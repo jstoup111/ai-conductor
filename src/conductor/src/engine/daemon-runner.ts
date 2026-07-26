@@ -177,6 +177,7 @@ export interface FeatureRunnerDeps {
   escalateBuildFailure?: (opts: {
     projectRoot: string;
     failureReason: string;
+    log?: (message: string) => void;
   }) => Promise<{ prUrl?: string }>;
   /**
    * Task 13: Setup-failure triage handler (daemon mode only). When a
@@ -205,6 +206,7 @@ export interface FeatureRunnerDeps {
     worktree: FeatureWorktree,
     slug: string,
     outcome: TriageOutcome,
+    log?: (message: string) => void,
   ) => Promise<void>;
 }
 
@@ -357,7 +359,7 @@ export function makeRunFeature(
             // block the build; it is diagnostic only.
             if (deps.surfaceQuarantineRef) {
               try {
-                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome);
+                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome, featureLog);
               } catch (err) {
                 featureLog(
                   `[daemon-runner] quarantine surfacing error (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
@@ -386,7 +388,7 @@ export function makeRunFeature(
       // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
       // the feature outcome or teardown discipline below.
       if (deps.daemon) {
-        await emitDaemonSignal(deps, worktree, item, outcome, providerExecution);
+        await emitDaemonSignal(deps, worktree, item, outcome, providerExecution, featureLog);
       }
 
       if (outcome.done) {
@@ -473,6 +475,7 @@ export function makeRunFeature(
             await deps.escalateBuildFailure({
               projectRoot: worktree.path,
               failureReason: reason,
+              log: featureLog,
             });
           } catch (err) {
             featureLog(
@@ -607,6 +610,7 @@ async function emitDaemonSignal(
   item: BacklogItem,
   outcome: WorktreeOutcome,
   providerExecution?: ProviderExecutionContext,
+  log?: (message: string) => void,
 ): Promise<void> {
   const featureOutcome: FeatureOutcome = {
     slug: item.slug,
@@ -628,7 +632,7 @@ async function emitDaemonSignal(
     provider: deps.provider,
     providerExecution,
     tierSkippedRetro,
-    log: deps.log,
+    log,
   });
 }
 

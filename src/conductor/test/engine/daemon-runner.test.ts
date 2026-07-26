@@ -1167,6 +1167,41 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       }
     });
 
+    it('false-ship passes its feature logger to escalation', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const featureLog = vi.fn();
+        let escalationLog: ((message: string) => void) | undefined;
+        const featureDeps = deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: undefined,
+        });
+        featureDeps.createWorktree = async (slug) => ({ path: wt, branch: `feat/${slug}` });
+        featureDeps.beginFeatureRun = () => ({
+          events: new ConductorEventEmitter(),
+          providerExecution: {
+            configuredProviders: [],
+            runtimes: new ProviderRuntimeSet([]),
+            sessions: new ProviderSessionStore(),
+          },
+          log: featureLog,
+          stop: () => {},
+        });
+        featureDeps.escalateBuildFailure = async (opts) => {
+          escalationLog = (opts as { log?: (message: string) => void }).log;
+          return {};
+        };
+
+        await makeRunFeature(featureDeps)(ITEM);
+
+        expect(escalationLog).toBe(featureLog);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
     it('false-ship continues even if escalateBuildFailure throws', async () => {
       const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
       try {

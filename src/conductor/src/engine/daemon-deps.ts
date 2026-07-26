@@ -160,7 +160,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       return escalateBuildFailure({
         projectRoot: opts.projectRoot,
         failureReason: opts.failureReason,
-        log: cfg.log,
+        log: opts.log ?? cfg.log,
       });
     },
 
@@ -172,8 +172,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Task 14 (TS-5): surface quarantine evidence to the resuming build agent.
     // Rooted at the feature's own worktree (not the main checkout) so
     // `rev-parse --verify wip/setup-quarantine-<slug>` sees that worktree's refs.
-    surfaceQuarantineRef: (wt, slug, outcome) =>
-      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: cfg.log ?? (() => {}) }),
+    surfaceQuarantineRef: (wt, slug, outcome, log) =>
+      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: log ?? cfg.log ?? (() => {}) }),
   };
 }
 
