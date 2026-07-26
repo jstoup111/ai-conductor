@@ -7,6 +7,14 @@ product track). Extracted from PRD `.docs/specs/2026-07-22-build-auth-token-chec
 (FR-1..FR-7). Acceptance signals are CLI exit codes/output, daemon log/status entries,
 and marker-file state — this project has no HTTP API or frontend.
 
+> **Provider-scope amendment (#905, approved 2026-07-25):** the `build_auth`
+> credential health check, daemon gate, preflight, token injection, and park behavior
+> below govern self-host dispatches whose preferred provider is Claude. A
+> Codex-selected self-host dispatch branches before this Claude-specific setup and
+> uses Codex's own auth-source readiness. Both built-in providers enter the same
+> bounded recovery lifecycle, but the coordinator never uses one provider's credential
+> checks or remediation for the other. Claude-specific source behavior is unchanged.
+
 ---
 
 ## Story: Health check reports credential state in daemon-token mode

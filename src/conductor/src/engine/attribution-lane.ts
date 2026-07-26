@@ -34,6 +34,7 @@ import type {
   InvokeOptions,
   LLMProvider,
   TokenUsage,
+  AuthenticationReadiness,
 } from '../execution/llm-provider.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { ModelAvailability } from './model-availability.js';
@@ -99,6 +100,7 @@ export interface VerifierDispatchResult extends ProviderAttributionMetadata {
   rateLimited?: boolean;
   waitSeconds?: number;
   sessionExpired?: boolean;
+  authentication?: AuthenticationReadiness;
 }
 
 /**
@@ -388,6 +390,9 @@ export async function dispatchAttributionVerifier(
           : {}),
         ...(providerResult.tokenUsage
           ? { tokenUsage: providerResult.tokenUsage }
+          : {}),
+        ...(providerResult.authentication
+          ? { authentication: providerResult.authentication }
           : {}),
       }
     : {};

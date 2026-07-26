@@ -1,5 +1,12 @@
 import { execa } from 'execa';
-import type { InvokeOptions, InvokeResult, LLMProvider, TokenUsage } from './llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  AuthenticationSource,
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+  TokenUsage,
+} from './llm-provider.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -11,12 +18,58 @@ export const CODEX_MODEL_UNAVAILABLE_RE =
   /(?:requested |selected )?model .{0,80}(?:not found|unavailable|not available|unsupported|not supported)|unknown model|model not found|do not have access to (?:the )?model/i;
 export const CODEX_SESSION_EXPIRED_RE =
   /(?:session|thread|conversation) (?:not found|does not exist|expired|invalid)|no conversation found|failed to resume|cannot resume/i;
+export const CODEX_PERMISSION_DECISION_RE =
+  /(?:permission|approval|review).{0,80}(?:denied|unavailable|rejected|cancel(?:led|ed)|timed out|timeout|unknown result|failed to (?:produce|return) (?:an? )?decision|indeterminate|no decision)/i;
 
 interface CodexJsonEvent {
   type?: string;
   item?: { type?: string; text?: string; content?: Array<{ text?: string }> };
   usage?: Record<string, unknown>;
 }
+
+interface SelectedAuthentication {
+  source: AuthenticationSource;
+  apiKey?: string;
+}
+
+interface DoctorCommandResult {
+  stdout?: unknown;
+  stderr?: unknown;
+  exitCode?: number | null;
+}
+
+type DoctorEvidence =
+  | {
+    kind: 'documented';
+    state: AuthenticationReadiness['state'];
+  }
+  | {
+    kind: 'legacy';
+    source: AuthenticationSource;
+    configured: boolean;
+    authenticated: boolean;
+    rejected?: boolean;
+  };
+
+export interface CodexDoctorRunnerOptions {
+  reject: false;
+  timeout: number;
+  stdout: 'pipe';
+  stderr: 'pipe';
+  env?: Record<string, string>;
+}
+
+/** A narrow injectable boundary for captured, non-mutating Codex readiness checks. */
+export type CodexDoctorRunner = (
+  command: 'codex',
+  args: readonly ['doctor', '--json', '--summary'],
+  options: CodexDoctorRunnerOptions,
+) => Promise<DoctorCommandResult>;
+
+const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
+
+const defaultCodexDoctorRunner: CodexDoctorRunner = async (command, args, options) =>
+  execa(command, args, options) as Promise<DoctorCommandResult>;
 
 /** Extract the final agent message and optional usage from Codex JSONL output. */
 export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: TokenUsage } {
@@ -55,19 +108,54 @@ function parseWaitSeconds(output: string): number {
 }
 
 export class CodexProvider implements LLMProvider {
+  private readonly authentication: SelectedAuthentication;
+
+  constructor(private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner) {
+    this.authentication = this.selectAuthentication();
+  }
+
+  async readiness(): Promise<AuthenticationReadiness> {
+    const authentication = this.authentication;
+    try {
+      const result = await this.runDoctor(
+        'codex',
+        ['doctor', '--json', '--summary'],
+        {
+          reject: false,
+          timeout: CODEX_DOCTOR_TIMEOUT_MS,
+          stdout: 'pipe',
+          stderr: 'pipe',
+          env: authentication.apiKey
+            ? { CODEX_API_KEY: authentication.apiKey }
+            : undefined,
+        },
+      );
+      return this.classifyReadiness(result, authentication);
+    } catch {
+      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    }
+  }
+
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
-    const args = this.buildArgs(options, true);
+    const readiness = await this.readiness();
+    if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+
+    const authentication = this.authentication;
+    const args = this.buildArgs(options, true, true);
     const prompt = this.composePrompt(options);
 
     const result = await execa('codex', args, {
       reject: false,
       input: prompt,
-      stdout: ['pipe', 'inherit'],
-      stderr: ['pipe', 'inherit'],
+      stdout: 'pipe',
+      stderr: 'pipe',
       cwd: options.cwd,
+      env: authentication.apiKey
+        ? { CODEX_API_KEY: authentication.apiKey }
+        : undefined,
     });
 
-    return this.classifyCompletion(result, true);
+    return this.classifyCompletion(result, true, authentication, true);
   }
 
   /**
@@ -75,16 +163,28 @@ export class CodexProvider implements LLMProvider {
    * usable for conductor's collaborative calls by streaming that one-shot run.
    */
   async invokeInteractive(options: InvokeOptions): Promise<InvokeResult> {
-    const result = await execa('codex', this.buildArgs(options, false), {
+    // A real interactive session leaves authorization to the operator. Auto
+    // streaming still uses this method, but is explicitly marked noninteractive
+    // by the runner and must prove readiness for every dispatch.
+    if (!options.interactive) {
+      const readiness = await this.readiness();
+      if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+    }
+
+    const authentication = this.authentication;
+    const result = await execa('codex', this.buildArgs(options, false, !options.interactive), {
       reject: false,
       input: this.composePrompt(options),
       stdin: 'pipe',
-      stdout: ['pipe', 'inherit'],
-      stderr: ['pipe', 'inherit'],
+      stdout: options.interactive ? ['pipe', 'inherit'] : 'pipe',
+      stderr: options.interactive ? ['pipe', 'inherit'] : 'pipe',
       cwd: options.cwd,
+      env: authentication.apiKey
+        ? { CODEX_API_KEY: authentication.apiKey }
+        : undefined,
     });
 
-    return this.classifyCompletion(result, false);
+    return this.classifyCompletion(result, false, authentication, !options.interactive);
   }
 
   private classifyCompletion(
@@ -95,14 +195,22 @@ export class CodexProvider implements LLMProvider {
       code?: string;
     },
     jsonOutput: boolean,
+    authenticationSelection: SelectedAuthentication,
+    automaticReview = true,
   ): InvokeResult {
+    const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
     const exitCode = (result.exitCode ?? 1) as number;
     const parsed = jsonOutput
       ? parseCodexJsonl(stdout)
       : { output: stdout, tokenUsage: undefined };
-    const output = stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
+    const rawOutput =
+      stderr ? `${parsed.output}\n${stderr}`.trim() : parsed.output;
+    const output = this.sanitizeOutput(
+      rawOutput,
+      authenticationSelection.apiKey,
+    );
 
     // Missing-binary classification is anchored to structural process signals.
     // Never infer provider-wide unavailability from arbitrary stderr prose.
@@ -116,37 +224,238 @@ export class CodexProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        authentication: this.authenticationResult(source, 'ready'),
       };
     }
 
     // Rate limits take precedence over auth: some service responses include
     // both quota and sign-in wording, but retry coordination must win.
-    const rateLimited = exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(output);
-    const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(output);
-    const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(output);
-    const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(output);
+    const rateLimited = exitCode !== 0 && CODEX_RATE_LIMIT_RE.test(rawOutput);
+    const modelUnavailable = exitCode !== 0 && CODEX_MODEL_UNAVAILABLE_RE.test(rawOutput);
+    const authFailure = exitCode !== 0 && !rateLimited && !modelUnavailable && CODEX_AUTH_FAILURE_RE.test(rawOutput);
+    const sessionExpired = CODEX_SESSION_EXPIRED_RE.test(rawOutput);
+    // Automatic runs cannot wait for an operator to decide a permission
+    // request. Once every established recovery class has been excluded, treat
+    // the remaining Codex-specific permission-decision result as an unavailable
+    // automatic-review decision and fail closed. A generic empty exit or
+    // process timeout is not sufficient evidence of a permission denial.
+    const permissionDenied =
+      exitCode !== 0 &&
+      automaticReview &&
+      !rateLimited &&
+      !modelUnavailable &&
+      !authFailure &&
+      !sessionExpired &&
+      CODEX_PERMISSION_DECISION_RE.test(rawOutput);
+    const authentication = this.authenticationResult(
+      source,
+      authFailure ? 'unusable' : 'ready',
+    );
 
     return {
       success: exitCode === 0,
-      output,
+      output: authFailure
+        ? `Codex authentication failed using the selected ${source} source.`
+        : permissionDenied
+          ? 'Codex automatic permission review was denied or unavailable. Verify the review policy or permissions, then retry.'
+        : output,
       exitCode,
       rateLimited: rateLimited || undefined,
-      waitSeconds: rateLimited ? parseWaitSeconds(output) : undefined,
+      waitSeconds: rateLimited ? parseWaitSeconds(rawOutput) : undefined,
       modelUnavailable: modelUnavailable || undefined,
       authFailure: authFailure || undefined,
+      permissionDenied: permissionDenied || undefined,
       sessionExpired: sessionExpired || undefined,
       tokenUsage: parsed.tokenUsage,
+      authentication,
     };
   }
 
-  private buildArgs(options: InvokeOptions, json: boolean): string[] {
+  private readinessFailure(readiness: AuthenticationReadiness): InvokeResult {
+    return {
+      success: false,
+      output: readiness.remediation ?? 'Codex authentication is not ready.',
+      exitCode: 1,
+      authFailure: true,
+      authentication: readiness,
+    };
+  }
+
+  private selectAuthentication(): SelectedAuthentication {
+    const apiKey = process.env.CODEX_API_KEY;
+    return apiKey
+      ? { source: 'api-key', apiKey }
+      : { source: 'cached-login' };
+  }
+
+  private authenticationResult(
+    source: AuthenticationSource,
+    state: AuthenticationReadiness['state'] | undefined,
+  ): AuthenticationReadiness | undefined {
+    if (!state) return undefined;
+    return {
+      provider: 'codex',
+      source,
+      state,
+    };
+  }
+
+  private classifyReadiness(
+    result: DoctorCommandResult,
+    authentication: SelectedAuthentication,
+  ): AuthenticationReadiness {
+    const evidence = this.parseDoctorEvidence(result.stdout);
+    if (!evidence || (evidence.kind === 'legacy' && evidence.source !== authentication.source)) {
+      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    }
+
+    const exitCode = result.exitCode ?? 1;
+    if (evidence.kind === 'documented') {
+      if (evidence.state === 'ready') {
+        return exitCode === 0
+          ? { provider: 'codex', source: authentication.source, state: 'ready' }
+          : this.nonReadyReadiness(authentication.source, 'unverifiable');
+      }
+      return this.nonReadyReadiness(authentication.source, evidence.state);
+    }
+
+    if (
+      evidence.configured === true &&
+      evidence.authenticated === true &&
+      evidence.rejected !== true &&
+      exitCode === 0
+    ) {
+      return { provider: 'codex', source: authentication.source, state: 'ready' };
+    }
+    if (
+      evidence.configured === false &&
+      evidence.authenticated === false &&
+      evidence.rejected !== true &&
+      exitCode === 0
+    ) {
+      return this.nonReadyReadiness(authentication.source, 'missing');
+    }
+    if (
+      evidence.configured === true &&
+      evidence.authenticated === false &&
+      evidence.rejected === true &&
+      exitCode !== 0
+    ) {
+      return this.nonReadyReadiness(authentication.source, 'unusable');
+    }
+    return this.nonReadyReadiness(authentication.source, 'unverifiable');
+  }
+
+  private parseDoctorEvidence(stdout: unknown): DoctorEvidence | undefined {
+    if (typeof stdout !== 'string') return undefined;
+    try {
+      const parsed: unknown = JSON.parse(stdout);
+      if (!parsed || typeof parsed !== 'object') return undefined;
+      const record = parsed as Record<string, unknown>;
+      if (record.schemaVersion !== 1) return undefined;
+
+      const hasDocumentedShape = 'overallStatus' in record || 'checks' in record;
+      const hasLegacyShape = 'auth' in record || 'transport' in record;
+      if (hasDocumentedShape && hasLegacyShape) return undefined;
+
+      if (hasDocumentedShape) {
+        const { overallStatus, checks } = record;
+        if (
+          (overallStatus !== 'ok' && overallStatus !== 'fail') ||
+          !checks ||
+          typeof checks !== 'object' ||
+          Array.isArray(checks)
+        ) {
+          return undefined;
+        }
+        const credentials = (checks as Record<string, unknown>)['auth.credentials'];
+        if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) return undefined;
+        const { status, summary } = credentials as Record<string, unknown>;
+        if (typeof summary !== 'string') return undefined;
+        if (status === 'ok') {
+          return overallStatus === 'ok' ? { kind: 'documented', state: 'ready' } : undefined;
+        }
+        if (status !== 'fail' || overallStatus !== 'fail') return undefined;
+        if (/no codex credentials were found/i.test(summary)) {
+          return { kind: 'documented', state: 'missing' };
+        }
+        if (/invalid|rejected|unauthorized|expired/i.test(summary)) {
+          return { kind: 'documented', state: 'unusable' };
+        }
+        return undefined;
+      }
+
+      const { auth, transport } = record;
+      if (!auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') return undefined;
+      const { selectedMode, configured, rejected } = auth as Record<string, unknown>;
+      const { authenticated } = transport as Record<string, unknown>;
+      if (
+        (selectedMode !== 'api-key' && selectedMode !== 'cached-login') ||
+        typeof configured !== 'boolean' ||
+        typeof authenticated !== 'boolean' ||
+        (rejected !== undefined && typeof rejected !== 'boolean')
+      ) {
+        return undefined;
+      }
+      return { kind: 'legacy', source: selectedMode, configured, authenticated, rejected };
+    } catch {
+      return undefined;
+    }
+  }
+
+  private nonReadyReadiness(
+    source: AuthenticationSource,
+    state: Exclude<AuthenticationReadiness['state'], 'ready'>,
+  ): AuthenticationReadiness {
+    const action = source === 'api-key'
+      ? 'Replace CODEX_API_KEY and restart the daemon.'
+      : 'Sign in to Codex and retry.';
+    const reason = state === 'missing'
+      ? 'The selected Codex authentication source is not configured.'
+      : state === 'unusable'
+        ? 'The selected Codex authentication source was rejected.'
+        : 'Codex authentication readiness could not be verified.';
+    return { provider: 'codex', source, state, remediation: `${reason} ${action}` };
+  }
+
+  private sanitizeOutput(output: string, apiKey: string | undefined): string {
+    if (!apiKey) return output;
+
+    const fragments = [
+      apiKey,
+      ...Array.from(
+        { length: Math.max(0, apiKey.length - 1) },
+        (_, index) => apiKey.slice(0, apiKey.length - index - 1),
+      ),
+      ...Array.from(
+        { length: Math.max(0, apiKey.length - 1) },
+        (_, index) => apiKey.slice(index + 1),
+      ),
+    ]
+      .filter((fragment) => fragment.length > 0)
+      .sort((left, right) => right.length - left.length);
+
+    return fragments.reduce(
+      (sanitized, fragment) => sanitized.split(fragment).join('[redacted]'),
+      output,
+    );
+  }
+
+  private buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[] {
     const args = options.resume
       ? ['exec', 'resume', options.sessionId]
       : ['exec'];
 
     if (options.model) args.push('--model', options.model);
     if (options.effort) args.push('--config', `model_reasoning_effort="${options.effort}"`);
-    if (options.dangerouslySkipPermissions) args.push('--dangerously-bypass-approvals-and-sandbox');
+    if (unattended) {
+      args.push(
+        '--config', 'sandbox_mode="workspace-write"',
+        '--config', 'approval_policy="on-request"',
+        '--config', 'approvals_reviewer="auto_review"',
+        '--config', 'shell_environment_policy.ignore_default_excludes=false',
+      );
+    }
     // `resume` does not expose --cd, but execa's cwd still sets the working root.
     if (!options.resume && options.cwd) args.push('--cd', options.cwd);
     if (json) args.push('--json');

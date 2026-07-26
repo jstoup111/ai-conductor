@@ -13,7 +13,10 @@ import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
-import type { TokenUsage } from '../execution/llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  TokenUsage,
+} from '../execution/llm-provider.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -344,6 +347,10 @@ export interface StepRunResult {
    * The conductor halts and reports the auth failure.
    */
   authFailure?: boolean;
+  /** A provider's automatic permission review denied the requested action. */
+  permissionDenied?: boolean;
+  /** Provider-owned, sanitized authentication readiness for this dispatch. */
+  authentication?: AuthenticationReadiness;
   /**
    * #814: set when a judged-gate grader (today: build_review) could not be
    * DISPATCHED — the grader subprocess/session failed to run or exited without
@@ -379,6 +386,25 @@ export interface StepRunResult {
     trackingRefSha: string | null;
     remoteHeadSha: string | null;
     fresh: boolean;
+  };
+}
+
+export interface SpotAuditDispatchResult {
+  success: boolean;
+  output?: string;
+  authFailure?: boolean;
+  authentication?: AuthenticationReadiness;
+}
+
+/** Preserve recovery metadata when adapting a verifier dispatch for spot audit. */
+export function toSpotAuditVerifierResult(
+  result: SpotAuditDispatchResult,
+): SpotAuditDispatchResult & { output: string } {
+  return {
+    success: result.success,
+    output: result.output ?? '',
+    ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
+    ...(result.authentication ? { authentication: result.authentication } : {}),
   };
 }
 
@@ -511,7 +537,7 @@ export interface StepRunner {
     residueIds: string[];
     planPath: string;
     projectRoot: string;
-  }): Promise<{ success: boolean; output?: string } | { success: false; output: string }>;
+  }): Promise<SpotAuditDispatchResult>;
   /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
@@ -1206,6 +1232,31 @@ export class Conductor {
     }
   }
 
+  /** Dispatch the observational verifier, recovering one provider-auth failure in place. */
+  private async dispatchSpotAuditVerifier(opts: {
+    residueIds: string[];
+    planPath: string;
+  }): Promise<SpotAuditDispatchResult & { output: string }> {
+    const dispatch = async (): Promise<SpotAuditDispatchResult & { output: string }> => {
+      if (!this.stepRunner.dispatchVerifier) {
+        return { success: false, output: 'dispatchVerifier not available' };
+      }
+      return toSpotAuditVerifierResult(await this.stepRunner.dispatchVerifier({
+        residueIds: opts.residueIds,
+        planPath: opts.planPath,
+        projectRoot: this.projectRoot,
+      }));
+    };
+
+    const result = await dispatch();
+    if (!result.authFailure || !result.authentication) return result;
+    const park = await this.parkOnAuthFailure({
+      actualProvider: result.authentication.provider,
+      authentication: result.authentication,
+    });
+    return park.timedOut ? result : dispatch();
+  }
+
   /**
    * Shared park-and-poll for an `authFailure` result, factored out of the
    * SERIAL loop's inline branch (~3082) so the concurrent-group JOIN (Task 4,
@@ -1217,8 +1268,65 @@ export class Conductor {
    * outcome; the caller decides what "resume" or "halt" means for its own
    * loop shape.
    */
-  private async parkOnAuthFailure(): Promise<{ timedOut: boolean; haltReason: string }> {
+  private async parkOnAuthFailure(
+    failed?: Pick<StepRunResult, 'actualProvider' | 'authentication'>,
+  ): Promise<{ timedOut: boolean; haltReason: string }> {
     const shPark = resolveSelfHostConfig(this.config);
+
+    const authentication = failed?.authentication;
+    const actualProvider = failed?.actualProvider;
+    if (authentication?.provider === 'codex' && actualProvider) {
+      if (authentication.source === 'api-key') {
+        const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
+        const startedAt = Date.now();
+        await this.events.emit({
+          type: 'credentials_park',
+          reason: 'Codex API key is startup-only — waiting for daemon restart',
+        });
+        while (timeoutMs > 0 && Date.now() - startedAt < timeoutMs) {
+          await this.sleep(1_000);
+        }
+        return {
+          timedOut: true,
+          haltReason:
+            'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
+            'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.',
+        };
+      }
+
+      const readiness = this.providerExecution?.runtimes.readinessFor(
+        actualProvider,
+        authentication,
+      );
+      if (readiness) {
+        const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
+        const startedAt = Date.now();
+        await this.events.emit({
+          type: 'credentials_park',
+          reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
+        });
+
+        for (;;) {
+          const current = await readiness();
+          if (
+            current.provider === authentication.provider &&
+            current.source === authentication.source &&
+            current.state === 'ready'
+          ) {
+            return { timedOut: false, haltReason: '' };
+          }
+          if (timeoutMs <= 0 || Date.now() - startedAt >= timeoutMs) {
+            return {
+              timedOut: true,
+              haltReason:
+                'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+                'Refresh the Codex login, then re-queue this feature.',
+            };
+          }
+          await this.sleep(1_000);
+        }
+      }
+    }
 
     if (this.selfHost && shPark.buildAuthMode === 'api-key') {
       return {
@@ -1691,6 +1799,17 @@ export class Conductor {
     state: ConductState,
     retryHint: string | undefined,
   ): Promise<StepRunResult> {
+    // Provider selection must precede self-host preparation: the guardrail
+    // bundle below configures Claude's global credentials and sandbox only.
+    // The step runner retains responsibility for Codex's provider-local
+    // readiness and unattended policy boundary.
+    const buildSelection =
+      this.config.steps?.build?.llm_provider ?? this.config.llm_provider;
+    const preferredBuildProvider = normalizeProviderSelection(buildSelection)[0];
+    if (preferredBuildProvider === 'codex') {
+      return this.stepRunner.run(name, state, { retryReason: retryHint });
+    }
+
     const sh = resolveSelfHostConfig(this.config);
 
     if (sh.skillRelinkPreflight && !this.relinkDone) {
@@ -2556,7 +2675,32 @@ export class Conductor {
                 .filter((i) => i !== -1);
               if (authFailureIdxs.length === 0) break;
 
-              const park = await this.parkOnAuthFailure();
+              // A group branch carries the provider-owned readiness evidence
+              // from its failed dispatch. Park and retry only the members
+              // that failed against that exact provider/source pair; a
+              // completed sibling (or a member waiting on another source)
+              // must never be redispatched as an implicit fallback.
+              const failedOutcome = outcomes[authFailureIdxs[0]!]!;
+              const authentication =
+                failedOutcome.kind === 'no-verdict'
+                  ? failedOutcome.authentication
+                  : undefined;
+              const retryIdxs = authentication
+                ? authFailureIdxs.filter((idx) => {
+                    const outcome = outcomes[idx]!;
+                    const candidate =
+                      outcome.kind === 'no-verdict' ? outcome.authentication : undefined;
+                    return (
+                      candidate?.provider === authentication.provider &&
+                      candidate.source === authentication.source
+                    );
+                  })
+                : authFailureIdxs;
+              const park = await this.parkOnAuthFailure(
+                authentication
+                  ? { actualProvider: authentication.provider, authentication }
+                  : undefined,
+              );
               if (park.timedOut) {
                 await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                   () => {},
@@ -2578,13 +2722,43 @@ export class Conductor {
                 return;
               }
 
-              const retryMembers = authFailureIdxs.map((i) => membership.dispatchable[i]!);
+              const retryMembers = retryIdxs.map((i) => membership.dispatchable[i]!);
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
-              authFailureIdxs.forEach((idx, k) => {
+              retryIdxs.forEach((idx, k) => {
                 outcomes[idx] = retryOutcomes[k]!;
               });
+            }
+
+            const permissionDeniedIdx = outcomes.findIndex(
+              (outcome) => outcome.kind === 'permission-denied',
+            );
+            if (permissionDeniedIdx !== -1) {
+              const outcome = outcomes[permissionDeniedIdx]!;
+              const member = membership.dispatchable[permissionDeniedIdx]!;
+              if (outcome.kind !== 'permission-denied') {
+                throw new Error('permission-denied outcome index lost its disposition');
+              }
+              const provider = outcome.provider === 'codex' ? 'Codex' : outcome.provider;
+              const source = outcome.authentication?.source;
+              const haltReason =
+                `${provider} permission review denied a required action for grouped member "${member.name}"` +
+                (source ? ` using the selected ${source} source` : '') +
+                '.\n' +
+                'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
+                `\nProvider detail: ${outcome.reason}`;
+              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+              await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), haltReason + '\n', 'utf-8')
+                .catch(() => {
+                  /* best-effort marker */
+                });
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
             }
 
             // A branch outcome of `verdict: pass` only means the skill
@@ -3549,118 +3723,15 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
-            const shPark = resolveSelfHostConfig(this.config);
-
-            // Task 11 (TR-4): Retarget authFailure park to daemon token in daemon-token mode.
-            // Only applies when self-host mode is active. In daemon-token mode, watch the
-            // daemon token path for non-empty content. In operator mode, watch the operator
-            // credentials for expiresAt freshness. In api-key mode, do not park — HALT
-            // immediately with ANTHROPIC_API_KEY.
-            let parkResult: Awaited<ReturnType<typeof waitForCredentialsChange>>;
-            let haltReason: string;
-
-            if (this.selfHost && shPark.buildAuthMode === 'api-key') {
-              // Task 11: api-key mode does not support auth-failure park
-              haltReason =
-                `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
-                `is missing, invalid, or has insufficient permissions.\n` +
-                `Please set ANTHROPIC_API_KEY and re-queue this feature.`;
-              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                () => {},
-              );
-              await writeFile(
-                join(this.projectRoot, LOOP_HALT_MARKER),
-                haltReason + '\n',
-                'utf-8',
-              ).catch(() => {
-                /* best-effort marker */
-              });
-              await writeState(this.stateFilePath, state);
-              const prUrl = await this.surfaceRemediationPr(haltReason);
-              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
-              process.off('SIGINT', sigintHandler);
-              process.off('SIGTERM', sigterm);
-              return;
-            } else if (this.selfHost && shPark.buildAuthMode === 'daemon-token') {
-              // Task 11: Park on daemon token path, check for non-empty content
-              const tokenPath = shPark.buildAuthTokenPath;
-              const daemonTokenClassifier = createDaemonTokenContentClassifier();
-
-              await emitTracked({
-                type: 'credentials_park',
-                reason: 'daemon build token expired or invalid — waiting for refresh',
-              });
-
-              parkResult = await waitForCredentialsChange({
-                initialState: 'expired', // Start as expired (trigger polling)
-                credentialsPath: tokenPath,
-                globalConfigDir: '', // Not used in daemon-token mode
-                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
-                sleep: this.sleep,
-                now: () => Date.now(),
-                contentClassifier: daemonTokenClassifier,
-              });
-
-              if (parkResult.type === 'timeout') {
-                // Task 13 (TR-4): Daemon-token park timeout HALT names token path and re-mint instructions
-                // (never operator OAuth file, never "retries exhausted"). Preserves retry budget contract.
-                haltReason =
-                  `Daemon build token expired and refresh timed out.\n` +
-                  `Token file: ${tokenPath}\n` +
-                  `Please run: ${(await import('./self-host/daemon-build-token.js')).DAEMON_BUILD_TOKEN_MINT_COMMAND}\n` +
-                  `Then re-queue this feature.`;
-              } else {
-                // Task 11 + Task 9: Park resolved, resume retry. On the next attempt,
-                // runSelfBuildDispatch will re-read the daemon token from the file
-                // (which was updated during the park interval) and re-inject it.
-                haltReason = ''; // Not halting on successful resume
-              }
-            } else {
-              // Operator credentials mode (backward compatibility)
-              const operatorConfigDir =
-                process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
-              const credPath = join(operatorConfigDir, '.credentials.json');
-              const credState = await readOperatorCredentialsState(
-                operatorConfigDir,
-                Date.now(),
-              );
-
-              await emitTracked({
-                type: 'credentials_park',
-                reason: 'operator OAuth token expired or invalid — waiting for refresh',
-              });
-
-              parkResult = await waitForCredentialsChange({
-                initialState: credState,
-                credentialsPath: credPath,
-                globalConfigDir: operatorConfigDir,
-                timeoutMs: shPark.authParkTimeoutMinutes * 60 * 1000,
-                sleep: this.sleep,
-                now: () => Date.now(),
-              });
-
-              if (parkResult.type === 'timeout') {
-                // Operator mode: Auth-park timeout
-                const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
-                haltReason =
-                  `Operator credentials expired and refresh timed out.\n` +
-                  `Credentials file: ${parkResult.credentialsPath}\n` +
-                  `Expires at: ${expiresAtStr}\n` +
-                  `Please refresh your OAuth token and re-queue this feature.`;
-              } else {
-                haltReason = ''; // Not halting on successful resume
-              }
-            }
-
-            // Handle park timeout
-            if (parkResult.type === 'timeout') {
+            const park = await this.parkOnAuthFailure(result);
+            if (park.timedOut) {
               // Task 14: Auth-park timeout → credentials-specific HALT.
               await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                 () => {},
               );
               await writeFile(
                 join(this.projectRoot, LOOP_HALT_MARKER),
-                haltReason + '\n',
+                park.haltReason + '\n',
                 'utf-8',
               ).catch(() => {
                 /* best-effort marker */
@@ -3669,8 +3740,8 @@ export class Conductor {
               // so the daemon can classify the outcome even if escalation throws (C1).
               await writeState(this.stateFilePath, state);
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
-              const prUrl = await this.surfaceRemediationPr(haltReason);
-              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              const prUrl = await this.surfaceRemediationPr(park.haltReason);
+              await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -3680,6 +3751,32 @@ export class Conductor {
             // retry without decrementing attempt (budget intact).
             attempt--;
             continue;
+          }
+
+          // Permission review denial is terminal for this run. Retrying or
+          // escalating providers/models cannot approve an action that Codex
+          // already denied under the bounded policy.
+          if (result.permissionDenied) {
+            const provider = result.actualProvider ?? 'selected provider';
+            const source = result.authentication?.source;
+            const detail = result.output?.trim();
+            const haltReason =
+              `${provider === 'codex' ? 'Codex' : provider} permission review denied a required action` +
+              (source ? ` using the selected ${source} source` : '') +
+              '.\n' +
+              'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
+              (detail ? `\nProvider detail: ${detail}` : '');
+            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+            await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), haltReason + '\n', 'utf-8')
+              .catch(() => {
+                /* best-effort marker */
+              });
+            await writeState(this.stateFilePath, state);
+            const prUrl = await this.surfaceRemediationPr(haltReason);
+            await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           if (!result.success) {
@@ -5885,21 +5982,10 @@ export class Conductor {
               emitter: emitterAdapter,
               dispatch: async (inputs): Promise<import('./attribution-lane.js').VerifierDispatchResult> => {
                 try {
-                  // Dispatch via stepRunner's dispatchVerifier if available,
-                  // otherwise gracefully fail (audit is observational only).
-                  if (this.stepRunner.dispatchVerifier) {
-                    const result = await this.stepRunner.dispatchVerifier({
-                      residueIds: inputs.residueIds,
-                      planPath,
-                      projectRoot: this.projectRoot,
-                    });
-                    return {
-                      success: result.success,
-                      output: result.output ?? '',
-                    };
-                  }
-                  // Dispatcher not available (safe for non-testing scenarios)
-                  return { success: false, output: 'dispatchVerifier not available' };
+                  return await this.dispatchSpotAuditVerifier({
+                    residueIds: inputs.residueIds,
+                    planPath,
+                  });
                 } catch (err) {
                   // Dispatch error: return neutral result (audit is observational only)
                   return {

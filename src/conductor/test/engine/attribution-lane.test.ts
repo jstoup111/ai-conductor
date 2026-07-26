@@ -397,10 +397,29 @@ Add tests for sweep.
       residueIds: ['1'],
       featureWorktreePath: dir,
       gitRunner: createMockedGitRunner(),
+      providerDispatch: async () => ({
+        success: false,
+        output: 'auth failed',
+        exitCode: 1,
+        authFailure: true,
+        authentication: {
+          provider: 'codex',
+          source: 'cached-login',
+          state: 'unusable',
+        },
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [],
+      }),
     });
 
     expect(result.success).toBe(false);
     expect(result.authFailure).toBe(true);
+    expect(result.authentication).toEqual({
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'unusable',
+    });
   });
 
   it('returns failure on session expired', async () => {

@@ -16,6 +16,9 @@ import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { detectsAuthFailure } from '../../src/execution/claude-provider.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
 
@@ -40,6 +43,7 @@ describe('conductor auth-park: daemon-token mode', () => {
   let tokenPath: string;
   let events: ConductorEventEmitter;
   let priorToken: string | undefined;
+  let priorCodexApiKey: string | undefined;
 
   function selfHostConfig() {
     return {
@@ -57,6 +61,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
     priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    priorCodexApiKey = process.env.CODEX_API_KEY;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await writeState(statePath, READY_STATE);
@@ -66,8 +71,249 @@ describe('conductor auth-park: daemon-token mode', () => {
   afterEach(async () => {
     if (priorToken === undefined) delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     else process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+    if (priorCodexApiKey === undefined) delete process.env.CODEX_API_KEY;
+    else process.env.CODEX_API_KEY = priorCodexApiKey;
     await rm(dir, { recursive: true, force: true }).catch(() => {});
     await rm(tokenDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('rechecks the failed Codex cached login through its own runtime before resuming', async () => {
+    const readiness = vi
+      .fn()
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+    const codex = {
+      invoke: vi.fn(),
+      invokeInteractive: vi.fn(async () => {}),
+      readiness,
+    };
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: codex,
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    const park = await (conductor as any).parkOnAuthFailure({
+      actualProvider: 'codex',
+      authentication: {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'unusable',
+      },
+    });
+
+    expect(readiness).toHaveBeenCalledTimes(2);
+    expect(park).toEqual({ timedOut: false, haltReason: '' });
+  });
+
+  it('parks Codex API-key failures until the configured timeout without rechecking another source', async () => {
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: {
+          invoke: vi.fn(),
+          invokeInteractive: vi.fn(async () => {}),
+          readiness,
+        },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async () => {
+      clockOffset += 60_000;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    try {
+      const park = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'unusable',
+        },
+      });
+
+      expect(runner.run).not.toHaveBeenCalled();
+      expect(readiness).not.toHaveBeenCalled();
+      expect(sleepFn).toHaveBeenCalledTimes(1);
+      expect(park.timedOut).toBe(true);
+      expect(park.haltReason).toContain('restart the daemon');
+      expect(park.haltReason).not.toContain('CODEX_API_KEY=');
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
+  it('halts Codex API-key failures immediately when the auth park timeout is disabled', async () => {
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const sleepFn = vi.fn(async () => {});
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    const park = await (conductor as any).parkOnAuthFailure({
+      actualProvider: 'codex',
+      authentication: { provider: 'codex', source: 'api-key', state: 'unusable' },
+    });
+
+    expect(readiness).not.toHaveBeenCalled();
+    expect(sleepFn).not.toHaveBeenCalled();
+    expect(park).toMatchObject({ timedOut: true });
+    expect(park.haltReason).toContain('restart the daemon');
+  });
+
+  it.each(['missing', 'unusable', 'unverifiable'] as const)(
+    'serial Codex %s preflight parks and resumes only the failed attempt',
+    async (state) => {
+      const readiness = vi
+        .fn()
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state })
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
+      const buildAttempts: number[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step, _state, options) => {
+          if (step !== 'build') return { success: true };
+          buildAttempts.push(options?.attempt ?? -1);
+          if (buildAttempts.length === 1) {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state },
+            };
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        maxRetries: 1,
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      });
+
+      await conductor.run();
+
+      expect(readiness).toHaveBeenCalledTimes(2);
+      expect(buildAttempts).toEqual([1, 1]);
+    },
+  );
+
+  it('serial Codex API-key rejection halts once without hot-resuming after an environment change', async () => {
+    const readiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step !== 'build') return { success: true };
+        process.env.CODEX_API_KEY = 'replacement-must-not-hot-resume';
+        return {
+          success: false,
+          authFailure: true,
+          actualProvider: 'codex',
+          authentication: { provider: 'codex', source: 'api-key', state: 'unusable' },
+        };
+      }),
+    };
+    const halts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect(runner.run).toHaveBeenCalledTimes(1);
+    expect(readiness).not.toHaveBeenCalled();
+    expect(halts).toHaveLength(1);
+    expect(halts[0]).toContain('restart the daemon');
+    expect(halts[0]).not.toContain('replacement-must-not-hot-resume');
   });
 
   it('authFailure in daemon-token mode parks on the daemon token path (not operator credentials)', async () => {

@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type {
+  AuthenticationReadiness,
+  AuthenticationSource,
   InvokeOptions,
   InvokeResult,
   LLMProvider,
@@ -15,6 +17,37 @@ type ClassifyProviderAttempt = (
 ) => ProviderUnavailableClassification | undefined;
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('lets built-in providers expose a sanitized optional authentication readiness verdict', async () => {
+    const readiness: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'api-key' satisfies AuthenticationSource,
+      state: 'unusable',
+      remediation: 'Replace the API key, restart the daemon, and requeue the work.',
+    };
+    const provider: LLMProvider = {
+      async invoke(): Promise<InvokeResult> {
+        return {
+          success: true,
+          output: 'ok',
+          exitCode: 0,
+          authentication: readiness,
+        };
+      },
+      async invokeInteractive(): Promise<void> {},
+      async readiness(): Promise<AuthenticationReadiness> {
+        return readiness;
+      },
+    };
+
+    expect({
+      readiness: await provider.readiness?.(),
+      result: await provider.invoke({ prompt: 'check', sessionId: 'check', resume: false }),
+    }).toEqual({
+      readiness,
+      result: { success: true, output: 'ok', exitCode: 0, authentication: readiness },
+    });
+  });
+
   it('keeps void-returning custom interactive providers valid and non-classifying', async () => {
     const legacyProvider: LLMProvider = {
       async invoke(): Promise<InvokeResult> {

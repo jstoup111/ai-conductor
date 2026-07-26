@@ -128,6 +128,25 @@ describe('self-host wiring — default bundle members forward to the real primit
     const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
     expect(defaultSelfHostGuardrails.releaseGate).toBe(runReleaseArtifactGate);
   });
+
+  it('keeps Codex self-host setup out of the #904 skill and AGENTS.md surface', async () => {
+    const conductorSrc = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      'src',
+      'engine',
+      'conductor.ts',
+    );
+    const text = await readFile(conductorSrc, 'utf-8');
+    const start = text.indexOf('runSelfBuildDispatch');
+    const end = text.indexOf('async run(): Promise<void>');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(text.slice(start, end)).not.toMatch(/\.agents\/skills|AGENTS\.md|discover(?:ed)?Skills/i);
+  });
 });
 
 describe('self-host Phase 6 — daemon-loop wiring', () => {
@@ -154,7 +173,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   function selfBuildConductor(
     guardrails: SelfHostGuardrails,
     runner: StepRunner,
-    opts: { selfHost?: boolean; daemon?: boolean } = {},
+    opts: { selfHost?: boolean; daemon?: boolean; config?: Record<string, unknown> } = {},
   ): Conductor {
     return new Conductor({
       stateFilePath: statePath,
@@ -168,6 +187,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
+      config: opts.config as never,
     });
   }
 
@@ -241,6 +261,30 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(releaseGate).toHaveBeenCalledTimes(1);
     expect(seen.find((s) => s.step === 'finish')).toBeDefined();
     expect(await exists(join(dir, '.pipeline', 'HALT'))).toBe(false);
+  });
+
+  it('selecting Codex skips Claude-only self-build preparation while preserving shared release gates', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const { preflightBuildAuthCheck } = await import(
+      '../../../src/engine/self-host/build-auth-preflight.js'
+    );
+    vi.mocked(preflightBuildAuthCheck).mockClear();
+    const { guardrails, teardown } = makeGuardrails();
+    const { runner, seen } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner, {
+      config: { steps: { build: { llm_provider: 'codex' } } },
+    }).run();
+
+    expect(guardrails.relink).not.toHaveBeenCalled();
+    expect(preflightBuildAuthCheck).not.toHaveBeenCalled();
+    expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
+    expect(teardown).not.toHaveBeenCalled();
+    expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
+    expect(guardrails.releaseGate).toHaveBeenCalledTimes(1);
+    expect(seen.find((entry) => entry.step === 'build')).toBeDefined();
   });
 
   it('passes the INSTALLED root (not the detection root) to provisionSandbox (#363 / TR-4)', async () => {

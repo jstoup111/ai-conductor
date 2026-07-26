@@ -30,15 +30,30 @@ function jsonlMessage(text: string): string {
   ].join('\n');
 }
 
+function readyDoctorResult(source: 'api-key' | 'cached-login' = 'cached-login') {
+  return {
+    stdout: JSON.stringify({
+      schemaVersion: 1,
+      auth: { selectedMode: source, configured: true },
+      transport: { authenticated: true },
+    }),
+    exitCode: 0,
+  };
+}
+
 describe('CodexProvider', () => {
   let provider: CodexProvider;
 
   beforeEach(() => {
-    vi.clearAllMocks();
-    provider = new CodexProvider();
+    vi.resetAllMocks();
+    provider = new CodexProvider(
+      vi.fn(async (_command, _args, options) =>
+        readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
+      ),
+    );
   });
 
-  it('runs a fresh Codex exec with JSONL, model, cwd, and stdin prompt delivery', async () => {
+  it('runs a fresh Codex exec with its fixed unattended policy, JSONL, model, cwd, and stdin prompt delivery', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('No-op complete.'), exitCode: 0 } as any);
 
     const result = await provider.invoke({
@@ -52,7 +67,13 @@ describe('CodexProvider', () => {
     expect(command).toBe('codex');
     expect(args).toEqual(expect.arrayContaining(['exec', '--json', '--model', 'gpt-5.4', '--cd', '/workspace/project', '-']));
     expect(args).toEqual(expect.arrayContaining(['--config', 'model_reasoning_effort="high"']));
-    expect(args).toContain('--dangerously-bypass-approvals-and-sandbox');
+    expect(args).toEqual(expect.arrayContaining([
+      '--config', 'sandbox_mode="workspace-write"',
+      '--config', 'approval_policy="on-request"',
+      '--config', 'approvals_reviewer="auto_review"',
+      '--config', 'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(args).not.toContain(baseOptions.prompt);
     expect(options.input).toBe('You are the conductor.\n\nMake the no-op change');
     expect(options.cwd).toBe('/workspace/project');
@@ -68,8 +89,74 @@ describe('CodexProvider', () => {
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-123']);
     expect(args).not.toContain('--cd');
+    expect(args).toEqual(expect.arrayContaining([
+      'sandbox_mode="workspace-write"',
+      'approval_policy="on-request"',
+      'approvals_reviewer="auto_review"',
+      'shell_environment_policy.ignore_default_excludes=false',
+    ]));
+    expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
     expect(args).toContain('-');
     expect(options.cwd).toBe('/workspace/project');
+  });
+
+  it('enforces the same policy for automatic streaming while keeping API keys in the Codex client environment', async () => {
+    const key = 'sk-905-scoped-client-key';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({ stdout: 'Streamed.', exitCode: 0 } as any);
+    const apiKeyProvider = new CodexProvider(
+      vi.fn(async (_command, _args, options) =>
+        readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
+      ),
+    );
+
+    try {
+      await apiKeyProvider.invokeInteractive({
+        ...baseOptions,
+        interactive: false,
+        dangerouslySkipPermissions: true,
+      });
+
+      const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(args).toEqual(expect.arrayContaining([
+        'sandbox_mode="workspace-write"',
+        'approval_policy="on-request"',
+        'approvals_reviewer="auto_review"',
+        'shell_environment_policy.ignore_default_excludes=false',
+      ]));
+      expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
+      expect(options.env).toEqual({ CODEX_API_KEY: key });
+      expect(args).not.toContain(key);
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('captures every substantive Codex stream before returning sanitized one-shot and automatic-streaming output', async () => {
+    const key = 'sk-905-contained-output-key';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
+    mockExeca
+      .mockResolvedValueOnce({ stdout: jsonlMessage(`One-shot leaked ${key.slice(0, 8)}.`), exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: `Automatic stream leaked ${key.slice(-8)}.`, exitCode: 0 } as any);
+
+    try {
+      const oneShot = await apiKeyProvider.invoke(baseOptions);
+      const automatic = await apiKeyProvider.invokeInteractive({ ...baseOptions, interactive: false });
+
+      expect(mockExeca.mock.calls.map(([, , options]) => ({ stdout: options.stdout, stderr: options.stderr }))).toEqual([
+        { stdout: 'pipe', stderr: 'pipe' },
+        { stdout: 'pipe', stderr: 'pipe' },
+      ]);
+      expect(`${oneShot.output}\n${automatic.output}`).not.toContain(key.slice(0, 8));
+      expect(`${oneShot.output}\n${automatic.output}`).not.toContain(key.slice(-8));
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
   });
 
   it('keeps a >128 KiB prompt out of argv', async () => {
@@ -81,6 +168,487 @@ describe('CodexProvider', () => {
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(options.input).toContain(prompt);
     for (const arg of args) expect(arg.length).toBeLessThan(1024);
+  });
+
+  it('fails closed with a Codex permission diagnostic when automatic review reports a structured denial or review timeout', async () => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ type: 'error', code: 'approval_denied' }), stderr: '', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review timed out awaiting approval.', exitCode: 1, timedOut: true } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review returned an unknown result.', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review failed to produce a decision.', exitCode: 1 } as any);
+
+    const oneShot = await provider.invoke(baseOptions);
+    const automaticStream = await provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+    const unknownReview = await provider.invoke(baseOptions);
+    const failedReview = await provider.invoke(baseOptions);
+
+    for (const result of [oneShot, automaticStream, unknownReview, failedReview]) {
+      expect(result).toMatchObject({
+        success: false,
+        permissionDenied: true,
+        authFailure: undefined,
+        rateLimited: undefined,
+        modelUnavailable: undefined,
+        sessionExpired: undefined,
+        authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
+      });
+      expect(result.output).toMatch(/Codex.*automatic permission.*(unavailable|denied).*retry/i);
+    }
+    expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"']),
+        expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"', 'resume', 'thread-123']),
+      ]),
+    );
+  });
+
+  it('does not misclassify generic empty, process-timeout, unrelated unknown, or build failures as Codex permission decisions', async () => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'child process timed out', exitCode: 1, timedOut: true } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'model response contained an unknown field', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'build failed', exitCode: 1 } as any);
+
+    const emptyFailure = await provider.invoke(baseOptions);
+    const timeoutFailure = await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    const unrelatedUnknown = await provider.invoke(baseOptions);
+    const buildFailure = await provider.invoke(baseOptions);
+
+    expect(emptyFailure).toMatchObject({ success: false, output: '', permissionDenied: undefined });
+    expect(timeoutFailure).toMatchObject({
+      success: false,
+      output: 'child process timed out',
+      permissionDenied: undefined,
+    });
+    expect(unrelatedUnknown).toMatchObject({
+      success: false,
+      output: 'model response contained an unknown field',
+      permissionDenied: undefined,
+    });
+    expect(buildFailure).toMatchObject({
+      success: false,
+      output: 'build failed',
+      permissionDenied: undefined,
+    });
+  });
+
+  it.each([
+    { name: 'cached login when no API key is supplied', key: undefined, source: 'cached-login' },
+    { name: 'an API key when it is supplied', key: 'sk-905-api-key', source: 'api-key' },
+    { name: 'an API key when both sources are available', key: 'sk-905-api-key', source: 'api-key' },
+    { name: 'cached login when neither source is known to be available', key: undefined, source: 'cached-login' },
+  ] as const)(
+    'selects $source for $name and never exposes the supplied credential',
+    async ({ key, source }) => {
+      const priorKey = process.env.CODEX_API_KEY;
+      if (key === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = key;
+      mockExeca.mockResolvedValue({
+        stdout: '',
+        stderr: `Invalid API key ${key ?? 'cached-login-path'}`,
+        exitCode: 1,
+      } as any);
+      const selectedProvider = new CodexProvider(
+        vi.fn(async (_command, _args, options) =>
+          readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
+        ),
+      );
+
+      try {
+        const result = await selectedProvider.invoke(baseOptions);
+        const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+
+        expect({
+          authentication: result.authentication,
+          output: result.output,
+          childKey: options.env?.CODEX_API_KEY,
+        }).toEqual({
+          authentication: {
+            provider: 'codex',
+            source,
+            state: 'unusable',
+          },
+          output: `Codex authentication failed using the selected ${source} source.`,
+          childKey: key,
+        });
+      } finally {
+        if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+        else process.env.CODEX_API_KEY = priorKey;
+      }
+    },
+  );
+
+  it('redacts an API key and its visible fragments from successful result output', async () => {
+    const key = 'sk-905-api-key-fragment';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage(`Completed with ${key}, ${key.slice(0, 8)}, and ${key.slice(-8)}.`),
+      exitCode: 0,
+    } as any);
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
+
+    try {
+      const result = await apiKeyProvider.invoke(baseOptions);
+
+      expect(result.output).not.toMatch(new RegExp(`${key}|${key.slice(0, 8)}|${key.slice(-8)}`));
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('redacts even one-character API key prefixes and suffixes without empty matching', async () => {
+    const key = 'ABCD';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({
+      stdout: jsonlMessage(`Visible ${key.slice(0, 1)} ${key.slice(-1)} ${key}.`),
+      exitCode: 0,
+    } as any);
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
+
+    try {
+      const result = await apiKeyProvider.invoke(baseOptions);
+
+      expect(result.output).not.toMatch(new RegExp(`${key}|${key.slice(0, 1)}|${key.slice(-1)}`));
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('probes the selected authentication source through a captured bounded doctor command', async () => {
+    const key = 'sk-905-readiness-key';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    mockExeca.mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'api-key', configured: true },
+        transport: { authenticated: true },
+      }),
+      stderr: '',
+      exitCode: 0,
+    } as any);
+
+    try {
+      const defaultProvider = new CodexProvider();
+      await expect(defaultProvider.readiness()).resolves.toEqual({
+        provider: 'codex',
+        source: 'api-key',
+        state: 'ready',
+      });
+
+      const [command, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(command).toBe('codex');
+      expect(args).toEqual(['doctor', '--json', '--summary']);
+      expect(options).toMatchObject({
+        reject: false,
+        timeout: 10_000,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: { CODEX_API_KEY: key },
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('accepts an injected captured doctor runner without reaching the exec boundary', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: true },
+        transport: { authenticated: true },
+      }),
+      exitCode: 0,
+    });
+    const isolatedProvider = new CodexProvider(runDoctor);
+
+    await expect(isolatedProvider.readiness()).resolves.toMatchObject({
+      source: 'cached-login', state: 'ready',
+    });
+    expect(runDoctor).toHaveBeenCalledOnce();
+    expect(mockExeca).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      'cached-login',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'Codex credentials are available' } },
+      },
+      0,
+      'ready',
+    ],
+    [
+      'API key',
+      'sk-905-readiness-key',
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'Codex credentials are available' } },
+      },
+      0,
+      'ready',
+    ],
+    [
+      'no credentials',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'fail',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'no Codex credentials were found' } },
+      },
+      1,
+      'missing',
+    ],
+    [
+      'explicitly rejected credentials',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'fail',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'invalid API key' } },
+      },
+      1,
+      'unusable',
+    ],
+  ] as const)(
+    'classifies the documented doctor envelope for %s without exposing diagnostics',
+    async (_name, apiKey, evidence, exitCode, state) => {
+      const priorKey = process.env.CODEX_API_KEY;
+      if (apiKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = apiKey;
+
+      try {
+        const runDoctor = vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode });
+
+        const readiness = await new CodexProvider(runDoctor).readiness();
+
+        expect(readiness).toMatchObject({
+          provider: 'codex',
+          source: apiKey === undefined ? 'cached-login' : 'api-key',
+          state,
+        });
+        expect(JSON.stringify(readiness)).not.toContain('credentials');
+      } finally {
+        if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+        else process.env.CODEX_API_KEY = priorKey;
+      }
+    },
+  );
+
+  it.each([
+    [
+      'missing auth check',
+      { schemaVersion: 1, overallStatus: 'ok', checks: {} },
+    ],
+    [
+      'unknown check status',
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'warning', summary: 'maybe ready' } },
+      },
+    ],
+    [
+      'overall failure despite an otherwise-ready credential check',
+      {
+        schemaVersion: 1,
+        overallStatus: 'fail',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+      },
+    ],
+    [
+      'conflicting documented and legacy evidence',
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      },
+    ],
+  ] as const)('fails closed for %s documented doctor evidence', async (_name, evidence) => {
+    const readiness = await new CodexProvider(
+      vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode: 0 }),
+    ).readiness();
+
+    expect(readiness).toMatchObject({ source: 'cached-login', state: 'unverifiable' });
+  });
+
+  it('blocks an unattended invocation when its fresh readiness check is not ready', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      }),
+      exitCode: 0,
+    });
+    const gatedProvider = new CodexProvider(runDoctor);
+
+    const result = await gatedProvider.invoke(baseOptions);
+
+    expect({ readiness: result.authentication, execCalls: mockExeca.mock.calls.length }).toEqual({
+      readiness: expect.objectContaining({ state: 'missing' }),
+      execCalls: 0,
+    });
+  });
+
+  it('checks readiness again before a resumed unattended dispatch', async () => {
+    const runDoctor = vi.fn().mockResolvedValue(readyDoctorResult());
+    const gatedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Done.'), exitCode: 0 } as any);
+
+    await gatedProvider.invoke(baseOptions);
+    await gatedProvider.invoke({ ...baseOptions, resume: true });
+
+    expect({ readinessChecks: runDoctor.mock.calls.length, executions: mockExeca.mock.calls.length }).toEqual({
+      readinessChecks: 2,
+      executions: 2,
+    });
+  });
+
+  it('keeps the constructor-bound API key across readiness and resumed exec after environment changes', async () => {
+    const key = 'sk-905-bound-at-construction';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    const runDoctor = vi.fn(async () => {
+      delete process.env.CODEX_API_KEY;
+      return readyDoctorResult('api-key');
+    });
+    const boundProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Done.'), exitCode: 0 } as any);
+
+    try {
+      await boundProvider.invoke(baseOptions);
+      await boundProvider.invoke({ ...baseOptions, resume: true });
+
+      expect(mockExeca.mock.calls.map(([, , options]) => options.env)).toEqual([
+        { CODEX_API_KEY: key },
+        { CODEX_API_KEY: key },
+      ]);
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('gates automatic streaming but preserves an operator interactive session', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      }),
+      exitCode: 0,
+    });
+    const gatedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: 'interactive output', exitCode: 0 } as any);
+
+    const automatic = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false });
+    const interactive = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    expect({
+      automaticState: automatic.authentication?.state,
+      operatorExecutionCount: mockExeca.mock.calls.length,
+      readinessChecks: runDoctor.mock.calls.length,
+      interactiveSuccess: interactive.success,
+    }).toEqual({
+      automaticState: 'missing',
+      operatorExecutionCount: 1,
+      readinessChecks: 1,
+      interactiveSuccess: true,
+    });
+    expect(mockExeca.mock.calls[0]?.[1]).not.toContain('approval_policy="on-request"');
+  });
+
+  it.each([
+    [
+      'missing selected source',
+      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: false }, transport: { authenticated: false } },
+      { exitCode: 0 },
+      'missing',
+    ],
+    [
+      'rejected selected source',
+      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true, rejected: true }, transport: { authenticated: false } },
+      { exitCode: 1 },
+      'unusable',
+    ],
+    [
+      'malformed evidence',
+      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true } },
+      { exitCode: 0 },
+      'unverifiable',
+    ],
+    [
+      'unsupported evidence schema',
+      { schemaVersion: 2, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } },
+      { exitCode: 0 },
+      'unverifiable',
+    ],
+    [
+      'failed command despite otherwise-ready evidence',
+      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } },
+      { exitCode: 1 },
+      'unverifiable',
+    ],
+    [
+      'conflicting selected source evidence',
+      { schemaVersion: 1, auth: { selectedMode: 'api-key', configured: true }, transport: { authenticated: true } },
+      { exitCode: 0 },
+      'unverifiable',
+    ],
+  ] as const)(
+    'fails closed as %s without exposing doctor diagnostics',
+    async (_name, evidence, result, state) => {
+      mockExeca.mockResolvedValue({
+        stdout: JSON.stringify(evidence),
+        stderr: 'secret doctor diagnostic /private/token',
+        ...result,
+      } as any);
+
+      const readiness = await new CodexProvider().readiness();
+
+      expect(readiness).toMatchObject({
+        provider: 'codex',
+        source: 'cached-login',
+        state,
+        remediation: expect.any(String),
+      });
+      expect(JSON.stringify(readiness)).not.toMatch(/secret|private|token/i);
+      expect(mockExeca).toHaveBeenCalledTimes(1);
+      expect(mockExeca.mock.calls[0]?.[1]).not.toContain('exec');
+    },
+  );
+
+  it('fails closed as unverifiable when the captured doctor command times out or fails externally', async () => {
+    mockExeca.mockRejectedValueOnce(Object.assign(new Error('timed out'), { timedOut: true }));
+    mockExeca.mockResolvedValueOnce({
+      stdout: '',
+      stderr: 'network unavailable with secret doctor diagnostic',
+      exitCode: 1,
+    } as any);
+
+    const defaultProvider = new CodexProvider();
+    await expect(defaultProvider.readiness()).resolves.toMatchObject({
+      provider: 'codex', source: 'cached-login', state: 'unverifiable',
+    });
+    await expect(defaultProvider.readiness()).resolves.toMatchObject({
+      provider: 'codex', source: 'cached-login', state: 'unverifiable',
+    });
+    expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual([
+      ['doctor', '--json', '--summary'],
+      ['doctor', '--json', '--summary'],
+    ]);
   });
 
   it.each([
@@ -100,6 +668,11 @@ describe('CodexProvider', () => {
     } else {
       expect(result[expectedFlag as keyof typeof result]).toBe(true);
     }
+    expect(result.authentication).toMatchObject({
+      provider: 'codex',
+      source: 'cached-login',
+      state: expectedFlag === 'authFailure' ? 'unusable' : 'ready',
+    });
     if (expectedFlag === 'rateLimited') expect(result.waitSeconds).toBe(45);
   });
 
@@ -160,7 +733,7 @@ describe('CodexProvider', () => {
           failed: true,
         },
         expected: {
-          output: 'Authentication required. Please run codex login.',
+          output: 'Codex authentication failed using the selected cached-login source.',
           authFailure: true,
         },
       },
@@ -264,16 +837,28 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('streams a one-shot exec for interface-compatible interactive calls', async () => {
+  it('captures output for a noninteractive invokeInteractive call', async () => {
     mockExeca.mockResolvedValue({ exitCode: 0 } as any);
 
-    await provider.invokeInteractive(baseOptions);
+    await provider.invokeInteractive({ ...baseOptions, interactive: false });
 
     const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
     expect(args).not.toContain('--json');
     expect(options).toMatchObject({
       stdin: 'pipe',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+  });
+
+  it('live-inherits captured output for a true operator-interactive call', async () => {
+    mockExeca.mockResolvedValue({ stdout: 'visible output', stderr: '', exitCode: 0 } as any);
+
+    await provider.invokeInteractive({ ...baseOptions, interactive: true });
+
+    const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+    expect({ stdout: options.stdout, stderr: options.stderr }).toEqual({
       stdout: ['pipe', 'inherit'],
       stderr: ['pipe', 'inherit'],
     });
@@ -331,7 +916,7 @@ describe('CodexProvider', () => {
         },
         expected: {
           success: false,
-          output: 'Authentication required. Please run codex login.',
+          output: 'Codex authentication failed using the selected cached-login source.',
           exitCode: 1,
           authFailure: true,
         },
@@ -415,8 +1000,8 @@ describe('CodexProvider', () => {
           waitSeconds:
             'waitSeconds' in expected ? expected.waitSeconds : undefined,
         },
-        stdout: ['pipe', 'inherit'],
-        stderr: ['pipe', 'inherit'],
+        stdout: 'pipe',
+        stderr: 'pipe',
       })),
     );
   });

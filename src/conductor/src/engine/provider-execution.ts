@@ -37,6 +37,8 @@ export interface ProviderCandidateFailureClassification {
 
 export interface ProviderAttemptMetadata {
   provider: string;
+  /** Sanitized source selected by the Codex provider, when it reported one. */
+  authenticationSource?: 'api-key' | 'cached-login';
   model?: string;
   tokenUsage?: TokenUsage;
   outcome: 'success' | 'failure' | 'unavailable';
@@ -304,6 +306,7 @@ export function buildProviderAttemptMetadata({
   const invoked = result.providerInvocationSkipped !== true;
   return {
     provider: providerKey,
+    ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
     ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
     ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
     outcome: unavailable

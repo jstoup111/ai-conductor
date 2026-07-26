@@ -77,6 +77,78 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('returns a permission denial from the selected provider without falling back', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'Codex permission review denied the required action.',
+      exitCode: 1,
+      permissionDenied: true,
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not run',
+      exitCode: 0,
+    }));
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      runtimes,
+      sessions,
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+    });
+
+    expect({ result, claudeCalls: claudeInvoke.mock.calls }).toEqual({
+      result: expect.objectContaining({
+        success: false,
+        permissionDenied: true,
+        actualProvider: 'codex',
+      }),
+      claudeCalls: [],
+    });
+  });
+
+  it('emits only the selected Codex authentication source for successful and failed attempts', async () => {
+    const captured: unknown[] = [];
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({
+        success: true, output: 'completed', exitCode: 0,
+        authentication: { provider: 'codex', source: 'api-key', state: 'ready', remediation: 'sk-secret' },
+      })
+      .mockResolvedValueOnce({
+        success: false, output: 'authentication rejected', exitCode: 1,
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable', remediation: 'sk-secret' },
+      });
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('codex-session'));
+    const module = await import('../../src/engine/provider-execution.js');
+
+    for (const prompt of ['successful', 'failed']) {
+      await module.executeProviderCandidates({
+        step: 'build', configuredProviders: ['codex'], preferredProvider: 'codex', runtimes, sessions,
+        options: { prompt, cwd: '/workspace/feature' },
+        onAttempt: (_step, attempt) => captured.push(attempt),
+      });
+    }
+
+    expect(captured.map((attempt) => ({
+      source: (attempt as { authenticationSource?: string }).authenticationSource,
+      includesCredentialMaterial: JSON.stringify(attempt).includes('sk-secret'),
+    }))).toEqual([
+      { source: 'api-key', includesCredentialMaterial: false },
+      { source: 'cached-login', includesCredentialMaterial: false },
+    ]);
+  });
+
   it('exposes bounded helpers for native config, invocation/session handling, and attempt metadata', async () => {
     const module = await import('../../src/engine/provider-execution.js');
 
@@ -103,6 +175,11 @@ describe('executeProviderCandidates', () => {
         output: 'review complete',
         exitCode: 0,
         tokenUsage: { input: 13, output: 8 },
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
       }),
     );
     const legacyInteractive = vi.fn(async (): Promise<void> => {});
@@ -196,6 +273,11 @@ describe('executeProviderCandidates', () => {
         output: 'review complete',
         exitCode: 0,
         tokenUsage: { input: 13, output: 8 },
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
         preferredProvider: 'codex',
         actualProvider: 'codex',
         resolvedModel: 'gpt-step/verbatim',
@@ -203,6 +285,7 @@ describe('executeProviderCandidates', () => {
         attempts: [
           {
             provider: 'codex',
+            authenticationSource: 'api-key',
             model: 'gpt-step/verbatim',
             tokenUsage: { input: 13, output: 8 },
             outcome: 'success',
@@ -770,7 +853,7 @@ describe('executeProviderCandidates', () => {
         name: 'rate-limit precedence',
         failure: {
           success: false,
-          output: '429 retry later',
+          output: 'not logged in, but 429 retry later',
           exitCode: 1,
           rateLimited: true,
           waitSeconds: 45,

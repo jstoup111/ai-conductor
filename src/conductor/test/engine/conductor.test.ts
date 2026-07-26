@@ -110,6 +110,126 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
+    const module = await import('../../src/engine/conductor.js') as {
+      toSpotAuditVerifierResult?: (result: unknown) => unknown;
+    };
+
+    expect(module.toSpotAuditVerifierResult?.({
+      success: false,
+      output: 'selected authentication source rejected',
+      authFailure: true,
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    })).toEqual({
+      success: false,
+      output: 'selected authentication source rejected',
+      authFailure: true,
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    });
+  });
+
+  it('parks a cached-login audit verifier failure and redispatches only that verifier when ready', async () => {
+    const authentication = { provider: 'codex' as const, source: 'cached-login' as const, state: 'unusable' as const };
+    const readiness = vi.fn().mockResolvedValue({ ...authentication, state: 'ready' as const });
+    const dispatchVerifier = vi.fn()
+      .mockResolvedValueOnce({ success: false, output: 'login expired', authFailure: true, authentication })
+      .mockResolvedValueOnce({ success: true, output: 'verdict' });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
+      providerExecution: { runtimes, sessions: new ProviderSessionStore(), configuredProviders: ['codex'] },
+      sleepFn: vi.fn(async () => {}),
+    });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({
+      result,
+      readinessCalls: readiness.mock.calls.length,
+      verifierCalls: dispatchVerifier.mock.calls.length,
+      mainRunnerCalls: vi.mocked(runner.run).mock.calls.length,
+    }).toEqual({
+      result: { success: true, output: 'verdict' },
+      readinessCalls: 1,
+      verifierCalls: 2,
+      mainRunnerCalls: 0,
+    });
+  });
+
+  it('returns a timed-out API-key verifier auth failure to the observational audit without redispatching', async () => {
+    const authentication = { provider: 'codex' as const, source: 'api-key' as const, state: 'unusable' as const };
+    const dispatchVerifier = vi.fn().mockResolvedValue({ success: false, output: 'key rejected', authFailure: true, authentication });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      sleepFn: vi.fn(async () => {}),
+    });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({ result, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+      result: { success: false, output: 'key rejected', authFailure: true, authentication },
+      verifierCalls: 1,
+      mainRunnerCalls: 0,
+    });
+  });
+
+  it('loses a repeatedly rejected cached-login audit sample after one in-place recovery cycle', async () => {
+    const authentication = { provider: 'codex' as const, source: 'cached-login' as const, state: 'unusable' as const };
+    const readiness = vi.fn().mockResolvedValue({ ...authentication, state: 'ready' as const });
+    const dispatchVerifier = vi.fn()
+      .mockResolvedValueOnce({ success: false, output: 'first rejection', authFailure: true, authentication })
+      .mockResolvedValueOnce({ success: false, output: 'second rejection', authFailure: true, authentication });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+      policy: CODEX_MODEL_POLICY, builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
+      providerExecution: { runtimes, sessions: new ProviderSessionStore(), configuredProviders: ['codex'] },
+      sleepFn: vi.fn(async () => {}),
+    });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({ result, readinessCalls: readiness.mock.calls.length, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+      result: { success: false, output: 'second rejection', authFailure: true, authentication },
+      readinessCalls: 1,
+      verifierCalls: 2,
+      mainRunnerCalls: 0,
+    });
+  });
+
+  it('keeps a non-auth verifier failure observational with one dispatch', async () => {
+    const dispatchVerifier = vi.fn().mockResolvedValue({ success: false, output: 'verdict unavailable' });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({ result, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+      result: { success: false, output: 'verdict unavailable' },
+      verifierCalls: 1,
+      mainRunnerCalls: 0,
+    });
+  });
+
   describe('track resolution from the committed marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, interactive)', () => {
     it('technical marker → prd is skipped even when state.track is unset', async () => {
       // /explore wrote the marker; state has no `track` (interactive path).
@@ -4896,6 +5016,140 @@ describe('engine/conductor', () => {
       };
     }
 
+    it('rechecks the failed Codex source and redispatches only auth-failed group members', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+
+      const readiness = vi
+        .fn()
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: {
+            invoke: vi.fn(),
+            invokeInteractive: vi.fn(async () => {}),
+            readiness,
+          },
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
+      const calls: Array<{ step: StepName; attempt?: number }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step, _state, options) => {
+          calls.push({ step, attempt: options?.attempt });
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          const priorCalls = calls.filter((call) => call.step === step).length;
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+            return { success: true };
+          }
+          if (step === 'prd_audit' && priorCalls === 1) {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+            };
+          }
+          if (step === 'architecture_review_as_built' && priorCalls === 1) {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state: 'missing' },
+            };
+          }
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), PRD_AUDIT_PASS);
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              AS_BUILT_APPROVED,
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 1,
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      });
+
+      await conductor.run();
+
+      expect(readiness).toHaveBeenCalledTimes(2);
+      expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
+      expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
+      expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
+    });
+
+    it('halts one denied Codex group member without rerunning its completed siblings', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: StepName[] = [];
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          calls.push(step);
+          if (step === 'prd_audit') {
+            return {
+              success: false,
+              output: 'Codex automatic permission review denied the required action.',
+              permissionDenied: true,
+              actualProvider: 'codex',
+              authentication: {
+                provider: 'codex',
+                source: 'api-key',
+                state: 'ready',
+              },
+            };
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect({
+        calls: Object.fromEntries(
+          ['manual_test', 'prd_audit', 'architecture_review_as_built'].map((step) => [
+            step,
+            calls.filter((call) => call === step).length,
+          ]),
+        ),
+        haltReasons,
+      }).toEqual({
+        calls: { manual_test: 1, prd_audit: 1, architecture_review_as_built: 1 },
+        haltReasons: [
+          expect.stringMatching(
+            /Codex permission review denied[\s\S]*selected api-key source[\s\S]*re-scope[\s\S]*re-queue/i,
+          ),
+        ],
+      });
+    });
+
     it('mixed-order completions (prd_audit resolves before manual_test) still produce one consistent state snapshot with all member + group keys', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 
@@ -8913,6 +9167,36 @@ describe('engine/conductor', () => {
 
       // Runner should have been called at least twice on the first step (1 auth-failed + 1 success)
       expect(attempt).toBeGreaterThanOrEqual(2);
+    });
+
+    it('halts an unknown Codex review result without consuming a retry', async () => {
+      const runner: StepRunner = {
+        run: vi.fn(async () => ({
+          success: false,
+          output: 'Codex automatic review returned an unknown result for workspace escape',
+          permissionDenied: true,
+          actualProvider: 'codex',
+          authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
+        })),
+      };
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect({ calls: runner.run.mock.calls.length, haltReasons }).toEqual({
+        calls: 1,
+        haltReasons: [expect.stringMatching(/Codex permission review denied[\s\S]*cached-login/i)],
+      });
     });
 
     it('re-enters park on subsequent authFailure without budget burn', async () => {
