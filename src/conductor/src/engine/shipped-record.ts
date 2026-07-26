@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import type { BacklogTreeSource } from './daemon-backlog.js';
+import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 
 /**

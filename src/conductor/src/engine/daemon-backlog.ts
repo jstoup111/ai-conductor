@@ -18,6 +18,7 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
+import type { BacklogTreeSource } from './backlog-tree-source.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -43,11 +44,7 @@ const execFile = promisify(execFileCb);
  * `readFile(relPath)` → the content of a repo-relative path on the base branch,
  *   or `null` when the path is absent from that tree.
  */
-export interface BacklogTreeSource {
-  listPlanFiles(): Promise<string[]>;
-  listShippedFiles(): Promise<string[]>;
-  readFile(relPath: string): Promise<string | null>;
-}
+export type { BacklogTreeSource } from './backlog-tree-source.js';
 
 /**
  * Production tree source: reads the committed `baseBranch` tree of the repo at

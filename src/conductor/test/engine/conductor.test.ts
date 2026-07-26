@@ -228,6 +228,7 @@ describe('engine/conductor', () => {
       verifierCalls: 1,
       mainRunnerCalls: 0,
     });
+  });
 
   describe('merged shipment terminal guard (Task 7)', () => {
     const terminalState: ConductState = {
