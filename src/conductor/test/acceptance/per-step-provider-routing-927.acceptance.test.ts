@@ -321,13 +321,13 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
       providerKey: 'claude',
       policy: CLAUDE_MODEL_POLICY,
       expectedModel: 'sonnet',
-      expectedEffort: 'low',
+      expectedEffort: 'medium',
     },
     {
       providerKey: 'codex',
       policy: CODEX_MODEL_POLICY,
       expectedModel: 'gpt-5.6-terra',
-      expectedEffort: 'low',
+      expectedEffort: 'medium',
     },
   ])(
     'preserves the pre-feature $providerKey invocation, retry, session, and diagnostic fixture',
@@ -409,7 +409,7 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
       phase: 'BUILD',
       tier: 'M',
       config: undefined,
-      expected: { model: 'opus', effort: 'high' },
+      expected: { model: 'fable', effort: 'high' },
     },
     {
       name: 'specialized Claude plan at L',
@@ -599,7 +599,7 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
       }),
     ).toEqual({
       model: 'opus',
-      effort: 'medium',
+      effort: 'xhigh',
       modelFallbackLadder: CLAUDE_MODEL_POLICY.modelFallbackLadder,
     });
   });
