@@ -303,6 +303,13 @@ Add to `.gitignore` (idempotent — don't duplicate):
   idempotent. Update AGENTS.md atomically; if the update cannot be completed safely, leave the original content
   intact and report an actionable AGENTS.md error rather than creating a partial file. Never overwrite user content.
 
+When both host files are present, preserve and update `CLAUDE.md` and `AGENTS.md` independently:
+add only the missing harness reference and never normalize away operator-authored content. Validate
+that each host keeps its own invocation syntax (Claude `/skill-name`, Codex `$skill-name`) while
+both point to the same shared workflow and lifecycle gates in `HARNESS.md`. If either file
+contradicts that contract, report the host and the conflicting instruction before completing
+initialization.
+
 ### 7. Bootstrap Memory (Existing Projects Only)
 
 Seed `.memory/` from existing code. Use detection from Steps 4 and 4c — don't re-scan.

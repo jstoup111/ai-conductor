@@ -84,6 +84,12 @@ contains 'Claude template loads the shared HARNESS.md contract' \
   '~/.claude/skills/HARNESS\.md' "$CLAUDE_TEMPLATE"
 contains 'Codex template loads that same HARNESS.md contract from its native scope' \
   '~/.agents/skills/HARNESS\.md' "$AGENTS_TEMPLATE"
+contains 'Claude and Codex templates identify the shared workflow and lifecycle gates' \
+  'shared.*(workflow|lifecycle).*gate|same.*(workflow|lifecycle).*gate' "$CLAUDE_TEMPLATE"
+contains 'Codex template keeps Codex invocation syntax native' \
+  'Codex.*\$[a-z][a-z-]*' "$AGENTS_TEMPLATE"
+contains 'Claude template keeps Claude invocation syntax native' \
+  'Claude.*`/[a-z][a-z-]*`' "$CLAUDE_TEMPLATE"
 not_contains 'Codex guidance never instructs Codex to invoke Claude slash syntax' \
   'Codex.*`/[a-z][a-z-]*`|invoke.*`/[a-z][a-z-]*`' "$AGENTS_TEMPLATE"
 
