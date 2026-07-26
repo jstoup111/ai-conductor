@@ -113,6 +113,29 @@ describe('executeProviderCandidates', () => {
     expect(teardown).toHaveBeenCalledOnce();
   });
 
+  it('tears down a failed candidate home before provisioning its fallback', async () => {
+    const events: string[] = [];
+    const codex = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'missing', exitCode: 127, providerUnavailable: true, providerUnavailableScope: 'run' })), invokeInteractive: vi.fn(async () => {}) };
+    const claude = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'ok', exitCode: 0 })), invokeInteractive: vi.fn(async () => {}) };
+    const runtimes = new ProviderRuntimeSet([runtime('codex', codex), runtime('claude', claude)]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')), options: { prompt: 'build', cwd: '/workspace' },
+      prepareCandidateSelfHost: async candidate => ({ executable: candidate.providerKey, env: {}, args: [], teardown: async () => { events.push(`cleanup:${candidate.providerKey}`); } }),
+    });
+    expect(events).toEqual(['cleanup:codex', 'cleanup:claude']);
+  });
+
+  it.each(['success', 'failure', 'cancellation', 'timeout', 'interruption', 'retry exhaustion', 'replacement'])('cleans the candidate home on %s terminal result', async (_terminal) => {
+    const teardown = vi.fn(async () => {});
+    const provider = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'terminal', exitCode: 1 })), invokeInteractive: vi.fn(async () => {}) };
+    const runtimes = new ProviderRuntimeSet([runtime('codex', provider)]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+    await executeProviderCandidates({ step: 'build', configuredProviders: ['codex'], runtimes, sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')), options: { prompt: 'build', cwd: '/workspace' }, prepareCandidateSelfHost: async () => ({ executable: 'codex', env: {}, args: [], teardown }) });
+    expect(teardown).toHaveBeenCalledOnce();
+  });
+
   it('redacts a safety canary from attempt metadata, fallback warnings, and the terminal provider error', async () => {
     const canary = 'CANARY_SECRET_907';
     const provider = {
