@@ -359,7 +359,7 @@ describe('engine/finish-record-cli', () => {
       await expect(snapshotDir(existingAbsDir)).resolves.toEqual(before);
     });
 
-    it('passes the guard when gh succeeds with a URL and push-evidence confirms HEAD is pushed', async () => {
+    it('passes normalized ancestry evidence when gh succeeds with a URL and push-evidence confirms HEAD is pushed', async () => {
       const runGh = vi.fn(async () => ({
         stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
       }));
@@ -371,6 +371,9 @@ describe('engine/finish-record-cli', () => {
           return { stdout: '' }; // exit 0 → is-ancestor → pushed
         }
         if (args[0] === 'rev-parse' && args.includes('HEAD')) {
+          return { stdout: 'candidate\n' };
+        }
+        if (args[0] === 'rev-parse' && args.includes('--verify')) {
           return { stdout: 'candidate\n' };
         }
         if (args[0] === 'rev-parse' && args.includes('@{u}')) {
@@ -386,7 +389,19 @@ describe('engine/finish-record-cli', () => {
           pipelineDir: existingAbsDir,
         },
         scratchParent,
-        { runGh, runGit, evaluateEvidence: async () => validEvidence },
+        {
+          runGh,
+          runGit,
+          evaluateEvidence: async (_input, dependencies) => {
+            await expect(
+              dependencies.gitRunner?.(['merge-base', '--is-ancestor', 'candidate', 'candidate']),
+            ).resolves.toBe('true');
+            await expect(
+              dependencies.gitRunner?.(['rev-parse', '--verify', 'candidate']),
+            ).resolves.toBe('candidate\n');
+            return validEvidence;
+          },
+        },
       );
       expect(code).toBe(0);
       expect(runGh).toHaveBeenCalledWith(

@@ -228,7 +228,15 @@ export async function dispatchFinishRecord(
           candidateCommit,
         },
         {
-          gitRunner: async (args) => (await deps.runGit(args, { cwd: repoDir })).stdout,
+          gitRunner: async (args) => {
+            try {
+              const result = await deps.runGit(args, { cwd: repoDir });
+              return isMergeBaseAncestor(args) ? 'true' : result.stdout;
+            } catch (error) {
+              if (isMergeBaseAncestor(args) && exitCode(error) === 1) return 'false';
+              throw error;
+            }
+          },
           githubRunner: async (implementationPr) => {
             if (implementationPr !== cmd.prUrl) {
               throw new Error(`unexpected implementation PR binding request: ${implementationPr}`);
@@ -297,4 +305,15 @@ export async function dispatchFinishRecord(
   }
 
   return 0;
+}
+
+function isMergeBaseAncestor(args: string[]): boolean {
+  return args[0] === 'merge-base' && args[1] === '--is-ancestor';
+}
+
+function exitCode(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error &&
+    typeof (error as { code?: unknown }).code === 'number'
+    ? (error as { code: number }).code
+    : undefined;
 }
