@@ -111,7 +111,15 @@ assert "non-clean state: overall --check exit reflects the failure (FR-3)" "$r"
 [ "$rc" -eq 2 ] && r=0 || r=1
 assert "build-auth-only failure: exits 2 so install drift remains distinguishable" "$r"
 
-# ─── Case 3: conduct-ts absent from PATH entirely → warn, not crash ──
+# ─── Case 3: install drift takes precedence over a build-auth failure ─────────
+
+unlink "$FAKE_HOME/.agents/skills/rebase"
+out=$(run_check "$FAIL_BIN" 2>&1) && rc=0 || rc=$?
+ln -s "$HARNESS_DIR/skills/rebase" "$FAKE_HOME/.agents/skills/rebase"
+[ "$rc" -eq 1 ] && r=0 || r=1
+assert "mixed install drift + build-auth failure: exits 1 for install drift" "$r"
+
+# ─── Case 4: conduct-ts absent from PATH entirely → warn, not crash ──
 
 out=$(run_check "" 2>&1) && rc=0 || rc=$?
 echo "$out" | grep -qE "⚠.*build-auth" && r=0 || r=1
