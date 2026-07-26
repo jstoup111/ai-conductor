@@ -419,6 +419,28 @@ describe('CodexProvider', () => {
       1,
       'unusable',
     ],
+    [
+      'missing credentials despite an unrelated overall-green summary',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'Codex credentials are missing' } },
+      },
+      0,
+      'missing',
+    ],
+    [
+      'expired credentials despite an unrelated overall-green summary',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'cached credentials expired' } },
+      },
+      0,
+      'unusable',
+    ],
   ] as const)(
     'classifies the documented doctor envelope for %s without exposing diagnostics',
     async (_name, apiKey, evidence, exitCode, state) => {
@@ -532,6 +554,41 @@ describe('CodexProvider', () => {
       execCalls: 0,
     });
   });
+
+  it.each([
+    ['missing', 'no Codex credentials were found', 'missing'],
+    ['unusable', 'cached credentials expired', 'unusable'],
+  ] as const)(
+    'blocks initial and adjacent unattended dispatches for explicit %s documented evidence',
+    async (_name, summary, state) => {
+      const runDoctor = vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus: 'ok',
+          checks: { 'auth.credentials': { status: 'fail', summary } },
+        }),
+        exitCode: 0,
+      });
+      const gatedProvider = new CodexProvider(runDoctor);
+
+      const initial = await gatedProvider.invoke(baseOptions);
+      const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+
+      expect({
+        initial: initial.authentication?.state,
+        adjacent: adjacent.authentication?.state,
+        doctorCalls: runDoctor.mock.calls.length,
+        substantiveCalls: mockExeca.mock.calls.length,
+        output: `${initial.output}\n${adjacent.output}`,
+      }).toEqual({
+        initial: state,
+        adjacent: state,
+        doctorCalls: 2,
+        substantiveCalls: 0,
+        output: expect.not.stringContaining(summary),
+      });
+    },
+  );
 
   it('checks readiness again before a resumed unattended dispatch', async () => {
     const runDoctor = vi.fn().mockResolvedValue(readyDoctorResult());

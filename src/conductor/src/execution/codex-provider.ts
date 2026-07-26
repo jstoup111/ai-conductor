@@ -383,8 +383,8 @@ export class CodexProvider implements LLMProvider {
             unrelatedHealth: overallStatus === 'fail' ? 'degraded' : undefined,
           };
         }
-        if (status !== 'fail' || overallStatus !== 'fail') return undefined;
-        if (/no codex credentials were found/i.test(summary)) {
+        if (status !== 'fail') return undefined;
+        if (/(?:no codex credentials were found|codex credentials are missing)/i.test(summary)) {
           return { kind: 'documented', state: 'missing' };
         }
         if (/invalid|rejected|unauthorized|expired/i.test(summary)) {
