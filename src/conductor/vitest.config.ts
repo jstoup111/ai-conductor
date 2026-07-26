@@ -12,7 +12,7 @@ export default defineConfig({
     // where the conductor suite pollutes its own working directory.
     globalSetup: ['./test/global-setup.ts'],
     pool: 'forks',
-    poolOptions: { forks: { maxForks: 3, minForks: 1 } },
+    poolOptions: { forks: { maxForks: 12, minForks: 1 } },
     testTimeout: 20000,
     hookTimeout: 30000,
   },
