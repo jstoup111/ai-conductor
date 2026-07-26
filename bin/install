@@ -1070,10 +1070,41 @@ report_selected_provider_readiness() {
   done
 }
 
+# A prior catalog is trusted only when its HARNESS.md resolves to a complete
+# harness root. This lets an update refresh links installed by an earlier
+# checkout without treating an arbitrary operator-owned symlink as ours.
+prior_harness_root() {
+  local harness_link=$1 resolved root
+  [ -L "$harness_link" ] || return 1
+  resolved=$(readlink -f "$harness_link" 2>/dev/null || echo "")
+  root=${resolved%/HARNESS.md}
+  [ "$resolved" = "${root}/HARNESS.md" ] &&
+    [ -f "${root}/HARNESS.md" ] && [ -f "${root}/VERSION" ] &&
+    [ -d "${root}/skills" ] || return 1
+  printf '%s\n' "$root"
+}
+
+# A catalog entry is mutable only when it is an exact link from this checkout,
+# or from the complete prior harness identified by this catalog's HARNESS.md.
+# Regular files, directories, broken links, and arbitrary links are operator
+# content and must stay byte-for-byte/target-for-target intact.
+owned_skill_link() {
+  local skills_dir=$1 skill=$2 target=$3 current prior_root
+  current=$(readlink -f "$target" 2>/dev/null || echo "")
+  [ "$current" = "${HARNESS_DIR}/skills/${skill}" ] && return 0
+  prior_root=$(prior_harness_root "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+  [ -n "$prior_root" ] && [ "$current" = "${prior_root}/skills/${skill}" ]
+}
+
+owned_harness_link() {
+  local target=$1 current
+  current=$(readlink -f "$target" 2>/dev/null || echo "")
+  [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ] && return 0
+  prior_harness_root "$target" >/dev/null 2>&1
+}
+
 # Once the active Codex catalog is established in ~/.agents/skills, remove only
-# exact harness-owned links left at Codex's former discovery location. A
-# symlink is owned only when its resolved target is this checkout's canonical
-# source; files, directories, broken links, and foreign links remain untouched.
+# exact harness-owned links left at Codex's former discovery location.
 reconcile_legacy_codex_links() {
   local legacy_dir="${HOME}/.codex/skills"
   local skill target source current
@@ -1083,14 +1114,26 @@ reconcile_legacy_codex_links() {
     source="${HARNESS_DIR}/skills/${skill}"
     if [ -L "$target" ]; then
       current=$(readlink -f "$target" 2>/dev/null || echo "")
-      [ "$current" = "$source" ] && rm -- "$target"
+      if [ "$current" = "$source" ]; then
+        rm -- "$target"
+      else
+        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+      fi
+    elif [ -e "$target" ]; then
+      warn "Codex legacy skill: ${skill} — foreign entry preserved"
     fi
   done
 
   target="${legacy_dir}/HARNESS.md"
   if [ -L "$target" ]; then
     current=$(readlink -f "$target" 2>/dev/null || echo "")
-    [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ] && rm -- "$target"
+    if [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+      rm -- "$target"
+    else
+      warn "Codex legacy harness instructions — foreign symlink preserved"
+    fi
+  elif [ -e "$target" ]; then
+    warn "Codex legacy harness instructions — foreign entry preserved"
   fi
 }
 
@@ -1158,16 +1201,21 @@ install() {
       fi
 
       if [ -L "$target" ]; then
-        current=$(readlink -f "$target" 2>/dev/null || echo "")
-        if [ "$current" = "$source" ]; then
+        if owned_skill_link "$skills_dir" "$skill" "$target"; then
+          current=$(readlink -f "$target" 2>/dev/null || echo "")
+          if [ "$current" = "$source" ]; then
+            continue  # Already correct
+          fi
+          ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink update failed"; continue; }
+          updated=$((updated + 1))
+        else
+          warn "${client} skill: ${skill} — foreign symlink preserved"
           continue  # Already correct
         fi
-        ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink update failed"; continue; }
-        updated=$((updated + 1))
       else
         if [ -e "$target" ]; then
-          warn "${client} skill: ${skill} — exists but is not a symlink. Backing up to ${target}.bak"
-          mv "$target" "${target}.bak" || { warn "${client} skill: ${skill} — backup failed, skipping"; continue; }
+          warn "${client} skill: ${skill} — foreign entry preserved"
+          continue
         fi
         ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink failed"; continue; }
         installed=$((installed + 1))
@@ -1176,14 +1224,18 @@ install() {
 
     harness_target="${skills_dir}/HARNESS.md"
     if [ -L "$harness_target" ]; then
-      current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
-      if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
-        ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+      if owned_harness_link "$harness_target"; then
+        current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+        if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+          ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+        fi
+      else
+        warn "${client} harness instructions — foreign symlink preserved"
       fi
     else
       if [ -e "$harness_target" ]; then
-        warn "${client} harness instructions — exists but is not a symlink. Backing up to ${harness_target}.bak"
-        mv "$harness_target" "${harness_target}.bak" || { warn "${client} harness instructions — backup failed"; continue; }
+        warn "${client} harness instructions — foreign entry preserved"
+        continue
       fi
       ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink failed"
     fi

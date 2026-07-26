@@ -244,29 +244,53 @@ check 'repeated normal install and update preserve the exact current catalog and
 # uninstall byte-for-byte or target-for-target.
 FOREIGN_HOME="$TMP_ROOT/home-foreign"
 mkdir -p "$FOREIGN_HOME/.agents/skills/pipeline" "$FOREIGN_HOME/.codex/skills"
+NEAR_MATCH_CHECKOUT="${CHECKOUT}-foreign"
+mkdir -p "$NEAR_MATCH_CHECKOUT/skills/conduct" "$NEAR_MATCH_CHECKOUT/skills/tdd"
+printf '%s\n' 'not this harness' > "$NEAR_MATCH_CHECKOUT/HARNESS.md"
 printf '%s\n' 'operator-owned tdd file' > "$FOREIGN_HOME/.agents/skills/tdd"
 printf '%s\n' 'operator-owned pipeline directory' > "$FOREIGN_HOME/.agents/skills/pipeline/data"
-ln -s "$TMP_ROOT/operator-conduct-target" "$FOREIGN_HOME/.agents/skills/conduct"
-ln -s "$TMP_ROOT/operator-legacy-tdd-target" "$FOREIGN_HOME/.codex/skills/tdd"
+ln -s "$NEAR_MATCH_CHECKOUT/skills/conduct" "$FOREIGN_HOME/.agents/skills/conduct"
+ln -s "$NEAR_MATCH_CHECKOUT/HARNESS.md" "$FOREIGN_HOME/.agents/skills/HARNESS.md"
+ln -s "$NEAR_MATCH_CHECKOUT/skills/tdd" "$FOREIGN_HOME/.codex/skills/tdd"
 printf '%s\n' 'operator-owned legacy harness instructions' > "$FOREIGN_HOME/.codex/skills/HARNESS.md"
 # Exact harness-owned current link: update may retain it, uninstall must remove it.
 ln -s "$CHECKOUT/skills/stories" "$FOREIGN_HOME/.agents/skills/stories"
 FOREIGN_FILE_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/tdd" | awk '{print $1}')
 FOREIGN_DIR_HASH=$(sha256sum "$FOREIGN_HOME/.agents/skills/pipeline/data" | awk '{print $1}')
 FOREIGN_CURRENT_LINK_TARGET=$(readlink "$FOREIGN_HOME/.agents/skills/conduct")
+FOREIGN_CURRENT_HARNESS_TARGET=$(readlink "$FOREIGN_HOME/.agents/skills/HARNESS.md")
 FOREIGN_LEGACY_LINK_TARGET=$(readlink "$FOREIGN_HOME/.codex/skills/tdd")
 FOREIGN_HARNESS_HASH=$(sha256sum "$FOREIGN_HOME/.codex/skills/HARNESS.md" | awk '{print $1}')
 run_install "$FOREIGN_HOME" --update --providers codex >"$TMP_ROOT/foreign-update.out" 2>&1
+check 'update succeeds while preserving foreign collisions' \
+  test "$?" -eq 0
 check 'update preserves a foreign regular file colliding with a current skill name' \
-  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/tdd" | awk '{print $1}')" = "$FOREIGN_FILE_HASH"
+  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/tdd" | awk '{print $1}')" = "$FOREIGN_FILE_HASH" && \
+    test ! -e "$FOREIGN_HOME/.agents/skills/tdd.bak"
 check 'update preserves a foreign directory colliding with a current skill name' \
-  test "$(sha256sum "$FOREIGN_HOME/.agents/skills/pipeline/data" | awk '{print $1}')" = "$FOREIGN_DIR_HASH"
+  test -d "$FOREIGN_HOME/.agents/skills/pipeline" && \
+    test "$(sha256sum "$FOREIGN_HOME/.agents/skills/pipeline/data" | awk '{print $1}')" = "$FOREIGN_DIR_HASH" && \
+    test ! -e "$FOREIGN_HOME/.agents/skills/pipeline.bak"
 check 'update preserves a foreign symlink colliding with a current skill name' \
-  test "$(readlink "$FOREIGN_HOME/.agents/skills/conduct")" = "$FOREIGN_CURRENT_LINK_TARGET"
+  test "$(readlink "$FOREIGN_HOME/.agents/skills/conduct")" = "$FOREIGN_CURRENT_LINK_TARGET" && \
+    test ! -e "$FOREIGN_HOME/.agents/skills/conduct.bak"
+check 'update preserves a foreign current-scope HARNESS.md symlink' \
+  test "$(readlink "$FOREIGN_HOME/.agents/skills/HARNESS.md")" = "$FOREIGN_CURRENT_HARNESS_TARGET" && \
+    test ! -e "$FOREIGN_HOME/.agents/skills/HARNESS.md.bak"
 check 'update preserves a foreign symlink colliding with a legacy skill name' \
   test "$(readlink "$FOREIGN_HOME/.codex/skills/tdd")" = "$FOREIGN_LEGACY_LINK_TARGET"
 check 'update preserves foreign legacy HARNESS.md content' \
   test "$(sha256sum "$FOREIGN_HOME/.codex/skills/HARNESS.md" | awk '{print $1}')" = "$FOREIGN_HARNESS_HASH"
+
+FOREIGN_LEGACY_LINK_HOME="$TMP_ROOT/home-foreign-legacy-link"
+mkdir -p "$FOREIGN_LEGACY_LINK_HOME/.codex/skills"
+ln -s "$NEAR_MATCH_CHECKOUT/HARNESS.md" "$FOREIGN_LEGACY_LINK_HOME/.codex/skills/HARNESS.md"
+FOREIGN_LEGACY_HARNESS_TARGET=$(readlink "$FOREIGN_LEGACY_LINK_HOME/.codex/skills/HARNESS.md")
+run_install "$FOREIGN_LEGACY_LINK_HOME" --update --providers codex \
+  >"$TMP_ROOT/foreign-legacy-link-update.out" 2>&1
+check 'update preserves a foreign legacy HARNESS.md symlink without backup' \
+  test "$(readlink "$FOREIGN_LEGACY_LINK_HOME/.codex/skills/HARNESS.md")" = "$FOREIGN_LEGACY_HARNESS_TARGET" && \
+    test ! -e "$FOREIGN_LEGACY_LINK_HOME/.codex/skills/HARNESS.md.bak"
 
 # Check mode must diagnose the documented active scope, including missing and
 # duplicate current/legacy views, rather than accepting the old scope alone.
