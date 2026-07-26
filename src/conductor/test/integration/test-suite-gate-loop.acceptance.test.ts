@@ -140,6 +140,56 @@ describe('test_suite native gate loop', () => {
     expect(ensure).toHaveBeenCalledTimes(1);
   });
 
+  it('emits stale native verification freshness before executing the verifier', async () => {
+    await writeState(stateFilePath, {
+      ...FRONT_DONE,
+      wiring_check: 'done',
+      test_suite: 'pending',
+      manual_test: 'pending',
+      prd_audit: 'pending',
+      architecture_review_as_built: 'pending',
+      retro: 'done',
+    });
+    const observed: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('test_suite_verification', (event) => {
+      observed.push({
+        type: event.type,
+        freshness: (event as { freshness?: unknown }).freshness,
+      });
+    });
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: { run: async () => ({ success: true }) },
+      events,
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'test_suite',
+      maxRetries: 1,
+      fullSuiteVerifier: {
+        inspect: async () => ({ status: 'STALE', reason: 'source_changed' }),
+        ensure: async () => {
+          observed.push('ensure');
+          return {
+            status: 'EXECUTED',
+            freshness: { status: 'STALE', reason: 'source_changed' },
+            evidence: PASS_EVIDENCE,
+          };
+        },
+      },
+    });
+
+    await conductor.run();
+
+    expect(observed).toEqual([
+      {
+        type: 'test_suite_verification',
+        freshness: { status: 'STALE', reason: 'source_changed' },
+      },
+      'ensure',
+    ]);
+  });
+
   it.each<{
     label: string;
     reason: FullSuiteFailureReason;

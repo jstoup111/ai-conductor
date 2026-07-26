@@ -5651,6 +5651,10 @@ export class Conductor {
   }
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
+    const inspection = await this.fullSuiteVerifier.inspect();
+    if (inspection.status === 'STALE') {
+      await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
+    }
     const verification = await this.fullSuiteVerifier.ensure();
     if (verification.status === 'FAILED') {
       return {
