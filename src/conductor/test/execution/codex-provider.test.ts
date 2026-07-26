@@ -173,12 +173,14 @@ describe('CodexProvider', () => {
   it('fails closed with a Codex permission diagnostic when automatic review reports a structured denial or review timeout', async () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: JSON.stringify({ type: 'error', code: 'approval_denied' }), stderr: '', exitCode: 1 } as any)
-      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review timed out awaiting approval.', exitCode: 1, timedOut: true } as any);
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review timed out awaiting approval.', exitCode: 1, timedOut: true } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review returned an unknown result.', exitCode: 1 } as any);
 
     const oneShot = await provider.invoke(baseOptions);
     const automaticStream = await provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+    const unknownReview = await provider.invoke(baseOptions);
 
-    for (const result of [oneShot, automaticStream]) {
+    for (const result of [oneShot, automaticStream, unknownReview]) {
       expect(result).toMatchObject({
         success: false,
         permissionDenied: true,
@@ -197,18 +199,25 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('does not misclassify generic empty or process-timeout failures as Codex permission decisions', async () => {
+  it('does not misclassify generic empty, process-timeout, or unrelated unknown failures as Codex permission decisions', async () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 1 } as any)
-      .mockResolvedValueOnce({ stdout: '', stderr: 'child process timed out', exitCode: 1, timedOut: true } as any);
+      .mockResolvedValueOnce({ stdout: '', stderr: 'child process timed out', exitCode: 1, timedOut: true } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'model response contained an unknown field', exitCode: 1 } as any);
 
     const emptyFailure = await provider.invoke(baseOptions);
     const timeoutFailure = await provider.invokeInteractive({ ...baseOptions, interactive: false });
+    const unrelatedUnknown = await provider.invoke(baseOptions);
 
     expect(emptyFailure).toMatchObject({ success: false, output: '', permissionDenied: undefined });
     expect(timeoutFailure).toMatchObject({
       success: false,
       output: 'child process timed out',
+      permissionDenied: undefined,
+    });
+    expect(unrelatedUnknown).toMatchObject({
+      success: false,
+      output: 'model response contained an unknown field',
       permissionDenied: undefined,
     });
   });

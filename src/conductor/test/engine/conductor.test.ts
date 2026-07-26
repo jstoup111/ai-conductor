@@ -9113,11 +9113,11 @@ describe('engine/conductor', () => {
       expect(attempt).toBeGreaterThanOrEqual(2);
     });
 
-    it('halts a Codex permission denial without consuming a retry', async () => {
+    it('halts an unknown Codex review result without consuming a retry', async () => {
       const runner: StepRunner = {
         run: vi.fn(async () => ({
           success: false,
-          output: 'permission review denied workspace escape',
+          output: 'Codex automatic review returned an unknown result for workspace escape',
           permissionDenied: true,
           actualProvider: 'codex',
         })),
