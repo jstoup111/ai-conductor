@@ -1,4 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   CodexProvider,
   parseCodexJsonl,
@@ -51,6 +54,64 @@ describe('CodexProvider', () => {
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
+  });
+
+  it('prepares only the selected API-key auth for an isolated Codex home', async () => {
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = 'sk-self-host-selected';
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
+    try {
+      const prepared = await apiKeyProvider.prepareSelfHostAuth!({
+        provider: 'codex',
+        homeDir: '/tmp/isolated-codex-home',
+      });
+      expect(prepared).toEqual({
+        env: { CODEX_API_KEY: 'sk-self-host-selected' },
+        args: [],
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('keeps cached-login selection opaque while launching only through the supplied isolated home', async () => {
+    const priorKey = process.env.CODEX_API_KEY;
+    const priorHome = process.env.CODEX_HOME;
+    const sourceHome = await mkdtemp(join(tmpdir(), 'codex-provider-source-'));
+    const isolatedHome = await mkdtemp(join(tmpdir(), 'codex-provider-isolated-'));
+    await writeFile(join(sourceHome, 'auth.json'), 'opaque-selected-login', { mode: 0o600 });
+    delete process.env.CODEX_API_KEY;
+    process.env.CODEX_HOME = sourceHome;
+    const cachedProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('cached-login')), '/resolved/codex');
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('isolated'), exitCode: 0 } as any);
+    try {
+      expect(await cachedProvider.prepareSelfHostAuth!({ provider: 'codex', homeDir: isolatedHome }))
+        .toEqual({ args: [] });
+      expect(await readFile(join(isolatedHome, 'auth.json'), 'utf8')).toBe('opaque-selected-login');
+      await cachedProvider.invoke({
+        ...baseOptions,
+        selfHost: {
+          executable: '/resolved/codex',
+          env: { CODEX_HOME: isolatedHome },
+          args: ['--config', 'project_doc_max_bytes=0'],
+          teardown: async () => {},
+        },
+      });
+      const [command, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(command).toBe('/resolved/codex');
+      expect(args).toEqual(expect.arrayContaining(['--config', 'project_doc_max_bytes=0']));
+      expect(options.env).toEqual({ CODEX_HOME: isolatedHome });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+      if (priorHome === undefined) delete process.env.CODEX_HOME;
+      else process.env.CODEX_HOME = priorHome;
+      await Promise.all([
+        rm(sourceHome, { recursive: true, force: true }),
+        rm(isolatedHome, { recursive: true, force: true }),
+      ]);
+    }
   });
 
   it('runs a fresh Codex exec with its fixed unattended policy, JSONL, model, cwd, and stdin prompt delivery', async () => {

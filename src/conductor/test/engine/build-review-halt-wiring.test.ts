@@ -502,6 +502,10 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     await mkdir(join(repo, '.docs/plans'), { recursive: true });
     await writeFile(join(repo, '.docs/plans/feat.md'), '# Implementation Plan: feat\n\nDo the thing.\n');
+    // build_review runs inside BUILD, so its protected DECIDE input must be
+    // committed before the conductor establishes the immutable seal.
+    await execFile('git', ['add', '.docs/plans/feat.md'], { cwd: repo });
+    await execFile('git', ['commit', '-q', '-m', 'docs: approve implementation plan'], { cwd: repo });
 
     await seedToBuildReview(statePath, repo, { markRemainingStepsDone: true });
 

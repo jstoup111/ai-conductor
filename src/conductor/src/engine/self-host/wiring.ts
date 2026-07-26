@@ -21,6 +21,11 @@ import {
   type SandboxBuildEnv,
   type ProvisionOptions,
 } from './sandbox-build-env.js';
+import {
+  provisionProviderHome,
+  type ProviderHome,
+  type ProvisionProviderHomeOptions,
+} from './provider-home.js';
 import { runVersionApprovalGate, type VersionGateOptions } from './version-gate.js';
 import { runReleaseArtifactGate, type ReleaseGateOptions } from './release-gate.js';
 import type { GateVerdict } from './gate-halt.js';
@@ -43,6 +48,8 @@ export interface SelfHostGuardrails {
   relink(opts?: RelinkPreflightOptions): Promise<void>;
   /** Provision the throwaway CLAUDE_CONFIG_DIR sandbox (TR-5/6). */
   provisionSandbox(opts: ProvisionOptions): Promise<SandboxBuildEnv>;
+  /** Candidate-specific isolated home seam; adopted by the self-host dispatcher in Task 23. */
+  provisionProviderHome?(opts: ProvisionProviderHomeOptions): Promise<ProviderHome>;
   /** VERSION-approval finish gate (TR-7). */
   versionGate(opts: VersionGateOptions): Promise<GateVerdict>;
   /** Release-artifact finish gate: integrity/CHANGELOG/migration (TR-8/9/10). */
@@ -55,6 +62,7 @@ export const defaultSelfHostGuardrails: SelfHostGuardrails = {
   resolveInstalledHarnessRoot,
   relink: relinkSkillsForSelfBuild,
   provisionSandbox: provisionSandboxBuildEnv,
+  provisionProviderHome,
   versionGate: runVersionApprovalGate,
   releaseGate: runReleaseArtifactGate,
 };

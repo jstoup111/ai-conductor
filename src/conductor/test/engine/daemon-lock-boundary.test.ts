@@ -70,6 +70,9 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // lock; it does not participate in daemon single-winner semantics.
       'engine/full-suite-fingerprint.ts',
       'engine/full-suite-verifier.ts',
+      // The protected-artifact seal uses create-once publication for an
+      // immutable baseline; it is unrelated to daemon process ownership.
+      'engine/protected-artifact-seal.ts',
     ];
 
     for (const file of allTs) {

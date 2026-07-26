@@ -1,5 +1,10 @@
 # Component Diagram: Deterministic Build Evidence Attribution (#433)
 
+> **Historical architecture amended by #907 on 2026-07-26:** the singular
+> `.pipeline/current-task` auto-stamp and mutation-authority path shown below is retired.
+> Current architecture uses concurrent task-local telemetry; see
+> `codex-safety-and-self-host-parity-907.md`.
+
 **Last updated:** 2026-07-09
 **Scope:** The attribution path from per-task dispatch to evidence-gate verdict, and where
 #433 moves it from prompt discipline to machinery: an engine-owned `conduct-ts task` CLI

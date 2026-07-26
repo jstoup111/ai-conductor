@@ -25,6 +25,36 @@ describe('ClaudeProvider', () => {
   };
 
   describe('invoke', () => {
+    it('remains independent of Codex-only isolated-home state', async () => {
+      const priorHome = process.env.CODEX_HOME;
+      process.env.CODEX_HOME = '/missing/codex-home';
+      mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
+      try {
+        await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
+        const [command, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+        expect(command).toBe('claude');
+        expect(options.env?.CODEX_HOME).toBeUndefined();
+      } finally {
+        if (priorHome === undefined) delete process.env.CODEX_HOME;
+        else process.env.CODEX_HOME = priorHome;
+      }
+    });
+
+    it('runs when Codex is absent from PATH and no Codex environment is configured', async () => {
+      const priorPath = process.env.PATH;
+      const priorCodex = process.env.CODEX_HOME;
+      process.env.PATH = '/claude-only';
+      delete process.env.CODEX_HOME;
+      mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
+      try {
+        await provider.invoke({ ...baseOptions, dangerouslySkipPermissions: true });
+        expect(mockExeca.mock.calls[0]?.[0]).toBe('claude');
+      } finally {
+        if (priorPath === undefined) delete process.env.PATH; else process.env.PATH = priorPath;
+        if (priorCodex === undefined) delete process.env.CODEX_HOME; else process.env.CODEX_HOME = priorCodex;
+      }
+    });
+
     it('builds correct args for first call (not resume)', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',

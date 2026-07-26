@@ -627,6 +627,8 @@ export class ClaudeProvider implements LLMProvider {
   private buildArgs(options: InvokeOptions): string[] {
     const args: string[] = [];
 
+    if (options.selfHost?.args) args.push(...options.selfHost.args);
+
     if (options.resume) {
       args.push('--resume', options.sessionId);
     } else {
@@ -662,7 +664,11 @@ export class ClaudeProvider implements LLMProvider {
    * inherited environment.
    */
   private buildEnv(options: InvokeOptions): NodeJS.ProcessEnv | undefined {
-    if (!options.effort) return undefined;
-    return { ...process.env, CLAUDE_CODE_EFFORT_LEVEL: options.effort };
+    if (!options.effort && !options.selfHost?.env) return undefined;
+    return {
+      ...process.env,
+      ...options.selfHost?.env,
+      ...(options.effort ? { CLAUDE_CODE_EFFORT_LEVEL: options.effort } : {}),
+    };
   }
 }

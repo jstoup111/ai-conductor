@@ -34,6 +34,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt } from '../../src/engine/rebase.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCb);
 
@@ -112,6 +113,8 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
     await seedPreRebaseState(statePath);
+    const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
   });
 
   afterEach(async () => {

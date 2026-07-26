@@ -10,6 +10,7 @@
 // ends at a HALT for the operator to re-install, `/verify`, and merge.
 
 import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
+import { redactSafetyText } from '../safety-diagnostics.js';
 
 /** Re-exported from the canonical marker module for existing importers. */
 export { HALT_MARKER };
@@ -25,7 +26,7 @@ export type GateVerdict = { ok: true } | { ok: false; reason: string };
  */
 export async function writeSelfHostHalt(projectRoot: string, reason: string): Promise<void> {
   const body =
-    `${reason}\n\n` +
+    `${redactSafetyText(reason)}\n\n` +
     `Harness self-build gate HALT — the daemon never merges (ADR-005/ADR-010).\n` +
     `Resume procedure:\n` +
     `  1. Address the gate reason above.\n` +

@@ -1,5 +1,9 @@
 # Architecture: Harness Daemon Self-Host Guardrails
 
+> **Historical architecture amended by #907 on 2026-07-26:** self-host no longer relinks
+> live global skills, and both providers use minimal throwaway homes without inherited
+> personal configuration. See `codex-safety-and-self-host-parity-907.md`.
+
 **Last updated:** 2026-06-30
 **Scope:** The **build-plane** guardrails that make the `james-stoup-agents` harness repo safe
 to daemon-register — a unified **harness self-host mode** activated by a self-detect seam. Shows

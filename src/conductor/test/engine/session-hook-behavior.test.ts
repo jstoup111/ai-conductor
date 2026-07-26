@@ -144,7 +144,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
   });
 
-  it('flips the row to in_progress and writes .pipeline/current-task when line 1 is "Task: <id>"', () => {
+  it('flips only the row to in_progress when line 1 is "Task: <id>"', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
     const pipelineDir = join(tempDir, '.pipeline');
     mkdirSync(pipelineDir, { recursive: true });
@@ -187,8 +187,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     expect(updated.tasks.find((t) => t.id === '1')?.status).toBe('completed');
     expect(updated.tasks.find((t) => t.id === '2')?.status).toBe('in_progress');
 
-    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(true);
-    expect(readFileSync(join(pipelineDir, 'current-task'), 'utf-8')).toBe('7');
+    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
 
     // No leftover .tmp intermediate from the atomic write
     const leftoverTmp = readdirSync(pipelineDir).filter((f: string) => f.endsWith('.tmp'));
@@ -247,11 +246,10 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
     expect(updated.tasks.find((t) => t.id === '1')?.status).toBe('pending');
     expect(updated.tasks.find((t) => t.id === '2')?.status).toBe('pending');
 
-    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(true);
-    expect(readFileSync(join(pipelineDir, 'current-task'), 'utf-8')).toBe('7');
+    expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
   });
 
-  it('exits 2 and leaves state untouched when the task id is unknown', () => {
+  it('abstains and leaves state untouched when the task id is unknown', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
     const pipelineDir = join(tempDir, '.pipeline');
     mkdirSync(pipelineDir, { recursive: true });
@@ -287,11 +285,8 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
     }
 
-    expect(exitCode).toBe(2);
-    expect(stderr).toContain('99');
-    expect(stderr).toContain('1');
-    expect(stderr).toContain('2');
-    expect(stderr).toContain('7');
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
 
     expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
     expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
@@ -446,8 +441,9 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       expect(updated.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
       expect(updated.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
 
-      // Overlap guard: stamp removed so the commit hook can't attribute
-      expect(existsSync(currentTaskPath)).toBe(false);
+      // Session dispatches must not mutate a concurrent task's stamp.
+      expect(existsSync(currentTaskPath)).toBe(true);
+      expect(readFileSync(currentTaskPath, 'utf-8')).toBe('7');
     });
   });
 
@@ -488,7 +484,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       }
 
       expect(exitCode).toBe(0);
-      expect(existsSync(currentTaskPath)).toBe(false);
+      expect(existsSync(currentTaskPath)).toBe(true);
       expect(stderr).toContain('pre-dispatch-hook: abstain — task-status.json unreadable (dispatch Task: 2)');
     });
 
@@ -533,7 +529,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
   });
 
   describe('abstain loudly when the status file is unparseable or wrong-shaped', () => {
-    it('removes the stamp and emits diagnostic when status file contains invalid JSON', () => {
+    it('preserves the stamp and emits diagnostic when status file contains invalid JSON', () => {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
       const pipelineDir = join(tempDir, '.pipeline');
       mkdirSync(pipelineDir, { recursive: true });
@@ -570,13 +566,13 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       }
 
       expect(exitCode).toBe(0);
-      expect(existsSync(currentTaskPath)).toBe(false);
+      expect(existsSync(currentTaskPath)).toBe(true);
       expect(stderr).toContain('pre-dispatch-hook: abstain —');
       expect(stderr).toContain('unparseable');
       expect(stderr).toContain('dispatch Task: 2');
     });
 
-    it('removes the stamp and emits diagnostic when status file has wrong-shaped tasks (object instead of array)', () => {
+    it('preserves the stamp and emits diagnostic when status file has wrong-shaped tasks (object instead of array)', () => {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
       const pipelineDir = join(tempDir, '.pipeline');
       mkdirSync(pipelineDir, { recursive: true });
@@ -613,7 +609,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       }
 
       expect(exitCode).toBe(0);
-      expect(existsSync(currentTaskPath)).toBe(false);
+      expect(existsSync(currentTaskPath)).toBe(true);
       expect(stderr).toContain('pre-dispatch-hook: abstain —');
       expect(stderr).toContain('wrong-shaped');
       expect(stderr).toContain('dispatch Task: 2');
@@ -621,7 +617,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
   });
 
   describe('abstain loudly when the atomic status write fails', () => {
-    it('removes the stamp and emits diagnostic when write/rename fails on read-only dir', () => {
+    it('preserves the stamp and emits diagnostic when write/rename fails on read-only dir', () => {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
       const pipelineDir = join(tempDir, '.pipeline');
       mkdirSync(pipelineDir, { recursive: true });
@@ -677,11 +673,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       expect(exitCode).toBe(0);
       expect(stderr).toContain('pre-dispatch-hook: abstain —');
       expect(stderr).toContain('dispatch Task: 2');
-      // Stamp should be removed, or if removal fails on the read-only dir,
-      // the diagnostic should report the removal failure
-      if (existsSync(currentTaskPath)) {
-        expect(stderr).toContain('stamp removal also failed');
-      }
+      expect(existsSync(currentTaskPath)).toBe(true);
     });
   });
 
@@ -817,8 +809,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       };
       expect(updated.tasks.find((t) => t.id === '2')?.status).toBe('in_progress');
 
-      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(true);
-      expect(readFileSync(join(pipelineDir, 'current-task'), 'utf-8')).toBe('2');
+      expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
     });
 
     it('does not emit abstain diagnostic on idempotent re-dispatch', () => {
@@ -915,11 +906,12 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       };
       expect(updated.tasks.find((t) => t.id === '3')?.status).toBe('in_progress');
 
-      // Overlap guard: stamp removed
-      expect(existsSync(currentTaskPath)).toBe(false);
+      // A concurrent stamp belongs to another task and remains untouched.
+      expect(existsSync(currentTaskPath)).toBe(true);
+      expect(readFileSync(currentTaskPath, 'utf-8')).toBe('2');
     });
 
-    it('still exits 2 (unknown id block) with healthy status file', () => {
+    it('abstains for an unknown id with a healthy status file', () => {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
       const pipelineDir = join(tempDir, '.pipeline');
       mkdirSync(pipelineDir, { recursive: true });
@@ -957,9 +949,9 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
         stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
       }
 
-      expect(exitCode).toBe(2);
+      expect(exitCode).toBe(0);
       expect(stderr).toContain('99');
-      expect(stderr).not.toContain('pre-dispatch-hook: abstain');
+      expect(stderr).toContain('pre-dispatch-hook: abstain');
 
       expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatus);
       expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
@@ -1126,7 +1118,7 @@ describe('POST_DISPATCH_HOOK behavior', () => {
     return { ...payload, hook_event_name: 'PostToolUse' };
   }
 
-  it('removes the stamp and leaves the row in_progress (never completed) when the stamp matches the dispatched id', () => {
+  it('leaves the stamp and row untouched when the dispatched id matches', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'post-dispatch-hook-'));
     const pipelineDir = join(tempDir, '.pipeline');
     mkdirSync(pipelineDir, { recursive: true });
@@ -1165,7 +1157,7 @@ describe('POST_DISPATCH_HOOK behavior', () => {
     }
 
     expect(exitCode).toBe(0);
-    expect(existsSync(currentTaskPath)).toBe(false);
+    expect(existsSync(currentTaskPath)).toBe(true);
 
     const afterStatusRaw = readFileSync(statusPath, 'utf-8');
     expect(afterStatusRaw).toBe(beforeStatusRaw);
@@ -1175,7 +1167,7 @@ describe('POST_DISPATCH_HOOK behavior', () => {
     expect(updated.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
   });
 
-  it('leaves a mismatched stamp untouched and exits 0 with a stderr diagnostic', () => {
+  it('leaves a mismatched stamp untouched and exits 0 silently', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'post-dispatch-hook-'));
     const pipelineDir = join(tempDir, '.pipeline');
     mkdirSync(pipelineDir, { recursive: true });
@@ -1207,7 +1199,7 @@ describe('POST_DISPATCH_HOOK behavior', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr.length).toBeGreaterThan(0);
+    expect(result.stderr).toBe('');
     expect(existsSync(currentTaskPath)).toBe(true);
     expect(readFileSync(currentTaskPath, 'utf-8')).toBe('9');
 

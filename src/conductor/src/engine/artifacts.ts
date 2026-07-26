@@ -509,6 +509,11 @@ export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
 
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
+  /**
+   * Optional task-local observability. Completion predicates deliberately do
+   * not read this: the independent build-review verdict remains authority.
+   */
+  taskAttribution?: { status: 'absent' | 'valid' | 'stale' | 'mismatched'; taskId?: string };
   /** Epoch ms; predicates reject artifacts older than this when set. */
   sessionStartedAt?: number;
   /**

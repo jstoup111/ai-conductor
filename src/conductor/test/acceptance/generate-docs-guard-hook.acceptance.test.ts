@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { classifyDocsGuardMutationTarget } from '../../src/tools/generate-docs-guard-hook.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance spec for "Generated hooks/claude/docs-guard.sh + generator"
@@ -69,5 +70,25 @@ describe('Generator writes DOCS_GUARD_HOOK verbatim to a file (#788 Task 10)', (
 
     const after = await readFile(file, 'utf8');
     expect(after).toBe('#!/bin/bash\necho stale\n');
+  });
+});
+
+describe('docs-guard target classification (#907 Task 12)', () => {
+  it('uses the terminal seal classifier for a canonical in-workspace target', () => {
+    expect(classifyDocsGuardMutationTarget({
+      projectRoot: '/workspace/feature-907',
+      target: '/workspace/feature-907/.docs/stories/retro-907.md',
+      phase: 'SHIP',
+      step: 'retro',
+    })).toEqual({ kind: 'allowed', target: '.docs/stories/retro-907.md' });
+  });
+
+  it('fails closed when the generated-hook boundary receives an indeterminate target', () => {
+    expect(classifyDocsGuardMutationTarget({
+      projectRoot: '/workspace/feature-907',
+      target: '../outside/.docs/stories/retro-907.md',
+      phase: 'SHIP',
+      step: 'retro',
+    })).toMatchObject({ kind: 'indeterminate' });
   });
 });

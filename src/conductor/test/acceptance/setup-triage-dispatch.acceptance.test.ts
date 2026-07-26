@@ -240,6 +240,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
       onAttempt:
         "(step, attempt) =>\n      eventTarget.emit({ type: 'provider_attempt', step, ...attempt })",
       warn: '(_message, transition) => eventTarget.emit(transition)',
+      withCandidateSafety: 'createCandidateSafetyBoundary()',
     },
     contextOwner:
       'featureRun?.providerExecution ?? deps.providerExecution?.()',

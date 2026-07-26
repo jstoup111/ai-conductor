@@ -41,6 +41,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCb);
 
@@ -69,6 +70,13 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
 async function runFinishTimeRebase(repo: string): Promise<void> {
   const statePath = join(repo, 'conduct-state.json');
   await seedPreRebaseState(statePath);
+  const baselineCommit = (
+    await execFile('git', ['rev-parse', 'HEAD'], { cwd: repo })
+  ).stdout.trim();
+  // A real finish-time rebase follows BUILD, where the approved DECIDE
+  // baseline is sealed. Seed that lifecycle prerequisite before entering
+  // directly at the SHIP-native rebase step.
+  await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
   const events = new ConductorEventEmitter();
   const runner: StepRunner = {
     run: async () => ({ success: true }) satisfies StepRunResult,
@@ -83,7 +91,6 @@ async function runFinishTimeRebase(repo: string): Promise<void> {
     fromStep: 'rebase',
   } as never);
   await conductor.run();
-  console.error('[DEBUG after run]', await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8').catch((e) => `ERR:${e}`));
 }
 
 interface Scratch {
@@ -143,7 +150,6 @@ async function buildTranslationRepo(): Promise<
 
 /** Seeds the three sha-anchored stores per Stories 2-4. */
 async function seedStores(repo: string, c1Sha: string, c2Sha: string): Promise<void> {
-  console.error('[DEBUG seedStores]', { c1Sha, c2Sha });
   await mkdir(join(repo, '.pipeline'), { recursive: true });
 
   const evidence = {

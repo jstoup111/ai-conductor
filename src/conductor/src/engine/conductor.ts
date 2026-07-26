@@ -7,7 +7,7 @@ import {
   unlink as unlinkFile,
   stat,
 } from 'node:fs/promises';
-import { constants as fsConstants, existsSync, readdirSync, rmdirSync } from 'node:fs';
+import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -15,6 +15,7 @@ import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type {
   AuthenticationReadiness,
+  InvokeResult,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ConductState } from '../types/index.js';
@@ -34,7 +35,9 @@ import type {
   ProviderAttemptMetadata,
   ProviderAttributionMetadata,
   ProviderExecutionContext,
+  ProviderCandidate,
 } from './provider-execution.js';
+import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
@@ -74,6 +77,11 @@ import {
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
 import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './phase-marker.js';
+import {
+  createProtectedArtifactSeal,
+  verifyProtectedArtifactSeal,
+} from './protected-artifact-seal.js';
+import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
@@ -143,17 +151,18 @@ import {
   resolveRebaseResolutionAttempts,
   resolveSelfHostConfig,
   resolveBuildReviewConfig,
+  phaseForStep,
 } from './resolved-config.js';
 import {
   defaultSelfHostGuardrails,
   type SelfHostGuardrails,
 } from './self-host/wiring.js';
-import type { SandboxBuildEnv } from './self-host/sandbox-build-env.js';
 import { waitForCredentialsChange, readOperatorCredentialsState } from './self-host/operator-credentials.js';
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
+import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
@@ -867,24 +876,6 @@ export async function checkAttributionMachineryIntact(
     );
   }
 
-  // Stamp path writability: `.pipeline/current-task` is where the
-  // PreToolUse hook stamps the active task id before a build session starts.
-  // Check writability of the existing file if present, otherwise of its
-  // parent directory (the file doesn't exist until the first stamp write).
-  const currentTaskPath = join(pipelineDir, 'current-task');
-  const currentTaskExists = await accessFile(currentTaskPath).then(() => true).catch(() => false);
-  const writabilityCheckTarget = currentTaskExists ? currentTaskPath : pipelineDir;
-  const stampPathWritable = await accessFile(writabilityCheckTarget, fsConstants.W_OK)
-    .then(() => true)
-    .catch(() => false);
-  if (!stampPathWritable) {
-    return (
-      `Attribution machinery broken: .pipeline/current-task stamp path is not writable.\n` +
-      `Build dispatch requires the .pipeline/current-task stamp path to be ` +
-      `writable so a build session can be attributed to a task.`
-    );
-  }
-
   return null;
 }
 
@@ -935,13 +926,9 @@ export class Conductor {
   private selfHost: boolean;
   private baseBranch?: string;
   private guardrails: SelfHostGuardrails;
-  /**
-   * The self-build's throwaway CLAUDE_CONFIG_DIR sandbox, provisioned lazily on
-   * the first `build` dispatch and torn down (idempotently) in `run()`'s finally.
-   */
-  private activeSandbox: SandboxBuildEnv | null = null;
+  /** Reusable safety verdicts are valid only within one exact attempt identity. */
+  private readonly safetyAttemptCache = new SafetyAttemptCache();
   /** Guards the one-time skill relink so it runs before the first build only. */
-  private relinkDone = false;
   /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
   private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
   private sleep: (ms: number) => Promise<void>;
@@ -1762,60 +1749,43 @@ export class Conductor {
   }
 
   /**
-   * Dispatch the `build` step for a self-build under the guardrail bundle:
-   *   1. relink harness skills ONCE before the first build (TR-4) — a failure
-   *      throws InstallStaleError, which aborts the run before any child build;
-   *   2. provision a throwaway CLAUDE_CONFIG_DIR sandbox ONCE (TR-5/6) — a
-   *      provisioning failure throws SandboxProvisionError, aborting before build;
-   *   3. scope `process.env.CLAUDE_CONFIG_DIR` to the sandbox for EXACTLY this
-   *      child dispatch and restore it afterwards on BOTH the pass and throw
-   *      branches, so no env bleeds into later steps (e.g. finish).
-   * The sandbox is torn down in `run()`'s finally. Every throw propagates to
-   * `run()`'s catch, which writes `.pipeline/HALT` — the build never runs against
-   * a half-provisioned sandbox or stale skill links.
+   * Dispatch one self-build through candidate-local isolation. Provider
+   * selection happens inside the executor, so preparation and boundary
+   * verification must be keyed to the resolved candidate rather than its
+   * preferred predecessor in a fallback list.
    */
   private async runSelfBuildDispatch(
     name: StepName,
     state: ConductState,
     retryHint: string | undefined,
   ): Promise<StepRunResult> {
-    // Provider selection must precede self-host preparation: the guardrail
-    // bundle below configures Claude's global credentials and sandbox only.
-    // The step runner retains responsibility for Codex's provider-local
-    // readiness and unattended policy boundary.
-    const buildSelection =
-      this.config.steps?.build?.llm_provider ?? this.config.llm_provider;
-    const preferredBuildProvider = normalizeProviderSelection(buildSelection)[0];
-    if (preferredBuildProvider === 'codex') {
-      return this.stepRunner.run(name, state, { retryReason: retryHint });
-    }
-
-    const sh = resolveSelfHostConfig(this.config);
-
-    if (sh.skillRelinkPreflight && !this.relinkDone) {
-      this.relinkDone = true;
-      // Default harness root (the installed MAIN checkout), NOT the worktree:
-      // relink refreshes global ~/.claude against main so daemon-dispatched
-      // skills resolve; the worktree's edits are isolated by the sandbox below,
-      // never by repointing the operator's live globals.
-      await this.guardrails.relink({ log: (m) => console.error(m) });
-    }
+    const selfHostConfig = resolveSelfHostConfig(this.config);
+    const stepSelection =
+      this.config.steps?.[name]?.llm_provider ?? this.config.llm_provider;
+    const preferredBuildProvider = normalizeProviderSelection(stepSelection)[0];
+    const sh = selfHostConfig;
 
     if (!sh.sandboxBuildEnv) {
-      return this.stepRunner.run(name, state, { retryReason: retryHint });
+      return {
+        success: false,
+        permissionDenied: true,
+        output: 'Required safety protection unavailable: self-host-isolation',
+      };
     }
 
     // Pre-flight daemon build-auth token check (Task 6, TR-3/TR-2): BEFORE provisioning,
     // check if daemon-token mode is configured and the token file is readable.
     // If missing or unreadable, HALT with mint instructions. For api-key mode, skip.
     // Never consumes the retry budget.
-    const buildAuthPreflight = await checkBuildAuth(
-      sh.buildAuthMode,
-      sh.buildAuthTokenPath,
-      this.projectRoot,
-    );
-    if (buildAuthPreflight !== undefined) {
-      return buildAuthPreflight;
+    if (preferredBuildProvider !== 'codex') {
+      const buildAuthPreflight = await checkBuildAuth(
+        sh.buildAuthMode,
+        sh.buildAuthTokenPath,
+        this.projectRoot,
+      );
+      if (buildAuthPreflight !== undefined) {
+        return buildAuthPreflight;
+      }
     }
 
     // Pre-flight credential expiry check (TR-2): BEFORE provisioning, check if
@@ -1834,21 +1804,6 @@ export class Conductor {
       }
     }
 
-    if (!this.activeSandbox) {
-      // INSTALLED root, not the module-relative detection root (#363): for a
-      // worktree-run engine the detection root IS the worktree, which made the
-      // sandbox settings retarget (main → worktree) a silent no-op and left the
-      // build running against the operator's live hook paths. Fallback for an
-      // unresolved/rejected root stays projectRoot — the relink preflight has
-      // already HALTed the dangerous (rejected) case before this point.
-      const installed = await this.guardrails.resolveInstalledHarnessRoot();
-      const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
-      this.activeSandbox = await this.guardrails.provisionSandbox({
-        worktreeRoot: this.projectRoot,
-        harnessRoot,
-      });
-    }
-
     // Task 9 (TR-2): Read the daemon build token in daemon-token mode. The token
     // is available after the buildAuthPreflight check above (which validates it
     // exists and is readable). Extract it so we can inject it into the step runner env.
@@ -1860,25 +1815,142 @@ export class Conductor {
       }
     }
 
-    const hadKey = 'CLAUDE_CONFIG_DIR' in process.env;
-    const prior = process.env.CLAUDE_CONFIG_DIR;
-    process.env.CLAUDE_CONFIG_DIR = this.activeSandbox.configDir;
-
-    const hadToken = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
-    const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    if (daemonToken) {
-      process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
+    // Compatibility seam for injected/legacy runners which do not route via
+    // ProviderExecutionContext. Real entrypoints always take the candidate
+    // path below; this retains the existing isolated behavior for that narrow
+    // test/extension surface.
+    if (!this.providerExecution) {
+      if (preferredBuildProvider === 'codex') {
+        return this.stepRunner.run(name, state, { retryReason: retryHint });
+      }
+      const installed = await this.guardrails.resolveInstalledHarnessRoot();
+      const harnessRoot = installed.status === 'ok' ? installed.root : this.projectRoot;
+      const sandbox = await this.guardrails.provisionSandbox({ worktreeRoot: this.projectRoot, harnessRoot });
+      const priorConfig = process.env.CLAUDE_CONFIG_DIR;
+      const priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      const hadConfig = 'CLAUDE_CONFIG_DIR' in process.env;
+      const hadToken = 'CLAUDE_CODE_OAUTH_TOKEN' in process.env;
+      process.env.CLAUDE_CONFIG_DIR = sandbox.configDir;
+      if (daemonToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = daemonToken;
+      try {
+        return await this.stepRunner.run(name, state, { retryReason: retryHint });
+      } finally {
+        if (hadConfig) process.env.CLAUDE_CONFIG_DIR = priorConfig;
+        else delete process.env.CLAUDE_CONFIG_DIR;
+        if (hadToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
+        else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+        await sandbox.teardown();
+      }
     }
 
+    const priorPreparation = this.providerExecution?.prepareCandidateSelfHost;
+    const priorSafety = this.providerExecution?.withCandidateSafety;
+    if (this.providerExecution) {
+      this.providerExecution.withCandidateSafety = async (candidate, invoke) => {
+        const result = await this.withSelfHostCandidateSafety(
+          candidate,
+          state,
+          sh.sandboxBuildEnv,
+          () => priorSafety ? priorSafety(candidate, invoke) : invoke(),
+        );
+        return result;
+      };
+      this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime) => {
+        const installed = await this.guardrails.resolveInstalledHarnessRoot();
+        const liveCheckout = installed.status === 'ok' ? installed.root : this.projectRoot;
+        const codex = candidate.providerKey === 'codex';
+        const providerHome = codex
+          ? process.env.CODEX_HOME ?? join(homedir(), '.codex')
+          : process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
+        const boundary = await fingerprintLiveBoundary({
+          liveCheckout,
+          unrelatedProviderState: providerHome,
+          selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
+        });
+        const verify = async () => {
+          const result = await verifyLiveBoundary(boundary).catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
+          if (!result.ok) {
+            await writeHaltMarker(this.projectRoot, `${result.reason}\n`, 'mechanical').catch(() => {});
+            throw new Error(result.reason ?? 'Live boundary could not be verified.');
+          }
+        };
+        if (codex) {
+          const prepareAuth = runtime.provider.prepareSelfHostAuth;
+          const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
+          const provisionHome = this.guardrails.provisionProviderHome;
+          if (!prepareAuth || !resolveExecutable || !provisionHome) {
+            throw new Error('Codex self-host isolation is unavailable for the resolved provider candidate.');
+          }
+          const executable = await resolveExecutable.call(runtime.provider);
+          const home = await provisionHome({
+            provider: { id: 'codex', prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, { provider: 'codex', homeDir: context.homeDir }) },
+            worktreeRoot: this.projectRoot,
+          });
+          return { executable, env: home.childEnv(), args: home.childArgs(), teardown: async () => { try { await verify(); } finally { await home.teardown(); } } };
+        }
+        if (candidate.providerKey === 'claude') {
+          const sandbox = await this.guardrails.provisionSandbox({ worktreeRoot: this.projectRoot, harnessRoot: liveCheckout });
+          return {
+            executable: 'claude',
+            env: { ...sandbox.childEnv(), ...(daemonToken ? { CLAUDE_CODE_OAUTH_TOKEN: daemonToken } : {}) },
+            args: [],
+            teardown: async () => { try { await verify(); } finally { await sandbox.teardown(); } },
+          };
+        }
+        return priorPreparation?.(candidate, runtime);
+      };
+    }
     try {
       return await this.stepRunner.run(name, state, { retryReason: retryHint });
     } finally {
-      if (hadKey) process.env.CLAUDE_CONFIG_DIR = prior;
-      else delete process.env.CLAUDE_CONFIG_DIR;
-
-      if (hadToken) process.env.CLAUDE_CODE_OAUTH_TOKEN = priorToken;
-      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+      if (this.providerExecution) {
+        this.providerExecution.prepareCandidateSelfHost = priorPreparation;
+        this.providerExecution.withCandidateSafety = priorSafety;
+      }
     }
+  }
+
+  /** Apply the existing safety authority to the actual resolved provider. */
+  private async withSelfHostCandidateSafety(
+    candidate: ProviderCandidate,
+    state: ConductState,
+    sandboxEnabled: boolean,
+    invoke: () => Promise<InvokeResult>,
+  ): Promise<InvokeResult> {
+    const identity = {
+      taskId: state.feature_desc ?? this.featureDesc ?? 'unknown-task',
+      provider: candidate.providerKey,
+      phase: phaseForStep(candidate.step),
+      workspace: this.projectRoot,
+      baseline: (await currentCommitSha(this.projectRoot)) ?? 'unknown-baseline',
+      terminalRun: String(state.session_started_at ?? 'unknown-terminal-run'),
+    };
+    const cached = this.safetyAttemptCache.reuse(identity);
+    const verdict = cached ?? evaluateSafetyBoundary({
+      provider: candidate.providerKey,
+      context: { selfHost: this.isSelfBuild() },
+      protections: [{
+        name: 'self-host-isolation',
+        criticality: 'required',
+        scope: 'self-host',
+        applicability: this.isSelfBuild() ? 'applicable' : 'not-applicable',
+        state: sandboxEnabled ? 'passing' : 'disabled',
+      }],
+    });
+    if (!cached && verdict.passed) this.safetyAttemptCache.record(identity, verdict);
+    if (!verdict.passed) {
+      return {
+        success: false,
+        exitCode: 1,
+        permissionDenied: true,
+        output: `Required safety protection unavailable: ${verdict.requiredFailures.map((p) => p.name).join(', ')}`,
+      };
+    }
+    const result = await invoke();
+    const notices = formatProviderCapabilityGapMessages(candidate.providerKey, verdict.diagnosticGaps);
+    return notices.length === 0
+      ? result
+      : { ...result, output: [...notices, result.output ?? ''].filter(Boolean).join('\n') };
   }
 
   /**
@@ -3498,16 +3570,32 @@ export class Conductor {
           // session activity. Never written when enforcement isn't
           // configured (absent/future cutover) — zero overhead for
           // operators who haven't opted in.
-          // Task 6 (#676): pre-dispatch attribution-machinery guard. Checked
-          // before the build-step-active marker / dispatch below — a build
-          // step never reaches an unattributable dispatch when the
-          // machinery it depends on is broken.
-          const machineryIssue =
-            step.name === 'build' && isEnforcementConfigured(this.config)
-              ? await seedAndCheckAttributionMachinery(this.projectRoot, state.feature_desc ?? '')
-              : null;
+          // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
+          // every attempt before writing phase markers or starting dispatch; a
+          // resume therefore cannot accept a dirty workspace as a new baseline.
+          let protectedArtifactIssue: string | null = null;
+          if (step.phase === 'BUILD' || step.phase === 'SHIP') {
+            const currentCommit = await currentCommitSha(this.projectRoot);
+            const baselineCommit = step.phase === 'BUILD' ? currentCommit : undefined;
+            // Legacy/test-only non-git roots cannot establish an approved
+            // commit identity. They remain outside this committed-artifact
+            // boundary; real feature worktrees always supply one.
+            if (currentCommit) {
+              const sealVerdict = await verifyProtectedArtifactSeal({
+                projectRoot: this.projectRoot,
+                baselineCommit: baselineCommit ?? undefined,
+              });
+              if (!sealVerdict.ok) {
+                protectedArtifactIssue = sealVerdict.reason;
+              } else if (step.phase === 'BUILD' && baselineCommit) {
+                // Persist only after the workspace matches committed DECIDE
+                // content. createProtectedArtifactSeal is immutable once present.
+                await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+              }
+            }
+          }
           const markerActive =
-            !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
+            !protectedArtifactIssue && step.name === 'build' && isEnforcementConfigured(this.config);
           if (markerActive) {
             writeBuildStepMarker(this.projectRoot);
           }
@@ -3527,9 +3615,9 @@ export class Conductor {
           }
 
           let result: StepRunResult;
-          if (machineryIssue) {
+          if (protectedArtifactIssue) {
             buildWatcher?.stop();
-            result = { success: false, output: machineryIssue };
+            result = { success: false, output: protectedArtifactIssue };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below — that flow only
             // fires in `mode === 'auto'` (daemon), but a broken attribution
@@ -3546,7 +3634,7 @@ export class Conductor {
             // here. Retryable per existing step-retry semantics, not a
             // bypass of them.
             if (attempt >= 2) {
-              await writeHaltMarker(this.projectRoot, machineryIssue);
+              await writeHaltMarker(this.projectRoot, protectedArtifactIssue);
             }
           } else
           try {
@@ -3555,7 +3643,7 @@ export class Conductor {
               step.name !== 'worktree' &&
               step.name !== 'test_suite' &&
               step.name !== 'rebase' &&
-              !(this.isSelfBuild() && step.name === 'build')
+              !(this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name)))))
             ) {
               // Task 2, session-fresh-verdict-artifacts: stamp immediately
               // before the generic dispatch call so completionCtx can
@@ -3571,7 +3659,7 @@ export class Conductor {
                     ? await this.runRebaseStep(state)
                     : step.name === 'test_suite'
                       ? await this.runTestSuiteStep()
-                      : this.isSelfBuild() && step.name === 'build'
+                      : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
                         ? await this.runSelfBuildDispatch(step.name, state, retryHint)
                         : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
@@ -3791,7 +3879,7 @@ export class Conductor {
             // preflight credentials check, exit immediately without retrying. This
             // preserves the credentials-specific HALT reason instead of allowing the
             // retry loop to overwrite it with the generic "retries exhausted" message.
-            if (this.isSelfBuild() && step.name === 'build') {
+            if (this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))) {
               const haltPath = join(this.projectRoot, HALT_MARKER);
               const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
               if (haltExists) {
@@ -5672,17 +5760,10 @@ export class Conductor {
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
+      this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
       process.off('SIGHUP', sighupHandler);
-
-      // Self-build sandbox teardown (TR-5): the throwaway CLAUDE_CONFIG_DIR is
-      // removed on EVERY exit path — success, HALT, or a mid-build crash. teardown
-      // is idempotent, so this is safe even if a future path tears down earlier.
-      if (this.activeSandbox) {
-        await this.activeSandbox.teardown().catch(() => {});
-        this.activeSandbox = null;
-      }
 
       // Terminal-marker guarantee (failure side). A handful of early `return`s
       // in the loop exit WITHOUT writing DONE or HALT — a blocked gate

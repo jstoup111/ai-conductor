@@ -23,6 +23,7 @@ import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
 import type { ProviderExecutionContext } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
 import {
   normalizeProviderSelection,
   validateRegisteredProviderSelections,
@@ -1004,6 +1005,9 @@ async function main(): Promise<void> {
     sessions: new ProviderSessionStore(),
     config: config,
     modelOverride: opts.model,
+    // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
+    // Conductor composes self-host authority around it when applicable.
+    withCandidateSafety: createCandidateSafetyBoundary(),
     onAttempt: (step, attempt) =>
       events.emit({ type: 'provider_attempt', step, ...attempt }),
     warn: (_message, transition) => events.emit(transition),

@@ -7,7 +7,8 @@ import { promisify } from 'node:util';
 
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 
-// END-TO-END acceptance specs for the #519/#501 abstain-or-loud hardening
+// END-TO-END acceptance specs for the #519/#501 abstain-or-loud hardening,
+// amended by #907's concurrent task-local telemetry contract
 // (.docs/decisions/adr-2026-07-11-attribution-abstain-or-loud.md, APPROVED).
 //
 // Stories 1, 3, 4, and 6 are single-hook-invocation scenarios (unit-covered —
@@ -132,9 +133,10 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
     await rm(dir, { recursive: true, force: true });
   });
 
-  // Covers: Story 2 — the #519 cascade shape can never recur
+  // Covers the surviving #519 guarantee under #907: bookkeeping failures
+  // cannot inject or cascade a workspace-global task id.
   describe('Story 2: a bookkeeping failure mid-sequence never cascades a stale id', () => {
-    it('dispatch 1 heals, dispatch 2 corrupts and abstains, dispatch 3 recovers — each commit carries its own id or none', async () => {
+    it('dispatch 1 records telemetry, dispatch 2 abstains, and an explicit task-local trailer survives recovery', async () => {
       await seedTaskStatus([
         { id: '1', status: 'pending' },
         { id: '2', status: 'pending' },
@@ -144,10 +146,10 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
       // (a) healthy dispatch for Task 1.
       const first = await dispatch('Task: 1');
       expect(first.code).toBe(0);
-      expect(await currentTaskContent()).toBe('1');
+      expect(await currentTaskContent()).toBeNull();
       const commit1 = await commitFile('a.txt', 'a', 'feat: task one work');
       expect(commit1.code).toBe(0);
-      expect(await lastCommitMessage()).toMatch(/^Task: 1$/m);
+      expect(await lastCommitMessage()).not.toMatch(/^Task: /m);
       await completeDispatch('Task: 1');
 
       // (b) status file corrupted (wrong-shaped) before task 2's dispatch
@@ -175,14 +177,14 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
       ]);
       const third = await dispatch('Task: 3');
       expect(third.code).toBe(0);
-      expect(await currentTaskContent()).toBe('3');
+      expect(await currentTaskContent()).toBeNull();
 
-      const commit3 = await commitFile('c.txt', 'c', 'feat: task three work');
+      const commit3 = await commitFile('c.txt', 'c', 'feat: task three work\n\nTask: 3');
       expect(commit3.code).toBe(0);
       expect(await lastCommitMessage()).toMatch(/^Task: 3$/m);
     });
 
-    it('the same sequence with a healthy status file throughout stamps every commit correctly (proves the fixture fails for the right reason)', async () => {
+    it('healthy concurrent dispatches update independent rows and preserve each explicit trailer', async () => {
       await seedTaskStatus([
         { id: '1', status: 'pending' },
         { id: '2', status: 'pending' },
@@ -190,22 +192,31 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
       ]);
 
       await dispatch('Task: 1');
-      const commit1 = await commitFile('a.txt', 'a', 'feat: task one work');
+      const commit1 = await commitFile('a.txt', 'a', 'feat: task one work\n\nTask: 1');
       expect(commit1.code).toBe(0);
       expect(await lastCommitMessage()).toMatch(/^Task: 1$/m);
       await completeDispatch('Task: 1');
 
       await dispatch('Task: 2');
-      expect(await currentTaskContent()).toBe('2');
-      const commit2 = await commitFile('b.txt', 'b', 'feat: task two work');
+      expect(await currentTaskContent()).toBeNull();
+      const commit2 = await commitFile('b.txt', 'b', 'feat: task two work\n\nTask: 2');
       expect(commit2.code).toBe(0);
       expect(await lastCommitMessage()).toMatch(/^Task: 2$/m);
       await completeDispatch('Task: 2');
 
       await dispatch('Task: 3');
-      const commit3 = await commitFile('c.txt', 'c', 'feat: task three work');
+      const commit3 = await commitFile('c.txt', 'c', 'feat: task three work\n\nTask: 3');
       expect(commit3.code).toBe(0);
       expect(await lastCommitMessage()).toMatch(/^Task: 3$/m);
+
+      const status = JSON.parse(
+        await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
+      ) as { tasks: Array<{ id: string; status: string }> };
+      expect(status.tasks.map(({ id, status: taskStatus }) => ({ id, status: taskStatus }))).toEqual([
+        { id: '1', status: 'in_progress' },
+        { id: '2', status: 'in_progress' },
+        { id: '3', status: 'in_progress' },
+      ]);
     });
   });
 

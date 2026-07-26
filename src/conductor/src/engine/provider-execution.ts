@@ -1,6 +1,7 @@
 import type {
   InvokeOptions,
   InvokeResult,
+  SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ComplexityTier, StepName } from '../types/index.js';
@@ -24,6 +25,13 @@ import {
   resolvePreferredProviderNativeStepConfig,
   type ResolvedProviderNativeStepConfig,
 } from './resolved-config.js';
+import {
+  validateTaskAttribution,
+  type TaskAttributionDiagnosticCode,
+  type TaskAttributionInput,
+} from './task-attribution.js';
+import { evaluateSafetyBoundary, type SafetyDiagnosticGap, type SafetyProtection } from './safety-boundary.js';
+import { redactSafetyText } from './safety-diagnostics.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -37,6 +45,10 @@ export interface ProviderCandidateFailureClassification {
 
 export interface ProviderAttemptMetadata {
   provider: string;
+  /** Validated task-local telemetry; never an authorization input. */
+  taskId?: string;
+  /** Sanitized invalid-attribution classification; diagnostics only. */
+  taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   /** Sanitized source selected by the Codex provider, when it reported one. */
   authenticationSource?: 'api-key' | 'cached-login';
   model?: string;
@@ -44,6 +56,8 @@ export interface ProviderAttemptMetadata {
   outcome: 'success' | 'failure' | 'unavailable';
   reason?: string;
   fallbackReason?: string;
+  /** Visible diagnostic-only boundary notices; never controls fallback. */
+  safetyDiagnostics?: readonly string[];
   invoked: boolean;
 }
 
@@ -68,6 +82,91 @@ export interface ProviderTransitionWarning {
   nextProvider: string;
 }
 
+/**
+ * Resolved provider identity exposed to the per-candidate safety boundary.
+ * It deliberately excludes prompts, session IDs, and authentication material.
+ */
+export interface ProviderCandidate {
+  step: StepName;
+  providerKey: string;
+  model: string;
+  effort: EffortLevel;
+}
+
+/** Render safe provider capability-gap notices without affecting execution. */
+export function formatProviderCapabilityGapMessages(
+  provider: string,
+  gaps: readonly SafetyDiagnosticGap[],
+): readonly string[] {
+  return gaps
+    .filter(
+      (gap) =>
+        gap.provider === provider && gap.classification === 'diagnostic-only',
+    )
+    .slice()
+    .sort((left, right) =>
+      `${left.name}\u0000${left.applicability}\u0000${left.state}`.localeCompare(
+        `${right.name}\u0000${right.applicability}\u0000${right.state}`,
+      ),
+    )
+    .map(
+      (gap) =>
+        `Provider ${provider}: diagnostic-only capability gap ${gap.name} (${gap.state}).`,
+    );
+}
+
+/**
+ * Surrounds one resolved provider invocation with preflight and terminal
+ * verification. The executor awaits it before it may accept or fall back.
+ */
+export type WithCandidateSafety = (
+  candidate: ProviderCandidate,
+  invoke: () => Promise<InvokeResult>,
+) => Promise<InvokeResult>;
+
+/**
+ * The production candidate boundary. It evaluates a provider-labelled verdict
+ * even when no provider-independent protection applies, so BUILD/SHIP never
+ * degrade to a direct executor call. Callers may supply required protections;
+ * diagnostic-only gaps are carried into both result and attempt metadata.
+ */
+export function createCandidateSafetyBoundary(options: {
+  protections?: (candidate: ProviderCandidate) => readonly SafetyProtection[];
+  selfHost?: boolean;
+} = {}): WithCandidateSafety {
+  return async (candidate, invoke) => {
+    const verdict = evaluateSafetyBoundary({
+      provider: candidate.providerKey,
+      context: { selfHost: options.selfHost ?? false },
+      protections: options.protections?.(candidate) ?? [],
+    });
+    const notices = formatProviderCapabilityGapMessages(candidate.providerKey, verdict.diagnosticGaps);
+    if (!verdict.passed) {
+      return {
+        success: false,
+        exitCode: 1,
+        permissionDenied: true,
+        output: `Required safety protection unavailable: ${verdict.requiredFailures.map((p) => p.name).join(', ')}`,
+        ...(notices.length ? { safetyDiagnostics: notices } : {}),
+      };
+    }
+    const result = await invoke();
+    return notices.length === 0
+      ? result
+      : {
+          ...result,
+          output: [...notices, result.output].filter(Boolean).join('\n'),
+          safetyDiagnostics: notices,
+        };
+  };
+}
+
+/** Creates a child-only invocation context after the actual candidate resolves. */
+export type PrepareCandidateSelfHost = (
+  candidate: ProviderCandidate,
+  runtime: ProviderRuntime,
+) => Promise<SelfHostInvocation | undefined>;
+
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
   configuredProviders: readonly string[];
@@ -80,10 +179,20 @@ export interface ExecuteProviderCandidatesInput {
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  /** Task-local telemetry to validate before any candidate/session invocation. */
+  taskAttribution?: TaskAttributionInput;
   onAttempt?: (
     step: StepName,
     attempt: ProviderAttemptMetadata,
   ) => void | Promise<void>;
+  /** Best-effort error reporting for attempt telemetry; never affects execution. */
+  onTelemetryError?: (
+    error: unknown,
+    attempt: ProviderAttemptMetadata,
+  ) => void | Promise<void>;
+  /** Safety boundary for each resolved candidate, after resolution and before fallback. */
+  withCandidateSafety?: WithCandidateSafety;
+  prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -102,6 +211,11 @@ export interface ProviderExecutionContext {
   config?: HarnessConfig;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  /** Task-local telemetry passed through the provider-dispatch boundary. */
+  taskAttribution?: TaskAttributionInput;
+  /** Candidate-level safety wrapper retained for every provider-aware dispatch. */
+  withCandidateSafety?: WithCandidateSafety;
+  prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
@@ -290,6 +404,8 @@ export async function invokeProviderCandidate({
 
 export interface BuildProviderAttemptMetadataInput {
   providerKey: string;
+  taskId?: string;
+  taskAttributionDiagnostic?: TaskAttributionDiagnosticCode;
   result: InvokeResult;
   resolvedModel: string;
   invokedModel?: string;
@@ -300,6 +416,8 @@ export interface BuildProviderAttemptMetadataInput {
 /** Construct event-boundary metadata for exactly one candidate result. */
 export function buildProviderAttemptMetadata({
   providerKey,
+  taskId,
+  taskAttributionDiagnostic,
   result,
   resolvedModel,
   invokedModel,
@@ -307,8 +425,11 @@ export function buildProviderAttemptMetadata({
   nextProvider,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
+  const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
+    ...(taskId ? { taskId } : {}),
+    ...(taskAttributionDiagnostic ? { taskAttributionDiagnostic } : {}),
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
     ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
     ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
@@ -318,11 +439,12 @@ export function buildProviderAttemptMetadata({
         ? 'success'
         : 'failure',
     ...(!result.success
-      ? { reason: unavailable?.reason ?? result.output }
+      ? { reason: failureReason }
       : {}),
     ...(unavailable && nextProvider
-      ? { fallbackReason: unavailable.reason }
+      ? { fallbackReason: redactSafetyText(unavailable.reason) }
       : {}),
+    ...(result.safetyDiagnostics ? { safetyDiagnostics: result.safetyDiagnostics } : {}),
     invoked,
   };
 }
@@ -344,7 +466,11 @@ export async function executeProviderCandidates({
   escalate = true,
   modelOverride,
   effortOverride,
+  taskAttribution: attributionInput,
   onAttempt,
+  onTelemetryError,
+  withCandidateSafety,
+  prepareCandidateSelfHost,
   warn,
   options,
   optionsForCandidate,
@@ -355,6 +481,13 @@ export async function executeProviderCandidates({
   });
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
+  const attribution = attributionInput
+    ? validateTaskAttribution(attributionInput)
+    : undefined;
+  // Invalid attribution is diagnostic telemetry, never an execution veto.
+  const taskId = attribution && 'taskId' in attribution ? attribution.taskId : undefined;
+  const taskAttributionDiagnostic =
+    attribution && 'diagnostic' in attribution ? attribution.diagnostic.code : undefined;
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -372,29 +505,71 @@ export async function executeProviderCandidates({
       effortOverride,
     });
     const candidateOptions = optionsForCandidate?.(providerKey) ?? options;
-    const { result, invokedModel } = await invokeProviderCandidate({
-      providerKey,
-      runtime,
-      sessions,
-      resolved,
-      options: candidateOptions,
-    });
+    let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
+    const invoke = async (): Promise<InvokeResult> => {
+      const candidate = {
+        step,
+        providerKey,
+        model: resolved.model,
+        effort: resolved.effort,
+      };
+      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime);
+      try {
+        invocation = await invokeProviderCandidate({
+          providerKey,
+          runtime,
+          sessions,
+          resolved,
+          options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+        });
+        return invocation.result;
+      } finally {
+        await selfHost?.teardown();
+      }
+    };
+    const result = withCandidateSafety
+      ? await withCandidateSafety(
+          {
+            step,
+            providerKey,
+            model: resolved.model,
+            effort: resolved.effort,
+          },
+          invoke,
+        )
+      : await invoke();
+    const invokedModel = invocation?.invokedModel;
 
     const unavailable = classifyProviderCandidateFailure(result);
+    const safeResult = result.output === undefined
+      ? result
+      : { ...result, output: redactSafetyText(result.output) };
     const nextProvider = candidates[index + 1];
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
-      result,
+      taskId,
+      taskAttributionDiagnostic,
+      result: safeResult,
       resolvedModel: resolved.model,
       invokedModel,
       unavailable,
       nextProvider,
     });
     attempts.push(attemptMetadata);
-    await onAttempt?.(step, attemptMetadata);
+    try {
+      await onAttempt?.(step, attemptMetadata);
+    } catch (error) {
+      // Attempt metadata is observational only. A failed telemetry sink must
+      // not alter dispatch, fallback, mutation, or completion authority.
+      try {
+        await onTelemetryError?.(error, attemptMetadata);
+      } catch {
+        // Reporting the telemetry failure is itself best effort.
+      }
+    }
     if (!unavailable) {
       return {
-        ...result,
+        ...safeResult,
         preferredProvider,
         actualProvider: providerKey,
         resolvedModel: invokedModel ?? resolved.model,
@@ -422,11 +597,11 @@ export async function executeProviderCandidates({
       type: 'provider_fallback',
       step,
       failedProvider: providerKey,
-      reason: unavailable.reason,
+      reason: redactSafetyText(unavailable.reason),
       nextProvider,
     };
     await warn?.(
-      `Step ${step}: provider ${providerKey} unavailable (${unavailable.reason}); falling back to ${nextProvider}.`,
+      `Step ${step}: provider ${providerKey} unavailable (${redactSafetyText(unavailable.reason)}); falling back to ${nextProvider}.`,
       transition,
     );
   }

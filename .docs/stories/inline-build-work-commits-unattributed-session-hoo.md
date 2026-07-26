@@ -1,5 +1,10 @@
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** missing task attribution no longer blocks project
+> mutation. Task trailers are telemetry; protected-artifact and workspace boundaries plus
+> judgment gates own safety and acceptance. Historical stamp-dependent mutation criteria
+> below are superseded.
+
 # Stories: Inline Build-Work Attribution Enforcement (#505)
 
 Technical track — acceptance criteria derive from intake jstoup111/ai-conductor#505 and

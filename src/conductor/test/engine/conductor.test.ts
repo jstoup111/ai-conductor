@@ -53,6 +53,7 @@ import {
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import type { GroupMember } from '../../src/engine/group-core.js';
+import { runGroupBranch } from '../../src/engine/group-core.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeFile, mkdir, readFile } from 'fs/promises';
@@ -13012,4 +13013,99 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     expect(tryGetStepIndex('retro')).not.toBeNull();
     expect(tryGetStepIndex('remediate')).toBeNull();
   });
+
+  it('stops a self-host build before dispatch when its required isolation is disabled', async () => {
+    const safetyDir = await mkdtemp(join(tmpdir(), 'conductor-safety-'));
+    const safetyStatePath = join(safetyDir, 'conduct-state.json');
+    await writeState(safetyStatePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
+      architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
+      complexity_tier: 'M', track: 'technical', feature_desc: 'safety-boundary',
+    } as ConductState);
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({
+      stateFilePath: safetyStatePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: safetyDir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      maxRetries: 1,
+      config: {
+        harness_self_host: {
+          skill_relink_preflight: false,
+          sandbox_build_env: false,
+          build_auth: { mode: 'api-key' },
+        },
+      } as HarnessConfig,
+    });
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState, retryHint?: string) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
+
+    expect(vi.mocked(runner.run)).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
+    await rm(safetyDir, { recursive: true, force: true });
+  });
+
+  it.each(['claude', 'codex'] as const)(
+    'rejects an injected %s executor that bypasses BUILD/SHIP safety on initial, retry, resume, group, and auxiliary paths',
+    async (providerKey) => {
+      const provider: LLMProvider = {
+        invoke: vi.fn(),
+        invokeInteractive: vi.fn(),
+      };
+      const runtime = {
+        key: providerKey,
+        provider,
+        policy: providerKey === 'claude' ? CLAUDE_MODEL_POLICY : CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      };
+      const bypassExecutor = vi.fn(async () => ({
+        success: true,
+        output: 'bypassed safety',
+        exitCode: 0,
+        preferredProvider: providerKey,
+        actualProvider: providerKey,
+        attempts: [],
+      }));
+      const projectRoot = '/tmp/task-17-safety';
+      const runner = new DefaultStepRunner(provider, 'session', projectRoot, {
+        config: { llm_provider: providerKey },
+        providerExecution: {
+          configuredProviders: [providerKey],
+          runtimes: new ProviderRuntimeSet([runtime]),
+          sessions: new ProviderSessionStore(),
+          executor: bypassExecutor,
+          withCandidateSafety: async (_candidate, invoke) => invoke(),
+        },
+      });
+      const executeOneShot = (runner as unknown as {
+        executeProviderAwareOneShot: (step: StepName, options: InvokeOptions) => Promise<InvokeResult>;
+      }).executeProviderAwareOneShot.bind(runner);
+
+      const initial = await runner.run('build', {} as ConductState, { attempt: 1 });
+      const retry = await runner.run('build', {} as ConductState, { attempt: 2 });
+      const resume = await runner.run('build', {} as ConductState, { attempt: 2, resume: true });
+      const grouped = await runGroupBranch(
+        { name: 'manual_test', skill: 'manual-test', outcome: { kind: 'skipped' } },
+        {} as ConductState,
+        { stepRunner: runner },
+        1,
+      );
+      const auxiliary = await executeOneShot('build_review', { prompt: 'review', cwd: projectRoot });
+
+      expect({ initial, retry, resume, grouped, auxiliary }).toEqual({
+        initial: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
+        retry: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
+        resume: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
+        grouped: expect.objectContaining({ kind: 'permission-denied', reason: expect.stringContaining('Safety wrapper was not entered') }),
+        auxiliary: expect.objectContaining({ success: false, output: expect.stringContaining('Safety wrapper was not entered') }),
+      });
+    },
+  );
 });

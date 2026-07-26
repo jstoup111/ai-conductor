@@ -387,8 +387,9 @@ describe('conductor auth-park: daemon-token mode', () => {
       // Should have called build twice: first fails with authFailure (parks),
       // second succeeds after park resumes.
       expect(buildAttempts).toBe(2);
-      // Only one provisioning (reused across park-resume, not re-provisioned)
-      expect(mockGuardrails.provisionSandbox).toHaveBeenCalledTimes(1);
+      // Each provider attempt receives fresh isolation, including the resumed
+      // candidate after an auth park.
+      expect(mockGuardrails.provisionSandbox).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
     }
@@ -898,7 +899,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       // Build called twice: first fails with authFailure (parks, no retry
       // budget burned), second succeeds after park resumes on token refresh.
       expect(buildAttempts).toBe(2);
-      expect(mockGuardrails.provisionSandbox).toHaveBeenCalledTimes(1);
+      expect(mockGuardrails.provisionSandbox).toHaveBeenCalledTimes(2);
     } finally {
       nowSpy.mockRestore();
     }

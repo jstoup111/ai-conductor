@@ -1,5 +1,11 @@
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** `.pipeline/current-task` and Story 5's
+> overlap-clears-the-stamp behavior are retired as required attribution machinery. Concurrent
+> tasks retain independent `in_progress` telemetry and explicit valid commit trailers; no
+> workspace-global stamp authorizes mutation or overrides task-local attribution. Historical
+> criteria below describe the superseded implementation.
+
 # Stories: Engine-Invoked Task Start/Done at Subagent Dispatch (#477)
 
 Technical track (no PRD). Acceptance criteria derive from the APPROVED

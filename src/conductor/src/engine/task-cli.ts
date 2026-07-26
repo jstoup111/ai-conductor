@@ -185,12 +185,9 @@ export async function runTaskDone(projectRoot: string, id: string): Promise<numb
     return 0;
   }
 
-  // Validate stamp matches the requested id
+  // A different stamp is a sibling's current work. Never clear it.
   if (stampContent !== id) {
-    console.error(
-      `[task-cli] task id mismatch: requested "${id}" but stamp contains "${stampContent}"\n` +
-        `[task-cli] stamp will not be removed until task ${stampContent} is marked done`,
-    );
+    console.error(`[task-cli] cannot clear task ${id}; current stamp is ${stampContent}`);
     return 1;
   }
 

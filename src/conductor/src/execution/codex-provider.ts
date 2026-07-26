@@ -1,10 +1,15 @@
 import { execa } from 'execa';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { copySelectedCodexLogin } from './codex-self-host-auth.js';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  SelfHostAuthContext,
+  SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
 
@@ -109,9 +114,30 @@ function parseWaitSeconds(output: string): number {
 
 export class CodexProvider implements LLMProvider {
   private readonly authentication: SelectedAuthentication;
+  private readonly executable: string;
+  private readonly cachedLoginSource: string;
 
-  constructor(private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner) {
+  constructor(
+    private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
+    executable = process.env.CODEX_EXECUTABLE ?? 'codex',
+  ) {
     this.authentication = this.selectAuthentication();
+    this.executable = executable;
+    this.cachedLoginSource = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'auth.json');
+  }
+
+  async resolveSelfHostExecutable(): Promise<string> {
+    return this.executable;
+  }
+
+  async prepareSelfHostAuth(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
+    if (!this.authentication.apiKey) {
+      await copySelectedCodexLogin({ source: this.cachedLoginSource, homeDir: context.homeDir });
+    }
+    return {
+      ...(this.authentication.apiKey ? { env: { CODEX_API_KEY: this.authentication.apiKey } } : {}),
+      args: [],
+    };
   }
 
   async readiness(): Promise<AuthenticationReadiness> {
@@ -141,18 +167,16 @@ export class CodexProvider implements LLMProvider {
     if (readiness.state !== 'ready') return this.readinessFailure(readiness);
 
     const authentication = this.authentication;
-    const args = this.buildArgs(options, true, true);
+    const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
     const prompt = this.composePrompt(options);
 
-    const result = await execa('codex', args, {
+    const result = await execa(options.selfHost?.executable ?? this.executable, args, {
       reject: false,
       input: prompt,
       stdout: 'pipe',
       stderr: 'pipe',
       cwd: options.cwd,
-      env: authentication.apiKey
-        ? { CODEX_API_KEY: authentication.apiKey }
-        : undefined,
+      env: this.invocationEnv(options, authentication),
     });
 
     return this.classifyCompletion(result, true, authentication, true);
@@ -172,16 +196,14 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const result = await execa('codex', this.buildArgs(options, false, !options.interactive), {
+    const result = await execa(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
       reject: false,
       input: this.composePrompt(options),
       stdin: 'pipe',
       stdout: options.interactive ? ['pipe', 'inherit'] : 'pipe',
       stderr: options.interactive ? ['pipe', 'inherit'] : 'pipe',
       cwd: options.cwd,
-      env: authentication.apiKey
-        ? { CODEX_API_KEY: authentication.apiKey }
-        : undefined,
+      env: this.invocationEnv(options, authentication),
     });
 
     return this.classifyCompletion(result, false, authentication, !options.interactive);
@@ -462,6 +484,19 @@ export class CodexProvider implements LLMProvider {
     // An explicit '-' makes stdin prompt delivery unambiguous and avoids argv
     // length limits for large build-review prompts.
     args.push('-');
+    return args;
+  }
+
+  private invocationEnv(options: InvokeOptions, authentication: SelectedAuthentication): NodeJS.ProcessEnv | undefined {
+    const auth = authentication.apiKey ? { CODEX_API_KEY: authentication.apiKey } : undefined;
+    return options.selfHost ? { ...options.selfHost.env, ...auth } : auth;
+  }
+
+  private selfHostArgs(options: InvokeOptions): readonly string[] {
+    const args = options.selfHost?.args ?? [];
+    if (args.length > 16 || args.some((arg) => arg.length > 512)) {
+      throw new Error('Codex self-host arguments exceed the bounded provider contract.');
+    }
     return args;
   }
 
