@@ -28,6 +28,12 @@ export interface TaskTelemetryRetirement {
   terminalReason: TaskTerminalReason;
 }
 
+/** The result of an advisory task-row replacement attempt. */
+export interface TaskTelemetryReplacementResult {
+  activeTasks: ActiveTaskTelemetry[];
+  diagnostic?: TaskAttributionDiagnosticCode;
+}
+
 const TASK_ID = new RegExp(`^${TASK_ID_PATTERN}$`);
 
 function sanitizedTaskId(value: unknown): string {
@@ -73,4 +79,25 @@ export function retireTaskTelemetry(
   retirement: TaskTelemetryRetirement,
 ): ActiveTaskTelemetry[] {
   return activeTasks.filter(({ taskId }) => taskId !== retirement.taskId);
+}
+
+/**
+ * Replaces only the named telemetry row when the replacement is a current,
+ * exact plan id. Invalid replacement input is reported as telemetry and leaves
+ * every active row intact; it never relabels a concurrent sibling.
+ */
+export function replaceTaskTelemetry(
+  activeTasks: readonly ActiveTaskTelemetry[],
+  taskId: string,
+  replacement: TaskAttributionInput,
+): TaskTelemetryReplacementResult {
+  const validated = validateTaskAttribution(replacement);
+  if ('diagnostic' in validated) {
+    return { activeTasks: [...activeTasks], diagnostic: validated.diagnostic.code };
+  }
+  return {
+    activeTasks: activeTasks.map((task) =>
+      task.taskId === taskId ? { ...task, taskId: validated.taskId } : task,
+    ),
+  };
 }

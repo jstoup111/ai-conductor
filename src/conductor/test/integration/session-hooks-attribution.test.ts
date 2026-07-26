@@ -155,6 +155,18 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
   });
 
+  it('preserves both task rows when independent activations race', async () => {
+    const [first, second] = await Promise.all([
+      runHook(preHookPath, 'PreToolUse', 'Task: 7'),
+      runHook(preHookPath, 'PreToolUse', 'Task: 9'),
+    ]);
+
+    expect([first.code, second.code]).toEqual([0, 0]);
+    const status = await readTaskStatus();
+    expect(status.tasks.find((task) => task.id === '7')?.status).toBe('in_progress');
+    expect(status.tasks.find((task) => task.id === '9')?.status).toBe('in_progress');
+  });
+
   it('leaves concurrent task telemetry intact when a dispatch completes', async () => {
     await runHook(preHookPath, 'PreToolUse', 'Task: 7');
     await runHook(preHookPath, 'PreToolUse', 'Task: 9');

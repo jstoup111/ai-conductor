@@ -7,7 +7,7 @@ import {
   unlink as unlinkFile,
   stat,
 } from 'node:fs/promises';
-import { constants as fsConstants, existsSync, readdirSync, rmdirSync } from 'node:fs';
+import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -868,24 +868,6 @@ export async function checkAttributionMachineryIntact(
       `expected script(s): ${missingHooks.join(', ')}.\n` +
       `Build dispatch requires session hooks to be installed so a build ` +
       `session can be attributed to a task.`
-    );
-  }
-
-  // Stamp path writability: `.pipeline/current-task` is where the
-  // PreToolUse hook stamps the active task id before a build session starts.
-  // Check writability of the existing file if present, otherwise of its
-  // parent directory (the file doesn't exist until the first stamp write).
-  const currentTaskPath = join(pipelineDir, 'current-task');
-  const currentTaskExists = await accessFile(currentTaskPath).then(() => true).catch(() => false);
-  const writabilityCheckTarget = currentTaskExists ? currentTaskPath : pipelineDir;
-  const stampPathWritable = await accessFile(writabilityCheckTarget, fsConstants.W_OK)
-    .then(() => true)
-    .catch(() => false);
-  if (!stampPathWritable) {
-    return (
-      `Attribution machinery broken: .pipeline/current-task stamp path is not writable.\n` +
-      `Build dispatch requires the .pipeline/current-task stamp path to be ` +
-      `writable so a build session can be attributed to a task.`
     );
   }
 
@@ -3502,14 +3484,6 @@ export class Conductor {
           // session activity. Never written when enforcement isn't
           // configured (absent/future cutover) — zero overhead for
           // operators who haven't opted in.
-          // Task 6 (#676): pre-dispatch attribution-machinery guard. Checked
-          // before the build-step-active marker / dispatch below — a build
-          // step never reaches an unattributable dispatch when the
-          // machinery it depends on is broken.
-          const machineryIssue =
-            step.name === 'build' && isEnforcementConfigured(this.config)
-              ? await seedAndCheckAttributionMachinery(this.projectRoot, state.feature_desc ?? '')
-              : null;
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -3535,7 +3509,7 @@ export class Conductor {
             }
           }
           const markerActive =
-            !machineryIssue && !protectedArtifactIssue && step.name === 'build' && isEnforcementConfigured(this.config);
+            !protectedArtifactIssue && step.name === 'build' && isEnforcementConfigured(this.config);
           if (markerActive) {
             writeBuildStepMarker(this.projectRoot);
           }
@@ -3555,9 +3529,9 @@ export class Conductor {
           }
 
           let result: StepRunResult;
-          if (machineryIssue || protectedArtifactIssue) {
+          if (protectedArtifactIssue) {
             buildWatcher?.stop();
-            result = { success: false, output: machineryIssue ?? protectedArtifactIssue! };
+            result = { success: false, output: protectedArtifactIssue };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below — that flow only
             // fires in `mode === 'auto'` (daemon), but a broken attribution
@@ -3574,7 +3548,7 @@ export class Conductor {
             // here. Retryable per existing step-retry semantics, not a
             // bypass of them.
             if (attempt >= 2) {
-              await writeHaltMarker(this.projectRoot, machineryIssue ?? protectedArtifactIssue!);
+              await writeHaltMarker(this.projectRoot, protectedArtifactIssue);
             }
           } else
           try {

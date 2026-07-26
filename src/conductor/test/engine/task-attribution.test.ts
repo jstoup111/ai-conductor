@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { activateTaskTelemetry, retireTaskTelemetry } from '../../src/engine/task-attribution.js';
+import {
+  activateTaskTelemetry,
+  replaceTaskTelemetry,
+  retireTaskTelemetry,
+} from '../../src/engine/task-attribution.js';
 
 describe('validateTaskAttribution', () => {
   it('preserves only exact task-local ids from the current seeded plan', async () => {
@@ -53,4 +57,21 @@ describe('retireTaskTelemetry', () => {
       ]);
     },
   );
+});
+
+describe('replaceTaskTelemetry', () => {
+  it.each([
+    { label: 'missing', replacement: { taskId: '', seededTaskIds: ['7', '9'] }, diagnostic: 'empty' },
+    { label: 'unknown', replacement: { taskId: '99', seededTaskIds: ['7', '9'] }, diagnostic: 'unknown' },
+  ] as const)('rejects a $label replacement without relabeling sibling telemetry', ({ replacement, diagnostic }) => {
+    const activeTasks = [
+      { taskId: '7', context: { provider: 'claude' } },
+      { taskId: '9', context: { provider: 'codex' } },
+    ];
+
+    expect(replaceTaskTelemetry(activeTasks, '7', replacement)).toEqual({
+      activeTasks,
+      diagnostic,
+    });
+  });
 });

@@ -95,6 +95,11 @@ export interface ExecuteProviderCandidatesInput {
     step: StepName,
     attempt: ProviderAttemptMetadata,
   ) => void | Promise<void>;
+  /** Best-effort error reporting for attempt telemetry; never affects execution. */
+  onTelemetryError?: (
+    error: unknown,
+    attempt: ProviderAttemptMetadata,
+  ) => void | Promise<void>;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -365,6 +370,7 @@ export async function executeProviderCandidates({
   effortOverride,
   taskAttribution: attributionInput,
   onAttempt,
+  onTelemetryError,
   warn,
   options,
   optionsForCandidate,
@@ -420,7 +426,17 @@ export async function executeProviderCandidates({
       nextProvider,
     });
     attempts.push(attemptMetadata);
-    await onAttempt?.(step, attemptMetadata);
+    try {
+      await onAttempt?.(step, attemptMetadata);
+    } catch (error) {
+      // Attempt metadata is observational only. A failed telemetry sink must
+      // not alter dispatch, fallback, mutation, or completion authority.
+      try {
+        await onTelemetryError?.(error, attemptMetadata);
+      } catch {
+        // Reporting the telemetry failure is itself best effort.
+      }
+    }
     if (!unavailable) {
       return {
         ...result,

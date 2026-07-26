@@ -160,6 +160,42 @@ describe('executeProviderCandidates', () => {
     expect(claudeInvoke).not.toHaveBeenCalled();
   });
 
+  it('reports a telemetry-write failure without changing the provider completion verdict', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Codex completed the independently adjudicated work.',
+      exitCode: 0,
+    }));
+    const telemetryError = new Error('telemetry storage unavailable');
+    const onTelemetryError = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      preferredProvider: 'codex',
+      runtimes,
+      sessions,
+      onAttempt: async () => { throw telemetryError; },
+      onTelemetryError,
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+    });
+
+    expect({
+      result: { success: result.success, actualProvider: result.actualProvider },
+      providerCalls: codexInvoke.mock.calls.length,
+      telemetryReport: onTelemetryError.mock.calls,
+    }).toEqual({
+      result: { success: true, actualProvider: 'codex' },
+      providerCalls: 1,
+      telemetryReport: [[telemetryError, expect.objectContaining({ provider: 'codex', outcome: 'success' })]],
+    });
+  });
+
   it.each([
     { label: 'absent', taskAttribution: undefined },
     { label: 'stale', taskAttribution: { taskId: '2', seededTaskIds: ['1'], knownTaskIds: ['1', '2'] } },

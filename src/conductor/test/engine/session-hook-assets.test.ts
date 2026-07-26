@@ -101,32 +101,28 @@ describe('session-hook-assets', () => {
 });
 
 describe('MUTATION_GATE_HOOK', () => {
-  it('blocks an unstamped Edit when the marker is present, with the redirect message', () => {
+  it('keeps an unstamped Edit advisory when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'Edit', tool_input: { file_path: '/tmp/x.ts' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
-    expect(result.stderr).toMatch(/Task: <id>/);
+    expect(result.status).toBe(0);
   });
 
-  it('blocks an unstamped Write when the marker is present, with the redirect message', () => {
+  it('keeps an unstamped Write advisory when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'Write', tool_input: { file_path: '/tmp/x.ts' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
-  it('blocks an unstamped NotebookEdit when the marker is present, with the redirect message', () => {
+  it('keeps an unstamped NotebookEdit advisory when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'NotebookEdit', tool_input: { notebook_path: '/tmp/x.ipynb' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
   it('passes through a stamped Edit when the marker is present', () => {
@@ -172,13 +168,12 @@ describe('MUTATION_GATE_HOOK', () => {
     expect(result.status).toBe(0);
   });
 
-  it('blocks an unstamped `git commit` Bash invocation when the marker is present', () => {
+  it('keeps an unstamped `git commit` Bash invocation advisory when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'Bash', tool_input: { command: 'git commit -m "wip"' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
   it('passes through a stamped `git commit` Bash invocation when the marker is present', () => {
@@ -190,22 +185,20 @@ describe('MUTATION_GATE_HOOK', () => {
     expect(result.status).toBe(0);
   });
 
-  it('blocks an unstamped `git commit --no-verify` Bash invocation when the marker is present', () => {
+  it('keeps an unstamped `git commit --no-verify` Bash invocation advisory when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'Bash', tool_input: { command: 'git commit --no-verify -m "wip"' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
-  it('blocks an unstamped chained `git commit` Bash invocation when the marker is present', () => {
+  it('keeps an unstamped chained `git commit` Bash invocation advisory when the marker is present', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'Bash', tool_input: { command: 'cd a && git commit -m "wip"' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
   it('passes through a stamped `git commit --no-verify` Bash invocation when the marker is present', () => {
@@ -324,37 +317,30 @@ describe('MUTATION_GATE_HOOK', () => {
     expect(result.status).toBe(0);
   });
 
-  it('treats an empty stamp file as absent and blocks an Edit when the marker is present', () => {
+  it('allows an Edit when the task telemetry stamp is empty', () => {
     const result = runMutationGateHook({
       marker: true,
       stamp: '',
       payload: { tool_name: 'Edit', tool_input: { file_path: '/tmp/x.ts' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
-  it('treats a whitespace-only stamp file as absent and blocks a Write when the marker is present', () => {
+  it('allows a Write when the task telemetry stamp is whitespace-only', () => {
     const result = runMutationGateHook({
       marker: true,
       stamp: '   \n\t \n',
       payload: { tool_name: 'Write', tool_input: { file_path: '/tmp/x.ts' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/stamped Agent dispatch/);
+    expect(result.status).toBe(0);
   });
 
-  it('blocks an unstamped Edit under a "Task: none" dispatch (no stamp by design)', () => {
-    // A "Task: none" dispatch (e.g. /simplify during pipeline) intentionally
-    // writes no .pipeline/current-task stamp — mutations remain blocked,
-    // same as any other unstamped context (ADR-2026-07-10).
+  it('allows an Edit under a "Task: none" dispatch because attribution is advisory', () => {
     const result = runMutationGateHook({
       marker: true,
       payload: { tool_name: 'Edit', tool_input: { file_path: '/tmp/x.ts' } },
     });
-    expect(result.status).toBe(2);
-    expect(result.stderr).toMatch(/Task: <id>/);
-    expect(result.stderr).toMatch(/Task: none/);
+    expect(result.status).toBe(0);
   });
 });
 
