@@ -57,6 +57,9 @@ const noopProvider = {
 /** Minimal gh stub. */
 const noopGh = async (_args: string[], _opts: { cwd: string }) => ({ stdout: '' });
 
+/** Successful Git runner for remote-flow fixtures that are not testing publication. */
+const noopGit = async () => ({ stdout: '', stderr: '' });
+
 // ── temp dir scaffolding ──────────────────────────────────────────────────────
 
 let workDir: string;
@@ -752,7 +755,7 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     const { gh, calls } = makeTestGh(prUrl);
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ route, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, git: noopGit, registryPath, engineerDir, decide: makeTestDecide() });
 
     // PR URL reported in output
     expect(text()).toMatch(/pull\/42/);
@@ -852,6 +855,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
       route,
       io,
       gh,
+      git: noopGit,
       registryPath,
       engineerDir,
       ensureRunningLaunch,
@@ -940,6 +944,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
       route,
       io,
       gh,
+      git: noopGit,
       registryPath,
       engineerDir,
       ensureRunningLaunch,

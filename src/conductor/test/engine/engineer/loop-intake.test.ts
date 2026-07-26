@@ -89,6 +89,8 @@ function makeGh(prUrl = 'https://example.invalid/x/pull/1') {
   return { gh, calls };
 }
 
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 /**
  * Approving DECIDE seam for tests that reach authoring.
  * Returns real artifacts with the required markers so runAuthoring completes:
@@ -186,7 +188,7 @@ describe('loop-intake: confirm path', () => {
     const { gh } = makeGh('https://example.invalid/alpha/pull/42');
     const { io } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, git: noOpGit, decide: makeTestDecide() });
 
     // Confirm path: ideasProcessed must be 1.
     expect(summary.ideasProcessed).toBe(1);
@@ -315,7 +317,7 @@ describe('loop-intake: redirect to unknown project', () => {
     // redirect unknown, then confirm valid target
     const { io, text } = scriptedIo(['some idea', 'redirect nonesuch', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, git: noOpGit, decide: makeTestDecide() });
 
     // After rejecting the unknown redirect, the gate re-prompts and accepts 'y'
     expect(text()).toMatch(/not (a )?registered|unknown project/i);
@@ -343,7 +345,7 @@ describe('loop-intake: per-idea failure isolation', () => {
     // idea1 will fail; idea2 will succeed with confirm
     const { io, text } = scriptedIo(['idea one', 'idea two', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, git: noOpGit, decide: makeTestDecide() });
 
     // Session must NOT throw — it must return a summary.
     expect(summary).toBeDefined();
