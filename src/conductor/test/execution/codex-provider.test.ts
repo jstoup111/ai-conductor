@@ -480,6 +480,28 @@ describe('CodexProvider', () => {
       1,
       'unusable',
     ],
+    [
+      'missing credentials despite an unrelated overall-green summary',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'Codex credentials are missing' } },
+      },
+      0,
+      'missing',
+    ],
+    [
+      'expired credentials despite an unrelated overall-green summary',
+      undefined,
+      {
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'fail', summary: 'cached credentials expired' } },
+      },
+      0,
+      'unusable',
+    ],
   ] as const)(
     'classifies the documented doctor envelope for %s without exposing diagnostics',
     async (_name, apiKey, evidence, exitCode, state) => {
@@ -507,6 +529,76 @@ describe('CodexProvider', () => {
 
   it.each([
     [
+      'all-green doctor health',
+      'ok',
+      { provider: 'codex', source: 'cached-login', state: 'ready' },
+    ],
+    [
+      'unrelated degraded doctor health',
+      'fail',
+      {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'ready',
+        unrelatedHealth: 'degraded',
+      },
+    ],
+  ] as const)(
+    'classifies supported ready auth evidence with %s without leaking doctor diagnostics',
+    async (_name, overallStatus, expected) => {
+      const readiness = await new CodexProvider(
+        vi.fn().mockResolvedValue({
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            overallStatus,
+            checks: {
+              'auth.credentials': {
+                status: 'ok',
+                summary: 'credentials available; reachability probe failed at https://internal.example',
+              },
+            },
+          }),
+          exitCode: overallStatus === 'ok' ? 0 : 1,
+        }),
+      ).readiness();
+
+      expect(readiness).toEqual(expected);
+    },
+  );
+
+  it('keeps adversarial doctor diagnostics below the readiness boundary', async () => {
+    const rawFragments = [
+      '/private/codex/credentials.json',
+      'sk-live-super-secret-token',
+      'upstream.reachability.internal',
+      'arbitrary doctor diagnostic text',
+    ];
+    const readiness = await new CodexProvider(
+      vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus: 'fail',
+          checks: {
+            'auth.credentials': {
+              status: 'ok',
+              summary: rawFragments.join(' '),
+            },
+            'upstream.reachability.internal': {
+              status: 'fail',
+              summary: rawFragments.join(' '),
+            },
+          },
+        }),
+        stderr: rawFragments.join(' '),
+        exitCode: 1,
+      }),
+    ).readiness();
+
+    expect(JSON.stringify(readiness)).not.toContain(rawFragments.join(' '));
+  });
+
+  it.each([
+    [
       'missing auth check',
       { schemaVersion: 1, overallStatus: 'ok', checks: {} },
     ],
@@ -516,14 +608,6 @@ describe('CodexProvider', () => {
         schemaVersion: 1,
         overallStatus: 'ok',
         checks: { 'auth.credentials': { status: 'warning', summary: 'maybe ready' } },
-      },
-    ],
-    [
-      'overall failure despite an otherwise-ready credential check',
-      {
-        schemaVersion: 1,
-        overallStatus: 'fail',
-        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
       },
     ],
     [
@@ -562,6 +646,41 @@ describe('CodexProvider', () => {
       execCalls: 0,
     });
   });
+
+  it.each([
+    ['missing', 'no Codex credentials were found', 'missing'],
+    ['unusable', 'cached credentials expired', 'unusable'],
+  ] as const)(
+    'blocks initial and adjacent unattended dispatches for explicit %s documented evidence',
+    async (_name, summary, state) => {
+      const runDoctor = vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus: 'ok',
+          checks: { 'auth.credentials': { status: 'fail', summary } },
+        }),
+        exitCode: 0,
+      });
+      const gatedProvider = new CodexProvider(runDoctor);
+
+      const initial = await gatedProvider.invoke(baseOptions);
+      const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
+
+      expect({
+        initial: initial.authentication?.state,
+        adjacent: adjacent.authentication?.state,
+        doctorCalls: runDoctor.mock.calls.length,
+        substantiveCalls: mockExeca.mock.calls.length,
+        output: `${initial.output}\n${adjacent.output}`,
+      }).toEqual({
+        initial: state,
+        adjacent: state,
+        doctorCalls: 2,
+        substantiveCalls: 0,
+        output: expect.not.stringContaining(summary),
+      });
+    },
+  );
 
   it('checks readiness again before a resumed unattended dispatch', async () => {
     const runDoctor = vi.fn().mockResolvedValue(readyDoctorResult());

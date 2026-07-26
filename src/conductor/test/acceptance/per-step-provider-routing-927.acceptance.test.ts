@@ -889,6 +889,36 @@ describe('ST-927-6 — failure-classification boundary', () => {
 });
 
 describe('ST-927-7 — provider-local sessions and accounting', () => {
+  it('keeps #254-shaped BUILD then build_review on Codex when mixed-health readiness is supported', async () => {
+    const execute = await loadExecuteProviderCandidates();
+    const codex = scriptedProvider(() => ({
+      ...ok('supported cached login completed'),
+      authentication: {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'ready',
+        unrelatedHealth: 'degraded',
+      },
+    }));
+    const claude = scriptedProvider(() => ok('must not be selected'));
+    const sessionStore = new Map<string, ProviderSessionScope>();
+    const shared = {
+      preferredProvider: 'codex',
+      configuredProviders: ['codex', 'claude'],
+      runtimes: runtimes(claude.provider, codex.provider),
+      sessionStore,
+    };
+
+    const build = await execute({ ...shared, step: 'build', executionId: '254-build' });
+    const review = await execute({ ...shared, step: 'build_review', executionId: '254-build-review' });
+
+    expect([build, review]).toEqual(expect.arrayContaining([
+      expect.objectContaining({ success: true, actualProvider: 'codex', attempts: [expect.objectContaining({ provider: 'codex' })] }),
+    ]));
+    expect(codex.calls).toHaveLength(2);
+    expect(claude.calls).toHaveLength(0);
+  });
+
   it('starts fresh per step/provider, resumes only a same-step/provider retry, and attributes every attempt', async () => {
     const execute = await loadExecuteProviderCandidates();
     const sessionStore = new Map<string, ProviderSessionScope>();

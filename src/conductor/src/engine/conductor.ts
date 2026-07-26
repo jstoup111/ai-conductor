@@ -1280,8 +1280,7 @@ export class Conductor {
     const shPark = resolveSelfHostConfig(this.config);
 
     const authentication = failed?.authentication;
-    const actualProvider = failed?.actualProvider;
-    if (authentication?.provider === 'codex' && actualProvider) {
+    if (authentication?.provider === 'codex') {
       if (authentication.source === 'api-key') {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
@@ -1301,35 +1300,78 @@ export class Conductor {
       }
 
       const readiness = this.providerExecution?.runtimes.readinessFor(
-        actualProvider,
+        authentication.provider,
         authentication,
       );
       if (readiness) {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
+        const timedOutResult = {
+          timedOut: true,
+          haltReason:
+            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+            'Refresh the Codex login, then re-queue this feature.',
+        };
         await this.events.emit({
           type: 'credentials_park',
           reason: 'Codex cached login unavailable — waiting for a fresh readiness check',
         });
 
+        if (timeoutMs <= 0) {
+          return timedOutResult;
+        }
+
+        let retryDelayMs = 1_000;
+        let lastProgress:
+          | { readiness: typeof authentication.state; degradation: 'credential-failure' | 'unrelated-diagnostic-degradation'; emittedAt: number }
+          | undefined;
         for (;;) {
           const current = await readiness();
-          if (
+          const now = Date.now();
+          const elapsedMs = now - startedAt;
+          const isReady =
             current.provider === authentication.provider &&
             current.source === authentication.source &&
-            current.state === 'ready'
+            current.state === 'ready';
+          const timedOut = elapsedMs >= timeoutMs;
+          const nextDelayMs = isReady || timedOut
+            ? 0
+            : Math.min(retryDelayMs, timeoutMs - elapsedMs);
+          const degradation = current.unrelatedHealth === 'degraded'
+            ? 'unrelated-diagnostic-degradation' as const
+            : 'credential-failure' as const;
+          const previousProgress = lastProgress;
+          const stateChanged =
+            !previousProgress ||
+            previousProgress.readiness !== current.state ||
+            previousProgress.degradation !== degradation;
+
+          if (stateChanged || now - previousProgress.emittedAt >= 60_000) {
+            await this.events.emit({
+              type: 'credentials_park_progress',
+              provider: 'codex',
+              source: authentication.source,
+              readiness: current.state,
+              elapsedSeconds: Math.min(
+                Math.ceil(timeoutMs / 1_000),
+                Math.max(0, Math.floor(elapsedMs / 1_000)),
+              ),
+              nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
+              degradation,
+            });
+            lastProgress = { readiness: current.state, degradation, emittedAt: now };
+          }
+
+          if (
+            isReady
           ) {
             return { timedOut: false, haltReason: '' };
           }
-          if (timeoutMs <= 0 || Date.now() - startedAt >= timeoutMs) {
-            return {
-              timedOut: true,
-              haltReason:
-                'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
-                'Refresh the Codex login, then re-queue this feature.',
-            };
+          if (timedOut) {
+            return timedOutResult;
           }
-          await this.sleep(1_000);
+          await this.sleep(nextDelayMs);
+          retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
       }
     }

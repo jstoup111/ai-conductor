@@ -1,8 +1,17 @@
 import type { StepName, StepStatus, ComplexityTier } from './steps.js';
 import type { BootstrapMode } from './state.js';
-import type { TokenUsage } from '../execution/llm-provider.js';
+import type {
+  AuthenticationReadinessState,
+  AuthenticationSource,
+  TokenUsage,
+} from '../execution/llm-provider.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
+
+/** Closed, non-diagnostic context for credential-park progress telemetry. */
+export type CredentialParkProgressDegradation =
+  | 'credential-failure'
+  | 'unrelated-diagnostic-degradation';
 
 /**
  * Extra state threaded into onRecovery so the UI can adapt its menu
@@ -98,6 +107,16 @@ export type ConductorEvent =
   | { type: 'rate_limit'; waitSeconds: number }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
+  | {
+      /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
+      type: 'credentials_park_progress';
+      provider: 'codex';
+      source: AuthenticationSource;
+      readiness: AuthenticationReadinessState;
+      elapsedSeconds: number;
+      nextProbeDelaySeconds: number;
+      degradation: CredentialParkProgressDegradation;
+    }
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }

@@ -1,7 +1,7 @@
 # ADR: Provider-neutral auth park with source-specific readiness
 
 **Date:** 2026-07-25
-**Status:** APPROVED
+**Status:** SUPERSEDED
 **Feature:** Codex authentication, sandbox, and permission readiness (#905)
 **Deciders:** James Stoup (operator), architecture review for issue #905
 **Supersedes:** `adr-2026-07-25-codex-unattended-readiness-and-bounded-execution`
@@ -11,6 +11,8 @@ disposition provider-neutral while preserving source-specific recovery checks
 `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope`
 
 **Approval:** Approved by James Stoup on 2026-07-25.
+
+**Superseded by:** `adr-2026-07-26-codex-auth-evidence-and-recovery-backoff`
 
 ## Context
 

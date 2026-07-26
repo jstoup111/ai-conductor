@@ -124,6 +124,33 @@ describe('TerminalRenderer', () => {
     );
   });
 
+  it('renders typed credential-park progress without a lifecycle restart', async () => {
+    await renderer.handle({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'unusable',
+      elapsedSeconds: 3,
+      nextProbeDelaySeconds: 4,
+      degradation: 'credential-failure',
+    });
+
+    expect(stream.output()).toContain(
+      'Codex cached-login credentials: unusable (credential-failure); waiting 3s, next check in 4s',
+    );
+  });
+
+  it('renders only closed credential-park progress fields', async () => {
+    const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
+    await renderer.handle({
+      type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+      readiness: 'unusable', elapsedSeconds: 60, nextProbeDelaySeconds: 30,
+      degradation: 'credential-failure',
+    });
+
+    expect(stream.output()).not.toContain(rawFragment);
+  });
+
   it('reads state from file on each dashboard render', async () => {
     await renderer.handle({ type: 'step_completed', step: 'worktree', status: 'done' });
     expect(readStateMock).toHaveBeenCalledWith('/tmp/test-state.json');

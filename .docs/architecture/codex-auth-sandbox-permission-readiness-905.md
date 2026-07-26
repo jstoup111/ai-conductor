@@ -1,11 +1,11 @@
 # Components + Sequences: Codex Authentication and Autonomous Execution Readiness
 
-**Last updated:** 2026-07-25
-**Scope:** Current provider-aware execution seams plus the planned Codex-specific
-authentication readiness, bounded unattended policy, failure disposition, and self-host
-isolation responsibilities for issue #905. Planned elements are marked **[NEW]** or
-**[CHANGE]**; their boundaries follow the approved PRD and the approved shared-auth-park
-ADR dated 2026-07-25.
+**Last updated:** 2026-07-26
+**Scope:** Current provider-aware Codex authentication readiness, bounded unattended
+policy, failure disposition, and self-host isolation responsibilities from issue #905,
+plus the planned mixed-health classification and recovery-loop implementation for issue #970.
+Issue #970 elements are marked **[CHANGE #970]** and map to the approved 12-task implementation
+plan.
 
 ## Component Diagram
 
@@ -22,16 +22,16 @@ graph LR
     subgraph orchestration ["Existing provider-aware orchestration"]
         Runner["Step runner<br/>normal and auxiliary dispatches"]
         Execution["Provider candidate execution<br/>selection, model ladder, classification"]
-        Recovery["Shared authentication recovery<br/>[CHANGE: one bounded park lifecycle]"]
+        Recovery["Shared authentication recovery<br/>one bounded park lifecycle<br/>[CHANGE #970: backed-off probes and progress events]"]
         Events["Operator diagnostics and audit events"]
     end
 
     subgraph codexboundary ["Planned Codex invocation boundary"]
         AuthSelect["Authentication source selection [NEW]<br/>per-run API key, otherwise cached login"]
-        Readiness["Authentication readiness gate [NEW]<br/>ready, missing, unusable, unverifiable"]
+        Readiness["Authentication readiness gate<br/>ready, missing, unusable, unverifiable<br/>[CHANGE #970: auth evidence independent of unrelated checks]"]
         Policy["Unattended invocation policy [NEW]<br/>workspace-write, on-request, auto-review"]
         CodexProvider["Codex provider adapter [CHANGE]<br/>scoped auth, explicit policy, classification"]
-        AuthPark["Auth park coordinator [CHANGE]<br/>provider/source retained; source-specific readiness<br/>zero fallback, retry, and escalation budget"]
+        AuthPark["Auth park coordinator<br/>provider/source retained; source-specific readiness<br/>zero fallback, retry, and escalation budget<br/>[CHANGE #970: bounded backoff and visible wait state]"]
     end
 
     subgraph selfhost ["Self-host provider isolation"]
@@ -113,7 +113,8 @@ sequenceDiagram
     R->>CLI: codex doctor --json --summary<br/>captured with bounded timeout
     CLI->>S: authenticate
     S-->>CLI: accepted, rejected, or unavailable
-    CLI-->>R: ready, unusable, or unverifiable
+    CLI-->>R: versioned per-check evidence plus overall health
+    Note over R: auth.credentials is classified independently<br/>from unrelated doctor checks [CHANGE #970]
 
     alt selected source ready
         R-->>D: proceed with selected auth context
@@ -158,9 +159,10 @@ sequenceDiagram
     C->>C: retain failed provider, source, and sanitized state
     C->>C: freeze retry, escalation, and fallback budgets
     alt source can become ready in this process
-        loop bounded park interval
+        loop bounded park interval with capped backoff [CHANGE #970]
             C->>R: recheck the same selected source
             R-->>C: ready, missing, unusable, or unverifiable
+            C-->>O: rate-limited progress with auth state<br/>and unrelated-health distinction [CHANGE #970]
         end
         alt source becomes ready
             C->>C: resume only the failed attempt or group member
@@ -251,6 +253,19 @@ sequenceDiagram
 - An automatic-review denial is an actionable permission failure. It never selects a
   different auth source, advances provider/model fallback, or weakens policy on retry.
 
+## Planned Implementation for Issue #970
+
+- A documented `auth.credentials` status of `ok` is sufficient authentication evidence
+  even when another doctor check makes overall health fail. Missing, rejected, malformed,
+  or absent auth evidence continues to fail closed.
+- The cached-login park retains its existing timeout and zero-budget semantics while
+  replacing fixed one-second subprocess polling with bounded, capped backoff.
+- A recovery wait emits rate-limited progress that identifies the selected credential
+  source and distinguishes authentication state from unrelated doctor health. Raw doctor
+  output and credential material remain excluded.
+- No provider fallback, authentication-source fallback, new deployable component, or new
+  external integration is introduced.
+
 ## Diagram Impact Boundary
 
 Issue #905 changes internal conductor components and invocation sequences around an
@@ -275,3 +290,5 @@ container, and ERD diagrams therefore require no update.
 | 2026-07-25 | Resolved auth probe, recovery, policy, and self-host boundaries | Operator-approved architecture ADR |
 | 2026-07-25 | Replaced Codex-only HALT with shared auth park and source-specific readiness | Operator-approved PRD and superseding ADR amendment |
 | 2026-07-25 | Mapped approved components and sequences to the #905 implementation plan | Plan update; no new container, service, datastore, or external integration |
+| 2026-07-26 | Added mixed-health auth classification and backed-off visible recovery | DECIDE architecture input for issue #970, Medium tier |
+| 2026-07-26 | Mapped #970 to the provider classifier, shared park coordinator, and exhaustive event consumers | Plan update; 12 consolidated TDD tasks and no new architectural boundary |

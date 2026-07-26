@@ -47,6 +47,7 @@ type DoctorEvidence =
   | {
     kind: 'documented';
     state: AuthenticationReadiness['state'];
+    unrelatedHealth?: AuthenticationReadiness['unrelatedHealth'];
   }
   | {
     kind: 'legacy';
@@ -334,9 +335,12 @@ export class CodexProvider implements LLMProvider {
     const exitCode = result.exitCode ?? 1;
     if (evidence.kind === 'documented') {
       if (evidence.state === 'ready') {
-        return exitCode === 0
-          ? { provider: 'codex', source: authentication.source, state: 'ready' }
-          : this.nonReadyReadiness(authentication.source, 'unverifiable');
+        return {
+          provider: 'codex',
+          source: authentication.source,
+          state: 'ready',
+          unrelatedHealth: evidence.unrelatedHealth,
+        };
       }
       return this.nonReadyReadiness(authentication.source, evidence.state);
     }
@@ -395,10 +399,14 @@ export class CodexProvider implements LLMProvider {
         const { status, summary } = credentials as Record<string, unknown>;
         if (typeof summary !== 'string') return undefined;
         if (status === 'ok') {
-          return overallStatus === 'ok' ? { kind: 'documented', state: 'ready' } : undefined;
+          return {
+            kind: 'documented',
+            state: 'ready',
+            unrelatedHealth: overallStatus === 'fail' ? 'degraded' : undefined,
+          };
         }
-        if (status !== 'fail' || overallStatus !== 'fail') return undefined;
-        if (/no codex credentials were found/i.test(summary)) {
+        if (status !== 'fail') return undefined;
+        if (/(?:no codex credentials were found|codex credentials are missing)/i.test(summary)) {
           return { kind: 'documented', state: 'missing' };
         }
         if (/invalid|rejected|unauthorized|expired/i.test(summary)) {
