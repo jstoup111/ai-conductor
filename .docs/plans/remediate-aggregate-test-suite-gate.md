@@ -47,3 +47,17 @@ Return `false` for the literal `(unknown)` sentinel before resolving paths. Pres
 ## Batch verification
 
 `npx vitest run test/engine/conductor-auth-park.test.ts test/engine/tmux-leak-guard.test.ts`
+
+### Task rem-test-daemon-build-auth-01: Stop daemon build-auth acceptance fixtures before the finish fence
+
+**Files likely touched:**
+
+- `src/conductor/test/acceptance/isolate-daemon-build-auth-from-operator-oauth.acceptance.test.ts`
+
+**Dependencies:** none
+
+Keep the real self-host build/auth dispatch path under test, but make successful `Conductor.run()` fixtures terminate at their intended post-build boundary. Do not change production finish-fence behavior.
+
+**Verify:**
+
+`npx vitest run test/acceptance/isolate-daemon-build-auth-from-operator-oauth.acceptance.test.ts`
