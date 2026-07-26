@@ -192,13 +192,14 @@ describe('Story 1 — automated pre-SHIP gate (FR-1, FR-7)', () => {
 });
 
 describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () => {
-  it('documents the shared TypeScript verifier without requiring a repository-specific generic skill', async () => {
+  it('documents the shared verifier interface without requiring a repository-specific command', async () => {
     const [conduct, harness] = await Promise.all([
       readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8'),
       readFile(join(REPO_ROOT, 'HARNESS.md'), 'utf8'),
     ]);
 
-    expect(harness).toMatch(/conduct-ts test-suite/i);
+    expect(harness).toMatch(/repository-configured aggregate verifier/i);
+    expect(harness).not.toMatch(/conduct-ts test-suite/i);
     expect(harness).toMatch(/native pre-SHIP aggregate gate/i);
     expect(conduct).not.toMatch(/skills\/test-suite/i);
   });

@@ -291,8 +291,8 @@ affected-test scope genuinely uncertain:
 4. Module-to-test mapping is low-confidence and cannot be made confidently.
 
 When a trigger fires, state `Aggregate fallback: <exact trigger and reason>`
-and invoke `conduct-ts test-suite`. Do not call the project's aggregate command
-directly and do not use the legacy Bash conductor. No other intermediate
+and use the host's repository-configured aggregate verifier interface. Do not
+call the project's aggregate command directly. No other intermediate
 condition authorizes a broad run. The native pre-SHIP aggregate gate runs after
 BUILD and before manual testing; finish
 reuse/fallback, mutation-specific repair checks, and independent CI authority

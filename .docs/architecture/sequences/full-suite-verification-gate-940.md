@@ -10,7 +10,7 @@ kickback, finish fallback, and independent PR/CI behavior.
 sequenceDiagram
     autonumber
     participant FLOW as Conductor test_suite gate<br/>or direct /test-suite
-    participant VERIFY as TypeScript FullSuiteVerifier
+    participant VERIFY as Shared configured verifier
     participant CFG as .ai-conductor/config.yml
     participant INPUT as Git/worktree + declared env
     participant PROOF as .pipeline/test-suite-evidence.json
@@ -80,8 +80,8 @@ sequenceDiagram
 ## Earlier full-suite fallback
 
 When scoped-test selection is unsafe or impossible during BUILD, the workflow
-invokes `conduct-ts test-suite` instead of calling the project's aggregate
-command directly. A successful fallback therefore writes the same proof. At
+uses the host's repository-configured verifier interface instead of calling the
+project's aggregate command directly. A successful fallback therefore writes the same proof. At
 the explicit `test_suite` gate, unchanged inputs produce `REUSED`, not a second
 execution.
 
