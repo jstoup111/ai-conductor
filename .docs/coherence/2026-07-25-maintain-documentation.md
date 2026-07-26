@@ -1,9 +1,9 @@
 # Coherence Check: Maintain documentation
 
-**Date:** 2026-07-25  
-**Tier:** M  
-**Track:** Technical  
-**Plan stem:** `2026-07-25-maintain-documentation`  
+**Date:** 2026-07-25
+**Tier:** M
+**Track:** Technical
+**Plan stem:** `2026-07-25-maintain-documentation`
 **Result:** COVERED — zero gaps
 
 Outcome rows are not required because this chat-origin feature has no staged `.pipeline/`
