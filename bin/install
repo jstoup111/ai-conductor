@@ -990,11 +990,10 @@ node_supports_conduct_ts() {
 }
 
 # Build the conduct-ts bundle: npm install + npm run build in src/conductor/.
-# Runs in BOTH fresh-install and --update modes — the install-freshness guard
-# refuses to start a stale bundle, so an update that skipped the rebuild would
-# brick `conduct-ts`. Non-fatal: on any failure it warns and returns 1 so the
-# caller can continue (step 3b then reports the missing bundle). Idempotent —
-# npm install is a near no-op when dependencies are already satisfied.
+# Runs on fresh installs only; bin/setup owns engine setup in worktrees. Non-fatal:
+# on any failure it warns and returns 1 so the caller can continue (step 3b then
+# reports the missing bundle). Idempotent — npm install is a near no-op when
+# dependencies are already satisfied.
 build_conduct_ts() {
   local conductor_dir="${HARNESS_DIR}/src/conductor"
   echo ""
@@ -1297,11 +1296,13 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
-  # 3a. Build conduct-ts (npm install + npm run build) so the dist bundle is
-  # fresh before we symlink it. Runs in --update mode too — the install-freshness
-  # guard refuses a stale bundle. Non-fatal: a build failure (no npm, wrong Node)
-  # just leaves the bundle missing, and step 3b reports that.
-  build_conduct_ts || true
+  # 3a. Build conduct-ts (npm install + npm run build) on fresh installs so the
+  # dist bundle is ready before we symlink it. Updates do not install dependencies
+  # or rebuild the bundle. Non-fatal: a build failure (no npm, wrong Node) just
+  # leaves the bundle missing, and step 3b reports that.
+  if [ "$UPDATE_MODE" = false ]; then
+    build_conduct_ts || true
+  fi
 
   # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
   # conduct-ts is the engine-layer rewrite of conduct; users opt in today by
