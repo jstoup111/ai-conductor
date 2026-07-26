@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-vi.mock('execa', () => ({ execa: vi.fn() }));
+vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
 
 // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): spy on
 // `runScopeFailDisposition` (the Task 7/8 disposition + HALT-bound
@@ -1795,6 +1795,16 @@ describe('integration/gate-loop', () => {
       // A single task, no path list — a bare `Task: t1` trailer is enough
       // for deriveCompletion / the evidence-sidecar stamp to resolve it.
       await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
+      await git('add', '.docs/plans/p.md');
+      await git('commit', '-q', '-m', 'docs: approve task plan');
+      const planText = '### Task t1\n**Story:** 1-1 (happy path)\n';
+      const { execa } = await import('execa');
+      const mockExeca = vi.mocked(execa);
+      mockExeca.mockImplementation(async (_command: string, args: readonly string[] = []) => {
+        if (args[0] === 'ls-tree') return { stdout: '.docs/plans/p.md\0' } as never;
+        if (args[0] === 'show') return { stdout: planText } as never;
+        return { stdout: '' } as never;
+      });
       await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       const config = { build_review: { enabled: true } };
@@ -1894,7 +1904,11 @@ describe('integration/gate-loop', () => {
         git: fakeGit,
         shipmentEvidence: validShipmentEvidence,
       });
-      await conductor.run();
+      try {
+        await conductor.run();
+      } finally {
+        mockExeca.mockImplementation(async () => ({ stdout: '' }) as never);
+      }
 
       // The kickback fired and the loop still converged despite the wipe —
       // the build gate never treated the missing task-status.json as a
