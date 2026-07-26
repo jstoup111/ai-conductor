@@ -39,8 +39,16 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toContain('.pipeline/build-review.json');
     expect(prompt).toContain(
-      "{ verdict: 'PASS' | 'FAIL', reasons: string[], rubric: { tautology: string, scope: string, rootCause: string, completeness: string } }",
+      "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean } }",
     );
+  });
+
+  it('requires every independent failed-rubric finding in a structured list', () => {
+    const prompt = buildGraderPrompt(inputs);
+
+    expect(prompt).toMatch(/every independent finding/i);
+    expect(prompt).toMatch(/findings/i);
+    expect(prompt).toMatch(/one finding per array entry/i);
   });
 
   it('instructs the grader to run the project test suite itself', () => {
@@ -62,7 +70,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(
       /(do not|must not|never).*(per-task|SHA|reachability|corroboration)/i,
     );
-    expect(prompt).toMatch(/rubric\.completeness/);
+    expect(prompt).toMatch(/findings\.completeness/);
     expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 

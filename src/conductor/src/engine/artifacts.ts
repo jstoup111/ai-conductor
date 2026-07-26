@@ -1080,12 +1080,23 @@ export interface BuildReviewRubric {
   completeness?: boolean;
 }
 
+/**
+ * Detailed, independently actionable findings grouped by the rubric item
+ * that failed. This is additive: older grader artifacts continue to provide
+ * only the legacy free-form `reasons` array.
+ */
+export type BuildReviewFindings = Partial<{
+  [K in keyof BuildReviewRubric]: string[];
+}>;
+
 export interface BuildReviewVerdict {
   verdict: 'PASS' | 'FAIL';
   /** Free-form explanations; required in practice for FAIL, but not enforced
    * here — an empty/absent reasons array on FAIL still parses (fail-closed
    * validation only guards the shape needed to route PASS vs FAIL safely). */
   reasons?: string[];
+  /** Every independent finding for each failed rubric item. */
+  findings?: BuildReviewFindings;
   rubric: BuildReviewRubric;
   /** The HEAD SHA this verdict was formed against (gate-code-validity-on-
    * redispatch, #817). Additive/optional — absent on legacy verdicts or when
@@ -1094,6 +1105,21 @@ export interface BuildReviewVerdict {
    * (Task 5) to decide whether a PASS verdict can be trusted without a
    * re-run. Never required for a verdict to parse. */
   codeStamp?: string | null;
+}
+
+/**
+ * Flatten a verdict's legacy summaries and structured findings for every
+ * existing consumer that needs actionable build-review feedback. Keeping the
+ * legacy reasons first preserves their prior rendering and artifact contract.
+ */
+export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'reasons' | 'findings'>): string[] {
+  const details = [...(verdict.reasons ?? [])];
+  for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+    for (const finding of verdict.findings?.[rubric] ?? []) {
+      details.push(`[${rubric}] ${finding}`);
+    }
+  }
+  return details;
 }
 
 /**
@@ -1113,6 +1139,7 @@ export function validateBuildReviewVerdict(
       ok: true;
       verdict: 'PASS' | 'FAIL';
       reasons?: string[];
+      findings?: BuildReviewFindings;
       rubric: BuildReviewRubric;
       codeStamp?: string | null;
     }
@@ -1140,10 +1167,31 @@ export function validateBuildReviewVerdict(
   if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
   if (typeof rubricSrc.completeness === 'boolean') rubric.completeness = rubricSrc.completeness;
 
+  let findings: BuildReviewFindings | undefined;
+  if (e.findings !== undefined) {
+    if (typeof e.findings !== 'object' || e.findings === null || Array.isArray(e.findings)) {
+      return { ok: false, reason: `${BUILD_REVIEW_VERDICT} "findings" must be an object when present` };
+    }
+    const source = e.findings as Record<string, unknown>;
+    findings = {};
+    for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+      const candidate = source[rubricName];
+      if (candidate === undefined) continue;
+      if (!Array.isArray(candidate) || candidate.some((finding) => typeof finding !== 'string')) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${rubricName}" must be a string array when present`,
+        };
+      }
+      findings[rubricName] = candidate;
+    }
+  }
+
   const result: {
     ok: true;
     verdict: 'PASS' | 'FAIL';
     reasons?: string[];
+    findings?: BuildReviewFindings;
     rubric: BuildReviewRubric;
     codeStamp?: string | null;
   } = {
@@ -1154,6 +1202,7 @@ export function validateBuildReviewVerdict(
   if (Array.isArray(e.reasons)) {
     result.reasons = e.reasons as string[];
   }
+  if (findings !== undefined) result.findings = findings;
   if (typeof e.codeStamp === 'string' || e.codeStamp === null) {
     result.codeStamp = e.codeStamp;
   }
@@ -1932,8 +1981,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: false, reason: result.reason, routeClass: 'absent' };
     }
     if (result.verdict === 'FAIL') {
-      const reasons = result.reasons && result.reasons.length > 0
-        ? result.reasons.join('; ')
+      const details = buildReviewFailureDetails(result);
+      const reasons = details.length > 0
+        ? details.join('; ')
         : 'no reasons recorded';
       return {
         done: false,

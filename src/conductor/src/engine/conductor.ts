@@ -118,6 +118,7 @@ import {
   planStem,
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
+  buildReviewFailureDetails,
   validateBuildReviewVerdict,
   WIRING_EVIDENCE,
   validateWiringEvidence,
@@ -4772,6 +4773,7 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
+                const failureDetails = buildReviewFailureDetails(parsed);
                 // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
                 // scope-FAIL disposition, BEFORE any rework routing decision
                 // below (and before the #569 no_task_progress remediation
@@ -4799,7 +4801,7 @@ export class Conductor {
                       git: makeGitRunner(this.projectRoot),
                       root: this.projectRoot,
                       gradedBaseSha: lastBuildReviewMergeBase,
-                      flaggedPaths: extractFlaggedPaths(parsed.reasons),
+                      flaggedPaths: extractFlaggedPaths(failureDetails),
                       regrade: async () => 'pass',
                     });
                   } catch {
@@ -4874,8 +4876,8 @@ export class Conductor {
                 if (count <= MAX_KICKBACKS_PER_GATE) {
                   kickbackCounts.set('build_review', count);
                   const evidence =
-                    parsed.reasons && parsed.reasons.length > 0
-                      ? parsed.reasons.join('\n')
+                    failureDetails.length > 0
+                      ? failureDetails.join('\n')
                       : 'grader returned FAIL without reasons';
                   await emitTracked({
                     type: 'kickback',
@@ -4912,7 +4914,7 @@ export class Conductor {
                 }
                 const reason =
                   `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
-                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${parsed.reasons?.[0] ?? 'no reasons recorded'}`;
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${failureDetails.join('; ') || 'no reasons recorded'}`;
                 await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                   () => {},
                 );
