@@ -42,6 +42,8 @@ export type ConductorEvent =
       type: 'provider_attempt';
       step: StepName;
       provider: string;
+      /** Sanitized Codex authentication source; omitted for other providers. */
+      authenticationSource?: 'api-key' | 'cached-login';
       outcome: 'success' | 'failure' | 'unavailable';
       /** False when a cached run-wide unavailability avoided process dispatch. */
       invoked: boolean;

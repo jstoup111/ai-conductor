@@ -110,6 +110,7 @@ describe('EventPersister', () => {
         type: 'provider_attempt',
         step: 'plan',
         provider: 'codex',
+        authenticationSource: 'cached-login',
         outcome: 'unavailable',
         reason: 'executable not found',
         model: 'gpt-5.6-sol',

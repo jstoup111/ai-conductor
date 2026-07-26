@@ -77,6 +77,40 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('emits only the selected Codex authentication source for successful and failed attempts', async () => {
+    const captured: unknown[] = [];
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({
+        success: true, output: 'completed', exitCode: 0,
+        authentication: { provider: 'codex', source: 'api-key', state: 'ready', remediation: 'sk-secret' },
+      })
+      .mockResolvedValueOnce({
+        success: false, output: 'authentication rejected', exitCode: 1,
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable', remediation: 'sk-secret' },
+      });
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('codex-session'));
+    const module = await import('../../src/engine/provider-execution.js');
+
+    for (const prompt of ['successful', 'failed']) {
+      await module.executeProviderCandidates({
+        step: 'build', configuredProviders: ['codex'], preferredProvider: 'codex', runtimes, sessions,
+        options: { prompt, cwd: '/workspace/feature' },
+        onAttempt: (_step, attempt) => captured.push(attempt),
+      });
+    }
+
+    expect(captured.map((attempt) => ({
+      source: (attempt as { authenticationSource?: string }).authenticationSource,
+      includesCredentialMaterial: JSON.stringify(attempt).includes('sk-secret'),
+    }))).toEqual([
+      { source: 'api-key', includesCredentialMaterial: false },
+      { source: 'cached-login', includesCredentialMaterial: false },
+    ]);
+  });
+
   it('exposes bounded helpers for native config, invocation/session handling, and attempt metadata', async () => {
     const module = await import('../../src/engine/provider-execution.js');
 
@@ -213,6 +247,7 @@ describe('executeProviderCandidates', () => {
         attempts: [
           {
             provider: 'codex',
+            authenticationSource: 'api-key',
             model: 'gpt-step/verbatim',
             tokenUsage: { input: 13, output: 8 },
             outcome: 'success',
