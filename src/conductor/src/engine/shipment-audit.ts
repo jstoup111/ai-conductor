@@ -319,7 +319,7 @@ interface MergedPullRequestNode {
 const MERGED_PULL_REQUESTS_QUERY = `
 query($owner: String!, $name: String!, $endCursor: String) {
   repository(owner: $owner, name: $name) {
-    pullRequests(states: MERGED, first: 100, after: $endCursor) {
+    pullRequests(states: MERGED, first: 10, after: $endCursor) {
       nodes {
         number
         url
