@@ -109,4 +109,13 @@ describe('provider-aware self-host homes', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('removes only its created home when auth preparation fails after assets are linked', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'provider-home-partial-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(join(worktree, 'skills'), { recursive: true });
+    await expect(provisionProviderHome({ provider: { id: 'claude', prepareSelfHostAuth: async () => { throw new Error('CANARY_SECRET_PARTIAL'); } }, worktreeRoot: worktree, baseDir: root })).rejects.toThrow('[REDACTED]');
+    expect((await (await import('node:fs/promises')).readdir(root)).filter(name => name.startsWith('self-host-'))).toEqual([]);
+    await rm(root, { recursive: true, force: true });
+  });
 });
