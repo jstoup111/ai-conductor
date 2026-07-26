@@ -109,6 +109,12 @@ describe('evaluateSafetyBoundary', () => {
     expect(verdict).toMatchObject({
       passed: false,
       requiredFailures: [{ name: 'protected-artifacts' }],
+      failures: [{
+        provider: 'claude',
+        protection: 'protected-artifacts',
+        reason: 'Required protection is unavailable.',
+        stoppedScope: 'provider-attempt',
+      }],
       diagnosticGaps: [{ name: 'native-observability' }],
     });
   });

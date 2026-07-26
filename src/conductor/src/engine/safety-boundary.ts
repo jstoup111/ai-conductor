@@ -1,3 +1,8 @@
+import {
+  createSafetyFailureDiagnostic,
+  type SafetyFailureDiagnostic,
+} from './safety-diagnostics.js';
+
 /** Whether a protection applies to the current provider attempt. */
 export type SafetyApplicability = 'applicable' | 'not-applicable' | 'unknown';
 
@@ -64,6 +69,7 @@ export interface SafetyDiagnosticGap {
 export interface SafetyVerdict {
   passed: boolean;
   requiredFailures: readonly SafetyProtection[];
+  failures: readonly SafetyFailureDiagnostic[];
   diagnosticGaps: readonly SafetyDiagnosticGap[];
   /** Copied observability context, never an authorization signal. */
   attribution?: SafetyAttributionTelemetry;
@@ -182,10 +188,21 @@ export function evaluateSafetyBoundary(input: SafetyBoundaryInput): SafetyVerdic
       applicability,
       state,
     }));
+  const failures = requiredFailures.map((protection) =>
+    createSafetyFailureDiagnostic({
+      provider: input.provider,
+      protection: {
+        name: protection.name,
+        state: protection.state,
+        scope: protection.scope,
+      },
+    }),
+  );
 
   return {
     passed: requiredFailures.length === 0,
     requiredFailures,
+    failures,
     diagnosticGaps,
     ...(input.attribution ? { attribution: input.attribution } : {}),
   };
