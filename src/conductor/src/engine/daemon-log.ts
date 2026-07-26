@@ -37,8 +37,9 @@ export function formatDaemonFeatureTag(featureSlug: string): string {
  * deliberately joins `[daemon]` without whitespace; ordinary repository-wide
  * messages retain the familiar separating space.
  */
-export function formatDaemonActivityLine(message: string): string {
-  return message.startsWith('[') ? `[daemon]${message}` : `[daemon] ${message}`;
+export function formatDaemonActivityLine(message: string, featureOwned = false): string {
+  if (featureOwned) return `[daemon]${message}`;
+  return `[daemon] ${message}`;
 }
 
 /**
@@ -47,10 +48,10 @@ export function formatDaemonActivityLine(message: string): string {
  */
 export function createFeatureDaemonLogger(
   featureSlug: string,
-  baseLog: (message: string) => void,
+  baseLog: (message: string, featureOwned?: boolean) => void,
 ): (message: string) => void {
   const featureTag = formatDaemonFeatureTag(featureSlug);
-  return (message) => baseLog(`${featureTag} ${message}`);
+  return (message) => baseLog(`${featureTag} ${message}`, true);
 }
 
 /** Absolute path to a repo's daemon activity log. */

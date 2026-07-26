@@ -533,7 +533,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
-  const log = (msg: string) => {
+  const log = (msg: string, featureOwned = false) => {
     // Task 16: Parse per-feature log lines and suppress unchanged status
     // Pattern 1: "▶ start <slug>" → { slug, status: 'start' }
     const startMatch = msg.match(/▶.*start\s+(\S+)/);
@@ -554,9 +554,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       const oldStatus = lastStatus.get(slug);
       const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
       lastStatus.set(slug, 'resume');
-      const liveLine = formatDaemonActivityLine(newMsg);
+      const liveLine = formatDaemonActivityLine(newMsg, featureOwned);
       console.log(`${chalk.dim('[daemon]')}${liveLine.slice('[daemon]'.length)}`);
-      logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(newMsg))));
+      logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(newMsg), featureOwned)));
       return; // Resume lines always logged with (was: ...) appended
     }
 
@@ -574,12 +574,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
 
     // For all other lines (discovery, sweeps, etc.), always log
-    const liveLine = formatDaemonActivityLine(msg);
+    const liveLine = formatDaemonActivityLine(msg, featureOwned);
     console.log(`${chalk.dim('[daemon]')}${liveLine.slice('[daemon]'.length)}`);
     // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
     // back via `conduct daemon logs` can be correlated in time; the console stays
     // uncluttered for live watching.
-    logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(msg))));
+    logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(msg), featureOwned)));
   };
 
   // Task 17: Create the transition-aware discovery logger
@@ -824,7 +824,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
-    const featureLog = createFeatureDaemonLogger(item.slug, log);
+    const featureLog = createFeatureDaemonLogger(item.slug, (message) => log(message, true));
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents: ConductorEvent['type'][] = [
       'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
@@ -923,6 +923,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         modelPolicy: selectedRuntime.policy,
         mode: 'auto',
         providerExecution,
+        log: featureLog,
       },
     );
 
@@ -1091,8 +1092,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           featureDesc: `setup-fix-${item.slug}`,
           config,
           modelPolicy: selectedRuntime.policy,
-          mode: 'auto',
-          providerExecution,
+        mode: 'auto',
+        providerExecution,
+        log: featureLog,
         },
       );
       featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
@@ -1655,6 +1657,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                         modelPolicy: selectedRuntime.policy,
                         mode: 'auto',
                         providerExecution,
+                        log: createFeatureDaemonLogger(entry.slug, (message) => log(message, true)),
                       },
                     );
                     return await stepRunner.resolveRebaseConflict(ctx);
@@ -1741,6 +1744,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                         modelPolicy: selectedRuntime.policy,
                         mode: 'auto',
                         providerExecution,
+                        log: createFeatureDaemonLogger(ctx.entry.slug, (message) => log(message, true)),
                       },
                     );
                     await stepRunner.resolveCiFailure({

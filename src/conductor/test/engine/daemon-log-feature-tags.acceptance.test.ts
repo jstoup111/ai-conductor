@@ -11,7 +11,7 @@ import * as daemonLog from '../../src/engine/daemon-log.js';
  * - `daemon-cli.ts#runConductorInWorktree` sends events and diagnostics through it.
  */
 
-type FeatureLogger = (message: string) => void;
+type FeatureLogger = (message: string, featureOwned?: boolean) => void;
 type FeatureLoggerFactory = (featureSlug: string, baseLog: FeatureLogger) => FeatureLogger;
 
 function featureLogger(featureSlug: string, baseLog: FeatureLogger): FeatureLogger {
@@ -29,11 +29,11 @@ function featureLogger(featureSlug: string, baseLog: FeatureLogger): FeatureLogg
 function recordDaemonOutput() {
   const live: string[] = [];
   const persisted: string[] = [];
-  const baseLog: FeatureLogger = (message) => {
+  const baseLog: FeatureLogger = (message, featureOwned) => {
     // Exercise the same daemon-line composition used by runDaemonMode before
     // observing either sink. A callback-only local prefix would let this
     // acceptance suite pass even if the live daemon tee remained incorrect.
-    const line = daemonLog.formatDaemonActivityLine(message);
+    const line = daemonLog.formatDaemonActivityLine(message, featureOwned);
     live.push(line);
     persisted.push(daemonLog.formatDaemonLogLine(line, new Date(0)));
   };
@@ -41,6 +41,11 @@ function recordDaemonOutput() {
 }
 
 describe('acceptance: daemon log feature tags', () => {
+  it('routes every daemon-created DefaultStepRunner warning sink through a feature logger', async () => {
+    const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    expect([...source.matchAll(/new DefaultStepRunner\([\s\S]*?\n\s*\);/g)].every((match) => /\n\s*log: /.test(match[0]))).toBe(true);
+  });
+
   it('tags setup, structured-event, warning, retry, and subprocess diagnostics in live and persisted output', () => {
     const output = recordDaemonOutput();
     const log = featureLogger('daemon-logs-tag-current', output.baseLog);
@@ -96,8 +101,8 @@ describe('acceptance: daemon log feature tags', () => {
     try {
       const sink = await daemonLog.openDaemonLog(repo);
       const live: string[] = [];
-      const baseLog: FeatureLogger = (message) => {
-        const line = daemonLog.formatDaemonActivityLine(message);
+      const baseLog: FeatureLogger = (message, featureOwned) => {
+        const line = daemonLog.formatDaemonActivityLine(message, featureOwned);
         live.push(line);
         sink.write(daemonLog.formatDaemonLogLine(line, new Date(0)));
       };

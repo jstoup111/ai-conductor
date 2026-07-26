@@ -251,6 +251,10 @@ describe('engine/daemon-log', () => {
       expect(formatDaemonActivityLine('global scan complete')).toBe('[daemon] global scan complete');
     });
 
+    it('keeps a separator before bracket-leading repository-global content', () => {
+      expect(formatDaemonActivityLine('[setup-triage] x')).toBe('[daemon] [setup-triage] x');
+    });
+
     it('does not duplicate its context while global and feature lines alternate', () => {
       const lines: string[] = [];
       const log = (line: string) => lines.push(line);
