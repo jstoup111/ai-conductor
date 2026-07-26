@@ -23,8 +23,9 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 - Add `protected-artifact-seal.ts` and `safety-boundary.ts`. The seal is anchored once to approved,
   committed DECIDE artifacts at first BUILD entry, consumes the existing `phase-marker.ts`
   bounded allowlist, and is checked before and after every BUILD/SHIP attempt. The boundary
-  classifies required versus diagnostic capabilities and is invoked from the conductor-owned
-  provider paths before raw execution and before accepting a result.
+  classifies required versus diagnostic capabilities. The conductor supplies one per-candidate
+  attempt wrapper to `executeProviderCandidates`; it enters only after actual-provider resolution,
+  wraps raw invocation, and verifies the result before candidate fallback or acceptance.
 - Refactor `sandbox-build-env.ts` behind a provider-aware isolated-home contract. Claude receives
   only selected auth, engine controls, and worktree skills; Codex consumes #905's selected auth,
   adds a restricted opaque cached-credential handoff where necessary, and gets a child-only HOME
@@ -35,7 +36,9 @@ advisory threshold because 15 stories each require explicit happy and negative-p
   authority. Diagnostics pass through one redactor before logs, HALTs, attempt metadata, or
   persisted safety artifacts.
 - Consume merged #905's auth/readiness and invocation policy after rebasing; do not duplicate it.
-  Preserve #904 ordinary skill installation/discovery and adjust only the self-host child.
+  Add a narrow optional provider-owned self-host-auth capability so the engine never rediscovers
+  Codex credential layout. Preserve #904 ordinary skill installation/discovery and adjust only the
+  self-host child.
 
 ## Prerequisites
 
@@ -122,7 +125,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 - `src/conductor/test/engine/git-hook-assets.test.ts`
 - `src/conductor/test/integration/git-hooks-attribution.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/git-hook-assets.ts#PREPARE_COMMIT_MSG_HOOK`
+**Wired-into:** `src/conductor/src/engine/worktree-prepare.ts#prepareWorktree`
 **Dependencies:** Task 1
 
 ### Task 5: Retire only the matching terminal task
@@ -238,7 +241,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 - `src/conductor/test/engine/protected-artifact-seal.test.ts`
 - `src/conductor/test/engine/phase-marker.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/phase-marker.ts#resolveDocsAllowlist`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
 **Dependencies:** Task 9
 
 ### Task 11: Reject protected drift without resealing it
@@ -278,7 +281,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 - `src/conductor/test/engine/protected-artifact-seal.test.ts`
 - `src/conductor/test/acceptance/generate-docs-guard-hook.acceptance.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/protected-artifact-seal.ts#verifyProtectedArtifactSeal`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
 **Dependencies:** Task 10
 
 ### Task 13: Fail closed on indeterminate and escaping targets
@@ -308,7 +311,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 **Steps:**
 1. Write failing wiring tests that inventory initial BUILD/SHIP raw provider calls and require safety preflight plus terminal verification around each.
 2. Run the focused tests and verify RED.
-3. Construct the safety boundary in the conductor and invoke it around provider candidates and self-host dispatch before accepting results.
+3. Construct the safety boundary in the conductor and pass a per-candidate wrapper into provider execution so preflight runs after actual-provider resolution and terminal verification runs before fallback or acceptance.
 4. Run provider and conductor wiring tests and verify GREEN.
 5. Commit with message: `feat: wrap build and ship provider attempts`.
 
@@ -320,7 +323,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 - `src/conductor/test/engine/safety-boundary.test.ts`
 - `src/conductor/test/engine/wiring-live-probe.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#DefaultStepRunner.runProviderAwareNormal, src/conductor/src/engine/conductor.ts#Conductor.runSelfBuildDispatch`
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#executeProviderCandidates, src/conductor/src/engine/conductor.ts#Conductor.runSelfBuildDispatch`
 **Dependencies:** Task 7, Task 8, Task 11, Task 13
 
 ### Task 15: Distinguish inapplicable from unavailable protections
@@ -453,7 +456,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 **Steps:**
 1. Write failing contract tests for Claude/Codex provision, child environment, selected auth, engine controls, worktree assets, and idempotent teardown.
 2. Run the focused tests and verify RED.
-3. Generalize the sandbox contract into a provider-aware isolated-home provisioner while preserving path-bounded teardown.
+3. Generalize the sandbox contract into a provider-aware isolated-home provisioner that accepts the resolved candidate/provider, allocates its isolated destination, and invokes its optional provider-owned auth capability there while preserving path-bounded teardown.
 4. Run the focused tests and verify GREEN.
 5. Commit with message: `refactor: provision provider-aware self-host homes`.
 
@@ -495,22 +498,24 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests for API-key and cached-login selection, isolated `CODEX_HOME`, bounded args, resolved executable, and Claude-only operation with all Codex state absent.
+1. Write failing tests for an optional provider-owned self-host-auth capability, API-key and cached-login selection, isolated `CODEX_HOME`, bounded args, resolved executable, and Claude-only operation with all Codex state absent.
 2. Run the focused tests and verify RED.
-3. Consume #905 auth/readiness, pass isolated env/args to Codex, and keep Codex provisioning/provider failures out of Claude-only paths.
+3. Extend the provider contract/runtime with a narrow optional self-host-auth preparer, implement it from #905's private Codex selection, and pass its isolated env/args only to the resolved Codex candidate.
 4. Run Codex provider, self-host, and Claude-only tests and verify GREEN.
 5. Commit with message: `feat: launch codex in isolated self-host home`.
 
 **Files:**
 - `src/conductor/src/engine/self-host/provider-home.ts`
 - `src/conductor/src/engine/conductor.ts`
+- `src/conductor/src/engine/provider-runtime.ts`
+- `src/conductor/src/execution/llm-provider.ts`
 - `src/conductor/src/execution/codex-provider.ts`
 - `src/conductor/test/engine/self-host/provider-home.test.ts`
 - `src/conductor/test/execution/codex-provider.test.ts`
 - `src/conductor/test/execution/claude-provider.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.runSelfBuildDispatch, src/conductor/src/execution/codex-provider.ts#CodexProvider.invoke`
-**Dependencies:** Task 21
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#executeProviderCandidates, src/conductor/src/engine/conductor.ts#Conductor.runSelfBuildDispatch`
+**Dependencies:** Task 14, Task 21
 
 ### Task 24: Hand cached Codex credentials opaquely
 **Story:** FR-8 NP-4; FR-14 HP-2 and NP-2
@@ -519,17 +524,18 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 **Steps:**
 1. Write failing tests for one selected native credential artifact, restrictive mode, no parse/log/hash/symlink, unchanged source, and cleanup after success/failure.
 2. Run the focused tests and verify RED.
-3. Implement a self-host-only opaque copy/handoff into isolated `CODEX_HOME` with source fingerprint-by-metadata/content comparison kept out of diagnostics.
+3. Implement the provider-owned self-host capability with an opaque byte copy into isolated `CODEX_HOME` and a private byte-for-byte source comparison; do not hash, parse, persist derived metadata, or expose credential layout to the engine.
 4. Run permission, canary, source-sentinel, and cleanup tests and verify GREEN.
 5. Commit with message: `feat: hand off cached codex credentials opaquely`.
 
 **Files:**
-- `src/conductor/src/engine/self-host/codex-credential-handoff.ts`
+- `src/conductor/src/execution/codex-self-host-auth.ts`
 - `src/conductor/src/engine/self-host/provider-home.ts`
-- `src/conductor/test/engine/self-host/codex-credential-handoff.test.ts`
+- `src/conductor/src/execution/codex-provider.ts`
+- `src/conductor/test/execution/codex-self-host-auth.test.ts`
 - `src/conductor/test/engine/self-host/provider-home.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/self-host/provider-home.ts#provisionProviderHome`
+**Wired-into:** `src/conductor/src/engine/provider-runtime.ts#ProviderRuntimeSet.get, src/conductor/src/engine/self-host/provider-home.ts#provisionProviderHome`
 **Dependencies:** Task 23
 
 ### Task 25: Isolate Codex skill discovery from the #904 user catalog
@@ -600,17 +606,18 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 **Steps:**
 1. Write failing parameterized tests for success, failure, cancellation, timeout, interruption, retry exhaustion, and provider replacement.
 2. Run the focused tests and verify RED.
-3. Centralize provider-home, discovery-home, credential-copy, and child-env teardown in the self-host terminal `finally` path.
+3. Centralize provider-home, discovery-home, credential-copy, and child-env teardown in the per-candidate attempt wrapper's `finally` path so each failed fallback candidate is cleaned before the next is provisioned.
 4. Run the terminal-path matrix and verify GREEN with no residue.
 5. Commit with message: `feat: clean self-host isolation on every exit`.
 
 **Files:**
 - `src/conductor/src/engine/self-host/provider-home.ts`
+- `src/conductor/src/engine/provider-execution.ts`
 - `src/conductor/src/engine/conductor.ts`
 - `src/conductor/test/engine/self-host/provider-home.test.ts`
 - `src/conductor/test/engine/conductor.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.runSelfBuildDispatch`
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#executeProviderCandidates`
 **Dependencies:** Task 24, Task 25, Task 27
 
 ### Task 29: Bound partial provisioning and repeated cleanup
@@ -665,7 +672,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 7,8,11,13 -> 14 -> 15 -> 16 -> 19 -> 20 -> 21
 14 -> 17 -> 18
 21 -> 22
-21 -> 23 -> 24
+14,21 -> 23 -> 24
 23 -> 25
 22,23 -> 26 -> 27 -> 28 -> 29
 4,6,16,22,29 -> 30

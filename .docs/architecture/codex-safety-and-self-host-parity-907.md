@@ -13,7 +13,7 @@ flowchart LR
 
     subgraph Engine["Conductor engine"]
         Conductor["Conductor lifecycle<br/>step, retry, resume, cleanup"]
-        Routing["Provider execution routing<br/>Claude or Codex"]
+        Routing["Per-candidate provider routing<br/>actual Claude or Codex runtime"]
         TaskState["Task attribution service<br/>validated ids and concurrent active rows"]
         PhaseState["Phase protection state<br/>active phase and allowed artifacts"]
         Seal["Protected artifact seal<br/>approved DECIDE baseline"]
@@ -29,6 +29,7 @@ flowchart LR
         ClaudeHooks["Claude lifecycle integrations<br/>current interception surface"]
         Codex["Codex provider"]
         CodexClient["Codex client<br/>native sandbox and lifecycle hooks"]
+        ProviderAuth["Optional self-host auth capability<br/>provider-owned selected representation"]
     end
 
     subgraph Isolated["Per-run minimal provider home"]
@@ -71,10 +72,11 @@ flowchart LR
     Safety --> Docs
     Safety --> State
     Conductor --> SelfHost
-    Routing --> SelfHost
+    Routing -- "actual candidate" --> SelfHost
     SelfHost --> LiveAudit
     LiveAudit --> Safety
-    SelfHost --> Auth
+    SelfHost --> ProviderAuth
+    ProviderAuth --> Auth
     SelfHost --> ClaudeHome
     SelfHost --> CodexHome
     SelfHost --> Work
@@ -107,6 +109,9 @@ flowchart LR
 - Judgment gates remain the authority for architecture, wiring, and build completeness.
 - Both provider homes preserve only selected authentication, engine-owned controls, and
   worktree-owned harness assets. Personal settings/hooks and live global relink are excluded.
+- The conductor creates the policy wrapper, but provider execution enters it per candidate
+  after resolving the actual runtime. The provider-owned auth capability prepares only its
+  selected representation; teardown completes before fallback advances.
 - #904's ordinary Codex catalog remains under the operator's `$HOME/.agents/skills`; a
   self-host child receives a separate discovery home linked only to feature-worktree skills.
 - `adr-2026-07-26-concurrent-task-telemetry-and-symmetric-self-host-isolation` places policy and terminal
@@ -126,6 +131,7 @@ flowchart LR
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-26 | Place isolation inside per-candidate routing and add provider-owned auth capability | Post-plan architecture review for issue #907 |
 | 2026-07-26 | Name planned safety, seal, diagnostic, provider-home, and live-verifier components | `/plan` update for issue #907 |
 | 2026-07-26 | Replace singular task lease with concurrent telemetry; add minimal homes for both providers | Conflict-check resolution for issue #907 |
 | 2026-07-25 | Resolve the safety seam and record Codex native guards | Architecture review for issue #907 |

@@ -20,35 +20,35 @@ sequenceDiagram
     participant W as Feature worktree
     participant L as Live checkout and unrelated config
 
-    C->>R: resolve provider for build step
-    R-->>C: Claude or Codex
-    C->>A: obtain provider-selected auth source
-    A-->>C: selected authentication context
-    C->>V: fingerprint live checkout and unrelated provider state
-    V-->>C: bounded baseline ready
-    C->>I: prepare minimal throwaway provider home
-    alt required isolation cannot be verified
-        I-->>C: unavailable or unverifiable
-        C-->>C: stop before provider dispatch
-    else isolation ready
-        I->>A: request selected auth handoff only
-        A-->>I: child env or opaque temporary credential
-        I->>D: create child-only skill view from worktree
-        D-->>I: Claude skills or Codex .agents/skills ready
-        I->>I: install engine controls and worktree harness assets
-        I-->>C: isolated context with selected authentication only
-        C->>P: dispatch self-host build
-        P->>W: read and mutate feature worktree
-        P--xL: mutation denied
-        Note over P,L: no personal settings/hooks, global relink,<br/>mutable state, or live-checkout access
-        P-->>C: success, failure, or interruption
-        C->>V: verify live boundary on terminal path
-        alt live boundary changed or unverifiable
-            V-->>C: reject safe completion with sanitized recovery
-        else live boundary unchanged
-            V-->>C: terminal verification passes
+    C->>R: begin selected-first provider candidates
+    loop each resolved actual candidate
+        R-->>C: Claude or Codex runtime
+        C->>V: fingerprint live checkout and unrelated provider state
+        V-->>C: bounded baseline ready
+        C->>I: allocate candidate-specific throwaway provider home
+        alt required isolation cannot be verified
+            I-->>C: unavailable or unverifiable
+            C-->>C: stop candidate before provider dispatch
+        else isolation ready
+            I->>A: prepare selected auth into isolated destination
+            A-->>I: child env or opaque temporary credential handle
+            I->>D: create child-only skill view from worktree
+            D-->>I: Claude skills or Codex .agents/skills ready
+            I->>I: install engine controls and worktree harness assets
+            I-->>C: isolated context with selected authentication only
+            C->>P: dispatch self-host candidate
+            P->>W: read and mutate feature worktree
+            P--xL: mutation denied
+            Note over P,L: no personal settings/hooks, global relink,<br/>mutable state, or live-checkout access
+            P-->>C: success, failure, or provider-unavailable result
+            C->>V: verify live boundary before fallback or acceptance
+            alt live boundary changed or unverifiable
+                V-->>C: reject safe completion with sanitized recovery
+            else live boundary unchanged
+                V-->>C: terminal verification passes
+            end
         end
-        C->>I: finally teardown provider, discovery, and credential state
+        C->>I: finally teardown candidate home, discovery, and credential state
         I-->>C: idempotent path-bounded cleanup complete
     end
 ```
@@ -68,6 +68,8 @@ sequenceDiagram
 - The provider may mutate the feature worktree but not the live harness checkout.
 - Teardown is required after success, failure, or interruption. Retry and resume create
   a fresh isolated context with the same #905 authentication-selection rules.
+- Provider fallback cannot reuse the prior candidate's home or auth: each candidate enters
+  isolation after actual-runtime resolution and completes verification/cleanup before advance.
 - Provisioning failures remove only feature-created paths before any model work starts;
   diagnostics are redacted before logs, HALTs, attempt metadata, or persisted artifacts.
 
@@ -81,6 +83,7 @@ sequenceDiagram
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-26 | Move provider-home/auth lifecycle inside the actual-candidate fallback loop | Post-plan architecture review for issue #907 |
 | 2026-07-26 | Add planned live fingerprint and unified terminal cleanup flow | `/plan` update for issue #907 |
 | 2026-07-26 | Apply minimal isolated-home behavior to both Claude and Codex | Conflict-check resolution for issue #907 |
 | 2026-07-26 | Add opaque cached-auth handoff and isolated #904 skill discovery | Landed #905 and inflight #904 conflict resolution |
