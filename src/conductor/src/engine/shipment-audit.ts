@@ -221,60 +221,218 @@ async function latestCommittedFile(options: ShipmentAuditOptions, path: string):
 
 async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promise<MergedPullRequest[]> {
   const repository = await repositoryName(options);
+  const [owner, name] = repository.split('/');
+  if (!owner || !name || repository.split('/').length !== 2) {
+    throw new Error('repository name is malformed for merged PR enumeration');
+  }
   const { stdout } = await options.runGh(
-    ['api', '--paginate', '--slurp', `repos/${repository}/pulls?state=closed&per_page=100`],
+    graphqlPaginatedArgs(MERGED_PULL_REQUESTS_QUERY, [
+      ['owner', owner],
+      ['name', name],
+    ]),
     { cwd: options.cwd },
   );
-  const pages = JSON.parse(stdout) as Array<Array<{ number?: unknown; merged_at?: unknown }>>;
-  const numbers = pages.flat()
-    .filter((pull) => typeof pull.number === 'number' && typeof pull.merged_at === 'string')
-    .map((pull) => pull.number as number);
+  const pages = parseGraphqlPages(stdout, 'merged PR enumeration');
   const pullRequests: MergedPullRequest[] = [];
-  for (const number of numbers) {
-    const { stdout: metadata } = await options.runGh(
-      ['pr', 'view', String(number), '--json', 'number,url,body,headRefOid,mergedAt'],
-      { cwd: options.cwd },
-    );
-    const parsed = JSON.parse(metadata) as {
-      number?: unknown;
-      url?: unknown;
-      body?: unknown;
-      headRefOid?: unknown;
-      mergedAt?: unknown;
-    };
-    if (
-      typeof parsed.number !== 'number'
-      || typeof parsed.url !== 'string'
-      || typeof parsed.headRefOid !== 'string'
-      || typeof parsed.mergedAt !== 'string'
-    ) {
-      throw new Error(`merged PR metadata is incomplete for #${number}`);
+  for (const page of pages) {
+    const connection = pullRequestConnection(page, 'merged PR enumeration');
+    for (const node of requiredArray(connection.nodes, 'merged PR enumeration nodes')) {
+      const pullRequest = mergedPullRequestFromNode(node);
+      pullRequest.changedPaths.push(...await remainingChangedPaths(
+        options,
+        owner,
+        name,
+        pullRequest.number,
+        pullRequest.filesPageInfo,
+      ));
+      pullRequests.push({
+        number: pullRequest.number,
+        url: pullRequest.url,
+        body: pullRequest.body,
+        changedPaths: pullRequest.changedPaths,
+        headSha: pullRequest.headSha,
+        mergedAt: pullRequest.mergedAt,
+      });
     }
-    pullRequests.push({
-      number: parsed.number,
-      url: parsed.url,
-      body: typeof parsed.body === 'string' ? parsed.body : '',
-      changedPaths: await paginatedChangedPaths(options, repository, parsed.number),
-      headSha: parsed.headRefOid,
-      mergedAt: parsed.mergedAt,
-    });
   }
+  requireCompletePagination(
+    pages.map((page) => pageInfo(pullRequestConnection(page, 'merged PR enumeration').pageInfo, 'merged PR pagination')),
+    'merged PR enumeration',
+  );
+  const numbers = new Set(pullRequests.map((pullRequest) => pullRequest.number));
+  if (numbers.size !== pullRequests.length) throw new Error('merged PR enumeration returned duplicate pull requests');
   return pullRequests;
 }
 
-async function paginatedChangedPaths(
+async function remainingChangedPaths(
   options: ShipmentAuditOptions,
-  repository: string,
+  owner: string,
+  name: string,
   number: number,
+  firstPageInfo: GraphqlPageInfo,
 ): Promise<string[]> {
+  if (!firstPageInfo.hasNextPage) return [];
+  if (firstPageInfo.endCursor === null) {
+    throw new Error(`changed-file enumeration for #${number} is incomplete`);
+  }
   const { stdout } = await options.runGh(
-    ['api', '--paginate', '--slurp', `repos/${repository}/pulls/${number}/files?per_page=100`],
+    graphqlPaginatedArgs(PULL_REQUEST_FILES_QUERY, [
+      ['owner', owner],
+      ['name', name],
+      ['number', String(number), true],
+      ['endCursor', firstPageInfo.endCursor],
+    ]),
     { cwd: options.cwd },
   );
-  const pages = JSON.parse(stdout) as Array<Array<{ filename?: unknown }>>;
-  return pages.flatMap((page) => page.flatMap((file) =>
-    typeof file.filename === 'string' ? [file.filename] : [],
-  ));
+  const pages = parseGraphqlPages(stdout, `changed-file enumeration for #${number}`);
+  const connections = pages.map((page) => pullRequestFilesConnection(page, number));
+  requireCompletePagination(
+    connections.map((connection) => pageInfo(connection.pageInfo, `changed-file pagination for #${number}`)),
+    `changed-file enumeration for #${number}`,
+  );
+  return connections.flatMap((connection) => requiredArray(connection.nodes, `changed-file enumeration for #${number} nodes`)
+    .map((node) => requiredString(object(node, `changed-file enumeration for #${number} node`).path, `changed-file path for #${number}`)));
+}
+
+interface GraphqlPageInfo {
+  hasNextPage: boolean;
+  endCursor: string | null;
+}
+
+interface MergedPullRequestNode {
+  number: number;
+  url: string;
+  body: string;
+  headSha: string;
+  mergedAt: string;
+  changedPaths: string[];
+  filesPageInfo: GraphqlPageInfo;
+}
+
+const MERGED_PULL_REQUESTS_QUERY = `
+query($owner: String!, $name: String!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequests(states: MERGED, first: 100, after: $endCursor) {
+      nodes {
+        number
+        url
+        body
+        mergedAt
+        headRefOid
+        files(first: 100) {
+          nodes { path }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+      pageInfo { hasNextPage endCursor }
+    }
+  }
+}`;
+
+const PULL_REQUEST_FILES_QUERY = `
+query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      files(first: 100, after: $endCursor) {
+        nodes { path }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+function graphqlPaginatedArgs(
+  query: string,
+  variables: Array<[name: string, value: string, typed?: boolean]>,
+): string[] {
+  return [
+    'api',
+    'graphql',
+    '--paginate',
+    '--slurp',
+    '-f',
+    `query=${query}`,
+    ...variables.flatMap(([name, value, typed]) => [typed ? '-F' : '-f', `${name}=${value}`]),
+  ];
+}
+
+function parseGraphqlPages(stdout: string, context: string): unknown[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(stdout);
+  } catch (error) {
+    throw new Error(`${context} returned malformed GraphQL JSON: ${errorMessage(error)}`);
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error(`${context} returned no GraphQL pages`);
+  return parsed;
+}
+
+function pullRequestConnection(page: unknown, context: string): Record<string, unknown> {
+  const repository = object(object(object(page, context).data, `${context} data`).repository, `${context} repository`);
+  return object(repository.pullRequests, `${context} connection`);
+}
+
+function pullRequestFilesConnection(page: unknown, number: number): Record<string, unknown> {
+  const context = `changed-file enumeration for #${number}`;
+  const repository = object(object(object(page, context).data, `${context} data`).repository, `${context} repository`);
+  return object(object(repository.pullRequest, `${context} pull request`).files, `${context} connection`);
+}
+
+function mergedPullRequestFromNode(node: unknown): MergedPullRequestNode {
+  const value = object(node, 'merged PR node');
+  const files = object(value.files, `merged PR files for #${String(value.number)}`);
+  return {
+    number: requiredNumber(value.number, 'merged PR number'),
+    url: requiredString(value.url, 'merged PR URL'),
+    body: typeof value.body === 'string' ? value.body : '',
+    headSha: requiredString(value.headRefOid, 'merged PR head SHA'),
+    mergedAt: requiredString(value.mergedAt, 'merged PR merge timestamp'),
+    changedPaths: requiredArray(files.nodes, 'merged PR changed-file nodes').map((file) =>
+      requiredString(object(file, 'merged PR changed-file node').path, 'merged PR changed-file path')),
+    filesPageInfo: pageInfo(files.pageInfo, 'merged PR changed-file pagination'),
+  };
+}
+
+function requireCompletePagination(pageInfos: GraphqlPageInfo[], context: string): void {
+  if (pageInfos.length === 0 || pageInfos.at(-1)?.hasNextPage) {
+    throw new Error(`${context} pagination is incomplete`);
+  }
+  for (let index = 0; index < pageInfos.length - 1; index += 1) {
+    if (!pageInfos[index].hasNextPage || pageInfos[index].endCursor === null) {
+      throw new Error(`${context} pagination is malformed`);
+    }
+  }
+}
+
+function pageInfo(value: unknown, context: string): GraphqlPageInfo {
+  const parsed = object(value, context);
+  if (typeof parsed.hasNextPage !== 'boolean' || (parsed.endCursor !== null && typeof parsed.endCursor !== 'string')) {
+    throw new Error(`${context} is malformed`);
+  }
+  if (parsed.hasNextPage && parsed.endCursor === null) throw new Error(`${context} is incomplete`);
+  return { hasNextPage: parsed.hasNextPage, endCursor: parsed.endCursor };
+}
+
+function object(value: unknown, context: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`${context} is malformed`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requiredArray(value: unknown, context: string): unknown[] {
+  if (!Array.isArray(value)) throw new Error(`${context} is malformed`);
+  return value;
+}
+
+function requiredString(value: unknown, context: string): string {
+  if (typeof value !== 'string' || !value) throw new Error(`${context} is malformed`);
+  return value;
+}
+
+function requiredNumber(value: unknown, context: string): number {
+  if (typeof value !== 'number' || !Number.isInteger(value)) throw new Error(`${context} is malformed`);
+  return value;
 }
 
 async function auditSource(
