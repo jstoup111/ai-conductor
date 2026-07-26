@@ -1230,6 +1230,31 @@ export class Conductor {
     }
   }
 
+  /** Dispatch the observational verifier, recovering one provider-auth failure in place. */
+  private async dispatchSpotAuditVerifier(opts: {
+    residueIds: string[];
+    planPath: string;
+  }): Promise<SpotAuditDispatchResult & { output: string }> {
+    const dispatch = async (): Promise<SpotAuditDispatchResult & { output: string }> => {
+      if (!this.stepRunner.dispatchVerifier) {
+        return { success: false, output: 'dispatchVerifier not available' };
+      }
+      return toSpotAuditVerifierResult(await this.stepRunner.dispatchVerifier({
+        residueIds: opts.residueIds,
+        planPath: opts.planPath,
+        projectRoot: this.projectRoot,
+      }));
+    };
+
+    const result = await dispatch();
+    if (!result.authFailure || !result.authentication) return result;
+    const park = await this.parkOnAuthFailure({
+      actualProvider: result.authentication.provider,
+      authentication: result.authentication,
+    });
+    return park.timedOut ? result : dispatch();
+  }
+
   /**
    * Shared park-and-poll for an `authFailure` result, factored out of the
    * SERIAL loop's inline branch (~3082) so the concurrent-group JOIN (Task 4,
@@ -5899,18 +5924,10 @@ export class Conductor {
               emitter: emitterAdapter,
               dispatch: async (inputs): Promise<import('./attribution-lane.js').VerifierDispatchResult> => {
                 try {
-                  // Dispatch via stepRunner's dispatchVerifier if available,
-                  // otherwise gracefully fail (audit is observational only).
-                  if (this.stepRunner.dispatchVerifier) {
-                    const result = await this.stepRunner.dispatchVerifier({
-                      residueIds: inputs.residueIds,
-                      planPath,
-                      projectRoot: this.projectRoot,
-                    });
-                    return toSpotAuditVerifierResult(result);
-                  }
-                  // Dispatcher not available (safe for non-testing scenarios)
-                  return { success: false, output: 'dispatchVerifier not available' };
+                  return await this.dispatchSpotAuditVerifier({
+                    residueIds: inputs.residueIds,
+                    planPath,
+                  });
                 } catch (err) {
                   // Dispatch error: return neutral result (audit is observational only)
                   return {

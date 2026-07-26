@@ -128,6 +128,108 @@ describe('engine/conductor', () => {
     });
   });
 
+  it('parks a cached-login audit verifier failure and redispatches only that verifier when ready', async () => {
+    const authentication = { provider: 'codex' as const, source: 'cached-login' as const, state: 'unusable' as const };
+    const readiness = vi.fn().mockResolvedValue({ ...authentication, state: 'ready' as const });
+    const dispatchVerifier = vi.fn()
+      .mockResolvedValueOnce({ success: false, output: 'login expired', authFailure: true, authentication })
+      .mockResolvedValueOnce({ success: true, output: 'verdict' });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
+      providerExecution: { runtimes, sessions: new ProviderSessionStore(), configuredProviders: ['codex'] },
+      sleepFn: vi.fn(async () => {}),
+    });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({
+      result,
+      readinessCalls: readiness.mock.calls.length,
+      verifierCalls: dispatchVerifier.mock.calls.length,
+      mainRunnerCalls: vi.mocked(runner.run).mock.calls.length,
+    }).toEqual({
+      result: { success: true, output: 'verdict' },
+      readinessCalls: 1,
+      verifierCalls: 2,
+      mainRunnerCalls: 0,
+    });
+  });
+
+  it('returns a timed-out API-key verifier auth failure to the observational audit without redispatching', async () => {
+    const authentication = { provider: 'codex' as const, source: 'api-key' as const, state: 'unusable' as const };
+    const dispatchVerifier = vi.fn().mockResolvedValue({ success: false, output: 'key rejected', authFailure: true, authentication });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      sleepFn: vi.fn(async () => {}),
+    });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({ result, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+      result: { success: false, output: 'key rejected', authFailure: true, authentication },
+      verifierCalls: 1,
+      mainRunnerCalls: 0,
+    });
+  });
+
+  it('loses a repeatedly rejected cached-login audit sample after one in-place recovery cycle', async () => {
+    const authentication = { provider: 'codex' as const, source: 'cached-login' as const, state: 'unusable' as const };
+    const readiness = vi.fn().mockResolvedValue({ ...authentication, state: 'ready' as const });
+    const dispatchVerifier = vi.fn()
+      .mockResolvedValueOnce({ success: false, output: 'first rejection', authFailure: true, authentication })
+      .mockResolvedValueOnce({ success: false, output: 'second rejection', authFailure: true, authentication });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(), readiness },
+      policy: CODEX_MODEL_POLICY, builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
+      providerExecution: { runtimes, sessions: new ProviderSessionStore(), configuredProviders: ['codex'] },
+      sleepFn: vi.fn(async () => {}),
+    });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({ result, readinessCalls: readiness.mock.calls.length, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+      result: { success: false, output: 'second rejection', authFailure: true, authentication },
+      readinessCalls: 1,
+      verifierCalls: 2,
+      mainRunnerCalls: 0,
+    });
+  });
+
+  it('keeps a non-auth verifier failure observational with one dispatch', async () => {
+    const dispatchVerifier = vi.fn().mockResolvedValue({ success: false, output: 'verdict unavailable' });
+    const runner: StepRunner = { run: vi.fn(), dispatchVerifier };
+    const conductor = new Conductor({ stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir });
+
+    const result = await (conductor as unknown as { dispatchSpotAuditVerifier: (opts: { residueIds: string[]; planPath: string }) => Promise<unknown> })
+      .dispatchSpotAuditVerifier({ residueIds: ['8'], planPath: '/tmp/plan.md' });
+
+    expect({ result, verifierCalls: dispatchVerifier.mock.calls.length, mainRunnerCalls: vi.mocked(runner.run).mock.calls.length }).toEqual({
+      result: { success: false, output: 'verdict unavailable' },
+      verifierCalls: 1,
+      mainRunnerCalls: 0,
+    });
+  });
+
   describe('track resolution from the committed marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, interactive)', () => {
     it('technical marker → prd is skipped even when state.track is unset', async () => {
       // /explore wrote the marker; state has no `track` (interactive path).
