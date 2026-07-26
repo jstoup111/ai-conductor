@@ -129,6 +129,12 @@ describe('self-host wiring — default bundle members forward to the real primit
     expect(defaultSelfHostGuardrails.releaseGate).toBe(runReleaseArtifactGate);
   });
 
+  it('exposes the candidate-aware provider-home seam without replacing the legacy sandbox seam', async () => {
+    const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
+    expect(typeof defaultSelfHostGuardrails.provisionProviderHome).toBe('function');
+    expect(typeof defaultSelfHostGuardrails.provisionSandbox).toBe('function');
+  });
+
   it('keeps Codex self-host setup out of the #904 skill and AGENTS.md surface', async () => {
     const conductorSrc = join(
       dirname(fileURLToPath(import.meta.url)),

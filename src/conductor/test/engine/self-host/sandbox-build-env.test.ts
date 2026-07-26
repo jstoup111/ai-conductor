@@ -478,6 +478,13 @@ describe('SandboxBuildEnv (TR-5/TR-6)', () => {
   });
 });
 
+describe('provider-home compatibility export', () => {
+  it('exposes the provider-aware provisioner without changing the legacy Claude sandbox contract', async () => {
+    expect(typeof sandboxBuildEnvModule.provisionProviderHome).toBe('function');
+    expect(typeof sandboxBuildEnvModule.provisionSandboxBuildEnv).toBe('function');
+  });
+});
+
 /** A stable, order-independent snapshot of a directory tree's entries. */
 async function snapshot(dir: string): Promise<string[]> {
   const out: string[] = [];

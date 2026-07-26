@@ -37,6 +37,12 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir, homedir } from 'node:os';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
+export {
+  provisionProviderHome,
+  type ProviderHome,
+  type ProvisionProviderHomeOptions,
+  type ResolvedSelfHostProvider,
+} from './provider-home.js';
 
 /** Injectable filesystem seam so the adversarial branches are deterministic. */
 export interface SandboxFs {
@@ -392,4 +398,3 @@ export async function sandboxLinkTargets(
     hooks: join(sandbox.configDir, 'hooks'),
   };
 }
-
