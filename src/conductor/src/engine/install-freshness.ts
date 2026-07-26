@@ -252,6 +252,7 @@ export async function ensureInstallFresh(opts: EnsureFreshOptions = {}): Promise
   const runner = opts.runner ?? realInstallRunner;
   const checkCode = await runner(['--check'], harnessRoot);
   if (checkCode === 0) return; // fresh — nothing to do
+  if (checkCode === 2) return; // unrelated installer readiness failure — not skill drift
 
   log(DRIFT_MESSAGE);
 
