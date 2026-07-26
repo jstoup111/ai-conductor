@@ -141,6 +141,35 @@ describe('openSpecPr', () => {
     ]);
   });
 
+  it('propagates a diverged push rejection without creating or force-pushing a PR', async () => {
+    const branch = 'spec/diverged-idea';
+    const trace: Array<{ command: string; args: string[] }> = [];
+    const runner: HandoffDeps['runner'] = async (args) => {
+      trace.push({ command: 'gh', args: [...args] });
+      return { stdout: 'https://github.com/acme/my-project/pull/42', stderr: '' };
+    };
+    const gitRunner: NonNullable<HandoffDeps['gitRunner']> = async (args) => {
+      trace.push({ command: 'git', args: [...args] });
+      throw new Error('rejected non-fast-forward: remote branch has diverged');
+    };
+    let errorMessage = '';
+
+    try {
+      await openSpecPr(makeTarget(tempDir), branch, {
+        runner,
+        gitRunner,
+        ledgerOpts: { engineerDir: tempDir },
+      });
+    } catch (error) {
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+
+    expect({ errorMessage, trace }).toEqual({
+      errorMessage: 'rejected non-fast-forward: remote branch has diverged',
+      trace: [{ command: 'git', args: ['push', '-u', 'origin', branch] }],
+    });
+  });
+
   it('records the (project, feature) key in the authored ledger', async () => {
     const PR_URL = 'https://github.com/acme/ledger-proj/pull/7';
     const target = makeTarget(tempDir, 'ledger-proj');
