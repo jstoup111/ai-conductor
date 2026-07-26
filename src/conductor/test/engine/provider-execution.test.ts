@@ -15,6 +15,7 @@ import {
 } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import { formatProviderCapabilityGapMessages } from '../../src/engine/provider-execution.js';
 
 interface PreferredExecutionResult extends InvokeResult {
   preferredProvider: string;
@@ -83,6 +84,24 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('keeps declared diagnostic-only provider-gap messages stable across retry and resume', () => {
+    const gap = {
+      provider: 'codex',
+      name: 'native-observability',
+      classification: 'diagnostic-only' as const,
+      applicability: 'applicable' as const,
+      state: 'missing' as const,
+    };
+
+    expect([
+      formatProviderCapabilityGapMessages('codex', [gap]),
+      formatProviderCapabilityGapMessages('codex', [gap]),
+    ]).toEqual([
+      ['Provider codex: diagnostic-only capability gap native-observability (missing).'],
+      ['Provider codex: diagnostic-only capability gap native-observability (missing).'],
+    ]);
+  });
+
   it('wraps each resolved candidate through safety before fallback advances', async () => {
     const transcript: string[] = [];
     const unavailable = (): InvokeResult => ({

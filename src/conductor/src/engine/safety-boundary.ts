@@ -13,6 +13,9 @@ export type SafetyProtectionState =
 /** Required protections gate work; diagnostic protections only report gaps. */
 export type SafetyCriticality = 'required' | 'diagnostic';
 
+/** How the provider declares a protection's capability significance. */
+export type SafetyCapabilityClassification = 'required' | 'diagnostic-only';
+
 /** The run class in which a protection is required. */
 export type SafetyProtectionScope = 'all' | 'self-host';
 
@@ -25,6 +28,8 @@ export interface SafetyRunContext {
 export interface SafetyProtection {
   name: string;
   criticality: SafetyCriticality;
+  /** Diagnostic gaps are tolerated only when this is explicitly diagnostic-only. */
+  classification?: SafetyCapabilityClassification;
   /** Required protections must declare where they are authoritative. */
   scope?: SafetyProtectionScope;
   applicability: SafetyApplicability;
@@ -33,6 +38,8 @@ export interface SafetyProtection {
 
 export interface SafetyBoundaryInput {
   protections: readonly SafetyProtection[];
+  /** Provider that produced these observations; required for diagnostic labels. */
+  provider?: string;
   /** Actual dispatch context used to verify claimed applicability. */
   context?: SafetyRunContext;
   /** Diagnostic task-local context; deliberately excluded from safety authority. */
@@ -46,7 +53,9 @@ export type SafetyAttributionTelemetry =
 
 /** An observed capability gap which does not itself authorize work. */
 export interface SafetyDiagnosticGap {
+  provider: string;
   name: string;
+  classification: 'diagnostic-only';
   applicability: SafetyApplicability;
   state: SafetyProtectionState;
 }
@@ -74,6 +83,31 @@ function requiredProtectionFails(
   return protection.applicability !== 'applicable' || protection.state !== 'passing';
 }
 
+function hasProviderLabel(provider: string | undefined): provider is string {
+  return provider?.trim().length !== 0;
+}
+
+function isDeclaredDiagnosticOnly(
+  protection: SafetyProtection,
+  provider: string | undefined,
+): boolean {
+  return (
+    protection.criticality === 'diagnostic' &&
+    protection.classification === 'diagnostic-only' &&
+    hasProviderLabel(provider)
+  );
+}
+
+function capabilityClassificationFails(
+  protection: SafetyProtection,
+  provider: string | undefined,
+): boolean {
+  if (protection.criticality === 'required') {
+    return protection.classification === 'diagnostic-only';
+  }
+  return !isDeclaredDiagnosticOnly(protection, provider);
+}
+
 /**
  * Classify a provider attempt without provider-specific assumptions.
  * Required protections fail closed unless explicitly not applicable and every
@@ -81,15 +115,23 @@ function requiredProtectionFails(
  */
 export function evaluateSafetyBoundary(input: SafetyBoundaryInput): SafetyVerdict {
   const requiredFailures = input.protections.filter(
-    (protection) => requiredProtectionFails(protection, input.context),
+    (protection) =>
+      requiredProtectionFails(protection, input.context) ||
+      capabilityClassificationFails(protection, input.provider),
   );
   const diagnosticGaps = input.protections
     .filter(
       (protection) =>
-        protection.criticality === 'diagnostic' &&
+        isDeclaredDiagnosticOnly(protection, input.provider) &&
         !(protection.applicability === 'not-applicable' || protection.state === 'passing'),
     )
-    .map(({ name, applicability, state }) => ({ name, applicability, state }));
+    .map(({ name, applicability, state }) => ({
+      provider: input.provider!,
+      name,
+      classification: 'diagnostic-only' as const,
+      applicability,
+      state,
+    }));
 
   return {
     passed: requiredFailures.length === 0,

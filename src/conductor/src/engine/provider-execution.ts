@@ -29,6 +29,7 @@ import {
   type TaskAttributionDiagnosticCode,
   type TaskAttributionInput,
 } from './task-attribution.js';
+import type { SafetyDiagnosticGap } from './safety-boundary.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -86,6 +87,28 @@ export interface ProviderCandidate {
   providerKey: string;
   model: string;
   effort: EffortLevel;
+}
+
+/** Render safe provider capability-gap notices without affecting execution. */
+export function formatProviderCapabilityGapMessages(
+  provider: string,
+  gaps: readonly SafetyDiagnosticGap[],
+): readonly string[] {
+  return gaps
+    .filter(
+      (gap) =>
+        gap.provider === provider && gap.classification === 'diagnostic-only',
+    )
+    .slice()
+    .sort((left, right) =>
+      `${left.name}\u0000${left.applicability}\u0000${left.state}`.localeCompare(
+        `${right.name}\u0000${right.applicability}\u0000${right.state}`,
+      ),
+    )
+    .map(
+      (gap) =>
+        `Provider ${provider}: diagnostic-only capability gap ${gap.name} (${gap.state}).`,
+    );
 }
 
 /**

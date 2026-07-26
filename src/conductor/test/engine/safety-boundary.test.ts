@@ -87,9 +87,16 @@ describe('evaluateSafetyBoundary', () => {
 
   it('reports diagnostic gaps without allowing them to override a required failure', () => {
     const verdict = evaluateSafetyBoundary({
+      provider: 'claude',
       protections: [
         { name: 'protected-artifacts', criticality: 'required', applicability: 'applicable', state: 'missing' },
-        { name: 'native-observability', criticality: 'diagnostic', applicability: 'applicable', state: 'missing' },
+        {
+          name: 'native-observability',
+          criticality: 'diagnostic',
+          classification: 'diagnostic-only',
+          applicability: 'applicable',
+          state: 'missing',
+        },
       ],
     });
 
@@ -102,10 +109,17 @@ describe('evaluateSafetyBoundary', () => {
 
   it('passes only when every applicable required protection is passing', () => {
     const verdict = evaluateSafetyBoundary({
+      provider: 'claude',
       protections: [
         { name: 'task-identity', criticality: 'required', applicability: 'applicable', state: 'passing' },
         { name: 'protected-artifacts', criticality: 'required', applicability: 'applicable', state: 'passing' },
-        { name: 'native-observability', criticality: 'diagnostic', applicability: 'applicable', state: 'missing' },
+        {
+          name: 'native-observability',
+          criticality: 'diagnostic',
+          classification: 'diagnostic-only',
+          applicability: 'applicable',
+          state: 'missing',
+        },
       ],
     });
 
@@ -113,6 +127,59 @@ describe('evaluateSafetyBoundary', () => {
       passed: true,
       requiredFailures: [],
       diagnosticGaps: [{ name: 'native-observability' }],
+    });
+  });
+
+  it('permits an explicitly declared diagnostic-only provider gap only after required protections pass', () => {
+    const verdict = evaluateSafetyBoundary({
+      provider: 'codex',
+      protections: [
+        { name: 'protected-artifacts', criticality: 'required', applicability: 'applicable', state: 'passing' },
+        {
+          name: 'native-observability',
+          criticality: 'diagnostic',
+          classification: 'diagnostic-only',
+          applicability: 'applicable',
+          state: 'missing',
+        },
+      ],
+    });
+
+    expect(verdict).toMatchObject({
+      passed: true,
+      requiredFailures: [],
+      diagnosticGaps: [{
+        provider: 'codex',
+        name: 'native-observability',
+        classification: 'diagnostic-only',
+        state: 'missing',
+      }],
+    });
+  });
+
+  it('fails closed for missing or contradictory capability classifications', () => {
+    const verdict = evaluateSafetyBoundary({
+      provider: 'claude',
+      protections: [
+        { name: 'task-identity', criticality: 'required', applicability: 'applicable', state: 'passing' },
+        { name: 'unclassified-observability', criticality: 'diagnostic', applicability: 'applicable', state: 'missing' },
+        {
+          name: 'contradictory-observability',
+          criticality: 'diagnostic',
+          classification: 'required',
+          applicability: 'applicable',
+          state: 'missing',
+        },
+      ],
+    });
+
+    expect(verdict).toMatchObject({
+      passed: false,
+      requiredFailures: [
+        { name: 'unclassified-observability' },
+        { name: 'contradictory-observability' },
+      ],
+      diagnosticGaps: [],
     });
   });
 
