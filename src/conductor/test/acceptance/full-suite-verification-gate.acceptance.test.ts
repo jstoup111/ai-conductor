@@ -202,6 +202,31 @@ describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () =>
     expect(harness).toMatch(/native pre-SHIP aggregate gate/i);
     expect(conduct).not.toMatch(/skills\/test-suite/i);
   });
+
+  it('guides direct conduct runs through the dedicated configured-verifier gate before manual testing', async () => {
+    const [conduct, testSuite] = await Promise.all([
+      readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8'),
+      readFile(join(REPO_ROOT, 'skills/test-suite/SKILL.md'), 'utf8'),
+    ]);
+
+    expect({
+      conductPlacesTestSuiteBeforeManualTest:
+        /\/test-suite[\s\S]*\/manual-test/i.test(conduct),
+      suiteRequiresConfiguredAggregateVerifier:
+        /repository-configured aggregate verifier/i.test(testSuite),
+      suiteBlocksShipOnFailure: /(?:fail|failure)[\s\S]*(?:block|stop)[\s\S]*SHIP/i.test(testSuite),
+      suiteRoutesRemediationToBuild:
+        /\/(?:tdd|pipeline)/i.test(testSuite),
+      suiteAvoidsLegacyInvocation:
+        !/conduct-ts test-suite|(?:^|\n)\s*(?:bash|sh)\b/im.test(testSuite),
+    }).toEqual({
+      conductPlacesTestSuiteBeforeManualTest: true,
+      suiteRequiresConfiguredAggregateVerifier: true,
+      suiteBlocksShipOnFailure: true,
+      suiteRoutesRemediationToBuild: true,
+      suiteAvoidsLegacyInvocation: true,
+    });
+  });
 });
 
 describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
