@@ -10,7 +10,8 @@ requires: []
 ## Purpose
 
 Walks a feature through the complete SDLC flow by checking artifact state and directing the user
-to the correct next skill. Run `/conduct` at any point to see where you are and what to do next.
+to the correct next skill. Run the `conduct` workflow at any point to see where you are and what
+to do next (Claude `/conduct`; Codex `$conduct`).
 
 Does NOT run other skills internally — it assesses state and directs. The user invokes each skill.
 
@@ -23,9 +24,9 @@ current step only; it is reset at the next step boundary.
 
 - **Design phase** (bootstrap → plan): Each step reads the approved artifact
   produced by its predecessor.
-- **Build phase** (pipeline): The conductor drives the task loop. Claude orchestrates each task
-  by dispatching subagents. Subagent context is isolated and discarded — only a ~2-3 line summary
-  returns to the orchestrator per task. No context compaction needed.
+- **Build phase** (pipeline): The conductor drives the task loop. The selected host agent orchestrates
+  each task by dispatching subagents. Subagent context is isolated and discarded —
+  only a ~2-3 line summary returns to the orchestrator per task. No context compaction needed.
 - **Ship phase** (finish → retro): Lightweight steps, context stays bounded.
 
 Retries within the same step resume that step's session so partial work and
@@ -127,7 +128,8 @@ Present a clear status dashboard:
 | SHIP | finish/pr | ⬚ Pending | — |
 
 ### Next Step
-Run `/conflict-check` to check stories for contradictions before planning.
+Run the `conflict-check` workflow to check stories for contradictions before planning (Claude
+`/conflict-check`; Codex `$conflict-check`).
 ```
 
 **Status icons:**
@@ -218,7 +220,8 @@ Before suggesting the next step, verify that the previous step's **quality gates
 **After stories (before suggesting conflict-check):**
 - Open the stories file and verify EVERY story has at least one concrete negative path
 - If any story has only happy paths or vague negative paths ("handle errors gracefully"), BLOCK
-- Say: "Stories incomplete — [story name] is missing concrete negative paths. Run `/stories` again."
+- Say: "Stories incomplete — [story name] is missing concrete negative paths. Run the `stories`
+  workflow again (Claude `/stories`; Codex `$stories`)."
 
 **After conflict-check (before suggesting plan):**
 - Check the conflict report for any **blocking** conflicts still unresolved
@@ -228,7 +231,8 @@ Before suggesting the next step, verify that the previous step's **quality gates
 **After plan (before suggesting build):**
 - Open the plan and verify every acceptance criterion from stories maps to at least one task
 - If coverage gaps exist, BLOCK
-- Say: "Plan has coverage gaps — [criterion] has no corresponding task. Run `/plan` again."
+- Say: "Plan has coverage gaps — [criterion] has no corresponding task. Run the `plan` workflow
+  again (Claude `/plan`; Codex `$plan`)."
 
 **After architecture-review (before suggesting writing-system-tests):**
 - Check all ADR files in `.docs/decisions/adr-*.md` for `Status: DRAFT`
@@ -256,7 +260,8 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If any FR is non-ALIGNED and not human-ACCEPTED, BLOCK
 - Route by gap-class: `impl-gap` → back to BUILD to close the gap; `intended-drift` → back to
   DECIDE to amend the PRD, then re-audit
-- Say: "PRD audit blocked — [FR-N] is [verdict] ([gap-class]). Return to [BUILD/DECIDE] and re-run `/prd-audit`."
+- Say: "PRD audit blocked — [FR-N] is [verdict] ([gap-class]). Return to [BUILD/DECIDE] and re-run
+  the `prd-audit` workflow (Claude `/prd-audit`; Codex `$prd-audit`)."
 - **Daemon (auto) runs** route this automatically: an all-`impl-gap` audit self-heals back to
   BUILD (bounded, then HALTs if unresolved); any product/plan gap (`intended-drift` or an
   unclassifiable row) HALTs immediately for a human, since the DECIDE amendment can't be made
@@ -268,7 +273,9 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Otherwise open the as-built report (`.pipeline/architecture-review-as-built.md`). The gate is
   **fail-closed**: it passes ONLY on a clean `APPROVED` / `APPROVED WITH DRIFT NOTES` verdict.
 - If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
-- Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
+- Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR
+  (human-approved), then re-run `architecture-review --as-built` (Claude `/architecture-review
+  --as-built`; Codex `$architecture-review --as-built`)."
 - If the report has no recognizable `APPROVED`/`BLOCKED` verdict (e.g. a confused review with no
   ADRs), BLOCK and re-run — never treat a missing/garbled verdict as a pass.
 

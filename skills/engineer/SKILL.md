@@ -20,9 +20,11 @@ operator idea ─▶ [ENGINEER: route → DECIDE → spec PR → nudge]      (th
                  [DAEMON: build the merged spec]                    (separate, independent loop)
 ```
 
-**How it starts.** The operator runs `conduct-ts engineer` (no subcommand) in a terminal; that launches
-an interactive `claude /engineer` session and drops them here. Inside an existing session, the
-operator invokes `/engineer` directly. Either way, this skill is now driving.
+**How it starts.** Inside a live supported host-agent session, the operator invokes this skill with
+the host-native syntax: Claude Code uses `/engineer`; Codex uses `$engineer`. The existing
+`conduct-ts engineer` terminal launcher is a **Claude-only launcher**: it opens an interactive
+`claude /engineer` session. Native persistent-session launching and recovery for other hosts is
+deferred to **#759**; do not imply that this legacy launcher creates a Codex session.
 
 **Two independent loops.** This skill is the *idea→plan* loop. It does NOT build. The *execution*
 loop is the per-repo daemon, which scans **merged** spec PRs and builds them. The only coupling is
@@ -31,8 +33,8 @@ waits on, or owns the daemon.
 
 **Why this is a host-agent skill and not a CLI REPL (ADR-008).** The loop must run your *real*
 skills, agent personas, and hooks (`/explore`, `/prd`, `/stories`, `/plan` with their clarity loops).
-Those exist only inside a live Claude Code session. A Node REPL or a `claude -p` subprocess cannot
-run them interactively — so the engineer **is** the host agent, calling deterministic `conduct-ts`
+Those exist only inside a live supported host-agent session. A Node REPL or a provider subprocess
+cannot run them interactively — so the engineer **is** the host agent, calling deterministic `conduct-ts`
 primitives for the mechanical parts (registry read, path-guarded commit, PR open, daemon nudge)
 and running the DECIDE skills directly in chat for the reasoning parts.
 
@@ -51,10 +53,12 @@ and running the DECIDE skills directly in chat for the reasoning parts.
 
 ## The Loop
 
-**Handle exactly ONE idea per session, then end.** The launcher (`conduct-ts engineer`) relaunches you
-in a **fresh session with clean context** for the next idea — so do NOT loop over multiple ideas
-in-chat (that bloats and degrades context). Durable state (registry, lessons, processed markers)
-is file-backed, so the next fresh session picks up everything that matters. For this one idea:
+**Handle exactly ONE idea per session, then end.** Do NOT loop over multiple ideas in-chat (that
+bloats and degrades context). Durable state (registry, lessons, processed markers) is file-backed,
+so the next fresh supported host-agent session picks up everything that matters. The existing
+Claude-only launcher (`conduct-ts engineer`) relaunches Claude Code with clean context for the next
+idea; native persistent-session launching for other hosts remains deferred to #759. For this one
+idea:
 
 ### 1. Capture the idea
 The idea can arrive from **three** sources — resolve them in this order:
@@ -182,13 +186,17 @@ builds.
 
 ### 6. Deliver, then end the session
 The spec PR (or local-commit fallback) is the **final artifact**. Once step 5 reports it, tell the
-operator plainly: **"✅ Spec delivered for `<slug>` → `<PR url / branch>`. Type `/quit` to process the
-next idea in a fresh session."** Then stop — do **not** ask for another idea in this session. The
-launcher regains control when the operator quits and relaunches you clean for the next idea.
+operator plainly: **"✅ Spec delivered for `<slug>` → `<PR url / branch>`."** Then stop — do **not**
+ask for another idea in this session. In a Claude Code session, add: **"Type `/quit` to process the
+next idea in a fresh session."** The Claude-only launcher regains control when the operator quits
+and relaunches Claude Code cleanly. In every other supported host, tell the operator to end or close the session
+with that host's normal session control; native persistent-session launch/recovery
+behavior is deferred to #759.
 
-> Why `/quit` and not automatic: an interactive Claude Code session cannot terminate itself (slash
-> commands are user-only). The operator's single `/quit` is the session boundary that guarantees the
-> next idea starts with fresh context.
+> **Claude Code only — why `/quit` and not automatic:** an interactive Claude Code session cannot
+> terminate itself (slash commands are user-only). The operator's single `/quit` is the session
+> boundary that guarantees the next idea starts with fresh context. Other supported hosts use their
+> normal session-end control; this skill does not define a launcher or recovery contract for them.
 
 ## Non-negotiable gates
 

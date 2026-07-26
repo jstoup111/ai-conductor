@@ -89,6 +89,9 @@ export interface ExecuteProviderCandidatesInput {
     transition: ProviderTransitionWarning,
   ) => void | Promise<void>;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+  optionsForCandidate?: (
+    candidateKey: string,
+  ) => Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
 }
 
 /** Provider-aware execution state owned by one conductor/daemon feature run. */
@@ -344,6 +347,7 @@ export async function executeProviderCandidates({
   onAttempt,
   warn,
   options,
+  optionsForCandidate,
 }: ExecuteProviderCandidatesInput): Promise<ProviderExecutionResult> {
   const candidates = resolveProviderCandidates({
     configuredProviders,
@@ -367,12 +371,13 @@ export async function executeProviderCandidates({
       modelOverride,
       effortOverride,
     });
+    const candidateOptions = optionsForCandidate?.(providerKey) ?? options;
     const { result, invokedModel } = await invokeProviderCandidate({
       providerKey,
       runtime,
       sessions,
       resolved,
-      options,
+      options: candidateOptions,
     });
 
     const unavailable = classifyProviderCandidateFailure(result);

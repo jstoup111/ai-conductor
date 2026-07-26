@@ -10,8 +10,13 @@ requires: []
 ## Purpose
 
 Enforces test-driven development with domain integrity as a first-class concern. Every change
-goes through a five-step cycle with subagent isolation — the RED agent only sees tests, the
+goes through a five-step cycle with implementer isolation — the RED agent only sees tests, the
 GREEN agent only sees source, and the DOMAIN reviewer has veto authority over both.
+
+**Host mechanics:** Delegate RED, GREEN, and DOMAIN work through the selected host's available
+subagent facility. Claude Code uses its Agent tool and Claude model labels; other supported hosts
+use their native equivalents. The host mechanism may differ, but it MUST preserve this cycle's
+RED → DOMAIN → GREEN → DOMAIN → COMMIT order, scoped verification, review vetoes, and commit gates.
 
 ### Documentation boundary
 
@@ -118,8 +123,9 @@ raw project aggregate command directly.
 If the target test still fails after a bounded attempt (≈2 edits), or step 4 shows the change
 broke other tests and the cause is not immediately obvious, STOP editing. A generator guessing
 at a non-obvious failure burns tokens and risks masking the bug rather than fixing it. Dispatch
-the `/debugging` protocol in a fresh sub-session on **`model="opus"** (root-cause analysis is
-reasoning-heavy — see the repository's model table), handing it the failing test, the current
+the `/debugging` protocol in a fresh sub-session. In Claude Code, use **`model="opus"** for this
+reasoning-heavy root-cause analysis (see the repository's model table); other supported hosts use
+their native high-reasoning equivalent. Hand it the failing test, the current
 diff, and the full failure output. Return to GREEN only once debugging has produced an
 evidence-backed root cause.
 
@@ -249,7 +255,7 @@ Most cycles will NOT trigger a memory write — that is correct. Only persist ge
 more. Refactoring happens at **batch boundaries** (after completing a group of related tasks),
 as a distinct step between batches.
 
-At batch boundaries, run `/simplify` and check for:
+At batch boundaries, run the `simplify` workflow (Claude `/simplify`; Codex `$simplify`) and check for:
 
 1. **Duplicated business logic** — same authorization check, same event recording pattern,
    same calculation appearing in 2+ places. Extract on the **second** occurrence, don't wait
@@ -282,8 +288,9 @@ commits.
 
 ### Structural Enforcement
 
-When using the Agent tool for subagent dispatch, **inline the relevant context directly in the
-prompt** rather than giving broad file access. This keeps each dispatch focused and token-efficient.
+When dispatching through the selected host's available subagent facility, **inline the relevant
+context directly in the prompt** rather than giving broad file access. This keeps each dispatch
+focused and token-efficient. In Claude Code, this applies to Agent tool dispatches.
 
 | Phase | Agent | Provide in Prompt | Do NOT Provide |
 |-------|-------|-------------------|----------------|
@@ -307,9 +314,9 @@ prompt** rather than giving broad file access. This keeps each dispatch focused 
 - **Pre-gather decisions** — the TDD orchestrator checks `.memory/decisions/` for relevant
   prior decisions and includes them in the domain reviewer prompt. The reviewer does not
   search `.memory/` itself.
-- **Reuse subagents for sequential tasks on same files.** When consecutive tasks modify the
-  same files, use SendMessage to continue the existing subagent instead of spawning a new
-  one — this preserves the file cache and avoids redundant reads.
+- **Reuse host-native implementer sessions for sequential tasks on same files.** When consecutive
+tasks modify the same files, continue the existing host-native session instead of spawning a new
+one — this preserves the file cache and avoids redundant reads.
 
 This isolation prevents the RED agent from peeking at implementation (biasing the test)
 and the GREEN agent from over-engineering beyond what the test requires.
@@ -318,8 +325,10 @@ and the GREEN agent from over-engineering beyond what the test requires.
 
 Right-size the model to the diff size to reduce API cost and rate limit pressure:
 
-- **Diffs under 50 lines:** dispatch with `model="sonnet"` — sufficient for focused domain checks
-- **Diffs of 50+ lines:** dispatch with `model="opus"` — deep analysis for larger changes
+- **In Claude Code, diffs under 50 lines:** dispatch with `model="sonnet"` — sufficient for focused domain checks
+- **In Claude Code, diffs of 50+ lines:** dispatch with `model="opus"` — deep analysis for larger changes
+- **Other supported hosts:** select the native equivalent of the same focused versus deep-review
+  capability; do not weaken the review boundary or veto authority.
 
 Most TDD diffs are small (under 20 lines), so the majority of domain reviews will use Sonnet.
 

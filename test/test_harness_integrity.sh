@@ -801,6 +801,31 @@ else
   assert "test/test_ci_detect_docs_only.sh exists" 1
 fi
 
+# ── 14. Provider-compatible shared-skill contract ───────────────────────────
+# The canonical skill sources are loaded directly by both supported hosts.
+# Keep the negative provider-boundary fixtures in the normal integrity path so
+# a compatibility edit cannot silently reintroduce an unscoped Claude command,
+# model, tool, delegation, interaction, or weakened shared gate.
+echo ""
+echo -e "${BOLD}14. Provider-compatible shared-skill contract${NC}"
+
+provider_contract_test="${HARNESS_DIR}/test/test_provider_skill_contracts.sh"
+if [ -f "$provider_contract_test" ]; then
+  set +e
+  provider_contract_output=$(bash "$provider_contract_test" 2>&1)
+  provider_contract_exit=$?
+  set -e
+
+  if [ "$provider_contract_exit" -eq 0 ]; then
+    assert "test/test_provider_skill_contracts.sh — provider boundary fixtures and canonical audit pass" 0
+  else
+    echo "$provider_contract_output" | sed 's/^/    /'
+    assert "test/test_provider_skill_contracts.sh — provider boundary fixtures and canonical audit pass" 1
+  fi
+else
+  assert "test/test_provider_skill_contracts.sh exists" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

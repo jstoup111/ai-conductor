@@ -59,6 +59,12 @@ type ExecuteProviderCandidates = (input: {
     transition: ProviderTransitionWarning,
   ) => void;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+  optionsForCandidate?: (
+    candidateKey: ProviderRuntime['key'],
+  ) => Omit<
+    InvokeOptions,
+    'sessionId' | 'resume' | 'model' | 'effort'
+  >;
 }) => Promise<PreferredExecutionResult>;
 
 function runtime(
@@ -294,6 +300,204 @@ describe('executeProviderCandidates', () => {
         ],
       },
     });
+  });
+
+  it('resolves invocation options for the actual provider candidate', async () => {
+    const candidateKeys: Array<ProviderRuntime['key']> = [];
+    const codexInvoke = vi.fn(
+      async (_options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true,
+        output: 'candidate-local prompt used',
+        exitCode: 0,
+      }),
+    );
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+
+    await execute?.({
+      step: 'build',
+      configuredProviders: ['claude', 'codex'],
+      preferredProvider: 'codex',
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', {
+          invoke: codexInvoke,
+          invokeInteractive: vi.fn(async (): Promise<void> => {}),
+        }),
+      ]),
+      sessions: new ProviderSessionScope(
+        vi.fn().mockReturnValue('candidate-local-session'),
+      ),
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: { build: { llm_provider: 'codex' } },
+      },
+      options: {
+        prompt: 'Static prompt.',
+        cwd: '/workspace/feature',
+      },
+      optionsForCandidate: (candidateKey) => {
+        candidateKeys.push(candidateKey);
+        return {
+          prompt: `Prompt for ${candidateKey}.`,
+          cwd: '/workspace/feature',
+        };
+      },
+    });
+
+    expect({
+      candidateKeys,
+      prompts: codexInvoke.mock.calls.map(([options]) => options.prompt),
+    }).toEqual({
+      candidateKeys: ['codex'],
+      prompts: ['Prompt for codex.'],
+    });
+  });
+
+  it('resolves candidate-local prompts in callback order across live and cached fallbacks', async () => {
+    const cases: Array<{
+      name: string;
+      candidates: Array<'claude' | 'codex'>;
+      cachedFirst: boolean;
+    }> = [
+      {
+        name: 'Codex to Claude fallback',
+        candidates: ['codex', 'claude'],
+        cachedFirst: false,
+      },
+      {
+        name: 'Claude to Codex fallback',
+        candidates: ['claude', 'codex'],
+        cachedFirst: false,
+      },
+      {
+        name: 'cached-unavailable Codex to Claude fallback',
+        candidates: ['codex', 'claude'],
+        cachedFirst: true,
+      },
+    ];
+    const candidatePrompts = {
+      claude: 'Exact candidate-local prompt for Claude.',
+      codex: 'Exact candidate-local prompt for Codex.',
+    } as const;
+    const module = await import('../../src/engine/provider-execution.js');
+    const execute = (
+      module as { executeProviderCandidates?: ExecuteProviderCandidates }
+    ).executeProviderCandidates;
+    const observed = [];
+
+    for (const fixture of cases) {
+      const [first, second] = fixture.candidates;
+      const callbackOrder: Array<ProviderRuntime['key']> = [];
+      const invocations: Array<{ provider: string; prompt: string }> = [];
+      const unavailableReason = `${first} unavailable for ${fixture.name}`;
+      const provider = (candidate: 'claude' | 'codex'): LLMProvider => ({
+        invoke: vi.fn(async (options): Promise<InvokeResult> => {
+          invocations.push({
+            provider: candidate,
+            prompt: options.prompt,
+          });
+          return candidate === first
+            ? {
+                success: false,
+                output: unavailableReason,
+                exitCode: 127,
+                providerUnavailable: true,
+                providerUnavailableScope: 'run',
+                providerUnavailableReason: unavailableReason,
+              }
+            : {
+                success: true,
+                output: `${second} completed fallback`,
+                exitCode: 0,
+              };
+        }),
+        invokeInteractive: vi.fn(async (): Promise<void> => {}),
+      });
+      const firstRuntime = runtime(first, provider(first));
+      if (fixture.cachedFirst) {
+        firstRuntime.runWideUnavailable = { reason: unavailableReason };
+      }
+
+      await execute?.({
+        step: 'build',
+        configuredProviders: fixture.candidates,
+        preferredProvider: first,
+        runtimes: new ProviderRuntimeSet([
+          firstRuntime,
+          runtime(second, provider(second)),
+        ]),
+        sessions: new ProviderSessionScope(
+          vi.fn((candidate) => `${fixture.name}-${candidate}-session`),
+        ),
+        config: {
+          llm_provider: fixture.candidates,
+          steps: { build: { llm_provider: first } },
+        },
+        options: {
+          prompt: 'STATIC SENTINEL PROMPT MUST NOT BE DELIVERED.',
+          cwd: '/workspace/static-sentinel',
+        },
+        optionsForCandidate: (candidateKey) => {
+          callbackOrder.push(candidateKey);
+          return {
+            prompt:
+              candidatePrompts[
+                candidateKey as keyof typeof candidatePrompts
+              ],
+            cwd: '/workspace/candidate-local',
+          };
+        },
+      });
+
+      observed.push({
+        name: fixture.name,
+        callbackOrder,
+        invocations,
+      });
+    }
+
+    expect(observed).toEqual([
+      {
+        name: 'Codex to Claude fallback',
+        callbackOrder: ['codex', 'claude'],
+        invocations: [
+          {
+            provider: 'codex',
+            prompt: 'Exact candidate-local prompt for Codex.',
+          },
+          {
+            provider: 'claude',
+            prompt: 'Exact candidate-local prompt for Claude.',
+          },
+        ],
+      },
+      {
+        name: 'Claude to Codex fallback',
+        callbackOrder: ['claude', 'codex'],
+        invocations: [
+          {
+            provider: 'claude',
+            prompt: 'Exact candidate-local prompt for Claude.',
+          },
+          {
+            provider: 'codex',
+            prompt: 'Exact candidate-local prompt for Codex.',
+          },
+        ],
+      },
+      {
+        name: 'cached-unavailable Codex to Claude fallback',
+        callbackOrder: ['codex', 'claude'],
+        invocations: [
+          {
+            provider: 'claude',
+            prompt: 'Exact candidate-local prompt for Claude.',
+          },
+        ],
+      },
+    ]);
   });
 
   it('falls back in selected-first configured order for live and cached provider unavailability', async () => {

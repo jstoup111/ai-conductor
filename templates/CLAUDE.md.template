@@ -28,6 +28,12 @@ the user-scoped `~/.claude/skills/HARNESS.md`.
 
 Claude MUST read and follow `~/.claude/skills/HARNESS.md` at the start of every session.
 
+## Shared Workflow and Claude Invocation
+
+The shared harness workflow and lifecycle gates are defined by `HARNESS.md`; they are the same
+for every supported host. Claude invokes a harness skill with native `/skill-name` syntax (for
+example, `/tdd`) and must not use Codex `$skill-name` syntax.
+
 ## Skill References
 
 Harness references use paths relative to the harness root:

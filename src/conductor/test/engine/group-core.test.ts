@@ -365,7 +365,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       };
       const capturedInteractive = vi.fn(routeDispatch);
       const codexInteractive = vi.fn((options: InvokeOptions) =>
-        options.prompt === "/manual-test"
+        options.prompt === "$manual-test"
           ? manualDispatch()
           : architectureDispatch(),
       );
@@ -569,7 +569,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         ],
         codexCalls: [
           {
-            prompt: "/manual-test",
+            prompt: "$manual-test",
             sessionId: "manual-codex-session",
             resume: false,
             cwd: "/tmp/project",
@@ -579,7 +579,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             effort: "medium",
           },
           {
-            prompt: "/manual-test",
+            prompt: "$manual-test",
             sessionId: "manual-codex-session",
             resume: true,
             cwd: "/tmp/project",
@@ -589,7 +589,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             effort: "medium",
           },
           {
-            prompt: "/architecture-review --as-built",
+            prompt: "$architecture-review --as-built",
             sessionId: "architecture-codex-session",
             resume: false,
             cwd: "/tmp/project",

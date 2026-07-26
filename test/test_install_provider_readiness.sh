@@ -95,8 +95,8 @@ fi
 if [ -L "$FAKE_HOME/.local/bin/conduct" ] \
   && [ -f "$FAKE_HOME/.claude/skills/conduct/SKILL.md" ] \
   && [ -f "$FAKE_HOME/.claude/skills/HARNESS.md" ] \
-  && [ -f "$FAKE_HOME/.codex/skills/conduct/SKILL.md" ] \
-  && [ -f "$FAKE_HOME/.codex/skills/HARNESS.md" ]; then
+  && [ -f "$FAKE_HOME/.agents/skills/conduct/SKILL.md" ] \
+  && [ -f "$FAKE_HOME/.agents/skills/HARNESS.md" ]; then
   echo 'PASS Codex installation preserves common, Claude, and Codex surfaces without the Codex CLI'
 else
   echo 'FAIL Codex installation preserves common, Claude, and Codex surfaces without the Codex CLI'
@@ -199,8 +199,8 @@ for INSTALL_SELECTION in claude codex claude,codex omitted; do
     && [ -L "$INSTALL_SURFACE_HOME/.local/bin/conduct" ] \
     && [ -f "$INSTALL_SURFACE_HOME/.claude/skills/conduct/SKILL.md" ] \
     && [ -f "$INSTALL_SURFACE_HOME/.claude/skills/HARNESS.md" ] \
-    && [ -f "$INSTALL_SURFACE_HOME/.codex/skills/conduct/SKILL.md" ] \
-    && [ -f "$INSTALL_SURFACE_HOME/.codex/skills/HARNESS.md" ] ) || {
+    && [ -f "$INSTALL_SURFACE_HOME/.agents/skills/conduct/SKILL.md" ] \
+    && [ -f "$INSTALL_SURFACE_HOME/.agents/skills/HARNESS.md" ] ) || {
       INSTALL_SURFACE_MATRIX_FAILURE="$INSTALL_SELECTION (exit $INSTALL_SURFACE_CODE)"
       INSTALL_SURFACE_MATRIX_OUT="$INSTALL_SURFACE_OUT"
     }

@@ -5,8 +5,14 @@
 This project uses the james-stoup-agents harness. Its skills are installed in the user's
 Codex configuration; do not copy them into this project.
 
-Codex MUST read and follow `~/.codex/skills/HARNESS.md` at the start of every session. A
+Codex MUST read and follow `~/.agents/skills/HARNESS.md` at the start of every session. A
 project-local skill is only appropriate when this project deliberately overrides a harness skill.
+
+## Shared Workflow and Codex Invocation
+
+The shared harness workflow and lifecycle gates are defined by `HARNESS.md`; they are the same
+for every supported host. Codex invokes a harness skill with native `$skill-name` syntax (for
+example, `$tdd`) and must not use Claude slash-command syntax.
 
 ## Agent Personas
 

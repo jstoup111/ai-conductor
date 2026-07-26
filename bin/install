@@ -10,7 +10,7 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HARNESS_INSTRUCTIONS_SOURCE="${HARNESS_DIR}/HARNESS.md"
 CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
-CODEX_SKILLS_DIR="${HOME}/.codex/skills"
+CODEX_SKILLS_DIR="${HOME}/.agents/skills"
 LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
@@ -135,12 +135,15 @@ check_installation() {
   # configuration directories.
   local missing=0
   local stale=0
-  local skills_dir client skill target harness_target
+  local duplicates=0
+  local skills_dir client skill target harness_target location
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
+      location="Claude"
     else
       skills_dir="$CODEX_SKILLS_DIR"
+      location="Codex active"
     fi
     if [ -d "$skills_dir" ]; then
       ok "${client} skills directory exists (${skills_dir})"
@@ -154,17 +157,20 @@ check_installation() {
       if [ -L "$target" ]; then
         local resolved_target
         resolved_target=$(readlink -f "$target" 2>/dev/null || echo "broken")
-        if [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
-          ok "${client} skill: ${skill}"
+        if [ "$resolved_target" = "broken" ] || [ ! -e "$resolved_target" ]; then
+          fail "${location} skill: ${skill} (${target}) — broken symlink"
+          stale=$((stale + 1))
+        elif [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
+          ok "${location} skill: ${skill}"
         else
-          warn "${client} skill: ${skill} — points to ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
+          warn "${location} skill: ${skill} (${target}) — stale target ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
           stale=$((stale + 1))
         fi
-      elif [ -d "$target" ]; then
-        warn "${client} skill: ${skill} — exists but is not a symlink (may be a copy)"
+      elif [ -e "$target" ]; then
+        warn "${location} skill: ${skill} (${target}) — non-symlink entry"
         stale=$((stale + 1))
       else
-        fail "${client} skill: ${skill} — not installed"
+        fail "${location} skill: ${skill} (${target}) — missing"
         missing=$((missing + 1))
       fi
     done
@@ -173,20 +179,42 @@ check_installation() {
     if [ -L "$harness_target" ]; then
       local resolved_harness
       resolved_harness=$(readlink -f "$harness_target" 2>/dev/null || echo "broken")
-      if [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
-        ok "${client} harness instructions"
+      if [ "$resolved_harness" = "broken" ] || [ ! -e "$resolved_harness" ]; then
+        fail "${location} harness instructions (${harness_target}) — broken symlink"
+        stale=$((stale + 1))
+      elif [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ok "${location} harness instructions"
       else
-        warn "${client} harness instructions — point to ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
+        warn "${location} harness instructions (${harness_target}) — stale target ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
         stale=$((stale + 1))
       fi
     elif [ -e "$harness_target" ]; then
-      warn "${client} harness instructions — exists but is not a symlink"
+      warn "${location} harness instructions (${harness_target}) — non-symlink entry"
       stale=$((stale + 1))
     else
-      fail "${client} harness instructions — not installed"
+      fail "${location} harness instructions (${harness_target}) — missing"
       missing=$((missing + 1))
     fi
   done
+
+  # Codex's former discovery location must not shadow an active catalog. Do
+  # not modify it in check mode: even a foreign entry is useful diagnostic
+  # evidence, and reconciliation owns the mutation policy.
+  local legacy_dir="${HOME}/.codex/skills" legacy_target
+  for skill in "${SKILLS[@]}"; do
+    target="${CODEX_SKILLS_DIR}/${skill}"
+    legacy_target="${legacy_dir}/${skill}"
+    if { [ -e "$target" ] || [ -L "$target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
+      fail "Codex duplicate skill: ${skill} — active ${target} and legacy ${legacy_target} both exist"
+      duplicates=$((duplicates + 1))
+    fi
+  done
+  harness_target="${CODEX_SKILLS_DIR}/HARNESS.md"
+  legacy_target="${legacy_dir}/HARNESS.md"
+  if { [ -e "$harness_target" ] || [ -L "$harness_target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
+    fail "Codex duplicate harness instructions — active ${harness_target} and legacy ${legacy_target} both exist"
+    duplicates=$((duplicates + 1))
+  fi
 
   # Check conduct script
   echo ""
@@ -259,12 +287,13 @@ check_installation() {
   # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
   # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
-  if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && $all_ok; then
+  if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$duplicates" -eq 0 ] && $all_ok; then
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
     return 0
   else
     [ "$missing" -gt 0 ] && echo -e "${RED}${missing} skill(s) missing.${NC}"
     [ "$stale" -gt 0 ] && echo -e "${YELLOW}${stale} skill(s) stale or misconfigured.${NC}"
+    [ "$duplicates" -gt 0 ] && echo -e "${RED}${duplicates} Codex duplicate discovery entry(s).${NC}"
     echo -e "Run ${BOLD}./bin/install${NC} to fix."
     return 1
   fi
@@ -1070,6 +1099,72 @@ report_selected_provider_readiness() {
   done
 }
 
+# A prior catalog is trusted only when its HARNESS.md resolves to a complete
+# harness root. This lets an update refresh links installed by an earlier
+# checkout without treating an arbitrary operator-owned symlink as ours.
+prior_harness_root() {
+  local harness_link=$1 resolved root
+  [ -L "$harness_link" ] || return 1
+  resolved=$(readlink -f "$harness_link" 2>/dev/null || echo "")
+  root=${resolved%/HARNESS.md}
+  [ "$resolved" = "${root}/HARNESS.md" ] &&
+    [ -f "${root}/HARNESS.md" ] && [ -f "${root}/VERSION" ] &&
+    [ -d "${root}/skills" ] || return 1
+  printf '%s\n' "$root"
+}
+
+# A catalog entry is mutable only when it is an exact link from this checkout,
+# or from the complete prior harness identified by this catalog's HARNESS.md.
+# Regular files, directories, broken links, and arbitrary links are operator
+# content and must stay byte-for-byte/target-for-target intact.
+owned_skill_link() {
+  local skills_dir=$1 skill=$2 target=$3 current prior_root
+  current=$(readlink -f "$target" 2>/dev/null || echo "")
+  [ "$current" = "${HARNESS_DIR}/skills/${skill}" ] && return 0
+  prior_root=$(prior_harness_root "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+  [ -n "$prior_root" ] && [ "$current" = "${prior_root}/skills/${skill}" ]
+}
+
+owned_harness_link() {
+  local target=$1 current
+  current=$(readlink -f "$target" 2>/dev/null || echo "")
+  [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ] && return 0
+  prior_harness_root "$target" >/dev/null 2>&1
+}
+
+# Once the active Codex catalog is established in ~/.agents/skills, remove only
+# exact harness-owned links left at Codex's former discovery location. A prior
+# complete harness catalog is ownership proof here too: a legacy installation
+# can legitimately point at an older checkout.
+reconcile_legacy_codex_links() {
+  local legacy_dir="${HOME}/.codex/skills"
+  local skill target
+
+  for skill in "${SKILLS[@]}"; do
+    target="${legacy_dir}/${skill}"
+    if [ -L "$target" ]; then
+      if owned_skill_link "$legacy_dir" "$skill" "$target"; then
+        rm -- "$target"
+      else
+        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+      fi
+    elif [ -e "$target" ]; then
+      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+    fi
+  done
+
+  target="${legacy_dir}/HARNESS.md"
+  if [ -L "$target" ]; then
+    if owned_harness_link "$target"; then
+      rm -- "$target"
+    else
+      warn "Codex legacy harness instructions — foreign symlink preserved"
+    fi
+  elif [ -e "$target" ]; then
+    warn "Codex legacy harness instructions — foreign entry preserved"
+  fi
+}
+
 install() {
   guard_worktree_root
 
@@ -1090,12 +1185,40 @@ install() {
   local installed=0
   local updated=0
   local skills_dir client skill source target current harness_target
+  local prior_harness prior_root candidate candidate_name supported
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
     else
       skills_dir="$CODEX_SKILLS_DIR"
     fi
+
+    if [ "$client" = Codex ] && [ -L "${skills_dir}/HARNESS.md" ]; then
+      prior_harness=$(readlink -f "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+      prior_root="${prior_harness%/HARNESS.md}"
+      if [ "$prior_harness" = "${prior_root}/HARNESS.md" ] &&
+         [ -f "${prior_root}/HARNESS.md" ] && [ -f "${prior_root}/VERSION" ] &&
+         [ -d "${prior_root}/skills" ]; then
+        while IFS= read -r -d '' candidate; do
+          candidate_name="${candidate##*/}"
+          [ "$candidate_name" = "HARNESS.md" ] && continue
+          supported=false
+          for skill in "${SKILLS[@]}"; do
+            [ "$candidate_name" = "$skill" ] && supported=true && break
+          done
+          [ "$supported" = true ] && continue
+          current=$(readlink -- "$candidate" 2>/dev/null || echo "")
+          if [[ "$current" != /* ]]; then
+            current="${candidate%/*}/${current}"
+          fi
+          current=$(realpath -m -- "$current" 2>/dev/null || echo "")
+          if [ "$current" = "${prior_root}/skills/${candidate_name}" ]; then
+            rm -- "$candidate" || warn "Codex skill: ${candidate_name} — obsolete symlink removal failed"
+          fi
+        done < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -type l -print0)
+      fi
+    fi
+
     for skill in "${SKILLS[@]}"; do
       source="${HARNESS_DIR}/skills/${skill}"
       target="${skills_dir}/${skill}"
@@ -1106,16 +1229,21 @@ install() {
       fi
 
       if [ -L "$target" ]; then
-        current=$(readlink -f "$target" 2>/dev/null || echo "")
-        if [ "$current" = "$source" ]; then
+        if owned_skill_link "$skills_dir" "$skill" "$target"; then
+          current=$(readlink -f "$target" 2>/dev/null || echo "")
+          if [ "$current" = "$source" ]; then
+            continue  # Already correct
+          fi
+          ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink update failed"; continue; }
+          updated=$((updated + 1))
+        else
+          warn "${client} skill: ${skill} — foreign symlink preserved"
           continue  # Already correct
         fi
-        ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink update failed"; continue; }
-        updated=$((updated + 1))
       else
         if [ -e "$target" ]; then
-          warn "${client} skill: ${skill} — exists but is not a symlink. Backing up to ${target}.bak"
-          mv "$target" "${target}.bak" || { warn "${client} skill: ${skill} — backup failed, skipping"; continue; }
+          warn "${client} skill: ${skill} — foreign entry preserved"
+          continue
         fi
         ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink failed"; continue; }
         installed=$((installed + 1))
@@ -1124,18 +1252,24 @@ install() {
 
     harness_target="${skills_dir}/HARNESS.md"
     if [ -L "$harness_target" ]; then
-      current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
-      if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
-        ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+      if owned_harness_link "$harness_target"; then
+        current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+        if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+          ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+        fi
+      else
+        warn "${client} harness instructions — foreign symlink preserved"
       fi
     else
       if [ -e "$harness_target" ]; then
-        warn "${client} harness instructions — exists but is not a symlink. Backing up to ${harness_target}.bak"
-        mv "$harness_target" "${harness_target}.bak" || { warn "${client} harness instructions — backup failed"; continue; }
+        warn "${client} harness instructions — foreign entry preserved"
+        continue
       fi
       ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink failed"
     fi
   done
+
+  reconcile_legacy_codex_links
 
   if [ "$installed" -gt 0 ] || [ "$updated" -gt 0 ]; then
     ok "Skills: ${installed} installed, ${updated} updated (${#SKILLS[@]} per client)"
@@ -1265,7 +1399,7 @@ uninstall() {
   echo ""
 
   local removed=0
-  local skills_dir client skill target points_to harness_target
+  local skills_dir legacy_dir client skill target points_to harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1276,26 +1410,59 @@ uninstall() {
       target="${skills_dir}/${skill}"
       if [ -L "$target" ]; then
         points_to=$(readlink -f "$target" 2>/dev/null || echo "")
-        if [[ "$points_to" == "${HARNESS_DIR}"* ]]; then
-          rm "$target"
+        if { [ "$client" = Codex ] && owned_skill_link "$skills_dir" "$skill" "$target"; } || \
+           { [ "$client" = Claude ] && [[ "$points_to" == "${HARNESS_DIR}"* ]]; }; then
+          rm -- "$target"
           removed=$((removed + 1))
         else
           warn "${client} skill: ${skill} — symlink points elsewhere, skipping"
         fi
+      elif [ -e "$target" ]; then
+        warn "${client} skill: ${skill} — foreign entry preserved"
       fi
     done
 
     harness_target="${skills_dir}/HARNESS.md"
     if [ -L "$harness_target" ]; then
       points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
-      if [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
-        rm "$harness_target"
+      if { [ "$client" = Codex ] && owned_harness_link "$harness_target"; } || \
+         { [ "$client" = Claude ] && [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; }; then
+        rm -- "$harness_target"
         removed=$((removed + 1))
       else
         warn "${client} harness instructions — symlink points elsewhere, skipping"
       fi
+    elif [ -e "$harness_target" ]; then
+      warn "${client} harness instructions — foreign entry preserved"
     fi
   done
+
+  legacy_dir="${HOME}/.codex/skills"
+  for skill in "${SKILLS[@]}"; do
+    target="${legacy_dir}/${skill}"
+    if [ -L "$target" ]; then
+      if owned_skill_link "$legacy_dir" "$skill" "$target"; then
+        rm -- "$target"
+        removed=$((removed + 1))
+      else
+        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+      fi
+    elif [ -e "$target" ]; then
+      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+    fi
+  done
+
+  harness_target="${legacy_dir}/HARNESS.md"
+  if [ -L "$harness_target" ]; then
+    if owned_harness_link "$harness_target"; then
+      rm -- "$harness_target"
+      removed=$((removed + 1))
+    else
+      warn "Codex legacy harness instructions — foreign symlink preserved"
+    fi
+  elif [ -e "$harness_target" ]; then
+    warn "Codex legacy harness instructions — foreign entry preserved"
+  fi
   ok "Removed ${removed} skill symlinks"
 
   if [ -L "${LOCAL_BIN}/conduct" ]; then

@@ -297,9 +297,22 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - **Existing CLAUDE.md:** Verify it references the repository harness documentation. If missing, append the reference block.
   Never overwrite user content. Behavioral rules live in the harness documentation, not in the project CLAUDE.md.
 - **Fresh/no AGENTS.md:** Generate from `templates/AGENTS.md.template`. This gives Codex the
-  harness entry point while keeping the skills themselves user-scoped at `~/.codex/skills/`.
+  harness entry point while keeping the skills themselves user-scoped at `~/.agents/skills/`.
 - **Existing AGENTS.md:** Verify it references the repository harness documentation; append the Codex harness reference
-  block if needed. Never overwrite user content.
+  block if needed. Preserve all operator content and append the AGENTS.md reference exactly once: repeated initialization is
+  idempotent. Update AGENTS.md atomically; if the update cannot be completed safely, leave the original content
+  intact and report an actionable AGENTS.md error rather than creating a partial file. Never overwrite user content.
+
+When both host files are present, preserve and update `CLAUDE.md` and `AGENTS.md` independently:
+add only the missing harness reference and never normalize away operator-authored content. Validate
+that each host keeps its own invocation syntax (Claude `/skill-name`, Codex `$skill-name`) while
+both point to the same shared harness contract and lifecycle gates. If either file
+contradicts that contract, report the host and the conflicting instruction before completing
+initialization.
+
+For Codex, `~/.agents/skills/` is the active current catalog; treat the former
+`~/.codex/skills/` location as legacy migration material only. Never describe it as the active
+discovery location or ask an operator to recreate it.
 
 ### 7. Bootstrap Memory (Existing Projects Only)
 
@@ -313,7 +326,8 @@ Update `.memory/index.md`. Report: "Bootstrapped memory with N decisions, M patt
 
 ### 7b. Generate Architecture Diagrams
 
-Run `/architecture-diagram` to generate initial C4 diagrams from the codebase scan.
+Run the `architecture-diagram` workflow to generate initial C4 diagrams from the codebase scan
+(Claude `/architecture-diagram`; Codex `$architecture-diagram`).
 Use the inventory from Step 4 — don't re-scan.
 
 Output: `.docs/architecture/` with system-context.md, containers.md, components.md, erd.md,

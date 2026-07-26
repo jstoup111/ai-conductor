@@ -50,48 +50,10 @@ import {
 } from './provider-runtime.js';
 import { normalizeProviderSelection } from './provider-selection.js';
 import type { VerifierDispatchResult } from './attribution-lane.js';
-
-const STEP_PROMPTS: Record<StepName, string> = {
-  bootstrap: '/bootstrap',
-  memory: '/memory',
-  assess: '/assess',
-  explore: '/explore',
-  prd: '/prd',
-  complexity: '/conduct complexity',
-  stories: '/stories',
-  conflict_check: '/conflict-check',
-  plan: '/plan',
-  coherence_check: '/coherence-check',
-  architecture_diagram: '/architecture-diagram',
-  architecture_review: '/architecture-review',
-  worktree: '/conduct worktree',
-  acceptance_specs: '/writing-system-tests',
-  build: '/pipeline',
-  // Display sentinel for the model table; the grader dispatch is driven by
-  // the fresh-session assembly logic (see resolveRebaseConflict pattern),
-  // not by invoking a literal `/build-review` skill.
-  build_review: '/build-review',
-  // Engine-native (like complexity/rebase) — the completion predicate reads
-  // or computes the wiring-reachability evidence file directly; no skill
-  // dispatch. Present only to keep the Record<StepName, string> exhaustive.
-  wiring_check: '/conduct wiring-check',
-  // Engine-native aggregate verifier gate (Task 16 wires execution). This is
-  // a display/exhaustiveness sentinel, never a skill dispatch.
-  test_suite: '/conduct test-suite',
-  manual_test: '/manual-test',
-  prd_audit: '/prd-audit',
-  // Runs the architecture-review skill in its as-built compliance-gate mode.
-  architecture_review_as_built: '/architecture-review --as-built',
-  retro: '/retro',
-  // Engine-native (like complexity) — never dispatched; present only to keep
-  // the Record<StepName, string> exhaustive.
-  rebase: '/conduct rebase',
-  finish: '/finish',
-  // Conditional SHIP sub-routine: plans remediation for a blocking audit.
-  remediate: '/remediate',
-  // Out-of-band verification step: semantic attribution verification.
-  attribution_verify: '/attribution-verify',
-};
+import {
+  renderSkillInvocation,
+  STEP_SKILL_INVOCATIONS,
+} from './skill-invocation.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -333,6 +295,29 @@ export interface StepRunnerOptions {
   providerExecution?: ProviderExecutionContext;
 }
 
+type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
+type ProviderAwareFreeFormOneShotStep =
+  | 'worktree'
+  | 'build'
+  | 'attribution_verify'
+  | 'build_review';
+
+interface ProviderAwareOneShotRequestBase {
+  options: ExecuteProviderCandidatesInput['options'];
+  tier?: ComplexityTier;
+  dispatch?: StepRunOptions;
+}
+
+type ProviderAwareOneShotRequest =
+  | (ProviderAwareOneShotRequestBase & {
+      kind: 'skill';
+      step: ProviderAwareSkillOneShotStep;
+    })
+  | (ProviderAwareOneShotRequestBase & {
+      kind: 'free-form';
+      step: ProviderAwareFreeFormOneShotStep;
+    });
+
 export class DefaultStepRunner implements StepRunner {
   private sessionStarted = false;
   private sessionStartedInitialized = false;
@@ -446,6 +431,9 @@ export class DefaultStepRunner implements StepRunner {
         'rebase is handled by the engine (native git rebase-on-latest); it must not be dispatched to run()',
       );
     }
+    if (step === 'wiring_check') {
+      return { success: true };
+    }
 
     // build_review is a one-shot grader dispatch — never resumes the main
     // conductor session (see runBuildReview() for the resolveRebaseConflict
@@ -467,7 +455,15 @@ export class DefaultStepRunner implements StepRunner {
       await this.sleepFn(this.stepCooldown * 1000 * multiplier);
     }
 
-    const prompt = STEP_PROMPTS[step] ?? `/${step}`;
+    const skillInvocation = Object.prototype.hasOwnProperty.call(
+      STEP_SKILL_INVOCATIONS,
+      step,
+    )
+      ? STEP_SKILL_INVOCATIONS[step]
+      : undefined;
+    const prompt = skillInvocation
+      ? renderSkillInvocation(skillInvocation, this.providerKey)
+      : `/${step}`;
     // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
     // present, overrides the runner's shared this.sessionId so the branch
     // never touches (reads or mutates) the main conductor session — see
@@ -516,7 +512,7 @@ export class DefaultStepRunner implements StepRunner {
       if (this.providerRuntimes && branchSessionId === undefined) {
         if (step === 'remediate') {
           try {
-            const result = await this.executeProviderAwareOneShot(
+            const result = await this.executeProviderAwareSkillOneShot(
               step,
               {
                 prompt,
@@ -639,6 +635,7 @@ export class DefaultStepRunner implements StepRunner {
     systemPrompt: string,
     streaming: boolean,
     interactive = false,
+    invocationKind: 'skill' | 'free-form' = 'skill',
   ): Promise<StepRunResult> {
     const sessions = opts?.providerSessions ?? this.sessionStore;
     if (!this.providerRuntimes || !sessions) {
@@ -650,6 +647,15 @@ export class DefaultStepRunner implements StepRunner {
     const runtimes = streaming
       ? this.streamingProviderRuntimes(this.providerRuntimes)
       : this.providerRuntimes;
+    const invocationOptions: ExecuteProviderCandidatesInput['options'] = {
+      prompt,
+      systemPrompt,
+      cwd: this.projectDir,
+      dangerouslySkipPermissions: streaming
+        ? this.mode === 'auto'
+        : true,
+      ...(streaming ? { interactive } : {}),
+    };
     try {
       const result = await this.providerExecutor({
         step,
@@ -665,15 +671,21 @@ export class DefaultStepRunner implements StepRunner {
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
-        options: {
-          prompt,
-          systemPrompt,
-          cwd: this.projectDir,
-          dangerouslySkipPermissions: streaming
-            ? this.mode === 'auto'
-            : true,
-          ...(streaming ? { interactive } : {}),
-        },
+        options: invocationOptions,
+        ...(invocationKind === 'skill' && Object.prototype.hasOwnProperty.call(
+          STEP_SKILL_INVOCATIONS,
+          step,
+        )
+          ? {
+              optionsForCandidate: (candidateKey: string) => ({
+                ...invocationOptions,
+                prompt: renderSkillInvocation(
+                  STEP_SKILL_INVOCATIONS[step],
+                  candidateKey,
+                ),
+              }),
+            }
+          : {}),
       });
       this.callCount++;
       if (!opts?.providerSessions) {
@@ -687,28 +699,66 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private async executeProviderAwareOneShot(
-    step: StepName,
+    step: ProviderAwareFreeFormOneShotStep,
     options: ExecuteProviderCandidatesInput['options'],
     tier?: ComplexityTier,
     dispatch?: StepRunOptions,
   ): Promise<ProviderExecutionResult | undefined> {
+    return this.executeProviderAwareOneShotCore({
+      kind: 'free-form',
+      step,
+      options,
+      tier,
+      dispatch,
+    });
+  }
+
+  private async executeProviderAwareSkillOneShot(
+    step: ProviderAwareSkillOneShotStep,
+    options: ExecuteProviderCandidatesInput['options'],
+    tier?: ComplexityTier,
+    dispatch?: StepRunOptions,
+  ): Promise<ProviderExecutionResult | undefined> {
+    return this.executeProviderAwareOneShotCore({
+      kind: 'skill',
+      step,
+      options,
+      tier,
+      dispatch,
+    });
+  }
+
+  private async executeProviderAwareOneShotCore(
+    request: ProviderAwareOneShotRequest,
+  ): Promise<ProviderExecutionResult | undefined> {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
     return this.providerExecutor({
-      step,
+      step: request.step,
       configuredProviders: this.configuredProviders,
-      preferredProvider: this.config?.steps?.[step]?.llm_provider,
+      preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
       runtimes: this.providerRuntimes,
-      sessions: this.sessionStore.beginBranch(step),
+      sessions: this.sessionStore.beginBranch(request.step),
       config: this.config,
-      tier,
-      attempt: dispatch?.attempt ?? 1,
-      escalate: dispatch?.escalate ?? true,
-      modelOverride: dispatch?.modelOverride ?? this.modelOverride,
-      effortOverride: dispatch?.effortOverride ?? this.effortOverride,
+      tier: request.tier,
+      attempt: request.dispatch?.attempt ?? 1,
+      escalate: request.dispatch?.escalate ?? true,
+      modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
+      effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
-      options,
+      options: request.options,
+      ...(request.kind === 'skill'
+        ? {
+            optionsForCandidate: (candidateKey: string) => ({
+              ...request.options,
+              prompt: renderSkillInvocation(
+                STEP_SKILL_INVOCATIONS[request.step],
+                candidateKey,
+              ),
+            }),
+          }
+        : {}),
     });
   }
 
@@ -998,6 +1048,7 @@ export class DefaultStepRunner implements StepRunner {
         '',
         true,
         true,
+        'free-form',
       );
       return;
     }
@@ -1039,7 +1090,7 @@ export class DefaultStepRunner implements StepRunner {
       'STORIES: <integer estimate>\n' +
       'TIER: <S|M|L>   # your best letter judgement, used only as a fallback';
 
-    const providerResult = await this.executeProviderAwareOneShot(
+    const providerResult = await this.executeProviderAwareSkillOneShot(
       'complexity',
       {
         prompt: '/conduct complexity',
@@ -1114,12 +1165,15 @@ export class DefaultStepRunner implements StepRunner {
       '{"resolved": true}\n' +
       '{"resolved": false, "reason": "<explanation>"}';
 
-    const providerResult = await this.executeProviderAwareOneShot('rebase', {
-      prompt: '/rebase',
-      dangerouslySkipPermissions: true,
-      systemPrompt,
-      cwd: ctx.projectRoot,
-    });
+    const providerResult = await this.executeProviderAwareSkillOneShot(
+      'rebase',
+      {
+        prompt: '/rebase',
+        dangerouslySkipPermissions: true,
+        systemPrompt,
+        cwd: ctx.projectRoot,
+      },
+    );
     if (providerResult) {
       return {
         ...parseRebaseResolutionOutput(providerResult.output),
