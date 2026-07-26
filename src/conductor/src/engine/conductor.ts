@@ -2678,23 +2678,18 @@ export class Conductor {
             this.modelPolicyForStep(step.name),
             this.config,
           );
-          // Engagement is keyed to the group's first NON-SKIPPED member, not
-          // blindly to members[0]. A nominal entry the serial walk already
-          // skip-marked (e.g. manual_test config-disabled for self-host
-          // builds) hits a `continue` in the skip branches above and never
-          // reaches this code — keying engagement to members[0] therefore
-          // left the whole group permanently serial in any repo that
-          // disables its first member (zero `parallel_started` events ever).
-          // The first member surviving the skip cascade is the group's real
-          // entry point. Deliberately "first non-SKIPPED", not "first
-          // dispatchable": a member that is `done` (VerdictOutcome — e.g.
-          // manual_test on a kickback re-entry that navigateBack'd to
-          // prd_audit) still anchors engagement, so mid-loop re-entries at a
-          // later member keep the pre-existing SERIAL walk (and its
-          // gap-aware kickback machinery) exactly as before this fix.
-          const groupEntryName = membership.members.find(
-            (m) => m.outcome.kind !== 'skipped',
-          )?.name;
+          // Engagement is keyed to the first member that still needs work,
+          // rather than blindly to members[0]. A nominal entry that was
+          // config-skipped or is already green hits a `continue` before this
+          // branch; using it as the anchor would strand later non-green
+          // validators on the serial path. This especially matters for the
+          // finish fence: it preserves green siblings while re-fanning the
+          // remaining failed/stale validators together.
+          //
+          // With no dispatchable members, retain the first non-skipped member
+          // as the harmless fallback for the all-complete walk.
+          const groupEntryName = membership.dispatchable[0]?.name ??
+            membership.members.find((m) => m.outcome.kind !== 'skipped')?.name;
           if (membership.allSkipped && builtinGroup.members[0] === step.name) {
             for (const member of membership.members) {
               await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
