@@ -24,6 +24,10 @@ import {
   resolvePreferredProviderNativeStepConfig,
   type ResolvedProviderNativeStepConfig,
 } from './resolved-config.js';
+import {
+  validateTaskAttribution,
+  type TaskAttributionInput,
+} from './task-attribution.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -37,6 +41,8 @@ export interface ProviderCandidateFailureClassification {
 
 export interface ProviderAttemptMetadata {
   provider: string;
+  /** Validated task-local telemetry; never an authorization input. */
+  taskId?: string;
   /** Sanitized source selected by the Codex provider, when it reported one. */
   authenticationSource?: 'api-key' | 'cached-login';
   model?: string;
@@ -80,6 +86,8 @@ export interface ExecuteProviderCandidatesInput {
   escalate?: boolean;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  /** Task-local telemetry to validate before any candidate/session invocation. */
+  taskAttribution?: TaskAttributionInput;
   onAttempt?: (
     step: StepName,
     attempt: ProviderAttemptMetadata,
@@ -102,6 +110,8 @@ export interface ProviderExecutionContext {
   config?: HarnessConfig;
   modelOverride?: string;
   effortOverride?: EffortLevel;
+  /** Task-local telemetry passed through the provider-dispatch boundary. */
+  taskAttribution?: TaskAttributionInput;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
@@ -290,6 +300,7 @@ export async function invokeProviderCandidate({
 
 export interface BuildProviderAttemptMetadataInput {
   providerKey: string;
+  taskId?: string;
   result: InvokeResult;
   resolvedModel: string;
   invokedModel?: string;
@@ -300,6 +311,7 @@ export interface BuildProviderAttemptMetadataInput {
 /** Construct event-boundary metadata for exactly one candidate result. */
 export function buildProviderAttemptMetadata({
   providerKey,
+  taskId,
   result,
   resolvedModel,
   invokedModel,
@@ -309,6 +321,7 @@ export function buildProviderAttemptMetadata({
   const invoked = result.providerInvocationSkipped !== true;
   return {
     provider: providerKey,
+    ...(taskId ? { taskId } : {}),
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
     ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
     ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
@@ -344,6 +357,7 @@ export async function executeProviderCandidates({
   escalate = true,
   modelOverride,
   effortOverride,
+  taskAttribution: attributionInput,
   onAttempt,
   warn,
   options,
@@ -355,6 +369,19 @@ export async function executeProviderCandidates({
   });
   const preferredProvider = candidates[0];
   const attempts: ProviderAttemptMetadata[] = [];
+  const attribution = attributionInput
+    ? validateTaskAttribution(attributionInput)
+    : undefined;
+  if (attribution && 'diagnostic' in attribution) {
+    return {
+      success: false,
+      output: `Task attribution rejected: ${attribution.diagnostic.code}.`,
+      exitCode: 1,
+      preferredProvider,
+      attempts,
+    };
+  }
+  const taskId = attribution?.taskId;
 
   for (const [index, providerKey] of candidates.entries()) {
     const runtime = runtimes.get(providerKey);
@@ -384,6 +411,7 @@ export async function executeProviderCandidates({
     const nextProvider = candidates[index + 1];
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
+      taskId,
       result,
       resolvedModel: resolved.model,
       invokedModel,

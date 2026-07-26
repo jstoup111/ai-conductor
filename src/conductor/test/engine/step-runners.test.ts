@@ -58,6 +58,38 @@ function interactiveRuntime(
 const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
+  it('forwards task-local attribution to provider-aware normal dispatch', async () => {
+    const providerExecutor = vi.fn(async () => ({
+      success: true,
+      output: 'done',
+      exitCode: 0,
+      preferredProvider: 'codex',
+      actualProvider: 'codex',
+      attempts: [],
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('codex', vi.fn(async () => undefined))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+        taskAttribution: {
+          taskId: '2',
+          seededTaskIds: ['1', '2'],
+          expectedTaskId: '2',
+        },
+      },
+    });
+
+    await runner.run('build', emptyState);
+
+    expect(providerExecutor.mock.calls[0]?.[0].taskAttribution).toEqual({
+      taskId: '2',
+      seededTaskIds: ['1', '2'],
+      expectedTaskId: '2',
+    });
+  });
+
   it('routes complexity and recovery dispatches through provider-native fresh one-shot scopes', async () => {
     const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,

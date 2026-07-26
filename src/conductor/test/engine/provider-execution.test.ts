@@ -83,6 +83,84 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('carries one validated task id through Codex fallback to Claude', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: false,
+      output: 'Codex is unavailable.',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Claude completed the task.',
+      exitCode: 0,
+    }));
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      runtimes,
+      sessions,
+      taskAttribution: {
+        taskId: '2',
+        seededTaskIds: ['1', '2'],
+        expectedTaskId: '2',
+      },
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+    });
+
+    expect(result.attempts.map(({ provider, taskId }) => ({ provider, taskId }))).toEqual([
+      { provider: 'codex', taskId: '2' },
+      { provider: 'claude', taskId: '2' },
+    ]);
+  });
+
+  it('rejects invalid task attribution before either provider is invoked', async () => {
+    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Codex must not be invoked.',
+      exitCode: 0,
+    }));
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'Claude must not be invoked.',
+      exitCode: 0,
+    }));
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke: codexInvoke, invokeInteractive: vi.fn(async () => {}) }),
+      runtime('claude', { invoke: claudeInvoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('provider-session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      preferredProvider: 'codex',
+      runtimes,
+      sessions,
+      taskAttribution: { taskId: 'not an id', seededTaskIds: ['1', '2'] },
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+    });
+
+    expect({ result, calls: [codexInvoke.mock.calls, claudeInvoke.mock.calls] }).toEqual({
+      result: expect.objectContaining({
+        success: false,
+        output: 'Task attribution rejected: malformed.',
+        attempts: [],
+      }),
+      calls: [[], []],
+    });
+  });
+
   it('returns a permission denial from the selected provider without falling back', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: false,
