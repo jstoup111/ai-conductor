@@ -88,6 +88,16 @@ snapshot() {
   )
 }
 
+# The refusal guard must run before installer reconciliation. Seed both the
+# active Codex catalog and its legacy migration input so a guard regression
+# cannot silently mutate either scope.
+seed_codex_state() {
+  local home=$1
+  mkdir -p "$home/.agents/skills" "$home/.codex/skills"
+  printf '%s\n' 'active operator state' > "$home/.agents/skills/operator-state"
+  printf '%s\n' 'legacy operator state' > "$home/.codex/skills/operator-state"
+}
+
 # Run an install invocation hermetically: throwaway HOME, stubbed tool PATH,
 # closed stdin. Captures combined output to $OUT and exit code to $CODE.
 OUT=""
@@ -112,6 +122,7 @@ echo -e "${BOLD}Refusal — default mode from a worktree root${NC}"
 
 HOME1="$TMP_ROOT/home1"
 mkdir -p "$HOME1"
+seed_codex_state "$HOME1"
 BEFORE=$(snapshot "$HOME1")
 run_install "$WORKTREE_COPY/bin/install" "$HOME1"
 AFTER=$(snapshot "$HOME1")
@@ -122,7 +133,7 @@ assert "refusal message names the resolved physical root" \
   "$(echo "$OUT" | grep -qF "$WORKTREE_PHYSICAL"; echo $?)"
 assert "refusal message names the remedy (--allow-worktree-root)" \
   "$(echo "$OUT" | grep -qF -- "--allow-worktree-root"; echo $?)"
-assert "throwaway HOME is byte-for-byte unchanged after refusal" \
+assert "active and legacy Codex state are byte-for-byte unchanged after refusal" \
   "$([ "$BEFORE" = "$AFTER" ]; echo $?)"
 
 # ─── Refusal: --update mode ────────────────────────────────────────────────────
@@ -131,6 +142,7 @@ echo -e "${BOLD}Refusal — --update mode from a worktree root${NC}"
 
 HOME2="$TMP_ROOT/home2"
 mkdir -p "$HOME2"
+seed_codex_state "$HOME2"
 BEFORE=$(snapshot "$HOME2")
 run_install "$WORKTREE_COPY/bin/install" "$HOME2" --update
 AFTER=$(snapshot "$HOME2")
@@ -139,7 +151,7 @@ assert "--update from a worktree root exits non-zero" \
   "$([ "$CODE" -ne 0 ]; echo $?)"
 assert "--update refusal names the resolved root" \
   "$(echo "$OUT" | grep -qF "$WORKTREE_PHYSICAL"; echo $?)"
-assert "throwaway HOME unchanged after --update refusal" \
+assert "active and legacy Codex state unchanged after --update refusal" \
   "$([ "$BEFORE" = "$AFTER" ]; echo $?)"
 
 # ─── Refusal: symlinked logical path (physical resolution) ─────────────────────
@@ -241,11 +253,11 @@ run_install "$PLAIN_COPY/bin/install" "$HOME7" --uninstall
 assert "uninstall removes Claude user-scoped skills" \
   "$([ ! -e "$HOME7/.claude/skills/tdd" ]; echo $?)"
 assert "uninstall removes Codex user-scoped skills" \
-  "$([ ! -e "$HOME7/.codex/skills/tdd" ]; echo $?)"
+  "$([ ! -e "$HOME7/.agents/skills/tdd" ]; echo $?)"
 assert "uninstall removes Claude user-scoped harness instructions" \
   "$([ ! -e "$HOME7/.claude/skills/HARNESS.md" ]; echo $?)"
 assert "uninstall removes Codex user-scoped harness instructions" \
-  "$([ ! -e "$HOME7/.codex/skills/HARNESS.md" ]; echo $?)"
+  "$([ ! -e "$HOME7/.agents/skills/HARNESS.md" ]; echo $?)"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 
