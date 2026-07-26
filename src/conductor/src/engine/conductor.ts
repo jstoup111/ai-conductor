@@ -3755,9 +3755,12 @@ export class Conductor {
           // already denied under the bounded policy.
           if (result.permissionDenied) {
             const provider = result.actualProvider ?? 'selected provider';
+            const source = result.authentication?.source;
             const detail = result.output?.trim();
             const haltReason =
-              `${provider === 'codex' ? 'Codex' : provider} permission review denied a required action.\n` +
+              `${provider === 'codex' ? 'Codex' : provider} permission review denied a required action` +
+              (source ? ` using the selected ${source} source` : '') +
+              '.\n' +
               'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
               (detail ? `\nProvider detail: ${detail}` : '');
             await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});

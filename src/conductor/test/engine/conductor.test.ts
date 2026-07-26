@@ -9169,6 +9169,7 @@ describe('engine/conductor', () => {
           output: 'Codex automatic review returned an unknown result for workspace escape',
           permissionDenied: true,
           actualProvider: 'codex',
+          authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
         })),
       };
       const haltReasons: string[] = [];
@@ -9187,7 +9188,7 @@ describe('engine/conductor', () => {
 
       expect({ calls: runner.run.mock.calls.length, haltReasons }).toEqual({
         calls: 1,
-        haltReasons: [expect.stringContaining('Codex permission review denied')],
+        haltReasons: [expect.stringMatching(/Codex permission review denied[\s\S]*cached-login/i)],
       });
     });
 

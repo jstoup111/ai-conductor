@@ -190,6 +190,7 @@ describe('CodexProvider', () => {
         rateLimited: undefined,
         modelUnavailable: undefined,
         sessionExpired: undefined,
+        authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
       });
       expect(result.output).toMatch(/Codex.*automatic permission.*(unavailable|denied).*retry/i);
     }
@@ -266,7 +267,6 @@ describe('CodexProvider', () => {
             provider: 'codex',
             source,
             state: 'unusable',
-            remediation: 'Update the selected Codex authentication source and retry.',
           },
           output: `Codex authentication failed using the selected ${source} source.`,
           childKey: key,
@@ -668,6 +668,11 @@ describe('CodexProvider', () => {
     } else {
       expect(result[expectedFlag as keyof typeof result]).toBe(true);
     }
+    expect(result.authentication).toMatchObject({
+      provider: 'codex',
+      source: 'cached-login',
+      state: expectedFlag === 'authFailure' ? 'unusable' : 'ready',
+    });
     if (expectedFlag === 'rateLimited') expect(result.waitSeconds).toBe(45);
   });
 

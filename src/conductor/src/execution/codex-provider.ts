@@ -224,6 +224,7 @@ export class CodexProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        authentication: this.authenticationResult(source, 'ready'),
       };
     }
 
@@ -248,7 +249,7 @@ export class CodexProvider implements LLMProvider {
       CODEX_PERMISSION_DECISION_RE.test(rawOutput);
     const authentication = this.authenticationResult(
       source,
-      exitCode === 0 ? 'ready' : authFailure ? 'unusable' : undefined,
+      authFailure ? 'unusable' : 'ready',
     );
 
     return {
@@ -296,9 +297,6 @@ export class CodexProvider implements LLMProvider {
       provider: 'codex',
       source,
       state,
-      ...(state === 'unusable'
-        ? { remediation: 'Update the selected Codex authentication source and retry.' }
-        : {}),
     };
   }
 
