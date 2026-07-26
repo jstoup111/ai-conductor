@@ -77,6 +77,26 @@ export interface ProviderTransitionWarning {
   nextProvider: string;
 }
 
+/**
+ * Resolved provider identity exposed to the per-candidate safety boundary.
+ * It deliberately excludes prompts, session IDs, and authentication material.
+ */
+export interface ProviderCandidate {
+  step: StepName;
+  providerKey: string;
+  model: string;
+  effort: EffortLevel;
+}
+
+/**
+ * Surrounds one resolved provider invocation with preflight and terminal
+ * verification. The executor awaits it before it may accept or fall back.
+ */
+export type WithCandidateSafety = (
+  candidate: ProviderCandidate,
+  invoke: () => Promise<InvokeResult>,
+) => Promise<InvokeResult>;
+
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
   configuredProviders: readonly string[];
@@ -100,6 +120,8 @@ export interface ExecuteProviderCandidatesInput {
     error: unknown,
     attempt: ProviderAttemptMetadata,
   ) => void | Promise<void>;
+  /** Safety boundary for each resolved candidate, after resolution and before fallback. */
+  withCandidateSafety?: WithCandidateSafety;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -120,6 +142,8 @@ export interface ProviderExecutionContext {
   effortOverride?: EffortLevel;
   /** Task-local telemetry passed through the provider-dispatch boundary. */
   taskAttribution?: TaskAttributionInput;
+  /** Candidate-level safety wrapper retained for every provider-aware dispatch. */
+  withCandidateSafety?: WithCandidateSafety;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
@@ -371,6 +395,7 @@ export async function executeProviderCandidates({
   taskAttribution: attributionInput,
   onAttempt,
   onTelemetryError,
+  withCandidateSafety,
   warn,
   options,
   optionsForCandidate,
@@ -405,13 +430,29 @@ export async function executeProviderCandidates({
       effortOverride,
     });
     const candidateOptions = optionsForCandidate?.(providerKey) ?? options;
-    const { result, invokedModel } = await invokeProviderCandidate({
-      providerKey,
-      runtime,
-      sessions,
-      resolved,
-      options: candidateOptions,
-    });
+    let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
+    const invoke = async (): Promise<InvokeResult> => {
+      invocation = await invokeProviderCandidate({
+        providerKey,
+        runtime,
+        sessions,
+        resolved,
+        options: candidateOptions,
+      });
+      return invocation.result;
+    };
+    const result = withCandidateSafety
+      ? await withCandidateSafety(
+          {
+            step,
+            providerKey,
+            model: resolved.model,
+            effort: resolved.effort,
+          },
+          invoke,
+        )
+      : await invoke();
+    const invokedModel = invocation?.invokedModel;
 
     const unavailable = classifyProviderCandidateFailure(result);
     const nextProvider = candidates[index + 1];

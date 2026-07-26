@@ -83,6 +83,66 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('wraps each resolved candidate through safety before fallback advances', async () => {
+    const transcript: string[] = [];
+    const unavailable = (): InvokeResult => ({
+      success: false,
+      output: 'Codex unavailable.',
+      exitCode: 127,
+      providerUnavailable: true,
+      providerUnavailableScope: 'run',
+    });
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', {
+        invoke: vi.fn(async () => {
+          transcript.push('invoke:codex');
+          return unavailable();
+        }),
+        invokeInteractive: vi.fn(async () => {}),
+      }),
+      runtime('claude', {
+        invoke: vi.fn(async () => {
+          transcript.push('invoke:claude');
+          return { success: true, output: 'done', exitCode: 0 };
+        }),
+        invokeInteractive: vi.fn(async () => {}),
+      }),
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await (executeProviderCandidates as unknown as (input: {
+      step: 'build';
+      configuredProviders: readonly string[];
+      runtimes: ProviderRuntimeSet;
+      sessions: ProviderSessionScope;
+      options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+      withCandidateSafety: (candidate: { providerKey: string }, invoke: () => Promise<InvokeResult>) => Promise<InvokeResult>;
+    }) => Promise<InvokeResult>)({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('candidate-session')),
+      options: { prompt: 'Build it.', cwd: '/workspace/feature' },
+      withCandidateSafety: async (candidate, invoke) => {
+        transcript.push(`preflight:${candidate.providerKey}`);
+        try {
+          return await invoke();
+        } finally {
+          transcript.push(`verify-and-teardown:${candidate.providerKey}`);
+        }
+      },
+    });
+
+    expect(transcript).toEqual([
+      'preflight:codex',
+      'invoke:codex',
+      'verify-and-teardown:codex',
+      'preflight:claude',
+      'invoke:claude',
+      'verify-and-teardown:claude',
+    ]);
+  });
+
   it('carries one validated task id through Codex fallback to Claude', async () => {
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: false,

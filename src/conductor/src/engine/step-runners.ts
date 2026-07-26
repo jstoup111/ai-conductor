@@ -43,6 +43,7 @@ import {
   type ExecuteProviderCandidatesInput,
   type ProviderExecutionResult,
   type ProviderExecutionContext,
+  type WithCandidateSafety,
 } from './provider-execution.js';
 import {
   ProviderRuntimeSet,
@@ -349,6 +350,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   private taskAttribution?: ExecuteProviderCandidatesInput['taskAttribution'];
+  private withCandidateSafety?: WithCandidateSafety;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   callCount = 0;
 
@@ -393,6 +395,7 @@ export class DefaultStepRunner implements StepRunner {
     this.providerAttempt =
       options?.providerAttempt ?? options?.providerExecution?.onAttempt;
     this.taskAttribution = options?.providerExecution?.taskAttribution;
+    this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
@@ -672,6 +675,7 @@ export class DefaultStepRunner implements StepRunner {
         modelOverride: opts?.modelOverride ?? this.modelOverride,
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         taskAttribution: this.taskAttribution,
+        withCandidateSafety: this.withCandidateSafety,
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: invocationOptions,
