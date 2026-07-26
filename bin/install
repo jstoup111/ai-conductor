@@ -1070,6 +1070,30 @@ report_selected_provider_readiness() {
   done
 }
 
+# Once the active Codex catalog is established in ~/.agents/skills, remove only
+# exact harness-owned links left at Codex's former discovery location. A
+# symlink is owned only when its resolved target is this checkout's canonical
+# source; files, directories, broken links, and foreign links remain untouched.
+reconcile_legacy_codex_links() {
+  local legacy_dir="${HOME}/.codex/skills"
+  local skill target source current
+
+  for skill in "${SKILLS[@]}"; do
+    target="${legacy_dir}/${skill}"
+    source="${HARNESS_DIR}/skills/${skill}"
+    if [ -L "$target" ]; then
+      current=$(readlink -f "$target" 2>/dev/null || echo "")
+      [ "$current" = "$source" ] && rm -- "$target"
+    fi
+  done
+
+  target="${legacy_dir}/HARNESS.md"
+  if [ -L "$target" ]; then
+    current=$(readlink -f "$target" 2>/dev/null || echo "")
+    [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ] && rm -- "$target"
+  fi
+}
+
 install() {
   guard_worktree_root
 
@@ -1164,6 +1188,8 @@ install() {
       ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink failed"
     fi
   done
+
+  reconcile_legacy_codex_links
 
   if [ "$installed" -gt 0 ] || [ "$updated" -gt 0 ]; then
     ok "Skills: ${installed} installed, ${updated} updated (${#SKILLS[@]} per client)"

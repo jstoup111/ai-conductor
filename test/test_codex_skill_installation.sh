@@ -155,12 +155,15 @@ ln -s "$OLD_CHECKOUT/HARNESS.md" "$UPDATE_HOME/.agents/skills/HARNESS.md"
 ln -s "$OLD_CHECKOUT/skills/tdd" "$UPDATE_HOME/.agents/skills/tdd"
 ln -s "$OLD_CHECKOUT/skills/retired-workflow" "$UPDATE_HOME/.agents/skills/retired-workflow"
 ln -s "$CHECKOUT/skills/tdd" "$UPDATE_HOME/.codex/skills/tdd"
+ln -s "$CHECKOUT/HARNESS.md" "$UPDATE_HOME/.codex/skills/HARNESS.md"
 
 run_install "$UPDATE_HOME" --update --providers codex >"$TMP_ROOT/update-1.out" 2>&1
 check 'update refreshes a stale current-scope harness skill to this checkout' \
   test "$(readlink -f "$UPDATE_HOME/.agents/skills/tdd")" = "$CHECKOUT/skills/tdd"
 check 'update removes a recognized harness-owned legacy duplicate' \
   test ! -e "$UPDATE_HOME/.codex/skills/tdd"
+check 'update removes recognized harness-owned legacy instructions' \
+  test ! -e "$UPDATE_HOME/.codex/skills/HARNESS.md"
 check 'updated catalog matches the complete current source catalog' \
   owned_catalog_is_current "$UPDATE_HOME"
 check 'update removes an obsolete current-scope skill owned by the prior harness checkout' \
