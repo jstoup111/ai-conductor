@@ -21,6 +21,7 @@ import { createFileQueue } from '../../../../src/engine/engineer/intake/queue.js
 import { createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
 
 const exec = promisify(execFileCb);
+const noOpGit = async () => ({ stdout: '', stderr: '' });
 
 // ── shared fake gh ─────────────────────────────────────────────────────────────
 
@@ -206,6 +207,7 @@ describe('T26 cross-repo isolation through the full route-to-target path', () =>
       route: routeTo('o/b'),
       io,
       gh,
+      git: noOpGit,
       decide: decideStub(),
       engineerDir,
       sources: [adapter],
@@ -245,6 +247,7 @@ describe('T29 full lifecycle: capture → done → re-poll no-op → reopen', ()
       route: routeTo('o/b'),
       io,
       gh,
+      git: noOpGit,
       decide: decideStub(),
       engineerDir,
       sources: [adapter],

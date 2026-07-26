@@ -61,6 +61,8 @@ function makeGh(prUrl: string) {
   return { gh, calls };
 }
 
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 function makeTestDecide() {
   return async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string }) => {
     if (ctx.step === 'brainstorm') return { approved: true, artifact: `# PRD: ${ctx.idea}\n\nOk.\n` };
@@ -178,6 +180,7 @@ describe('FR-31 poll-on-launch: process oldest, leave the rest queued', () => {
       route,
       io,
       gh,
+      git: noOpGit,
       decide: makeTestDecide(),
       engineerDir,
       sources: [source],
@@ -227,6 +230,7 @@ describe('FR-31 chat fallback when the inbox is empty after poll', () => {
       route,
       io,
       gh,
+      git: noOpGit,
       decide: makeTestDecide(),
       engineerDir,
       sources: [source],
@@ -256,7 +260,7 @@ describe('FR-31 chat fallback when the inbox is empty after poll', () => {
       envelope('o/a#3', 'idea three', '2026-06-27T00:00:03.000Z'),
     ]);
 
-    const summary = await runEngineerMode({ route, io, gh, decide: makeTestDecide(), engineerDir, sources: [source], queue });
+    const summary = await runEngineerMode({ route, io, gh, git: noOpGit, decide: makeTestDecide(), engineerDir, sources: [source], queue });
 
     expect(summary.ideasProcessed).toBe(1);
     // Two remain queued.
@@ -295,6 +299,7 @@ describe('D5: envelope size label seeds the recommended tier', () => {
       route,
       io,
       gh,
+      git: noOpGit,
       decide: makeTestDecide(),
       assessComplexity,
       engineerDir,
@@ -331,6 +336,7 @@ describe('D5: envelope size label seeds the recommended tier', () => {
       route,
       io,
       gh,
+      git: noOpGit,
       decide: makeTestDecide(),
       assessComplexity,
       engineerDir,

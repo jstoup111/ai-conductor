@@ -139,6 +139,8 @@ function baseOpts(extra: Partial<DispatchEngineerOpts>): DispatchEngineerOpts {
   return { registryPath, engineerDir, print: () => {}, printErr: () => {}, ...extra };
 }
 
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 const envelope = (sourceRef: string, text: string) =>
   parseEnvelope({ id: sourceRef, source: 'github-issues', sourceRef, text, status: 'pending', receivedAt: '2026-06-27T00:00:00.000Z' });
 
@@ -412,7 +414,7 @@ describe('write-back via --source-ref', () => {
 
     const code = await dispatchEngineer(
       { kind: 'handoff', project: 'target-repo', branch, worktree: wt.worktreePath, sourceRef: 'target-repo#7' },
-      baseOpts({ gh, ensureRunningLaunch: () => {} }),
+      baseOpts({ gh, git: noOpGit, ensureRunningLaunch: () => {} }),
     );
     expect(code).toBe(0);
     // Done comment with the PR URL + label applied.
