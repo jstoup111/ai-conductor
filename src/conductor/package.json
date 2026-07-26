@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
-    "test": "vitest run --reporter=dot --silent",
+    "test": "vitest run --reporter=dot --silent --slowTestThreshold=1800000",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
