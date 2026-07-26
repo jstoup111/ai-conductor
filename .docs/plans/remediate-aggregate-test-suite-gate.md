@@ -97,3 +97,20 @@ do not change production rebase or finish-fence logic.
 **Verify:**
 
 `npx vitest run test/engine/rebase-translate-acceptance.test.ts`
+
+### Task rem-test-rebase-fixture-tail-01: Bound rebase guard and resolver fixtures at rebase
+
+**Files likely touched:**
+
+- `src/conductor/test/engine/merged-pr-guard-rebase.test.ts`
+- `src/conductor/test/engine/rebase-resolution-wiring.test.ts`
+
+**Dependencies:** `rem-test-rebase-translation-tail-01`
+
+Keep each real daemon-mode `runRebaseStep` invocation explicitly targeted at `rebase`, while
+pre-resolving its unrelated downstream `finish` step. Preserve the merged-PR and conflict-resolution
+assertions; do not change production rebase or publication-fence behavior.
+
+**Verify:**
+
+`npx vitest run test/engine/merged-pr-guard-rebase.test.ts test/engine/rebase-resolution-wiring.test.ts`
