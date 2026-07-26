@@ -1002,6 +1002,17 @@ describe('conductor auth-park: daemon-token mode', () => {
   );
 
   it('parks a selected-source Codex completion rejection without provider fallback', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build_review: 'done',
+      wiring_check: 'done',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+      retro: 'done',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState);
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'ready',
     });

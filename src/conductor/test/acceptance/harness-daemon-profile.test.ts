@@ -135,6 +135,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
           // credentials. Keep the self-host path active while making auth
           // readiness deterministic on developer machines and clean CI hosts.
           build_auth: { mode: 'api-key' },
+        },
         steps: {
           manual_test: { disable: true },
           architecture_review_as_built: { disable: true },
