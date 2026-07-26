@@ -1,7 +1,27 @@
 import { describe, expect, it } from 'vitest';
-import { createSafetyFailureDiagnostic } from '../../src/engine/safety-diagnostics.js';
+import { createSafetyFailureDiagnostic, redactSafetyText } from '../../src/engine/safety-diagnostics.js';
 
 describe('createSafetyFailureDiagnostic', () => {
+  it('redacts credential/config canaries and raw provider-body labels before output', () => {
+    const canary = 'CANARY_SECRET_907';
+    const redacted = redactSafetyText(
+      `Authorization: Bearer ${canary}; api_key=${canary}; raw body: ${canary}`,
+    );
+
+    expect(redacted).not.toContain(canary);
+  });
+
+  it.each([
+    ['log', 'provider log: CANARY_SECRET_907'],
+    ['attempt metadata', 'attempt reason: token=CANARY_SECRET_907'],
+    ['HALT/audit', 'audit body: CANARY_SECRET_907'],
+    ['provider error', 'Authorization: Bearer CANARY_SECRET_907'],
+    ['repository status', 'git status detail: CANARY_SECRET_907'],
+    ['partial cleanup', 'cleanup error: credential=CANARY_SECRET_907'],
+  ])('removes the canary from a %s diagnostic', (_surface, text) => {
+    expect(redactSafetyText(text)).not.toContain('CANARY_SECRET_907');
+  });
+
   it('reports known provider/protection failures with sanitized scope and bounded recovery', () => {
     expect(createSafetyFailureDiagnostic({
       provider: 'codex',

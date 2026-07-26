@@ -25,4 +25,11 @@ describe('writeSelfHostHalt classification', () => {
     const cls = await readFile(join(projectRoot, HALT_CLASS_MARKER), 'utf-8');
     expect(cls.trim()).toBe('needs-human');
   });
+
+  it('redacts a safety canary before persisting the HALT body', async () => {
+    const canary = 'CANARY_SECRET_907';
+    await writeSelfHostHalt(projectRoot, `cleanup failed: token=${canary}`);
+
+    await expect(readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8')).resolves.not.toContain(canary);
+  });
 });

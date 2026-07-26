@@ -84,6 +84,39 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('redacts a safety canary from attempt metadata, fallback warnings, and the terminal provider error', async () => {
+    const canary = 'CANARY_SECRET_907';
+    const provider = {
+      invoke: vi.fn(async (): Promise<InvokeResult> => ({
+        success: false,
+        output: `raw body: Authorization: Bearer ${canary}`,
+        exitCode: 127,
+        providerUnavailable: true,
+        providerUnavailableScope: 'run',
+      })),
+      invokeInteractive: vi.fn(async () => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', provider),
+      runtime('claude', provider),
+    ]);
+    const metadata: unknown[] = [];
+    const warnings: unknown[] = [];
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex', 'claude'],
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')),
+      options: { prompt: 'build', cwd: '/workspace' },
+      onAttempt: async (_step, attempt) => { metadata.push(attempt); },
+      warn: async (message, transition) => { warnings.push(message, transition); },
+    });
+
+    expect(JSON.stringify({ result, metadata, warnings })).not.toContain(canary);
+  });
+
   it('keeps declared diagnostic-only provider-gap messages stable across retry and resume', () => {
     const gap = {
       provider: 'codex',

@@ -28,6 +28,15 @@ function knownText(value: string | undefined): value is string {
   return value?.trim().length !== 0;
 }
 
+/** Remove credential/config values and opaque provider bodies at the safety boundary. */
+export function redactSafetyText(value: string): string {
+  return value
+    .replace(/\b(raw\s+body|body)\s*:\s*[^\n]*/gi, '$1: [REDACTED]')
+    .replace(/\bauthorization\s*:\s*bearer\s+[^\s,;]+/gi, 'Authorization: Bearer [REDACTED]')
+    .replace(/\b(api[_-]?key|token|secret|password|credential)\s*([=:])\s*(?:"[^"]*"|'[^']*'|[^\s,;]+)/gi, '$1$2[REDACTED]')
+    .replace(/\bCANARY_SECRET_[A-Za-z0-9_]+\b/g, '[REDACTED]');
+}
+
 function unverifiableDiagnostic(): SafetyFailureDiagnostic {
   return {
     provider: null,

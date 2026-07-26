@@ -30,6 +30,7 @@ import {
   type TaskAttributionInput,
 } from './task-attribution.js';
 import type { SafetyDiagnosticGap } from './safety-boundary.js';
+import { redactSafetyText } from './safety-diagnostics.js';
 
 export interface ProviderUnavailableClassification {
   scope: 'run';
@@ -376,6 +377,7 @@ export function buildProviderAttemptMetadata({
   nextProvider,
 }: BuildProviderAttemptMetadataInput): ProviderAttemptMetadata {
   const invoked = result.providerInvocationSkipped !== true;
+  const failureReason = redactSafetyText(unavailable?.reason ?? result.output ?? 'Provider attempt failed.');
   return {
     provider: providerKey,
     ...(taskId ? { taskId } : {}),
@@ -389,10 +391,10 @@ export function buildProviderAttemptMetadata({
         ? 'success'
         : 'failure',
     ...(!result.success
-      ? { reason: unavailable?.reason ?? result.output }
+      ? { reason: failureReason }
       : {}),
     ...(unavailable && nextProvider
-      ? { fallbackReason: unavailable.reason }
+      ? { fallbackReason: redactSafetyText(unavailable.reason) }
       : {}),
     invoked,
   };
@@ -478,12 +480,15 @@ export async function executeProviderCandidates({
     const invokedModel = invocation?.invokedModel;
 
     const unavailable = classifyProviderCandidateFailure(result);
+    const safeResult = result.output === undefined
+      ? result
+      : { ...result, output: redactSafetyText(result.output) };
     const nextProvider = candidates[index + 1];
     const attemptMetadata = buildProviderAttemptMetadata({
       providerKey,
       taskId,
       taskAttributionDiagnostic,
-      result,
+      result: safeResult,
       resolvedModel: resolved.model,
       invokedModel,
       unavailable,
@@ -503,7 +508,7 @@ export async function executeProviderCandidates({
     }
     if (!unavailable) {
       return {
-        ...result,
+        ...safeResult,
         preferredProvider,
         actualProvider: providerKey,
         resolvedModel: invokedModel ?? resolved.model,
@@ -531,11 +536,11 @@ export async function executeProviderCandidates({
       type: 'provider_fallback',
       step,
       failedProvider: providerKey,
-      reason: unavailable.reason,
+      reason: redactSafetyText(unavailable.reason),
       nextProvider,
     };
     await warn?.(
-      `Step ${step}: provider ${providerKey} unavailable (${unavailable.reason}); falling back to ${nextProvider}.`,
+      `Step ${step}: provider ${providerKey} unavailable (${redactSafetyText(unavailable.reason)}); falling back to ${nextProvider}.`,
       transition,
     );
   }
