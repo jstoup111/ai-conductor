@@ -1093,6 +1093,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await conductor.run();
 
     expect(parked).toHaveLength(0);
+  });
 
   it('uses the injected full-suite verifier at the aggregate test boundary', async () => {
     const fullSuiteVerifier = fullSuiteVerifierStub();
