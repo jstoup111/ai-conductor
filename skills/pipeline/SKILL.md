@@ -61,7 +61,9 @@ instructive stderr — fix the dispatch prompt's first line and redispatch. If a
 task's stamp is already present (overlap), the hook still flips the new row but clears
 the stamp file, so the commit-msg hook abstains from attribution rather than guessing —
 never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
-subagent return iff its content still matches that dispatch's id. The selected host agent orchestrates
+subagent return iff its content still matches that dispatch's id. Other supported hosts use their
+native task-attribution mechanism to preserve the same marker, state, and recovery contract.
+The selected host agent orchestrates
 the task through these steps:
 
 ```
@@ -73,7 +75,7 @@ PLAN VALIDATION (at pipeline start):
 DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
   Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
 
-0. DISPATCH MARKER — Before dispatching, ensure the subagent prompt's FIRST LINE will be
+0. DISPATCH MARKER — Before dispatching, ensure the implementer prompt's FIRST LINE will be
                    `Task: <id>` (bare plan header id, e.g. `Task: 9`, never `task-9`). This is
                    the contract the session hook enforces mechanically (see above) — you do not
                    run any CLI command for this step. If the hook blocks the dispatch (exit 2,
@@ -87,18 +89,18 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   with scoped context only. In Claude Code, dispatch through the Agent tool with
                   model="sonnet"; other supported hosts use their native model-selection mechanism.
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
-                  Subagent includes it as a trailer in all commits (including refactors); subagent amends before PASS
-                  if the trailer is malformed. Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
-3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
-4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
-5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
+                  Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
+                  if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
+4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
+5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
                   telemetry: it routes the build→build_review handoff, but `build_review`
                   judges/derives actual completion from a plan-vs-diff comparison (union of
                   trailer-tagged and diff-resolved tasks); the orchestrator never writes
                   `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
-6. DONE         — After the subagent's commit lands on the branch, the PostToolUse session hook
-                  (same matcher as step 0/2) removes `.pipeline/current-task` once the subagent
+6. DONE         — After the implementer's commit lands on the branch, the host-native attribution mechanism
+                  (the Claude Code PostToolUse hook uses the same matcher as step 0/2) removes `.pipeline/current-task` once the implementer
                   returns, iff its content still matches this dispatch's id — no CLI invocation
                   needed. It never writes `completed`; the `Task: <id>` trailer verified in step 5
                   only routes the handoff to `build_review`, which is the actual completion
@@ -260,8 +262,8 @@ on top of the just-completed TDD agent's API usage.
 At batch boundaries, dispatch an evaluator through the selected host's available subagent facility (see the model table below for the right
 model per tier and batch position) with **fresh, scoped context** (no shared state with the
 generator). The evaluator dispatch prompt's FIRST LINE MUST be exactly `Task: none` — the
-session hook (see Per-Task Execution) enforces this marker on every Agent-tool dispatch,
-evaluator included; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
+host-native attribution mechanism (the Claude Code session hook on Agent-tool dispatches) enforces
+this marker; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
 - The named **`BATCH_AFFECTED_TESTS` union and its result summary** (pass/fail counts + failure
