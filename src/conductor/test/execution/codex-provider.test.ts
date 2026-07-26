@@ -53,6 +53,52 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('prepares only the selected API-key auth for an isolated Codex home', async () => {
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = 'sk-self-host-selected';
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
+    try {
+      const prepared = await apiKeyProvider.prepareSelfHostAuth!({
+        provider: 'codex',
+        homeDir: '/tmp/isolated-codex-home',
+      });
+      expect(prepared).toEqual({
+        env: { CODEX_API_KEY: 'sk-self-host-selected' },
+        args: [],
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it('keeps cached-login selection opaque while launching only through the supplied isolated home', async () => {
+    const priorKey = process.env.CODEX_API_KEY;
+    delete process.env.CODEX_API_KEY;
+    const cachedProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('cached-login')), '/resolved/codex');
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('isolated'), exitCode: 0 } as any);
+    try {
+      expect(await cachedProvider.prepareSelfHostAuth!({ provider: 'codex', homeDir: '/tmp/codex-home' }))
+        .toEqual({ args: [] });
+      await cachedProvider.invoke({
+        ...baseOptions,
+        selfHost: {
+          executable: '/resolved/codex',
+          env: { CODEX_HOME: '/tmp/codex-home' },
+          args: ['--config', 'project_doc_max_bytes=0'],
+          teardown: async () => {},
+        },
+      });
+      const [command, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      expect(command).toBe('/resolved/codex');
+      expect(args).toEqual(expect.arrayContaining(['--config', 'project_doc_max_bytes=0']));
+      expect(options.env).toEqual({ CODEX_HOME: '/tmp/codex-home' });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
   it('runs a fresh Codex exec with its fixed unattended policy, JSONL, model, cwd, and stdin prompt delivery', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('No-op complete.'), exitCode: 0 } as any);
 

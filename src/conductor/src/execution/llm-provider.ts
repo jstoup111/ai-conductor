@@ -31,6 +31,24 @@ export interface AuthenticationReadiness {
   remediation?: string;
 }
 
+/** Opaque, child-only invocation settings prepared by a selected provider. */
+export interface SelfHostInvocation {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  args: readonly string[];
+  teardown(): Promise<void>;
+}
+
+export interface SelfHostAuthPreparation {
+  env?: NodeJS.ProcessEnv;
+  args: readonly string[];
+}
+
+export interface SelfHostAuthContext {
+  provider: 'codex';
+  homeDir: string;
+}
+
 export interface InvokeResult {
   success: boolean;
   output: string;
@@ -110,12 +128,18 @@ export interface InvokeOptions {
    * omitted, the subprocess inherits the parent process cwd.
    */
   cwd?: string;
+  /** Set only for the resolved self-host provider candidate. */
+  selfHost?: SelfHostInvocation;
 }
 
 export interface LLMProvider {
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;
+  /** Optional provider-owned selected-auth handoff for an isolated self-host home. */
+  prepareSelfHostAuth?(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation>;
+  /** Resolve the provider executable before a child home overrides provider state. */
+  resolveSelfHostExecutable?(): Promise<string>;
   /**
    * Built-in providers return classified completion after their streamed
    * process exits. Legacy custom providers may keep returning void; absence of

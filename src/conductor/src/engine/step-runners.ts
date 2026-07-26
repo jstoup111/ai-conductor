@@ -351,6 +351,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   private taskAttribution?: ExecuteProviderCandidatesInput['taskAttribution'];
   private withCandidateSafety?: WithCandidateSafety;
+  private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   callCount = 0;
 
@@ -396,6 +397,7 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerAttempt ?? options?.providerExecution?.onAttempt;
     this.taskAttribution = options?.providerExecution?.taskAttribution;
     this.withCandidateSafety = options?.providerExecution?.withCandidateSafety;
+    this.prepareCandidateSelfHost = options?.providerExecution?.prepareCandidateSelfHost;
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
@@ -677,6 +679,7 @@ export class DefaultStepRunner implements StepRunner {
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         taskAttribution: this.taskAttribution,
         withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+        prepareCandidateSelfHost: this.prepareCandidateSelfHost,
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: invocationOptions,

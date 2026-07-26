@@ -1,6 +1,7 @@
 import type {
   InvokeOptions,
   InvokeResult,
+  SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ComplexityTier, StepName } from '../types/index.js';
@@ -121,6 +122,12 @@ export type WithCandidateSafety = (
   invoke: () => Promise<InvokeResult>,
 ) => Promise<InvokeResult>;
 
+/** Creates a child-only invocation context after the actual candidate resolves. */
+export type PrepareCandidateSelfHost = (
+  candidate: ProviderCandidate,
+  runtime: ProviderRuntime,
+) => Promise<SelfHostInvocation | undefined>;
+
 export interface ExecuteProviderCandidatesInput {
   step: StepName;
   configuredProviders: readonly string[];
@@ -146,6 +153,7 @@ export interface ExecuteProviderCandidatesInput {
   ) => void | Promise<void>;
   /** Safety boundary for each resolved candidate, after resolution and before fallback. */
   withCandidateSafety?: WithCandidateSafety;
+  prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   warn?: (
     message: string,
     transition: ProviderTransitionWarning,
@@ -168,6 +176,7 @@ export interface ProviderExecutionContext {
   taskAttribution?: TaskAttributionInput;
   /** Candidate-level safety wrapper retained for every provider-aware dispatch. */
   withCandidateSafety?: WithCandidateSafety;
+  prepareCandidateSelfHost?: PrepareCandidateSelfHost;
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
@@ -421,6 +430,7 @@ export async function executeProviderCandidates({
   onAttempt,
   onTelemetryError,
   withCandidateSafety,
+  prepareCandidateSelfHost,
   warn,
   options,
   optionsForCandidate,
@@ -457,14 +467,25 @@ export async function executeProviderCandidates({
     const candidateOptions = optionsForCandidate?.(providerKey) ?? options;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     const invoke = async (): Promise<InvokeResult> => {
-      invocation = await invokeProviderCandidate({
+      const candidate = {
+        step,
         providerKey,
-        runtime,
-        sessions,
-        resolved,
-        options: candidateOptions,
-      });
-      return invocation.result;
+        model: resolved.model,
+        effort: resolved.effort,
+      };
+      const selfHost = await prepareCandidateSelfHost?.(candidate, runtime);
+      try {
+        invocation = await invokeProviderCandidate({
+          providerKey,
+          runtime,
+          sessions,
+          resolved,
+          options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+        });
+        return invocation.result;
+      } finally {
+        await selfHost?.teardown();
+      }
     };
     const result = withCandidateSafety
       ? await withCandidateSafety(

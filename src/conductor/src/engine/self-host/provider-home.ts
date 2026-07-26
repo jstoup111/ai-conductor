@@ -26,6 +26,8 @@ export const realProviderHomeFs: ProviderHomeFs = {
 export interface ProviderHomeEnvironment {
   /** Additional child-only environment values. */
   env?: NodeJS.ProcessEnv;
+  /** Provider-owned bounded invocation arguments; never credential material. */
+  args?: readonly string[];
 }
 
 export interface ProviderHomeContext {
@@ -47,6 +49,7 @@ export interface ProviderHome {
   readonly provider: SelfHostProviderId;
   readonly homeDir: string;
   childEnv(): NodeJS.ProcessEnv;
+  childArgs(): readonly string[];
   teardown(): Promise<void>;
 }
 
@@ -84,6 +87,7 @@ class ThrowawayProviderHome implements ProviderHome {
     readonly homeDir: string,
     private readonly parentEnv: NodeJS.ProcessEnv,
     private readonly additions: NodeJS.ProcessEnv,
+    private readonly args: readonly string[],
     private readonly fs: ProviderHomeFs,
   ) {}
 
@@ -95,6 +99,10 @@ class ThrowawayProviderHome implements ProviderHome {
     delete env.CLAUDE_CODE_OAUTH_TOKEN;
     env[HOME_VARIABLE[this.provider]] = this.homeDir;
     return { ...env, ...this.additions };
+  }
+
+  childArgs(): readonly string[] {
+    return this.args;
   }
 
   async teardown(): Promise<void> {
@@ -138,6 +146,7 @@ export async function provisionProviderHome(
       homeDir,
       parentEnv,
       { ...auth?.env, ...controls?.env },
+      [...(auth?.args ?? []), ...(controls?.args ?? [])],
       fs,
     );
   } catch (error) {

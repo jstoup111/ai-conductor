@@ -84,6 +84,35 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('applies and tears down an isolated self-host context only for the resolved Codex candidate', async () => {
+    const codex = {
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => ({
+        success: true,
+        output: options.selfHost?.env.CODEX_HOME ?? 'missing-home',
+        exitCode: 0,
+      })),
+      invokeInteractive: vi.fn(async () => {}),
+    };
+    const claude = { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}) };
+    const runtimes = new ProviderRuntimeSet([runtime('codex', codex), runtime('claude', claude)]);
+    const teardown = vi.fn(async () => {});
+    const prepare = vi.fn(async () => ({
+      executable: '/resolved/codex', env: { CODEX_HOME: '/tmp/isolated-codex' }, args: [], teardown,
+    }));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build', configuredProviders: ['codex', 'claude'], runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('session')),
+      options: { prompt: 'build', cwd: '/workspace' }, prepareCandidateSelfHost: prepare,
+    });
+
+    expect(result.output).toBe('/tmp/isolated-codex');
+    expect(prepare).toHaveBeenCalledWith(expect.objectContaining({ providerKey: 'codex' }), expect.anything());
+    expect(claude.invoke).not.toHaveBeenCalled();
+    expect(teardown).toHaveBeenCalledOnce();
+  });
+
   it('redacts a safety canary from attempt metadata, fallback warnings, and the terminal provider error', async () => {
     const canary = 'CANARY_SECRET_907';
     const provider = {

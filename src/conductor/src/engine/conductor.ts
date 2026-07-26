@@ -1806,7 +1806,43 @@ export class Conductor {
     }
 
     if (preferredBuildProvider === 'codex') {
-      return this.stepRunner.run(name, state, { retryReason: retryHint });
+      const priorPreparation = this.providerExecution?.prepareCandidateSelfHost;
+      if (this.providerExecution) {
+        this.providerExecution.prepareCandidateSelfHost = async (candidate, runtime) => {
+          if (candidate.providerKey !== 'codex') {
+            return priorPreparation?.(candidate, runtime);
+          }
+          const prepareAuth = runtime.provider.prepareSelfHostAuth;
+          const resolveExecutable = runtime.provider.resolveSelfHostExecutable;
+          const provisionHome = this.guardrails.provisionProviderHome;
+          if (!prepareAuth || !resolveExecutable || !provisionHome) {
+            throw new Error('Codex self-host isolation is unavailable for the resolved provider candidate.');
+          }
+          // Resolve before provider-home provisioning can introduce CODEX_HOME.
+          const executable = await resolveExecutable.call(runtime.provider);
+          const home = await provisionHome({
+            provider: {
+              id: 'codex',
+              prepareSelfHostAuth: (context) => prepareAuth.call(runtime.provider, {
+                provider: 'codex',
+                homeDir: context.homeDir,
+              }),
+            },
+            worktreeRoot: this.projectRoot,
+          });
+          return {
+            executable,
+            env: home.childEnv(),
+            args: home.childArgs(),
+            teardown: () => home.teardown(),
+          };
+        };
+      }
+      try {
+        return await this.stepRunner.run(name, state, { retryReason: retryHint });
+      } finally {
+        if (this.providerExecution) this.providerExecution.prepareCandidateSelfHost = priorPreparation;
+      }
     }
 
     const sh = selfHostConfig;

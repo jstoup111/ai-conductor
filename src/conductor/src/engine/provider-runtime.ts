@@ -1,6 +1,8 @@
 import type {
   AuthenticationReadiness,
   LLMProvider,
+  SelfHostAuthContext,
+  SelfHostAuthPreparation,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import {
@@ -58,6 +60,15 @@ export class ProviderRuntimeSet {
       return undefined;
     }
     return () => runtime.provider.readiness!();
+  }
+
+  selfHostAuthFor(
+    key: string,
+  ): ((context: SelfHostAuthContext) => Promise<SelfHostAuthPreparation>) | undefined {
+    const runtime = this.runtimes.get(key);
+    return runtime?.provider.prepareSelfHostAuth && runtime.provider.resolveSelfHostExecutable
+      ? (context) => runtime.provider.prepareSelfHostAuth!(context)
+      : undefined;
   }
 }
 
