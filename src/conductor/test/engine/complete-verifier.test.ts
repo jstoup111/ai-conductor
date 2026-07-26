@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -8,12 +8,39 @@ import {
 } from '../../src/engine/complete-verifier.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
 
+const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
+  slug: string;
+  implementationPr: string;
+  candidateCommit: string;
+}) => ({
+  kind: 'valid' as const,
+  slug: input.slug,
+  pr: input.implementationPr,
+  recordPath: `.docs/shipped/${input.slug}.md`,
+  hash: 'test-hash',
+  commit: input.candidateCommit,
+}));
+
+vi.mock('../../src/engine/shipment-evidence.js', () => ({
+  evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>
+    evaluateShipmentEvidenceSpy(...args),
+}));
+
 describe('engine/complete-verifier', () => {
   let dir: string;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'verify-test-'));
     await mkdir(join(dir, '.pipeline'), { recursive: true });
+    evaluateShipmentEvidenceSpy.mockClear();
+    evaluateShipmentEvidenceSpy.mockImplementation(async (input) => ({
+      kind: 'valid' as const,
+      slug: input.slug,
+      pr: input.implementationPr,
+      recordPath: `.docs/shipped/${input.slug}.md`,
+      hash: 'test-hash',
+      commit: input.candidateCommit,
+    }));
   });
 
   afterEach(async () => {
@@ -66,7 +93,14 @@ describe('engine/complete-verifier', () => {
     await writeFile(join(dir, '.docs/retros/2026-05-01-add-foo.md'), '# Retro\n');
     await writeFile(join(dir, '.pipeline/finish-choice'), 'pr');
 
-    const result = await verifyCompleteState(dir);
+    evaluateShipmentEvidenceSpy.mockResolvedValueOnce({
+      kind: 'refusal',
+      code: 'shipped-record-missing',
+      expected: '.docs/shipped/add-foo.md',
+      observed: null,
+    });
+
+    const result = await verifyWithCurrentSuite();
 
     expect(result).toMatchObject({ ok: false, failedSteps: ['finish'] });
   });
