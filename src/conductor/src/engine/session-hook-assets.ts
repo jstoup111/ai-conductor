@@ -151,8 +151,9 @@ export const POST_DISPATCH_HOOK = [
   '#!/bin/bash',
   'set -e',
   '',
-  '# Task-local telemetry is activated at dispatch and retired only by the',
-  '# task authority. Post-dispatch is intentionally a no-op.',
+  '# An explicit terminal-event owner may retire its supplied validated task',
+  '# telemetry through the engine. Post-dispatch is intentionally a no-op so',
+  '# it cannot mutate shared state or treat a dispatch return as completion.',
   'exit 0',
 ].join('\n');
 

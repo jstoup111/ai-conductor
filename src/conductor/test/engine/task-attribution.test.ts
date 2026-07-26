@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activateTaskTelemetry } from '../../src/engine/task-attribution.js';
+import { activateTaskTelemetry, retireTaskTelemetry } from '../../src/engine/task-attribution.js';
 
 describe('validateTaskAttribution', () => {
   it('preserves only exact task-local ids from the current seeded plan', async () => {
@@ -37,4 +37,20 @@ describe('activateTaskTelemetry', () => {
       { taskId: '2', context: { provider: 'codex' } },
     ]);
   });
+});
+
+describe('retireTaskTelemetry', () => {
+  it.each(['completed', 'failed', 'cancelled', 'interrupted'] as const)(
+    'retires only the matching task after it %s',
+    (terminalReason) => {
+      const activeTasks = [
+        { taskId: '7', context: { provider: 'claude', attempt: 1 } },
+        { taskId: '9', context: { provider: 'codex', attempt: 2 } },
+      ];
+
+      expect(retireTaskTelemetry(activeTasks, { taskId: '7', terminalReason })).toEqual([
+        { taskId: '9', context: { provider: 'codex', attempt: 2 } },
+      ]);
+    },
+  );
 });

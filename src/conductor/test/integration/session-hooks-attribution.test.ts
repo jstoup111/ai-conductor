@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { retireTaskTelemetry } from '../../src/engine/task-attribution.js';
 
 // END-TO-END acceptance spec for #477 (Story 5: overlap guard clears the
 // stamp so #452's commit hooks abstain). This chains TWO independently
@@ -163,6 +164,28 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     expect(post.code).toBe(0);
 
     expect(await currentTaskContent()).toBeNull();
+    const status = await readTaskStatus();
+    expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
+    expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
+  });
+
+  it('keeps terminal telemetry retirement task-local after the post-dispatch hook abstains', async () => {
+    await runHook(preHookPath, 'PreToolUse', 'Task: 7');
+    await runHook(preHookPath, 'PreToolUse', 'Task: 9');
+
+    const post = await runHook(postHookPath, 'PostToolUse', 'Task: 7');
+    expect(post.code).toBe(0);
+
+    expect(
+      retireTaskTelemetry(
+        [
+          { taskId: '7', context: { provider: 'claude' } },
+          { taskId: '9', context: { provider: 'codex' } },
+        ],
+        { taskId: '7', terminalReason: 'completed' },
+      ),
+    ).toEqual([{ taskId: '9', context: { provider: 'codex' } }]);
+
     const status = await readTaskStatus();
     expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
     expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');

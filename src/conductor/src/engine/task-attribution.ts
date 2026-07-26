@@ -19,6 +19,15 @@ export interface ActiveTaskTelemetry {
   context: Readonly<Record<string, unknown>>;
 }
 
+/** Terminal lifecycle outcomes that retire advisory task telemetry. */
+export type TaskTerminalReason = 'completed' | 'failed' | 'cancelled' | 'interrupted';
+
+/** A terminal event whose task id has already passed plan-local validation. */
+export interface TaskTelemetryRetirement {
+  taskId: string;
+  terminalReason: TaskTerminalReason;
+}
+
 const TASK_ID = new RegExp(`^${TASK_ID_PATTERN}$`);
 
 function sanitizedTaskId(value: unknown): string {
@@ -52,4 +61,16 @@ export function activateTaskTelemetry(
   task: ActiveTaskTelemetry,
 ): ActiveTaskTelemetry[] {
   return activeTasks.some(({ taskId }) => taskId === task.taskId) ? [...activeTasks] : [...activeTasks, task];
+}
+
+/**
+ * Retires only the task identified by an already-validated terminal event.
+ * This is deliberately a pure telemetry transition: it grants no mutation
+ * authority and does not determine task completion.
+ */
+export function retireTaskTelemetry(
+  activeTasks: readonly ActiveTaskTelemetry[],
+  retirement: TaskTelemetryRetirement,
+): ActiveTaskTelemetry[] {
+  return activeTasks.filter(({ taskId }) => taskId !== retirement.taskId);
 }
