@@ -179,7 +179,11 @@ describe('test_suite native gate loop', () => {
       },
     });
 
-    await conductor.run();
+    // This assertion targets the native verifier seam itself. A synthetic
+    // all-success conductor run would continue into the unrelated SHIP
+    // convergence loop after the verifier completes.
+    await (conductor as unknown as { runTestSuiteStep: () => Promise<unknown> })
+      .runTestSuiteStep();
 
     expect(observed).toEqual([
       {
