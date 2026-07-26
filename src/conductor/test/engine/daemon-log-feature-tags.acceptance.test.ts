@@ -30,8 +30,12 @@ function recordDaemonOutput() {
   const live: string[] = [];
   const persisted: string[] = [];
   const baseLog: FeatureLogger = (message) => {
-    live.push(`[daemon] ${message}`);
-    persisted.push(daemonLog.formatDaemonLogLine(`[daemon] ${message}`, new Date(0)));
+    // Exercise the same daemon-line composition used by runDaemonMode before
+    // observing either sink. A callback-only local prefix would let this
+    // acceptance suite pass even if the live daemon tee remained incorrect.
+    const line = daemonLog.formatDaemonActivityLine(message);
+    live.push(line);
+    persisted.push(daemonLog.formatDaemonLogLine(line, new Date(0)));
   };
   return { live, persisted, baseLog };
 }
@@ -76,7 +80,7 @@ describe('acceptance: daemon log feature tags', () => {
   it('leaves repository-global lines untagged and preserves prefix-like feature content as content', () => {
     const output = recordDaemonOutput();
     output.baseLog('global scan complete');
-    const message = '[daemon][other-feature] subprocess output';
+    const message = '[daemon-logs-tag-current] [daemon][other-feature] subprocess output';
     featureLogger('daemon-logs-tag-current', output.baseLog)(message);
 
     expect(output.live).toEqual([
@@ -93,7 +97,7 @@ describe('acceptance: daemon log feature tags', () => {
       const sink = await daemonLog.openDaemonLog(repo);
       const live: string[] = [];
       const baseLog: FeatureLogger = (message) => {
-        const line = `[daemon] ${message}`;
+        const line = daemonLog.formatDaemonActivityLine(message);
         live.push(line);
         sink.write(daemonLog.formatDaemonLogLine(line, new Date(0)));
       };

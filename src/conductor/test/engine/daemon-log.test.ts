@@ -9,6 +9,7 @@ import {
   followDaemonLog,
   daemonLogPath,
   formatDaemonLogLine,
+  formatDaemonActivityLine,
   createFeatureDaemonLogger,
 } from '../../src/engine/daemon-log.js';
 import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
@@ -246,11 +247,8 @@ describe('engine/daemon-log', () => {
       expect(lines).toEqual([`[${slug.slice(0, 23)}…] retrying build`]);
     });
 
-    it('leaves the base logger available for repository-global lines', () => {
-      const lines: string[] = [];
-      const log = (line: string) => lines.push(line);
-      log('global scan complete');
-      expect(lines).toEqual(['global scan complete']);
+    it('keeps a repository-global line on the production daemon prefix', () => {
+      expect(formatDaemonActivityLine('global scan complete')).toBe('[daemon] global scan complete');
     });
 
     it('does not duplicate its context while global and feature lines alternate', () => {
@@ -267,7 +265,7 @@ describe('engine/daemon-log', () => {
         'global scan started',
         '[feature-a] setup complete',
         'global scan complete',
-        '[feature-a] retrying build',
+        '[feature-a] [feature-a] retrying build',
       ]);
     });
   });

@@ -32,6 +32,16 @@ export function formatDaemonFeatureTag(featureSlug: string): string {
 }
 
 /**
+ * Compose the daemon-owned prefix with one message for both live and durable
+ * output. Feature loggers put their tag at the start of a message, where it
+ * deliberately joins `[daemon]` without whitespace; ordinary repository-wide
+ * messages retain the familiar separating space.
+ */
+export function formatDaemonActivityLine(message: string): string {
+  return message.startsWith('[') ? `[daemon]${message}` : `[daemon] ${message}`;
+}
+
+/**
  * Derive an immutable feature-owned logger from a daemon logger. The base logger
  * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
  */
@@ -40,8 +50,7 @@ export function createFeatureDaemonLogger(
   baseLog: (message: string) => void,
 ): (message: string) => void {
   const featureTag = formatDaemonFeatureTag(featureSlug);
-  return (message) =>
-    baseLog(message.startsWith(`${featureTag} `) ? message : `${featureTag} ${message}`);
+  return (message) => baseLog(`${featureTag} ${message}`);
 }
 
 /** Absolute path to a repo's daemon activity log. */

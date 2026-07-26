@@ -44,6 +44,7 @@ import { countResolvedTasks } from './engine/task-progress.js';
 import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
+  formatDaemonActivityLine,
   formatDaemonLogLine,
   createFeatureDaemonLogger,
   type DaemonLogSink,
@@ -553,8 +554,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       const oldStatus = lastStatus.get(slug);
       const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
       lastStatus.set(slug, 'resume');
-      console.log(`${chalk.dim('[daemon]')} ${newMsg}`);
-      logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(newMsg)}`));
+      const liveLine = formatDaemonActivityLine(newMsg);
+      console.log(`${chalk.dim('[daemon]')}${liveLine.slice('[daemon]'.length)}`);
+      logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(newMsg))));
       return; // Resume lines always logged with (was: ...) appended
     }
 
@@ -572,11 +574,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
 
     // For all other lines (discovery, sweeps, etc.), always log
-    console.log(`${chalk.dim('[daemon]')} ${msg}`);
+    const liveLine = formatDaemonActivityLine(msg);
+    console.log(`${chalk.dim('[daemon]')}${liveLine.slice('[daemon]'.length)}`);
     // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
     // back via `conduct daemon logs` can be correlated in time; the console stays
     // uncluttered for live watching.
-    logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
+    logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(msg))));
   };
 
   // Task 17: Create the transition-aware discovery logger
