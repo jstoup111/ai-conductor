@@ -1366,8 +1366,11 @@ export class Conductor {
               provider: 'codex',
               source: authentication.source,
               readiness: current.state,
-              elapsedSeconds: Math.max(0, Math.floor(elapsedMs / 1_000)),
-              nextProbeDelaySeconds: Math.ceil(nextDelayMs / 1_000),
+              elapsedSeconds: Math.min(
+                Math.ceil(timeoutMs / 1_000),
+                Math.max(0, Math.floor(elapsedMs / 1_000)),
+              ),
+              nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
               degradation,
             });
             lastProgress = { readiness: current.state, degradation, emittedAt: now };

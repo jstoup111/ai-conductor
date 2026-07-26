@@ -505,6 +505,37 @@ describe('CodexProvider', () => {
     },
   );
 
+  it('keeps adversarial doctor diagnostics below the readiness boundary', async () => {
+    const rawFragments = [
+      '/private/codex/credentials.json',
+      'sk-live-super-secret-token',
+      'upstream.reachability.internal',
+      'arbitrary doctor diagnostic text',
+    ];
+    const readiness = await new CodexProvider(
+      vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus: 'fail',
+          checks: {
+            'auth.credentials': {
+              status: 'ok',
+              summary: rawFragments.join(' '),
+            },
+            'upstream.reachability.internal': {
+              status: 'fail',
+              summary: rawFragments.join(' '),
+            },
+          },
+        }),
+        stderr: rawFragments.join(' '),
+        exitCode: 1,
+      }),
+    ).readiness();
+
+    expect(JSON.stringify(readiness)).not.toContain(rawFragments.join(' '));
+  });
+
   it.each([
     [
       'missing auth check',
