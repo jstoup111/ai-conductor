@@ -1,5 +1,6 @@
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { setTimeout as delay } from 'node:timers/promises';
 
 import { classifyShipmentAssociation } from './shipment-association.js';
 import {
@@ -349,6 +350,8 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
 }`;
 
 const MAX_GRAPHQL_PAGES = 10_000;
+const GRAPHQL_TRANSPORT_ATTEMPTS = 3;
+const GRAPHQL_TRANSPORT_BACKOFF_MS = [250, 500] as const;
 
 function graphqlVariables(
   owner: string,
@@ -371,14 +374,47 @@ async function graphqlPage(
   variables: Array<[name: string, value: string, typed?: boolean]>,
   context: string,
 ): Promise<unknown> {
-  const { stdout } = await options.runGh([
+  const args = [
     'api',
     'graphql',
     '-f',
     `query=${query}`,
     ...variables.flatMap(([name, value, typed]) => [typed ? '-F' : '-f', `${name}=${value}`]),
-  ], { cwd: options.cwd });
-  return parseGraphqlPage(stdout, context);
+  ];
+  let lastTransportError: unknown;
+  for (let attempt = 1; attempt <= GRAPHQL_TRANSPORT_ATTEMPTS; attempt += 1) {
+    try {
+      const { stdout } = await options.runGh(args, { cwd: options.cwd });
+      return parseGraphqlPage(stdout, context);
+    } catch (error) {
+      if (!isTransientGithubTransportError(error)) throw error;
+      lastTransportError = error;
+      if (attempt === GRAPHQL_TRANSPORT_ATTEMPTS) break;
+      await delay(GRAPHQL_TRANSPORT_BACKOFF_MS[attempt - 1]);
+    }
+  }
+  throw new Error(
+    `${context} GraphQL transport retry exhausted after ${GRAPHQL_TRANSPORT_ATTEMPTS} attempts: ${errorMessage(lastTransportError)}`,
+  );
+}
+
+function isTransientGithubTransportError(error: unknown): boolean {
+  const message = errorMessage(error).toLowerCase();
+  return [
+    'unexpected eof',
+    'error connecting to api.github.com',
+    'could not resolve host',
+    'getaddrinfo',
+    'eai_again',
+    'enotfound',
+    'econnreset',
+    'connection reset',
+    'socket hang up',
+    'etimedout',
+    'connection timed out',
+    'timeout',
+    'network is unreachable',
+  ].some((fragment) => message.includes(fragment));
 }
 
 function parseGraphqlPage(stdout: string, context: string): unknown {
