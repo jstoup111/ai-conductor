@@ -8,7 +8,7 @@
   },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
-    "test": "vitest run --reporter=dot",
+    "test": "vitest run --reporter=dot --silent",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
