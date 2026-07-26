@@ -61,3 +61,23 @@ Keep the real self-host build/auth dispatch path under test, but make successful
 **Verify:**
 
 `npx vitest run test/acceptance/isolate-daemon-build-auth-from-operator-oauth.acceptance.test.ts`
+
+### Task rem-test-post-build-tail-fixtures-01: Bound post-build fixture runs to their intended tail
+
+**Files likely touched:**
+
+- `src/conductor/test/engine/conductor-token-injection.test.ts`
+- `src/conductor/test/engine/self-host/wiring.test.ts`
+- `src/conductor/test/acceptance/daemon-rate-limit-episode-coordinator.acceptance.test.ts`
+- `src/conductor/test/acceptance/sandbox-auth-expiry-park.acceptance.test.ts`
+
+**Dependencies:** `rem-test-daemon-build-auth-01`
+
+For fixtures whose subject is self-host build setup, token injection, credential parking, or
+rate-limit recovery, pre-resolve unrelated SHIP-tail validators. Preserve any scenario that
+intentionally asserts finish dispatch by leaving only `finish` pending. Do not weaken the
+production finish validation fence.
+
+**Verify:**
+
+`npx vitest run test/engine/conductor-token-injection.test.ts test/engine/self-host/wiring.test.ts test/acceptance/daemon-rate-limit-episode-coordinator.acceptance.test.ts test/acceptance/sandbox-auth-expiry-park.acceptance.test.ts`
