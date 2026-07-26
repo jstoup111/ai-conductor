@@ -661,6 +661,7 @@ export class DefaultStepRunner implements StepRunner {
         : true,
       ...(streaming ? { interactive } : {}),
     };
+    const safety = this.candidateSafetyFor(step);
     try {
       const result = await this.providerExecutor({
         step,
@@ -675,7 +676,7 @@ export class DefaultStepRunner implements StepRunner {
         modelOverride: opts?.modelOverride ?? this.modelOverride,
         effortOverride: opts?.effortOverride ?? this.effortOverride,
         taskAttribution: this.taskAttribution,
-        withCandidateSafety: this.withCandidateSafety,
+        withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: invocationOptions,
@@ -694,11 +695,12 @@ export class DefaultStepRunner implements StepRunner {
             }
           : {}),
       });
+      const verifiedResult = safety?.verify(result) ?? result;
       this.callCount++;
       if (!opts?.providerSessions) {
-        await this.persistProviderAwareSuccess(result);
+        await this.persistProviderAwareSuccess(verifiedResult);
       }
-      return this.toStepRunResult(result);
+      return this.toStepRunResult(verifiedResult);
     } catch {
       this.callCount++;
       return { success: false, output: `Session for ${step} exited with error` };
@@ -740,7 +742,8 @@ export class DefaultStepRunner implements StepRunner {
   ): Promise<ProviderExecutionResult | undefined> {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
-    return this.providerExecutor({
+    const safety = this.candidateSafetyFor(request.step);
+    const result = await this.providerExecutor({
       step: request.step,
       configuredProviders: this.configuredProviders,
       preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
@@ -753,6 +756,7 @@ export class DefaultStepRunner implements StepRunner {
       modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
       effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
       taskAttribution: this.taskAttribution,
+      withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
       options: request.options,
@@ -768,6 +772,37 @@ export class DefaultStepRunner implements StepRunner {
           }
         : {}),
     });
+    return safety?.verify(result) ?? result;
+  }
+
+  /**
+   * BUILD/SHIP accepts an executor result only after the Task 14 boundary has
+   * actually run. This catches injected executors that silently omit the
+   * callback contract while returning a plausible success result.
+   */
+  private candidateSafetyFor(step: StepName): {
+    wrapper: WithCandidateSafety;
+    verify: (result: ProviderExecutionResult) => ProviderExecutionResult;
+  } | undefined {
+    if (!this.withCandidateSafety || !['BUILD', 'SHIP'].includes(phaseForStep(step))) {
+      return undefined;
+    }
+    let entered = false;
+    return {
+      wrapper: async (candidate, invoke) => {
+        entered = true;
+        return this.withCandidateSafety!(candidate, invoke);
+      },
+      verify: (result) => {
+        if (entered || !result.success) return result;
+        return {
+          ...result,
+          success: false,
+          permissionDenied: true,
+          output: 'Safety wrapper was not entered for this BUILD/SHIP provider attempt.',
+        };
+      },
+    };
   }
 
   private providerAttribution(result: ProviderExecutionResult) {
