@@ -79,6 +79,13 @@ steps:
     # gate: true                # force loop membership (or `false` to opt out)
     # kickback_target: true     # let a downstream step re-open this gate
 
+  # Require fresh evidence from a custom gate before the next step can run.
+  maintain-documentation:
+    after: rebase
+    skill: .agents/skills/maintain-documentation/SKILL.md
+    enforcement: gating
+    completion_artifact: .pipeline/maintain-documentation-pass
+
   # Tier-specific overrides (applied when complexity_tier matches)
   build:
     by_tier:
@@ -184,6 +191,14 @@ script or wrapper and set `command` to that aggregate target. `inputs` adds proj
 test-relevant paths to freshness calculation, while `environment` names variables whose values
 affect results; values are hashed and are not written to evidence. Harness integrity remains an
 independent self-host check, not part of this project suite declaration.
+
+### Custom-step completion artifacts
+
+A custom step can require one fresh completion file before the conductor advances. Set
+`completion_artifact` to an exact repository-relative file under `.pipeline/`; built-in steps,
+absolute paths, traversal, glob syntax, and `.pipeline/` without a filename are rejected. The
+configured skill creates the file only after its review passes. The conductor rejects a missing
+or stale file. Omit the field to keep the existing custom-step completion behavior.
 
 ### Provider-aware autonomous model policy (`conduct-ts` only)
 
