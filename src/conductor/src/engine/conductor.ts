@@ -930,7 +930,6 @@ export class Conductor {
   /** Reusable safety verdicts are valid only within one exact attempt identity. */
   private readonly safetyAttemptCache = new SafetyAttemptCache();
   /** Guards the one-time skill relink so it runs before the first build only. */
-  private relinkDone = false;
   /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
   private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
   private sleep: (ms: number) => Promise<void>;
@@ -1811,15 +1810,6 @@ export class Conductor {
     }
 
     const sh = selfHostConfig;
-
-    if (sh.skillRelinkPreflight && !this.relinkDone) {
-      this.relinkDone = true;
-      // Default harness root (the installed MAIN checkout), NOT the worktree:
-      // relink refreshes global ~/.claude against main so daemon-dispatched
-      // skills resolve; the worktree's edits are isolated by the sandbox below,
-      // never by repointing the operator's live globals.
-      await this.guardrails.relink({ log: (m) => console.error(m) });
-    }
 
     if (!sh.sandboxBuildEnv) {
       return this.stepRunner.run(name, state, { retryReason: retryHint });

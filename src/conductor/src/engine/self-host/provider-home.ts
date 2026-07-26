@@ -74,7 +74,7 @@ const HOME_VARIABLE: Record<SelfHostProviderId, 'CLAUDE_CONFIG_DIR' | 'CODEX_HOM
   claude: 'CLAUDE_CONFIG_DIR',
   codex: 'CODEX_HOME',
 };
-const DEFAULT_WORKTREE_ASSETS = ['skills', 'hooks'] as const;
+const DEFAULT_WORKTREE_ASSETS = ['skills'] as const;
 
 class ThrowawayProviderHome implements ProviderHome {
   private tornDown = false;

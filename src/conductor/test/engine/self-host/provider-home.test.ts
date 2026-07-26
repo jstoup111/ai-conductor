@@ -16,7 +16,6 @@ describe('provider-aware self-host homes', () => {
       const baseDir = join(root, 'homes');
       await Promise.all([
         mkdir(join(worktree, 'skills'), { recursive: true }),
-        mkdir(join(worktree, 'hooks'), { recursive: true }),
         mkdir(baseDir, { recursive: true }),
       ]);
 
@@ -61,7 +60,6 @@ describe('provider-aware self-host homes', () => {
         );
         expect(home.childEnv().CODEX_HOME).toBe(provider === 'codex' ? home.homeDir : undefined);
         expect(await realpath(join(home.homeDir, 'skills'))).toBe(await realpath(join(worktree, 'skills')));
-        expect(await realpath(join(home.homeDir, 'hooks'))).toBe(await realpath(join(worktree, 'hooks')));
         expect((await lstat(join(home.homeDir, 'skills'))).isSymbolicLink()).toBe(true);
       } finally {
         await home.teardown();
@@ -78,7 +76,6 @@ describe('provider-aware self-host homes', () => {
     const baseDir = join(root, 'homes');
     await Promise.all([
       mkdir(join(worktree, 'skills'), { recursive: true }),
-      mkdir(join(worktree, 'hooks'), { recursive: true }),
       mkdir(baseDir, { recursive: true }),
     ]);
 
