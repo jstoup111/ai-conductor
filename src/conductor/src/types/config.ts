@@ -128,6 +128,9 @@ export interface StepConfig {
   /** (Custom steps only) Enforcement level. Required when adding a step. */
   enforcement?: EnforcementLevel;
 
+  /** (Custom steps only) Exact repository-relative completion marker path. */
+  completion_artifact?: string;
+
   /**
    * (Custom steps only) Force gate-loop membership. When omitted, the step
    * inherits its `after` target's loop membership — so a custom step inserted

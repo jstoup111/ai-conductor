@@ -10,7 +10,7 @@ import type {
   StepRunResult,
   StepRunOptions,
 } from './conductor.js';
-import { ALL_STEPS, getStepDefinition, tryGetStepIndex } from './steps.js';
+import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from './steps.js';
 import {
   resolveStepConfig,
   phaseForStep,
@@ -363,6 +363,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerExecutor: typeof executeProviderCandidates;
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
+  private stepRegistry: ReturnType<typeof buildStepRegistry>;
   callCount = 0;
 
   constructor(
@@ -377,6 +378,7 @@ export class DefaultStepRunner implements StepRunner {
     this.stepCooldown = options?.stepCooldown ?? 0;
     this.sleepFn = options?.sleepFn ?? defaultSleep;
     this.config = options?.config;
+    this.stepRegistry = this.config ? buildStepRegistry(this.config) : ALL_STEPS;
     this.modelPolicy = options?.modelPolicy ?? CLAUDE_MODEL_POLICY;
     this.modelOverride =
       options?.modelOverride ?? options?.providerExecution?.modelOverride;
@@ -411,7 +413,9 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
-    return resolveStepConfig(step, phaseForStep(step), this.modelPolicy, this.config, {
+    const phase = this.stepRegistry.find((candidate) => candidate.name === step)?.phase
+      ?? phaseForStep(step);
+    return resolveStepConfig(step, phase, this.modelPolicy, this.config, {
       modelCliOverride: this.modelOverride,
       effortCliOverride: this.effortOverride,
       tier,
@@ -463,7 +467,7 @@ export class DefaultStepRunner implements StepRunner {
       await this.sleepFn(this.stepCooldown * 1000 * multiplier);
     }
 
-    const prompt = STEP_PROMPTS[step];
+    const prompt = STEP_PROMPTS[step] ?? `/${step}`;
     // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
     // present, overrides the runner's shared this.sessionId so the branch
     // never touches (reads or mutates) the main conductor session — see
@@ -1603,11 +1607,13 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private async buildSystemPrompt(step: StepName, autonomous: boolean, retryReason?: string): Promise<string> {
-    const stepDef = getStepDefinition(step);
+    const stepDef = this.stepRegistry.find((candidate) => candidate.name === step)
+      ?? getStepDefinition(step);
     // Out-of-band steps (e.g. `remediate`) have no position in the linear
     // sequence, so present them by label instead of an "N/total" index rather
     // than throwing "Unknown step".
-    const stepIdx = tryGetStepIndex(step);
+    const registryIdx = this.stepRegistry.findIndex((candidate) => candidate.name === step);
+    const stepIdx = registryIdx >= 0 ? registryIdx : tryGetStepIndex(step);
     const header =
       stepIdx !== null
         ? `[Conduct step ${stepIdx + 1}/${this.totalSteps}]`

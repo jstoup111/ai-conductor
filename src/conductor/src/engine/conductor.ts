@@ -722,7 +722,8 @@ async function selectChangedArtifacts(
   return changed;
 }
 
-function stepHasCompletionCheck(step: StepName): boolean {
+function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
+  if (config.steps?.[step]?.completion_artifact) return true;
   if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
 }
@@ -3255,7 +3256,7 @@ export class Conductor {
         if (
           this.verifyArtifacts &&
           step.name === 'acceptance_specs' &&
-          stepHasCompletionCheck(step.name)
+          stepHasCompletionCheck(step.name, this.config)
         ) {
           const preCheck = await checkStepCompletion(
             this.projectRoot,
@@ -3759,13 +3760,13 @@ export class Conductor {
           }
 
           // Step runner returned success. Now verify real completion.
-          if (!(this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity')) {
+          if (!(this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity')) {
             // No completion check will run this iteration — nothing will
             // consume the in-flight attempt timestamp, so clear it now
             // rather than leaking it into a later completionCtx() call.
             this.currentAttemptStartedAt = undefined;
           }
-          if (this.verifyArtifacts && stepHasCompletionCheck(step.name) && step.name !== 'complexity') {
+          if (this.verifyArtifacts && stepHasCompletionCheck(step.name, this.config) && step.name !== 'complexity') {
             let completion = await checkStepCompletion(
               this.projectRoot,
               step.name,
@@ -5319,7 +5320,7 @@ export class Conductor {
           //                  `.pipeline/review-required-<step>` (signalling it
           //                  found issues worth human attention)
           // Approved (path + sha256 match) files skip re-prompting across runs.
-          if (stepHasCompletionCheck(step.name) && this.mode !== 'auto') {
+          if (stepHasCompletionCheck(step.name, this.config) && this.mode !== 'auto') {
             const allFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
             if (allFiles.length > 0) {
               const unapproved = await filterUnapprovedArtifacts(

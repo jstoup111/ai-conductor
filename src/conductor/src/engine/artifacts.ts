@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -2937,6 +2937,49 @@ export async function checkStepCompletion(
 ): Promise<CompletionResult> {
   const predicate = CUSTOM_COMPLETION_PREDICATES[step];
   if (predicate) return predicate(dir, ctx);
+
+  const completionArtifact = ctx.config?.steps?.[step]?.completion_artifact;
+  if (completionArtifact) {
+    const artifact = join(dir, completionArtifact);
+    const floor = verdictFreshnessFloor(ctx);
+    if (floor === undefined) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" cannot be verified without an attempt or session freshness floor`,
+      };
+    }
+    const comparand = verdictFreshnessComparand(ctx);
+    const artifactStat = await lstat(artifact).catch(() => undefined);
+    if (artifactStat === undefined) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is missing — ${step} must write it after a passing review`,
+      };
+    }
+    if (!artifactStat.isFile()) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is not a regular file — ${step} must replace it with a file written after a passing review`,
+      };
+    }
+    const mtimeMs = artifactStat.mtimeMs;
+    if (mtimeMs < comparand!) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is stale — ${step} must rewrite it during this attempt`,
+      };
+    }
+    return {
+      done: true,
+      verdictFreshness: {
+        artifact,
+        mtimeMs,
+        floorMs: floor,
+        floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+        fresh: true,
+      },
+    };
+  }
 
   const extra = extraArtifactGlobs(step, ctx.config);
   const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extra];

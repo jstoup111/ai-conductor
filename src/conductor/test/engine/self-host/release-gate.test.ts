@@ -5,16 +5,14 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
   runIntegritySuite,
-  evaluateChangelogUnreleased,
   classifyBreakingSurfaces,
   evaluateMigration,
   hasRunnableMigrationBlock,
   runReleaseArtifactGate,
 } from '../../../src/engine/self-host/release-gate.js';
 
-// Phase 5 (TR-8/9/10): the ReleaseArtifactGate — integrity suite, CHANGELOG
-// [Unreleased], and Migration block. All fail-closed: an absent/unknown input
-// HALTs, never silently passes.
+// Phase 5 (TR-8/10): the ReleaseArtifactGate — integrity suite and Migration
+// block. Both fail-closed: an absent/unknown input HALTs, never silently passes.
 
 describe('runIntegritySuite (TR-8)', () => {
   let root: string;
@@ -67,41 +65,6 @@ describe('runIntegritySuite (TR-8)', () => {
     expect(v.ok).toBe(false);
     if (v.ok) return;
     expect(v.reason).toMatch(/timed out/i);
-  });
-});
-
-describe('evaluateChangelogUnreleased (TR-9)', () => {
-  it('populated [Unreleased] with an entry → pass', () => {
-    const cl = `# Changelog\n\n## [Unreleased]\n\n### Added\n- a new gate\n\n## [0.99.18] - 2026-06-30\n- old\n`;
-    expect(evaluateChangelogUnreleased(cl)).toEqual({ ok: true });
-  });
-
-  it('empty [Unreleased] (header only) → HALT', () => {
-    const cl = `# Changelog\n\n## [Unreleased]\n\n## [0.99.18] - 2026-06-30\n- old\n`;
-    const v = evaluateChangelogUnreleased(cl);
-    expect(v.ok).toBe(false);
-    if (v.ok) return;
-    expect(v.reason).toMatch(/unreleased/i);
-  });
-
-  it('missing [Unreleased] section → HALT naming the missing section', () => {
-    const cl = `# Changelog\n\n## [0.99.18] - 2026-06-30\n- old\n`;
-    const v = evaluateChangelogUnreleased(cl);
-    expect(v.ok).toBe(false);
-  });
-
-  it('whitespace/subheaders only under [Unreleased] → treated as empty (HALT)', () => {
-    const cl = `## [Unreleased]\n\n### Added\n\n### Fixed\n\n## [0.99.18]\n- old\n`;
-    expect(evaluateChangelogUnreleased(cl).ok).toBe(false);
-  });
-
-  it('tolerates duplicate [Unreleased] headers, entry under the second → pass', () => {
-    const cl = `## [Unreleased]\n## [Unreleased]\n\n### Fixed\n- real entry\n\n## [0.99.18]\n- old\n`;
-    expect(evaluateChangelogUnreleased(cl)).toEqual({ ok: true });
-  });
-
-  it('null changelog → HALT (fail-closed)', () => {
-    expect(evaluateChangelogUnreleased(null).ok).toBe(false);
   });
 });
 
@@ -183,7 +146,7 @@ describe('hasRunnableMigrationBlock — matches bin/migrate contract', () => {
   });
 });
 
-describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/9/10)', () => {
+describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)', () => {
   let projectRoot: string;
   let harnessRoot: string;
   beforeEach(async () => {
@@ -197,7 +160,7 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/9/10)
 
   const GOOD_CHANGELOG = `## [Unreleased]\n\n### Added\n- self-host guardrails\n\n## [0.99.18]\n- old\n`;
 
-  it('all three sub-gates satisfied → pass, no HALT', async () => {
+  it('both sub-gates satisfied → pass, no HALT', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,
       harnessRoot,
@@ -228,7 +191,7 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/9/10)
     expect(changelogRead).toBe(false); // short-circuits on the first failing gate
   });
 
-  it('integrity ok but empty CHANGELOG → HALT with the changelog reason', async () => {
+  it('integrity ok and empty [Unreleased] with non-breaking changes → pass without HALT', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,
       harnessRoot,
@@ -237,8 +200,36 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/9/10)
       access: async () => {},
       exec: async () => ({ code: 0, timedOut: false }),
     });
+    expect(v.ok).toBe(true);
+    expect(existsSync(join(projectRoot, '.pipeline', 'HALT'))).toBe(false);
+  });
+
+  it('empty [Unreleased] does not bypass the migration gate for a breaking change', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
+      changedFiles: async () => [{ status: 'M', path: 'bin/conduct' }],
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
     expect(v.ok).toBe(false);
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
-    expect(halt).toMatch(/unreleased/i);
+    expect(halt).toMatch(/migration block required/i);
+  });
+
+  it('empty [Unreleased] does not bypass fail-closed migration when changes are uncertain', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
+      changedFiles: async () => null,
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+    expect(v.ok).toBe(false);
+    const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
+    expect(halt).toMatch(/migration block required/i);
+    expect(halt).toMatch(/could not be determined|fail-closed/i);
   });
 });

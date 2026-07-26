@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -48,6 +48,8 @@ import {
   removeBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
+import type { StepName } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -178,6 +180,193 @@ describe('engine/artifacts', () => {
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(false);
       await createFile('App.test.tsx');
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: configured custom completion artifact', () => {
+    it('accepts the exact marker using the attempt floor or session fallback', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      const markerPath = join(dir, marker);
+      const markerMtime = Date.now() - 10_000;
+      await createFile(marker);
+      await utimes(markerPath, new Date(markerMtime), new Date(markerMtime));
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+      const step = 'maintain-documentation' as StepName;
+
+      const results = await Promise.all([
+        checkStepCompletion(dir, step, {
+          config,
+          attemptStartedAt: markerMtime + 1_000,
+          sessionStartedAt: markerMtime + 60_000,
+        }),
+        checkStepCompletion(dir, step, {
+          config,
+          sessionStartedAt: markerMtime - 1_000,
+        }),
+      ]);
+
+      expect(
+        results.map((result) => ({
+          done: result.done,
+          artifact: result.verdictFreshness?.artifact,
+          floorMs: result.verdictFreshness?.floorMs,
+          floorSource: result.verdictFreshness?.floorSource,
+          fresh: result.verdictFreshness?.fresh,
+        })),
+      ).toEqual([
+        {
+          done: true,
+          artifact: markerPath,
+          floorMs: markerMtime + 1_000,
+          floorSource: 'attempt',
+          fresh: true,
+        },
+        {
+          done: true,
+          artifact: markerPath,
+          floorMs: markerMtime - 1_000,
+          floorSource: 'session',
+          fresh: true,
+        },
+      ]);
+    });
+
+    it('fails closed when configured completion evidence is not fresh and verifiable', async () => {
+      const step = 'maintain-documentation' as StepName;
+      const configFor = (completionArtifact: string): HarnessConfig => ({
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: completionArtifact,
+          },
+        },
+      });
+      const staleMarker = '.pipeline/stale-documentation-pass';
+      const noFloorMarker = '.pipeline/no-floor-documentation-pass';
+      const blockedMarker = '.pipeline/blocked-documentation-pass';
+      const review = '.pipeline/maintain-documentation-review.md';
+      const attemptStartedAt = Date.now();
+      const staleTime = new Date(attemptStartedAt - 60_000);
+
+      await createFile(staleMarker, 'PASS\n');
+      await utimes(join(dir, staleMarker), staleTime, staleTime);
+      await createFile(noFloorMarker, 'PASS\n');
+      await createFile(blockedMarker, 'PASS\n');
+      await utimes(join(dir, blockedMarker), staleTime, staleTime);
+      await createFile(review, '# Documentation review\n\n**Verdict:** BLOCKED\n');
+
+      const results = await Promise.all([
+        checkStepCompletion(dir, step, {
+          config: configFor('.pipeline/missing-documentation-pass'),
+          attemptStartedAt,
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(staleMarker),
+          attemptStartedAt,
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(noFloorMarker),
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(blockedMarker),
+          attemptStartedAt,
+        }),
+      ]);
+
+      expect({
+        outcomes: results.map(({ done, reason }) => ({ done, reason })),
+        review: await readFile(join(dir, review), 'utf-8'),
+      }).toEqual({
+        outcomes: [
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/missing-documentation-pass" is missing — maintain-documentation must write it after a passing review',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/stale-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/no-floor-documentation-pass" cannot be verified without an attempt or session freshness floor',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/blocked-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+          },
+        ],
+        review: '# Documentation review\n\n**Verdict:** BLOCKED\n',
+      });
+    });
+
+    it('rejects a fresh directory at the configured completion artifact path', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      await mkdir(join(dir, marker), { recursive: true });
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+
+      const result = await checkStepCompletion(dir, 'maintain-documentation' as StepName, {
+        config,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason:
+          'configured completion artifact ".pipeline/maintain-documentation-pass" is not a regular file — maintain-documentation must replace it with a file written after a passing review',
+      });
+    });
+
+    it('rejects a fresh symlink at the configured completion artifact path', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      const target = join(dir, 'outside-pass');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(target, 'PASS\n');
+      await symlink(target, join(dir, marker));
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+
+      const result = await checkStepCompletion(dir, 'maintain-documentation' as StepName, {
+        config,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason:
+          'configured completion artifact ".pipeline/maintain-documentation-pass" is not a regular file — maintain-documentation must replace it with a file written after a passing review',
+      });
     });
   });
 

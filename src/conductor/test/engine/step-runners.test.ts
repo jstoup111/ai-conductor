@@ -780,6 +780,28 @@ describe('DefaultStepRunner', () => {
     expect(opts.systemPrompt).toContain('Remediate');
   });
 
+  it('dispatches a configured custom step skill command to the provider', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+      config: {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: '.pipeline/maintain-documentation-complete',
+          },
+        },
+      } as unknown as HarnessConfig,
+    });
+
+    await runner.run('maintain-documentation' as StepName, emptyState);
+
+    expect(provider.invokeInteractive).toHaveBeenCalledWith(
+      expect.objectContaining({ prompt: '/maintain-documentation' }),
+    );
+  });
+
   it('autonomous steps use --dangerouslySkipPermissions', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

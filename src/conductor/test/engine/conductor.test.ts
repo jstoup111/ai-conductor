@@ -9370,6 +9370,119 @@ describe('engine/conductor', () => {
   });
 
   describe('custom completion predicates', () => {
+    it('gates a custom step that configures an exact completion artifact', async () => {
+      const customStep = 'maintain-documentation' as StepName;
+      await writeState(statePath, {
+        rebase: 'done',
+        complexity_tier: 'M',
+        track: 'technical',
+      } as ConductState);
+      const stepsRun: StepName[] = [];
+      const failed: Array<{ step: StepName; error: string }> = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          stepsRun.push(step);
+          return step === customStep
+            ? { success: true }
+            : { success: false, output: 'unexpected downstream dispatch' };
+        }),
+      };
+      events.on('step_failed', (event) => {
+        if (event.type === 'step_failed') failed.push({ step: event.step, error: event.error });
+      });
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: '.pipeline/maintain-documentation-pass',
+          },
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        fromStep: customStep,
+        config,
+        verifyArtifacts: true,
+        maxRetries: 1,
+        onRecovery: vi.fn().mockResolvedValue('quit' as const),
+      });
+
+      await conductor.run();
+
+      const freshRoot = join(dir, 'fresh-marker-run');
+      const freshStatePath = join(freshRoot, 'conduct-state.json');
+      await mkdir(freshRoot, { recursive: true });
+      await writeState(freshStatePath, {
+        rebase: 'done',
+        complexity_tier: 'M',
+        track: 'technical',
+      } as ConductState);
+      const freshEvents = new ConductorEventEmitter();
+      const freshness: Array<{ step: StepName; floorSource: string; fresh: boolean }> = [];
+      freshEvents.on('verdict_freshness', (event) => {
+        if (event.type === 'verdict_freshness') {
+          freshness.push({
+            step: event.step,
+            floorSource: event.floorSource,
+            fresh: event.fresh,
+          });
+        }
+      });
+      const freshRunner: StepRunner = {
+        run: vi.fn(async (step) => {
+          if (step === customStep) {
+            await mkdir(join(freshRoot, '.pipeline'), { recursive: true });
+            await writeFile(join(freshRoot, '.pipeline/maintain-documentation-pass'), 'PASS\n');
+          }
+          return { success: true };
+        }),
+      };
+      await new Conductor({
+        stateFilePath: freshStatePath,
+        stepRunner: freshRunner,
+        events: freshEvents,
+        projectRoot: freshRoot,
+        fromStep: customStep,
+        config,
+        verifyArtifacts: true,
+      }).run();
+
+      const conductorSource = await readFile(
+        join(process.cwd(), 'src/engine/conductor.ts'),
+        'utf-8',
+      );
+      const completionCheckArguments = [
+        ...conductorSource.matchAll(/stepHasCompletionCheck\(([^)]*)\)/g),
+      ].map((match) => match[1].replace(/\s+/g, ' ').trim());
+
+      expect({
+        stepsRun,
+        customFailure: failed.find((event) => event.step === customStep),
+        freshness,
+        completionCheckArguments,
+      }).toEqual({
+        stepsRun: [customStep],
+        customFailure: {
+          step: customStep,
+          error:
+            'Step \'maintain-documentation\' completed but completion check failed: configured completion artifact ".pipeline/maintain-documentation-pass" is missing — maintain-documentation must write it after a passing review',
+        },
+        freshness: [{ step: customStep, floorSource: 'attempt', fresh: true }],
+        completionCheckArguments: [
+          'step: StepName, config: HarnessConfig',
+          'step.name, this.config',
+          'step.name, this.config',
+          'step.name, this.config',
+          'step.name, this.config',
+        ],
+      });
+    });
+
     it("build step requires .pipeline/task-status.json with all tasks completed", async () => {
       const runner: StepRunner = {
         run: vi.fn().mockResolvedValue({ success: true }),

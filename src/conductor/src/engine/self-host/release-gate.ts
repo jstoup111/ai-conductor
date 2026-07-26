@@ -1,11 +1,10 @@
-// self-host/release-gate.ts — ReleaseArtifactGate (TR-8/9/10).
+// self-host/release-gate.ts — ReleaseArtifactGate (TR-8/10).
 //
-// Three fail-closed sub-gates a harness self-build must clear at finish before a
+// Two fail-closed sub-gates a harness self-build must clear at finish before a
 // PR opens (adr-2026-06-30-halt-based-release-gates):
 //   1. TR-8  integrity suite  — `test/test_harness_integrity.sh` must exit 0
 //              (missing script or timeout → HALT, never a silent pass).
-//   2. TR-9  CHANGELOG        — a non-empty `## [Unreleased]` section.
-//   3. TR-10 migration block  — a breaking surface requires a runnable
+//   2. TR-10 migration block  — a breaking surface requires a runnable
 //              ```bash migration``` block that `bin/migrate` can execute.
 // Every failure writes a distinct HALT reason; uncertainty errs toward HALT.
 
@@ -77,7 +76,7 @@ export async function runIntegritySuite(opts: IntegrityOptions): Promise<GateVer
   return { ok: true };
 }
 
-// ── TR-9: CHANGELOG [Unreleased] ─────────────────────────────────────────────
+// ── CHANGELOG [Unreleased] parsing for TR-10 ─────────────────────────────────
 
 const HEADER_RE = /^##\s+\[([^\]]+)\]/;
 
@@ -107,44 +106,6 @@ export function extractUnreleasedBody(changelog: string | null | undefined): str
     body.push(lines[i]);
   }
   return body.join('\n');
-}
-
-/** True when the section body has at least one real entry (a `- ` bullet). */
-function hasChangelogEntry(body: string): boolean {
-  return body.split('\n').some((l) => /^\s*-\s+\S/.test(l));
-}
-
-/**
- * TR-9: a self-build needs a non-empty `## [Unreleased]` with ≥1 entry. A
- * missing section, an empty section, or subheaders-only all HALT (fail-closed).
- */
-export function evaluateChangelogUnreleased(changelog: string | null | undefined): GateVerdict {
-  return changelogVerdictFromBody(extractUnreleasedBody(changelog));
-}
-
-/**
- * The body-based core of the CHANGELOG gate. Takes an already-extracted
- * `## [Unreleased]` body (or null) so the composed gate can extract once and
- * feed the same body to both this check and the migration-block check.
- */
-export function changelogVerdictFromBody(body: string | null): GateVerdict {
-  if (body === null) {
-    return {
-      ok: false,
-      reason:
-        'CHANGELOG has no `## [Unreleased]` section (self-host release gate) — add one with the ' +
-        'change under Added/Changed/Fixed/Removed.',
-    };
-  }
-  if (!hasChangelogEntry(body)) {
-    return {
-      ok: false,
-      reason:
-        'CHANGELOG `## [Unreleased]` is empty (self-host release gate) — a header alone does not ' +
-        'satisfy the gate; add at least one entry.',
-    };
-  }
-  return { ok: true };
 }
 
 // ── TR-10: migration block for breaking surfaces ─────────────────────────────
@@ -377,7 +338,7 @@ export interface ReleaseGateOptions {
 }
 
 /**
- * Run all three sub-gates in order, HALTing on the FIRST failure with that
+ * Run both sub-gates in order, HALTing on the FIRST failure with that
  * gate's distinct reason (later gates are not consulted once one HALTs). Returns
  * the verdict; the caller must not open a PR when `verdict.ok` is false.
  */
@@ -396,14 +357,9 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
   }
 
   const changelog = await opts.readText(join(opts.harnessRoot, 'CHANGELOG.md'));
-  // Extract the [Unreleased] body ONCE; both the changelog verdict and the
-  // migration-block check consume the same parsed body.
+  // Integrity owns CHANGELOG structure. The release gate reads the body only
+  // for the migration-block check; ordinary release content may be empty.
   const unreleasedBody = extractUnreleasedBody(changelog);
-  const changelogVerdict = changelogVerdictFromBody(unreleasedBody);
-  if (!changelogVerdict.ok) {
-    await writeHalt(opts.projectRoot, changelogVerdict.reason);
-    return changelogVerdict;
-  }
 
   const changedFiles = await opts.changedFiles();
   const surfaces = classifyBreakingSurfaces(changedFiles);
