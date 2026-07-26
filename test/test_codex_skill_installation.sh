@@ -82,6 +82,30 @@ owned_catalog_is_current() {
     && [ "$(readlink -f "$fake_home/.agents/skills/HARNESS.md")" = "$CHECKOUT/HARNESS.md" ]
 }
 
+snapshot_current_catalog() {
+  local fake_home=$1
+  local output=$2
+  local catalog="$fake_home/.agents/skills"
+  local entry name raw_target canonical_target content_hash
+
+  printf 'entry-count %s\n' \
+    "$(find "$catalog" -mindepth 1 -maxdepth 1 -printf . | wc -c)" > "$output"
+  while IFS= read -r entry; do
+    name=$(basename "$entry")
+    if [ -L "$entry" ]; then
+      raw_target=$(readlink "$entry")
+      canonical_target=$(readlink -f "$entry")
+      printf 'link %s raw=%s canonical=%s\n' \
+        "$name" "$raw_target" "$canonical_target" >> "$output"
+    elif [ -f "$entry" ]; then
+      content_hash=$(sha256sum "$entry" | awk '{print $1}')
+      printf 'file %s sha256=%s\n' "$name" "$content_hash" >> "$output"
+    else
+      printf 'other %s\n' "$name" >> "$output"
+    fi
+  done < <(find "$catalog" -mindepth 1 -maxdepth 1 -print | sort)
+}
+
 legacy_catalog_has_no_owned_entries() {
   local fake_home=$1
   local skill source target
@@ -152,15 +176,66 @@ run_install "$SAME_CHECKOUT_HOME" --update --providers codex \
 check 'update removes an obsolete current-scope skill anchored to the same checkout' \
   test ! -L "$SAME_CHECKOUT_HOME/.agents/skills/retired-same-checkout-workflow"
 
-FIRST_SNAPSHOT="$TMP_ROOT/update-first.snapshot"
-SECOND_SNAPSHOT="$TMP_ROOT/update-second.snapshot"
-find "$UPDATE_HOME/.agents/skills" -mindepth 1 -maxdepth 1 -printf '%f %l\n' 2>/dev/null \
-  | sort > "$FIRST_SNAPSHOT"
-run_install "$UPDATE_HOME" --update --providers codex >"$TMP_ROOT/update-2.out" 2>&1
-find "$UPDATE_HOME/.agents/skills" -mindepth 1 -maxdepth 1 -printf '%f %l\n' 2>/dev/null \
-  | sort > "$SECOND_SNAPSHOT"
-check 'repeated update is idempotent and creates no duplicate or target churn' \
-  cmp -s "$FIRST_SNAPSHOT" "$SECOND_SNAPSHOT"
+IDEMPOTENCY_HOME="$TMP_ROOT/home-idempotency"
+IDEMPOTENCY_RUNS_OK=1
+run_install "$IDEMPOTENCY_HOME" --providers codex >"$TMP_ROOT/idempotency-initial.out" 2>&1 \
+  || IDEMPOTENCY_RUNS_OK=0
+printf '%s\n' 'operator-owned current-scope content' \
+  > "$IDEMPOTENCY_HOME/.agents/skills/operator-notes"
+snapshot_current_catalog "$IDEMPOTENCY_HOME" "$TMP_ROOT/idempotency-initial.snapshot"
+
+for iteration in 1 2; do
+  run_install "$IDEMPOTENCY_HOME" --providers codex \
+    >"$TMP_ROOT/idempotency-normal-$iteration.out" 2>&1 \
+    || IDEMPOTENCY_RUNS_OK=0
+  snapshot_current_catalog "$IDEMPOTENCY_HOME" \
+    "$TMP_ROOT/idempotency-normal-$iteration.snapshot"
+done
+
+for iteration in 1 2; do
+  run_install "$IDEMPOTENCY_HOME" --update --providers codex \
+    >"$TMP_ROOT/idempotency-update-$iteration.out" 2>&1 \
+    || IDEMPOTENCY_RUNS_OK=0
+  snapshot_current_catalog "$IDEMPOTENCY_HOME" \
+    "$TMP_ROOT/idempotency-update-$iteration.snapshot"
+done
+
+catalog_reinstall_is_idempotent() {
+  local source skill
+  local expected_count=2
+  local unrelated_hash
+
+  unrelated_hash=$(printf '%s\n' 'operator-owned current-scope content' | sha256sum | awk '{print $1}')
+  for source in "$CHECKOUT"/skills/*/SKILL.md; do
+    [ -f "$source" ] || continue
+    skill=$(basename "$(dirname "$source")")
+    expected_count=$((expected_count + 1))
+    grep -Fxq \
+      "link $skill raw=$CHECKOUT/skills/$skill canonical=$CHECKOUT/skills/$skill" \
+      "$TMP_ROOT/idempotency-initial.snapshot" \
+      || return 1
+  done
+
+  [ "$IDEMPOTENCY_RUNS_OK" -eq 1 ] \
+    && grep -Fxq "entry-count $expected_count" \
+      "$TMP_ROOT/idempotency-initial.snapshot" \
+    && grep -Fxq \
+      "link HARNESS.md raw=$CHECKOUT/HARNESS.md canonical=$CHECKOUT/HARNESS.md" \
+      "$TMP_ROOT/idempotency-initial.snapshot" \
+    && grep -Fxq "file operator-notes sha256=$unrelated_hash" \
+      "$TMP_ROOT/idempotency-initial.snapshot" \
+    && cmp -s "$TMP_ROOT/idempotency-initial.snapshot" \
+      "$TMP_ROOT/idempotency-normal-1.snapshot" \
+    && cmp -s "$TMP_ROOT/idempotency-initial.snapshot" \
+      "$TMP_ROOT/idempotency-normal-2.snapshot" \
+    && cmp -s "$TMP_ROOT/idempotency-initial.snapshot" \
+      "$TMP_ROOT/idempotency-update-1.snapshot" \
+    && cmp -s "$TMP_ROOT/idempotency-initial.snapshot" \
+      "$TMP_ROOT/idempotency-update-2.snapshot"
+}
+
+check 'repeated normal install and update preserve the exact current catalog and unrelated content' \
+  catalog_reinstall_is_idempotent
 
 # Ownership boundary: foreign files, directories, and links survive update and
 # uninstall byte-for-byte or target-for-target.
