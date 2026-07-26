@@ -50,8 +50,10 @@ export function formatDaemonActivityLine(message: string, featureOwned = false):
 export function createDaemonModeLogger(sinks: {
   writeLive: (line: string) => void;
   writePersisted: (line: string) => void;
+  formatActivityLine?: (message: string, featureOwned: boolean) => string;
 }): (msg: string, featureOwned?: boolean) => void {
   const lastStatus = new Map<string, string>();
+  const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
 
   return (msg: string, featureOwned = false) => {
     const startMatch = msg.match(/▶.*start\s+(\S+)/);
@@ -67,7 +69,7 @@ export function createDaemonModeLogger(sinks: {
       const oldStatus = lastStatus.get(slug);
       lastStatus.set(slug, 'resume');
       const resumed = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
-      const line = formatDaemonActivityLine(resumed, featureOwned);
+      const line = formatActivityLine(resumed, featureOwned);
       sinks.writeLive(line);
       sinks.writePersisted(line);
       return;
@@ -80,7 +82,7 @@ export function createDaemonModeLogger(sinks: {
       lastStatus.set(slug, outcomeStatus);
     }
 
-    const line = formatDaemonActivityLine(msg, featureOwned);
+    const line = formatActivityLine(msg, featureOwned);
     sinks.writeLive(line);
     sinks.writePersisted(line);
   };

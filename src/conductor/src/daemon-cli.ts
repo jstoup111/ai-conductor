@@ -45,6 +45,7 @@ import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon
 import {
   openDaemonLog,
   formatDaemonLogLine,
+  formatDaemonActivityLine,
   formatDaemonFeatureTag,
   createDaemonModeLogger,
   createFeatureDaemonLogger,
@@ -531,6 +532,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
   const log = createDaemonModeLogger({
+    formatActivityLine: formatDaemonActivityLine,
     writeLive: (line) =>
       console.log(`${chalk.dim('[daemon]')}${line.slice('[daemon]'.length)}`),
     // The persisted record gets a leading ISO-8601 UTC timestamp so activity

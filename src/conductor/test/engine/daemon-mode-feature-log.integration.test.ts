@@ -4,6 +4,16 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const fixture = vi.hoisted(() => ({ worktreePath: '' }));
+const daemonLogSpy = vi.hoisted(() => ({
+  formatDaemonActivityLine: vi.fn((message: string, featureOwned = false) =>
+    featureOwned ? `[daemon]${message}` : `[daemon] ${message}`,
+  ),
+}));
+
+vi.mock('../../src/engine/daemon-log.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/daemon-log.js')>();
+  return { ...actual, formatDaemonActivityLine: daemonLogSpy.formatDaemonActivityLine };
+});
 
 // Keep the daemon entry point real while replacing only the external feature
 // executor. Its controlled output exercises beginFeatureRun's actual scoped
@@ -37,6 +47,7 @@ let dirs: string[] = [];
 
 beforeEach(() => {
   dirs = [];
+  daemonLogSpy.formatDaemonActivityLine.mockClear();
 });
 
 afterEach(async () => {
@@ -82,6 +93,10 @@ describe('daemon-mode feature log integration', () => {
       expect(live).toContain(`[daemon][feature-a] ${message}`);
       expect(persisted).toContain(`[daemon][feature-a] ${message}`);
     }
+    expect(daemonLogSpy.formatDaemonActivityLine).toHaveBeenCalledWith(
+      '[feature-a] ▶ start feature-a',
+      true,
+    );
     expect(persisted).not.toMatch(/\[daemon\]\[feature-a\]\[feature-a\]/);
   });
 });
