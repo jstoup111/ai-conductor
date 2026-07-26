@@ -2731,6 +2731,33 @@ export class Conductor {
               });
             }
 
+            const permissionDeniedIdx = outcomes.findIndex(
+              (outcome) => outcome.kind === 'permission-denied',
+            );
+            if (permissionDeniedIdx !== -1) {
+              const outcome = outcomes[permissionDeniedIdx]!;
+              const member = membership.dispatchable[permissionDeniedIdx]!;
+              if (outcome.kind !== 'permission-denied') {
+                throw new Error('permission-denied outcome index lost its disposition');
+              }
+              const provider = outcome.provider === 'codex' ? 'Codex' : outcome.provider;
+              const haltReason =
+                `${provider} permission review denied a required action for grouped member "${member.name}".\n` +
+                'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
+                `\nProvider detail: ${outcome.reason}`;
+              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
+              await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), haltReason + '\n', 'utf-8')
+                .catch(() => {
+                  /* best-effort marker */
+                });
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
+            }
+
             // A branch outcome of `verdict: pass` only means the skill
             // dispatch itself succeeded — necessary but NOT sufficient for
             // "this member is truly done". The join recomputes each

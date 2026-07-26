@@ -5094,6 +5094,55 @@ describe('engine/conductor', () => {
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
     });
 
+    it('halts one denied Codex group member without rerunning its completed siblings', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: StepName[] = [];
+      const haltReasons: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') haltReasons.push(event.reason);
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          calls.push(step);
+          if (step === 'prd_audit') {
+            return {
+              success: false,
+              output: 'Codex automatic permission review denied the required action.',
+              permissionDenied: true,
+              actualProvider: 'codex',
+            };
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        maxRetries: 3,
+      });
+
+      await conductor.run();
+
+      expect({
+        calls: Object.fromEntries(
+          ['manual_test', 'prd_audit', 'architecture_review_as_built'].map((step) => [
+            step,
+            calls.filter((call) => call === step).length,
+          ]),
+        ),
+        haltReasons,
+      }).toEqual({
+        calls: { manual_test: 1, prd_audit: 1, architecture_review_as_built: 1 },
+        haltReasons: [
+          expect.stringMatching(/Codex permission review denied[\s\S]*re-scope[\s\S]*re-queue/i),
+        ],
+      });
+    });
+
     it('mixed-order completions (prd_audit resolves before manual_test) still produce one consistent state snapshot with all member + group keys', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
 

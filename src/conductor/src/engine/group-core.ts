@@ -51,6 +51,13 @@ export interface NoVerdictOutcome {
   authentication?: AuthenticationReadiness;
 }
 
+/** A provider denied a required action under its unattended permission policy. */
+export interface PermissionDeniedOutcome {
+  kind: "permission-denied";
+  provider: string;
+  reason: string;
+}
+
 /**
  * A branch was not dispatched at all (member skip rules — tier/track/
  * feature-type/skipWhenSkipped). Distinct from NoVerdictOutcome: skipped is
@@ -65,7 +72,11 @@ export interface SkippedOutcome {
  * boolean flags — so that every consumer is forced to handle each case
  * explicitly (see classifyOutcome below for the exhaustiveness contract).
  */
-export type BranchOutcome = VerdictOutcome | NoVerdictOutcome | SkippedOutcome;
+export type BranchOutcome =
+  | VerdictOutcome
+  | NoVerdictOutcome
+  | PermissionDeniedOutcome
+  | SkippedOutcome;
 
 export function makeVerdictOutcome(
   verdict: Verdict,
@@ -111,6 +122,8 @@ export function classifyOutcome(outcome: BranchOutcome): string {
       return `verdict:${outcome.verdict}`;
     case "no-verdict":
       return "no-verdict";
+    case "permission-denied":
+      return "permission-denied";
     case "skipped":
       return "skipped";
   }
@@ -525,6 +538,14 @@ async function runGroupBranchInner(
     // route it to halt/park handling instead of silently retrying it.
     if (result.authFailure) {
       return makeNoVerdictOutcome("authFailure", result.authentication);
+    }
+
+    if (result.permissionDenied) {
+      return {
+        kind: "permission-denied",
+        provider: result.actualProvider ?? result.preferredProvider ?? "selected provider",
+        reason: result.output ?? "Permission review denied the required action.",
+      };
     }
 
     lastOutput = result.output ?? lastOutput;
