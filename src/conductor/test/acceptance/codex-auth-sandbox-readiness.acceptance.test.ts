@@ -44,6 +44,14 @@ function doctorNonReady(
   });
 }
 
+function doctorAuthReadyWithUnrelatedHealthFailure() {
+  return JSON.stringify({
+    schemaVersion: 1,
+    overallStatus: 'fail',
+    checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+  });
+}
+
 describe('acceptance: Codex auth and bounded unattended execution (#905)', () => {
   let priorKey: string | undefined;
 
@@ -180,6 +188,28 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       expect(JSON.stringify(result)).not.toContain(secret);
     },
   );
+
+  // #970: supported credentials evidence may authorize dispatch despite an
+  // unrelated doctor-health failure. The completion result still owns its
+  // classification: only a selected-source rejection is an auth failure.
+  it.each([
+    ['selected-source rejection', 'Authentication required. Please run codex login.', true],
+    ['ordinary provider/network failure', 'network connection reset by peer', false],
+  ] as const)('preserves %s after mixed-health readiness', async (_case, stderr, expectedAuthFailure) => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: doctorAuthReadyWithUnrelatedHealthFailure(), stderr: 'unrelated health check failed', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr, exitCode: 1 } as any);
+
+    const result = await new CodexProvider().invoke(base);
+
+    expect(result.authentication).toMatchObject({
+      provider: 'codex',
+      source: 'cached-login',
+      state: expectedAuthFailure ? 'unusable' : 'ready',
+    });
+    expect(result.authFailure).toBe(expectedAuthFailure || undefined);
+    expect(mockExeca).toHaveBeenCalledTimes(2);
+  });
 
   // Covers: FR-13 through FR-18 and FR-22. A denied review is still bounded by
   // the exact unattended policy and never causes the old danger-bypass mode.

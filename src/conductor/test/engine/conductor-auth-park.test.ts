@@ -17,7 +17,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { detectsAuthFailure } from '../../src/execution/claude-provider.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
-import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
@@ -305,6 +305,100 @@ describe('conductor auth-park: daemon-token mode', () => {
       expect(buildAttempts).toEqual([1, 1]);
     },
   );
+
+  it('parks a selected-source Codex completion rejection without provider fallback', async () => {
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'ready',
+    });
+    const fallbackReadiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+      {
+        key: 'claude',
+        provider: {
+          invoke: vi.fn(),
+          invokeInteractive: vi.fn(async () => {}),
+          readiness: fallbackReadiness,
+        },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const readinessFor = vi.spyOn(runtimes, 'readinessFor');
+    const attempts: number[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        if (step !== 'build') return { success: true };
+        attempts.push(options?.attempt ?? -1);
+        return attempts.length === 1
+          ? {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+            }
+          : { success: true, actualProvider: 'codex' };
+      }),
+    };
+    const parked: unknown[] = [];
+    events.on('credentials_park', (event) => parked.push(event));
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 1,
+      sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+    });
+
+    await conductor.run();
+
+    expect(attempts).toEqual([1, 1]);
+    expect(readiness).toHaveBeenCalledTimes(1);
+    expect(readinessFor).toHaveBeenCalledWith('codex', {
+      provider: 'codex', source: 'cached-login', state: 'unusable',
+    });
+    expect(fallbackReadiness).not.toHaveBeenCalled();
+    expect(parked).toHaveLength(1);
+  });
+
+  it('does not park an ordinary Codex completion failure', async () => {
+    const parked: unknown[] = [];
+    events.on('credentials_park', (event) => parked.push(event));
+    const runner: StepRunner = {
+      run: vi.fn(async (step) =>
+        step === 'build'
+          ? { success: false, output: 'network connection reset by peer', actualProvider: 'codex' }
+          : { success: true },
+      ),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 0,
+      sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
+    });
+
+    await conductor.run();
+
+    expect(parked).toHaveLength(0);
+  });
 
   it('serial Codex API-key rejection halts once without hot-resuming after an environment change', async () => {
     const readiness = vi.fn();
