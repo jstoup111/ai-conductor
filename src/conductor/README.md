@@ -54,12 +54,12 @@ src/conductor/
 
 ```bash
 cd src/conductor
-npm install
+npm ci
 npm run build      # tsup → dist/index.js (+ .d.ts + .map)
 npm test           # vitest run
 ```
 
-The root `bin/install` runs these `npm install && npm run build` steps for you
+The root `bin/install` runs these `npm ci && npm run build` steps for you
 (in both first-run and `--update` mode) and then symlinks `conduct-ts`. The
 commands above are for building by hand. If Node < 20.5 is active or `npm` is
 missing, `bin/install` skips the build with a warning and leaves the

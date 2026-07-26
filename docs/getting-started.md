@@ -14,7 +14,7 @@ This symlinks every skill and `HARNESS.md` into both user-scoped discovery direc
 `~/.claude/skills/` for Claude Code and `~/.codex/skills/` for Codex — and installs the conductor CLI(s) to
 `~/.local/bin/`. It does not install skills into a project; use project-local skills only as
 explicit overrides. `./bin/install` also builds the TypeScript conductor bundle for you —
-it runs `npm install && npm run build` in `src/conductor/` (in both first-run and
+it runs `npm ci && npm run build` in `src/conductor/` (in both first-run and
 `--update` mode) and symlinks `conduct-ts` once the bundle exists. The build needs
 Node >= 20.5 (the repo pins 20.19.2 via `.tool-versions`); if Node is too old or `npm`
 is missing, the build is skipped with a warning and `conduct` still installs. See

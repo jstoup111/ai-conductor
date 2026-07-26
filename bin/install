@@ -989,12 +989,11 @@ node_supports_conduct_ts() {
   [ "$major" -gt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -ge 5 ]; }
 }
 
-# Build the conduct-ts bundle: npm install + npm run build in src/conductor/.
-# Runs in BOTH fresh-install and --update modes — the install-freshness guard
-# refuses to start a stale bundle, so an update that skipped the rebuild would
-# brick `conduct-ts`. Non-fatal: on any failure it warns and returns 1 so the
-# caller can continue (step 3b then reports the missing bundle). Idempotent —
-# npm install is a near no-op when dependencies are already satisfied.
+# Build the conduct-ts bundle: npm ci + npm run build in src/conductor/.
+# Runs on both fresh installs and updates so the bundle reflects the checked-out
+# harness version and a corrupt node_modules directory is replaced. Non-fatal:
+# on any failure it warns and returns 1 so the caller can continue (step 3b then
+# reports the missing bundle).
 build_conduct_ts() {
   local conductor_dir="${HARNESS_DIR}/src/conductor"
   echo ""
@@ -1020,11 +1019,11 @@ build_conduct_ts() {
   local log
   log=$(mktemp)
 
-  info "Installing conduct-ts dependencies (npm install)..."
-  if (cd "$conductor_dir" && npm install) >"$log" 2>&1; then
+  info "Installing conduct-ts dependencies (npm ci)..."
+  if (cd "$conductor_dir" && npm ci) >"$log" 2>&1; then
     ok "conduct-ts dependencies installed"
   else
-    fail "npm install failed in src/conductor/ — conduct-ts not built"
+    fail "npm ci failed in src/conductor/ — conduct-ts not built"
     tail -n 20 "$log" | sed 's/^/      /'
     rm -f "$log"
     return 1
@@ -1297,10 +1296,10 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
-  # 3a. Build conduct-ts (npm install + npm run build) so the dist bundle is
-  # fresh before we symlink it. Runs in --update mode too — the install-freshness
-  # guard refuses a stale bundle. Non-fatal: a build failure (no npm, wrong Node)
-  # just leaves the bundle missing, and step 3b reports that.
+  # 3a. Build conduct-ts (npm ci + npm run build) so the dist bundle reflects
+  # this harness version before we symlink it. This runs for installs and updates.
+  # Non-fatal: a build failure (no npm, wrong Node) just leaves the bundle
+  # missing, and step 3b reports that.
   build_conduct_ts || true
 
   # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
