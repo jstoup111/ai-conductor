@@ -13,7 +13,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Added
 
 - Add an opt-in repository-local documentation gate that verifies fresh review evidence and
-  finalizes the implementation PR link in notable changelog entries ({{IMPLEMENTATION_PR}}).
+  finalizes the implementation PR link in notable changelog entries ([implementation PR #956](https://github.com/jstoup111/ai-conductor/pull/956)).
 - Add the native `test_suite` project declaration and documentation for the
   reusable pre-SHIP aggregate gate. Projects identify one project-owned command
   that composes their unit, acceptance, and other authoritative tests; this
