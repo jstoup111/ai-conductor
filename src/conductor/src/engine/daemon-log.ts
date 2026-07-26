@@ -20,6 +20,28 @@ const DAEMON_LOG_NAME = 'daemon.log';
 const ROTATED_LOG_NAME = 'daemon.log.1';
 /** Single-file rotation cap (~1 MB). On open, an oversized log is moved aside once. */
 const ROTATE_SIZE_BYTES = 1_000_000;
+const FEATURE_TAG_DISPLAY_LENGTH = 24;
+
+/** Render a feature slug for a daemon log tag, bounded for readable live output. */
+export function formatDaemonFeatureTag(featureSlug: string): string {
+  const display =
+    featureSlug.length > FEATURE_TAG_DISPLAY_LENGTH
+      ? `${featureSlug.slice(0, FEATURE_TAG_DISPLAY_LENGTH - 1)}…`
+      : featureSlug;
+  return `[${display}]`;
+}
+
+/**
+ * Derive an immutable feature-owned logger from a daemon logger. The base logger
+ * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
+ */
+export function createFeatureDaemonLogger(
+  featureSlug: string,
+  baseLog: (message: string) => void,
+): (message: string) => void {
+  const featureTag = formatDaemonFeatureTag(featureSlug);
+  return (message) => baseLog(`${featureTag} ${message}`);
+}
 
 /** Absolute path to a repo's daemon activity log. */
 export function daemonLogPath(repoPath: string): string {

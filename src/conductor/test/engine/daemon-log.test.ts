@@ -9,6 +9,7 @@ import {
   followDaemonLog,
   daemonLogPath,
   formatDaemonLogLine,
+  createFeatureDaemonLogger,
 } from '../../src/engine/daemon-log.js';
 import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -228,6 +229,28 @@ describe('engine/daemon-log', () => {
       // First whitespace-delimited field parses back to the same instant.
       const stamp = line.split(' ', 1)[0];
       expect(new Date(stamp).getTime()).toBe(0);
+    });
+  });
+
+  describe('createFeatureDaemonLogger', () => {
+    it('adds the complete short feature slug without changing the message', () => {
+      const lines: string[] = [];
+      createFeatureDaemonLogger('short-slug', (line) => lines.push(line))('setup complete');
+      expect(lines).toEqual(['[short-slug] setup complete']);
+    });
+
+    it('uses a deterministic 24-character display ending in an ellipsis for long slugs', () => {
+      const lines: string[] = [];
+      const slug = 'daemon-logs-tag-current-with-extra-context';
+      createFeatureDaemonLogger(slug, (line) => lines.push(line))('retrying build');
+      expect(lines).toEqual([`[${slug.slice(0, 23)}…] retrying build`]);
+    });
+
+    it('leaves the base logger available for repository-global lines', () => {
+      const lines: string[] = [];
+      const log = (line: string) => lines.push(line);
+      log('global scan complete');
+      expect(lines).toEqual(['global scan complete']);
     });
   });
 
