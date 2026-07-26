@@ -24,7 +24,8 @@ advisory threshold because 15 stories each require explicit happy and negative-p
   committed DECIDE artifacts at first BUILD entry, consumes the existing `phase-marker.ts`
   bounded allowlist, and is checked before and after every BUILD/SHIP attempt. The boundary
   classifies required versus diagnostic capabilities. The conductor supplies one per-candidate
-  attempt wrapper to `executeProviderCandidates`; it enters only after actual-provider resolution,
+  attempt wrapper to `executeProviderCandidates`; the approved callback is
+  `withCandidateSafety(candidate, invoke)`. It enters only after actual-provider resolution,
   wraps raw invocation, and verifies the result before candidate fallback or acceptance.
 - Refactor `sandbox-build-env.ts` behind a provider-aware isolated-home contract. Claude receives
   only selected auth, engine controls, and worktree skills; Codex consumes #905's selected auth,
@@ -311,7 +312,7 @@ advisory threshold because 15 stories each require explicit happy and negative-p
 **Steps:**
 1. Write failing wiring tests that inventory initial BUILD/SHIP raw provider calls and require safety preflight plus terminal verification around each.
 2. Run the focused tests and verify RED.
-3. Construct the safety boundary in the conductor and pass a per-candidate wrapper into provider execution so preflight runs after actual-provider resolution and terminal verification runs before fallback or acceptance.
+3. Construct the safety boundary in the conductor and pass the approved `withCandidateSafety(candidate, invoke)` wrapper into provider execution so preflight runs after actual-provider resolution and terminal verification runs before fallback or acceptance.
 4. Run provider and conductor wiring tests and verify GREEN.
 5. Commit with message: `feat: wrap build and ship provider attempts`.
 

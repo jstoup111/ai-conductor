@@ -19,8 +19,9 @@ approved component and sequence diagrams
 > occurs inside `executeProviderCandidates`, below `runSelfBuildDispatch`, and merged #905
 > keeps selected credential material private to `CodexProvider`. The plan is amended so a
 > conductor-created per-candidate wrapper enters after candidate resolution and consumes a
-> narrow provider-owned self-host-auth capability. This closes fallback isolation and auth-
-> ownership gaps without changing the approved ADR outcome.
+> narrow provider-owned self-host-auth capability. The operator later approved the concrete
+> execution seam `withCandidateSafety(candidate, invoke)` for the RED acceptance specification.
+> This closes fallback isolation and auth-ownership gaps without changing the approved ADR outcome.
 
 ## Feasibility
 
@@ -102,7 +103,7 @@ No system-context, container, or ERD change is required.
 
 | Production surface | Design-time production wiring |
 |---|---|
-| Provider-neutral safety authority and verdict | Constructed by the conductor and passed into `executeProviderCandidates` as a per-candidate wrapper; enters after candidate resolution, surrounds raw invocation, and verifies before fallback/acceptance |
+| Provider-neutral safety authority and verdict | Constructed by the conductor and passed into `executeProviderCandidates` as `withCandidateSafety(candidate, invoke)`; enters after candidate resolution, surrounds raw invocation, and verifies before fallback/acceptance |
 | Concurrent task telemetry | Dispatch validates the prompt's plan-task id; task rows independently enter/leave `in_progress`; explicit commit trailers are validated but remain non-blocking telemetry |
 | Protected-artifact seal | Created once from approved committed DECIDE artifacts at first BUILD entry; checked before and after every BUILD/SHIP dispatch using `phase-marker.ts` allowlists |
 | Claude lifecycle adapter | Engine-owned hooks/settings are generated inside a minimal throwaway `CLAUDE_CONFIG_DIR`; no personal settings or hooks are copied |
