@@ -19,7 +19,7 @@ export const CODEX_MODEL_UNAVAILABLE_RE =
 export const CODEX_SESSION_EXPIRED_RE =
   /(?:session|thread|conversation) (?:not found|does not exist|expired|invalid)|no conversation found|failed to resume|cannot resume/i;
 export const CODEX_PERMISSION_DECISION_RE =
-  /(?:permission|approval|review).{0,80}(?:denied|unavailable|rejected|cancel(?:led|ed)|timed out|timeout|unknown result)/i;
+  /(?:permission|approval|review).{0,80}(?:denied|unavailable|rejected|cancel(?:led|ed)|timed out|timeout|unknown result|failed to (?:produce|return) (?:an? )?decision|indeterminate|no decision)/i;
 
 interface CodexJsonEvent {
   type?: string;

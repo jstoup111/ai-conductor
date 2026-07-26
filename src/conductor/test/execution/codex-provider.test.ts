@@ -174,13 +174,15 @@ describe('CodexProvider', () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: JSON.stringify({ type: 'error', code: 'approval_denied' }), stderr: '', exitCode: 1 } as any)
       .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review timed out awaiting approval.', exitCode: 1, timedOut: true } as any)
-      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review returned an unknown result.', exitCode: 1 } as any);
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review returned an unknown result.', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'Codex automatic review failed to produce a decision.', exitCode: 1 } as any);
 
     const oneShot = await provider.invoke(baseOptions);
     const automaticStream = await provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
     const unknownReview = await provider.invoke(baseOptions);
+    const failedReview = await provider.invoke(baseOptions);
 
-    for (const result of [oneShot, automaticStream, unknownReview]) {
+    for (const result of [oneShot, automaticStream, unknownReview, failedReview]) {
       expect(result).toMatchObject({
         success: false,
         permissionDenied: true,
@@ -199,15 +201,17 @@ describe('CodexProvider', () => {
     );
   });
 
-  it('does not misclassify generic empty, process-timeout, or unrelated unknown failures as Codex permission decisions', async () => {
+  it('does not misclassify generic empty, process-timeout, unrelated unknown, or build failures as Codex permission decisions', async () => {
     mockExeca
       .mockResolvedValueOnce({ stdout: '', stderr: '', exitCode: 1 } as any)
       .mockResolvedValueOnce({ stdout: '', stderr: 'child process timed out', exitCode: 1, timedOut: true } as any)
-      .mockResolvedValueOnce({ stdout: '', stderr: 'model response contained an unknown field', exitCode: 1 } as any);
+      .mockResolvedValueOnce({ stdout: '', stderr: 'model response contained an unknown field', exitCode: 1 } as any)
+      .mockResolvedValueOnce({ stdout: '', stderr: 'build failed', exitCode: 1 } as any);
 
     const emptyFailure = await provider.invoke(baseOptions);
     const timeoutFailure = await provider.invokeInteractive({ ...baseOptions, interactive: false });
     const unrelatedUnknown = await provider.invoke(baseOptions);
+    const buildFailure = await provider.invoke(baseOptions);
 
     expect(emptyFailure).toMatchObject({ success: false, output: '', permissionDenied: undefined });
     expect(timeoutFailure).toMatchObject({
@@ -218,6 +222,11 @@ describe('CodexProvider', () => {
     expect(unrelatedUnknown).toMatchObject({
       success: false,
       output: 'model response contained an unknown field',
+      permissionDenied: undefined,
+    });
+    expect(buildFailure).toMatchObject({
+      success: false,
+      output: 'build failed',
       permissionDenied: undefined,
     });
   });
