@@ -1,7 +1,7 @@
 {
   "complete": true,
-  "startedAt": "2026-07-26T00:51:38.529Z",
-  "completedAt": "2026-07-26T00:55:00.373Z",
+  "startedAt": "2026-07-26T09:04:38.879Z",
+  "completedAt": "2026-07-26T09:07:44.575Z",
   "rows": [
     {
       "sourcePath": ".docs/plans/2026-03-30-technical-assessment.md",
@@ -224,7 +224,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/91",
         "recordPath": ".docs/shipped/2026-06-27-phase-9.3-engineer-cleanup.md",
         "hash": "21a8f7ddf7d3a8b80bb3f4bc69e4896897cc8ac0fc101c4b1407ae4fe700a629",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -349,7 +349,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/153",
         "recordPath": ".docs/shipped/2026-06-29-rebase-resolution-skill.md",
         "hash": "d55faaba10f2e608910b9c34f1875921e1ed29b0652781393aca0e2bdcceff23",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -376,7 +376,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/382",
         "recordPath": ".docs/shipped/2026-06-30-background-intake-conduct-loop.md",
         "hash": "b1cbbbedc02b5e3fe796fc4e3668204d7016b26c4a9105e9f80968213bf2bd2d",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -534,12 +534,12 @@
     {
       "sourcePath": ".docs/plans/2026-07-12-rtk-hook-preservation.md",
       "sourceKind": "plan",
-      "classification": "backfilled",
+      "classification": "aligned",
       "plan": {
         "path": ".docs/plans/2026-07-12-rtk-hook-preservation.md",
         "slug": "2026-07-12-rtk-hook-preservation"
       },
-      "reason": "proven missing shipped record; proposal only",
+      "reason": "valid durable record is committed after implementation merge",
       "implementationPr": {
         "number": 615,
         "url": "https://github.com/jstoup111/ai-conductor/pull/615",
@@ -547,14 +547,12 @@
         "headSha": "6bbdf1b30c3b9fc95f5281dd40b95c252ea20d0c"
       },
       "verdict": {
-        "kind": "refusal",
-        "code": "shipped-record-missing",
-        "expected": ".docs/shipped/2026-07-12-rtk-hook-preservation.md",
-        "observed": null
-      },
-      "proposal": {
-        "path": ".docs/shipped/2026-07-12-rtk-hook-preservation.md",
-        "content": "---\nslug: 2026-07-12-rtk-hook-preservation\nspec_hash: f316d00be4263b748b6f0f9bdd545185c6094b0535c342fdbd0f311b7535ee6d\npr: https://github.com/jstoup111/ai-conductor/pull/615\nshipped: 2026-07-13\n---\n"
+        "kind": "valid",
+        "slug": "2026-07-12-rtk-hook-preservation",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/615",
+        "recordPath": ".docs/shipped/2026-07-12-rtk-hook-preservation.md",
+        "hash": "f316d00be4263b748b6f0f9bdd545185c6094b0535c342fdbd0f311b7535ee6d",
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -578,7 +576,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/650",
         "recordPath": ".docs/shipped/2026-07-12-wiring-reachability-gate.md",
         "hash": "d98feb1fafc1b33fdcfc950d363e5d942ecd32cc77a25905f35fbb086d250bcf",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -1409,7 +1407,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/596",
         "recordPath": ".docs/shipped/finish-staleness-grep-never-matches-rebase-finish.md",
         "hash": "817b892f499f82c20ac6218e1555097172e555334a164e4327d9cb5482e86670",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -1425,12 +1423,12 @@
     {
       "sourcePath": ".docs/plans/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
       "sourceKind": "plan",
-      "classification": "backfilled",
+      "classification": "aligned",
       "plan": {
         "path": ".docs/plans/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
         "slug": "finish-step-fails-try-1-on-every-daemon-ship-skill"
       },
-      "reason": "proven missing shipped record; proposal only",
+      "reason": "valid durable record is committed after implementation merge",
       "implementationPr": {
         "number": 427,
         "url": "https://github.com/jstoup111/ai-conductor/pull/427",
@@ -1438,14 +1436,12 @@
         "headSha": "325593fae9d5b91229fb1ac5318402baa053cbca"
       },
       "verdict": {
-        "kind": "refusal",
-        "code": "shipped-record-missing",
-        "expected": ".docs/shipped/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
-        "observed": null
-      },
-      "proposal": {
-        "path": ".docs/shipped/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
-        "content": "---\nslug: finish-step-fails-try-1-on-every-daemon-ship-skill\nspec_hash: 35d584d266a696cd7cff74b2df1e110969727d33a9c762631fdcb848d1a7b638\npr: https://github.com/jstoup111/ai-conductor/pull/427\nshipped: 2026-07-08\n---\n"
+        "kind": "valid",
+        "slug": "finish-step-fails-try-1-on-every-daemon-ship-skill",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/427",
+        "recordPath": ".docs/shipped/finish-step-fails-try-1-on-every-daemon-ship-skill.md",
+        "hash": "35d584d266a696cd7cff74b2df1e110969727d33a9c762631fdcb848d1a7b638",
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -1792,7 +1788,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/567",
         "recordPath": ".docs/shipped/mid-loop-pipeline-wipe-549.md",
         "hash": "7514040ebf4dd27e94f56e66dba3905648819d007789195a6e4fb3d36ea74f69",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -2172,7 +2168,7 @@
         "pr": "https://github.com/jstoup111/ai-conductor/pull/702",
         "recordPath": ".docs/shipped/retry-as-escalation.md",
         "hash": "9a4e6b6cb40623cfb6b2d13e44e71d0f71747c84e38b1396e9c06f7ece669c23",
-        "commit": "64576545473542cb55cddc8fc3d0f0ef4dc5927c"
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -2288,12 +2284,12 @@
     {
       "sourcePath": ".docs/plans/ship-ci-feedback-loop.md",
       "sourceKind": "plan",
-      "classification": "backfilled",
+      "classification": "aligned",
       "plan": {
         "path": ".docs/plans/ship-ci-feedback-loop.md",
         "slug": "ship-ci-feedback-loop"
       },
-      "reason": "proven missing shipped record; proposal only",
+      "reason": "valid durable record is committed after implementation merge",
       "implementationPr": {
         "number": 453,
         "url": "https://github.com/jstoup111/ai-conductor/pull/453",
@@ -2301,14 +2297,12 @@
         "headSha": "d50b88e89bc86bcdd84512d467b9c03c665baeb6"
       },
       "verdict": {
-        "kind": "refusal",
-        "code": "shipped-record-missing",
-        "expected": ".docs/shipped/ship-ci-feedback-loop.md",
-        "observed": null
-      },
-      "proposal": {
-        "path": ".docs/shipped/ship-ci-feedback-loop.md",
-        "content": "---\nslug: ship-ci-feedback-loop\nspec_hash: e60db9988069d6f447c3b106e4313f4a0888254cd416c0e04c9e52b2f8a4dcca\npr: https://github.com/jstoup111/ai-conductor/pull/453\nshipped: 2026-07-11\n---\n"
+        "kind": "valid",
+        "slug": "ship-ci-feedback-loop",
+        "pr": "https://github.com/jstoup111/ai-conductor/pull/453",
+        "recordPath": ".docs/shipped/ship-ci-feedback-loop.md",
+        "hash": "e60db9988069d6f447c3b106e4313f4a0888254cd416c0e04c9e52b2f8a4dcca",
+        "commit": "b2b0a19c062dff7bd80c595f5d70438d3d4a6772"
       }
     },
     {
@@ -2522,8 +2516,8 @@
     }
   ],
   "counts": {
-    "aligned": 7,
-    "backfilled": 3,
+    "aligned": 10,
+    "backfilled": 0,
     "unresolved": 34,
     "absent": 186,
     "ambiguous": 0,
