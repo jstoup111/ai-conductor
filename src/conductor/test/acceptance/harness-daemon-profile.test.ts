@@ -100,9 +100,11 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       resolveHarnessRoot: vi.fn(async () => dir),
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: dir })),
       relink: vi.fn(async () => {}),
-      provisionSandbox: vi.fn(async () => {
-        throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');
-      }),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => ({}),
+        teardown: async () => {},
+      })),
       versionGate: runVersionApprovalGate, // the REAL primitive — no marker, no freeze.
       releaseGate: releaseGateSpy,
     };
@@ -118,7 +120,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
-      config: { harness_self_host: { sandbox_build_env: false } },
+      config: { harness_self_host: { sandbox_build_env: true } },
     } as ConstructorParameters<typeof Conductor>[0]);
     return { conductor, seen };
   }
@@ -201,9 +203,11 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       resolveHarnessRoot: vi.fn(async () => dir),
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: dir })),
       relink: vi.fn(async () => {}),
-      provisionSandbox: vi.fn(async () => {
-        throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');
-      }),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => ({}),
+        teardown: async () => {},
+      })),
       versionGate: versionGateSpy,
       releaseGate: releaseGateSpy,
     };
@@ -221,7 +225,7 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       escalateBuildFailure: NOOP_ESCALATION,
       config: {
         harness_self_host: {
-          sandbox_build_env: false,
+          sandbox_build_env: true,
           version_approval_gate: false, // Gate is disabled
         },
       },

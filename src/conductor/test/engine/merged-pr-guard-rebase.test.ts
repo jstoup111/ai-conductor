@@ -26,6 +26,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import * as rebaseModule from '../../src/engine/rebase.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCb);
 const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
@@ -51,6 +52,7 @@ function makeGhFake(
 
 async function seedPreRebaseState(
   statePath: string,
+  repo: string,
   overrides: Record<string, unknown> = {},
 ): Promise<void> {
   const state: ConductState = { feature_desc: 'feat' };
@@ -60,6 +62,10 @@ async function seedPreRebaseState(
   }
   Object.assign(state, overrides);
   await writeState(statePath, state);
+  const baselineCommit = (
+    await execFile('git', ['rev-parse', 'HEAD'], { cwd: repo })
+  ).stdout.trim();
+  await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
 }
 
 async function fileExists(p: string): Promise<boolean> {
@@ -141,7 +147,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
-    await seedPreRebaseState(statePath, { pr_url: PR_URL });
+    await seedPreRebaseState(statePath, repo, { pr_url: PR_URL });
 
     const beforeSha = (await g(['rev-parse', 'feat'])).stdout.trim();
 
@@ -186,7 +192,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     ({ repo, g } = await buildConflictRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
-    await seedPreRebaseState(statePath, { pr_url: PR_URL });
+    await seedPreRebaseState(statePath, repo, { pr_url: PR_URL });
 
     const runner: StepRunner = {
       run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult),
@@ -216,7 +222,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
-    await seedPreRebaseState(statePath, { pr_url: PR_URL });
+    await seedPreRebaseState(statePath, repo, { pr_url: PR_URL });
 
     const beforeSha = (await g(['rev-parse', 'feat'])).stdout.trim();
 
@@ -249,7 +255,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
-    await seedPreRebaseState(statePath); // no pr_url
+    await seedPreRebaseState(statePath, repo); // no pr_url
 
     const beforeSha = (await g(['rev-parse', 'feat'])).stdout.trim();
 
@@ -282,7 +288,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
-    await seedPreRebaseState(statePath, { pr_url: PR_URL });
+    await seedPreRebaseState(statePath, repo, { pr_url: PR_URL });
 
     const runner: StepRunner = {
       run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult),

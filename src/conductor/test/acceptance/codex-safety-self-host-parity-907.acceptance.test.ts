@@ -110,7 +110,7 @@ describe('acceptance: Codex safety and self-host parity (#907)', () => {
   });
 
   // Covers: FR-1, FR-2, FR-4
-  it('keeps concurrent task rows independent when one task ends', async () => {
+  it('does not clear a sibling task stamp or manufacture completion when an older task ends', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'acceptance-907-attribution-'));
     try {
       const pipeline = join(projectRoot, '.pipeline');
@@ -122,13 +122,13 @@ describe('acceptance: Codex safety and self-host parity (#907)', () => {
 
       expect(await runTaskStart(projectRoot, '1')).toBe(0);
       expect(await runTaskStart(projectRoot, '2')).toBe(0);
-      expect(await runTaskDone(projectRoot, '1')).toBe(0);
+      expect(await runTaskDone(projectRoot, '1')).toBe(1);
 
       const status = JSON.parse(await readFile(join(pipeline, 'task-status.json'), 'utf8')) as {
         tasks: Array<{ id: string; status: string }>;
       };
       expect(status.tasks).toEqual([
-        { id: '1', status: 'done' },
+        { id: '1', status: 'in_progress' },
         { id: '2', status: 'in_progress' },
       ]);
       expect(await readFile(join(pipeline, 'current-task'), 'utf8')).toBe('2');
