@@ -56,6 +56,7 @@ export interface PermissionDeniedOutcome {
   kind: "permission-denied";
   provider: string;
   reason: string;
+  authentication?: Pick<AuthenticationReadiness, "provider" | "source" | "state">;
 }
 
 /**
@@ -545,6 +546,15 @@ async function runGroupBranchInner(
         kind: "permission-denied",
         provider: result.actualProvider ?? result.preferredProvider ?? "selected provider",
         reason: result.output ?? "Permission review denied the required action.",
+        ...(result.authentication
+          ? {
+              authentication: {
+                provider: result.authentication.provider,
+                source: result.authentication.source,
+                state: result.authentication.state,
+              },
+            }
+          : {}),
       };
     }
 

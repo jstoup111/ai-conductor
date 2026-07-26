@@ -1589,6 +1589,11 @@ TIER: M`,
         output: 'Codex permission review denied the required action.',
         exitCode: 1,
         permissionDenied: true,
+        authentication: {
+          provider: 'codex',
+          source: 'cached-login',
+          state: 'ready',
+        },
       });
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
@@ -1596,7 +1601,15 @@ TIER: M`,
 
       const result = await runner.run('worktree', emptyState);
 
-      expect(result).toMatchObject({ success: false, permissionDenied: true });
+      expect(result).toMatchObject({
+        success: false,
+        permissionDenied: true,
+        authentication: {
+          provider: 'codex',
+          source: 'cached-login',
+          state: 'ready',
+        },
+      });
     });
   });
 
@@ -2018,6 +2031,37 @@ TIER: M`,
       expect(opts.sessionId).not.toBe('session-1');
       // A real uuid, not empty/undefined.
       expect(opts.sessionId).toMatch(/^[0-9a-f-]{36}$/);
+    });
+
+    it('preserves authentication metadata on a legacy scalar permission denial', async () => {
+      const authentication = {
+        provider: 'codex' as const,
+        source: 'api-key' as const,
+        state: 'ready' as const,
+      };
+      const invoke = vi.fn().mockResolvedValue({
+        success: false,
+        output: 'Codex permission review denied the required action.',
+        exitCode: 1,
+        permissionDenied: true,
+        authentication,
+      });
+      const provider: LLMProvider = {
+        invoke,
+        invokeInteractive: vi.fn().mockResolvedValue(undefined),
+      };
+      const runner = new DefaultStepRunner(provider, 'session-1', dir, {
+        gitRunner: scriptedGit(),
+        planPath,
+      });
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result).toMatchObject({
+        success: false,
+        permissionDenied: true,
+        authentication,
+      });
     });
 
     it('resolves the feature\'s own plan by featureDesc stem, not the alphabetically-last plan file (#788)', async () => {

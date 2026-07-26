@@ -875,6 +875,12 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
       output: "Codex automatic permission review denied the required action.",
       permissionDenied: true,
       actualProvider: "codex",
+      authentication: {
+        provider: 'codex',
+        source: 'api-key',
+        state: 'ready',
+        remediation: 'sensitive provider detail',
+      },
     }]);
     const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
 
@@ -886,6 +892,11 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
         kind: "permission-denied",
         provider: "codex",
         reason: "Codex automatic permission review denied the required action.",
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
       },
     });
   });

@@ -2741,8 +2741,11 @@ export class Conductor {
                 throw new Error('permission-denied outcome index lost its disposition');
               }
               const provider = outcome.provider === 'codex' ? 'Codex' : outcome.provider;
+              const source = outcome.authentication?.source;
               const haltReason =
-                `${provider} permission review denied a required action for grouped member "${member.name}".\n` +
+                `${provider} permission review denied a required action for grouped member "${member.name}"` +
+                (source ? ` using the selected ${source} source` : '') +
+                '.\n' +
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
               await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});

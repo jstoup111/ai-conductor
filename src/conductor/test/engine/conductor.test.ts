@@ -5110,6 +5110,11 @@ describe('engine/conductor', () => {
               output: 'Codex automatic permission review denied the required action.',
               permissionDenied: true,
               actualProvider: 'codex',
+              authentication: {
+                provider: 'codex',
+                source: 'api-key',
+                state: 'ready',
+              },
             };
           }
           return { success: true };
@@ -5138,7 +5143,9 @@ describe('engine/conductor', () => {
       }).toEqual({
         calls: { manual_test: 1, prd_audit: 1, architecture_review_as_built: 1 },
         haltReasons: [
-          expect.stringMatching(/Codex permission review denied[\s\S]*re-scope[\s\S]*re-queue/i),
+          expect.stringMatching(
+            /Codex permission review denied[\s\S]*selected api-key source[\s\S]*re-scope[\s\S]*re-queue/i,
+          ),
         ],
       });
     });
