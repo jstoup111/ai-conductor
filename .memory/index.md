@@ -3,3 +3,7 @@
 ## Patterns
 
 - [feature-pool-lifecycle-logger](patterns/feature-pool-lifecycle-logger.md) — Cache a feature-scoped logger for pool lifecycle records outside the worktree scope.
+
+## Gotchas
+
+- [feature-logger-callback-capture](gotchas/feature-logger-callback-capture.md) — Feature-owned callback adapters must receive the scoped logger explicitly.
