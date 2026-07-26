@@ -3,6 +3,7 @@ import { isAbsolute, join } from 'node:path';
 import { execa } from 'execa';
 import type { GhRunner } from './pr-labels.js';
 import { parseShippedRecord, specHash } from './shipped-record.js';
+import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type ShipmentEvidenceResult =
   | {
@@ -27,6 +28,7 @@ export type ShipmentEvidenceRefusal = {
     | 'shipped-record-pr-mismatch'
     | 'shipped-record-hash-mismatch'
     | 'shipment-plan-missing'
+    | 'shipment-plan-ambiguous'
     | 'shipped-record-not-in-candidate'
     | 'shipment-candidate-not-on-implementation-head'
     | 'shipment-candidate-stale'
@@ -100,11 +102,51 @@ export async function evaluateShipmentEvidence(
     );
   }
 
-  const recordPath = `.docs/shipped/${slug}.md`;
   const readFile = dependencies.readFile ?? ((path: string) => showAtCommit(repoDir, candidateCommit, path));
   const gitRunner = dependencies.gitRunner ?? ((args: string[]) => runGit(repoDir, args));
-  const recordContent = await readEvidenceFile(readFile, recordPath);
-  if (isRefusal(recordContent)) return recordContent;
+  const exactPlanPath = `.docs/plans/${slug}.md`;
+  const exactRecordPath = `.docs/shipped/${slug}.md`;
+  // Preserve the strict verifier's established record-first failure surface
+  // for ordinary (exact-stem) plans. Date-prefixed fallback only engages when
+  // the exact plan is absent, so an I/O failure reading the expected record is
+  // never hidden by a later plan lookup.
+  const exactRecordContent = await readEvidenceFile(readFile, exactRecordPath);
+  if (isRefusal(exactRecordContent)) return exactRecordContent;
+  let planBytes = await readEvidenceFile(readFile, exactPlanPath);
+  if (isRefusal(planBytes)) return planBytes;
+
+  let identity;
+  let recordContent;
+  if (planBytes === null) {
+    let planPaths: string[];
+    try {
+      planPaths = await listPlanPathsAtCommit(gitRunner, candidateCommit);
+    } catch (error) {
+      return unavailable('shipment-evidence-git-unavailable', 'committed plan identity', error);
+    }
+    const resolution = resolveShipmentIdentity(slug, planPaths);
+    if (resolution.kind === 'missing') {
+      return refusal('shipment-plan-missing', resolution.expected, null);
+    }
+    if (resolution.kind === 'ambiguous') {
+      return refusal('shipment-plan-ambiguous', resolution.expected, resolution.candidates.join(', '));
+    }
+    identity = resolution.identity;
+    planBytes = await readEvidenceFile(readFile, identity.planPath);
+    if (isRefusal(planBytes)) return planBytes;
+    if (planBytes === null) return refusal('shipment-plan-missing', identity.planPath, null);
+    recordContent = await readEvidenceFile(readFile, identity.recordPath);
+    if (isRefusal(recordContent)) return recordContent;
+  } else {
+    const resolution = resolveShipmentIdentity(slug, [exactPlanPath]);
+    if (resolution.kind !== 'resolved') {
+      return refusal('shipment-plan-missing', exactPlanPath, null);
+    }
+    identity = resolution.identity;
+    recordContent = exactRecordContent;
+  }
+
+  const { recordPath } = identity;
   if (recordContent === null) {
     const workingTreeRecord = await existsInWorkingTree(repoDir, recordPath);
     if (isRefusal(workingTreeRecord)) return workingTreeRecord;
@@ -149,10 +191,10 @@ export async function evaluateShipmentEvidence(
       'malformed',
     );
   }
-  if (record.slug !== slug) {
+  if (record.slug !== identity.slug) {
     return refusal(
       'shipped-record-slug-mismatch',
-      slug,
+      identity.slug,
       record.slug,
     );
   }
@@ -164,18 +206,7 @@ export async function evaluateShipmentEvidence(
     );
   }
 
-  const planPath = `.docs/plans/${slug}.md`;
-  const planBytes = await readEvidenceFile(readFile, planPath);
-  if (isRefusal(planBytes)) return planBytes;
-  if (planBytes === null) {
-    return refusal(
-      'shipment-plan-missing',
-      planPath,
-      null,
-    );
-  }
-
-  const storiesBytes = await readStoriesBytes(readFile, slug, planBytes);
+  const storiesBytes = await readStoriesBytes(readFile, identity.slug, planBytes);
   if (isRefusal(storiesBytes)) return storiesBytes;
   const hash = specHash(planBytes, storiesBytes).digest;
   if (record.specHash !== hash) {
@@ -238,12 +269,27 @@ export async function evaluateShipmentEvidence(
 
   return {
     kind: 'valid',
-    slug,
+    slug: identity.slug,
     pr: record.pr,
     recordPath,
     hash,
     commit: candidateCommit,
   };
+}
+
+async function listPlanPathsAtCommit(
+  gitRunner: (args: string[]) => Promise<string>,
+  candidateCommit: string,
+): Promise<string[]> {
+  const output = await gitRunner([
+    'ls-tree',
+    '-r',
+    '--name-only',
+    candidateCommit,
+    '--',
+    '.docs/plans',
+  ]);
+  return output.split('\n').filter((path) => path.endsWith('.md'));
 }
 
 function refusal(

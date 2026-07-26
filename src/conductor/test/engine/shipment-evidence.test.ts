@@ -78,6 +78,43 @@ describe('evaluateShipmentEvidence', () => {
     expect(repeatedVerdict).toEqual(verdict);
   });
 
+  it('validates the date-prefixed record when feature state supplies the plan suffix', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-dated-identity-'));
+    scratchDirs.push(repoDir);
+    const requestedSlug = 'durable-shipped-record-enforcement-and-backfill-916-936';
+    const slug = `2026-07-25-${requestedSlug}`;
+    const pr = 'https://github.com/acme/conductor/pull/958';
+    const plan = '# Durable evidence\n';
+    const hash = specHash(Buffer.from(plan), null).digest;
+
+    await initTestRepo(repoDir);
+    await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/shipped'), { recursive: true });
+    await writeFile(join(repoDir, `.docs/plans/${slug}.md`), plan);
+    await writeFile(
+      join(repoDir, `.docs/shipped/${slug}.md`),
+      renderShippedRecord({ slug, specHash: hash, pr, shipped: '2026-07-26' }),
+    );
+    await execFile('git', ['add', '.'], { cwd: repoDir });
+    await execFile('git', ['commit', '-m', 'feat: add dated durable evidence'], { cwd: repoDir });
+    const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repoDir });
+    const commit = stdout.trim();
+
+    await expect(
+      evaluateShipmentEvidence(
+        { repoDir, slug: requestedSlug, implementationPr: pr, candidateCommit: commit },
+        { githubRunner: async () => ({ url: pr, headRefOid: commit }) },
+      ),
+    ).resolves.toEqual({
+      kind: 'valid',
+      slug,
+      pr,
+      recordPath: `.docs/shipped/${slug}.md`,
+      hash,
+      commit,
+    });
+  });
+
   it('refuses a candidate when the implementation PR binding reports a different head', async () => {
     const repoDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-pr-head-mismatch-'));
     scratchDirs.push(repoDir);
