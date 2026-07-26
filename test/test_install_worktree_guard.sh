@@ -169,11 +169,11 @@ assert "--update --allow-worktree-root exits zero" \
 assert "override run links skills into the throwaway HOME" \
   "$([ -L "$HOME4/.claude/skills/tdd" ]; echo $?)"
 assert "override run links Codex skills into the throwaway HOME" \
-  "$([ -L "$HOME4/.codex/skills/tdd" ]; echo $?)"
+  "$([ -L "$HOME4/.agents/skills/tdd" ]; echo $?)"
 assert "override run links Claude harness instructions into the throwaway HOME" \
   "$([ -L "$HOME4/.claude/skills/HARNESS.md" ] && [ -f "$HOME4/.claude/skills/HARNESS.md" ]; echo $?)"
 assert "override run links Codex harness instructions into the throwaway HOME" \
-  "$([ -L "$HOME4/.codex/skills/HARNESS.md" ] && [ -f "$HOME4/.codex/skills/HARNESS.md" ]; echo $?)"
+  "$([ -L "$HOME4/.agents/skills/HARNESS.md" ] && [ -f "$HOME4/.agents/skills/HARNESS.md" ]; echo $?)"
 assert "override run links conduct into the throwaway HOME" \
   "$([ -L "$HOME4/.local/bin/conduct" ]; echo $?)"
 assert "override run writes settings.json in the throwaway HOME" \
@@ -216,7 +216,7 @@ assert "no refusal message on a non-worktree root" \
 assert "install proceeded normally (skills linked)" \
   "$([ -L "$HOME6/.claude/skills/tdd" ]; echo $?)"
 assert "install proceeded normally (Codex skills linked)" \
-  "$([ -L "$HOME6/.codex/skills/tdd" ]; echo $?)"
+  "$([ -L "$HOME6/.agents/skills/tdd" ]; echo $?)"
 
 # ─── Sanity: default install on a main-style root without the flag ─────────────
 
@@ -231,11 +231,11 @@ assert "default install on a non-worktree root still works (guard inert)" \
 assert "skills linked on the plain-root install" \
   "$([ -L "$HOME7/.claude/skills/tdd" ]; echo $?)"
 assert "Codex skills linked on the plain-root install" \
-  "$([ -L "$HOME7/.codex/skills/tdd" ]; echo $?)"
+  "$([ -L "$HOME7/.agents/skills/tdd" ]; echo $?)"
 assert "Claude harness instructions linked on the plain-root install" \
   "$([ -L "$HOME7/.claude/skills/HARNESS.md" ]; echo $?)"
 assert "Codex harness instructions linked on the plain-root install" \
-  "$([ -L "$HOME7/.codex/skills/HARNESS.md" ]; echo $?)"
+  "$([ -L "$HOME7/.agents/skills/HARNESS.md" ]; echo $?)"
 
 run_install "$PLAIN_COPY/bin/install" "$HOME7" --uninstall
 assert "uninstall removes Claude user-scoped skills" \

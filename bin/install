@@ -10,7 +10,7 @@ set -euo pipefail
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HARNESS_INSTRUCTIONS_SOURCE="${HARNESS_DIR}/HARNESS.md"
 CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
-CODEX_SKILLS_DIR="${HOME}/.codex/skills"
+CODEX_SKILLS_DIR="${HOME}/.agents/skills"
 LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
