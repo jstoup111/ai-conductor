@@ -101,6 +101,7 @@ check_installation() {
   echo ""
 
   local all_ok=true
+  local build_auth_ok=true
 
   # Check every selected built-in CLI. Unlike normal installation, --check is
   # strict: every unavailable selected provider makes the readiness result
@@ -248,7 +249,7 @@ check_installation() {
       ok "${build_auth_line}"
     else
       fail "${build_auth_line}"
-      all_ok=false
+      build_auth_ok=false
     fi
   else
     warn "build-auth check skipped — conduct-ts not on PATH"
@@ -288,6 +289,9 @@ check_installation() {
   # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
   if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$duplicates" -eq 0 ] && $all_ok; then
+    if [ "$build_auth_ok" = false ]; then
+      return 2
+    fi
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
     return 0
   else

@@ -80,6 +80,14 @@ describe('ensureInstallFresh — staleness policy', () => {
     expect(calls).toEqual([['--check']]);
   });
 
+  it('build-auth readiness failure does not masquerade as stale skills', async () => {
+    const { runner } = makeRunner({ check: 2 });
+
+    await expect(
+      ensureInstallFresh({ harnessRoot: HARNESS, runner, interactive: false, log: () => {} }),
+    ).resolves.toBeUndefined();
+  });
+
   it('drift diagnostic names both active catalogs and native `$rebase` syntax', async () => {
     const { runner } = makeRunner({ check: 1 });
     const logs: string[] = [];
