@@ -387,6 +387,25 @@ export interface StepRunResult {
   };
 }
 
+export interface SpotAuditDispatchResult {
+  success: boolean;
+  output?: string;
+  authFailure?: boolean;
+  authentication?: AuthenticationReadiness;
+}
+
+/** Preserve recovery metadata when adapting a verifier dispatch for spot audit. */
+export function toSpotAuditVerifierResult(
+  result: SpotAuditDispatchResult,
+): SpotAuditDispatchResult & { output: string } {
+  return {
+    success: result.success,
+    output: result.output ?? '',
+    ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
+    ...(result.authentication ? { authentication: result.authentication } : {}),
+  };
+}
+
 /**
  * #814: backoff (ms) before re-dispatching a grader whose previous dispatch
  * failed to run. Exponential with a cap so a transient spawn/startup failure has
@@ -516,7 +535,7 @@ export interface StepRunner {
     residueIds: string[];
     planPath: string;
     projectRoot: string;
-  }): Promise<{ success: boolean; output?: string } | { success: false; output: string }>;
+  }): Promise<SpotAuditDispatchResult>;
   /**
    * Dispatch a fix-session to resolve a setup failure. Part of the two-stage
    * setup-failure triage (TS-3). Uses a fresh one-shot session (never resumes
@@ -5888,10 +5907,7 @@ export class Conductor {
                       planPath,
                       projectRoot: this.projectRoot,
                     });
-                    return {
-                      success: result.success,
-                      output: result.output ?? '',
-                    };
+                    return toSpotAuditVerifierResult(result);
                   }
                   // Dispatcher not available (safe for non-testing scenarios)
                   return { success: false, output: 'dispatchVerifier not available' };

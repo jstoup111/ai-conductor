@@ -110,6 +110,24 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
+    const module = await import('../../src/engine/conductor.js') as {
+      toSpotAuditVerifierResult?: (result: unknown) => unknown;
+    };
+
+    expect(module.toSpotAuditVerifierResult?.({
+      success: false,
+      output: 'selected authentication source rejected',
+      authFailure: true,
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    })).toEqual({
+      success: false,
+      output: 'selected authentication source rejected',
+      authFailure: true,
+      authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+    });
+  });
+
   describe('track resolution from the committed marker (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location, interactive)', () => {
     it('technical marker → prd is skipped even when state.track is unset', async () => {
       // /explore wrote the marker; state has no `track` (interactive path).
