@@ -446,6 +446,45 @@ describe('CodexProvider', () => {
 
   it.each([
     [
+      'all-green doctor health',
+      'ok',
+      { provider: 'codex', source: 'cached-login', state: 'ready' },
+    ],
+    [
+      'unrelated degraded doctor health',
+      'fail',
+      {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'ready',
+        unrelatedHealth: 'degraded',
+      },
+    ],
+  ] as const)(
+    'classifies supported ready auth evidence with %s without leaking doctor diagnostics',
+    async (_name, overallStatus, expected) => {
+      const readiness = await new CodexProvider(
+        vi.fn().mockResolvedValue({
+          stdout: JSON.stringify({
+            schemaVersion: 1,
+            overallStatus,
+            checks: {
+              'auth.credentials': {
+                status: 'ok',
+                summary: 'credentials available; reachability probe failed at https://internal.example',
+              },
+            },
+          }),
+          exitCode: overallStatus === 'ok' ? 0 : 1,
+        }),
+      ).readiness();
+
+      expect(readiness).toEqual(expected);
+    },
+  );
+
+  it.each([
+    [
       'missing auth check',
       { schemaVersion: 1, overallStatus: 'ok', checks: {} },
     ],
@@ -455,14 +494,6 @@ describe('CodexProvider', () => {
         schemaVersion: 1,
         overallStatus: 'ok',
         checks: { 'auth.credentials': { status: 'warning', summary: 'maybe ready' } },
-      },
-    ],
-    [
-      'overall failure despite an otherwise-ready credential check',
-      {
-        schemaVersion: 1,
-        overallStatus: 'fail',
-        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
       },
     ],
     [

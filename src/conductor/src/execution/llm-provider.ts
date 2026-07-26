@@ -20,6 +20,9 @@ export type AuthenticationReadinessState =
   | 'unusable'
   | 'unverifiable';
 
+/** A closed indication that non-authentication doctor checks are degraded. */
+export type UnrelatedHealth = 'degraded';
+
 /**
  * Safe metadata a provider may return for authentication recovery. Diagnostic
  * output and credential material deliberately have no representation here.
@@ -28,6 +31,7 @@ export interface AuthenticationReadiness {
   provider: 'codex';
   source: AuthenticationSource;
   state: AuthenticationReadinessState;
+  unrelatedHealth?: UnrelatedHealth;
   remediation?: string;
 }
 
