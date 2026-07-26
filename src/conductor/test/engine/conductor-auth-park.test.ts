@@ -167,6 +167,61 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
   });
 
+  it('emits one park start, immediate sanitized state changes, and throttles unchanged progress', async () => {
+    const readiness = vi
+      .fn()
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'unusable' })
+      .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async (delay: number) => {
+      clockOffset += delay;
+    });
+    const eventsSeen: unknown[] = [];
+    events.on('credentials_park', (event) => eventsSeen.push(event));
+    events.on('credentials_park_progress', (event) => eventsSeen.push(event));
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    try {
+      await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+
+      expect(eventsSeen.filter((event: any) => event.type === 'credentials_park')).toHaveLength(1);
+      expect(eventsSeen.filter((event: any) => event.type === 'credentials_park_progress')).toEqual([
+        expect.objectContaining({ readiness: 'missing', nextProbeDelaySeconds: 1, degradation: 'credential-failure' }),
+        expect.objectContaining({ readiness: 'unusable', nextProbeDelaySeconds: 4, degradation: 'credential-failure' }),
+        expect.objectContaining({ readiness: 'ready', nextProbeDelaySeconds: 0, degradation: 'credential-failure' }),
+      ]);
+      expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('clamps the final cached-login sleep to the remaining auth-park deadline', async () => {
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'unusable',

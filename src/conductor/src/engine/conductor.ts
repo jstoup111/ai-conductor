@@ -1336,20 +1336,52 @@ export class Conductor {
         }
 
         let retryDelayMs = 1_000;
+        let lastProgress:
+          | { readiness: typeof authentication.state; degradation: 'credential-failure' | 'unrelated-diagnostic-degradation'; emittedAt: number }
+          | undefined;
         for (;;) {
           const current = await readiness();
-          if (
+          const now = Date.now();
+          const elapsedMs = now - startedAt;
+          const isReady =
             current.provider === authentication.provider &&
             current.source === authentication.source &&
-            current.state === 'ready'
+            current.state === 'ready';
+          const timedOut = elapsedMs >= timeoutMs;
+          const nextDelayMs = isReady || timedOut
+            ? 0
+            : Math.min(retryDelayMs, timeoutMs - elapsedMs);
+          const degradation = current.unrelatedHealth === 'degraded'
+            ? 'unrelated-diagnostic-degradation' as const
+            : 'credential-failure' as const;
+          const previousProgress = lastProgress;
+          const stateChanged =
+            !previousProgress ||
+            previousProgress.readiness !== current.state ||
+            previousProgress.degradation !== degradation;
+
+          if (stateChanged || now - previousProgress.emittedAt >= 60_000) {
+            await this.events.emit({
+              type: 'credentials_park_progress',
+              provider: 'codex',
+              source: authentication.source,
+              readiness: current.state,
+              elapsedSeconds: Math.max(0, Math.floor(elapsedMs / 1_000)),
+              nextProbeDelaySeconds: Math.ceil(nextDelayMs / 1_000),
+              degradation,
+            });
+            lastProgress = { readiness: current.state, degradation, emittedAt: now };
+          }
+
+          if (
+            isReady
           ) {
             return { timedOut: false, haltReason: '' };
           }
-          if (timeoutMs <= 0 || Date.now() - startedAt >= timeoutMs) {
+          if (timedOut) {
             return timedOutResult;
           }
-          const remainingMs = timeoutMs - (Date.now() - startedAt);
-          await this.sleep(Math.min(retryDelayMs, remainingMs));
+          await this.sleep(nextDelayMs);
           retryDelayMs = Math.min(retryDelayMs * 2, 30_000);
         }
       }
