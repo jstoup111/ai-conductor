@@ -8991,10 +8991,14 @@ describe('engine/conductor', () => {
       const invoke = (
         provider: 'claude' | 'codex',
       ) => async (options: InvokeOptions): Promise<InvokeResult> => {
-        if (options.prompt !== '/memory' && options.prompt !== '/explore') {
+        const promptPrefix = provider === 'codex' ? '$' : '/';
+        if (
+          options.prompt !== `${promptPrefix}memory` &&
+          options.prompt !== `${promptPrefix}explore`
+        ) {
           return { success: true, output: 'non-target step completed', exitCode: 0 };
         }
-        const step = options.prompt === '/memory' ? 'memory' : 'explore';
+        const step = options.prompt === `${promptPrefix}memory` ? 'memory' : 'explore';
         const key = `${step}:${provider}`;
         const call = (providerCalls.get(key) ?? 0) + 1;
         providerCalls.set(key, call);
