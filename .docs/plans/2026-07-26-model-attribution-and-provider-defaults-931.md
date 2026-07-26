@@ -67,13 +67,11 @@ Tune existing provider-policy tables and this repository's provider routing in t
 2. Verify both fallback directions still re-resolve provider-native defaults and report fallback visibly.
 3. Verify explicit overrides, retry escalation, fallback ladders, unknown-provider compatibility, and disabled manual testing remain green.
 4. Inspect the diff and confirm no nested role, provider interface, standalone skill, or lifecycle topology changed.
-5. Create an empty evidence commit only if no corrective change is needed, with message: `test(models): verify attribution policy scope`.
+5. Commit any required stale-oracle correction with message: `test(models): verify attribution policy scope`.
 
 **Files:** `src/conductor/src/engine/provider-model-policy.ts`, `src/conductor/test/engine/provider-model-policy.test.ts`, `src/conductor/test/engine/resolved-config.test.ts`, `src/conductor/src/engine/model-table-metadata.ts`, `src/conductor/test/model-table-metadata.test.ts`, `src/conductor/test/generate-model-table.test.ts`, `src/conductor/test/acceptance/per-step-provider-routing-927.acceptance.test.ts`, `.ai-conductor/config.yml`, `HARNESS.md`
 
 **Wired-into:** none (no new production surface)
-
-**Verify-only:** yes
 
 **Dependencies:** Task 2
 
