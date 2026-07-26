@@ -2,21 +2,39 @@
 export type SafetyApplicability = 'applicable' | 'not-applicable' | 'unknown';
 
 /** The verified state of a protection that applies to an attempt. */
-export type SafetyProtectionState = 'passing' | 'missing' | 'unknown';
+export type SafetyProtectionState =
+  | 'passing'
+  | 'missing'
+  | 'corrupt'
+  | 'stale'
+  | 'disabled'
+  | 'unknown';
 
 /** Required protections gate work; diagnostic protections only report gaps. */
 export type SafetyCriticality = 'required' | 'diagnostic';
+
+/** The run class in which a protection is required. */
+export type SafetyProtectionScope = 'all' | 'self-host';
+
+/** Facts supplied by the live dispatch path, not by provider configuration. */
+export interface SafetyRunContext {
+  selfHost: boolean;
+}
 
 /** One provider-neutral protection observation. */
 export interface SafetyProtection {
   name: string;
   criticality: SafetyCriticality;
+  /** Required protections must declare where they are authoritative. */
+  scope?: SafetyProtectionScope;
   applicability: SafetyApplicability;
   state: SafetyProtectionState;
 }
 
 export interface SafetyBoundaryInput {
   protections: readonly SafetyProtection[];
+  /** Actual dispatch context used to verify claimed applicability. */
+  context?: SafetyRunContext;
   /** Diagnostic task-local context; deliberately excluded from safety authority. */
   attribution?: SafetyAttributionTelemetry;
 }
@@ -42,6 +60,20 @@ export interface SafetyVerdict {
   attribution?: SafetyAttributionTelemetry;
 }
 
+function requiredProtectionFails(
+  protection: SafetyProtection,
+  context: SafetyRunContext | undefined,
+): boolean {
+  if (protection.criticality !== 'required') return false;
+
+  const scope = protection.scope ?? 'all';
+  if (scope === 'self-host' && !context) return true;
+  const requiredHere = scope === 'all' || context?.selfHost === true;
+  if (!requiredHere) return protection.applicability !== 'not-applicable';
+
+  return protection.applicability !== 'applicable' || protection.state !== 'passing';
+}
+
 /**
  * Classify a provider attempt without provider-specific assumptions.
  * Required protections fail closed unless explicitly not applicable and every
@@ -49,10 +81,7 @@ export interface SafetyVerdict {
  */
 export function evaluateSafetyBoundary(input: SafetyBoundaryInput): SafetyVerdict {
   const requiredFailures = input.protections.filter(
-    (protection) =>
-      protection.criticality === 'required' &&
-      protection.applicability !== 'not-applicable' &&
-      !(protection.applicability === 'applicable' && protection.state === 'passing'),
+    (protection) => requiredProtectionFails(protection, input.context),
   );
   const diagnosticGaps = input.protections
     .filter(

@@ -78,6 +78,7 @@ import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from './protected-artifact-seal.js';
+import { evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
@@ -1765,6 +1766,25 @@ export class Conductor {
     state: ConductState,
     retryHint: string | undefined,
   ): Promise<StepRunResult> {
+    const selfHostConfig = resolveSelfHostConfig(this.config);
+    const safetyVerdict = evaluateSafetyBoundary({
+      context: { selfHost: this.isSelfBuild() },
+      protections: [{
+        name: 'self-host-isolation',
+        criticality: 'required',
+        scope: 'self-host',
+        applicability: this.isSelfBuild() ? 'applicable' : 'not-applicable',
+        state: selfHostConfig.sandboxBuildEnv ? 'passing' : 'disabled',
+      }],
+    });
+    if (!safetyVerdict.passed) {
+      return {
+        success: false,
+        output: `Required safety protection unavailable: ${safetyVerdict.requiredFailures.map((p) => p.name).join(', ')}`,
+        permissionDenied: true,
+      };
+    }
+
     // Provider selection must precede self-host preparation: the guardrail
     // bundle below configures Claude's global credentials and sandbox only.
     // The step runner retains responsibility for Codex's provider-local
@@ -1776,7 +1796,7 @@ export class Conductor {
       return this.stepRunner.run(name, state, { retryReason: retryHint });
     }
 
-    const sh = resolveSelfHostConfig(this.config);
+    const sh = selfHostConfig;
 
     if (sh.skillRelinkPreflight && !this.relinkDone) {
       this.relinkDone = true;

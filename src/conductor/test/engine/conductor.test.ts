@@ -13012,4 +13012,41 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     expect(tryGetStepIndex('retro')).not.toBeNull();
     expect(tryGetStepIndex('remediate')).toBeNull();
   });
+
+  it('stops a self-host build before dispatch when its required isolation is disabled', async () => {
+    const safetyDir = await mkdtemp(join(tmpdir(), 'conductor-safety-'));
+    const safetyStatePath = join(safetyDir, 'conduct-state.json');
+    await writeState(safetyStatePath, {
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      stories: 'done', conflict_check: 'done', plan: 'done', coherence_check: 'done',
+      architecture_diagram: 'done', architecture_review: 'done', acceptance_specs: 'done',
+      complexity_tier: 'M', track: 'technical', feature_desc: 'safety-boundary',
+    } as ConductState);
+    const runner = createMockStepRunner();
+    const conductor = new Conductor({
+      stateFilePath: safetyStatePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: safetyDir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      maxRetries: 1,
+      config: {
+        harness_self_host: {
+          skill_relink_preflight: false,
+          sandbox_build_env: false,
+          build_auth: { mode: 'api-key' },
+        },
+      } as HarnessConfig,
+    });
+
+    await (conductor as unknown as {
+      runSelfBuildDispatch: (step: StepName, state: ConductState, retryHint?: string) => Promise<StepRunResult>;
+    }).runSelfBuildDispatch('build', {} as ConductState);
+
+    expect(vi.mocked(runner.run)).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
+    await rm(safetyDir, { recursive: true, force: true });
+  });
 });

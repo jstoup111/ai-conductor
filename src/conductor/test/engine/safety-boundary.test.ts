@@ -39,12 +39,50 @@ describe('evaluateSafetyBoundary', () => {
 
   it('distinguishes an explicitly inapplicable required protection from a missing one', () => {
     const verdict = evaluateSafetyBoundary({
+      context: { selfHost: false },
       protections: [
-        { name: 'self-host-isolation', criticality: 'required', applicability: 'not-applicable', state: 'unknown' },
+        {
+          name: 'self-host-isolation',
+          criticality: 'required',
+          scope: 'self-host',
+          applicability: 'not-applicable',
+          state: 'unknown',
+        },
       ],
     });
 
     expect(verdict.passed).toBe(true);
+  });
+
+  it('fails closed when a self-host protection is falsely marked inapplicable during a self-host attempt', () => {
+    const verdict = evaluateSafetyBoundary({
+      context: { selfHost: true },
+      protections: [
+        {
+          name: 'self-host-isolation',
+          criticality: 'required',
+          scope: 'self-host',
+          applicability: 'not-applicable',
+          state: 'passing',
+        },
+      ],
+    });
+
+    expect(verdict.passed).toBe(false);
+  });
+
+  it('fails closed when the run context needed to classify a self-host protection is unavailable', () => {
+    const verdict = evaluateSafetyBoundary({
+      protections: [{
+        name: 'self-host-isolation',
+        criticality: 'required',
+        scope: 'self-host',
+        applicability: 'not-applicable',
+        state: 'passing',
+      }],
+    });
+
+    expect(verdict.passed).toBe(false);
   });
 
   it('reports diagnostic gaps without allowing them to override a required failure', () => {
