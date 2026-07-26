@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join, relative, resolve } from 'node:path';
+import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
 import { resolveDocsAllowlist } from './phase-marker.js';
 
@@ -43,7 +43,7 @@ export type ProtectedArtifactSealVerdict =
 export interface ActiveStepArtifactExceptionInput {
   phase: string;
   step: string;
-  target: string;
+  target: unknown;
 }
 
 export interface MutationTargetClassificationInput extends ActiveStepArtifactExceptionInput {
@@ -53,10 +53,32 @@ export interface MutationTargetClassificationInput extends ActiveStepArtifactExc
 export type MutationTargetClassification =
   | { kind: 'unprotected'; target: string }
   | { kind: 'allowed'; target: string }
-  | { kind: 'protected'; target: string };
+  | { kind: 'protected'; target: string }
+  | { kind: 'indeterminate'; reason: string };
 
-function canonicalWorkspaceTarget(projectRoot: string, target: string): string {
-  return relative(resolve(projectRoot), resolve(projectRoot, target)).replaceAll('\\', '/');
+function isContainedBy(root: string, target: string): boolean {
+  const relation = relative(root, target);
+  return relation === '' || (!relation.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`) && relation !== '..' && !isAbsolute(relation));
+}
+
+function canonicalWorkspaceTarget(projectRoot: string, target: unknown):
+  | { ok: true; target: string }
+  | { ok: false; reason: string } {
+  if (typeof target !== 'string' || target.length === 0 || target.includes('\0')) {
+    return { ok: false, reason: 'missing-or-malformed-target' };
+  }
+  if (target.includes('$') || target.includes('*') || target.includes('?') || target.includes('{')) {
+    return { ok: false, reason: 'dynamic-target' };
+  }
+  if (target.split(/[\\/]/).includes('..')) {
+    return { ok: false, reason: 'traversal-target' };
+  }
+  const root = resolve(projectRoot);
+  const resolved = resolve(root, target);
+  if (!isContainedBy(root, resolved)) return { ok: false, reason: 'outside-workspace-target' };
+  const canonical = relative(root, resolved).replaceAll('\\', '/');
+  if (canonical.length === 0) return { ok: false, reason: 'workspace-root-target' };
+  return { ok: true, target: canonical };
 }
 
 /**
@@ -71,7 +93,9 @@ export function classifyMutationTarget({
   phase,
   step,
 }: MutationTargetClassificationInput): MutationTargetClassification {
-  const canonicalTarget = canonicalWorkspaceTarget(projectRoot, target);
+  const canonical = canonicalWorkspaceTarget(projectRoot, target);
+  if (!canonical.ok) return { kind: 'indeterminate', reason: canonical.reason };
+  const canonicalTarget = canonical.target;
   if (isActiveStepArtifactException({ phase, step, target: canonicalTarget })) {
     return { kind: 'allowed', target: canonicalTarget };
   }
@@ -79,6 +103,33 @@ export function classifyMutationTarget({
     return { kind: 'protected', target: canonicalTarget };
   }
   return { kind: 'unprotected', target: canonicalTarget };
+}
+
+async function readContainedProtectedArtifact(
+  projectRoot: string,
+  path: string,
+): Promise<string | undefined> {
+  const root = await realpath(projectRoot);
+  const target = join(projectRoot, path);
+  const parent = await realpath(dirname(target)).catch(() => undefined);
+  if (!parent || !isContainedBy(root, parent)) return undefined;
+
+  const before = await lstat(target).catch(() => undefined);
+  if (!before || !before.isFile() || before.isSymbolicLink()) return undefined;
+  const content = await readFile(target, 'utf8').catch(() => undefined);
+  if (content === undefined) return undefined;
+
+  // Re-resolve after reading: a target may be replaced between the initial
+  // lstat and acceptance, so the earlier lexical check is never authoritative.
+  const after = await lstat(target).catch(() => undefined);
+  const accepted = await realpath(target).catch(() => undefined);
+  if (
+    !after || !accepted || !after.isFile() || after.isSymbolicLink()
+    || before.dev !== after.dev || before.ino !== after.ino || !isContainedBy(root, accepted)
+  ) {
+    return undefined;
+  }
+  return content;
 }
 
 /**
@@ -91,7 +142,7 @@ export function isActiveStepArtifactException({
   step,
   target,
 }: ActiveStepArtifactExceptionInput): boolean {
-  if (phase !== 'BUILD' && phase !== 'SHIP') return false;
+  if ((phase !== 'BUILD' && phase !== 'SHIP') || typeof target !== 'string') return false;
   return resolveDocsAllowlist(step).some((prefix) => target.startsWith(prefix));
 }
 
@@ -188,26 +239,29 @@ async function inspectSeal(
   const discoveredPaths = (await Promise.all(
     PROTECTED_ARTIFACT_DIRECTORIES.map((directory) => workspaceProtectedPaths(projectRoot, directory)),
   )).flat().sort(comparePaths);
-  const actualPaths = discoveredPaths.map((path) => {
+  const actualPaths: string[] = [];
+  for (const path of discoveredPaths) {
     const classification = classifyMutationTarget({
       projectRoot,
       target: path,
       phase: 'BUILD',
       step: 'protected_artifact_seal_audit',
     });
-    return classification.target;
-  });
+    if (classification.kind === 'indeterminate') {
+      return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
+    }
+    actualPaths.push(classification.target);
+  }
 
   for (const path of actualPaths) {
     if (!expected.has(path)) {
       return { ok: false, reason: `Protected artifact added: ${path}` };
     }
-    try {
-      const actual = fingerprint(await readFile(join(projectRoot, path), 'utf8'));
-      if (actual !== expected.get(path)) {
-        return { ok: false, reason: `Protected artifact changed: ${path}` };
-      }
-    } catch {
+    const content = await readContainedProtectedArtifact(projectRoot, path);
+    if (content === undefined) {
+      return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
+    }
+    if (fingerprint(content) !== expected.get(path)) {
       return { ok: false, reason: `Protected artifact changed: ${path}` };
     }
   }

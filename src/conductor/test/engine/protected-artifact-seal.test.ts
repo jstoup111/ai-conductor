@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -186,5 +186,40 @@ describe('classifyMutationTarget', () => {
     }],
   ] as const)('classifies a %s target', (_name, target, phase, step, expected) => {
     expect(classifyMutationTarget({ projectRoot, target, phase, step })).toEqual(expected);
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['malformed', ''],
+    ['dynamic', '$WORKSPACE/.docs/plans/frozen.md'],
+    ['outside workspace', '/workspace/another-feature/.docs/plans/frozen.md'],
+    ['traversal', '.docs/plans/../plans/frozen.md'],
+  ])('fails closed for a %s target', (_name, target) => {
+    expect(classifyMutationTarget({
+      projectRoot,
+      target,
+      phase: 'BUILD',
+      step: 'build',
+    })).toMatchObject({ kind: 'indeterminate' });
+  });
+});
+
+describe('verifyProtectedArtifactSeal target containment', () => {
+  it('fails closed when a protected artifact is replaced by a symlink outside the workspace', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    const outside = join(await mkdtemp(join(tmpdir(), 'protected-artifact-outside-')), 'replacement.md');
+    scratches.push(dirname(outside));
+    await writeFile(outside, 'approved plan\n');
+    await rm(join(repo, '.docs/plans/feature.md'));
+    await symlink(outside, join(repo, '.docs/plans/feature.md'));
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toMatchObject({
+      ok: false,
+      reason: 'Indeterminate protected artifact target: .docs/plans/feature.md',
+    });
   });
 });

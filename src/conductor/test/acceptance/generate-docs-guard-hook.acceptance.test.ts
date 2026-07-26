@@ -82,4 +82,13 @@ describe('docs-guard target classification (#907 Task 12)', () => {
       step: 'retro',
     })).toEqual({ kind: 'allowed', target: '.docs/stories/retro-907.md' });
   });
+
+  it('fails closed when the generated-hook boundary receives an indeterminate target', () => {
+    expect(classifyDocsGuardMutationTarget({
+      projectRoot: '/workspace/feature-907',
+      target: '../outside/.docs/stories/retro-907.md',
+      phase: 'SHIP',
+      step: 'retro',
+    })).toMatchObject({ kind: 'indeterminate' });
+  });
 });
