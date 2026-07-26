@@ -30,6 +30,11 @@ Before analysis, gather:
     retry-escalation history used in Part C (Context Efficiency Retro).
 - **Application:** full feature diff (branch point to HEAD), test suite output, `.docs/stories/` acceptance criteria, tech-context if loaded
 
+When gathering context through delegation, use the selected host's available subagent facility.
+The required evidence, report output, and memory follow-ups below are shared across supported
+hosts. Claude-specific Agent-tool or model mechanics apply only to Claude Code; another supported
+host follows its provider-native facility and configured provider policy.
+
 ---
 
 ## Part A: Harness Retro
@@ -88,7 +93,7 @@ this section — never estimate or guess a token/cost total.
   `unmetered/absent` explicitly.
 
 **Analyze:**
-- Which skills or subagent dispatches consumed the most context? (Count dispatches, estimate scope)
+- Which skills or selected-host subagent dispatches consumed the most context? (Count dispatches, estimate scope)
 - Were there redundant file reads, unnecessary explorations, or overly broad subagent prompts?
 - Did any skill load tech-context or memory that wasn't actually referenced in its output?
 - Were complexity tiers correctly applied? (Would a different tier have been appropriate?)
@@ -96,9 +101,10 @@ this section — never estimate or guess a token/cost total.
 
 **Propose:**
 - Specific SKILL.md changes that would reduce context without degrading output
-- Subagent prompt refinements (more focused context, fewer files)
+- Selected-host subagent prompt refinements (more focused context, fewer files)
 - Steps that could be skipped or batched for this feature's complexity tier
-- Model downgrades that would have been safe (e.g., Opus → Sonnet for a specific phase)
+- Model downgrades that would have been safe. For Claude Code, model-policy examples may be Opus →
+  Sonnet for a specific phase; other supported hosts use their configured provider policy.
 
 **Output:** 2-3 concrete, actionable findings with finding IDs (C-1, C-2, C-3).
 

@@ -80,6 +80,29 @@ require_pattern 'code review retains fresh-context evaluator review' \
   'fresh context' "$HARNESS_DIR/skills/code-review/SKILL.md"
 require_pattern 'finish retains fresh verification before completion' \
   'fresh.*(verification|evidence)|verify.*fresh' "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'finish delegates cleanup through the selected host facility' \
+  'selected host.{0,80}(available )?subagent facility|selected provider.{0,80}(available )?subagent facility' \
+  "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'finish scopes worktree-manager Agent-tool and model mechanics to Claude' \
+  'Claude.{0,140}(Agent tool|worktree-manager|haiku)|(Agent tool|worktree-manager|haiku).{0,140}Claude' \
+  "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'finish preserves merge-local completion choice' \
+  'Option 1: Merge locally' "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'finish preserves PR completion choice' \
+  'Option 2: Push & PR' "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'finish preserves keep completion choice' \
+  'Option 3: Keep as-is' "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'finish preserves discard completion choice' \
+  'Option 4: Discard' "$HARNESS_DIR/skills/finish/SKILL.md"
+require_pattern 'retro uses provider-neutral subagent delegation language' \
+  '(selected host|selected provider).{0,100}(subagent|delegat)|(subagent|delegat).{0,100}(selected host|selected provider)' \
+  "$HARNESS_DIR/skills/retro/SKILL.md"
+require_pattern 'retro scopes Claude model examples to Claude' \
+  'Claude.{0,100}(Opus|Sonnet)|(Opus|Sonnet).{0,100}Claude' \
+  "$HARNESS_DIR/skills/retro/SKILL.md"
+require_pattern 'retro preserves memory follow-up' \
+  'Persist learnings to `?\.memory/' \
+  "$HARNESS_DIR/skills/retro/SKILL.md"
 
 # Assessment and review delegation has to remain usable by either built-in
 # host. The shared rule selects the host's subagent facility; the existing
@@ -117,6 +140,37 @@ require_pattern 'code review retains fresh-context evaluator review' \
   'fresh context' "$HARNESS_DIR/skills/code-review/SKILL.md"
 require_pattern 'code review retains blocking verdict gate' \
   'BLOCK verdict prevents merge' "$HARNESS_DIR/skills/code-review/SKILL.md"
+
+# Build-cycle delegation is provider-neutral. Claude Code's Agent tool, session
+# hooks, and model labels remain valid host mechanics, but must not be presented
+# as requirements for every supported host.
+for build_skill in pipeline tdd; do
+  build_skill_file="$HARNESS_DIR/skills/${build_skill}/SKILL.md"
+  require_pattern "${build_skill} delegates through the selected host facility" \
+    'selected host.{0,80}(available )?subagent facility|selected provider.{0,80}(available )?subagent facility' \
+    "$build_skill_file"
+  require_pattern "${build_skill} scopes Claude Agent-tool mechanics" \
+    'Claude.{0,100}Agent tool|Agent tool.{0,100}Claude' \
+    "$build_skill_file"
+done
+
+require_pattern 'pipeline scopes session-hook mechanics to Claude Code' \
+  'Claude Code.{0,100}(PreToolUse|PostToolUse|session hook)|(PreToolUse|PostToolUse|session hook).{0,100}Claude Code' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline scopes its Claude model selection' \
+  'Claude.{0,120}model|model.{0,120}Claude' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'TDD scopes its Claude model selection' \
+  'Claude.{0,120}model|model.{0,120}Claude' \
+  "$HARNESS_DIR/skills/tdd/SKILL.md"
+
+if ! grep -qiE '(^|[^[:alnum:]])(use|via|using|dispatch.{0,40}via) the Agent tool' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md" \
+  "$HARNESS_DIR/skills/tdd/SKILL.md"; then
+  pass 'pipeline and TDD contain no unscoped Agent-tool imperative'
+else
+  fail 'pipeline and TDD contain no unscoped Agent-tool imperative'
+fi
 
 # These lifecycle skills share outcomes and gates across supported hosts. Only
 # installation, invocation, and interactive-session mechanics may differ.
