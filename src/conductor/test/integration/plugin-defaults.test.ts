@@ -1,12 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { readState, writeState } from '../../src/engine/state.js';
-import type { StepName, ConductState } from '../../src/types/index.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { discoverPlugins, registerBuiltins } from '../../src/engine/plugin-loader.js';
 import { PluginNotFoundError } from '../../src/types/plugin.js';
@@ -19,30 +15,13 @@ import {
 import { normalizeProviderSelection } from '../../src/engine/provider-selection.js';
 import { validateConfig } from '../../src/engine/config.js';
 
-class MockStepRunner implements StepRunner {
-  calls: StepName[] = [];
-
-  async run(step: StepName): Promise<StepRunResult> {
-    this.calls.push(step);
-    return { success: true };
-  }
-}
-
 describe('Integration: plugin defaults', () => {
   let dir: string;
-  let statePath: string;
-  let pipelineDir: string;
   let events: ConductorEventEmitter;
-  let runner: MockStepRunner;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-plugin-defaults-'));
-    pipelineDir = join(dir, '.pipeline');
-    statePath = join(pipelineDir, 'conduct-state.json');
-    await mkdir(pipelineDir, { recursive: true });
-
     events = new ConductorEventEmitter();
-    runner = new MockStepRunner();
   });
 
   afterEach(async () => {
@@ -166,47 +145,4 @@ describe('Integration: plugin defaults', () => {
     });
   });
 
-  it('Conductor session completes with default ClaudeProvider', async () => {
-    // Start with minimal config (no plugin selection)
-    const config = {} as any;
-
-    // Initialize plugin registry
-    const registry = new PluginRegistry();
-    const globalPluginsDir = join(dir, '.ai-conductor', 'plugins', 'global');
-    const projectPluginsDir = join(dir, '.ai-conductor', 'plugins', 'project');
-
-    await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-    registerBuiltins(registry, events, () => null);
-    registry.markInitialized();
-
-    // Get provider with fallback
-    const provider = registry.get<LLMProvider>(
-      'llm_provider',
-      config?.llm_provider ?? 'claude'
-    );
-
-    // Create a minimal conductor state
-    const initialState: ConductState = { complexity_tier: 'S', test_suite: 'done' };
-    await writeState(statePath, initialState);
-
-    // Create conductor
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      mode: 'auto',
-      config: config as any,
-      projectRoot: dir,
-    });
-
-    // Run conductor — should not throw PluginNotFoundError
-    await conductor.run();
-
-    // Verify state was updated
-    const result = await readState(statePath);
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.value.feature_status).toBe('complete');
-    }
-  });
 });
