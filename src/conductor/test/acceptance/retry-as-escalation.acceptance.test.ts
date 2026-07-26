@@ -192,15 +192,19 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     const invoke = (
       provider: 'claude' | 'codex',
     ) => async (options: InvokeOptions): Promise<InvokeResult> => {
-      if (options.prompt !== '/memory' && options.prompt !== '/explore') {
+      const step =
+        options.prompt === (provider === 'codex' ? '$memory' : '/memory')
+          ? 'memory'
+          : options.prompt === (provider === 'codex' ? '$explore' : '/explore')
+            ? 'explore'
+            : undefined;
+      if (!step) {
         return {
           success: true,
           output: `${provider} non-target step completed`,
           exitCode: 0,
         };
       }
-      const step =
-        options.prompt === '/memory' ? 'memory' : 'explore';
       const key = `${step}:${provider}`;
       const call = (providerCalls.get(key) ?? 0) + 1;
       providerCalls.set(key, call);
