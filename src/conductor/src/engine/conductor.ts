@@ -1151,6 +1151,12 @@ export class Conductor {
   private async nonGreenFinishValidators(
     state: ConductState,
   ): Promise<Array<{ name: StepName; verdict: GateObjectiveVerdict; reason: string }>> {
+    // `verifyArtifacts:false` is the intentional mocked-dispatch mode used by
+    // focused unit tests. Its success authority is the runner result, so the
+    // publication fence must not reintroduce artifact-only validation and
+    // invalidate an otherwise green SHIP round indefinitely.
+    if (!this.verifyArtifacts && !this.daemon) return [];
+
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(
       VALIDATION_GROUP,

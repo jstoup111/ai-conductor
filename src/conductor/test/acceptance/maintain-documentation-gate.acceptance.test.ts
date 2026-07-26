@@ -61,13 +61,9 @@ describe('repository-local documentation gate — real Conductor.run flow', () =
     for (const step of ALL_STEPS) state[step.name] = 'done';
     state.manual_test = 'skipped';
     state.prd_audit = 'skipped';
+    state.architecture_review_as_built = 'skipped';
     delete state.finish;
     await writeState(statePath, state as ConductState);
-    await writeFile(
-      join(dir, '.pipeline/architecture-review-as-built.md'),
-      '# As-Built Review\n\nVerdict: APPROVED\n',
-      'utf-8',
-    );
   });
 
   afterEach(async () => {
