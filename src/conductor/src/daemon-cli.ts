@@ -778,14 +778,26 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
     warn: (_message, transition) => eventTarget.emit(transition),
   });
+  // The pool emits a feature's start/resume/done records before and after its
+  // worktree scope exists. Cache the scoped logger by slug so those lifecycle
+  // records and the worktree-owned records share one immutable attribution.
+  const featureLogs = new Map<string, (message: string) => void>();
+  const featureLogFor = (slug: string): ((message: string) => void) => {
+    let featureLog = featureLogs.get(slug);
+    if (!featureLog) {
+      featureLog = createFeatureDaemonLogger(
+        slug,
+        (message) => log(message, true),
+        formatDaemonFeatureTag(slug),
+      );
+      featureLogs.set(slug, featureLog);
+    }
+    return featureLog;
+  };
   const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
-    const featureLog = createFeatureDaemonLogger(
-      item.slug,
-      (message) => log(message, true),
-      formatDaemonFeatureTag(item.slug),
-    );
+    const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents: ConductorEvent['type'][] = [
       'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
@@ -1352,6 +1364,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         }
       },
       runFeature,
+      featureLog: featureLogFor,
       log,
       staleEngineChecker,
       requestRestart,

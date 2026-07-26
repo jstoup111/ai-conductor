@@ -68,11 +68,13 @@ describe('daemon-mode feature log integration', () => {
     }
 
     const expected = [
+      '▶ start feature-a',
       'setup complete',
       '· ▶ build',
       'WARNING: provider unavailable',
       'retrying build (2/3)',
       'subprocess diagnostic: exit 1',
+      '■ done feature-a: done',
     ];
     const live = consoleLines.join('\n');
     const persisted = await readFile(daemonLogPath(repo), 'utf8');
