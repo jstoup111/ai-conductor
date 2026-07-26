@@ -307,6 +307,50 @@ export function stripAnsi(s: string): string {
 }
 
 /**
+ * Build the daemon's contextual activity logger.  Keeping transition state in
+ * this production seam makes the status suppression apply equally to the
+ * console and durable-log sinks, including feature-owned messages.
+ */
+export function createDaemonModeLogger(sinks: {
+  writeLive: (line: string) => void;
+  writePersisted: (line: string) => void;
+}): (msg: string, featureOwned?: boolean) => void {
+  const lastStatus = new Map<string, string>();
+
+  return (msg: string, featureOwned = false) => {
+    const startMatch = msg.match(/▶.*start\s+(\S+)/);
+    if (startMatch) {
+      const slug = startMatch[1];
+      if (lastStatus.get(slug) === 'start') return;
+      lastStatus.set(slug, 'start');
+    }
+
+    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
+    if (resumeMatch) {
+      const slug = resumeMatch[1];
+      const oldStatus = lastStatus.get(slug);
+      lastStatus.set(slug, 'resume');
+      const resumed = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
+      const line = formatDaemonActivityLine(resumed, featureOwned);
+      sinks.writeLive(line);
+      sinks.writePersisted(line);
+      return;
+    }
+
+    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
+    if (doneMatch) {
+      const [, slug, outcomeStatus] = doneMatch;
+      if (lastStatus.get(slug) === outcomeStatus) return;
+      lastStatus.set(slug, outcomeStatus);
+    }
+
+    const line = formatDaemonActivityLine(msg, featureOwned);
+    sinks.writeLive(line);
+    sinks.writePersisted(line);
+  };
+}
+
+/**
  * Task 4: RestartRequester accepts injected relink + trigger; session-hosted happy ordering
  * Task 5: Handle relink failure with abort-alive semantics in session-hosted mode
  *
@@ -522,10 +566,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // after `log` is defined.
   let ciFixEnabled = true;
 
-  // Task 16: Transition-only per-slug status logging + resume line
-  // Track the last status for each slug so we only emit log lines when status changes
-  const lastStatus = new Map<string, string>();
-
   // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime
   // of this daemon run. Constructed once, outside the sweep loop, and reused on
   // every startup + idle-poll sweep so steady-state (unchanged) PRs stay silent
@@ -533,54 +573,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
-  const log = (msg: string, featureOwned = false) => {
-    // Task 16: Parse per-feature log lines and suppress unchanged status
-    // Pattern 1: "▶ start <slug>" → { slug, status: 'start' }
-    const startMatch = msg.match(/▶.*start\s+(\S+)/);
-    if (startMatch) {
-      const slug = startMatch[1];
-      const status = 'start';
-      if (lastStatus.get(slug) === status) {
-        return; // Suppress unchanged status
-      }
-      lastStatus.set(slug, status);
-      // Fall through to log
-    }
-
-    // Pattern 2: "↻ resume <slug>" → { slug, status: 'resume' }
-    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
-    if (resumeMatch) {
-      const slug = resumeMatch[1];
-      const oldStatus = lastStatus.get(slug);
-      const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
-      lastStatus.set(slug, 'resume');
-      const liveLine = formatDaemonActivityLine(newMsg, featureOwned);
-      console.log(`${chalk.dim('[daemon]')}${liveLine.slice('[daemon]'.length)}`);
-      logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(newMsg), featureOwned)));
-      return; // Resume lines always logged with (was: ...) appended
-    }
-
-    // Pattern 3: "■ done <slug>: <outcome_status>" → { slug, status: outcome_status }
-    // This captures the outcome status (done, halted, error)
-    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
-    if (doneMatch) {
-      const slug = doneMatch[1];
-      const outcomeStatus = doneMatch[2]; // e.g., "done", "halted", "error"
-      if (lastStatus.get(slug) === outcomeStatus) {
-        return; // Suppress unchanged status
-      }
-      lastStatus.set(slug, outcomeStatus);
-      // Fall through to log
-    }
-
-    // For all other lines (discovery, sweeps, etc.), always log
-    const liveLine = formatDaemonActivityLine(msg, featureOwned);
-    console.log(`${chalk.dim('[daemon]')}${liveLine.slice('[daemon]'.length)}`);
-    // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
-    // back via `conduct daemon logs` can be correlated in time; the console stays
-    // uncluttered for live watching.
-    logSink?.write(formatDaemonLogLine(formatDaemonActivityLine(stripAnsi(msg), featureOwned)));
-  };
+  const log = createDaemonModeLogger({
+    writeLive: (line) =>
+      console.log(`${chalk.dim('[daemon]')}${line.slice('[daemon]'.length)}`),
+    // The persisted record gets a leading ISO-8601 UTC timestamp so activity
+    // read back via `conduct daemon logs` can be correlated in time; the
+    // console stays uncluttered for live watching.
+    writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
+  });
 
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
