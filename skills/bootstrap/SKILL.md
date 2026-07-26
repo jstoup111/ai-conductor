@@ -297,7 +297,7 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - **Existing CLAUDE.md:** Verify it references the repository harness documentation. If missing, append the reference block.
   Never overwrite user content. Behavioral rules live in the harness documentation, not in the project CLAUDE.md.
 - **Fresh/no AGENTS.md:** Generate from `templates/AGENTS.md.template`. This gives Codex the
-  harness entry point while keeping the skills themselves user-scoped at `~/.codex/skills/`.
+  harness entry point while keeping the skills themselves user-scoped at `~/.agents/skills/`.
 - **Existing AGENTS.md:** Verify it references the repository harness documentation; append the Codex harness reference
   block if needed. Never overwrite user content.
 
