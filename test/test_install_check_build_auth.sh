@@ -91,6 +91,8 @@ echo "$out" | grep -qi "build-auth" && r=0 || r=1
 assert "clean state: emits a build-auth status line" "$r"
 echo "$out" | grep -qE "✓.*build-auth" && r=0 || r=1
 assert "clean state: line is formatted as ok (✓)" "$r"
+[ "$rc" -eq 0 ] && r=0 || r=1
+assert "clean state: overall --check exits 0" "$r"
 
 # ─── Case 2: conduct-ts reports a non-clean state (exit 1) → fail line, fail counter increments ──
 
