@@ -89,13 +89,17 @@ manual selection on every feature.
   explicit Claude preference, then Codex is attempted first and Claude remains
   the ordered fallback provider.
 
-- **HP-2:** Given a self-hosted run reaches `assess`, `explore`, `prd`,
+- **HP-2:** Given a self-hosted run reaches `explore`, `prd`,
   `architecture_review`, `conflict_check`, `coherence_check`,
   `acceptance_specs`, `build_review`, `prd_audit`,
-  `architecture_review_as_built`, `rebase`, `remediate`,
-  `attribution_verify`, or the configured `maintain-documentation` step, when
+  `architecture_review_as_built`, `rebase`, or the configured
+  `maintain-documentation` step, when
   that step is dispatched, then Claude is attempted first and Codex remains
   its ordered fallback.
+
+  Out-of-band `assess`, `remediate`, and `attribution_verify` retain the
+  inherited provider because current configuration does not recognize them as
+  configurable built-in steps; issue #964 owns that missing seam.
 
 - **HP-3:** Given `manual_test` is configured as disabled for this repository,
   when provider defaults are added, then it remains disabled and the existing

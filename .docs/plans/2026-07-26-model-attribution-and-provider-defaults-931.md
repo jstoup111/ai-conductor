@@ -46,7 +46,7 @@ Tune existing provider-policy tables and this repository's provider routing in t
 **Type:** happy-path
 
 **Steps:**
-1. Add ordered global providers `codex`, then `claude`, and scalar Claude preferences only on the approved judgment steps.
+1. Add ordered global providers `codex`, then `claude`, and scalar Claude preferences only on the approved judgment steps recognized by current configuration; defer out-of-band `assess`, `remediate`, and `attribution_verify` to #964.
 2. Preserve `manual_test.disable: true` and every existing custom `maintain-documentation` field while adding its Claude preference.
 3. Load and validate the committed YAML with existing configuration tooling; verify the resolved structure contains the exact provider order/preferences and no schema error.
 4. Correct configuration only if that existing validation fails, then re-run it (GREEN).
