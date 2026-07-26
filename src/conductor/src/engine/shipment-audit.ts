@@ -225,16 +225,16 @@ async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promi
   if (!owner || !name || repository.split('/').length !== 2) {
     throw new Error('repository name is malformed for merged PR enumeration');
   }
-  const { stdout } = await options.runGh(
-    graphqlPaginatedArgs(MERGED_PULL_REQUESTS_QUERY, [
-      ['owner', owner],
-      ['name', name],
-    ]),
-    { cwd: options.cwd },
-  );
-  const pages = parseGraphqlPages(stdout, 'merged PR enumeration');
   const pullRequests: MergedPullRequest[] = [];
-  for (const page of pages) {
+  let cursor: string | null = null;
+  const seenCursors = new Set<string>();
+  for (let pageNumber = 0; pageNumber < MAX_GRAPHQL_PAGES; pageNumber += 1) {
+    const page = await graphqlPage(
+      options,
+      MERGED_PULL_REQUESTS_QUERY,
+      graphqlVariables(owner, name, undefined, cursor),
+      'merged PR enumeration',
+    );
     const connection = pullRequestConnection(page, 'merged PR enumeration');
     for (const node of requiredArray(connection.nodes, 'merged PR enumeration nodes')) {
       const pullRequest = mergedPullRequestFromNode(node);
@@ -254,11 +254,13 @@ async function enumerateMergedPullRequests(options: ShipmentAuditOptions): Promi
         mergedAt: pullRequest.mergedAt,
       });
     }
+    const pagination = pageInfo(connection.pageInfo, 'merged PR pagination');
+    if (!pagination.hasNextPage) break;
+    cursor = nextCursor(pagination, seenCursors, 'merged PR enumeration');
+    if (pageNumber === MAX_GRAPHQL_PAGES - 1) {
+      throw new Error(`merged PR enumeration exceeded ${MAX_GRAPHQL_PAGES} GraphQL pages`);
+    }
   }
-  requireCompletePagination(
-    pages.map((page) => pageInfo(pullRequestConnection(page, 'merged PR enumeration').pageInfo, 'merged PR pagination')),
-    'merged PR enumeration',
-  );
   const numbers = new Set(pullRequests.map((pullRequest) => pullRequest.number));
   if (numbers.size !== pullRequests.length) throw new Error('merged PR enumeration returned duplicate pull requests');
   return pullRequests;
@@ -275,23 +277,28 @@ async function remainingChangedPaths(
   if (firstPageInfo.endCursor === null) {
     throw new Error(`changed-file enumeration for #${number} is incomplete`);
   }
-  const { stdout } = await options.runGh(
-    graphqlPaginatedArgs(PULL_REQUEST_FILES_QUERY, [
-      ['owner', owner],
-      ['name', name],
-      ['number', String(number), true],
-      ['endCursor', firstPageInfo.endCursor],
-    ]),
-    { cwd: options.cwd },
-  );
-  const pages = parseGraphqlPages(stdout, `changed-file enumeration for #${number}`);
-  const connections = pages.map((page) => pullRequestFilesConnection(page, number));
-  requireCompletePagination(
-    connections.map((connection) => pageInfo(connection.pageInfo, `changed-file pagination for #${number}`)),
-    `changed-file enumeration for #${number}`,
-  );
-  return connections.flatMap((connection) => requiredArray(connection.nodes, `changed-file enumeration for #${number} nodes`)
-    .map((node) => requiredString(object(node, `changed-file enumeration for #${number} node`).path, `changed-file path for #${number}`)));
+  const changedPaths: string[] = [];
+  let cursor: string | null = firstPageInfo.endCursor;
+  const seenCursors = new Set<string>();
+  for (let pageNumber = 0; pageNumber < MAX_GRAPHQL_PAGES; pageNumber += 1) {
+    const context = `changed-file enumeration for #${number}`;
+    const page = await graphqlPage(
+      options,
+      PULL_REQUEST_FILES_QUERY,
+      graphqlVariables(owner, name, number, cursor),
+      context,
+    );
+    const connection = pullRequestFilesConnection(page, number);
+    changedPaths.push(...requiredArray(connection.nodes, `${context} nodes`)
+      .map((node) => requiredString(object(node, `${context} node`).path, `changed-file path for #${number}`)));
+    const pagination = pageInfo(connection.pageInfo, `changed-file pagination for #${number}`);
+    if (!pagination.hasNextPage) return changedPaths;
+    cursor = nextCursor(pagination, seenCursors, context);
+    if (pageNumber === MAX_GRAPHQL_PAGES - 1) {
+      throw new Error(`${context} exceeded ${MAX_GRAPHQL_PAGES} GraphQL pages`);
+    }
+  }
+  throw new Error(`changed-file enumeration for #${number} pagination is incomplete`);
 }
 
 interface GraphqlPageInfo {
@@ -341,29 +348,47 @@ query($owner: String!, $name: String!, $number: Int!, $endCursor: String) {
   }
 }`;
 
-function graphqlPaginatedArgs(
+const MAX_GRAPHQL_PAGES = 10_000;
+
+function graphqlVariables(
+  owner: string,
+  name: string,
+  number: number | undefined,
+  endCursor: string | null,
+): Array<[name: string, value: string, typed?: boolean]> {
+  const variables: Array<[name: string, value: string, typed?: boolean]> = [
+    ['owner', owner],
+    ['name', name],
+  ];
+  if (number !== undefined) variables.push(['number', String(number), true]);
+  if (endCursor !== null) variables.push(['endCursor', endCursor]);
+  return variables;
+}
+
+async function graphqlPage(
+  options: ShipmentAuditOptions,
   query: string,
   variables: Array<[name: string, value: string, typed?: boolean]>,
-): string[] {
-  return [
+  context: string,
+): Promise<unknown> {
+  const { stdout } = await options.runGh([
     'api',
     'graphql',
-    '--paginate',
-    '--slurp',
     '-f',
     `query=${query}`,
     ...variables.flatMap(([name, value, typed]) => [typed ? '-F' : '-f', `${name}=${value}`]),
-  ];
+  ], { cwd: options.cwd });
+  return parseGraphqlPage(stdout, context);
 }
 
-function parseGraphqlPages(stdout: string, context: string): unknown[] {
+function parseGraphqlPage(stdout: string, context: string): unknown {
   let parsed: unknown;
   try {
     parsed = JSON.parse(stdout);
   } catch (error) {
     throw new Error(`${context} returned malformed GraphQL JSON: ${errorMessage(error)}`);
   }
-  if (!Array.isArray(parsed) || parsed.length === 0) throw new Error(`${context} returned no GraphQL pages`);
+  object(parsed, context);
   return parsed;
 }
 
@@ -393,15 +418,15 @@ function mergedPullRequestFromNode(node: unknown): MergedPullRequestNode {
   };
 }
 
-function requireCompletePagination(pageInfos: GraphqlPageInfo[], context: string): void {
-  if (pageInfos.length === 0 || pageInfos.at(-1)?.hasNextPage) {
+function nextCursor(pageInfo: GraphqlPageInfo, seenCursors: Set<string>, context: string): string {
+  if (!pageInfo.hasNextPage || pageInfo.endCursor === null) {
     throw new Error(`${context} pagination is incomplete`);
   }
-  for (let index = 0; index < pageInfos.length - 1; index += 1) {
-    if (!pageInfos[index].hasNextPage || pageInfos[index].endCursor === null) {
-      throw new Error(`${context} pagination is malformed`);
-    }
+  if (seenCursors.has(pageInfo.endCursor)) {
+    throw new Error(`${context} pagination cursor repeated`);
   }
+  seenCursors.add(pageInfo.endCursor);
+  return pageInfo.endCursor;
 }
 
 function pageInfo(value: unknown, context: string): GraphqlPageInfo {
