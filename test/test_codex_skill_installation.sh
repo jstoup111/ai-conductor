@@ -378,8 +378,22 @@ check 'uninstall removes current harness-owned catalog entries' \
   test ! -e "$FOREIGN_HOME/.agents/skills/stories"
 check 'uninstall preserves foreign current-scope files at skill names' \
   test -f "$FOREIGN_HOME/.agents/skills/tdd"
+check 'uninstall preserves foreign current-scope harness instructions' \
+  test "$(readlink "$FOREIGN_HOME/.agents/skills/HARNESS.md")" = "$FOREIGN_CURRENT_HARNESS_TARGET"
 check 'uninstall preserves foreign legacy links' \
   test "$(readlink "$FOREIGN_HOME/.codex/skills/tdd")" = "$FOREIGN_LEGACY_LINK_TARGET"
+check 'uninstall preserves foreign legacy harness instructions' \
+  test "$(sha256sum "$FOREIGN_HOME/.codex/skills/HARNESS.md" | awk '{print $1}')" = "$FOREIGN_HARNESS_HASH"
+
+OWNED_LEGACY_HOME="$TMP_ROOT/home-owned-legacy"
+mkdir -p "$OWNED_LEGACY_HOME/.codex/skills"
+ln -s "$CHECKOUT/skills/stories" "$OWNED_LEGACY_HOME/.codex/skills/stories"
+ln -s "$CHECKOUT/HARNESS.md" "$OWNED_LEGACY_HOME/.codex/skills/HARNESS.md"
+run_install "$OWNED_LEGACY_HOME" --uninstall >"$TMP_ROOT/owned-legacy-uninstall.out" 2>&1
+check 'uninstall removes legacy harness-owned catalog entries' \
+  test ! -e "$OWNED_LEGACY_HOME/.codex/skills/stories"
+check 'uninstall removes legacy harness-owned instructions' \
+  test ! -e "$OWNED_LEGACY_HOME/.codex/skills/HARNESS.md"
 
 printf '\nCodex installation acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

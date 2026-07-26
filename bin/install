@@ -1400,7 +1400,7 @@ uninstall() {
   echo ""
 
   local removed=0
-  local skills_dir client skill target points_to harness_target
+  local skills_dir legacy_dir client skill target points_to harness_target
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1411,26 +1411,61 @@ uninstall() {
       target="${skills_dir}/${skill}"
       if [ -L "$target" ]; then
         points_to=$(readlink -f "$target" 2>/dev/null || echo "")
-        if [[ "$points_to" == "${HARNESS_DIR}"* ]]; then
-          rm "$target"
+        if { [ "$client" = Codex ] && owned_skill_link "$skills_dir" "$skill" "$target"; } || \
+           { [ "$client" = Claude ] && [[ "$points_to" == "${HARNESS_DIR}"* ]]; }; then
+          rm -- "$target"
           removed=$((removed + 1))
         else
           warn "${client} skill: ${skill} — symlink points elsewhere, skipping"
         fi
+      elif [ -e "$target" ]; then
+        warn "${client} skill: ${skill} — foreign entry preserved"
       fi
     done
 
     harness_target="${skills_dir}/HARNESS.md"
     if [ -L "$harness_target" ]; then
       points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
-      if [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
-        rm "$harness_target"
+      if { [ "$client" = Codex ] && owned_harness_link "$harness_target"; } || \
+         { [ "$client" = Claude ] && [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; }; then
+        rm -- "$harness_target"
         removed=$((removed + 1))
       else
         warn "${client} harness instructions — symlink points elsewhere, skipping"
       fi
+    elif [ -e "$harness_target" ]; then
+      warn "${client} harness instructions — foreign entry preserved"
     fi
   done
+
+  legacy_dir="${HOME}/.codex/skills"
+  for skill in "${SKILLS[@]}"; do
+    target="${legacy_dir}/${skill}"
+    if [ -L "$target" ]; then
+      points_to=$(readlink -f "$target" 2>/dev/null || echo "")
+      if [ "$points_to" = "${HARNESS_DIR}/skills/${skill}" ]; then
+        rm -- "$target"
+        removed=$((removed + 1))
+      else
+        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+      fi
+    elif [ -e "$target" ]; then
+      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+    fi
+  done
+
+  harness_target="${legacy_dir}/HARNESS.md"
+  if [ -L "$harness_target" ]; then
+    points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+    if [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+      rm -- "$harness_target"
+      removed=$((removed + 1))
+    else
+      warn "Codex legacy harness instructions — foreign symlink preserved"
+    fi
+  elif [ -e "$harness_target" ]; then
+    warn "Codex legacy harness instructions — foreign entry preserved"
+  fi
   ok "Removed ${removed} skill symlinks"
 
   if [ -L "${LOCAL_BIN}/conduct" ]; then
