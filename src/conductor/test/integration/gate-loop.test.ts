@@ -1191,6 +1191,7 @@ describe('integration/gate-loop', () => {
       verdicts: Array<{
         verdict: 'FAIL' | 'PASS';
         reasons: string[];
+        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[] }>;
         rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
       }>,
     ): Promise<{
@@ -1221,6 +1222,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: v.verdict,
                 reasons: v.reasons,
+                findings: v.findings,
                 rubric: v.rubric ?? { tautology: false, scope: false, rootCause: false },
               }),
             );
@@ -1336,6 +1338,24 @@ describe('integration/gate-loop', () => {
       expect(result.retryReasons.join('\n')).toContain(
         'implementation addresses only part of the declared scope',
       );
+      expect(result.completed).toBe(true);
+    });
+
+    it('passes every independent structured finding to the build retry hint', async () => {
+      const result = await runWithGraderVerdicts([
+        {
+          verdict: 'FAIL',
+          reasons: [],
+          findings: {
+            completeness: ['missing retry transition output', 'missing teardown transition output'],
+          },
+          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+        },
+        { verdict: 'PASS', reasons: [] },
+      ]);
+
+      expect(result.retryReasons.join('\n')).toContain('[completeness] missing retry transition output');
+      expect(result.retryReasons.join('\n')).toContain('[completeness] missing teardown transition output');
       expect(result.completed).toBe(true);
     });
   });

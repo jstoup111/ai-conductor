@@ -96,6 +96,10 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
         const code = err && typeof (err as { code?: number }).code === 'number' ? (err as { code: number }).code : 0;
         resolve({ stdout: stdout?.toString() ?? '', stderr: stderr?.toString() ?? '', code });
       });
+      // A hook may exit before its small fixture payload reaches stdin. The
+      // exec callback captures that exit; consume the resulting stream EPIPE
+      // so Vitest does not treat the test-harness race as an uncaught error.
+      child.stdin?.once('error', () => undefined);
       child.stdin?.end(payload(hookEvent, taskLine));
     });
   }
