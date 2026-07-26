@@ -55,6 +55,13 @@ describe('conductor auth-park: daemon-token mode', () => {
     } as never;
   }
 
+  function fullSuiteVerifierStub() {
+    return {
+      ensure: vi.fn().mockResolvedValue({ status: 'REUSED', evidence: {} as never }),
+      inspect: vi.fn().mockResolvedValue({ status: 'CURRENT', evidence: {} as never }),
+    };
+  }
+
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'auth-park-unit-'));
     tokenDir = await mkdtemp(join(tmpdir(), 'auth-park-token-'));
@@ -113,6 +120,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       sleepFn: vi.fn(async () => {}),
       config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
     });
 
     const park = await (conductor as any).parkOnAuthFailure({
@@ -798,6 +806,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       sleepFn,
       config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
     });
 
     const park = await (conductor as any).parkOnAuthFailure({
@@ -976,6 +985,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn: vi.fn(async () => {}),
         config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
         providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1077,6 +1087,20 @@ describe('conductor auth-park: daemon-token mode', () => {
     await conductor.run();
 
     expect(parked).toHaveLength(0);
+
+  it('uses the injected full-suite verifier at the aggregate test boundary', async () => {
+    const fullSuiteVerifier = fullSuiteVerifierStub();
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events,
+      projectRoot: dir,
+      fullSuiteVerifier,
+    });
+
+    await (conductor as any).runTestSuiteStep();
+
+    expect(fullSuiteVerifier.ensure).toHaveBeenCalledTimes(1);
   });
 
   it('serial Codex API-key rejection halts once without hot-resuming after an environment change', async () => {
@@ -1103,6 +1127,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       }),
     };
     const halts: string[] = [];
+    const fullSuiteVerifier = fullSuiteVerifierStub();
     events.on('loop_halt', (event) => {
       if (event.type === 'loop_halt') halts.push(event.reason);
     });
@@ -1117,6 +1142,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       sleepFn: vi.fn(async () => {}),
       config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as never,
       providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier,
     });
 
     await conductor.run();
@@ -1126,6 +1152,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(halts).toHaveLength(1);
     expect(halts[0]).toContain('restart the daemon');
     expect(halts[0]).not.toContain('replacement-must-not-hot-resume');
+    expect(fullSuiteVerifier.ensure).not.toHaveBeenCalled();
   });
 
   it('authFailure in daemon-token mode parks on the daemon token path (not operator credentials)', async () => {
@@ -1192,6 +1219,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1264,6 +1292,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1337,6 +1366,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1404,6 +1434,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1460,6 +1491,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       const haltPath = join(dir, '.pipeline/HALT');
@@ -1531,6 +1563,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       const haltPath = join(dir, '.pipeline/HALT');
@@ -1617,6 +1650,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
@@ -1704,6 +1738,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepFn,
         selfHostGuardrails: mockGuardrails as any,
         config: selfHostConfig(),
+        fullSuiteVerifier: fullSuiteVerifierStub(),
       });
 
       await conductor.run();
