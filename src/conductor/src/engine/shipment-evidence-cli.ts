@@ -27,18 +27,19 @@ import {
 import { specHash } from './shipped-record.js';
 
 export type ShipmentEvidenceCommand =
-  | { kind: 'check'; pr: string }
+  | { kind: 'check'; pr: string; eventPath?: string }
   | { kind: 'reconcile'; pr: string; shipped: string }
   | { kind: 'audit'; reportPath: string }
   | { kind: 'guide' };
 
 export const SHIPMENT_EVIDENCE_USAGE =
-  'conduct shipment-evidence [reconcile] --pr <implementation-pr-url> [--shipped <YYYY-MM-DD>] | audit [--report <path>]';
+  'conduct shipment-evidence --pr <implementation-pr-url> [--event <pull-request-event.json>] | reconcile --pr <implementation-pr-url> --shipped <YYYY-MM-DD> | audit [--report <path>]';
 
 export interface ShipmentEvidenceRunners {
   runGh?: GhRunner;
   runGit?: GitRunner;
   listPlanStems?: (cwd: string) => Promise<string[]>;
+  readEventMetadata?: (eventPath: string, cwd: string, runGit: GitRunner) => Promise<PullRequestEvidenceMetadata>;
   evaluateEvidence?: (
     input: ShipmentEvidenceInput,
     dependencies: ShipmentEvidenceDependencies,
@@ -47,7 +48,7 @@ export interface ShipmentEvidenceRunners {
   reportError?: (message: string) => void;
 }
 
-interface PullRequestEvidenceMetadata {
+export interface PullRequestEvidenceMetadata {
   url: string;
   body: string;
   changedPaths: string[];
@@ -66,7 +67,13 @@ export function detectShipmentEvidenceCommand(argv: string[]): ShipmentEvidenceC
   const prIndex = argv.indexOf('--pr', argsStart);
   const pr = prIndex === -1 ? undefined : argv[prIndex + 1];
   if (!pr || pr.startsWith('--')) return { kind: 'guide' };
-  if (!reconcile) return { kind: 'check', pr };
+  if (!reconcile) {
+    const eventIndex = argv.indexOf('--event', argsStart);
+    const eventPath = eventIndex === -1 ? undefined : argv[eventIndex + 1];
+    return eventPath && eventPath.startsWith('--')
+      ? { kind: 'guide' }
+      : { kind: 'check', pr, eventPath };
+  }
   const shippedIndex = argv.indexOf('--shipped', argsStart);
   const shipped = shippedIndex === -1 ? undefined : argv[shippedIndex + 1];
   return shipped && /^\d{4}-\d{2}-\d{2}/.test(shipped)
@@ -105,7 +112,9 @@ export async function dispatchShipmentEvidence(
       report(`shipped-record audit: complete (${audit.rows.length} candidates)`);
       return 0;
     }
-    const metadata = await readPullRequestEvidenceMetadata(runGh, cwd, cmd.pr);
+    const metadata = cmd.kind === 'check' && cmd.eventPath
+      ? await (runners.readEventMetadata ?? readPullRequestEventMetadata)(cmd.eventPath, cwd, runGit)
+      : await readPullRequestEvidenceMetadata(runGh, cwd, cmd.pr);
     if (metadata.url !== cmd.pr) {
       throw new Error(`implementation PR binding mismatch: expected ${cmd.pr}, got ${metadata.url || 'empty'}`);
     }
@@ -160,7 +169,7 @@ export async function dispatchShipmentEvidence(
         candidateCommit,
       },
       {
-        gitRunner: async (args) => (await runGit(args, { cwd })).stdout,
+        gitRunner: evidenceGitRunner(runGit, cwd),
         githubRunner: async (implementationPr) => {
           if (implementationPr !== cmd.pr) {
             throw new Error(`implementation PR binding mismatch: expected ${cmd.pr}, got ${implementationPr}`);
@@ -223,7 +232,7 @@ async function evaluateAtCandidateHead(
   return evaluateEvidence(
     { repoDir: cwd, slug, implementationPr, candidateCommit },
     {
-      gitRunner: async (args) => (await runGit(args, { cwd })).stdout,
+      gitRunner: evidenceGitRunner(runGit, cwd),
       githubRunner: async () => ({ url: implementationPr, headRefOid: candidateCommit }),
     },
   );
@@ -349,6 +358,65 @@ async function readPullRequestEvidenceMetadata(
       : [],
     headRefOid: typeof value.headRefOid === 'string' ? value.headRefOid : '',
   };
+}
+
+/**
+ * The pull_request workflow already checks out the immutable event head. Read
+ * its signed event payload plus the local commit graph rather than depending
+ * on `gh pr view` (which is unavailable in restricted CI credentials).
+ */
+async function readPullRequestEventMetadata(
+  eventPath: string,
+  cwd: string,
+  runGit: GitRunner,
+): Promise<PullRequestEvidenceMetadata> {
+  const event = JSON.parse(await readFile(eventPath, 'utf8')) as {
+    pull_request?: {
+      html_url?: unknown;
+      body?: unknown;
+      base?: { sha?: unknown };
+      head?: { sha?: unknown };
+    };
+  };
+  const pullRequest = event.pull_request;
+  const url = typeof pullRequest?.html_url === 'string' ? pullRequest.html_url : '';
+  const baseSha = typeof pullRequest?.base?.sha === 'string' ? pullRequest.base.sha : '';
+  const headRefOid = typeof pullRequest?.head?.sha === 'string' ? pullRequest.head.sha : '';
+  if (!url || !baseSha || !headRefOid) {
+    throw new Error(`pull-request event lacks URL or commit identity: ${eventPath}`);
+  }
+  const changedPaths = (await runGit(['diff', '--name-only', `${baseSha}...${headRefOid}`], { cwd })).stdout
+    .split('\n')
+    .filter(Boolean);
+  return {
+    url,
+    body: typeof pullRequest?.body === 'string' ? pullRequest.body : '',
+    changedPaths,
+    headRefOid,
+  };
+}
+
+function evidenceGitRunner(runGit: GitRunner, cwd: string) {
+  return async (args: string[]): Promise<string> => {
+    try {
+      const result = await runGit(args, { cwd });
+      return isMergeBaseAncestor(args) ? 'true' : result.stdout;
+    } catch (error) {
+      if (isMergeBaseAncestor(args) && exitCode(error) === 1) return 'false';
+      throw error;
+    }
+  };
+}
+
+function isMergeBaseAncestor(args: string[]): boolean {
+  return args[0] === 'merge-base' && args[1] === '--is-ancestor';
+}
+
+function exitCode(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error &&
+    typeof (error as { code?: unknown }).code === 'number'
+    ? (error as { code: number }).code
+    : undefined;
 }
 
 async function listPlanStems(cwd: string): Promise<string[]> {

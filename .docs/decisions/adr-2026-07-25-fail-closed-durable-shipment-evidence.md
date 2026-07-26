@@ -71,6 +71,12 @@ approve pull requests, and have no alternate GitHub App/PAT secret.
    weakening its PR, review, merge-method, or destructive-update rules. Administrative bypass remains
    a repository governance setting, not an engine success path.
 
+   The premerge job derives the implementation URL, PR body, base/head SHAs, and changed paths from
+   the checked-out `pull_request` event plus `git diff <base>...<head>`. It does not call `gh pr view`:
+   the event head is the authoritative CI binding, and the shared verifier still proves the durable
+   record, canonical hash, and exact checked-out commit. This keeps the required check usable with
+   read-only CI credentials.
+
 5. **Post-merge reconciliation through human repair PRs.** On a merged PR, an Action reruns the
    association and verifier against `main`. If valid, it exits. If the association is proven and the
    record is absent/invalid, it creates or updates a deterministic record-only branch and PR. The

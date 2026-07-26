@@ -27,7 +27,7 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: node src/conductor/dist/index.js shipment-evidence --pr "${{ github.event.pull_request.html_url }}"
+      - run: node src/conductor/dist/index.js shipment-evidence --pr "${{ github.event.pull_request.html_url }}" --event "$GITHUB_EVENT_PATH"
 
   reconcile:
     if: github.event.action == 'closed' && github.event.pull_request.merged == true

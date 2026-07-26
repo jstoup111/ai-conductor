@@ -1,4 +1,5 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
@@ -54,6 +55,61 @@ describe('shipment-evidence CLI', () => {
         headRefOid: 'a'.repeat(40),
       },
     });
+  });
+
+  it('uses checked-out pull-request event and commit evidence without gh in CI mode', async () => {
+    const pr = 'https://github.com/org/repo/pull/1';
+    const head = 'a'.repeat(40);
+    const base = 'b'.repeat(40);
+    const eventDir = await mkdtemp(join(tmpdir(), 'shipment-evidence-event-'));
+    const eventPath = join(eventDir, 'event.json');
+    await writeFile(eventPath, JSON.stringify({
+      pull_request: {
+        html_url: pr,
+        body: 'Plan: `.docs/plans/feature.md`',
+        base: { sha: base },
+        head: { sha: head },
+      },
+    }));
+    const runGh = vi.fn(async () => {
+      throw new Error('gh must not run for checked-out event evidence');
+    });
+    const evaluateEvidence = vi.fn(async () => ({
+      kind: 'valid' as const,
+      slug: 'feature',
+      pr,
+      recordPath: '.docs/shipped/feature.md',
+      hash: 'hash',
+      commit: head,
+    }));
+
+    try {
+      const code = await dispatchShipmentEvidence(
+        { kind: 'check', pr, eventPath },
+        '/repo',
+        {
+          runGh,
+          runGit: vi.fn(async (args: string[]) => {
+            if (args[0] === 'diff') {
+              expect(args).toEqual(['diff', '--name-only', `${base}...${head}`]);
+              return { stdout: 'src/conductor/src/engine/feature.ts\n' };
+            }
+            if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: head };
+            throw new Error(`unexpected git args: ${args.join(' ')}`);
+          }),
+          listPlanStems: async () => ['feature'],
+          evaluateEvidence,
+        },
+      );
+
+      expect({ code, ghCalls: runGh.mock.calls.length, input: evaluateEvidence.mock.calls[0]?.[0] }).toEqual({
+        code: 0,
+        ghCalls: 0,
+        input: { repoDir: '/repo', slug: 'feature', implementationPr: pr, candidateCommit: head },
+      });
+    } finally {
+      await rm(eventDir, { recursive: true, force: true });
+    }
   });
 
   it('succeeds without evaluating a spec-only or docs-only PR', async () => {
