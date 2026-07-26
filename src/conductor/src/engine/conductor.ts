@@ -6784,6 +6784,7 @@ export function resolveGroupMembership(
       { tier: state.complexity_tier },
     );
     const skip =
+      getStepStatus(state, name) === 'skipped' ||
       stepDef.skippableForTiers.includes(tier) ||
       (stepDef.skippableForTracks ?? []).includes(track) ||
       shouldSkipForUpstreamSkip(stepDef, state) ||

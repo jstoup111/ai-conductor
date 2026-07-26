@@ -124,4 +124,70 @@ describe('SHIP-tail publication fence (#922)', () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it('preserves a persisted skipped validator while rerunning applicable validators', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-skipped-'));
+    const statePath = join(dir, '.pipeline', 'conduct-state.json');
+    try {
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      const manualResults = join(dir, '.pipeline/manual-test-results.md');
+      await writeFile(
+        manualResults,
+        '# Results\n\n| Story | Result |\n|--|--|\n| #922 | PASS |\n',
+      );
+      await utimes(manualResults, new Date(), new Date(Date.now() + 60_000));
+      await writeState(statePath, {
+        complexity_tier: 'M',
+        track: 'product',
+        architecture_review: 'done',
+        test_suite: 'done',
+        manual_test: 'skipped',
+        prd_audit: 'failed',
+        architecture_review_as_built: 'stale',
+        retro: 'skipped',
+        rebase: 'done',
+      } as ConductState);
+
+      const dispatched: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          dispatched.push(step);
+          if (step === 'prd_audit') {
+            await writeFile(
+              join(dir, '.pipeline/prd-audit.md'),
+              '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | src/fence.ts:1 |\n',
+            );
+          } else if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\n**Verdict:** APPROVED\n',
+            );
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        daemon: true,
+        mode: 'auto',
+        fromStep: 'finish',
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      expect(
+        dispatched
+          .filter((step) =>
+            ['manual_test', 'prd_audit', 'architecture_review_as_built'].includes(step),
+          )
+          .sort(),
+      ).toEqual(['architecture_review_as_built', 'prd_audit']);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
