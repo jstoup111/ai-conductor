@@ -299,7 +299,9 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - **Fresh/no AGENTS.md:** Generate from `templates/AGENTS.md.template`. This gives Codex the
   harness entry point while keeping the skills themselves user-scoped at `~/.agents/skills/`.
 - **Existing AGENTS.md:** Verify it references the repository harness documentation; append the Codex harness reference
-  block if needed. Never overwrite user content.
+  block if needed. Preserve all operator content and append the AGENTS.md reference exactly once: repeated initialization is
+  idempotent. Update AGENTS.md atomically; if the update cannot be completed safely, leave the original content
+  intact and report an actionable AGENTS.md error rather than creating a partial file. Never overwrite user content.
 
 ### 7. Bootstrap Memory (Existing Projects Only)
 
