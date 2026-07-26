@@ -11,13 +11,14 @@ requires: [".docs/plans/ with implementation plan"]
 
 Orchestrates execution of an implementation plan through quality-gated stages. The configured
 harness runner drives the task loop — it parses the plan, iterates tasks, and sends one prompt
-per task. Claude orchestrates each task by dispatching subagents for implementation. Subagent
+per task. The selected host agent orchestrates each task by dispatching implementers through its
+available subagent facility. Subagent
 context is isolated and discarded after completion, keeping the orchestrator's context lean.
 
 ## Execution Model
 
 ```
-Harness runner              Claude (orchestrator)         Subagent (implementer)
+Harness runner              Host agent (orchestrator)    Subagent (implementer)
 ──────────────              ─────────────────────         ──────────────────────
 Parse plan, extract task →  Receive task context    →     Full TDD cycle
                             Dispatch subagent       →     RED → DOMAIN → GREEN
@@ -26,9 +27,14 @@ Check task-status.json  ←   Report PASS/FAIL              (context discarded)
 Next task or evaluator
 ```
 
-**Key constraint:** Claude MUST dispatch subagents for implementation via the Agent tool.
-It must NOT implement directly in the orchestration session. This keeps the orchestrator's
+**Key constraint:** The selected host agent MUST dispatch implementers through its available
+subagent facility. It must NOT implement directly in the orchestration session. This keeps the orchestrator's
 context bounded to ~2-3 summary lines per task regardless of feature size.
+
+**Host mechanics:** Claude Code uses its Agent tool and Claude model labels for this delegation.
+Other supported hosts use their native equivalent. These mechanics may differ, but they MUST
+preserve the shared task scope, TDD cycle, task attribution, verification, review, and gate
+contracts below.
 
 ## Practices
 
@@ -44,8 +50,8 @@ Default to **Standard** unless the user specifies otherwise.
 
 ### Per-Task Execution
 
-Task stamping is engine machinery, not an orchestrator instruction. A Claude-session
-PreToolUse hook, installed into the build worktree at provisioning time (see
+Task stamping is engine machinery, not an orchestrator instruction. In Claude Code, a
+Claude Code session PreToolUse hook, installed into the build worktree at provisioning time (see
 `adr-2026-07-10-session-hook-task-stamping.md`), inspects **line 1 only** of every
 subagent dispatch prompt. `Task: <id>` (id = bare plan header id, e.g. `Task: 9`, never
 `task-9`) flips that row to `in_progress` in `.pipeline/task-status.json` and writes
@@ -55,7 +61,7 @@ instructive stderr — fix the dispatch prompt's first line and redispatch. If a
 task's stamp is already present (overlap), the hook still flips the new row but clears
 the stamp file, so the commit-msg hook abstains from attribution rather than guessing —
 never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
-subagent return iff its content still matches that dispatch's id. Claude orchestrates
+subagent return iff its content still matches that dispatch's id. The selected host agent orchestrates
 the task through these steps:
 
 ```
@@ -77,7 +83,9 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                    Crash recovery: if a session restarts mid-task, manually reset the task back to
                    `pending` in .pipeline/task-status.json (same approach as before).
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
-2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
+2. DISPATCH     — Send task to a TDD implementer through the selected host's available subagent facility
+                  with scoped context only. In Claude Code, dispatch through the Agent tool with
+                  model="sonnet"; other supported hosts use their native model-selection mechanism.
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Subagent includes it as a trailer in all commits (including refactors); subagent amends before PASS
                   if the trailer is malformed. Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
@@ -157,7 +165,8 @@ step or instruction you must remember to run:
   `Edit|Write|NotebookEdit|Bash` blocks a direct file mutation or `git commit`
   invocation made in the orchestrator session — i.e. outside a stamped subagent
   dispatch — while a build step is active. The redirect message tells you to dispatch
-  the work via the Agent tool with a `Task: <id>` (or `Task: none`) line-1 marker
+  the work through the selected host's available subagent facility with a `Task: <id>` (or
+  `Task: none`) line-1 marker; in Claude Code this facility is the Agent tool
   instead of mutating files directly.
 
 **Three exemption surfaces (both gates abstain rather than reject):**
@@ -182,16 +191,16 @@ CLI verbs still exist for operator/recovery use (e.g. resetting a task after a c
 step you invoke mid-pipeline. You report the subagent's result (PASS/FAIL) to inform the
 conductor's logging and audit trail.
 
-**Subagent context scoping:** The subagent receives ONLY:
+**Subagent context scoping:** The implementer receives ONLY:
 - The task description and acceptance criteria (from the plan)
 - File paths to modify (from the plan's "Files likely touched")
 - The TDD skill instructions
 
-The subagent does NOT receive the full plan, all stories, or prior task history.
-The subagent handles the commit as part of the TDD COMMIT phase.
+The implementer does NOT receive the full plan, all stories, or prior task history.
+The implementer handles the commit as part of the TDD COMMIT phase.
 
-**No branch hygiene by the subagent — stay on the branch as-is.** Every dispatch prompt MUST
-instruct the implementation subagent to NOT run `git fetch`, `git pull`, `git rebase`, or switch
+**No branch hygiene by the implementer — stay on the branch as-is.** Every dispatch prompt MUST
+instruct the implementer to NOT run `git fetch`, `git pull`, `git rebase`, or switch
 branches. It commits only to the current feature branch. Mid-build fetch/rebase is how a feature
 branch silently auto-rebased onto a moved `origin/main` and stalled in a CHANGELOG conflict that
 blocked the commit. The **only** sanctioned rebase is the daemon's finish-time rebase-onto-latest
@@ -200,10 +209,10 @@ per-task loop. Implementation agents never integrate upstream themselves.
 
 **Context efficiency:** Do not inline file contents in subagent prompts. Provide: file path,
 line range of interest, and method signature. The subagent reads files as needed. For
-sequential tasks on the same files, reuse the existing subagent via SendMessage instead of
+sequential tasks on the same files, reuse the existing host-native implementer session instead of
 spawning a new agent — this preserves file cache and avoids redundant reads.
 
-**Scope discipline:** Subagents MUST only modify lines directly related to their assigned task.
+**Scope discipline:** Implementers MUST only modify lines directly related to their assigned task.
 Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
 definition, or "improving" a method signature while adding a validation) are scope violations.
 The evaluator should flag scope violations as IMPORTANT severity.
@@ -248,7 +257,7 @@ This provides audit-trail visibility into the scoping decision.
 **Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
 on top of the just-completed TDD agent's API usage.
 
-At batch boundaries, dispatch an evaluator agent (see the model table below for the right
+At batch boundaries, dispatch an evaluator through the selected host's available subagent facility (see the model table below for the right
 model per tier and batch position) with **fresh, scoped context** (no shared state with the
 generator). The evaluator dispatch prompt's FIRST LINE MUST be exactly `Task: none` — the
 session hook (see Per-Task Execution) enforces this marker on every Agent-tool dispatch,
@@ -288,8 +297,8 @@ Pre-batch verification (`BATCH_AFFECTED_TESTS` or its indeterminate-scope fallba
 add a lightweight integration check (full branch stat summary) but do NOT re-review earlier
 batches line by line — they already passed their own evaluator gate.
 
-**Enforcement — orchestrator writes, not the subagent.** After the evaluator agent
-returns, the orchestrator (not the evaluator subagent) MUST perform these three actions
+**Enforcement — orchestrator writes, not the evaluator.** After the evaluator
+returns, the orchestrator (not the evaluator) MUST perform these three actions
 atomically before advancing one single token further:
 
 1. `mkdir -p .pipeline/audit-trail/batch-N`
@@ -340,7 +349,7 @@ mismatch between the complexity tier and the task list, an ambiguous requirement
 that needs user judgement, a decision between two approaches where the plan
 doesn't specify, etc. — do NOT output a rhetorical question like "here are
 three options, what would you prefer?" as a wrap-up. Autonomous retries will
-re-dispatch Claude against the same unresolved question and burn the retry
+re-dispatch the host agent against the same unresolved question and burn the retry
 budget without producing new task completions.
 
 If you're tempted to ask "resolve now or exit to the harness?", you must
@@ -360,10 +369,10 @@ present, it:
 
 1. Emits a `build_stall` event (reason: `halt_marker`).
 2. Clears the marker (ack).
-3. Opens an interactive Claude REPL scoped to the build step, so the user
-   can discuss the blocker with Claude and take action.
+3. Opens the selected host's native interactive session scoped to the build step; in Claude Code,
+   this is an interactive Claude REPL, so the user can discuss the blocker and take action.
 4. Re-checks the completion predicate once the REPL exits.
-5. Either succeeds (user + Claude resolved enough tasks) or falls into the
+5. Either succeeds (user + host agent resolved enough tasks) or falls into the
    normal recovery menu.
 
 This REPL escalation path is unaffected by daemon-mode routing below — it applies only
@@ -457,7 +466,7 @@ Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `
 ### Parallel Execution (Standard and Full Autonomy)
 
 When tasks within a batch have no file-level dependencies on each other, dispatch them
-in parallel using the Agent tool. This does NOT require worktrees — parallel agents work
+in parallel through the selected host's available subagent facility. This does NOT require worktrees — parallel agents work
 in the same directory on non-overlapping files.
 
 **When to parallelize:**
@@ -468,7 +477,7 @@ in the same directory on non-overlapping files.
 **How to parallelize:**
 1. Read the plan and identify tasks with no mutual dependencies
 2. Group independent tasks into parallel batches (max 3 concurrent agents)
-3. Dispatch each task as a separate Agent tool call in a single message
+3. Dispatch each task through the selected host's available subagent facility in a single message
 4. Each agent receives: the task description, the test directory, the source directory
 5. Wait for all agents to complete
 6. Compute `BATCH_AFFECTED_TESTS` from every task's scoped affected-test set and run that union
@@ -477,7 +486,9 @@ in the same directory on non-overlapping files.
 
 **Worktree-based parallelism (Full autonomy only):**
 For tasks that touch overlapping files or need full isolation:
-- Dispatch the `worktree-manager` agent with `model="haiku"` to create parallel worktrees under `.worktrees/`
+- In Claude Code, dispatch the `worktree-manager` agent with `model="haiku"` to create parallel
+  worktrees under `.worktrees/`; other supported hosts use the native equivalent with the same
+  isolated-worktree responsibility.
 - Each worktree gets its own task batch
 - After completion, merge results back sequentially
 - The worktree-manager handles merge order, conflict resolution, and post-merge testing
@@ -500,7 +511,7 @@ At natural batch boundaries (after completing a group of related tasks):
 **Post-batch checks:**
 - Run the linter (if tech-context specifies one)
 - Run `/simplify` to check for accumulated duplication (dry business logic, not dry code).
-  If dispatched via the Agent tool, the `/simplify` dispatch prompt's first line MUST be
+  If dispatched through the selected host's available subagent facility, the `/simplify` dispatch prompt's first line MUST be
   `Task: none` (session-hook marker contract, see Per-Task Execution).
 - Verify architecture diagrams are current (if structural files changed in this batch, run `/architecture-diagram` in verification mode)
 - Run a **micro-retro** (see below)
@@ -513,13 +524,13 @@ At natural batch boundaries (after completing a group of related tasks):
 
 ### Micro-Retros (Per-Phase)
 
-At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched via the Agent tool, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
+At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched through the selected host's available subagent facility, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Memory Checkpoint (Per-Batch)
 
 **GATE: Every batch must persist at least one `.memory/` entry before proceeding.**
 
-Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write. If dispatched via the Agent tool, the memory-checkpoint dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
+Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write. If dispatched through the selected host's available subagent facility, the memory-checkpoint dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Progress Log
 
