@@ -312,6 +312,54 @@ fi
 
 mkdir -p "$CHECK_HOME/.agents/skills" "$CHECK_HOME/.codex/skills"
 ln -s "$CHECKOUT/skills/tdd" "$CHECK_HOME/.agents/skills/tdd"
+rm -f "$CHECK_HOME/.agents/skills/tdd"
+ln -s "$TMP_ROOT/missing-tdd-target" "$CHECK_HOME/.agents/skills/tdd"
+HOME="$CHECK_HOME" PATH="$STUBS:$CHECK_HOME/.local/bin:/usr/bin:/bin" \
+  "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root \
+  >"$TMP_ROOT/check-broken.out" 2>&1
+BROKEN_CODE=$?
+if [ "$BROKEN_CODE" -ne 0 ] \
+  && grep -qiE 'codex.*(active|current).*tdd' "$TMP_ROOT/check-broken.out" \
+  && grep -qi 'broken' "$TMP_ROOT/check-broken.out" \
+  && [ "$(readlink "$CHECK_HOME/.agents/skills/tdd")" = "$TMP_ROOT/missing-tdd-target" ]; then
+  pass 'check identifies a broken current Codex skill without repairing it'
+else
+  fail 'check identifies a broken current Codex skill without repairing it'
+fi
+
+rm -f "$CHECK_HOME/.agents/skills/tdd"
+ln -s "$OLD_CHECKOUT/skills/tdd" "$CHECK_HOME/.agents/skills/tdd"
+HOME="$CHECK_HOME" PATH="$STUBS:$CHECK_HOME/.local/bin:/usr/bin:/bin" \
+  "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root \
+  >"$TMP_ROOT/check-stale.out" 2>&1
+STALE_CODE=$?
+if [ "$STALE_CODE" -ne 0 ] \
+  && grep -qiE 'codex.*(active|current).*tdd' "$TMP_ROOT/check-stale.out" \
+  && grep -qiE 'stale|expected' "$TMP_ROOT/check-stale.out" \
+  && [ "$(readlink "$CHECK_HOME/.agents/skills/tdd")" = "$OLD_CHECKOUT/skills/tdd" ]; then
+  pass 'check identifies a stale current Codex skill without replacing it'
+else
+  fail 'check identifies a stale current Codex skill without replacing it'
+fi
+
+rm -f "$CHECK_HOME/.agents/skills/tdd"
+printf '%s\n' 'operator-owned current tdd' > "$CHECK_HOME/.agents/skills/tdd"
+NON_SYMLINK_HASH=$(sha256sum "$CHECK_HOME/.agents/skills/tdd" | awk '{print $1}')
+HOME="$CHECK_HOME" PATH="$STUBS:$CHECK_HOME/.local/bin:/usr/bin:/bin" \
+  "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root \
+  >"$TMP_ROOT/check-non-symlink.out" 2>&1
+NON_SYMLINK_CODE=$?
+if [ "$NON_SYMLINK_CODE" -ne 0 ] \
+  && grep -qiE 'codex.*(active|current).*tdd' "$TMP_ROOT/check-non-symlink.out" \
+  && grep -qiE 'not a symlink|non-symlink' "$TMP_ROOT/check-non-symlink.out" \
+  && [ "$(sha256sum "$CHECK_HOME/.agents/skills/tdd" | awk '{print $1}')" = "$NON_SYMLINK_HASH" ]; then
+  pass 'check identifies a non-symlink current Codex skill without mutating it'
+else
+  fail 'check identifies a non-symlink current Codex skill without mutating it'
+fi
+
+rm -f "$CHECK_HOME/.agents/skills/tdd"
+ln -s "$CHECKOUT/skills/tdd" "$CHECK_HOME/.agents/skills/tdd"
 ln -sfn "$CHECKOUT/skills/tdd" "$CHECK_HOME/.codex/skills/tdd"
 HOME="$CHECK_HOME" PATH="$STUBS:$CHECK_HOME/.local/bin:/usr/bin:/bin" \
   "$CHECKOUT/bin/install" --check --providers codex --allow-worktree-root \

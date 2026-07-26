@@ -135,12 +135,15 @@ check_installation() {
   # configuration directories.
   local missing=0
   local stale=0
-  local skills_dir client skill target harness_target
+  local duplicates=0
+  local skills_dir client skill target harness_target location
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
+      location="Claude"
     else
       skills_dir="$CODEX_SKILLS_DIR"
+      location="Codex active"
     fi
     if [ -d "$skills_dir" ]; then
       ok "${client} skills directory exists (${skills_dir})"
@@ -154,17 +157,20 @@ check_installation() {
       if [ -L "$target" ]; then
         local resolved_target
         resolved_target=$(readlink -f "$target" 2>/dev/null || echo "broken")
-        if [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
-          ok "${client} skill: ${skill}"
+        if [ "$resolved_target" = "broken" ] || [ ! -e "$resolved_target" ]; then
+          fail "${location} skill: ${skill} (${target}) — broken symlink"
+          stale=$((stale + 1))
+        elif [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
+          ok "${location} skill: ${skill}"
         else
-          warn "${client} skill: ${skill} — points to ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
+          warn "${location} skill: ${skill} (${target}) — stale target ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
           stale=$((stale + 1))
         fi
-      elif [ -d "$target" ]; then
-        warn "${client} skill: ${skill} — exists but is not a symlink (may be a copy)"
+      elif [ -e "$target" ]; then
+        warn "${location} skill: ${skill} (${target}) — non-symlink entry"
         stale=$((stale + 1))
       else
-        fail "${client} skill: ${skill} — not installed"
+        fail "${location} skill: ${skill} (${target}) — missing"
         missing=$((missing + 1))
       fi
     done
@@ -173,20 +179,42 @@ check_installation() {
     if [ -L "$harness_target" ]; then
       local resolved_harness
       resolved_harness=$(readlink -f "$harness_target" 2>/dev/null || echo "broken")
-      if [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
-        ok "${client} harness instructions"
+      if [ "$resolved_harness" = "broken" ] || [ ! -e "$resolved_harness" ]; then
+        fail "${location} harness instructions (${harness_target}) — broken symlink"
+        stale=$((stale + 1))
+      elif [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ok "${location} harness instructions"
       else
-        warn "${client} harness instructions — point to ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
+        warn "${location} harness instructions (${harness_target}) — stale target ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
         stale=$((stale + 1))
       fi
     elif [ -e "$harness_target" ]; then
-      warn "${client} harness instructions — exists but is not a symlink"
+      warn "${location} harness instructions (${harness_target}) — non-symlink entry"
       stale=$((stale + 1))
     else
-      fail "${client} harness instructions — not installed"
+      fail "${location} harness instructions (${harness_target}) — missing"
       missing=$((missing + 1))
     fi
   done
+
+  # Codex's former discovery location must not shadow an active catalog. Do
+  # not modify it in check mode: even a foreign entry is useful diagnostic
+  # evidence, and reconciliation owns the mutation policy.
+  local legacy_dir="${HOME}/.codex/skills" legacy_target
+  for skill in "${SKILLS[@]}"; do
+    target="${CODEX_SKILLS_DIR}/${skill}"
+    legacy_target="${legacy_dir}/${skill}"
+    if { [ -e "$target" ] || [ -L "$target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
+      fail "Codex duplicate skill: ${skill} — active ${target} and legacy ${legacy_target} both exist"
+      duplicates=$((duplicates + 1))
+    fi
+  done
+  harness_target="${CODEX_SKILLS_DIR}/HARNESS.md"
+  legacy_target="${legacy_dir}/HARNESS.md"
+  if { [ -e "$harness_target" ] || [ -L "$harness_target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
+    fail "Codex duplicate harness instructions — active ${harness_target} and legacy ${legacy_target} both exist"
+    duplicates=$((duplicates + 1))
+  fi
 
   # Check conduct script
   echo ""
@@ -259,12 +287,13 @@ check_installation() {
   # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
   # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
-  if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && $all_ok; then
+  if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$duplicates" -eq 0 ] && $all_ok; then
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
     return 0
   else
     [ "$missing" -gt 0 ] && echo -e "${RED}${missing} skill(s) missing.${NC}"
     [ "$stale" -gt 0 ] && echo -e "${YELLOW}${stale} skill(s) stale or misconfigured.${NC}"
+    [ "$duplicates" -gt 0 ] && echo -e "${RED}${duplicates} Codex duplicate discovery entry(s).${NC}"
     echo -e "Run ${BOLD}./bin/install${NC} to fix."
     return 1
   fi
