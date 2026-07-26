@@ -15,7 +15,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 // targeting: the #532 resume clamp is intentionally bypassed, but publication
 // safety must not be.
 describe('SHIP-tail publication fence (#922)', () => {
-  function stateAtPublicationWithStaleAsBuilt(): ConductState {
+  function stateAtPublicationWithMissingAsBuiltEvidence(): ConductState {
     const state: Record<string, unknown> = {
       complexity_tier: 'M',
       track: 'technical',
@@ -28,7 +28,9 @@ describe('SHIP-tail publication fence (#922)', () => {
     // and this fixture explicitly disables manual validation.
     state.manual_test = 'skipped';
     state.prd_audit = 'skipped';
-    state.architecture_review_as_built = 'stale';
+    // State completion alone is not publication evidence: deliberately omit the
+    // as-built review artifact so only the finish fence can detect the gap.
+    state.architecture_review_as_built = 'done';
     return state as ConductState;
   }
 
@@ -51,24 +53,28 @@ describe('SHIP-tail publication fence (#922)', () => {
     };
   }
 
-  it('normal traversal reruns a stale validator before dispatching finish', async () => {
+  it('normal traversal lets the finish fence rerun a validator with missing evidence', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-normal-'));
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
     try {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeState(statePath, stateAtPublicationWithStaleAsBuilt());
+      await writeState(statePath, stateAtPublicationWithMissingAsBuiltEvidence());
       const { runner, dispatched } = asBuiltPassingRunner(dir);
+      const events = new ConductorEventEmitter();
+      const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+      events.on('kickback', (event) => kickbacks.push({ from: event.from, to: event.to }));
 
       await new Conductor({
         projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
-        events: new ConductorEventEmitter(),
+        events,
         daemon: true,
         mode: 'auto',
         config: { steps: { manual_test: { disable: true } } },
       }).run();
 
+      expect(kickbacks).toContainEqual({ from: 'finish', to: 'architecture_review_as_built' });
       expect(dispatched.indexOf('architecture_review_as_built')).toBeLessThan(
         dispatched.indexOf('finish'),
       );
@@ -77,27 +83,31 @@ describe('SHIP-tail publication fence (#922)', () => {
     }
   });
 
-  it('resume reruns a stale validator before dispatching finish', async () => {
+  it('resume lets the finish fence rerun a validator with missing evidence', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'ship-tail-fence-resume-'));
     const statePath = join(dir, '.pipeline', 'conduct-state.json');
     try {
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      const state = stateAtPublicationWithStaleAsBuilt();
+      const state = stateAtPublicationWithMissingAsBuiltEvidence();
       state.last_step = 'finish';
       await writeState(statePath, state);
       const { runner, dispatched } = asBuiltPassingRunner(dir);
+      const events = new ConductorEventEmitter();
+      const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+      events.on('kickback', (event) => kickbacks.push({ from: event.from, to: event.to }));
 
       await new Conductor({
         projectRoot: dir,
         stateFilePath: statePath,
         stepRunner: runner,
-        events: new ConductorEventEmitter(),
+        events,
         daemon: true,
         mode: 'auto',
         resume: true,
         config: { steps: { manual_test: { disable: true } } },
       }).run();
 
+      expect(kickbacks).toContainEqual({ from: 'finish', to: 'architecture_review_as_built' });
       expect(dispatched.indexOf('architecture_review_as_built')).toBeLessThan(
         dispatched.indexOf('finish'),
       );
