@@ -1,4 +1,7 @@
 import { execa } from 'execa';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { copySelectedCodexLogin } from './codex-self-host-auth.js';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
@@ -112,6 +115,7 @@ function parseWaitSeconds(output: string): number {
 export class CodexProvider implements LLMProvider {
   private readonly authentication: SelectedAuthentication;
   private readonly executable: string;
+  private readonly cachedLoginSource: string;
 
   constructor(
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
@@ -119,13 +123,17 @@ export class CodexProvider implements LLMProvider {
   ) {
     this.authentication = this.selectAuthentication();
     this.executable = executable;
+    this.cachedLoginSource = join(process.env.CODEX_HOME ?? join(homedir(), '.codex'), 'auth.json');
   }
 
   async resolveSelfHostExecutable(): Promise<string> {
     return this.executable;
   }
 
-  async prepareSelfHostAuth(_context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
+  async prepareSelfHostAuth(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation> {
+    if (!this.authentication.apiKey) {
+      await copySelectedCodexLogin({ source: this.cachedLoginSource, homeDir: context.homeDir });
+    }
     return {
       ...(this.authentication.apiKey ? { env: { CODEX_API_KEY: this.authentication.apiKey } } : {}),
       args: [],
