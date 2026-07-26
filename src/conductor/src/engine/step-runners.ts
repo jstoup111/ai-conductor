@@ -455,7 +455,15 @@ export class DefaultStepRunner implements StepRunner {
       await this.sleepFn(this.stepCooldown * 1000 * multiplier);
     }
 
-    const prompt = renderSkillInvocation(STEP_SKILL_INVOCATIONS[step], this.providerKey);
+    const skillInvocation = Object.prototype.hasOwnProperty.call(
+      STEP_SKILL_INVOCATIONS,
+      step,
+    )
+      ? STEP_SKILL_INVOCATIONS[step]
+      : undefined;
+    const prompt = skillInvocation
+      ? renderSkillInvocation(skillInvocation, this.providerKey)
+      : `/${step}`;
     // Concurrent-group branch dispatch (group-core.ts): opts.sessionId, when
     // present, overrides the runner's shared this.sessionId so the branch
     // never touches (reads or mutates) the main conductor session — see
@@ -664,7 +672,10 @@ export class DefaultStepRunner implements StepRunner {
         onAttempt: this.providerAttempt,
         warn: this.providerWarn,
         options: invocationOptions,
-        ...(invocationKind === 'skill'
+        ...(invocationKind === 'skill' && Object.prototype.hasOwnProperty.call(
+          STEP_SKILL_INVOCATIONS,
+          step,
+        )
           ? {
               optionsForCandidate: (candidateKey: string) => ({
                 ...invocationOptions,
