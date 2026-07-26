@@ -105,9 +105,14 @@ describe('CodexProvider', () => {
     const priorKey = process.env.CODEX_API_KEY;
     process.env.CODEX_API_KEY = key;
     mockExeca.mockResolvedValue({ stdout: 'Streamed.', exitCode: 0 } as any);
+    const apiKeyProvider = new CodexProvider(
+      vi.fn(async (_command, _args, options) =>
+        readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
+      ),
+    );
 
     try {
-      await provider.invokeInteractive({
+      await apiKeyProvider.invokeInteractive({
         ...baseOptions,
         interactive: false,
         dangerouslySkipPermissions: true,
@@ -156,9 +161,14 @@ describe('CodexProvider', () => {
         stderr: `Invalid API key ${key ?? 'cached-login-path'}`,
         exitCode: 1,
       } as any);
+      const selectedProvider = new CodexProvider(
+        vi.fn(async (_command, _args, options) =>
+          readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
+        ),
+      );
 
       try {
-        const result = await provider.invoke(baseOptions);
+        const result = await selectedProvider.invoke(baseOptions);
         const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
 
         expect({
@@ -190,9 +200,10 @@ describe('CodexProvider', () => {
       stdout: jsonlMessage(`Completed with ${key}, ${key.slice(0, 8)}, and ${key.slice(-8)}.`),
       exitCode: 0,
     } as any);
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
 
     try {
-      const result = await provider.invoke(baseOptions);
+      const result = await apiKeyProvider.invoke(baseOptions);
 
       expect(result.output).not.toMatch(new RegExp(`${key}|${key.slice(0, 8)}|${key.slice(-8)}`));
     } finally {
@@ -209,9 +220,10 @@ describe('CodexProvider', () => {
       stdout: jsonlMessage(`Visible ${key.slice(0, 1)} ${key.slice(-1)} ${key}.`),
       exitCode: 0,
     } as any);
+    const apiKeyProvider = new CodexProvider(vi.fn(async () => readyDoctorResult('api-key')));
 
     try {
-      const result = await provider.invoke(baseOptions);
+      const result = await apiKeyProvider.invoke(baseOptions);
 
       expect(result.output).not.toMatch(new RegExp(`${key}|${key.slice(0, 1)}|${key.slice(-1)}`));
     } finally {
@@ -416,6 +428,31 @@ describe('CodexProvider', () => {
       readinessChecks: 2,
       executions: 2,
     });
+  });
+
+  it('keeps the constructor-bound API key across readiness and resumed exec after environment changes', async () => {
+    const key = 'sk-905-bound-at-construction';
+    const priorKey = process.env.CODEX_API_KEY;
+    process.env.CODEX_API_KEY = key;
+    const runDoctor = vi.fn(async () => {
+      delete process.env.CODEX_API_KEY;
+      return readyDoctorResult('api-key');
+    });
+    const boundProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Done.'), exitCode: 0 } as any);
+
+    try {
+      await boundProvider.invoke(baseOptions);
+      await boundProvider.invoke({ ...baseOptions, resume: true });
+
+      expect(mockExeca.mock.calls.map(([, , options]) => options.env)).toEqual([
+        { CODEX_API_KEY: key },
+        { CODEX_API_KEY: key },
+      ]);
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
   });
 
   it('gates automatic streaming but preserves an operator interactive session', async () => {

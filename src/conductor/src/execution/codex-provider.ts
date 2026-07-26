@@ -106,10 +106,14 @@ function parseWaitSeconds(output: string): number {
 }
 
 export class CodexProvider implements LLMProvider {
-  constructor(private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner) {}
+  private readonly authentication: SelectedAuthentication;
+
+  constructor(private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner) {
+    this.authentication = this.selectAuthentication();
+  }
 
   async readiness(): Promise<AuthenticationReadiness> {
-    const authentication = this.selectAuthentication();
+    const authentication = this.authentication;
     try {
       const result = await this.runDoctor(
         'codex',
@@ -134,7 +138,7 @@ export class CodexProvider implements LLMProvider {
     const readiness = await this.readiness();
     if (readiness.state !== 'ready') return this.readinessFailure(readiness);
 
-    const authentication = this.selectAuthentication();
+    const authentication = this.authentication;
     const args = this.buildArgs(options, true, true);
     const prompt = this.composePrompt(options);
 
@@ -165,7 +169,7 @@ export class CodexProvider implements LLMProvider {
       if (readiness.state !== 'ready') return this.readinessFailure(readiness);
     }
 
-    const authentication = this.selectAuthentication();
+    const authentication = this.authentication;
     const result = await execa('codex', this.buildArgs(options, false, !options.interactive), {
       reject: false,
       input: this.composePrompt(options),
