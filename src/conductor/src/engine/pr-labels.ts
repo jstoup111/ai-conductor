@@ -36,7 +36,10 @@ export type GitRunner = (
 export function makeProductionGit(): GitRunner {
   return async (args: string[], opts: { cwd: string }) => {
     assertRealExecAllowed('git');
-    const result = await execFileP('git', args, { cwd: opts.cwd });
+    const result = await execFileP('git', args, {
+      cwd: opts.cwd,
+      maxBuffer: 32 * 1024 * 1024,
+    });
     return { stdout: String(result.stdout) };
   };
 }
