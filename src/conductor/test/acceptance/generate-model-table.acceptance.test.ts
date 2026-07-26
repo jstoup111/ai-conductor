@@ -163,9 +163,7 @@ describe('real binary provider-labelled contract drift', () => {
       const codexModelRow = autonomousRowWith(4);
       const codexEffortRow = autonomousRowWith(5);
       const tierRow =
-        autonomousRows.find((row) =>
-          cells(row).slice(2, 6).some((cell) => /\([SML](?:\/[SML])+\)/.test(cell)),
-        ) ?? '';
+        autonomousRows.find((row) => cells(row)[0] === 'writing-system-tests') ?? '';
       const tierCellIndex = tierRow
         ? cells(tierRow).findIndex(
             (cell, index) => index >= 2 && index <= 5 && /\([SML](?:\/[SML])+\)/.test(cell),
