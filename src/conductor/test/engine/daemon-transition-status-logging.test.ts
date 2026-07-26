@@ -17,7 +17,7 @@ import {
   type BacklogItem,
   type DaemonDeps,
 } from '../../src/engine/daemon.js';
-import { createDaemonModeLogger } from '../../src/daemon-cli.js';
+import { createDaemonModeLogger } from '../../src/engine/daemon-log.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({

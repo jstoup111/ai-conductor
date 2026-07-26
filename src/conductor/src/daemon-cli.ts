@@ -44,8 +44,9 @@ import { countResolvedTasks } from './engine/task-progress.js';
 import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon-lock.js';
 import {
   openDaemonLog,
-  formatDaemonActivityLine,
   formatDaemonLogLine,
+  formatDaemonFeatureTag,
+  createDaemonModeLogger,
   createFeatureDaemonLogger,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
@@ -304,50 +305,6 @@ const PRESEEDED_DONE: StepName[] = [
 const ANSI_SGR = /\x1b\[[0-9;]*m/g;
 export function stripAnsi(s: string): string {
   return s.replace(ANSI_SGR, '');
-}
-
-/**
- * Build the daemon's contextual activity logger.  Keeping transition state in
- * this production seam makes the status suppression apply equally to the
- * console and durable-log sinks, including feature-owned messages.
- */
-export function createDaemonModeLogger(sinks: {
-  writeLive: (line: string) => void;
-  writePersisted: (line: string) => void;
-}): (msg: string, featureOwned?: boolean) => void {
-  const lastStatus = new Map<string, string>();
-
-  return (msg: string, featureOwned = false) => {
-    const startMatch = msg.match(/▶.*start\s+(\S+)/);
-    if (startMatch) {
-      const slug = startMatch[1];
-      if (lastStatus.get(slug) === 'start') return;
-      lastStatus.set(slug, 'start');
-    }
-
-    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
-    if (resumeMatch) {
-      const slug = resumeMatch[1];
-      const oldStatus = lastStatus.get(slug);
-      lastStatus.set(slug, 'resume');
-      const resumed = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
-      const line = formatDaemonActivityLine(resumed, featureOwned);
-      sinks.writeLive(line);
-      sinks.writePersisted(line);
-      return;
-    }
-
-    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
-    if (doneMatch) {
-      const [, slug, outcomeStatus] = doneMatch;
-      if (lastStatus.get(slug) === outcomeStatus) return;
-      lastStatus.set(slug, outcomeStatus);
-    }
-
-    const line = formatDaemonActivityLine(msg, featureOwned);
-    sinks.writeLive(line);
-    sinks.writePersisted(line);
-  };
 }
 
 /**
@@ -824,7 +781,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
-    const featureLog = createFeatureDaemonLogger(item.slug, (message) => log(message, true));
+    const featureLog = createFeatureDaemonLogger(
+      item.slug,
+      (message) => log(message, true),
+      formatDaemonFeatureTag(item.slug),
+    );
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
     const renderableEvents: ConductorEvent['type'][] = [
       'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
@@ -1657,7 +1618,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                         modelPolicy: selectedRuntime.policy,
                         mode: 'auto',
                         providerExecution,
-                        log: createFeatureDaemonLogger(entry.slug, (message) => log(message, true)),
+                        log: createFeatureDaemonLogger(
+                          entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(entry.slug),
+                        ),
                       },
                     );
                     return await stepRunner.resolveRebaseConflict(ctx);
@@ -1744,7 +1709,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                         modelPolicy: selectedRuntime.policy,
                         mode: 'auto',
                         providerExecution,
-                        log: createFeatureDaemonLogger(ctx.entry.slug, (message) => log(message, true)),
+                        log: createFeatureDaemonLogger(
+                          ctx.entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(ctx.entry.slug),
+                        ),
                       },
                     );
                     await stepRunner.resolveCiFailure({

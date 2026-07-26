@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import ts from 'typescript';
 import * as daemonLog from '../../src/engine/daemon-log.js';
 
 /**
@@ -41,6 +42,52 @@ function recordDaemonOutput() {
 }
 
 describe('acceptance: daemon log feature tags', () => {
+  it('has a production daemon-entry call path for feature-log helpers', async () => {
+    const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
+    const module = ts.createSourceFile('daemon-cli.ts', source, ts.ScriptTarget.Latest, true);
+    let importsFeatureTagFormatter = false;
+    let callsFeatureTagFormatter = false;
+    let importsDaemonModeLogger = false;
+    let callsDaemonModeLogger = false;
+
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isImportDeclaration(node) &&
+        ts.isStringLiteral(node.moduleSpecifier) &&
+        node.moduleSpecifier.text === './engine/daemon-log.js'
+      ) {
+        const bindings = node.importClause?.namedBindings;
+        importsFeatureTagFormatter =
+          !!bindings &&
+          ts.isNamedImports(bindings) &&
+          bindings.elements.some((binding) => binding.name.text === 'formatDaemonFeatureTag');
+        importsDaemonModeLogger =
+          !!bindings &&
+          ts.isNamedImports(bindings) &&
+          bindings.elements.some((binding) => binding.name.text === 'createDaemonModeLogger');
+      }
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'formatDaemonFeatureTag'
+      ) {
+        callsFeatureTagFormatter = true;
+      }
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        node.expression.text === 'createDaemonModeLogger'
+      ) {
+        callsDaemonModeLogger = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(module);
+
+    expect(importsFeatureTagFormatter && callsFeatureTagFormatter).toBe(true);
+    expect(importsDaemonModeLogger && callsDaemonModeLogger).toBe(true);
+  });
+
   it('routes every daemon-created DefaultStepRunner warning sink through a feature logger', async () => {
     const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
     expect([...source.matchAll(/new DefaultStepRunner\([\s\S]*?\n\s*\);/g)].every((match) => /\n\s*log: /.test(match[0]))).toBe(true);

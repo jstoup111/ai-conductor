@@ -43,14 +43,58 @@ export function formatDaemonActivityLine(message: string, featureOwned = false):
 }
 
 /**
+ * Build the daemon's contextual activity logger. Keeping transition state in
+ * this shared logging boundary makes status suppression apply equally to the
+ * console and durable-log sinks, including feature-owned messages.
+ */
+export function createDaemonModeLogger(sinks: {
+  writeLive: (line: string) => void;
+  writePersisted: (line: string) => void;
+}): (msg: string, featureOwned?: boolean) => void {
+  const lastStatus = new Map<string, string>();
+
+  return (msg: string, featureOwned = false) => {
+    const startMatch = msg.match(/▶.*start\s+(\S+)/);
+    if (startMatch) {
+      const slug = startMatch[1];
+      if (lastStatus.get(slug) === 'start') return;
+      lastStatus.set(slug, 'start');
+    }
+
+    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
+    if (resumeMatch) {
+      const slug = resumeMatch[1];
+      const oldStatus = lastStatus.get(slug);
+      lastStatus.set(slug, 'resume');
+      const resumed = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
+      const line = formatDaemonActivityLine(resumed, featureOwned);
+      sinks.writeLive(line);
+      sinks.writePersisted(line);
+      return;
+    }
+
+    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
+    if (doneMatch) {
+      const [, slug, outcomeStatus] = doneMatch;
+      if (lastStatus.get(slug) === outcomeStatus) return;
+      lastStatus.set(slug, outcomeStatus);
+    }
+
+    const line = formatDaemonActivityLine(msg, featureOwned);
+    sinks.writeLive(line);
+    sinks.writePersisted(line);
+  };
+}
+
+/**
  * Derive an immutable feature-owned logger from a daemon logger. The base logger
  * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
  */
 export function createFeatureDaemonLogger(
   featureSlug: string,
   baseLog: (message: string, featureOwned?: boolean) => void,
+  featureTag = formatDaemonFeatureTag(featureSlug),
 ): (message: string) => void {
-  const featureTag = formatDaemonFeatureTag(featureSlug);
   return (message) => baseLog(`${featureTag} ${message}`, true);
 }
 
