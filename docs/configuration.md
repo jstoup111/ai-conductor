@@ -33,6 +33,7 @@ defaults:
   model: sonnet                 # "haiku" | "sonnet" | "opus" or full model ID
   effort: medium                # "low" | "medium" | "high" | "xhigh" | "max"
   max_retries: 3                # Retry budget before recovery-menu escalation
+                                # (engine-computed steps always use 1 — see below)
 
 # ── Phase-level defaults (override global) ───────────────────────────────────
 phases:
@@ -178,6 +179,24 @@ conductor:
   update_channel: tagged       # "tagged" | "main"
   auto_check: true             # Check for updates on startup
 ```
+
+### Retry budget and engine-computed steps
+
+`max_retries` (global, per-phase, per-step, or per-tier) is the number of attempts a step
+gets before the conductor escalates to the recovery menu — but it does **not** apply to
+*engine-computed* steps. An engine-computed step is one the engine evaluates entirely
+in-process, dispatching no agent at all (today: `wiring_check` and `test_suite`). Its
+verdict is a deterministic function of the tree it runs against, so a second attempt over
+an unchanged tree re-derives the identical answer; retrying it only burns wall-clock before
+the same terminal failure. These steps always run with a budget of **1** — run once, judge
+once — and emit no `step_retry` events. A real failure still routes exactly as before
+(kickback to `build`, or the recovery menu), just without the redundant recomputations.
+
+This does not affect `build_review` or `attribution_verify`. Those are also engine-native
+in the sense that no skill file drives them, but they dispatch a one-shot LLM (grader /
+verifier) whose result can legitimately differ between attempts — including transient
+dispatch failures the backoff ladder exists to retry — so they honor the configured
+`max_retries`. Setting `max_retries` on an engine-computed step in config has no effect.
 
 ### Aggregate test-suite gate
 

@@ -83,6 +83,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Engine-computed steps now get a retry budget of ONE instead of the configured
+  `max_retries`. A step declared `kind: 'engine-native'` that dispatches no agent
+  (`wiring_check`, `test_suite`) is a deterministic function of the tree it runs
+  against, so re-running it over an unchanged tree re-derives the identical verdict —
+  every retry was guaranteed waste. Observed on a live daemon: `wiring_check` failed
+  three times with a byte-identical rejection message in 357ms before terminally
+  failing and costing a full build + build_review cycle. Such a step now runs once, is
+  judged once, and routes its failure (kickback / recovery menu) immediately. The
+  engine-native steps that DO dispatch a one-shot LLM — `build_review` and
+  `attribution_verify`, whose output can legitimately differ between attempts and whose
+  transient dispatch failures the backoff ladder is built to retry — keep the normal
+  budget. See `docs/configuration.md` ([#982](https://github.com/jstoup111/ai-conductor/issues/982)).
 - Needs-human halts are no longer wiped by the main-advance re-kick sweep. Halts now carry
   a machine-readable class (`needs-human` | `mechanical`) written alongside
   `.pipeline/HALT`, and the sweep checks it before clearing a marker: `needs-human` halts

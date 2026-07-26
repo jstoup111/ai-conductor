@@ -128,6 +128,7 @@ import {
   ACCEPTANCE_SPECS_RED_EVIDENCE,
   removeBuildReviewVerdict,
 } from './artifacts.js';
+import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
 import {
   FullSuiteVerifier,
@@ -274,6 +275,42 @@ function deriveGateTopology(steps: StepDefinition[]): GateTopology {
     steps[0]?.name;
   return { verdictSteps, kickbackTargets, firstLoopIndex, regionStart };
 }
+/**
+ * Engine-native steps that additionally dispatch a one-shot LLM rather than
+ * computing their verdict in-process (`runBuildReview` / `dispatchVerifier` in
+ * step-runners.ts). Their output can legitimately differ between attempts — a
+ * transient grader-dispatch failure is exactly what the #814 backoff ladder
+ * retries — so they keep the normal per-step retry budget.
+ */
+const AGENT_DISPATCHING_ENGINE_NATIVE_STEPS: ReadonlySet<StepName> = new Set<StepName>([
+  'build_review',
+  'attribution_verify',
+]);
+
+/**
+ * True for a step the engine computes ENTIRELY in-process: declared
+ * `kind: 'engine-native'` in STEP_SKILL_INVOCATIONS (so `renderSkillInvocation`
+ * throws for it and no agent is ever dispatched) and not one of the
+ * LLM-dispatching engine-native steps above. Today: `wiring_check` and
+ * `test_suite`.
+ *
+ * Such a step is a deterministic function of the tree it runs against, so
+ * re-running it over an unchanged tree cannot produce a different answer — every
+ * retry is guaranteed waste. Observed on a live daemon (#982): wiring_check
+ * failed three times with a byte-identical message in 357ms, then terminally
+ * failed and cost a full build + build_review cycle. These steps get a retry
+ * budget of ONE: they run, they are judged, they are done. A genuine failure
+ * still routes exactly as before (kickback / recovery menu) — just immediately,
+ * instead of after two redundant recomputations.
+ */
+export function isEngineComputedStep(step: StepName): boolean {
+  return (
+    Object.prototype.hasOwnProperty.call(STEP_SKILL_INVOCATIONS, step) &&
+    STEP_SKILL_INVOCATIONS[step].kind === 'engine-native' &&
+    !AGENT_DISPATCHING_ENGINE_NATIVE_STEPS.has(step)
+  );
+}
+
 // Anti-ping-pong: a single gate may be re-opened by kickback at most this many
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
@@ -3449,10 +3486,14 @@ export class Conductor {
             ? await snapshotArtifactMtimes(this.projectRoot, 'plan')
             : null;
 
-        // The native suite owns one process attempt per BUILD lap. Retrying the
-        // identical verifier input here would only rerun the same command before
-        // BUILD had a chance to remediate it.
-        const stepMaxRetries = step.name === 'test_suite' ? 1 : resolved.max_retries;
+        // #982: an engine-computed step (in-process, no agent dispatch) is a
+        // deterministic function of the tree, so a second attempt over the same
+        // tree re-derives the identical verdict. Budget of one — run, judge,
+        // done. This subsumes the pre-existing `test_suite` special case: the
+        // native suite likewise owns one process attempt per BUILD lap, since
+        // rerunning the identical verifier input only repeats the same command
+        // before BUILD has had a chance to remediate it.
+        const stepMaxRetries = isEngineComputedStep(step.name) ? 1 : resolved.max_retries;
         // Snapshot of resolved-task count before the most recent build retry,
         // so the circuit breaker can detect "Claude ran but completed zero
         // additional tasks" = no point retrying further, hand off to REPL.
