@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { execa } from 'execa';
+import { resolveDocsAllowlist } from './phase-marker.js';
 
 const PROTECTED_ARTIFACT_DIRECTORIES = [
   '.docs/architecture',
@@ -27,6 +28,26 @@ export interface CreateProtectedArtifactSealOptions {
   projectRoot: string;
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
   baselineCommit: string;
+}
+
+export interface ActiveStepArtifactExceptionInput {
+  phase: string;
+  step: string;
+  target: string;
+}
+
+/**
+ * Reports whether the current lifecycle step grants an exception for this
+ * exact target. The allowlist is resolved for every decision so one step's
+ * permission cannot be reused by a later step.
+ */
+export function isActiveStepArtifactException({
+  phase,
+  step,
+  target,
+}: ActiveStepArtifactExceptionInput): boolean {
+  if (phase !== 'BUILD' && phase !== 'SHIP') return false;
+  return resolveDocsAllowlist(step).some((prefix) => target.startsWith(prefix));
 }
 
 function comparePaths(left: string, right: string): number {

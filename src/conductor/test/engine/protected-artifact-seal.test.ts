@@ -5,7 +5,10 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import {
+  createProtectedArtifactSeal,
+  isActiveStepArtifactException,
+} from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
@@ -91,5 +94,37 @@ describe('createProtectedArtifactSeal', () => {
     await expect(
       createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: await git(repo, ['rev-parse', 'HEAD']) }),
     ).resolves.toEqual(original);
+  });
+});
+
+describe('isActiveStepArtifactException', () => {
+  it('permits only a protected target under the exact active step prefix', () => {
+    expect(
+      isActiveStepArtifactException({
+        phase: 'SHIP',
+        step: 'retro',
+        target: '.docs/stories/retro-907.md',
+      }),
+    ).toBe(true);
+  });
+
+  it('rejects a sibling path that merely resembles the active step prefix', () => {
+    expect(
+      isActiveStepArtifactException({
+        phase: 'SHIP',
+        step: 'retro',
+        target: '.docs/stories-unrelated/retro-907.md',
+      }),
+    ).toBe(false);
+  });
+
+  it('does not let a later step reuse a prior step protected-artifact permission', () => {
+    expect(
+      isActiveStepArtifactException({
+        phase: 'SHIP',
+        step: 'manual_test',
+        target: '.docs/stories/retro-907.md',
+      }),
+    ).toBe(false);
   });
 });
