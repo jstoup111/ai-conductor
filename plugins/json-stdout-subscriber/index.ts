@@ -25,7 +25,19 @@ export class JsonStdoutSubscriber implements UISubscriber {
 
   handle(event: ConductorEvent): void {
     if (!this.started) return;
-    const line = JSON.stringify({ ...event, ts: new Date().toISOString() }) + '\n';
+    const output =
+      event.type === 'test_suite_verification'
+        ? {
+            type: event.type,
+            freshness: {
+              status: event.freshness.status,
+              ...(event.freshness.reason !== undefined
+                ? { reason: event.freshness.reason }
+                : {}),
+            },
+          }
+        : event;
+    const line = JSON.stringify({ ...output, ts: new Date().toISOString() }) + '\n';
     process.stdout.write(line);
   }
 }
