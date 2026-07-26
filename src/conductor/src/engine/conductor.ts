@@ -78,7 +78,7 @@ import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from './protected-artifact-seal.js';
-import { evaluateSafetyBoundary } from './safety-boundary.js';
+import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
@@ -927,6 +927,8 @@ export class Conductor {
    * the first `build` dispatch and torn down (idempotently) in `run()`'s finally.
    */
   private activeSandbox: SandboxBuildEnv | null = null;
+  /** Reusable safety verdicts are valid only within one exact attempt identity. */
+  private readonly safetyAttemptCache = new SafetyAttemptCache();
   /** Guards the one-time skill relink so it runs before the first build only. */
   private relinkDone = false;
   /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
@@ -1767,7 +1769,23 @@ export class Conductor {
     retryHint: string | undefined,
   ): Promise<StepRunResult> {
     const selfHostConfig = resolveSelfHostConfig(this.config);
-    const safetyVerdict = evaluateSafetyBoundary({
+    // Provider selection must precede self-host preparation: the guardrail
+    // bundle below configures Claude's global credentials and sandbox only.
+    // The step runner retains responsibility for Codex's provider-local
+    // readiness and unattended policy boundary.
+    const buildSelection =
+      this.config.steps?.build?.llm_provider ?? this.config.llm_provider;
+    const preferredBuildProvider = normalizeProviderSelection(buildSelection)[0];
+    const safetyIdentity = {
+      taskId: state.feature_desc ?? this.featureDesc ?? 'unknown-task',
+      provider: preferredBuildProvider ?? 'unknown-provider',
+      phase: 'BUILD',
+      workspace: this.projectRoot,
+      baseline: (await currentCommitSha(this.projectRoot)) ?? 'unknown-baseline',
+      terminalRun: String(state.session_started_at ?? 'unknown-terminal-run'),
+    };
+    const cachedSafetyVerdict = this.safetyAttemptCache.reuse(safetyIdentity);
+    const safetyVerdict = cachedSafetyVerdict ?? evaluateSafetyBoundary({
       context: { selfHost: this.isSelfBuild() },
       protections: [{
         name: 'self-host-isolation',
@@ -1777,6 +1795,9 @@ export class Conductor {
         state: selfHostConfig.sandboxBuildEnv ? 'passing' : 'disabled',
       }],
     });
+    if (!cachedSafetyVerdict && safetyVerdict.passed) {
+      this.safetyAttemptCache.record(safetyIdentity, safetyVerdict);
+    }
     if (!safetyVerdict.passed) {
       return {
         success: false,
@@ -1785,13 +1806,6 @@ export class Conductor {
       };
     }
 
-    // Provider selection must precede self-host preparation: the guardrail
-    // bundle below configures Claude's global credentials and sandbox only.
-    // The step runner retains responsibility for Codex's provider-local
-    // readiness and unattended policy boundary.
-    const buildSelection =
-      this.config.steps?.build?.llm_provider ?? this.config.llm_provider;
-    const preferredBuildProvider = normalizeProviderSelection(buildSelection)[0];
     if (preferredBuildProvider === 'codex') {
       return this.stepRunner.run(name, state, { retryReason: retryHint });
     }
@@ -5694,6 +5708,7 @@ export class Conductor {
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
+      this.safetyAttemptCache.clear();
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
       process.off('SIGHUP', sighupHandler);

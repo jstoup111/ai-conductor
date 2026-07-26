@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateSafetyBoundary, type SafetyAttributionTelemetry } from '../../src/engine/safety-boundary.js';
+import {
+  SafetyAttemptCache,
+  evaluateSafetyBoundary,
+  type SafetyAttributionTelemetry,
+  type SafetyAttemptIdentity,
+  type SafetyVerdict,
+} from '../../src/engine/safety-boundary.js';
 
 describe('evaluateSafetyBoundary', () => {
   it('fails when an applicable required protection is missing', () => {
@@ -205,4 +211,45 @@ describe('evaluateSafetyBoundary', () => {
       expect(forbidden).toMatchObject({ passed: false, attribution });
     },
   );
+});
+
+describe('SafetyAttemptCache', () => {
+  const identity: SafetyAttemptIdentity = {
+    taskId: '17',
+    provider: 'claude',
+    phase: 'BUILD',
+    workspace: '/worktrees/feature-907',
+    baseline: 'approved-decide-commit',
+    terminalRun: 'run-1',
+  };
+  const verdict: SafetyVerdict = { passed: true, requiredFailures: [], diagnosticGaps: [] };
+
+  it('permits a same-attempt retry to reuse its verified safety state', () => {
+    const cache = new SafetyAttemptCache();
+    cache.record(identity, verdict);
+
+    expect(cache.reuse({ ...identity })).toBe(verdict);
+  });
+
+  it.each([
+    ['task', { taskId: '18' }],
+    ['provider', { provider: 'codex' }],
+    ['phase', { phase: 'SHIP' }],
+    ['workspace', { workspace: '/worktrees/other' }],
+    ['baseline', { baseline: 'other-approved-commit' }],
+    ['terminal run', { terminalRun: 'run-2' }],
+  ] as const)('invalidates rather than reuses state for a different %s identity', (_label, mismatch) => {
+    const cache = new SafetyAttemptCache();
+    cache.record(identity, verdict);
+
+    expect([cache.reuse({ ...identity, ...mismatch }), cache.reuse(identity)]).toEqual([undefined, undefined]);
+  });
+
+  it('drops reusable state during terminal cleanup', () => {
+    const cache = new SafetyAttemptCache();
+    cache.record(identity, verdict);
+    cache.clear();
+
+    expect(cache.reuse(identity)).toBeUndefined();
+  });
 });

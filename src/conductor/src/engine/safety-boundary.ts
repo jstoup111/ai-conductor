@@ -69,6 +69,56 @@ export interface SafetyVerdict {
   attribution?: SafetyAttributionTelemetry;
 }
 
+/** The full identity of one safety-verification lifetime. */
+export interface SafetyAttemptIdentity {
+  taskId: string;
+  provider: string;
+  phase: string;
+  workspace: string;
+  baseline: string;
+  terminalRun: string;
+}
+
+function sameSafetyAttempt(
+  left: SafetyAttemptIdentity,
+  right: SafetyAttemptIdentity,
+): boolean {
+  return (
+    left.taskId === right.taskId &&
+    left.provider === right.provider &&
+    left.phase === right.phase &&
+    left.workspace === right.workspace &&
+    left.baseline === right.baseline &&
+    left.terminalRun === right.terminalRun
+  );
+}
+
+/**
+ * Holds a verified verdict only for the exact active attempt identity. A
+ * mismatch clears it before callers can begin a new preflight, preventing a
+ * prior task/provider/workspace/run from authorizing later work.
+ */
+export class SafetyAttemptCache {
+  private entry?: { identity: SafetyAttemptIdentity; verdict: SafetyVerdict };
+
+  record(identity: SafetyAttemptIdentity, verdict: SafetyVerdict): void {
+    this.entry = { identity: { ...identity }, verdict };
+  }
+
+  reuse(identity: SafetyAttemptIdentity): SafetyVerdict | undefined {
+    if (!this.entry) return undefined;
+    if (!sameSafetyAttempt(this.entry.identity, identity)) {
+      this.clear();
+      return undefined;
+    }
+    return this.entry.verdict;
+  }
+
+  clear(): void {
+    this.entry = undefined;
+  }
+}
+
 function requiredProtectionFails(
   protection: SafetyProtection,
   context: SafetyRunContext | undefined,
