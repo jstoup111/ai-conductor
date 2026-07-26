@@ -3,10 +3,10 @@
 // A harness update (git pull / merged PR) does NOT auto-relink skills — that
 // only happens when `bin/install` runs. So a newly-added skill can be present in
 // the harness `skills/` tree but missing from `~/.claude/skills/` or
-// `~/.agents/skills/`, and a daemon-dispatched `claude -p '/<skill>'` or
-// `codex exec /<skill>` then hits an unknown skill, returns empty output, and
+// `~/.agents/skills/`, and a daemon-dispatched `claude -p <skill>` or
+// Codex `$<skill>` invocation then hits an unknown skill, returns empty output, and
 // the conductor HALTs with a cryptic "no parseable result"
-// (this exact gap left the `/rebase` skill unrunnable on the daemon).
+// (this exact gap left the `$rebase` skill unrunnable on the daemon).
 //
 // This guard runs `bin/install --check` (now scriptable — exits non-zero on
 // drift) at daemon entry. On drift it either prompts to run `bin/install
@@ -226,8 +226,8 @@ export interface EnsureFreshOptions {
 
 const DRIFT_MESSAGE =
   'Harness install is stale — one or more skills are missing or out of date in ' +
-  '~/.claude/skills or ~/.agents/skills. Daemon-dispatched skills (e.g. `claude -p /rebase` ' +
-  'or `codex exec /rebase`) will fail silently ' +
+  '~/.claude/skills or ~/.agents/skills. Daemon-dispatched skills (e.g. `claude -p <skill>` ' +
+  'or Codex `$rebase`) will fail silently ' +
   'until `bin/install --update` is run.';
 
 /**
@@ -281,9 +281,9 @@ export async function ensureInstallFresh(opts: EnsureFreshOptions = {}): Promise
 //
 // A harness SELF-BUILD may merge a spec that adds or renames a skill. `git pull`
 // alone does not relink `~/.claude/skills/` or `~/.agents/skills/`, so a
-// dispatched `claude -p '/<skill>'` or `codex exec /<skill>` would hit an
+// dispatched `claude -p <skill>` or Codex `$<skill>` invocation would hit an
 // unknown skill → empty output → a "no parseable
-// result" HALT (the exact gap that left /rebase unrunnable). Before dispatching a
+// result" HALT (the exact gap that left $rebase unrunnable). Before dispatching a
 // self-build we proactively relink via `bin/install --update` (relink only — it
 // skips deps + channel prompt, and does NOT git-pull). Scoped to self-builds:
 // callers gate this behind the SelfHostDetector, so a non-harness build never

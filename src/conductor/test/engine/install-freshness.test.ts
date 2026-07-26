@@ -80,7 +80,7 @@ describe('ensureInstallFresh — staleness policy', () => {
     expect(calls).toEqual([['--check']]);
   });
 
-  it('drift diagnostic names both active catalogs and the native Codex rebase invocation', async () => {
+  it('drift diagnostic names both active catalogs and native `$rebase` syntax', async () => {
     const { runner } = makeRunner({ check: 1 });
     const logs: string[] = [];
     const error = await ensureInstallFresh({
@@ -91,7 +91,7 @@ describe('ensureInstallFresh — staleness policy', () => {
     }).catch((cause) => cause as Error);
 
     expect(`${logs.join('\n')}\n${error.message}`).toMatch(
-      /~\/\.claude\/skills[\s\S]*~\/\.agents\/skills[\s\S]*`codex exec \/rebase`/,
+      /^(?![\s\S]*\/rebase)[\s\S]*~\/\.claude\/skills[\s\S]*~\/\.agents\/skills[\s\S]*\$rebase/,
     );
   });
 
