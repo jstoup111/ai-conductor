@@ -34,6 +34,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `docs/daemon-operations.md` and `src/conductor/README.md` for details.
 - Add the built-in `codex` LLM provider for non-interactive Codex CLI execution.
 
+### Fixed
+
+- `conduct register` now refuses to register a LINKED git worktree (e.g. a daemon
+  feature worktree under a project's `.worktrees/`) as its own top-level project.
+  Previously `bootstrap`'s auto-register step (`conduct register .`) ran unconditionally
+  in every feature worktree and had no way to distinguish "this is a worktree of an
+  already-registered project" from "this is a genuinely new repo" — the worktree got
+  its own registry record, and once the worktree was cleaned up post-ship that record
+  became a permanent `path-missing` ghost row in `conduct-ts daemon status` output. The
+  guard compares `git rev-parse --git-dir` against `--git-common-dir`: they differ only
+  for linked worktrees. `bootstrap`'s auto-register step now treats this specific
+  refusal as expected (not a failure to surface).
+
 ### Changed
 
 - `build_review` FAIL now resolves a structured routing decision — BUILD or

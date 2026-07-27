@@ -433,6 +433,14 @@ Honor `$AI_CONDUCTOR_REGISTRY` if set (tests and alternate installs point it els
 non-zero exit means the registry write failed — surface it; do not silently continue. Re-running
 bootstrap is safe: the same canonical path resolves to one record.
 
+**Worktree exception:** `conduct register` refuses (non-zero exit, no write) when `.` is a
+LINKED git worktree (e.g. a daemon feature worktree under a project's `.worktrees/`) rather than
+a repo's primary checkout — that path is a subdirectory of an already-registered project, not an
+independent one, and registering it would leave a permanent ghost entry once the worktree is
+cleaned up post-ship. This specific refusal is expected and NOT a failure to surface: skip step
+10b silently when it occurs. Any other non-zero exit (unwritable registry, corrupt file) is still
+a real failure and must be surfaced.
+
 ### 11. Recommend Next Steps
 
 | Mode | Recommendation |
