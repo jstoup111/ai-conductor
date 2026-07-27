@@ -62,11 +62,28 @@ for the closest fixture style).
 2. Verify RED.
 3. Implement: add the event to the union in `types/events.ts` with the five fields.
 4. Verify GREEN.
-5. Commit: "events: add unattributed_progress to the build event union"
+5. Carry the new union member through **every** compile-time exhaustiveness seam over
+   `ConductorEvent['type']` — the union is not additive-safe, so a new member is only
+   landed once each exhaustive `Record`/mapped type keyed on it compiles again. Concretely:
+   in `test/integration/audit-trail-completeness.integration.test.ts`, classify
+   `unattributed_progress` as `not-audited-by-design` in `EVENT_TYPE_CLASSIFICATION`
+   (it is retry-loop telemetry — the retry itself is already friction-mapped via
+   `step_retry`, so it produces no audit record of its own), and add its minimally valid
+   `EVENT_FIXTURES` payload (`step`, `attempt`, `resolvedCount`, `headBefore`, `headAfter`).
+6. Verify `npm run typecheck:test` is clean — that gate, not vitest, is what proves the
+   exhaustiveness seams are closed (esbuild strips type-only errors at runtime).
+7. Commit: "events: add unattributed_progress to the build event union"
 
 **Files:**
 - src/conductor/src/types/events.ts — new union member
 - src/conductor/test/progress-event-coverage.test.ts — coverage assertion
+- src/conductor/test/integration/audit-trail-completeness.integration.test.ts — exhaustive
+  `EVENT_TYPE_CLASSIFICATION` + `EVENT_FIXTURES` maps keyed on `ConductorEvent['type']`
+
+**Amended 2026-07-27 (operator, build_review completeness gap):** the original Files list
+stopped at `events.ts` + `progress-event-coverage.test.ts` and omitted the two exhaustive
+maps the type gate proves must change (TS2741 x2). Steps 5-6 and the third Files entry make
+that follow-through explicitly in scope for this task rather than unauthorized drive-by work.
 
 **Wired-into:** none (inert until src/conductor/src/engine/conductor.ts) — emitted by Task 3
 **Dependencies:** none
