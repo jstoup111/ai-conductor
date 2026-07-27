@@ -40,7 +40,14 @@ async function paneCwdSticky(): Promise<boolean> {
   const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
   delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
   try {
-    await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir());
+    try {
+      await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir());
+    } catch {
+      // A tmux binary can be installed while its server is unavailable to this
+      // process (for example, a restricted CI/container socket). That is a
+      // missing real-tmux capability, not a leak-guard failure.
+      return false;
+    }
     const cwd = sessionPaneCwd(name);
     return isTmpdirRooted(cwd);
   } finally {
@@ -507,6 +514,7 @@ describe('tmux-leak-guard (#377)', () => {
     if (!(await paneCwdSticky())) return; // host rewrites pane cwd away from start path — skip
 
     const before = snapshotDaemonSessions();
+    if (before.failed) return; // tmux server cannot provide the required baseline signal — skip
     const name = `cc-daemon-leaktest-${randomBytes(4).toString('hex')}`;
 
     // Create the "leak" the way an escape would: real tmux, kill-switch off.
