@@ -34,7 +34,7 @@ import {
 } from './engine/provider-selection.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
-import { ALL_STEPS } from './engine/steps.js';
+import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -52,7 +52,8 @@ import {
   createFeatureDaemonLogger,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { ConductState, ConductorEvent, StepName } from './types/index.js';
+import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { ComplexityTier } from './types/steps.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
@@ -294,6 +295,23 @@ export const PRESEEDED_DONE: StepName[] = [
   'memory',
   ...ALL_STEPS.filter((step) => step.phase === 'DECIDE').map((step) => step.name),
 ];
+
+/**
+ * Resolve daemon-owned front-half steps to their durable state for a tier.
+ * An unresolved tier deliberately falls back to M before evaluating skips, so
+ * a missing complexity marker can never receive the Small-tier exemption.
+ */
+export function preseedStepStatuses(
+  tier: ComplexityTier | undefined,
+): Record<string, StepStatus> {
+  const resolvedTier = tier ?? 'M';
+  return Object.fromEntries(
+    PRESEEDED_DONE.map((name) => [
+      name,
+      getStepDefinition(name).skippableForTiers.includes(resolvedTier) ? 'skipped' : 'done',
+    ]),
+  );
+}
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
 // plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
@@ -897,10 +915,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
 
     if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
-    // Always stamp DECIDE steps as done regardless of whether this is a fresh
-    // start or a resume — the human authored them and they never re-run.
-    for (const name of PRESEEDED_DONE) {
-      (baseState as Record<string, unknown>)[name] = 'done';
+    // Stamp all daemon-owned front-half steps before resume. A tier-skipped
+    // step has no authored artifact, so it must not be recorded as done.
+    for (const [name, status] of Object.entries(preseedStepStatuses(baseState.complexity_tier))) {
+      (baseState as Record<string, unknown>)[name] = status;
     }
     // Seed the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) so the conductor's track-skip applies
     // (prd + prd-audit skipped on technical). Default product (back-compat).

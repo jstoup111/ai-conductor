@@ -296,6 +296,16 @@ describe('Story 3 — preseeded steps carry a tier-correct status', () => {
     }
   });
 
+  it('regression: the as-built review stays independently S-skippable while following architecture_review skips', () => {
+    // The Task 2 audit originally overlooked this consumer of the architecture
+    // review status. Its own S-tier rule must remain intact; upstream skipping
+    // is an additional condition, not a replacement for the tier rule.
+    const asBuilt = ALL_STEPS.find((step) => step.name === 'architecture_review_as_built');
+
+    expect(asBuilt?.skippableForTiers).toContain('S');
+    expect(asBuilt?.skipWhenSkipped).toBe('architecture_review');
+  });
+
   it('happy: at M tier coherence_check is stamped done — the artifact was authored during DECIDE', async () => {
     const statuses = await productionPreseedStatuses('M');
 
@@ -352,7 +362,9 @@ describe('Story 3 — preseeded steps carry a tier-correct status', () => {
     expect(source).not.toMatch(/\(baseState as Record<string, unknown>\)\[name\] = 'done';/);
     // Ordering hazard (plan Task 3): the tier fallback must precede stamping.
     const fallbackAt = source.indexOf('baseState.complexity_tier = item.tier');
-    const stampAt = source.indexOf('preseedStepStatuses');
+    // The helper is exported near the module top; inspect its final reference,
+    // which is the production stamping call inside the daemon closure.
+    const stampAt = source.lastIndexOf('preseedStepStatuses');
     expect(fallbackAt).toBeGreaterThan(-1);
     expect(stampAt).toBeGreaterThan(-1);
     expect(
