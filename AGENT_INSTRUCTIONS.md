@@ -92,7 +92,9 @@ controls implementation order.
 
 ### Validation Suite
 
-Run `test/test_harness_integrity.sh` — it checks all of the following:
+Run `test/test_harness_integrity.sh`. The checks below are the ones you break most often; the script
+actually runs 15 numbered and 2 unnumbered checks. The canonical enumeration — every check, what makes it
+fail, and how to fix it — is [`docs/contributing/validation.md`](docs/contributing/validation.md).
 
 1. **Bash syntax** — All scripts in `bin/`, `hooks/claude/`, and `test/` pass `bash -n`.
 2. **SKILL.md frontmatter** — Every `skills/*/SKILL.md` has YAML frontmatter with required
@@ -126,11 +128,12 @@ fix all references before committing.
 Docs track features. Every change that adds or alters user-facing behavior MUST
 update the relevant documentation in the **same** PR:
 
-- New `conduct`/`conduct-ts` flags or config keys → update `docs/configuration.md`.
-- New daemon options or operational behavior → update `docs/daemon-operations.md`.
-- New skill, gate, hook, or HARNESS.md rule → reflect it in the relevant
-  `docs/*.md` guide (see `README.md`'s Documentation index) and any affected
-  skill/architecture docs.
+- New `conduct-ts` flags → update `docs/reference/cli.md`; new config keys → `docs/reference/configuration.md`.
+- New daemon options or operational behavior → update `docs/guides/running-the-daemon.md`, and the
+  affected runbook under `docs/runbooks/` if it changes recovery.
+- New skill → `docs/reference/skills.md`; new step → `docs/reference/steps.md`; new gate →
+  `docs/explanation/gates.md`; new hook → `docs/reference/settings-and-hooks.md`; new HARNESS.md rule →
+  the affected page in `docs/` (see `README.md`'s Documentation index).
 - Ordinary reader-visible changes update the canonical affected documentation. Leave README unchanged unless the README landing-page contract changes.
 - The README rule is a repository-local landing-page refinement of the global harness documentation convention.
 
