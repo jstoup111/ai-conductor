@@ -185,9 +185,14 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       const { runner, log } = trackingRunner(dir);
       const kickbacks: Array<{ from: StepName; to: StepName }> = [];
       events.on('kickback', (event: { from: StepName; to: StepName }) => kickbacks.push(event));
+      // The #922 publication fence is an artifact-verifying boundary: with
+      // `verifyArtifacts:false` (the mocked-dispatch unit mode) runner success
+      // is the only authority and `nonGreenFinishValidators` is inert by
+      // design. Production always verifies artifacts (index.ts, daemon-cli.ts),
+      // so the fence oracle must run in that mode.
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        fromStep: 'finish',
+        fromStep: 'finish', verifyArtifacts: true,
       });
 
       await conductor.run();
