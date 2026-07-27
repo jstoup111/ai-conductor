@@ -16,7 +16,18 @@ For the operator-facing role model, see [architecture](../explanation/architectu
 | `skills/` | Skill catalog. See [skills reference](../reference/skills.md). |
 | `agents/`, `templates/`, `tech-context/` | Prompt templates, scaffolding, stack knowledge. |
 | `hooks/claude/` | Hook scripts. See [settings and hooks](../reference/settings-and-hooks.md). |
-| `test/` | Repo-level bash scripts, including the integrity suite. See [validation](validation.md). |
+| `test/` | Repo-level bash scripts, including the integrity suite and `lint_shell.sh`. See [validation](validation.md). |
+
+Static-analysis configuration sits at two levels. Anything needing the TypeScript project lives inside
+`src/conductor/`; anything spanning the whole repository lives at the root.
+
+| Path | Configures |
+| --- | --- |
+| `src/conductor/eslint.config.mjs` | Type-aware ESLint over `src/**/*.ts`. Needs `tsconfig.json` and `node_modules`, so it lives with the package. |
+| `src/conductor/tsconfig.json` | `npm run typecheck` — `src/` only; `test/` is excluded. |
+| `src/conductor/tsconfig.test.json` | `npm run typecheck:test` — extends the above and adds `test/`. |
+| `test/lint_shell.sh` | The ShellCheck file set and severity. Single source of truth for both CI's `shellcheck` job and integrity check 1b. |
+| `lychee.toml` | Documentation link checking. At the root because its inputs span `docs/`, the root READMEs, and `src/conductor/README.md`. |
 
 ## Layers
 

@@ -42,11 +42,12 @@ Check 5b additionally needs `jq` on `PATH`; without it you get
 
 ## The checks
 
-In file order. Sections 5 and 9 carry lettered sub-checks, and two checks are unnumbered in the script.
+In file order. Sections 1, 5, and 9 carry lettered sub-checks, and two checks are unnumbered in the script.
 
 | # | Verifies | Fails when | Fix |
 | --- | --- | --- | --- |
 | 1 | `bash -n` over `bin/*` (only files whose first line matches `bash`), `hooks/claude/*.sh`, `test/*.sh`, and `.github/scripts/*.sh`. | Any of those scripts has a syntax error. | Fix the syntax. A `bin/` file with a non-bash shebang is skipped entirely, not checked. |
+| 1b | ShellCheck at `--severity=error` over the script set enumerated by `test/lint_shell.sh` (`bin/*` by shebang, plus `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh`). Where check 1 proves a script *parses*, this catches shell bugs that parse fine and misbehave at runtime. | Any finding at `error` severity (exit 1), or the enumeration returns zero scripts (exit 2 — the gate refuses to report success on an empty set). | Run `test/lint_shell.sh` and fix what it names. Threshold and deferred warning/info/style counts are documented in that script's header. |
 | 2 | Every `skills/*/SKILL.md` opens with `---` and its frontmatter contains `name:`, `description:`, `enforcement:`, `phase:`. | The delimiter or any required field is missing. | Add the field. See [skills](../reference/skills.md). |
 | 3 | Every `agents/[a-z_-]*.md` string appearing in `skills/` or `HARNESS.md` exists on disk. | A referenced agent file is missing. | Create the agent file or fix the reference. |
 | 4 | Every backticked `` `/name` `` reference in `skills/*/SKILL.md` maps to a `skills/<name>/` directory. | Never — this is a `warn_check`. | Rename the reference, or accept the WARN for genuine slash commands like `/quit`. |
@@ -108,6 +109,12 @@ the first seven checks in detail and names this page as the canonical enumeratio
 > you did not. Run `cd src/conductor && npm ci` before treating a local integrity pass as meaningful.
 > Tracked in [#1014](https://github.com/jstoup111/ai-conductor/issues/1014).
 
+> **Known limitation.** Check 1b degrades to WARN-skip when `shellcheck` is not on `PATH`, with the line
+> `shellcheck not installed — skipping shell static analysis`. Same shape as the 5a/5b/5c gap above: the
+> run reports green while the shell static-analysis gate never executed. CI installs the tool explicitly
+> in both the `integrity` and `shellcheck` jobs, so it always enforces there. Locally, install it
+> (`sudo apt-get install shellcheck`, `brew install shellcheck`) before treating a pass as meaningful.
+
 > **Known limitation.** Check 5c mutates a tracked file during the run. It backs up
 > `hooks/claude/docs-guard.sh` to a temp file, appends
 > `# deliberately corrupted for drift-detection fixture test` to the committed path in place, runs
@@ -121,7 +128,9 @@ the first seven checks in detail and names this page as the canonical enumeratio
 | Context | Invocation |
 | --- | --- |
 | CI | The `integrity` job in `.github/workflows/ci.yml` runs `bash test/test_harness_integrity.sh`. It is skipped when the `changes` job classifies the diff as docs-only. |
+| CI (shell only) | The `shellcheck` job runs `bash test/lint_shell.sh` — the same script check 1b calls, so the two enforce one file set at one severity. Also skipped on docs-only diffs. |
 | Self-host finish gate | `runIntegritySuite` in `src/conductor/src/engine/self-host/release-gate.ts` runs the same script with a 120-second budget before a PR opens. A missing script, a timeout, or any non-zero exit HALTs the build. See [releases](releases.md). |
 
-Other static checks are separate from this suite: `npm run typecheck` and `npm test` in `src/conductor`.
+Other static checks are separate from this suite: `npm run typecheck`, `npm run typecheck:test`,
+`npm run lint`, and `npm test` in `src/conductor`, plus the `links` job's documentation link check.
 See [testing](testing.md).
