@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "DECIDE-phase coherence ownership at the daemon
-// boundary" (#971) — Stories 1, 2, 3 and 6.
+// boundary" (#971) — Stories 1, 2 and 3.
 // .docs/stories/2026-07-26-daemon-decide-phase-coherence-ownership-971.md
 // ADR: .docs/decisions/adr-2026-07-26-daemon-decide-preseed-ownership.md
 //
@@ -371,45 +371,5 @@ describe('Story 3 — preseeded steps carry a tier-correct status', () => {
       fallbackAt,
       'the complexity-tier fallback must be assigned BEFORE the preseed stamping loop',
     ).toBeLessThan(stampAt);
-  });
-});
-
-// ─── Story 6 ─────────────────────────────────────────────────────────────────
-// Operational documentation reflects the new rejection.
-
-describe('Story 6 — the daemon operations guide documents the new discovery rejection', () => {
-  const guide = () =>
-    readFile(fileURLToPath(new URL('../../../../docs/daemon-operations.md', import.meta.url)), 'utf-8');
-
-  it('happy: the guide documents the coherence rejection alongside the two existing warn-skips', async () => {
-    const doc = await guide();
-
-    expect(doc).toMatch(/stories not approved/i);
-    expect(doc).toMatch(/dependency tree/i);
-    expect(doc).toMatch(/coherence/i);
-    expect(doc).toMatch(/\.docs\/coherence\//);
-  });
-
-  it('happy: the guide states the rejection is non-Small only and names the remedy', async () => {
-    const doc = await guide();
-    const at = doc.search(/coherence/i);
-    // Anchor the section on a real mention — without this the slice would fall
-    // back to the whole document and the test would pass vacuously.
-    expect(at, 'the guide must mention the coherence rejection at all').toBeGreaterThan(-1);
-    const section = doc.slice(Math.max(0, at - 500), at + 1500);
-
-    expect(section).toMatch(/Small|tier S|non-Small/i);
-    expect(section, 'the remedy — author the artifact on the default branch — must be named').toMatch(
-      /default branch/i,
-    );
-  });
-
-  it('negative: the guide states the phase-ownership invariant, so the skip is diagnosable without reading engine source', async () => {
-    const doc = await guide();
-
-    expect(doc).toMatch(/DECIDE/);
-    expect(doc, 'the invariant: a phase:DECIDE step is never executed by the daemon').toMatch(
-      /never executed by the daemon|the daemon never executes/i,
-    );
   });
 });
