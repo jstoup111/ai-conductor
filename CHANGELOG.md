@@ -83,6 +83,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Daemon discovery no longer silently misclassifies a feature whose complexity/track
+  markers were landed under an undated stem. `.docs/complexity/<stem>.md` and
+  `.docs/track/<stem>.md` were read by the raw plan slug only, so a plan named
+  `YYYY-MM-DD-<name>.md` with markers at `<name>.md` missed both reads and the build
+  silently used the most-expensive defaults (`M` / `product`) — running `prd_audit`
+  and `architecture_review_as_built` that the real `S`/`technical` metadata would have
+  skipped, then blocking at SHIP on artifacts that were never required. Discovery now
+  falls back to the date-stripped stem, but only when exactly one plan maps to it, so
+  the relaxed lookup can never guess between two features; ambiguity refuses the
+  fallback. Any tier/track that still falls back to a default now logs the paths tried.
+
 - The self-build sandbox again propagates the operator's workspace trust. The
   throwaway `CLAUDE_CONFIG_DIR` stopped seeding `.claude.json` when the self-host
   isolation refactor rewrote `sandbox-build-env.ts`, so every headless self-build
