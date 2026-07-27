@@ -567,6 +567,44 @@ export function undatedStem(stem: string): string {
   return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
 }
 
+/**
+ * Discovery deliberately performs only the shallow coherence-artifact check:
+ * a Markdown table needs a header, separator, and at least one data row. Deep
+ * coverage and claim validation belongs to `coherence-validator` at land.
+ */
+function hasCoherenceTableDataRow(content: string | null): boolean {
+  if (content === null || content.trim().length === 0) return false;
+
+  const rows = content.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+    return trimmed
+      .slice(1, -1)
+      .split('|')
+      .map((cell) => cell.trim());
+  });
+
+  for (let index = 0; index + 2 < rows.length; index += 1) {
+    const header = rows[index];
+    const separator = rows[index + 1];
+    const data = rows[index + 2];
+    if (
+      header === null ||
+      separator === null ||
+      data === null ||
+      header.length === 0 ||
+      header.length !== separator.length ||
+      header.length !== data.length ||
+      !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
+    ) {
+      continue;
+    }
+    return true;
+  }
+
+  return false;
+}
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
@@ -740,6 +778,39 @@ export async function discoverBacklog(
       continue;
     }
 
+    // The coherence artifact is mandatory for every non-S tier. This remains
+    // intentionally shallow: discovery has only the base-branch tree, while
+    // the semantic validator needs a change set and runs at land. Check both
+    // shipped-dedup identities first so a completed implementation is never
+    // reported as missing coherence before its existing dedup path handles it.
+    const shippedByStem = shippedRecords.some((record) => record.stem === slug);
+    const candidateDigest = specHash(
+      Buffer.from(planContent, 'utf-8'),
+      Buffer.from(storiesContent, 'utf-8'),
+    ).digest;
+    const shippedByContent =
+      !shippedByStem &&
+      shippedRecords.some(
+        (record) =>
+          !('malformed' in record.record) &&
+          record.record.specHash === candidateDigest,
+      );
+    const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
+    if (
+      tier !== 'S' &&
+      !shippedByStem &&
+      !shippedByContent &&
+      !hasCoherenceTableDataRow(coherenceContent)
+    ) {
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
+          `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
+          'Author it on the default branch; logged once.',
+      );
+      continue;
+    }
+
     // Shipped-work dedup (Story 3/Task 4): a content-eligible candidate whose
     // stem matches a shipped record already committed on the base branch has
     // already merged its implementation — never re-dispatch or re-kick it,
@@ -776,10 +847,6 @@ export async function discoverBacklog(
     // digest is compared against every shipped record's `spec_hash`; a match
     // means the implementation already shipped under the OLD stem, so the
     // cache is repaired under the candidate's (NEW) slug, not the old one.
-    const candidateDigest = specHash(
-      Buffer.from(planContent, 'utf-8'),
-      Buffer.from(storiesContent, 'utf-8'),
-    ).digest;
     const hashMatch = shippedRecords.find(
       (r) => !('malformed' in r.record) && r.record.specHash === candidateDigest,
     );
