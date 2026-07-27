@@ -134,6 +134,12 @@ export interface InvokeOptions {
    * omitted, the subprocess inherits the parent process cwd.
    */
   cwd?: string;
+  /**
+   * Optional feature-scoped sink for subprocess diagnostics. Daemon feature
+   * runs supply their persisted logger; ordinary CLI runs leave this unset and
+   * continue inheriting stdio directly.
+   */
+  diagnosticLog?: (message: string) => void;
   /** Set only for the resolved self-host provider candidate. */
   selfHost?: SelfHostInvocation;
 }

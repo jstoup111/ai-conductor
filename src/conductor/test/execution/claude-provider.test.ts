@@ -25,6 +25,21 @@ describe('ClaudeProvider', () => {
   };
 
   describe('invoke', () => {
+    it('routes interactive subprocess diagnostics through the supplied feature logger', async () => {
+      const featureLog = vi.fn();
+      mockExeca.mockResolvedValue({
+        stdout: 'subprocess stdout diagnostic',
+        stderr: 'subprocess stderr diagnostic',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      await provider.invokeInteractive({ ...baseOptions, diagnosticLog: featureLog });
+
+      expect(featureLog).toHaveBeenCalledWith('subprocess stdout diagnostic');
+      expect(featureLog).toHaveBeenCalledWith('subprocess stderr diagnostic');
+    });
+
     it('remains independent of Codex-only isolated-home state', async () => {
       const priorHome = process.env.CODEX_HOME;
       process.env.CODEX_HOME = '/missing/codex-home';

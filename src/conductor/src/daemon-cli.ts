@@ -779,6 +779,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     onAttempt: (step, attempt) =>
       eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
     warn: (_message, transition) => eventTarget.emit(transition),
+    ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle

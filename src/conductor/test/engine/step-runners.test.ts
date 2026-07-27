@@ -90,6 +90,31 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('forwards the daemon feature diagnostic logger to a streaming provider invocation', async () => {
+    const featureLog = vi.fn();
+    const providerExecutor = vi.fn(async () => ({
+      success: true,
+      output: 'done',
+      exitCode: 0,
+      preferredProvider: 'claude',
+      actualProvider: 'claude',
+      attempts: [],
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+        diagnosticLog: featureLog,
+      },
+    });
+
+    await runner.run('build', emptyState);
+
+    expect(providerExecutor.mock.calls[0]?.[0].options.diagnosticLog).toBe(featureLog);
+  });
+
   it('reads self-host candidate hooks from the live context after construction', async () => {
     const executor = vi.fn(async (input: any) => {
       const candidate = { step: 'build', providerKey: 'codex', model: 'gpt', effort: 'medium' };

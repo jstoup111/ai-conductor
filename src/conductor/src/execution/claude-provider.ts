@@ -1,4 +1,4 @@
-import { execa } from 'execa';
+import { execa, type Options as ExecaOptions } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
@@ -459,6 +459,26 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
 }
 
 export class ClaudeProvider implements LLMProvider {
+  private async runClaude(
+    args: string[],
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog'>,
+  ) {
+    const { diagnosticLog, ...execaOptions } = options;
+    const result = await execa('claude', args, {
+      ...execaOptions,
+      // A daemon feature must retain the diagnostic in its scoped/persisted
+      // log. Other callers preserve the existing live inherited stdio path.
+      stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
+      stderr: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
+    });
+    if (diagnosticLog) {
+      for (const output of [result.stdout, result.stderr]) {
+        if (typeof output === 'string' && output.length > 0) diagnosticLog(output);
+      }
+    }
+    return result;
+  }
+
   /**
    * Run Claude with --print mode. Captures output for analysis.
    * Used only for truly non-interactive one-shot queries.
@@ -484,21 +504,19 @@ export class ClaudeProvider implements LLMProvider {
     // no prompt, stdin is explicitly closed: otherwise Claude's CLI waits ~3s
     // for piped input on a TTY and logs "no stdin data received in 3s" per call.
     const result = hasPrompt
-      ? await execa('claude', args, {
+      ? await this.runClaude(args, {
           reject: false,
           input: options.prompt,
-          stdout: ['pipe', 'inherit'],
-          stderr: ['pipe', 'inherit'],
           env: this.buildEnv(options),
           cwd: options.cwd,
+          diagnosticLog: options.diagnosticLog,
         })
-      : await execa('claude', args, {
+      : await this.runClaude(args, {
           reject: false,
           stdin: 'ignore',
-          stdout: ['pipe', 'inherit'],
-          stderr: ['pipe', 'inherit'],
           env: this.buildEnv(options),
           cwd: options.cwd,
+          diagnosticLog: options.diagnosticLog,
         });
 
     return this.classifyCompletion(result, true);
@@ -532,13 +550,12 @@ export class ClaudeProvider implements LLMProvider {
 
     // Capture while inheriting output so classification remains available only
     // after the visibly streamed process completes.
-    const result = await execa('claude', args, {
+    const result = await this.runClaude(args, {
       stdin: options.interactive ? 'inherit' : 'ignore',
-      stdout: ['pipe', 'inherit'],
-      stderr: ['pipe', 'inherit'],
       reject: false,
       env: this.buildEnv(options),
       cwd: options.cwd,
+      diagnosticLog: options.diagnosticLog,
     });
 
     return this.classifyCompletion(result, false);

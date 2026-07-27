@@ -219,6 +219,8 @@ export interface ProviderExecutionContext {
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
+  /** Feature-owned persisted sink for provider subprocess diagnostics. */
+  diagnosticLog?: (message: string) => void;
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {

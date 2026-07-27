@@ -661,7 +661,7 @@ export class DefaultStepRunner implements StepRunner {
     const runtimes = streaming
       ? this.streamingProviderRuntimes(this.providerRuntimes)
       : this.providerRuntimes;
-    const invocationOptions: ExecuteProviderCandidatesInput['options'] = {
+    const invocationOptions = this.withFeatureDiagnosticLog({
       prompt,
       systemPrompt,
       cwd: this.projectDir,
@@ -669,7 +669,7 @@ export class DefaultStepRunner implements StepRunner {
         ? this.mode === 'auto'
         : true,
       ...(streaming ? { interactive } : {}),
-    };
+    });
     const safety = this.candidateSafetyFor(step);
     try {
       const result = await this.providerExecutor({
@@ -772,7 +772,7 @@ export class DefaultStepRunner implements StepRunner {
         this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
-      options: request.options,
+      options: this.withFeatureDiagnosticLog(request.options),
       ...(request.kind === 'skill'
         ? {
             optionsForCandidate: (candidateKey: string) => ({
@@ -786,6 +786,13 @@ export class DefaultStepRunner implements StepRunner {
         : {}),
     });
     return safety?.verify(result) ?? result;
+  }
+
+  private withFeatureDiagnosticLog(
+    options: ExecuteProviderCandidatesInput['options'],
+  ): ExecuteProviderCandidatesInput['options'] {
+    const diagnosticLog = this.providerExecutionContext?.diagnosticLog;
+    return diagnosticLog ? { ...options, diagnosticLog } : options;
   }
 
   /**
