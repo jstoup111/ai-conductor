@@ -710,6 +710,16 @@ export async function discoverBacklog(
 
     if (await isProcessed(slug)) continue;
 
+    // Carry the engineer-assessed complexity tier so the daemon build honors it
+    // (Small skips acceptance_specs/retro). Resolve it before vetting so those
+    // checks can use it. The marker is committed at
+    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — and
+    // `slug` plus the base-branch tree source are unchanged through the vetting
+    // block below. Absent/garbled → undefined, and the daemon falls back to 'M'
+    // (legacy behavior, no breakage).
+    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
+    const tier = parseComplexityTier(tierMarker.content);
+
     // Eligibility = APPROVED + well-formed. The daemon pre-seeds the front half
     // (stories/plan = done) and never re-runs their gates, so this is the only
     // place specs are vetted before autonomous build. Reject unapproved or
@@ -820,14 +830,6 @@ export async function discoverBacklog(
       }
       continue;
     }
-
-    // Carry the engineer-assessed complexity tier so the daemon build honors it
-    // (Small skips acceptance_specs/retro). The marker is committed at
-    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — so it is
-    // resolvable here from the base-branch tree. Absent/garbled → undefined, and
-    // the daemon falls back to 'M' (legacy behavior, no breakage).
-    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
-    const tier = parseComplexityTier(tierMarker.content);
 
     // Carry the originating issue ref (if this spec came from github-issues
     // intake) so the daemon can put `Closes owner/repo#N` on the implementation
