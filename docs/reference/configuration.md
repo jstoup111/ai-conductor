@@ -72,9 +72,9 @@ Validation is fail-closed at the top level: an unrecognized key is a hard load e
 | `harness_version` mismatch | `{ type: 'version_mismatch' }` (only when `loadConfig` is passed a `harnessVersion`) |
 | Malformed project config at run start | `process.exit(1)` |
 
-Only four sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
+Only five sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
 (`:708`), `auto_restart_on_stale_engine` (`:778`), `engine_refresh_min_interval_seconds` (`:807`), and
-the `build_review` normalizer (`:850,859,865`).
+the `build_review` and `ci_watch` normalizers (`:52,875-890,905-924`).
 
 ## Key index
 
@@ -651,7 +651,7 @@ Kill-switch for classifying a retry as a rerun versus a route to another step. V
 | `retry_routing.enabled` | boolean | Boolean, else hard error | `true` |
 
 `enabled` is the only allowed key; an unknown key inside the block is a hard error. This is stricter than
-`ci_watch` and `kickback_escalation`, which silently discard the block instead.
+`kickback_escalation`, which silently discards its block instead.
 
 Consumed at `src/conductor/src/engine/conductor.ts:4149`.
 
@@ -799,22 +799,23 @@ unchanged, and no attempt counter is burned.
 ## build_review
 
 The judgement gate at the `build` → downstream seam. The block is normalized in place; the resolved value
-is written back (`config.ts:837-872`).
+is written back (`config.ts:867-895`).
 
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
 | `build_review.enabled` | boolean | `true` | Works |
-| `build_review.perTaskFloor` | boolean | `true` per the type | Unreachable from config |
+| `build_review.perTaskFloor` | boolean | `true` | Works |
 
 Normalization contract:
 
 | Input | Result |
 | --- | --- |
 | Absent or `null` | `{ enabled: true }`, no warning |
-| `{ enabled: true }` or `{ enabled: false }` | As given, no warning |
-| Non-object, unknown inner key, or non-boolean `enabled` | `{ enabled: true }` plus one warning |
+| Valid `enabled` and/or `perTaskFloor` keys | Preserved; omitted `enabled` defaults to `true` |
+| Non-object | `{ enabled: true }` plus one warning |
+| Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
 
-Malformed input fails **open** to enabled by design — `config.ts:843-845` states the rule as never
+Malformed input fails **open** to enabled by design — `config.ts:867-895` states the rule as never
 silently opting a project out of the replacement authority.
 
 `build_review` is a gating built-in with no `configDisableAllowed`
@@ -822,32 +823,27 @@ silently opting a project out of the replacement authority.
 config key is the only off switch. When disabled, the step is marked `skipped` and a `config_skip` event
 is emitted (`src/conductor/src/engine/conductor.ts:6259, 6270-6276`), resolved once per pass.
 
-> **Known limitation.** Setting any key other than `enabled` inside `build_review` triggers the
-> malformed path: the entire block is replaced with `{ enabled: true }`, so `perTaskFloor` is stripped
-> **and your own `enabled` value is discarded** (`config.ts:848-854`). Input
-> `{enabled: true, perTaskFloor: false}` yields `{enabled: true}` with the warning
-> `build_review has invalid value …, falling back to enabled.` `perTaskFloor` is resolved
-> (`resolved-config.ts:633-636`) and consumed (`step-runners.ts:1521-1552`) but can never be set. Its
-> effect is telemetry only — it writes `.pipeline/per-task-floor.json` and prepends advisory lines, never
-> changing a verdict. Tracked in [#1002](https://github.com/jstoup111/ai-conductor/issues/1002).
+`perTaskFloor` reaches the build-review resolver (`resolved-config.ts:633-636`) and controls its
+per-task floor telemetry (`step-runners.ts:1569-1584`).
 
 ## ci_watch
 
 Post-merge CI watch and fix loop. Normalized in place; the resolved value is written back
-(`config.ts:874-898`).
+(`config.ts:898-929`).
 
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
 | `ci_watch.enabled` | boolean | `true` | Works (`src/conductor/src/daemon-cli.ts:1678`) |
-| `ci_watch.cooldownMinutes` | number | `60` per the type | Unreachable from config |
+| `ci_watch.cooldownMinutes` | finite non-negative number | `60` | Works |
 
 Normalization contract:
 
 | Input | Result |
 | --- | --- |
 | Absent or `null` | `{ enabled: true }`, no warning |
-| `{ enabled: true }` or `{ enabled: false }` | As given, no warning |
-| Non-object, unknown inner key, or non-boolean `enabled` | `{ enabled: true }`, **no warning at all** |
+| Valid `enabled` and/or `cooldownMinutes` keys | Preserved; omitted `enabled` defaults to `true` |
+| Non-object | `{ enabled: true }` plus one warning |
+| Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
 
 Eligibility failures return `{ eligible: false, reason }` and skip — they never halt
 (`src/conductor/src/engine/ci-fix.ts:230-264`).
@@ -857,12 +853,8 @@ Draft PRs are never dispatched to the CI fix loop. The sweep still labels them (
 candidates — a draft PR belongs to an in-flight build, and fixing its CI would fight the running
 build. Attempt counters are not burned for skipped drafts.
 
-> **Known limitation.** Setting `cooldownMinutes` — or any key besides `enabled` — replaces the whole
-> block with `{ enabled: true }` **silently**, discarding your `enabled` value with no warning
-> (`config.ts:880-898`). `src/conductor/src/engine/ci-fix.ts:250` reads
-> `cfg?.ci_watch?.cooldownMinutes ?? 60` and can therefore only ever see `undefined`; the cooldown is
-> permanently 60 minutes. Unlike `build_review`, this path emits nothing to tell you it happened.
-> Tracked in [#1002](https://github.com/jstoup111/ai-conductor/issues/1002).
+`cooldownMinutes` reaches the CI-fix cooldown calculation (`src/conductor/src/engine/ci-fix.ts:250`);
+`0` is valid and disables the delay.
 
 ## kickback_escalation
 
