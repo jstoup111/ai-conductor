@@ -65,7 +65,7 @@ checklist: add the name first, then fix every type error `npm run typecheck` rep
 | 1 | `src/conductor/src/types/steps.ts:1` | The name, to the `StepName` union. |
 | 2 | `src/conductor/src/engine/steps.ts:4` | A `StepDefinition` appended to `ALL_STEPS` — or to `OUT_OF_BAND_STEPS` (`:304`) if it is not part of the linear gate-loop sequence. |
 | 3 | `src/conductor/src/engine/artifacts.ts:39` | An entry in `STEP_ARTIFACT_GLOBS`. |
-| 4 | `src/conductor/src/engine/provider-model-policy.ts` | `CLAUDE_STEP_MODELS` (`:32`), `CODEX_STEP_MODELS` (`:61`), `STEP_EFFORTS` (`:90`). The composed policies at `:135` and `:151` are deep-frozen. |
+| 4 | `src/conductor/src/engine/provider-model-policy.ts` | `CLAUDE_STEP_MODELS` (`:32`), `CODEX_STEP_MODELS` (`:61`), `STEP_EFFORTS` (`:90`). The composed policies at `:139` and `:155` are deep-frozen. |
 | 5 | `src/conductor/src/engine/resolved-config.ts` | `DEFAULT_STEP_RETRIES` (`:24`), `DEFAULT_STEP_REVIEW` (`:58`), and the mapping in `phaseForStep` (`:397`). |
 | 6 | `src/conductor/src/engine/model-table-metadata.ts` | `STEP_RATIONALE` (`:14`) and, if a skill drives the step, `SKILL_STEP_MAP` (`:72`). Then regenerate HARNESS.md. |
 | 7 | `src/conductor/src/engine/skill-invocation.ts:11` | A `SkillInvocationDescriptor` in `STEP_SKILL_INVOCATIONS` — either `{ kind: 'skill', skillName, arguments }` or `{ kind: 'engine-native' }`. Path resolution happens in `engine/skill-resolver.ts:65`. |
@@ -128,7 +128,7 @@ machinery is `engine/gate-verdicts.ts` — `checkGateCompletion` (`:17`), `compu
 
 Routing over verdicts is `engine/selector.ts`: `gateSatisfied` (`:53`), `selectNextGate` (`:111`),
 `earliestUnsatisfiedGateIndex` (`:130`). Kickbacks are capped by `MAX_KICKBACKS_PER_GATE` in
-`engine/conductor.ts:318`.
+`engine/conductor.ts:319`.
 
 Supporting machinery, if your gate needs it: `engine/gate-invalidation.ts`, `engine/gate-writeback.ts`,
 `engine/gate-code-validity.ts`, `engine/gated-snapshot.ts`.

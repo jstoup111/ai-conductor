@@ -99,7 +99,8 @@ when the episode ends.
 
 > **Known limitation.** The episode stamp is in-memory, scoped to the running daemon process.
 > Restart the daemon during an episode and its episode-caused halts are no longer recognized as
-> recoverable — they must be cleared by hand or by a base-branch advance. Not yet filed.
+> recoverable — they must be cleared by hand or by a base-branch advance.
+> Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023).
 
 #### Auth parks
 
@@ -173,7 +174,7 @@ worktree; it reads `.pipeline/` relative to the current directory.
 > **Known limitation.** `--report` cannot show halts or kickbacks. `loop_halt` and `kickback`
 > are among the 28 of 57 event types the engine emits but never registers as readable, so they
 > never reach `events.jsonl` and no report can surface them. Use `.pipeline/HALT` and
-> `.pipeline/gates/<step>.json` instead. Not yet filed.
+> `.pipeline/gates/<step>.json` instead. Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 ### 5. Read the daemon's own narrative
 
@@ -187,7 +188,7 @@ startup dashboard snapshot.
 > **Known limitation.** The log rotates to `.daemon/daemon.log.1` only when it is reopened and
 > already exceeds 1 MB, and no CLI reads the rotated file. A long-running daemon never rotates
 > mid-run; once it does, the previous history is only reachable by opening
-> `.daemon/daemon.log.1` directly. Not yet filed.
+> `.daemon/daemon.log.1` directly. Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 ## Recovery
 

@@ -64,6 +64,19 @@ conduct-ts daemon logs --all            # every registered repo, with ==> path <
 `--all` prints `--follow is not supported with --all; showing a static snapshot.` and does not
 follow. A missing log prints `(no daemon log yet for <path>)`.
 
+Lines a feature run owns are tagged with its slug, so a serial drain of several features stays
+readable and greppable:
+
+```text
+[daemon] holding daemon lock (pid 12345) for /home/you/code/my-project
+[daemon][my-feature-254] ▶ start my-feature-254
+[daemon][my-feature-254] · ▶ build
+```
+
+Filter one feature's narrative with `conduct-ts daemon logs | grep '\[<slug>\]'`. Untagged `[daemon]`
+lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
+[artifacts](../reference/artifacts.md#line-shapes).
+
 To watch the session itself:
 
 ```bash
