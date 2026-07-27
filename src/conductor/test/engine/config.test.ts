@@ -11,6 +11,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
 describe('config', () => {
@@ -1387,6 +1388,16 @@ complexity:
       }).toEqual({
         build_review: { enabled: true, perTaskFloor: false },
         warnings: [],
+      });
+    });
+
+    it('passes perTaskFloor:false through validation to the build_review resolver', () => {
+      const result = validateConfig({
+        build_review: { enabled: true, perTaskFloor: false },
+      });
+      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual({
+        enabled: true,
+        perTaskFloor: false,
       });
     });
 
