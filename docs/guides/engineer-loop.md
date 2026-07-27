@@ -31,6 +31,10 @@ There are two surfaces and you use both:
 
 Every primitive prints a single JSON line on success, so each step's output feeds the next.
 
+For Medium and Large work, authoring runs `coherence_check` immediately after `plan` and commits
+`.docs/coherence/<plan-stem>.md` with the spec artifacts. Small work skips both the gate and the
+artifact, allowing the daemon to begin at BUILD after the spec PR merges.
+
 ## Start a session
 
 ```bash

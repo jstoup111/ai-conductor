@@ -26,6 +26,10 @@ Three properties of the current design make this more than a missing list entry:
   `conduct-ts engineer land` — a regression against the issue's third desired outcome.
 - The three other tier-skippable DECIDE steps are stamped `'done'` unconditionally, so preseeding
   a fourth one inherits an existing semantic inconsistency about S-tier specs.
+- The engine-owned `runAuthoring` seam has its own canonical DECIDE sequence. Before this
+  change it stopped at `plan`, so an engineer-authored M/L spec could reach its spec branch
+  without the coherence artifact the daemon now requires. The authoring path must close that
+  gap rather than relying on an operator to invoke a separate step by convention.
 
 This repo's Design Principle is explicit that the durable fix for a repeatedly-violated
 invariant is machinery, not a corrected instance.
@@ -110,6 +114,19 @@ base-branch tree via `tree.readFile` with no change set in scope. Duplicating th
 create two divergent notions of validity for one artifact. The shallow check is a backstop for
 specs that bypassed `land` — hand-pushed spec branches, or the gate's own tier-S and
 legacy-change-set disengagement paths (`coherence-validator.ts:1144-1154`).
+
+### D5 — Engineer authoring owns the non-S coherence gate and artifact
+
+After `plan`, `runAuthoring` invokes `coherence_check` for M and L tiers. The approved result is
+written as `.docs/coherence/<slug>.md` and staged with the other authored DECIDE artifacts in the
+single spec-branch commit. S-tier authoring skips the gate and writes no coherence artifact,
+matching the existing tier exemption.
+
+This is a production behavior change to the engine authoring seam, not a claim that the existing
+flow was already complete. It keeps the daemon's discovery requirement and the engineer's
+canonical DECIDE order coherent: the producer creates the required artifact before the consumer
+vets it. The injected `decide` seam remains the test boundary; the implementation must cover both
+the M/L invocation-and-commit path and the S-tier non-invocation path.
 
 ## Consequences
 

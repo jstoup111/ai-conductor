@@ -2,7 +2,7 @@
 
 **Last updated:** 2026-07-26
 **Scope:** The phase-ownership seam between operator-led DECIDE authoring and autonomous daemon
-execution — the daemon preseed constant (`daemon-cli.ts:285-296`, applied `:882-887`), the
+execution — the engineer authoring sequence (`engineer/authoring.ts`), the daemon preseed constant (`daemon-cli.ts:285-296`, applied `:882-887`), the
 discovery-time spec vetting loop (`daemon-backlog.ts:655-673`, tier resolved `:771`), the step
 definition table (`steps.ts` / `types/steps.ts`), the conductor's tier-skip computation
 (`conductor.ts:2549-2557`), and the already-existing land-time coherence gate
@@ -67,9 +67,9 @@ graph TD
 
 ```mermaid
 graph TD
-    subgraph DECIDE2["DECIDE — unchanged, already correct"]
+    subgraph DECIDE2["DECIDE — engineer authoring"]
         PLAN2["/plan"]
-        COH2["/coherence-check<br/>M/L only"]
+        COH2["NEW: runAuthoring invokes<br/>/coherence-check after plan<br/>M/L only"]
         LAND2["engineer land<br/>runCoherenceGate<br/>deep validation, waivable"]
     end
 
@@ -118,6 +118,7 @@ graph TD
 | Component | Responsibility | Change |
 |---|---|---|
 | `steps.ts` / `ALL_STEPS` | Sole declaration of which phase owns each step | none (already correct) |
+| `engineer/authoring.ts` `runAuthoring` | Execute the canonical DECIDE sequence and commit its artifacts | **extended** — M/L invokes `coherence_check` after `plan` and commits `.docs/coherence/<slug>.md`; S skips it |
 | `daemon-cli.ts` `PRESEEDED_DONE` | Derive the preseed set from `ALL_STEPS` phase membership | **replaced** — hand-list → derivation |
 | `daemon-cli.ts` stamping loop | Stamp preseeded steps with a tier-correct status | **amended** per ADR |
 | `daemon-backlog.ts` vetting loop | Reject un-buildable merged specs before dispatch | **extended** with a third check |
