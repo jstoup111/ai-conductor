@@ -56,9 +56,9 @@ export interface VerifyProtectedArtifactSealOptions {
   /** Required only while validating a first BUILD entry before it may persist a seal. */
   baselineCommit?: string;
   /**
-   * The current feature's own slug. Scopes the temporary self-amendment
-   * loosening in `inspectSeal` — absent means no loosening (fully protected,
-   * prior behavior). See that function's inline comment for the rationale.
+   * The current feature's own slug. Scopes durable reporting of its
+   * self-amendments in `inspectSeal` — absent means no self-amendments are
+   * tolerated (fully protected, prior behavior).
    */
   featureDesc?: string;
   /**
@@ -270,8 +270,8 @@ async function workspaceProtectedPaths(projectRoot: string, directory: string): 
  * True when `path`'s filename stem (basename minus `.md`) names the SAME
  * feature as `featureDesc`, tolerating a leading `YYYY-MM-DD-` date-prefix
  * mismatch on either side (mirrors the dated-vs-undated stem ambiguity fixed
- * for backlog metadata lookups in #1024). Used ONLY to scope the temporary
- * self-amendment loosening below — it never affects whether a path is
+ * for backlog metadata lookups in #1024). Used ONLY to scope the durable
+ * self-amendment reporting below — it never affects whether a path is
  * discovered/protected in the first place.
  */
 function namesOwnFeature(path: string, featureDesc: string): boolean {

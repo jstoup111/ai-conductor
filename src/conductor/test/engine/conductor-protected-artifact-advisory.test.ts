@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -78,6 +78,92 @@ describe('conductor protected-artifact self-amendment advisory', () => {
       )],
       firstDispatchedStep: 'build',
       firstBuildSealCreation: [{ projectRoot, baselineCommit: 'approved-commit' }],
+    });
+  });
+
+  it('keeps the clean successful BUILD path quiet', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
+    temporaryDirectories.push(projectRoot);
+    const statePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(statePath, JSON.stringify({ plan: 'done' }), 'utf8');
+
+    vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
+    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+      ok: true,
+      seal: { version: 1, baselineCommit: 'approved-commit', protectedArtifacts: [] },
+      selfAmendments: [],
+    });
+    vi.spyOn(protectedArtifactSeal, 'createProtectedArtifactSeal').mockResolvedValue({
+      version: 1,
+      baselineCommit: 'approved-commit',
+      protectedArtifacts: [],
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const dispatchedSteps: string[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        dispatchedSteps.push(step);
+        return { success: false, output: 'expected stop after BUILD dispatch' };
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'default',
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    expect({ warnings: warn.mock.calls, dispatchedSteps }).toEqual({
+      warnings: [],
+      dispatchedSteps: ['build'],
+    });
+  });
+
+  it('keeps a failed seal on the protected-artifact halt path without an advisory', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
+    temporaryDirectories.push(projectRoot);
+    const statePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(statePath, JSON.stringify({ plan: 'done' }), 'utf8');
+
+    vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
+    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/feature.md',
+    });
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const run = vi.fn(async () => {
+      throw new Error('unexpected dispatch after protected-artifact seal failure');
+    });
+    const runner: StepRunner = { run };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'default',
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    expect({
+      warnings: warn.mock.calls,
+      dispatches: run.mock.calls,
+      halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
+    }).toEqual({
+      warnings: [],
+      dispatches: [],
+      halt: expect.stringContaining('Protected artifact changed: .docs/plans/feature.md'),
     });
   });
 });
