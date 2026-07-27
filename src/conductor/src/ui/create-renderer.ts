@@ -231,6 +231,17 @@ export function createRenderer(
         break;
       }
 
+      case 'unattributed_progress': {
+        const headBefore = event.headBefore?.slice(0, 12) ?? '(none)';
+        const headAfter = event.headAfter?.slice(0, 12) ?? '(none)';
+        region.log(
+          chalk.dim(
+            `  · ${event.step} — unattributed progress on attempt ${event.attempt}: ${event.resolvedCount} resolved (${headBefore} → ${headAfter})`,
+          ),
+        );
+        break;
+      }
+
       case 'build_no_progress': {
         const task = event.currentTaskId ? ` — stuck on ${event.currentTaskId}` : '';
         const displayResolved = displayBuildPosition(

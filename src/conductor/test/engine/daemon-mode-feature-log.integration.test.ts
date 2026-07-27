@@ -9,10 +9,18 @@ const daemonLogSpy = vi.hoisted(() => ({
     featureOwned ? `[daemon]${message}` : `[daemon] ${message}`,
   ),
 }));
+const ciFixProbeSpy = vi.hoisted(() => ({
+  defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
+}));
 
 vi.mock('../../src/engine/daemon-log.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-log.js')>();
   return { ...actual, formatDaemonActivityLine: daemonLogSpy.formatDaemonActivityLine };
+});
+
+vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
+  return { ...actual, defaultCiFixProbe: ciFixProbeSpy.defaultCiFixProbe };
 });
 
 // Keep the daemon entry point real while replacing only the external feature
@@ -59,6 +67,7 @@ let dirs: string[] = [];
 beforeEach(() => {
   dirs = [];
   daemonLogSpy.formatDaemonActivityLine.mockClear();
+  ciFixProbeSpy.defaultCiFixProbe.mockClear();
 });
 
 afterEach(async () => {

@@ -406,10 +406,15 @@ escalating to a human:
 subsequent stalls go straight to HALT without remediation dispatch. This prevents ask→answer→ask
 loops while keeping the fallback path safe.
 
-**Also triggered implicitly** when two consecutive build attempts produce zero
-new task completions (measured via `.pipeline/task-status.json` resolved count).
-So even if you forget to write the marker, the circuit breaker catches the
-stall — but writing the marker is the polite contract: it labels the reason
+**Also triggered implicitly** when a build attempt produces zero new task
+completions (the attributed count from `.pipeline/task-status.json`/`Task:`
+trailers doesn't move) AND HEAD doesn't move that same attempt — the
+attributed count alone is advisory routing/telemetry and can never by itself
+kill a build; commit movement is the liveness authority
+(adr-2026-07-23-commit-movement-liveness-floor). An attempt that lands real,
+committed work without a `Task:` trailer is never misread as a stall. So even
+if you forget to write the marker, the circuit breaker catches a genuine
+wedge — but writing the marker is the polite contract: it labels the reason
 and prevents a speculative second retry.
 
 ### User-requested exit during a run

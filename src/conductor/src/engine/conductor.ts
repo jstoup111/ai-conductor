@@ -187,6 +187,7 @@ import {
   writeStallQuestionEvidence,
   writeStallHalt,
   normalizeTasks,
+  resolveTaskIds,
 } from './task-progress.js';
 import {
   makeGitRunner,
@@ -3592,6 +3593,22 @@ export class Conductor {
         // work that produced no new commits, or nothing dispatched at all).
         const headShaBeforeBuild: string | null =
           step.name === 'build' ? await currentCommitSha(this.projectRoot) : null;
+        // adr-2026-07-23-commit-movement-liveness-floor: per-attempt SHA
+        // baseline for the `no_task_progress` breaker's liveness-floor
+        // conjunct — distinct from `headShaBeforeBuild` above (which is
+        // captured once at step entry for zero-work-product telemetry).
+        // Re-rolled to the attempt-end SHA at the bottom of each retry
+        // iteration so it always reflects "HEAD at the start of THIS
+        // attempt", not "HEAD at step entry".
+        let headShaAttemptStart: string | null = headShaBeforeBuild;
+        // Plan Task 8 (builds-stall-when-work-lands-without-task-trailer-):
+        // true if ANY attempt in this build step's retry loop moved HEAD
+        // (i.e. emitted `unattributed_progress` at least once) — real,
+        // uncommitted-to-a-task work landed even though the retry budget
+        // ultimately exhausted. Consulted at the exhaustion tail below to
+        // route through the completion-seam success path instead of the
+        // generic "retries exhausted" HALT.
+        let anyAttemptMovedHead = false;
         // Task 8: Capture stall question for error handling in degraded remediation exits.
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
@@ -4281,14 +4298,52 @@ export class Conductor {
                 retryResolvedBefore = resolvedTasksBefore;
                 retryResolvedAfter = resolvedTasksAfter;
                 const markerSet = await haltMarkerExists(this.projectRoot);
+                // adr-2026-07-23-commit-movement-liveness-floor: attempt-end
+                // SHA compared against `headShaAttemptStart` to decide
+                // whether HEAD actually moved THIS attempt. `headShaAfterBuild`
+                // was already computed above for zero-work-product detection.
+                const headShaAttemptEnd = headShaAfterBuild;
+                // Fail-closed: a null/unreadable SHA on either side must
+                // never be treated as "moved" — only count movement when
+                // BOTH reads succeeded and differ. This can only ever
+                // cause a stall to still be classified, never suppress one.
+                const headMovedThisAttempt =
+                  headShaAttemptEnd !== null &&
+                  headShaAttemptStart !== null &&
+                  headShaAttemptEnd !== headShaAttemptStart;
                 if (markerSet) {
                   stalled = 'halt_marker';
-                } else if (attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore) {
+                } else if (
+                  attempt >= 2 &&
+                  resolvedTasksAfter <= resolvedTasksBefore &&
+                  !headMovedThisAttempt
+                ) {
                   stalled = 'no_task_progress';
                   // #569 Task 5: record a distinct, actionable reason for
                   // the terminal HALT fallback in case this build step
                   // ultimately exhausts retries after this stall.
                   lastBuildStallReason = `build stalled: no task progress (resolved tasks stayed at ${resolvedTasksAfter} after ${attempt} attempt(s))`;
+                } else if (
+                  attempt >= 2 &&
+                  resolvedTasksAfter <= resolvedTasksBefore &&
+                  headMovedThisAttempt
+                ) {
+                  // Real, committed work landed this attempt but the
+                  // resolved-task count didn't move (no `Task:` trailer
+                  // attributed it to a plan task id) — this is NOT a stall.
+                  // Emit telemetry only; fall through to the normal retry
+                  // path below. Deliberately does not feed the #280
+                  // count-moved progress-bypass gate, which stays keyed on
+                  // count movement, not this HEAD-movement floor.
+                  await emitTracked({
+                    type: 'unattributed_progress',
+                    step: step.name,
+                    attempt,
+                    resolvedCount: resolvedTasksAfter,
+                    headBefore: headShaAttemptStart,
+                    headAfter: headShaAttemptEnd,
+                  });
+                  anyAttemptMovedHead = true;
                 }
 
                 // T4: within-dispatch progress-bypass gate. A completion-gate
@@ -4714,6 +4769,7 @@ export class Conductor {
                   }
                 }
                 resolvedTasksBefore = resolvedTasksAfter;
+                headShaAttemptStart = headShaAfterBuild;
               }
 
               if (progressBypassed || attempt < stepMaxRetries) {
@@ -4762,6 +4818,56 @@ export class Conductor {
                 const freshEvidence = await createTaskEvidence(this.projectRoot);
                 freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
                 await freshEvidence.write();
+              }
+              // Task 8 (builds-stall-when-work-lands-without-task-trailer-):
+              // budget exhausted with NO attempt ever satisfying the
+              // completion gate would normally fall straight into the
+              // `!succeeded` HALT/recovery path below. But if at least one
+              // attempt moved HEAD with real, unattributed commits
+              // (`anyAttemptMovedHead`), the work is genuinely landing —
+              // it's just not stamped against a plan task row. Treat that
+              // as a routing problem, not a stall: exit through the exact
+              // same success seam `completion.done` uses (no second advance
+              // code path) so the run proceeds to `build_review`, and record
+              // which plan task ids were left unresolved so an operator can
+              // still see the gap in `conduct-state.json`.
+              if (step.name === 'build' && anyAttemptMovedHead) {
+                let routedReason: string | undefined;
+                try {
+                  const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
+                  const raw = await readFile(statusPath, 'utf-8');
+                  const parsed = JSON.parse(raw) as unknown;
+                  const tasks = normalizeTasks(parsed);
+                  const planIds = tasks
+                    .map((t) => t.id)
+                    .filter((id): id is string => id !== undefined);
+                  const resolved = await resolveTaskIds(this.projectRoot, planIds);
+                  const unresolvedIds = planIds.filter((id) => !resolved.has(id));
+                  routedReason = `routed: unresolved [${unresolvedIds.join(', ')}] after ${attempt} attempts with commit movement`;
+                } catch {
+                  // Fail-soft: if task-status.json is missing/unparseable we
+                  // still route (real commits landed — the whole point of
+                  // this seam), just without an ids list in the reason.
+                  routedReason = `routed: unresolved [] after ${attempt} attempts with commit movement`;
+                }
+                state.build_routed_reason = routedReason;
+                // Persist immediately: the loop's normal success tail calls
+                // `saveStepStatus`, which reads the CURRENT on-disk state,
+                // flips only `step.name`/`last_step`, and writes it back — an
+                // in-memory-only field set here would never reach disk
+                // otherwise, since saveStepStatus's read-modify-write starts
+                // from whatever is already persisted, not from this `state`
+                // object.
+                await writeState(this.stateFilePath, state);
+                if (this.taskEvidence) {
+                  const freshEvidence = await createTaskEvidence(this.projectRoot);
+                  freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+                  await freshEvidence.write();
+                }
+                succeeded = true;
+                successOutput = result.output;
+                stepResult = result;
+                break;
               }
               break;
             }

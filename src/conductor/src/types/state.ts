@@ -57,6 +57,16 @@ export type ConductState = {
   // Project-level state preserved across features
   bootstrap?: StepStatus;
   assess?: StepStatus;
+  /**
+   * Set when a `build` step's retry budget exhausts but at least one attempt
+   * moved HEAD (real, unattributed commits landed even though no plan task
+   * row was ever explicitly resolved) — the engine routes this case through
+   * the normal success/completion seam into `build_review` instead of
+   * HALTing, and records why here so an operator (or a later coherence
+   * check) can see which plan task ids were left unresolved. Not written on
+   * ordinary success or ordinary HALT; absent means "did not apply."
+   */
+  build_routed_reason?: string;
 };
 
 export interface ArtifactApproval {

@@ -304,6 +304,7 @@ export class OtelVisualizer implements VisualizerPlugin {
       'kickback',
       'feature_complete',
       'build_progress',
+      'unattributed_progress',
       'build_no_progress',
       'build_stall',
     ];
@@ -426,6 +427,9 @@ export class OtelVisualizer implements VisualizerPlugin {
         break;
       case 'build_progress':
         this.spanManager.onBuildProgress(event);
+        break;
+      case 'unattributed_progress':
+        // Routine telemetry is intentionally tolerated without a span event.
         break;
       case 'build_no_progress':
         this.spanManager.onBuildNoProgress(event);

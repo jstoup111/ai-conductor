@@ -105,6 +105,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   auto_park_contradiction: 'not-audited-by-design',
   zero_work_product: 'not-audited-by-design',
   unattributed_dispatch: 'not-audited-by-design',
+  // Retry-loop liveness telemetry: the attempt it describes is already
+  // friction-mapped via `step_retry`, so it writes no record of its own.
+  unattributed_progress: 'not-audited-by-design',
   halt_cleared: 'friction-mapped',
   ci_failed: 'not-audited-by-design',
   attribution_divergence: 'not-audited-by-design',
@@ -225,6 +228,14 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   zero_work_product: { type: 'zero_work_product', step: 'build', dispatchCount: 1, headSha: 'abc123' },
   unattributed_dispatch: { type: 'unattributed_dispatch', step: 'build', unattributedCount: 1 },
+  unattributed_progress: {
+    type: 'unattributed_progress',
+    step: 'build',
+    attempt: 1,
+    resolvedCount: 0,
+    headBefore: 'a'.repeat(40),
+    headAfter: 'b'.repeat(40),
+  },
   halt_cleared: { type: 'halt_cleared', step: 'build', cause: 'operator' },
   ci_failed: {
     type: 'ci_failed',

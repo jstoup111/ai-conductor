@@ -832,7 +832,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
       'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
       'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
-      'build_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
+      'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
       'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
       'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
       'auto_park_contradiction',
@@ -1975,6 +1975,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
       log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}`);
+      break;
+    }
+    case 'unattributed_progress': {
+      const headBefore = event.headBefore?.slice(0, 12) ?? '(none)';
+      const headAfter = event.headAfter?.slice(0, 12) ?? '(none)';
+      log(
+        `${dot} ${chalk.dim(`unattributed progress: ${event.step} attempt ${event.attempt}, ${event.resolvedCount} resolved (${headBefore} → ${headAfter})`)}`,
+      );
       break;
     }
     case 'build_no_progress': {
