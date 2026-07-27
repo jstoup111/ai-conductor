@@ -294,6 +294,73 @@ describe('engine/daemon-log', () => {
     });
   });
 
+  describe('createFeatureDaemonLogger composed over the real base logger (negative paths, FR-6)', () => {
+    function countOccurrences(haystack: string, needle: string): number {
+      return haystack.split(needle).length - 1;
+    }
+
+    function buildLoggers(featureSlug: string) {
+      const live: string[] = [];
+      const persisted: string[] = [];
+      const baseLog = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: (line) => persisted.push(formatDaemonLogLine(line)),
+      });
+      const featureLog = createFeatureDaemonLogger(featureSlug, baseLog);
+      return { live, persisted, baseLog, featureLog };
+    }
+
+    function assertPersistedMatchesLiveModuloTimestamp(liveLine: string, persistedLine: string) {
+      const match = persistedLine.match(/^(\S+) (.*)$/s);
+      expect(match).not.toBeNull();
+      const [, stamp, rest] = match!;
+      expect(Number.isNaN(new Date(stamp).getTime())).toBe(false);
+      expect(rest).toBe(liveLine);
+    }
+
+    it.each([
+      ['a line already containing [daemon]', 'saw [daemon] restart the pool'],
+      ['a line already containing a [slug]-shaped tag', 'conflict with [other-feature] detected'],
+      ['a line containing both', '[daemon] noted a clash with [other-feature]'],
+    ])('%s gets exactly one added [daemon] prefix and one added feature tag', (_desc, content) => {
+      const featureSlug = 'my-feature';
+      const { live, persisted, featureLog } = buildLoggers(featureSlug);
+
+      featureLog(content);
+
+      expect(live).toHaveLength(1);
+      expect(persisted).toHaveLength(1);
+      const liveLine = live[0];
+      const persistedLine = persisted[0];
+
+      const inputDaemonCount = countOccurrences(content, '[daemon]');
+      const inputTagCount = countOccurrences(content, `[${featureSlug}]`);
+
+      expect(countOccurrences(liveLine, '[daemon]')).toBe(inputDaemonCount + 1);
+      expect(countOccurrences(liveLine, `[${featureSlug}]`)).toBe(inputTagCount + 1);
+
+      // Persisted content (after stripping the leading timestamp) matches live exactly.
+      assertPersistedMatchesLiveModuloTimestamp(liveLine, persistedLine);
+      expect(countOccurrences(persistedLine, '[daemon]')).toBe(inputDaemonCount + 1);
+      expect(countOccurrences(persistedLine, `[${featureSlug}]`)).toBe(inputTagCount + 1);
+    });
+
+    it('does not suppress a genuine global lifecycle line merely because an earlier feature-owned line quoted it mid-sentence', () => {
+      const { live, persisted, baseLog, featureLog } = buildLoggers('feature-a');
+
+      // A feature-owned line that quotes another feature's lifecycle glyph
+      // mid-sentence must not be mistaken for a real transition.
+      featureLog('note: saw ▶ start feature-b mentioned');
+
+      // The genuine global lifecycle line for feature-b must still land normally.
+      baseLog('▶ start feature-b');
+
+      const genuineLine = '[daemon] ▶ start feature-b';
+      expect(live).toContain(genuineLine);
+      expect(persisted.some((l) => l.endsWith(genuineLine))).toBe(true);
+    });
+  });
+
   describe('tailDaemonLog (negative paths)', () => {
     it('returns "missing" when the log file does not exist', async () => {
       const res = await tailDaemonLog(dir, 10);
