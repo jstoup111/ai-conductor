@@ -206,9 +206,19 @@ Before a self-host build runs, the engine fingerprints two surfaces with a per-f
 1. **The live checkout** — the harness checkout the daemon itself is running out of.
 2. **Unrelated provider state** — `~/.claude` or `~/.codex`, whichever the selected provider owns.
 
-A mismatch is fail-closed: the engine writes `.pipeline/HALT` with kind `mechanical` and throws. A
-verification that itself fails is coerced to a mismatch (`Live boundary could not be verified.`).
-There is no config key — this is unconditional for self-host provider preparation.
+A mismatch is fail-closed: the run halts, the engine writes `.pipeline/HALT` with kind `mechanical`,
+and no further work is dispatched. A verification that itself fails is coerced to a mismatch (`Live
+boundary could not be verified.`). There is no config key — this is unconditional for self-host
+provider preparation.
+
+The halt lands at the **next dispatch boundary**, not on the dispatch that was in flight. Teardown
+runs after the step it guards has already produced its result, and the window it covers is the whole
+step — so the change it catches is, by construction, something that happened while that step was
+running. The step therefore keeps its own verdict (its real success or its real failure), and the
+violation is enforced before anything else runs: the next retry attempt, the next step (including a
+parallel-group fan-out), or the point where the loop would otherwise converge. Detection is
+unaffected; a violated run still stops, and the completed step's work is preserved for the re-kick
+instead of being discarded and redone.
 
 Each surface carries its own exclusion list, filtered **during** the walk so an excluded subtree is
 never descended into.
@@ -324,7 +334,9 @@ than launching a dangling-link environment; a self-build cannot run without it.
 **A build halted the instant the daemon wrote a log line.** That is the live-boundary guard tripping
 on a path outside its exclusion lists. Check what changed during the run — an editor save or a
 generated file in the live checkout, a `git` operation outside `.git`, or a provider config file such
-as `~/.claude/settings.json` touched by another session.
+as `~/.claude/settings.json` touched by another session. The step that was running when it tripped is
+recorded with its own real verdict, so a re-kick resumes after it rather than repeating it; fix or
+re-baseline whatever changed, then unpark.
 
 **`daemon start` refuses with an install-drift message.** Run `bin/install --update` and retry. A
 stale install leaves newly added skills unregistered, and daemon-dispatched skills then fail

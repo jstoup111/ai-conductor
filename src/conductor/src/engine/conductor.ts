@@ -973,6 +973,27 @@ export class Conductor {
   private guardrails: SelfHostGuardrails;
   /** Reusable safety verdicts are valid only within one exact attempt identity. */
   private readonly safetyAttemptCache = new SafetyAttemptCache();
+  /**
+   * A self-host live-boundary violation observed at the END of a dispatch that
+   * was ALREADY in flight, held until the next dispatch boundary.
+   *
+   * The boundary fingerprint is taken when a candidate is prepared and
+   * re-verified in its teardown, so any concurrent change to the live checkout
+   * or the operator's provider home — an unrelated interactive session, an
+   * OAuth/credential refresh, an operator repairing a stale auth override —
+   * lands INSIDE the window of a step that is already running. Throwing from
+   * teardown discarded that step's completed result (the throw replaces the
+   * invocation's return value), so a step that had genuinely succeeded was
+   * reported as `failed` and its work redone on re-kick.
+   *
+   * Detection is unchanged and NOT weakened: the verdict is still computed on
+   * exactly the same surfaces, and the run still halts. Only its ENFORCEMENT
+   * POINT moves — from "retroactively fail the dispatch that already
+   * finished" to "refuse the NEXT dispatch". A step therefore always concludes
+   * on its own merits, and the new provider/config state is applied from the
+   * next dispatch onward.
+   */
+  private pendingLiveBoundaryHalt?: string;
   /** Guards the one-time skill relink so it runs before the first build only. */
   /** Breadcrumb of the last step index reached in the main loop, for terminal-verdict diagnostics. */
   private _breadcrumb: { lastAdvancedStep?: string; exitIndex?: number; lastEventType?: string } = {};
@@ -1874,6 +1895,24 @@ export class Conductor {
     return this.daemon && this.selfHost;
   }
 
+  /**
+   * Consume a live-boundary violation recorded while a PREVIOUS dispatch was in
+   * flight, if any. Called at every dispatch boundary (each retry attempt, and
+   * once more when the loop converges) so the guard's stop-the-run authority is
+   * fully preserved while never rewriting the verdict of a step that already
+   * concluded. Writes the same `mechanical` HALT marker the in-teardown check
+   * used to write, and returns the reason; returns undefined when clean.
+   * One-shot by construction — the reason is cleared as it is consumed, so a
+   * single violation halts once rather than re-firing on every later boundary.
+   */
+  private async consumePendingLiveBoundaryHalt(): Promise<string | undefined> {
+    const reason = this.pendingLiveBoundaryHalt;
+    if (reason === undefined) return undefined;
+    this.pendingLiveBoundaryHalt = undefined;
+    await writeHaltMarker(this.projectRoot, `${reason}\n`, 'mechanical').catch(() => {});
+    return reason;
+  }
+
   /** Read a file's text, or null when it does not exist (gate readText seam). */
   private readTextOrNull(path: string): Promise<string | null> {
     return readFile(path, 'utf-8').then(
@@ -2002,11 +2041,18 @@ export class Conductor {
           provider: codex ? 'codex' : 'claude',
           selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
         });
+        // Runs in the candidate's teardown — i.e. AFTER the dispatch it guards
+        // has already produced its result. Record the verdict instead of
+        // throwing: a throw here propagates out of the `finally` that calls
+        // teardown, discarding a completed step's real outcome and reporting a
+        // successful step as `failed` (see `pendingLiveBoundaryHalt`). The
+        // recorded reason is consumed at the next dispatch boundary, which is
+        // where the HALT marker is written and the run stops.
         const verify = async () => {
           const result = await verifyLiveBoundary(boundary).catch(() => ({ ok: false, reason: 'Live boundary could not be verified.' }));
           if (!result.ok) {
-            await writeHaltMarker(this.projectRoot, `${result.reason}\n`, 'mechanical').catch(() => {});
-            throw new Error(result.reason ?? 'Live boundary could not be verified.');
+            this.pendingLiveBoundaryHalt =
+              result.reason ?? 'Live boundary could not be verified.';
           }
         };
         if (codex) {
@@ -2684,6 +2730,25 @@ export class Conductor {
               await writeState(this.stateFilePath, state);
             }
             continue;
+          }
+        }
+
+        // Self-host live-boundary enforcement point (step boundary). Every skip
+        // has been evaluated, so this step is about to execute — as a parallel
+        // group below or through the serial retry loop further down. A boundary
+        // violation recorded while an EARLIER step was in flight stops the run
+        // HERE, before any new provider work, rather than retroactively
+        // rewriting the verdict of the step that already concluded. Covers the
+        // group fan-out, which does not pass through the retry loop's own gate.
+        {
+          const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
+          if (boundaryHalt) {
+            await writeState(this.stateFilePath, state);
+            const prUrl = await this.surfaceRemediationPr(boundaryHalt);
+            await emitTracked({ type: 'loop_halt', reason: boundaryHalt, prUrl });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
         }
 
@@ -3721,6 +3786,25 @@ export class Conductor {
         if (!acceptanceRedPreHealed)
         while (attempt < stepMaxRetries) {
           attempt++;
+
+          // Self-host live-boundary enforcement point. A violation observed
+          // while an EARLIER dispatch was in flight is enforced HERE — before
+          // the next dispatch spends any provider work — never retroactively
+          // against the dispatch that already finished. The run still halts
+          // with the same reason and the same `mechanical` HALT class; what
+          // changes is that the completed step keeps its own verdict, so a
+          // re-kick resumes after it instead of redoing it.
+          {
+            const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
+            if (boundaryHalt) {
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(boundaryHalt);
+              await emitTracked({ type: 'loop_halt', reason: boundaryHalt, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+          }
 
           // #188 retry-as-escalation: recompute the per-attempt (model, effort)
           // as a pure function of the 1-based `attempt`. Attempt 1 returns the
@@ -6086,6 +6170,21 @@ export class Conductor {
       // Clean up SIGINT handler and SIGTERM handler
       process.off('SIGINT', sigintHandler);
       process.off('SIGTERM', sigterm);
+
+      // Terminal enforcement point for a deferred live-boundary violation: the
+      // loop converged with no further dispatch to gate, so the last dispatch's
+      // violation is enforced here instead. Without this the guard would be
+      // silently dropped whenever the violated dispatch happened to be the last
+      // one of the run.
+      {
+        const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
+        if (boundaryHalt) {
+          await writeState(this.stateFilePath, state);
+          const prUrl = await this.surfaceRemediationPr(boundaryHalt);
+          await this.events.emit({ type: 'loop_halt', reason: boundaryHalt, prUrl });
+          return;
+        }
+      }
 
       await this.completeRun(state, 'gate-driven loop converged\n');
     } catch (err) {
