@@ -557,7 +557,16 @@ async function main(): Promise<void> {
   // evidence/task-cli dispatch pattern.
   const buildAuthStatusCmd = detectBuildAuthStatusCommand(process.argv);
   if (buildAuthStatusCmd) {
-    const code = await dispatchBuildAuthStatus(buildAuthStatusCmd);
+    // Load the REAL merged config (project .ai-conductor/config.yml deep-merged
+    // over ~/.ai-conductor/config.yml) so the reported mode matches what a real
+    // self-host dispatch will actually resolve via resolveSelfHostConfig(this.config)
+    // in conductor.ts. Without this, dispatchBuildAuthStatus's `config` dep defaults
+    // to undefined and it always reports the hardcoded default (daemon-token/valid)
+    // regardless of any harness_self_host.build_auth override on disk — a falsely
+    // reassuring status that masks the real, active mode (#971 incident).
+    const buildAuthMergedResult = await loadMergedConfig(process.cwd());
+    const buildAuthConfig = buildAuthMergedResult.ok ? buildAuthMergedResult.config : undefined;
+    const code = await dispatchBuildAuthStatus(buildAuthStatusCmd, { config: buildAuthConfig });
     process.exit(code);
   }
 

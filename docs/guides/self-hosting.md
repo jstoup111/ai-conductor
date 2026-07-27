@@ -94,6 +94,15 @@ build-auth preflight is skipped entirely when the preferred build provider is `c
 Point `harness_self_host.build_auth.token_path` elsewhere if you keep the token somewhere other than
 the default.
 
+`build-auth-status` reports the same merged config (project `.ai-conductor/config.yml` deep-merged
+over `~/.ai-conductor/config.yml`) that a real self-host dispatch resolves — including `build_auth` set
+in your **user**-level config. `harness_self_host` is an ordinary deep-merge key, not one of the
+project-only-injected keys (see [configuration reference](../reference/configuration.md)), so a
+`build_auth.mode: api-key` left in `~/.ai-conductor/config.yml` from a previous project or experiment
+silently applies to every project you self-host afterward, even one whose own config never sets
+`build_auth`. If a build unexpectedly halts on a missing `ANTHROPIC_API_KEY`, check
+`~/.ai-conductor/config.yml` for a stale override before assuming the token is broken.
+
 ## Step 3 — Start the daemon
 
 ```bash

@@ -15,6 +15,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
   of reading only the project file, so daemon-only operators no longer lose user-level settings that
   every other entry point already applied ([implementation PR #1031](https://github.com/jstoup111/ai-conductor/pull/1031)).
+- `conduct-ts build-auth-status` now loads the real merged config (project `.ai-conductor/config.yml`
+  deep-merged over `~/.ai-conductor/config.yml`) before resolving `harness_self_host.build_auth`, instead
+  of always resolving against no config at all. Previously the command unconditionally reported the
+  hardcoded default (`mode=daemon-token state=valid`) no matter what was actually on disk, so it gave a
+  false all-clear while a real self-host dispatch — which does resolve the merged config — used a
+  different, possibly conflicting mode. This masked a real incident where a stale
+  `harness_self_host.build_auth.mode: api-key` left in an operator's user-level config silently
+  deep-merged into a project whose own config never set it, and the daemon build correctly (per that
+  merged config) halted on a missing API key while `build-auth-status` kept reporting daemon-token/valid.
 - A resumed feature no longer parks forever with `loop exited without a terminal verdict` without ever
   dispatching a session. The resume clamp decides which step to re-enter from the on-disk gate verdicts,
   but the loop admits a step by reading `conduct-state.json` — so when a step's verdict said satisfied
