@@ -234,7 +234,7 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     depsFactory: 'createProviderExecution',
     factoryState: {
       configuredProviders: 'configuredProviders',
-      runtimes: 'createProviderRuntimeSet(registry, log)',
+      runtimes: 'createProviderRuntimeSet(registry, runtimeLog)',
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       onAttempt:
@@ -245,9 +245,9 @@ it('daemon feature, narrative, setup-fix, and CI-fix paths share feature-owned p
     contextOwner:
       'featureRun?.providerExecution ?? deps.providerExecution?.()',
     contextFlow: [
-      'deps.runSetupTriage:providerExecution',
+      'deps.runSetupTriage:featureLog',
       'deps.runConductor:providerExecution',
-      'emitDaemonSignal:providerExecution',
+      'emitDaemonSignal:featureLog',
     ],
   });
 });
