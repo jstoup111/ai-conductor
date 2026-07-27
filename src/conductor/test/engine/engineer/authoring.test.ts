@@ -546,6 +546,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       decide: trackingDecide,
       assessComplexity: approveTier(tier),
     });
+    assertSpecResult(result);
     const coherence = await showOnBranch(result.branch, '.docs/coherence/csv-export.md', repoPath);
 
     expect({ steps, coherence }).toEqual({
@@ -561,6 +562,27 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       ],
       coherence: MINIMAL_COHERENCE_TABLE.trim(),
     });
+  });
+
+  it.each(['M', 'L'] as const)('rejecting coherence_check for a %s tier leaves no spec branch, artifacts, or commit', async (tier) => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const rejectingCoherenceCheck = async (step: string) => {
+      if (step === 'coherence_check') return { approved: false, artifact: '' };
+      return await fullDecide()(step);
+    };
+
+    await expect(
+      runAuthoring(target, 'CSV export', {
+        decide: rejectingCoherenceCheck,
+        assessComplexity: approveTier(tier),
+      }),
+    ).rejects.toThrow(/coherence/i);
+
+    expect({
+      branches: await git(['branch', '--list', 'spec/*'], repoPath),
+      commits: await git(['rev-list', '--count', 'HEAD'], repoPath),
+      worktree: await git(['status', '--porcelain'], repoPath),
+    }).toEqual({ branches: '', commits: '1', worktree: '' });
   });
 
   it('Medium tier commits the full artifact set + a Tier: M marker', async () => {
