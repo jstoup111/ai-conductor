@@ -62,7 +62,9 @@ describe('SHIP-tail publication fence (#922)', () => {
       const { runner, dispatched } = asBuiltPassingRunner(dir);
       const events = new ConductorEventEmitter();
       const kickbacks: Array<{ from: StepName; to: StepName }> = [];
-      events.on('kickback', (event) => kickbacks.push({ from: event.from, to: event.to }));
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+      });
 
       await new Conductor({
         projectRoot: dir,
@@ -94,7 +96,9 @@ describe('SHIP-tail publication fence (#922)', () => {
       const { runner, dispatched } = asBuiltPassingRunner(dir);
       const events = new ConductorEventEmitter();
       const kickbacks: Array<{ from: StepName; to: StepName }> = [];
-      events.on('kickback', (event) => kickbacks.push({ from: event.from, to: event.to }));
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+      });
 
       await new Conductor({
         projectRoot: dir,

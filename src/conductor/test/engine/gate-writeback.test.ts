@@ -113,7 +113,7 @@ describe('gate-writeback (Task 17)', () => {
       expect(patched).toBe(9);
     });
 
-    it('re-announces on reason transition: same single comment, body updated in place (Task 18)', async () => {
+    it('re-announces on entry transition: same single comment, body updated in place (Task 18)', async () => {
       let created = 0;
       let patched = 0;
       let existingBody: string | undefined;
@@ -146,13 +146,21 @@ describe('gate-writeback (Task 17)', () => {
         return { stdout: '' };
       };
 
-      const unownedIndeterminate = {
+      // This case originally alternated between two `reason` values. `GatedReason`
+      // has since been narrowed to the single member 'other-owner' — un-owned specs
+      // default-build now, so 'unowned-indeterminate' can no longer reach a
+      // GatedSpecEntry at all (see gate-writeback.ts). The transition being proven
+      // here is therefore expressed through `otherOwner`, which still varies. The
+      // property under test is unchanged: a changed entry re-announces in place,
+      // patching one comment rather than creating another.
+      const ownedByAlice = {
         kind: 'spec' as const,
         slug: '2026-07-05-widget',
-        reason: 'unowned-indeterminate' as const,
+        reason: 'other-owner' as const,
+        otherOwner: 'alice',
         remedy: 'declare an Owner: for this spec, or grandfather it via owner_gate_cutover',
       };
-      const otherOwner = {
+      const ownedByBob = {
         kind: 'spec' as const,
         slug: '2026-07-05-widget',
         reason: 'other-owner' as const,
@@ -160,31 +168,31 @@ describe('gate-writeback (Task 17)', () => {
         remedy: 'declare an Owner: for this spec, or grandfather it via owner_gate_cutover',
       };
 
-      // Pass 1: gated as unowned-indeterminate — creates the comment.
-      await upsertGatedMarkerComment(unownedIndeterminate, PR_URL, gh, '/repo');
-      // Pass 2: transitions to other-owner — same comment, body updated.
-      await upsertGatedMarkerComment(otherOwner, PR_URL, gh, '/repo');
-      // Pass 3: transitions back to unowned-indeterminate — still same comment.
-      await upsertGatedMarkerComment(unownedIndeterminate, PR_URL, gh, '/repo');
+      // Pass 1: gated to alice — creates the comment.
+      await upsertGatedMarkerComment(ownedByAlice, PR_URL, gh, '/repo');
+      // Pass 2: transitions to bob — same comment, body updated.
+      await upsertGatedMarkerComment(ownedByBob, PR_URL, gh, '/repo');
+      // Pass 3: transitions back to alice — still same comment.
+      await upsertGatedMarkerComment(ownedByAlice, PR_URL, gh, '/repo');
 
       expect(created).toBe(1);
       expect(patched).toBe(2);
       expect(existingBody).toContain(OWNER_GATED_MARKER);
-      expect(existingBody).toContain('unowned-indeterminate');
+      expect(existingBody).toContain('alice');
       expect(existingBody).not.toContain('bob');
-      // The intermediate patch reflected the other-owner transition faithfully.
+      // The intermediate patch reflected the bob transition faithfully.
       expect(patchedBodies[0]).toContain('other-owner');
       expect(patchedBodies[0]).toContain('bob');
 
       // Idempotency across further back-and-forth transitions: 10 more passes
-      // alternating between the two reasons still yields exactly one comment,
-      // and the final state matches the last-applied reason.
+      // alternating between the two owners still yields exactly one comment,
+      // and the final state matches the last-applied entry.
       for (let i = 0; i < 10; i++) {
-        const spec = i % 2 === 0 ? otherOwner : unownedIndeterminate;
+        const spec = i % 2 === 0 ? ownedByBob : ownedByAlice;
         await upsertGatedMarkerComment(spec, PR_URL, gh, '/repo');
       }
       expect(created).toBe(1);
-      expect(existingBody).toContain('unowned-indeterminate');
+      expect(existingBody).toContain('alice');
       expect(existingBody).not.toContain('bob');
     });
   });

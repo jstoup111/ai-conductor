@@ -30,6 +30,10 @@ interface ProviderRuntime {
 interface ProviderRuntimeSet {
   keys(): string[];
   get(key: string): ProviderRuntime;
+  readinessFor(
+    key: string,
+    authentication: AuthenticationReadiness,
+  ): (() => Promise<AuthenticationReadiness>) | undefined;
 }
 
 type CreateProviderRuntimeSet = (

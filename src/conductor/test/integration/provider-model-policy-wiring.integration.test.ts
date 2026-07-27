@@ -92,12 +92,12 @@ it('composes one ordered provider context across the interactive run after regis
     (node) => node.expression.getText(sourceFile) === 'Conductor',
   );
   const runnerOptions =
-    runnerConstruction?.arguments[3] &&
+    runnerConstruction?.arguments?.[3] &&
     ts.isObjectLiteralExpression(runnerConstruction.arguments[3])
       ? runnerConstruction.arguments[3]
       : undefined;
   const conductorOptions =
-    conductorConstruction?.arguments[0] &&
+    conductorConstruction?.arguments?.[0] &&
     ts.isObjectLiteralExpression(conductorConstruction.arguments[0])
       ? conductorConstruction.arguments[0]
       : undefined;
@@ -156,7 +156,7 @@ it('composes one ordered provider context across the interactive run after regis
     ),
     runtimeSetConstructionCount: runtimeCalls.length,
     sessionStoreConstructionCount: sessionConstructions.length,
-    runnerProvider: runnerConstruction?.arguments[0]?.getText(sourceFile),
+    runnerProvider: runnerConstruction?.arguments?.[0]?.getText(sourceFile),
     runnerContext: propertyText(runnerOptions, 'providerExecution'),
     conductorContext: propertyText(conductorOptions, 'providerExecution'),
     preludeContext:
@@ -298,6 +298,7 @@ it('composes isolated provider execution state for every daemon feature after on
         daemonSource.indexOf('const createProviderExecution'),
     factoryDefaultsToGlobalRuntimeLogger:
       factoryFunction?.parameters[1]?.initializer?.getText(daemonFile) === 'log' &&
+      runtimeProperty !== undefined &&
       ts.isPropertyAssignment(runtimeProperty) &&
       ts.isCallExpression(runtimeProperty.initializer) &&
       runtimeProperty.initializer.expression.getText(daemonFile) ===
@@ -306,11 +307,13 @@ it('composes isolated provider execution state for every daemon feature after on
         'registry' &&
       runtimeProperty.initializer.arguments[1]?.getText(daemonFile) ===
         factoryFunction.parameters[1]?.name.getText(daemonFile) &&
+      sessionsProperty !== undefined &&
       ts.isPropertyAssignment(sessionsProperty) &&
       ts.isNewExpression(sessionsProperty.initializer) &&
       sessionsProperty.initializer.expression.getText(daemonFile) ===
         'ProviderSessionStore',
     featureInjectsScopedRuntimeLogger:
+      featureExecution !== undefined &&
       ts.isPropertyAssignment(featureExecution) &&
       ts.isCallExpression(featureExecution.initializer) &&
       featureExecution.initializer.expression.getText(daemonFile) ===
@@ -602,7 +605,7 @@ it('freezes one daemon registry without retaining legacy global provider authori
         'selectedRuntime.policy',
   );
   const runnerKind = (construction: ts.NewExpression): string | undefined => {
-    const options = construction.arguments[3];
+    const options = construction.arguments?.[3];
     if (!options || !ts.isObjectLiteralExpression(options)) return undefined;
     const featureDesc = options.properties.find(
       (property): property is ts.PropertyAssignment =>
@@ -688,10 +691,10 @@ it('freezes one daemon registry without retaining legacy global provider authori
       auxiliaryRunners.every(
         (construction) =>
           providerName === undefined ||
-          construction.arguments[0] === undefined ||
+          construction.arguments?.[0] === undefined ||
           !ts.isIdentifier(construction.arguments[0]) ||
           construction.arguments[0].text !== providerName ||
-          !objectBindsPolicy(construction.arguments[3], policyName),
+          !objectBindsPolicy(construction.arguments?.[3], policyName),
       ),
     legacyMainRuntimeBindingsAbsent:
       runProviderBinding === undefined && runPolicyBinding === undefined,
@@ -700,7 +703,7 @@ it('freezes one daemon registry without retaining legacy global provider authori
     conductorAvoidsLegacyRuntimePolicyBinding:
       conductorConstructions.length === 1 &&
       !objectBindsPolicy(
-        conductorConstructions[0].arguments[0],
+        conductorConstructions[0].arguments?.[0],
         'runModelPolicy',
       ),
   }).toEqual({
@@ -757,7 +760,7 @@ it('binds every production step-resolution call to the policy owned by its execu
     fileURLToPath(new URL('../../', import.meta.url)),
   );
   const program = ts.createProgram({
-    rootNames: sourceUrls.map(fileURLToPath),
+    rootNames: sourceUrls.map((url) => fileURLToPath(url)),
     options: parsedConfig.options,
   });
   const checker = program.getTypeChecker();

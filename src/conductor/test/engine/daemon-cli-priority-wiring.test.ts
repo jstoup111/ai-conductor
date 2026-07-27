@@ -176,7 +176,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     };
 
     const logs: string[] = [];
-    const resolver = backlogMod.createPriorityResolver(fakeReader, (msg) => logs.push(msg));
+    const resolver = backlogMod.createPriorityResolver(fakeReader, (msg: string) => logs.push(msg));
 
     const items: BacklogItem[] = [{ slug: 'a', sourceRef: 'acme/app#1' }];
 
@@ -224,7 +224,7 @@ describe('Task 13 — daemon-cli priority resolver wiring', () => {
     };
 
     const logs: string[] = [];
-    const resolver = backlogMod.createPriorityResolver(failingReader, (msg) => logs.push(msg));
+    const resolver = backlogMod.createPriorityResolver(failingReader, (msg: string) => logs.push(msg));
 
     const items: BacklogItem[] = [
       { slug: 'a', sourceRef: 'acme/app#1' },

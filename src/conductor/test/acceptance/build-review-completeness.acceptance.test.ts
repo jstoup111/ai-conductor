@@ -44,8 +44,8 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult, StepName } from '../../src/engine/conductor.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 
 const BUILD_REVIEW_VERDICT_PATH = '.pipeline/build-review.json';
 

@@ -97,6 +97,7 @@ describe('ensureInstallFresh — staleness policy', () => {
       interactive: false,
       log: (message) => logs.push(message),
     }).catch((cause) => cause as Error);
+    if (!(error instanceof Error)) throw new Error('expected ensureInstallFresh to reject');
 
     expect(`${logs.join('\n')}\n${error.message}`).toMatch(
       /^(?![\s\S]*\/rebase)[\s\S]*~\/\.claude\/skills[\s\S]*~\/\.agents\/skills[\s\S]*\$rebase/,

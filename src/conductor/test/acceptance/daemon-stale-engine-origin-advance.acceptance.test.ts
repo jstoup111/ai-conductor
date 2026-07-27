@@ -511,7 +511,7 @@ describe('acceptance: staleness is loud on every degraded self-heal path (TI-4)'
     const warner = createStalenessWarner((msg: string) => log.push(msg));
     return async () => {
       const outcome = await fastForwardRoot(dir);
-      if (outcome?.status === 'skipped' && causes.includes(outcome.cause)) {
+      if (outcome?.status === 'skipped' && causes.some((cause) => cause === outcome.cause)) {
         warner.warn(outcome.cause, outcome.originHead, 'main');
       }
       return outcome;

@@ -87,7 +87,7 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     extra: { daemon?: boolean; provider?: LLMProvider; log?: (m: string) => void; wtPath?: string } = {},
   ): FeatureRunnerDeps {
     const wt = extra.wtPath ?? worktreePath;
-    const base: FeatureRunnerDeps = {
+    const base: Omit<FeatureRunnerDeps, 'daemon' | 'project'> = {
       createWorktree: async () => {
         await seedEvents(wt);
         return { path: wt, branch: `feat/${ITEM.slug}` } as FeatureWorktree;

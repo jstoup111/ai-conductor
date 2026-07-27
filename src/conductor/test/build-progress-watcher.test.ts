@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -133,7 +133,7 @@ describe('readSnapshot', () => {
 describe('BuildProgressWatcher change-driven emission', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   // Fake timers guard the watcher's own `.unref()`'d poll interval so a stray
   // `start()` in these tests can never leave a real timer running past the
@@ -285,7 +285,7 @@ describe('BuildProgressWatcher change-driven emission', () => {
 describe('BuildProgressWatcher lifecycle hardening', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-lifecycle-test-'));
@@ -381,7 +381,7 @@ describe('BuildProgressWatcher lifecycle hardening', () => {
 describe('BuildProgressWatcher heartbeat re-emission', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-heartbeat-test-'));
@@ -515,7 +515,7 @@ describe('BuildProgressWatcher heartbeat re-emission', () => {
 describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-quiet-test-'));
@@ -648,7 +648,7 @@ describe('BuildProgressWatcher quiet-episode build_no_progress', () => {
 describe('BuildProgressWatcher settle()', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-settle-test-'));
@@ -742,7 +742,7 @@ describe('BuildProgressWatcher settle()', () => {
 describe('BuildProgressWatcher default clock (no now option)', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-default-clock-test-'));
@@ -822,7 +822,7 @@ describe('BuildProgressWatcher default clock (no now option)', () => {
 describe('BuildProgressWatcher injectable clock', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<typeof emitter.emit>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-clock-test-'));

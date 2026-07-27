@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import { JsonStdoutSubscriber } from '../../../../plugins/json-stdout-subscriber/index.ts';
 import { TerminalSubscriber } from '../../src/ui/subscriber.js';
@@ -40,7 +40,7 @@ function buildRegistryAndSelectSubscriber(
 }
 
 describe('Config-driven subscriber selection', () => {
-  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
   let renderCallback: ReturnType<typeof vi.fn>;
   let emitter: ConductorEventEmitter;
 
@@ -60,7 +60,7 @@ describe('Config-driven subscriber selection', () => {
 
       subscriber.start();
 
-      const event: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 0 };
+      const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
       await emitter.emit(event);
 
       // Terminal renderCallback should NOT be called
@@ -95,7 +95,7 @@ describe('Config-driven subscriber selection', () => {
       const subscriber = buildRegistryAndSelectSubscriber('terminal', emitter, renderCallback);
       subscriber.start();
 
-      await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 0 });
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 0 });
 
       // Terminal subscriber invokes renderCallback — not stdout JSON
       expect(renderCallback).toHaveBeenCalledOnce();

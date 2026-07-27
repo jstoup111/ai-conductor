@@ -204,7 +204,9 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
 
       const kickbacks: unknown[] = [];
       const events = new ConductorEventEmitter();
-      events.on('kickback', (e) => kickbacks.push(e));
+      events.on('kickback', (e) => {
+        kickbacks.push(e);
+      });
 
       const conductor = makeConductor(dir, statePath, runner, events);
       await conductor.run();

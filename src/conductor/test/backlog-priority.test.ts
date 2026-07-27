@@ -7,9 +7,22 @@ import {
   ghIssueLabelReader,
   PRIORITY_BAND_RANK,
   type PriorityResolution,
+  type PriorityBand,
 } from '../src/engine/backlog-priority.js';
 import type { BacklogItem } from '../src/engine/daemon.js';
 import type { GhRunner } from '../src/engine/tracker-client.js';
+
+/**
+ * Narrows a PriorityResolution to its 'banded' variant, asserting via `expect`
+ * that the mode is indeed 'banded'. Lets tests keep the same behavioral
+ * assertion while satisfying the discriminated union's type narrowing so
+ * `.bands` is accessible afterward.
+ */
+function assertBanded(
+  result: PriorityResolution
+): asserts result is Extract<PriorityResolution, { mode: 'banded' }> {
+  expect(result.mode).toBe('banded');
+}
 
 describe('PRIORITY_BAND_RANK — exported band ranking', () => {
   it('exports a single ranking with no-issue < critical < high < medium < low < unlabeled', () => {
@@ -265,7 +278,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2']);
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(result.bands.get('owner/repo#2')).toBe('low');
     });
@@ -287,7 +300,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#2']);
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('feature-1')).toBe('no-issue');
       expect(result.bands.get('owner/repo#2')).toBe('unlabeled');
     });
@@ -326,7 +339,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: false });
 
       expect(callLog).toEqual([]); // no reader calls
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(result.bands.get('owner/repo#2')).toBe('medium');
     });
@@ -356,7 +369,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
 
       // First refresh: label is 'low'
       let result = await resolver.resolve(items, { refresh: true });
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('low');
       expect(callLog).toEqual(['read:owner/repo#1']);
 
@@ -368,7 +381,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
 
       // Second refresh: should re-fetch and get new label
       result = await resolver.resolve(items, { refresh: true });
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(callLog).toEqual(['read:owner/repo#1']);
     });
@@ -396,7 +409,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(callLog).toEqual([]);
 
       // Verify all items get 'no-issue' band
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('feature-1')).toBe('no-issue');
       expect(result.bands.get('feature-2')).toBe('no-issue');
       expect(result.bands.get('feature-3')).toBe('no-issue');
@@ -419,7 +432,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(callLog).toEqual([]);
 
       // Verify empty resolution
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.size).toBe(0);
     });
 
@@ -442,7 +455,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(callLog).toEqual([]);
 
       // Verify item treated as 'no-issue' (not 'unlabeled', not undefined)
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('garbled-item')).toBe('no-issue');
     });
   });
@@ -484,7 +497,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2,owner/repo#3']);
 
       // Verify bands
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(result.bands.get('owner/repo#2')).toBe('unlabeled'); // not-found → unlabeled (data, not outage)
       expect(result.bands.get('owner/repo#3')).toBe('low');
@@ -522,7 +535,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2']);
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('unlabeled'); // empty → unlabeled (no priority extracted)
       expect(result.bands.get('owner/repo#2')).toBe('medium');
 
@@ -559,7 +572,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2']);
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high'); // honors labels despite closed state
       expect(result.bands.get('owner/repo#2')).toBe('unlabeled'); // closed without priority → unlabeled
 
@@ -598,7 +611,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       const result = await resolver.resolve(items, { refresh: true });
 
       expect(callLog).toEqual(['read:owner/repo#1,owner/repo#2,owner/repo#3']);
-      expect(result.mode).toBe('banded'); // stays in banded mode, no fallback
+      assertBanded(result); // stays in banded mode, no fallback
       expect(result.bands.get('owner/repo#1')).toBe('unlabeled'); // no priority label → unlabeled
       expect(result.bands.get('owner/repo#2')).toBe('unlabeled'); // malformed priority → unlabeled
       expect(result.bands.get('owner/repo#3')).toBe('high'); // valid priority honored
@@ -683,7 +696,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       // Second call: succeeds (reader no longer throws)
       shouldFail = false;
       result = await resolver.resolve(items, { refresh: true });
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       // Warning count stays at 1 from the previous outage
       expect(warnLog.length).toBe(1);
@@ -713,7 +726,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
 
       // First call: succeeds
       let result = await resolver.resolve(items, { refresh: true });
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(warnLog.length).toBe(0); // No warning on success
 
@@ -826,7 +839,7 @@ describe('createPriorityResolver — stateful resolver with caching', () => {
       // Non-refresh resolve after recovery: banded from the repopulated cache,
       // with zero additional reader calls (cache-hit contract intact)
       result = await resolver.resolve(items, { refresh: false });
-      expect(result.mode).toBe('banded');
+      assertBanded(result);
       expect(result.bands.get('owner/repo#1')).toBe('high');
       expect(callLog.length).toBe(callsAfterRecovery);
     });
@@ -840,7 +853,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-b' }, // no sourceRef
       { slug: 'item-c', sourceRef: 'issue-2' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-1', 'medium'],
       ['issue-2', 'low'],
     ]);
@@ -861,7 +874,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-unlinked' }, // no sourceRef → no-issue band
       { slug: 'item-medium', sourceRef: 'issue-m' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-h', 'high'],
       ['issue-c', 'critical'],
       ['issue-m', 'medium'],
@@ -885,7 +898,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-b', sourceRef: 'issue-b' },
       { slug: 'item-c', sourceRef: 'issue-c' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-a', 'low'],
       ['issue-b', 'high'],
       ['issue-c', 'medium'],
@@ -905,7 +918,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-unlabeled', sourceRef: 'issue-no-band' }, // has sourceRef but no band → unlabeled
       { slug: 'item-low', sourceRef: 'issue-low' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-low', 'low'],
     ]);
     const res: PriorityResolution = { mode: 'banded', bands };
@@ -918,12 +931,14 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
   });
 
   it('same-band stable order: multiple items in same band keep input order', () => {
-    const items: BacklogItem[] = [
+    // createdAt is not a BacklogItem field; kept here as an arbitrary extra
+    // property to prove ordering is by band + input position, not by date.
+    const items: (BacklogItem & { createdAt: string })[] = [
       { slug: 'item-a', sourceRef: 'issue-a', createdAt: '2024-01-03' },
       { slug: 'item-b', sourceRef: 'issue-b', createdAt: '2024-01-01' },
       { slug: 'item-c', sourceRef: 'issue-c', createdAt: '2024-01-02' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-a', 'medium'],
       ['issue-b', 'medium'],
       ['issue-c', 'medium'],
@@ -944,7 +959,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-2', sourceRef: 'issue-2' },
       { slug: 'item-3', sourceRef: 'issue-3' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-1', 'medium'],
       ['issue-2', 'medium'],
       ['issue-3', 'medium'],
@@ -966,7 +981,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-medium', sourceRef: 'issue-medium' },
       { slug: 'item-unlinked' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-high', 'high'],
       ['issue-medium', 'medium'],
     ]);
@@ -1017,7 +1032,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'item-a', sourceRef: 'issue-a' },
     ];
     const itemsCopy = JSON.parse(JSON.stringify(items));
-    const bands = new Map([['issue-a', 'high']]);
+    const bands = new Map<string, PriorityBand>([['issue-a', 'high']]);
     const res: PriorityResolution = { mode: 'banded', bands };
 
     orderBacklog(items, res);
@@ -1036,7 +1051,7 @@ describe('orderBacklog — banded stable sort with priority resolution', () => {
       { slug: 'd1', sourceRef: 'issue-d' },
       { slug: 'b2', sourceRef: 'issue-b2' },
     ];
-    const bands = new Map([
+    const bands = new Map<string, PriorityBand>([
       ['issue-a', 'low'],
       ['issue-b', 'high'],
       ['issue-a2', 'low'],
@@ -1080,13 +1095,13 @@ describe('orderBacklog — permutation and determinism properties', () => {
   function generateRandomBacklog(
     count: number,
     seed: number
-  ): BacklogItem[] {
+  ): (BacklogItem & { createdAt: string })[] {
     const rng = seededRandom(seed);
-    const items: BacklogItem[] = [];
+    const items: (BacklogItem & { createdAt: string })[] = [];
 
     for (let i = 0; i < count; i++) {
       const hasSourceRef = rng() > 0.3; // 70% have sourceRef
-      const item: BacklogItem = {
+      const item: BacklogItem & { createdAt: string } = {
         slug: `item-${i}`,
         sourceRef: hasSourceRef ? `issue-${Math.floor(rng() * 10)}` : undefined,
         createdAt: `2024-01-${(i % 28) + 1}`,
@@ -1120,7 +1135,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
       const items = generateRandomBacklog(10, seed);
       const inputSlugs = extractSlugs(items);
 
-      const bands = new Map<string, PriorityResolution['bands'] extends Map<string, infer V> ? V : never>([
+      const bands = new Map<string, PriorityBand>([
         ['issue-0', 'high'],
         ['issue-1', 'medium'],
         ['issue-2', 'low'],
@@ -1141,9 +1156,9 @@ describe('orderBacklog — permutation and determinism properties', () => {
       const inputSlugs = extractSlugs(items);
 
       // Create bands for all sourceRefs in the backlog
-      const bands = new Map<string, PriorityResolution['bands'] extends Map<string, infer V> ? V : never>();
+      const bands = new Map<string, PriorityBand>();
       for (let i = 0; i < 10; i++) {
-        const priorities: Array<PriorityResolution['bands'] extends Map<string, infer V> ? V : never> = ['high', 'medium', 'low'];
+        const priorities: Array<PriorityBand> = ['high', 'medium', 'low'];
         bands.set(`issue-${i}`, priorities[i % 3]);
       }
       const res: PriorityResolution = { mode: 'banded', bands };
@@ -1162,7 +1177,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
         { slug: 'y', sourceRef: 'issue-2' },
         { slug: 'z' },
       ];
-      const bands = new Map([
+      const bands = new Map<string, PriorityBand>([
         ['issue-1', 'high'],
         ['issue-2', 'low'],
       ]);
@@ -1184,11 +1199,14 @@ describe('orderBacklog — permutation and determinism properties', () => {
     });
 
     it('other fields (sourceRef, createdAt) are not mutated', () => {
-      const items: BacklogItem[] = [
+      // createdAt is not a BacklogItem field; used as an arbitrary extra
+      // property to prove orderBacklog passes unknown fields through
+      // untouched (it builds results via object spread).
+      const items: (BacklogItem & { createdAt: string })[] = [
         { slug: 'item-1', sourceRef: 'issue-99', createdAt: '2024-06-15' },
         { slug: 'item-2', sourceRef: 'issue-88', createdAt: '2024-07-20' },
       ];
-      const bands = new Map([
+      const bands = new Map<string, PriorityBand>([
         ['issue-99', 'high'],
         ['issue-88', 'medium'],
       ]);
@@ -1196,9 +1214,16 @@ describe('orderBacklog — permutation and determinism properties', () => {
 
       const result = orderBacklog(items, res);
 
-      // Find reordered items and verify fields preserved
-      const item1Result = result.find((item) => item.slug === 'item-1');
-      const item2Result = result.find((item) => item.slug === 'item-2');
+      // Find reordered items and verify fields preserved. orderBacklog's
+      // declared return type is BacklogItem[], but it only ever builds
+      // results via object spread, so the extra createdAt field survives
+      // at runtime — reclaim that known shape here.
+      const item1Result = result.find((item) => item.slug === 'item-1') as
+        | (BacklogItem & { createdAt: string })
+        | undefined;
+      const item2Result = result.find((item) => item.slug === 'item-2') as
+        | (BacklogItem & { createdAt: string })
+        | undefined;
 
       expect(item1Result?.sourceRef).toBe('issue-99');
       expect(item1Result?.createdAt).toBe('2024-06-15');
@@ -1214,7 +1239,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
         { slug: 'b', sourceRef: 'issue-y' },
         { slug: 'c' },
       ];
-      const bands = new Map([
+      const bands = new Map<string, PriorityBand>([
         ['issue-x', 'low'],
         ['issue-y', 'high'],
       ]);
@@ -1230,7 +1255,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
 
     it('same input, called three times: all outputs identical', () => {
       const items = generateRandomBacklog(20, 111);
-      const bands = new Map<string, PriorityResolution['bands'] extends Map<string, infer V> ? V : never>([
+      const bands = new Map<string, PriorityBand>([
         ['issue-0', 'high'],
         ['issue-5', 'medium'],
         ['issue-9', 'low'],
@@ -1389,7 +1414,7 @@ describe('orderBacklog — permutation and determinism properties', () => {
         { slug: 'a', sourceRef: 'issue-2' },
         { slug: 'm', sourceRef: 'issue-3' },
       ];
-      const bands = new Map([
+      const bands = new Map<string, PriorityBand>([
         ['issue-1', 'medium'],
         ['issue-2', 'medium'],
         ['issue-3', 'medium'],

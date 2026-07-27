@@ -28,7 +28,7 @@ function stubDeps(memoryProvider: unknown): FeatureRunnerDeps {
     markProcessed: async () => {},
     daemon: false,
     provider: {
-      invoke: async () => ({ success: true, output: '' }),
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
       invokeInteractive: async () => {},
     },
     project: 'test-project',

@@ -30,7 +30,7 @@ describe('TerminalRenderer', () => {
       complexity_tier: 'M',
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'in_progress',
+      explore: 'in_progress',
       plan: 'done',
     };
 

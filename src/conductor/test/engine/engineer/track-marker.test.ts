@@ -126,6 +126,7 @@ describe('runAuthoring — commits a track marker', () => {
   }
   it('writes .docs/track/<slug>.md defaulting to product', async () => {
     const r = await runAuthoring({ name: 'a', canonicalPath: repo }, 'idea t', { decide: approvedDecide() });
+    if (r.kind !== 'spec') throw new Error('Expected a spec authoring result');
     await git(['checkout', defaultBranch]);
     await git(['merge', '--no-ff', '-m', 'm', r.branch]);
     expect(parseTrack(await show(defaultBranch, '.docs/track/idea-t.md'))).toBe('product');

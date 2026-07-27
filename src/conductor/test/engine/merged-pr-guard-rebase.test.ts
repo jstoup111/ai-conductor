@@ -11,7 +11,7 @@
  * returns `verified`; unavailable or unproven evidence must HALT.
  */
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -79,10 +79,10 @@ async function fileExists(p: string): Promise<boolean> {
 /** Non-conflicting repo: `feat` branch cleanly rebases onto `main`. */
 async function buildCleanRepo(): Promise<{
   repo: string;
-  g: (args: string[]) => ReturnType<typeof execFile>;
+  g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }> {
   const repo = await mkdtemp(join(tmpdir(), 'rebase-guard-clean-'));
-  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const g = (args: string[]) => execFile('git', args, { cwd: repo, encoding: 'utf8' as const });
 
   await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
   await g(['config', 'user.email', 't@t.com']);
@@ -108,10 +108,10 @@ async function buildCleanRepo(): Promise<{
 /** Conflicting repo — same shape as rebase-resolution-wiring.test.ts. */
 async function buildConflictRepo(): Promise<{
   repo: string;
-  g: (args: string[]) => ReturnType<typeof execFile>;
+  g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
 }> {
   const repo = await mkdtemp(join(tmpdir(), 'rebase-guard-conflict-'));
-  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const g = (args: string[]) => execFile('git', args, { cwd: repo, encoding: 'utf8' as const });
 
   await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
   await g(['config', 'user.email', 't@t.com']);
@@ -134,10 +134,10 @@ async function buildConflictRepo(): Promise<{
 
 describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => {
   let repo: string;
-  let g: (args: string[]) => ReturnType<typeof execFile>;
+  let g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
   let statePath: string;
   let events: ConductorEventEmitter;
-  let performRebaseSpy: ReturnType<typeof vi.spyOn>;
+  let performRebaseSpy: MockInstance<typeof rebaseModule.performRebase> | undefined;
 
   afterEach(async () => {
     performRebaseSpy?.mockRestore();

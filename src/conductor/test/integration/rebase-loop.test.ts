@@ -333,7 +333,7 @@ describe('integration/rebase-loop', () => {
       const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step: string) => {
           ran.push(step);
           return satisfy(step);
         },
@@ -1317,6 +1317,7 @@ describe('integration/rebase-loop', () => {
         const git2 = makeRebaseGitRunner(dir);
         const outcome = await performRebase(git2, dir, BASE);
         expect(outcome.kind).toBe('changed');
+        if (outcome.kind !== 'changed') throw new Error('expected a changed rebase outcome');
         expect(outcome.featureSurface).toBeUndefined();
 
         const result = await applyRebaseVerdicts(dir, outcome, true);

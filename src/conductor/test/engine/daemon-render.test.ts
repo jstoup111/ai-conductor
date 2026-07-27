@@ -63,7 +63,7 @@ describe('renderDaemonEvent', () => {
   it('renders step_retry without progress delta and collapses multi-line reason', () => {
     const output = lines({
       type: 'step_retry',
-      step: 'test',
+      step: 'test_suite',
       attempt: 1,
       maxAttempts: 2,
       reason: 'timeout\nexpected: 5s\nactual: 10s',

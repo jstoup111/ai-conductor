@@ -157,7 +157,7 @@ describe('handleGateResponse — redirect to unknown project (reprompt)', () => 
     expect(outcome.kind).toBe('reprompt');
     // Structural check: reprompt must NOT have a project property.
     // @ts-expect-error — 'project' should not exist on reprompt
-    const _noop = (outcome as { project?: unknown }).project;
+    const _noop = outcome.project;
     void _noop;
     // If TypeScript compiles the @ts-expect-error without error, the type has
     // no project field. The runtime check below is the falsifiable assertion.

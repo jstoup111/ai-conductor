@@ -11,7 +11,7 @@ async function loadClaimModule() {
   return import('../../../../src/engine/engineer/intake/dependency-claim.js') as Promise<any>;
 }
 
-function makeEnvelope(sourceRef: string, receivedAt: string) {
+function makeEnvelope(sourceRef: string | undefined, receivedAt: string) {
   return {
     id: `id-${sourceRef}`,
     source: 'github-issues',
@@ -23,8 +23,9 @@ function makeEnvelope(sourceRef: string, receivedAt: string) {
 }
 
 /** In-memory IntakeQueue fake mirroring the acceptance-spec fake: FIFO claim(),
- * release() pushes back onto the pending list. */
-function makeFakeQueue(envelopes: ReturnType<typeof makeEnvelope>[]) {
+ * release() pushes back onto the pending list. Some deferral tests attach an
+ * `attempts` field to individual envelopes to assert it is left untouched. */
+function makeFakeQueue(envelopes: (ReturnType<typeof makeEnvelope> & { attempts?: number })[]) {
   const pending = [...envelopes];
   const claimed = new Map<string, any>();
   return {
@@ -436,7 +437,8 @@ describe('Task 20: dependency-claim — deferral is free; indeterminate defers; 
 
     expect(outcome.kind).toBe('claim');
     const stillPending = await queue.listPending();
-    const deferred = stillPending.find((e: any) => e.sourceRef === 'acme/app#1');
+    const deferred = stillPending.find((e) => e.sourceRef === 'acme/app#1');
+    if (!deferred) throw new Error('expected the blocked entry to remain pending');
     expect(deferred.status).toBe('pending');
     expect(deferred.attempts).toBe(0);
     expect(ledgerCalls).toBe(0);
@@ -477,8 +479,10 @@ describe('Task 20: dependency-claim — deferral is free; indeterminate defers; 
     expect(outcome.kind).toBe('claim');
     expect(outcome.envelope.sourceRef).toBe('acme/app#3');
     const stillPending = await queue.listPending();
-    const a = stillPending.find((e: any) => e.sourceRef === 'acme/app#1');
-    const b = stillPending.find((e: any) => e.sourceRef === 'acme/app#2');
+    const a = stillPending.find((e) => e.sourceRef === 'acme/app#1');
+    const b = stillPending.find((e) => e.sourceRef === 'acme/app#2');
+    if (!a) throw new Error('expected acme/app#1 to remain pending');
+    if (!b) throw new Error('expected acme/app#2 to remain pending');
     expect(a.status).toBe('pending');
     expect(a.attempts).toBe(0);
     expect(b.status).toBe('pending');

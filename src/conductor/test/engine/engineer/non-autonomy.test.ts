@@ -596,19 +596,19 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
 
   // ── 1. Delegates to a start-ONLY supervisor (no management surface) ────────
 
-  it('launchDaemon delegates to supervisor.start exactly once', () => {
+  it('launchDaemon delegates to supervisor.start exactly once', async () => {
     const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemon('/projects/non-autonomy-test', { supervisor });
+    await launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     expect(supervisor.start).toHaveBeenCalledOnce();
     expect(starts).toEqual(['/projects/non-autonomy-test']);
   });
 
-  it('the injected seam exposes no stop/restart/attach — engineer cannot manage', () => {
+  it('the injected seam exposes no stop/restart/attach — engineer cannot manage', async () => {
     const { supervisor } = makeStarterSpy();
 
-    launchDaemon('/projects/non-autonomy-test', { supervisor });
+    await launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     // start-only: no control connection / IPC / lifecycle method reachable.
     expect((supervisor as Record<string, unknown>)['stop']).toBeUndefined();
@@ -626,8 +626,8 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
     // start() returns void → undefined here; even a Promise<void> exposes no
     // .kill()/.on() (no retained ChildProcess, no IPC).
     if (result !== undefined) {
-      expect((result as Record<string, unknown>)['kill']).toBeUndefined();
-      expect((result as Record<string, unknown>)['on']).toBeUndefined();
+      expect('kill' in result).toBe(false);
+      expect('on' in result).toBe(false);
     }
   });
 
@@ -653,13 +653,13 @@ describe('engineer daemon launch: non-management guarantees (FR-8)', () => {
 
   // ── 4. Exactly one launch, zero re-spawns, no implicit launch ─────────────
 
-  it('zero launches before the call, exactly one after, no supervision re-spawn', () => {
+  it('zero launches before the call, exactly one after, no supervision re-spawn', async () => {
     const { supervisor } = makeStarterSpy();
 
     // Importing the module must not trigger a launch.
     expect(supervisor.start).toHaveBeenCalledTimes(0);
 
-    launchDaemon('/projects/non-autonomy-test', { supervisor });
+    await launchDaemon('/projects/non-autonomy-test', { supervisor });
 
     // Exactly one — no retry, no heartbeat, no re-spawn loop.
     expect(supervisor.start).toHaveBeenCalledTimes(1);

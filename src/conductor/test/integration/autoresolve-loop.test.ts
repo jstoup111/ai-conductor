@@ -120,9 +120,9 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: 3 },
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
-        runSuite: async () => {
+        runSuite: async (_projectRoot: string) => {
           suiteCalls++;
-          return { exitCode: 0, durationMs: 5 };
+          return { exitCode: 0, durationMs: 5, configured: true };
         },
         resolver: async () => {
           resolverCalls++;
@@ -184,7 +184,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: 1 },
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
-        runSuite: async () => ({ exitCode: 0, durationMs: 1 }),
+        runSuite: async (_projectRoot: string) => ({ exitCode: 0, durationMs: 1, configured: true }),
         resolver: async () => {
           resolverCalls++;
           return { resolved: false, reason: 'cannot resolve: genuinely ambiguous' };
@@ -254,7 +254,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       { enabled: true, suiteCommand: 'npm test', cooldownMinutes: 60, attemptCap: 3 },
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
-        runSuite: async () => ({ exitCode: 1, durationMs: 42 }),
+        runSuite: async (_projectRoot: string) => ({ exitCode: 1, durationMs: 42, configured: true }),
         resolver: async () => ({ resolved: true }),
         log: (msg: string) => logLines.push(msg),
       },

@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName } from '../../src/engine/conductor.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
+import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -33,7 +33,7 @@ describe('resolveWaiverRef — path-form', () => {
     const fileExists = async (path: string) => path === 'src/foo.ts';
     const ref: InertRef = { form: 'path', path: 'src/foo.ts' };
 
-    const result = await resolveWaiverRef(ref, fileExists, gh);
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo');
 
     expect(result.status).toBe('waived');
     expect(result.evidence).toContain('(path exists)');
@@ -45,7 +45,7 @@ describe('resolveWaiverRef — path-form', () => {
     const fileExists = async (_path: string) => false;
     const ref: InertRef = { form: 'path', path: 'src/missing.ts' };
 
-    const result = await resolveWaiverRef(ref, fileExists, gh);
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo');
 
     expect(result.status).toBe('gap');
     expect(result.message).toBe('inert waiver ref src/missing.ts not found');
@@ -57,7 +57,7 @@ describe('resolveWaiverRef — path-form', () => {
     const fileExists = async (_path: string) => true;
     const ref: InertRef = { form: 'path', path: 'src/bar.ts' };
 
-    await resolveWaiverRef(ref, fileExists, gh);
+    await resolveWaiverRef(ref, fileExists, gh, '/repo');
 
     expect(calls.length).toBe(0);
   });
@@ -74,7 +74,7 @@ describe('resolveWaiverRef — issue-form', () => {
       return { stdout: JSON.stringify({ state: 'OPEN' }) };
     };
 
-    const result = await resolveWaiverRef(ref, fileExists, gh);
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo');
 
     expect(result.status).toBe('waived');
     expect(result.evidence).toContain('(gh: open)');
@@ -84,7 +84,7 @@ describe('resolveWaiverRef — issue-form', () => {
   it('reports a gap naming the closed state when gh reports the issue is closed', async () => {
     const gh: GhRunner = async () => ({ stdout: JSON.stringify({ state: 'CLOSED' }) });
 
-    const result = await resolveWaiverRef(ref, fileExists, gh);
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo');
 
     expect(result.status).toBe('gap');
     expect(result.message).toBe('inert waiver ref acme/widgets#42 is closed');
@@ -95,7 +95,7 @@ describe('resolveWaiverRef — issue-form', () => {
       throw new Error('HTTP 401: Bad credentials (gh error)\nsome extra detail');
     };
 
-    const result = await resolveWaiverRef(ref, fileExists, gh);
+    const result = await resolveWaiverRef(ref, fileExists, gh, '/repo');
 
     expect(result.status).toBe('gap');
     expect(result.message).toBe(
@@ -120,7 +120,7 @@ describe('checkInertContractContradiction — waived-but-wired', () => {
     const searchReferences: ReferenceSearchRunner = async (symbol) =>
       symbol === 'doStuff' ? ['src/foo.ts', 'src/bar.ts'] : [];
 
-    const gaps = await checkInertContractContradiction(tasks, newExports, searchReferences, fileExists, gh);
+    const gaps = await checkInertContractContradiction(tasks, newExports, searchReferences, fileExists, gh, '/repo');
 
     expect(gaps.length).toBe(1);
     expect(gaps[0]).toContain('task 21');
@@ -141,7 +141,7 @@ describe('checkInertContractContradiction — waived-but-wired', () => {
     const searchReferences: ReferenceSearchRunner = async (symbol) =>
       symbol === 'doStuff' ? ['src/foo.ts', 'src/foo.test.ts'] : [];
 
-    const gaps = await checkInertContractContradiction(tasks, newExports, searchReferences, fileExists, gh);
+    const gaps = await checkInertContractContradiction(tasks, newExports, searchReferences, fileExists, gh, '/repo');
 
     expect(gaps.length).toBe(0);
   });
@@ -164,6 +164,7 @@ describe('checkInertContractContradiction — waived-but-wired', () => {
       searchReferences,
       missingFileExists,
       gh,
+      '/repo',
     );
 
     expect(gaps.length).toBe(0);

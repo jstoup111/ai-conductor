@@ -81,7 +81,9 @@ describe.skipIf(!shouldRun)('codex CLI readiness compatibility (real binary)', (
       const output = [result.stdout, result.stderr].filter(Boolean).join('\n');
 
       if (result.exitCode === 0) {
-        ctx.skip('This Codex doctor build does not validate API keys; no non-mutating rejection evidence is available.');
+        // This Codex doctor build does not validate API keys; no
+        // non-mutating rejection evidence is available.
+        ctx.skip();
         return;
       }
       expect(CODEX_AUTH_FAILURE_RE.test(output)).toBe(true);

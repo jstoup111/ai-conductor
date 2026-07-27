@@ -9,10 +9,10 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -72,6 +72,8 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       resolveHarnessRoot: vi.fn(async () => '/installed/harness'),
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: '/installed/harness' })),
       relink, provisionSandbox,
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
     };
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
@@ -157,7 +159,7 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       }]);
       const buildCalls: Array<{ retryReason?: string; attempt?: number } | undefined> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step, _state, options) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
           if (step !== 'build') return { success: true };
           buildCalls.push(options);
           if (buildCalls.length === 1) {

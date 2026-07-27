@@ -37,11 +37,11 @@ describe('T23 — terminal renderer: when_skip event', () => {
     const { renderer, stream } = makeRenderer();
     const event: ConductorEvent = {
       type: 'when_skip',
-      step: 'brainstorm',
+      step: 'explore',
       expression: 'tier == L',
     };
     await renderer(event);
-    expect(stream.output()).toMatch(/brainstorm/);
+    expect(stream.output()).toMatch(/explore/);
     expect(stream.output()).toMatch(/tier == L/);
   });
 
@@ -65,12 +65,12 @@ describe('T23 — terminal renderer: parallel events', () => {
     const { renderer, stream } = makeRenderer();
     const event: ConductorEvent = {
       type: 'parallel_started',
-      step: 'brainstorm',
+      step: 'explore',
       branches: ['frontend', 'backend'],
     };
     await renderer(event);
     const out = stream.output();
-    expect(out).toMatch(/brainstorm/);
+    expect(out).toMatch(/explore/);
     expect(out).toMatch(/frontend/);
     expect(out).toMatch(/backend/);
   });
@@ -79,12 +79,12 @@ describe('T23 — terminal renderer: parallel events', () => {
     const { renderer, stream } = makeRenderer();
     const event: ConductorEvent = {
       type: 'parallel_completed',
-      step: 'brainstorm',
+      step: 'explore',
       branches: ['a', 'b'],
     };
     await renderer(event);
     const out = stream.output();
-    expect(out).toMatch(/brainstorm/);
+    expect(out).toMatch(/explore/);
     expect(out).toMatch(/completed/);
   });
 
@@ -92,7 +92,7 @@ describe('T23 — terminal renderer: parallel events', () => {
     const { renderer, stream } = makeRenderer();
     const event: ConductorEvent = {
       type: 'parallel_failure',
-      step: 'brainstorm',
+      step: 'explore',
       branch: 'backend',
       error: 'skill timed out',
     };
@@ -110,7 +110,7 @@ describe('T24 — zero-subscriber: events emitted without subscribers do not thr
     await expect(
       emitter.emit({
         type: 'when_skip',
-        step: 'brainstorm',
+        step: 'explore',
         expression: 'tier == L',
       }),
     ).resolves.toBeUndefined();
@@ -121,7 +121,7 @@ describe('T24 — zero-subscriber: events emitted without subscribers do not thr
     await expect(
       emitter.emit({
         type: 'parallel_started',
-        step: 'brainstorm',
+        step: 'explore',
         branches: ['a', 'b'],
       }),
     ).resolves.toBeUndefined();
@@ -132,7 +132,7 @@ describe('T24 — zero-subscriber: events emitted without subscribers do not thr
     await expect(
       emitter.emit({
         type: 'parallel_completed',
-        step: 'brainstorm',
+        step: 'explore',
         branches: ['a'],
       }),
     ).resolves.toBeUndefined();
@@ -143,7 +143,7 @@ describe('T24 — zero-subscriber: events emitted without subscribers do not thr
     await expect(
       emitter.emit({
         type: 'parallel_failure',
-        step: 'brainstorm',
+        step: 'explore',
         branch: 'x',
         error: 'err',
       }),

@@ -74,7 +74,7 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
       );
 
       const rendererErrors: ConductorEvent[] = [];
-      events.on('renderer_error', (ev) => rendererErrors.push(ev));
+      events.on('renderer_error', (ev) => { rendererErrors.push(ev); });
 
       // PRODUCTION construction path — this is what main() must call.
       const vis = createOtelVisualizer(
@@ -118,7 +118,7 @@ describe('FR-8: onWarning wired at production construction site (createOtelVisua
     expect(disabledResolved.enabled).toBe(false);
 
     const rendererErrors: ConductorEvent[] = [];
-    events.on('renderer_error', (ev) => rendererErrors.push(ev));
+    events.on('renderer_error', (ev) => { rendererErrors.push(ev); });
 
     let threw = false;
     let vis: ReturnType<typeof createOtelVisualizer> | undefined;

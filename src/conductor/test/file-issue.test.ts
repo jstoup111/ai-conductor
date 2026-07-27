@@ -59,6 +59,18 @@ function makeFakeTracker(opts: { failIssueCreate?: boolean } = {}) {
     async upsertIssueComment() {
       throw new Error('not used in this test');
     },
+    async getIssueBody() {
+      throw new Error('not used in this test');
+    },
+    async viewPullRequest() {
+      throw new Error('not used in this test');
+    },
+    async createLabel() {
+      throw new Error('not used in this test');
+    },
+    async removeIssueLabel() {
+      throw new Error('not used in this test');
+    },
   };
 
   return { tracker, createIssueCalls };

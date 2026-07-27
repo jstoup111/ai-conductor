@@ -19,7 +19,6 @@
 
 import { describe, it, expect } from 'vitest';
 import { build } from 'tsup';
-import { PUBLISH_WRAPPER_ENV_VAR } from '../../scripts/publish-guard.mjs';
 import { execa } from 'execa';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
@@ -31,6 +30,18 @@ import { readFileSync } from 'node:fs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(HERE, '..', '..', 'src');
+
+// scripts/publish-guard.mjs is a plain JS module with no declaration file
+// and scripts/ is outside tsconfig.test.json's `include`, so both a static
+// `import` and a literal-specifier dynamic `import()` of it fail typecheck
+// (TS7016) under this project's `moduleResolution: "bundler"` settings (no
+// `allowJs`). Routing the specifier through a variable makes it a
+// non-literal dynamic import, which TS cannot statically resolve to the
+// untyped file and so types as `any` instead of erroring — the constant
+// itself is a plain string (see scripts/publish-guard.mjs).
+const publishGuardModulePath = '../../scripts/publish-guard.mjs';
+const { PUBLISH_WRAPPER_ENV_VAR }: { PUBLISH_WRAPPER_ENV_VAR: string } =
+  await import(publishGuardModulePath);
 
 // Every build() call in this file targets a scratch workDir, never the real
 // engine `dist/`, but tsup loads the repo's tsup.config.ts regardless of

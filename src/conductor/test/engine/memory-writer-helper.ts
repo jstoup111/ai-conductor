@@ -28,7 +28,21 @@ import { recordMemoryEntry } from '../../src/engine/memory-store.ts';
 
 const { FAKE_HOME, REPO_PATH, CATEGORY, ENTRY_NAME, ENTRY_BODY, INDEX_LINE } = process.env;
 
-if (!FAKE_HOME || !REPO_PATH || !CATEGORY || !ENTRY_NAME || !ENTRY_BODY || !INDEX_LINE) {
+const VALID_CATEGORIES = ['context', 'decisions', 'patterns', 'gotchas'] as const;
+type MemoryCategory = (typeof VALID_CATEGORIES)[number];
+function isMemoryCategory(value: string): value is MemoryCategory {
+  return (VALID_CATEGORIES as readonly string[]).includes(value);
+}
+
+if (
+  !FAKE_HOME ||
+  !REPO_PATH ||
+  !CATEGORY ||
+  !ENTRY_NAME ||
+  !ENTRY_BODY ||
+  !INDEX_LINE ||
+  !isMemoryCategory(CATEGORY)
+) {
   process.stderr.write(
     'memory-writer-helper: missing required env vars ' +
       `(FAKE_HOME=${FAKE_HOME}, REPO_PATH=${REPO_PATH}, CATEGORY=${CATEGORY}, ` +

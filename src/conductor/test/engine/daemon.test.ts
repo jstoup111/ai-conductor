@@ -7,6 +7,7 @@ import {
   guardedDispatchWith,
   type BacklogItem,
   type DaemonDeps,
+  type FeatureOutcome,
 } from '../../src/engine/daemon.js';
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
@@ -921,7 +922,7 @@ describe('engine/daemon — runDaemon', () => {
     const logs: string[] = [];
     const deps: DaemonDeps = {
       discoverBacklog: async () => [], // identity-fail-closed: always empty
-      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       repoRootMissing: () => {
         callCount++;
         // Return null for first 2 calls (initial poll + first idle poll)
@@ -1079,7 +1080,7 @@ describe('engine/daemon — runDaemon', () => {
       // Daemon should complete without hitting the never-resolving sleep
       const res = await Promise.race([
         daemonPromise,
-        new Promise<any>((_, reject) =>
+        new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('daemon timeout')), 500)
         ),
       ]);
@@ -1135,7 +1136,7 @@ describe('engine/daemon — runDaemon', () => {
 
       const res = await Promise.race([
         daemonPromise,
-        new Promise<any>((_, reject) =>
+        new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('daemon timeout')), 500)
         ),
       ]);
@@ -1215,7 +1216,7 @@ describe('engine/daemon — runDaemon', () => {
 
       const res = await Promise.race([
         daemonPromise,
-        new Promise<any>((_, reject) =>
+        new Promise<never>((_, reject) =>
           setTimeout(() => reject(new Error('daemon timeout')), 500)
         ),
       ]);
@@ -1238,6 +1239,7 @@ describe('engine/daemon — runDaemon', () => {
       active: () => true, // Episode is active → suppress dispatch
       enter: () => {},
       clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
     };
 
     let sleptCount = 0;
@@ -1297,6 +1299,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         sleep: async () => {},
       };
@@ -1354,6 +1357,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         isPaused: async () => isPausedFlag,
         sleep: async () => {
@@ -1403,6 +1407,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         sleep: async () => {
           // Clear episode on first sleep (idle poll)
@@ -1442,6 +1447,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         isPaused: async () => isPausedFlag,
         sleep: async () => {},
@@ -1487,6 +1493,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
           haltEventLog.push({ slug, episodeCaused });
@@ -1516,6 +1523,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
           haltEventLog.push({ slug, episodeCaused });
@@ -1554,6 +1562,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
           haltedSlugs[slug] = true;
@@ -1617,6 +1626,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         onHaltWritten: async (slug, episodeCaused) => {
           haltedSlugs[slug] = true;
@@ -1674,6 +1684,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         sleep: async () => {
           pollCount++;
@@ -1713,6 +1724,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         requestRestart,
         sleep: async () => {
@@ -1759,6 +1771,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         sleep: async () => {
           pollCount++;
@@ -1798,6 +1811,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         sleep: async () => {
           pollCount++;
@@ -1839,6 +1853,7 @@ describe('engine/daemon — runDaemon', () => {
           active: () => episodeActive,
           enter: () => {},
           clear: () => Promise.resolve(),
+          nextWaitSeconds: () => 60,
         },
         requestRestart,
         sleep: async () => {
@@ -2013,7 +2028,7 @@ describe('engine/daemon — runDaemon', () => {
       const resolvedPath = '/tmp/fake-daemon-build-token';
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(3)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         isBuildAuthMissing: async () => true,
         getBuildAuthRemediationMessage: () => buildAuthRemediationMessage(resolvedPath),
         onHaltWritten: async () => {
@@ -2053,7 +2068,7 @@ describe('engine/daemon — runDaemon', () => {
       let call = 0;
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(2)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         isBuildAuthMissing: async () => sequence[Math.min(call++, sequence.length - 1)],
         log: (msg) => logs.push(msg),
         sleep: async () => {},
@@ -2135,7 +2150,7 @@ describe('engine/daemon — runDaemon', () => {
       const events: string[] = [];
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         isBuildAuthMissing: async () => true, // whitespace-only still classifies as missing
         watchBuildAuthRestored: (onRestored) => {
           setTimeout(() => {
@@ -2167,7 +2182,7 @@ describe('engine/daemon — runDaemon', () => {
       let disposeCalled = false;
       const deps: DaemonDeps = {
         discoverBacklog: staticBacklog(items(1)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         isBuildAuthMissing: async () => false,
         watchBuildAuthRestored: () => {
           return () => {
@@ -2244,13 +2259,13 @@ describe('engine/daemon — runDaemon', () => {
             gateChecks.push(!stillPresent);
             return !stillPresent;
           },
-          runFeature: vi.fn(async (it) => {
+          runFeature: vi.fn(async (it: BacklogItem) => {
             // Simulate the race: the credential is deleted mid-cycle, after
             // the daemon-level gate above already passed for this cycle, but
             // before this feature's own preflight check runs.
             await rm(tokenPath, { force: true });
             preflightResult = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
-            return { slug: it.slug, status: 'done' };
+            return { slug: it.slug, status: 'done' as const };
           }),
           log: () => {},
           sleep: async () => {},
@@ -2297,7 +2312,7 @@ describe('engine/daemon — runDaemon', () => {
 
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(1)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         isBuildAuthMissing: async () => credentialMissing,
         isPaused: async () => isPausedFlag,
         sleep: async () => {
@@ -2324,7 +2339,7 @@ describe('engine/daemon — runDaemon', () => {
       let parkChecked = false;
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(1)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         isBuildAuthMissing: async () => false, // credential gate inactive throughout
         isParked: async () => {
           parkChecked = true;
@@ -2395,7 +2410,7 @@ describe('engine/daemon — runDaemon', () => {
       // inferred from) the other gates' state.
       const deps: DaemonDeps & { isBuildAuthMissing?: () => Promise<boolean> } = {
         discoverBacklog: staticBacklog(items(1)),
-        runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+        runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
         // isBuildAuthMissing intentionally absent (api-key mode)
         isPaused: async () => false,
         isParked: async () => false,

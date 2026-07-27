@@ -7,12 +7,13 @@ import {
   formatGapReport,
 } from '../../src/engine/complete-verifier.js';
 import type { FullSuiteInspectionResult } from '../../src/engine/full-suite-verifier.js';
+import type { ShipmentEvidenceResult } from '../../src/engine/shipment-evidence.js';
 
 const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
   slug: string;
   implementationPr: string;
   candidateCommit: string;
-}) => ({
+}): Promise<ShipmentEvidenceResult> => ({
   kind: 'valid' as const,
   slug: input.slug,
   pr: input.implementationPr,

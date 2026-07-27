@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, stat, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import chalk from 'chalk';
+import chalk, { type ColorSupportLevel } from 'chalk';
 import {
   openDaemonLog,
   tailDaemonLog,
@@ -146,7 +146,7 @@ describe('engine/daemon-log', () => {
   });
 
   describe('KICKBACK lines are ANSI-free and greppable (file-log parity)', () => {
-    let priorLevel: number;
+    let priorLevel: ColorSupportLevel;
 
     beforeEach(() => {
       // Force chalk on, as if run from an attached TTY, so the real rendering

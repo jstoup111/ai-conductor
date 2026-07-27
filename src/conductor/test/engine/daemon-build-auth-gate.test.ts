@@ -60,7 +60,7 @@ describe('engine/daemon — build-auth credential gate (FR-6, #483)', () => {
     const logs: string[] = [];
     const deps: GatedDeps = {
       discoverBacklog: staticBacklog(items(3)),
-      runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       isBuildAuthMissing: async () => true,
       log: (msg) => logs.push(msg),
       sleep: async () => {},
@@ -84,7 +84,7 @@ describe('engine/daemon — build-auth credential gate (FR-6, #483)', () => {
   it('a present, verified-fresh credential dispatches normally (gate is transparent when satisfied)', async () => {
     const deps: GatedDeps = {
       discoverBacklog: staticBacklog(items(2)),
-      runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       isBuildAuthMissing: async () => false,
     };
 
@@ -130,7 +130,7 @@ describe('engine/daemon — build-auth credential gate (FR-6, #483)', () => {
     // stale/cached "ok" the moment ANY file write is observed.
     const deps: GatedDeps = {
       discoverBacklog: staticBacklog(items(1)),
-      runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       isBuildAuthMissing: async () => true, // whitespace-only classifies as missing
       sleep: async () => {},
     };
@@ -148,7 +148,7 @@ describe('engine/daemon — build-auth credential gate (FR-6, #483)', () => {
   it('undefined dep -> byte-identical legacy behavior (optimization-never-authority, matches the isPaused/rateLimitEpisode precedent)', async () => {
     const deps: DaemonDeps = {
       discoverBacklog: staticBacklog(items(2)),
-      runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       // isBuildAuthMissing intentionally absent
     };
 
@@ -161,7 +161,7 @@ describe('engine/daemon — build-auth credential gate (FR-6, #483)', () => {
   it('a throwing predicate fails CLOSED (treated as missing, zero dispatch) — never crashes the loop, never silently proceeds', async () => {
     const deps: GatedDeps = {
       discoverBacklog: staticBacklog(items(2)),
-      runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       isBuildAuthMissing: async () => {
         throw new Error('EACCES: cannot read token file');
       },
@@ -181,7 +181,7 @@ describe('engine/daemon — build-auth credential gate (FR-6, #483)', () => {
   it('composition: clearing the credential gate ALONE does not dispatch while the daemon is separately PAUSED — gates compose, per the rate-limit-episode precedent', async () => {
     const deps: GatedDeps = {
       discoverBacklog: staticBacklog(items(1)),
-      runFeature: vi.fn(async (it) => ({ slug: it.slug, status: 'done' })),
+      runFeature: vi.fn(async (it: BacklogItem) => ({ slug: it.slug, status: 'done' as const })),
       isBuildAuthMissing: async () => false, // credential fine
       isPaused: async () => true, // but operator paused
     };

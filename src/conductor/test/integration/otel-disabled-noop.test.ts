@@ -18,10 +18,10 @@ import type { VisualizerPlugin } from '../../src/types/plugin.js';
 async function emitBasicRun(emitter: ConductorEventEmitter): Promise<void> {
   await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
   await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-  await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+  await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
   await emitter.emit({
     type: 'step_completed',
-    step: 'brainstorm',
+    step: 'explore',
     status: 'done',
   });
   await emitter.emit({ type: 'feature_complete', featureDesc: 'otel-noop-test' });
@@ -100,7 +100,9 @@ describe('FR-1: no-op when disabled', () => {
 
     const emitter = new ConductorEventEmitter();
     const rendererErrors: string[] = [];
-    emitter.on('renderer_error', (ev) => rendererErrors.push((ev as { error: string }).error));
+    emitter.on('renderer_error', (ev) => {
+      rendererErrors.push((ev as { error: string }).error);
+    });
 
     // Production-shaped gate: only call createOtelVisualizer when enabled.
     const visualizerList: VisualizerPlugin[] = [];

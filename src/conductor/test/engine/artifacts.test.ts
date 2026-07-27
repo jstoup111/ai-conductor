@@ -8,18 +8,21 @@ import { execa } from 'execa';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Import the real readStaleHaltTitle for use in spy implementation
-import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  readStaleHaltTitle as realReadStaleHaltTitle,
+  readStaleHaltBanner as realReadStaleHaltBanner,
+} from '../../src/engine/halt-pr-rehabilitation.js';
 
 // Spy target for the finish predicate's Phase 2 presentation check
 // (readStaleHaltTitle, invoked with a gh runner). Mocked so tests can assert
 // it is never reached when a Phase 1 evidence condition (e.g. push
 // verification) already failed the gate. Default behavior returns null (fail-open);
 // tests can override via mockImplementation to call the real implementation.
-const readStaleHaltTitleSpy = vi.fn(async () => null);
+const readStaleHaltTitleSpy = vi.fn<typeof realReadStaleHaltTitle>(async () => null);
 // Spy target for the finish predicate's Phase 2 presentation banner check
 // (readStaleHaltBanner, invoked with a gh runner). Default behavior returns
 // null (fail-open); tests override via mockImplementation to call the real logic.
-const readStaleHaltBannerSpy = vi.fn(async () => null);
+const readStaleHaltBannerSpy = vi.fn<typeof realReadStaleHaltBanner>(async () => null);
 const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
   slug: string;
   implementationPr: string;
@@ -33,8 +36,10 @@ const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
   commit: input.candidateCommit,
 }));
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
-  readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
-  readStaleHaltBanner: (...args: unknown[]) => readStaleHaltBannerSpy(...args),
+  readStaleHaltTitle: (...args: Parameters<typeof realReadStaleHaltTitle>) =>
+    readStaleHaltTitleSpy(...args),
+  readStaleHaltBanner: (...args: Parameters<typeof realReadStaleHaltBanner>) =>
+    readStaleHaltBannerSpy(...args),
 }));
 vi.mock('../../src/engine/shipment-evidence.js', () => ({
   evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>

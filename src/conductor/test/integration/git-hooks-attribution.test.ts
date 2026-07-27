@@ -71,7 +71,7 @@ describe('integration/git-hooks-attribution', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; code: number }> {
+  async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
     await writeFile(join(dir, name), body, 'utf-8');
     await git('add', name);
     return git('commit', '-m', message);
@@ -424,7 +424,7 @@ describe('integration/git-hooks-attribution', () => {
         expect(result.stdout + result.stderr).not.toContain('rejected');
       } catch (err) {
         const e = err as { stdout?: string; stderr?: string };
-        fail(`Expected engine commit to succeed, got error: ${e.stderr}`);
+        throw new Error(`Expected engine commit to succeed, got error: ${e.stderr}`);
       }
     });
   });

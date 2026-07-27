@@ -100,6 +100,7 @@ describe('engine/manual-test-record-cli', () => {
         rm: vi.fn(async (path: string) => {
           files.delete(path);
         }),
+        readStdin: vi.fn(async () => ''),
       };
       return { runners, files };
     };

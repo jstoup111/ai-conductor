@@ -97,13 +97,12 @@ describe('planShipmentReconciliation', () => {
       expectedRecord: { specHash: 'a'.repeat(64), shipped: '2026-07-25' },
     };
 
+    const first = planShipmentReconciliation(input);
+    const second = planShipmentReconciliation(input);
+
     expect([
-      planShipmentReconciliation(input).kind === 'repair'
-        ? planShipmentReconciliation(input).identity
-        : null,
-      planShipmentReconciliation(input).kind === 'repair'
-        ? planShipmentReconciliation(input).identity
-        : null,
+      first.kind === 'repair' ? first.identity : null,
+      second.kind === 'repair' ? second.identity : null,
     ]).toEqual(['916/durable-shipped-records', '916/durable-shipped-records']);
   });
 

@@ -108,8 +108,8 @@ describe('T10: run span lifecycle — one trace per run', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'step-a', index: 0 });
-    await emitter.emit({ type: 'step_started', step: 'step-b', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'stories', index: 0 });
+    await emitter.emit({ type: 'step_started', step: 'plan', index: 1 });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -123,8 +123,8 @@ describe('T10: run span lifecycle — one trace per run', () => {
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
     await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -145,12 +145,12 @@ describe('T11: step spans — duration and status', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const step = spanExporter.getFinishedSpans().find((s) => s.name === 'brainstorm');
+    const step = spanExporter.getFinishedSpans().find((s) => s.name === 'explore');
     expect(step).toBeDefined();
   });
 
@@ -243,16 +243,16 @@ describe('T12: step span negatives — orphan and re-run', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     // Second step_started for the same step (re-run)
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    // Two brainstorm spans: the re-run span (closed OK) + original (force-closed)
-    const brainstormSpans = spanExporter.getFinishedSpans().filter((s) => s.name === 'brainstorm');
-    expect(brainstormSpans.length).toBeGreaterThanOrEqual(2);
+    // Two explore spans: the re-run span (closed OK) + original (force-closed)
+    const exploreSpans = spanExporter.getFinishedSpans().filter((s) => s.name === 'explore');
+    expect(exploreSpans.length).toBeGreaterThanOrEqual(2);
   });
 
   it('orphan step_failed → one warning, no throw', async () => {
@@ -278,14 +278,14 @@ describe('T13: step span attributes', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 2, maxAttempts: 3, reason: 'flaky' });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'flaky' });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'brainstorm')!;
-    expect(span.attributes['conductor.step']).toBe('brainstorm');
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'explore')!;
+    expect(span.attributes['conductor.step']).toBe('explore');
     expect(span.attributes['conductor.step.index']).toBe(1);
     expect(span.attributes['conductor.step.status']).toBe('done');
     expect(span.attributes['conductor.retry.count']).toBe(1);
@@ -340,13 +340,13 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 2, maxAttempts: 3, reason: 'flaky' });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'flaky' });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'brainstorm')!;
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'explore')!;
     const retryEvent = span.events.find((e) => e.name === 'retry');
     expect(retryEvent).toBeDefined();
     expect(retryEvent!.attributes?.['attempt']).toBe(2);
@@ -411,14 +411,14 @@ describe('T14: span events for retries / gate verdicts / kickbacks', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 2, maxAttempts: 3, reason: 'flaky' });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 3, maxAttempts: 3, reason: 'timeout' });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'flaky' });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 3, maxAttempts: 3, reason: 'timeout' });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
-    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'brainstorm')!;
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'explore')!;
     const retryEvents = span.events.filter((e) => e.name === 'retry');
     expect(retryEvents).toHaveLength(2);
     expect(span.attributes['conductor.retry.count']).toBe(2);
@@ -438,11 +438,11 @@ describe('T20: incomplete-span close (FR-9 unit coverage)', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     // No step_completed / feature_complete — simulate abrupt stop
     await vis.stop();
 
-    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'brainstorm')!;
+    const span = spanExporter.getFinishedSpans().find((s) => s.name === 'explore')!;
     expect(span).toBeDefined();
     expect(span.status.code).toBe(2 /* ERROR */);
     expect(span.attributes['conductor.incomplete']).toBe(true);
@@ -453,14 +453,14 @@ describe('T20: incomplete-span close (FR-9 unit coverage)', () => {
     vis.start(emitter);
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({ type: 'step_started', step: 'plan', index: 2 });
     // All three left open — forceCloseAll must handle all
     await vis.stop();
 
     const spans = spanExporter.getFinishedSpans().filter((s) => s.parentSpanId);
     const names = spans.map((s) => s.name).sort();
-    expect(names).toEqual(['bootstrap', 'brainstorm', 'plan'].sort());
+    expect(names).toEqual(['bootstrap', 'explore', 'plan'].sort());
     for (const s of spans) {
       expect(s.status.code).toBe(2 /* ERROR */);
       expect(s.attributes['conductor.incomplete']).toBe(true);

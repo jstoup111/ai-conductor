@@ -23,7 +23,7 @@ describe('RunMode derivation', () => {
 
   it('exits non-zero with error message when both --auto and --interactive are set', () => {
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: number) => {
+    const exitSpy = vi.spyOn(process, 'exit').mockImplementation((_code?: string | number | null) => {
       throw new Error('process.exit called');
     });
 

@@ -993,7 +993,7 @@ function makeFakePlatform(opts: { failing?: Set<string> } = {}) {
     }
 
     if (!isWrite) {
-      const set = issueKey ? links.get(issueKey) ?? new Set() : new Set();
+      const set = issueKey ? links.get(issueKey) ?? new Set<string>() : new Set<string>();
       return {
         stdout: JSON.stringify(
           [...set].map((ref) => {

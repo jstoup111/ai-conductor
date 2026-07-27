@@ -18,6 +18,7 @@ import { tmpdir } from 'node:os';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
+import type { RunAuthoringResult, SpecAuthoringResult } from '../../../src/engine/engineer/authoring.js';
 import { landSpec } from '../../../src/engine/engineer/land-spec.js';
 import type { GhRunner } from '../../../src/engine/owner-gate/identity.js';
 import { createEngineerWorktree } from '../../../src/engine/engineer/worktree-authoring.js';
@@ -26,6 +27,15 @@ import { parseIntakeSourceRef } from '../../../src/engine/artifacts.js';
 import { discoverBacklog } from '../../../src/engine/daemon-backlog.js';
 
 const execFile = promisify(execFileCb);
+
+// Narrow RunAuthoringResult to the spec-branch shape. These tests all drive
+// DECIDE flows that approve into a spec branch (not a documentation-only
+// delivery), so a non-spec result here is a genuine test failure.
+function assertSpecResult(result: RunAuthoringResult): asserts result is SpecAuthoringResult {
+  if (result.kind !== 'spec') {
+    throw new Error(`expected a spec authoring result, got kind=${result.kind}`);
+  }
+}
 
 const ACCEPTED_STORIES = [
   '# Stories: dep bump',
@@ -117,8 +127,8 @@ describe('parseIntakeSourceRef', () => {
 
 describe('writeIntakeMarker', () => {
   it('no-ops (returns null, writes nothing) without a valid sourceRef or owner', async () => {
-    expect(await writeIntakeMarker(repoPath, 'slug', undefined)).toBeNull();
-    expect(await writeIntakeMarker(repoPath, 'slug', 'garbage')).toBeNull();
+    expect(await writeIntakeMarker(repoPath, 'slug', undefined, undefined)).toBeNull();
+    expect(await writeIntakeMarker(repoPath, 'slug', 'garbage', undefined)).toBeNull();
     expect(await showOnBranch(defaultBranch, '.docs/intake/slug.md')).toBeNull();
   });
 
@@ -261,6 +271,7 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
       decide: approvedDecide(),
       sourceRef: 'acme/app#49',
     });
+    assertSpecResult(result);
 
     const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
     expect(marker).toContain('Source-Ref: acme/app#49');
@@ -275,6 +286,7 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
 
   it('writes a marker with Owner (born-owned) for a hand-authored spec (no sourceRef) — still discoverable', async () => {
     const result = await runAuthoring(target(), 'dep bump', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
     expect(marker).toContain('Owner: fakeowner');
@@ -293,6 +305,7 @@ describe('runAuthoring intake marker (FR-1, FR-3)', () => {
       decide: approvedDecide(),
       sourceRef: 'not-a-valid-ref',
     });
+    assertSpecResult(result);
     const marker = await showOnBranch(result.branch, `.docs/intake/${slugOf(result.branch)}.md`);
     expect(marker).toContain('Owner: fakeowner');
     expect(marker ?? '').not.toContain('Source-Ref:');

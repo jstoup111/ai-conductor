@@ -504,7 +504,7 @@ describe('localWorkSource — priority resolver wiring (post-gate ordering)', ()
     // Eligibility set (count and members) must be identical
     expect(result).toHaveLength(originalItems.length);
     const originalSlugs = new Set(originalItems.map((i) => i.slug));
-    const resultSlugs = new Set(result.map((i) => i.slug));
+    const resultSlugs = new Set(result.map((i: BacklogItem) => i.slug));
     expect(resultSlugs).toEqual(originalSlugs);
   });
 });

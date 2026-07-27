@@ -3,6 +3,7 @@ import { createHash } from 'crypto';
 import type { EvidenceStamp } from '../../src/engine/task-evidence.js';
 import type { TaskEvidence } from '../../src/engine/task-evidence.js';
 import { selectAuditSample, selectAuditSampleFromStamps } from '../../src/engine/attribution-audit.js';
+import type { AccuracyLedgerRecord } from '../../src/engine/attribution-audit.js';
 
 // #505 TS-14: Deterministic spot-audit sampler — select a reproducible
 // subset of tasks for accuracy auditing based on feature slug and sample
@@ -15,6 +16,7 @@ function createMockEvidence(stamps: Map<string, EvidenceStamp>): TaskEvidence {
     noEvidenceAttempts: 0,
     noEvidenceReasons: [],
     migrationGrandfather: new Set(),
+    lastResolvedCount: 0,
     async write() {
       // No-op
     },
@@ -302,7 +304,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
       try {
         const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
 
-        const record = {
+        const record: AccuracyLedgerRecord = {
           ts: Date.now(),
           feature: 'test-feature',
           taskId: 'task-1',
@@ -342,7 +344,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
       try {
         const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
 
-        const record = {
+        const record: AccuracyLedgerRecord = {
           ts: 1625097600000,
           feature: 'my-feature',
           taskId: 'task-42',
@@ -380,7 +382,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
       try {
         const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
 
-        const record = {
+        const record: AccuracyLedgerRecord = {
           ts: 1625097600000,
           feature: 'test-feature',
           taskId: 'task-1',
@@ -419,7 +421,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
       try {
         const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
 
-        const record = {
+        const record: AccuracyLedgerRecord = {
           ts: 1625097600000,
           feature: 'test-feature',
           taskId: 'task-1',
@@ -452,7 +454,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
       try {
         const ledgerPath = join(tmpDir, '.daemon/attribution-accuracy.jsonl');
 
-        const record1 = {
+        const record1: AccuracyLedgerRecord = {
           ts: 1000,
           feature: 'feature-a',
           taskId: 'task-1',
@@ -462,7 +464,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
           agree: true,
         };
 
-        const record2 = {
+        const record2: AccuracyLedgerRecord = {
           ts: 2000,
           feature: 'feature-b',
           taskId: 'task-2',
@@ -524,7 +526,7 @@ describe('appendAccuracyLedger — accuracy ledger writer', () => {
         await writeFile(ledgerPath, JSON.stringify(initialRecord) + '\n', 'utf-8');
 
         // Append another record
-        const newRecord = {
+        const newRecord: AccuracyLedgerRecord = {
           ts: 2000,
           feature: 'feature-2',
           taskId: 'task-2',

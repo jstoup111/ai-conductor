@@ -79,7 +79,10 @@ describe('acceptance: real-flow suppression breaks the restart loop within the s
       try {
         // ── 1. Real boot identity: dist currently holds V1 content. ──────────
         const dist = await buildFixtureDist(distWorkDir, FIXTURE_V1);
-        const bootIdentity = await captureEngineIdentity(dist); // X
+        const capturedBootIdentity = await captureEngineIdentity(dist); // X
+        expect(capturedBootIdentity).not.toBeNull();
+        if (capturedBootIdentity === null) throw new Error('unreachable: asserted above');
+        const bootIdentity = capturedBootIdentity;
 
         // Pre-derive the REAL hash the engine will have once it reaches V2 —
         // rebuilt at the SAME path (a rebuild in a different directory embeds

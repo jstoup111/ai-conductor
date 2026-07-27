@@ -79,6 +79,7 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
     mergeable: 'CONFLICTING',
     hasFailingOrPendingChecks: false,
     labels: [],
+    checksOutcome: 'none',
   };
 
   const cfg: HarnessConfig = {

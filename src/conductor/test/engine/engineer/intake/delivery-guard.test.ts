@@ -816,7 +816,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     const candidate2 = makeEnvelope('idea-2');
     const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFailingGh().runner;
+    const { runner: gh } = makeFailingGh();
 
     // Capture logger
     const logMessages: string[] = [];
@@ -867,7 +867,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     const candidate1 = makeEnvelope('idea-1');
     const { queue, releasedEnvelopes } = makeFakeQueueWithEnvelopes([candidate1]);
     const { ledger, transitionCalls } = makeFakeLedger();
-    const { runner: gh } = makeFailingGh().runner;
+    const { runner: gh } = makeFailingGh();
 
     const mockLogger = {
       info: (msg: string) => {
@@ -908,7 +908,7 @@ describe('Task 6: createDeliveryGuardedQueue — unknown PR state fails safe', (
     const candidate2 = makeEnvelope('idea-2');
     const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
     const { ledger } = makeFakeLedger();
-    const { runner: gh } = makeFailingGh().runner;
+    const { runner: gh } = makeFailingGh();
 
     const mockLogger = {
       info: (msg: string) => {

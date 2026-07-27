@@ -119,19 +119,19 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
         scrollbackLog.push('conduct-ts: dist symlink is broken (./dist)');
         scrollbackLog.push('conduct-ts: run \'npm run build\' to rebuild, or republish the engine, to fix it');
         scrollbackLog.push('[Process exited with code 1]');
-        return { code: 0, stdout: '' }; // respawn-pane itself succeeds, but the command inside fails
+        return { code: 0, stdout: '', stderr: '' }; // respawn-pane itself succeeds, but the command inside fails
       }
 
       // Other tmux commands pass through unchanged
-      if (cmd === 'set-option') return { code: 0, stdout: '' };
-      if (cmd === 'new-session') return { code: 0, stdout: '' };
+      if (cmd === 'set-option') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'new-session') return { code: 0, stdout: '', stderr: '' };
       if (cmd === 'capture-pane') {
-        return { code: 0, stdout: scrollbackLog.join('\n') };
+        return { code: 0, stdout: scrollbackLog.join('\n'), stderr: '' };
       }
-      if (cmd === 'has-session') return { code: 0, stdout: '' };
-      if (cmd === 'list-panes') return { code: 0, stdout: '0' }; // pane is alive (0 = not dead)
+      if (cmd === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'list-panes') return { code: 0, stdout: '0', stderr: '' }; // pane is alive (0 = not dead)
 
-      return { code: 0, stdout: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const supervisor = makeTmuxSupervisor(mockRunner);
@@ -175,19 +175,19 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
       if (cmd === 'respawn-pane') {
         // Simulate: launcher fails, process exits, pane left dead
         paneAlive = false;
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
 
       if (cmd === 'list-panes') {
         // Return pane_dead = 1 (dead) after failed respawn
-        return { code: 0, stdout: paneAlive ? '0' : '1' };
+        return { code: 0, stdout: paneAlive ? '0' : '1', stderr: '' };
       }
 
-      if (cmd === 'has-session') return { code: 0, stdout: '' };
-      if (cmd === 'set-option') return { code: 0, stdout: '' };
-      if (cmd === 'capture-pane') return { code: 0, stdout: '[launcher error]' };
+      if (cmd === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'set-option') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'capture-pane') return { code: 0, stdout: '[launcher error]', stderr: '' };
 
-      return { code: 0, stdout: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const supervisor = makeTmuxSupervisor(mockRunner);
@@ -226,12 +226,12 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
       const cmd = args[0] ?? '';
       if (cmd === 'respawn-pane') {
         paneAlive = false; // Simulate launcher failure
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
-      if (cmd === 'list-panes') return { code: 0, stdout: paneAlive ? '0' : '1' };
-      if (cmd === 'has-session') return { code: 0, stdout: '' };
-      if (cmd === 'set-option') return { code: 0, stdout: '' };
-      return { code: 0, stdout: '' };
+      if (cmd === 'list-panes') return { code: 0, stdout: paneAlive ? '0' : '1', stderr: '' };
+      if (cmd === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'set-option') return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const supervisor = makeTmuxSupervisor(mockRunner);
@@ -272,24 +272,24 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
       if (cmd === 'respawn-pane') {
         // Simulate: respawn succeeds but the process inside fails
         // The pane stays alive (remain-on-exit keeps it) with error in scrollback
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
 
       if (cmd === 'kill-session') {
         // AC5: kill-session should NOT be called on a simple respawn failure
         // (it's only called in the degraded fallback path, which is for tmux-level issues)
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
 
       if (cmd === 'capture-pane') {
-        return { code: 0, stdout: scrollbackContent };
+        return { code: 0, stdout: scrollbackContent, stderr: '' };
       }
 
-      if (cmd === 'has-session') return { code: 0, stdout: '' };
-      if (cmd === 'set-option') return { code: 0, stdout: '' };
-      if (cmd === 'list-panes') return { code: 0, stdout: '1' }; // pane is dead after launcher failure
+      if (cmd === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'set-option') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'list-panes') return { code: 0, stdout: '1', stderr: '' }; // pane is dead after launcher failure
 
-      return { code: 0, stdout: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const supervisor = makeTmuxSupervisor(mockRunner);
@@ -329,23 +329,23 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
       if (cmd === 'respawn-pane') {
         // Simulate: launcher fails, pane dies
         paneAlive = false;
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
 
       if (cmd === 'list-panes') {
-        return { code: 0, stdout: paneAlive ? '0' : '1' };
+        return { code: 0, stdout: paneAlive ? '0' : '1', stderr: '' };
       }
 
-      if (cmd === 'has-session') return { code: 0, stdout: '' };
-      if (cmd === 'set-option') return { code: 0, stdout: '' };
+      if (cmd === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'set-option') return { code: 0, stdout: '', stderr: '' };
       if (cmd === 'capture-pane') {
         // Hand-fed pane output; anchored to the real launcher's actual
         // stderr, verified by conduct-ts-smoke.test.ts (real-binary smoke,
         // injected-runner-needs-real-binary-smoke convention).
-        return { code: 0, stdout: 'conduct-ts: dist symlink is broken\n[Process exited with code 1]' };
+        return { code: 0, stdout: 'conduct-ts: dist symlink is broken\n[Process exited with code 1]', stderr: '' };
       }
 
-      return { code: 0, stdout: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const supervisor = makeTmuxSupervisor(mockRunner);
@@ -378,20 +378,20 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
         // Launcher now succeeds, pane stays alive
         launcherSucceeded = true;
         paneAlive = true; // Process is now alive
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
 
       if (cmd === 'list-panes') {
-        return { code: 0, stdout: paneAlive ? '0' : '1' };
+        return { code: 0, stdout: paneAlive ? '0' : '1', stderr: '' };
       }
 
-      if (cmd === 'has-session') return { code: 0, stdout: '' };
-      if (cmd === 'set-option') return { code: 0, stdout: '' };
+      if (cmd === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (cmd === 'set-option') return { code: 0, stdout: '', stderr: '' };
       if (cmd === 'capture-pane') {
-        return { code: 0, stdout: launcherSucceeded ? 'daemon running\n[normal log]' : '[error]' };
+        return { code: 0, stdout: launcherSucceeded ? 'daemon running\n[normal log]' : '[error]', stderr: '' };
       }
 
-      return { code: 0, stdout: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const recoverySuper = makeTmuxSupervisor(recoveryRunner);
@@ -422,12 +422,12 @@ describe('Task T35 — daemon restart into broken current (FR-16 negative path)'
     const failRunner: TmuxRunner = (args, opts) => {
       if (args[0] === 'respawn-pane') {
         paneAlive = false;
-        return { code: 0, stdout: '' };
+        return { code: 0, stdout: '', stderr: '' };
       }
-      if (args[0] === 'list-panes') return { code: 0, stdout: paneAlive ? '0' : '1' };
-      if (args[0] === 'has-session') return { code: 0, stdout: '' };
-      if (args[0] === 'set-option') return { code: 0, stdout: '' };
-      return { code: 0, stdout: '' };
+      if (args[0] === 'list-panes') return { code: 0, stdout: paneAlive ? '0' : '1', stderr: '' };
+      if (args[0] === 'has-session') return { code: 0, stdout: '', stderr: '' };
+      if (args[0] === 'set-option') return { code: 0, stdout: '', stderr: '' };
+      return { code: 0, stdout: '', stderr: '' };
     };
 
     const failSuper = makeTmuxSupervisor(failRunner);

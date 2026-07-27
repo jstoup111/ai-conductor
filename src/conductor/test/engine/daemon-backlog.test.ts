@@ -2001,7 +2001,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
         }
       }
       // For all other commands, use the real git runner
-      return (await makeGitRunner(dir))(args);
+      return makeGitRunner(dir)(args);
     };
 
     // Call fastForwardRoot with the mocked git runner
@@ -2076,7 +2076,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
         }
       }
       // For all other commands, use the real git runner
-      return (await makeGitRunner(dir))(args);
+      return makeGitRunner(dir)(args);
     };
 
     // Call fastForwardRoot with the mocked git runner
@@ -2211,7 +2211,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
       if (args[0] === 'rm' || (args[0] === 'remove' && args[1])) {
         deleteCount += 1;
       }
-      return (await makeGitRunner(dir))(args);
+      return makeGitRunner(dir)(args);
     };
 
     // Call fastForwardRoot with the partially-explained dirty tree
@@ -2565,7 +2565,7 @@ describe('engine/daemon-backlog — fastForwardRoot structured outcome (Task 1)'
       if (args[0] === 'fetch') {
         return { exitCode: 1, stdout: '', stderr: 'simulated offline' };
       }
-      return (await realGit)(args);
+      return realGit(args);
     };
     const logs: string[] = [];
     const outcome = await fastForwardRoot(dir, (m) => logs.push(m), failingFetchGit);

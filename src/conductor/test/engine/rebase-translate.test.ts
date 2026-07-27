@@ -29,7 +29,6 @@ import { execa } from 'execa';
 //   git(['patch-id', '--stable'], { input: diffText })  -> "<patch-id> <sha>" per sha
 import type { GitResult } from '../../src/engine/rebase.js';
 import { buildRewriteMap, resolveThroughMap } from '../../src/engine/rebase-translate.js';
-// @ts-expect-error — Task 5 (GREEN) adds this export; Task 4 (RED) asserts it doesn't exist yet.
 import { applyMapToStores } from '../../src/engine/rebase-translate.js';
 
 interface FakeGitOptions {
@@ -537,7 +536,6 @@ async function mkdirForFixtures(dir: string): Promise<void> {
 //     events: ConductorEventEmitter,
 //     residueEntries: Array<{ sha: string; citingTaskIds: string[]; reason: string }>,
 //   ): Promise<void>
-// @ts-expect-error — Task 11 (GREEN) adds this export; Task 10 (RED) asserts it doesn't exist yet.
 import { writeResidue } from '../../src/engine/rebase-translate.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 

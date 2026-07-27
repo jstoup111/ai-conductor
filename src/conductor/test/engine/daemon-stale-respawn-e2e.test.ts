@@ -132,7 +132,6 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           mockLog,
           mockLock,
           mockProcess,
-          // @ts-expect-error — 5th param does not exist yet (Task 4, RED)
           { relink: relinkStub, triggerSelfRestart: triggerSelfRestartStub },
         );
 
@@ -743,8 +742,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
             mockLog,
             mockLock,
             mockProcess,
-            // @ts-expect-error — 5th param does not exist yet (Task 4, RED)
-            { relink: relinkStub, triggerSelfRestart },
+              { relink: relinkStub, triggerSelfRestart },
           );
 
           // Force the stale verdict: the requester is invoked as the daemon's

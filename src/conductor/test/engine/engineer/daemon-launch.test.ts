@@ -36,28 +36,28 @@ describe('launchDaemon — auto-launch kill-switch (NO_AUTOLAUNCH_ENV)', () => {
     expect(launchDaemon('/projects/kill-switch-test')).toBeUndefined();
   });
 
-  it('an INJECTED supervisor is NEVER suppressed by the kill-switch (delegation contract holds)', () => {
+  it('an INJECTED supervisor is NEVER suppressed by the kill-switch (delegation contract holds)', async () => {
     const { supervisor, starts } = makeStarterSpy();
-    launchDaemon('/projects/kill-switch-test', { supervisor });
+    await launchDaemon('/projects/kill-switch-test', { supervisor });
     expect(supervisor.start).toHaveBeenCalledOnce();
     expect(starts).toEqual(['/projects/kill-switch-test']);
   });
 });
 
 describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
-  it('delegates to supervisor.start(project) exactly once', () => {
+  it('delegates to supervisor.start(project) exactly once', async () => {
     const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemon('/projects/my-app', { supervisor });
+    await launchDaemon('/projects/my-app', { supervisor });
 
     expect(supervisor.start).toHaveBeenCalledOnce();
     expect(starts).toEqual(['/projects/my-app']);
   });
 
-  it('passes the repo path through unchanged (daemon binds to repoPath — FR-22 intent)', () => {
+  it('passes the repo path through unchanged (daemon binds to repoPath — FR-22 intent)', async () => {
     const { supervisor, starts } = makeStarterSpy();
 
-    launchDaemon('/projects/alpha', { supervisor });
+    await launchDaemon('/projects/alpha', { supervisor });
 
     // The repo path is the start() argument (the session is created with cwd=repo);
     // it is NOT smuggled as a positional CLI arg or dropped.
@@ -73,8 +73,8 @@ describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
     // is returned by a real async supervisor, it must NEVER expose process-control
     // surface (.kill/.on) — there is no retained ChildProcess.
     if (result !== undefined) {
-      expect((result as Record<string, unknown>)['kill']).toBeUndefined();
-      expect((result as Record<string, unknown>)['on']).toBeUndefined();
+      expect('kill' in result).toBe(false);
+      expect('on' in result).toBe(false);
     }
   });
 
@@ -102,17 +102,17 @@ describe('launchDaemon (ADR-014 mechanism: tmux Supervisor.start)', () => {
 // in this engineer-facing module.
 // ---------------------------------------------------------------------------
 describe('launch is not manage (FR-8 — ADR-005 intent preserved under ADR-014)', () => {
-  it('the injected seam is start-ONLY — no stop/kill/restart/attach reachable', () => {
+  it('the injected seam is start-ONLY — no stop/kill/restart/attach reachable', async () => {
     const { supervisor } = makeStarterSpy();
 
     // The DaemonStarter seam exposes only `start`. A test (or caller) cannot reach
     // a management method through it — the type and the runtime object agree.
     expect(typeof supervisor.start).toBe('function');
-    expect((supervisor as Record<string, unknown>)['stop']).toBeUndefined();
-    expect((supervisor as Record<string, unknown>)['restart']).toBeUndefined();
-    expect((supervisor as Record<string, unknown>)['attach']).toBeUndefined();
+    expect('stop' in supervisor).toBe(false);
+    expect('restart' in supervisor).toBe(false);
+    expect('attach' in supervisor).toBe(false);
 
-    launchDaemon('/projects/alpha', { supervisor });
+    await launchDaemon('/projects/alpha', { supervisor });
     expect(supervisor.start).toHaveBeenCalledOnce();
   });
 
@@ -132,13 +132,13 @@ describe('launch is not manage (FR-8 — ADR-005 intent preserved under ADR-014)
     expect((daemonLaunchModule as Record<string, unknown>)['restartDaemon']).toBeUndefined();
   });
 
-  it('zero launches before the explicit call, exactly one after (no implicit launch)', () => {
+  it('zero launches before the explicit call, exactly one after (no implicit launch)', async () => {
     const { supervisor } = makeStarterSpy();
 
     // Importing the module + building the spy must not trigger any start.
     expect(supervisor.start).toHaveBeenCalledTimes(0);
 
-    launchDaemon('/projects/alpha', { supervisor });
+    await launchDaemon('/projects/alpha', { supervisor });
     expect(supervisor.start).toHaveBeenCalledTimes(1);
 
     // Nothing else launches implicitly — count stays exactly 1.

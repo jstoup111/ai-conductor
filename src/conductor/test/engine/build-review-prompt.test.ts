@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
+import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 
 // ── build_review grader prompt assembly ──────────────────────────────────
 //
@@ -11,9 +12,19 @@ import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 // (task-status, maker summary, transcript) — input isolation is the point.
 
 describe('buildGraderPrompt', () => {
-  const inputs = {
+  // `buildGraderPrompt` only reads `diff`/`planBody`; the remaining fields
+  // exist on BuildReviewInputs for the caller's provenance bookkeeping, not
+  // for prompt assembly — filled with fallback-shaped values here since
+  // these tests don't exercise the merge-base/freshness plumbing.
+  const inputs: BuildReviewInputs = {
     diff: 'diff --git a/foo.ts b/foo.ts\n+console.log("hi")\n',
     planBody: '## Plan\n\nDo the thing.',
+    mergeBase: 'deadbeef',
+    baseRef: 'main',
+    baseKind: 'local',
+    trackingRefSha: null,
+    remoteHeadSha: null,
+    fresh: false,
   };
 
   it('includes the three rubric items verbatim', () => {

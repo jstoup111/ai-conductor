@@ -7,11 +7,24 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CodexProvider } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { Options } from 'execa';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 import { execa } from 'execa';
 
-const mockExeca = vi.mocked(execa);
+// The `execa` type is an intersection of several call-signature overloads
+// (template-literal, bind, 2-arg short, 3-arg long); `Parameters<typeof execa>`
+// — which `vi.mocked()` relies on — resolves to only the LAST overload (the
+// 2-arg short form), even though the codex-provider under test always calls
+// the real 3-arg long form `execa(command, args, options)`. This repoints the
+// mock at that actual call shape so `.mock.calls` reflects what is really
+// invoked, instead of casting every read site to `any`.
+type ExecaLongCall = (
+  file: string,
+  args: readonly string[],
+  options?: Options,
+) => ReturnType<typeof execa>;
+const mockExeca = vi.mocked(execa as unknown as ExecaLongCall);
 const secret = 'sk-905-secret-never-log';
 const base: InvokeOptions = {
   prompt: 'Implement the approved change.',
@@ -80,7 +93,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
 
     expect(mockExeca).toHaveBeenCalledTimes(4);
     for (const index of [0, 2]) {
-      const [command, args] = mockExeca.mock.calls[index] as [string, string[]];
+      const [command, args] = mockExeca.mock.calls[index];
       expect(command).toBe('codex');
       expect(args).toEqual(expect.arrayContaining(['doctor', '--json', '--summary']));
     }
@@ -97,9 +110,9 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     const result = await provider.invoke(base);
 
     expect(mockExeca).toHaveBeenCalledTimes(2);
-    for (const [, args, options] of mockExeca.mock.calls as Array<[string, string[], any]>) {
+    for (const [, args, options] of mockExeca.mock.calls) {
       expect(args).not.toContain(secret);
-      expect(options.env?.CODEX_API_KEY).toBe(secret);
+      expect(options?.env?.CODEX_API_KEY).toBe(secret);
     }
     expect(result.output).not.toContain(secret);
   });
@@ -117,7 +130,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     const result = await provider.invoke(base);
 
     expect(mockExeca).toHaveBeenCalledTimes(1);
-    const [, args] = mockExeca.mock.calls[0] as [string, string[]];
+    const [, args] = mockExeca.mock.calls[0];
     expect(args).toEqual(expect.arrayContaining(['doctor', '--json', '--summary']));
     expect(args).not.toContain('exec');
     expect(result.success).toBe(false);
@@ -139,7 +152,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     await provider.invoke({ ...base, resume: true });
 
     for (const index of [1, 3]) {
-      const [, args] = mockExeca.mock.calls[index] as [string, string[]];
+      const [, args] = mockExeca.mock.calls[index];
       expect(args).toEqual(expect.arrayContaining([
         'sandbox_mode="workspace-write"',
         'approval_policy="on-request"',
@@ -157,7 +170,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     ['api-key-only', secret, doctorReady('api-key'), 'ready', 'api-key'],
     ['both sources', secret, doctorReady('api-key'), 'ready', 'api-key'],
     ['neither source', undefined, doctorNonReady('cached-login', 'missing'), 'missing', 'cached-login'],
-  ] as const)('selects %s deterministically and never falls back', async (_case, apiKey, stdout, state, source) => {
+  ] as Array<[string, string | undefined, string, 'ready' | 'missing' | 'unusable', string]>)('selects %s deterministically and never falls back', async (_case, apiKey, stdout, state, source) => {
     if (apiKey) process.env.CODEX_API_KEY = apiKey;
     mockExeca.mockResolvedValueOnce({ stdout, stderr: '', exitCode: state === 'unusable' ? 1 : 0 } as any);
     if (state === 'ready') mockExeca.mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as any);
@@ -244,7 +257,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: '', stderr: 'approval denied by reviewer', exitCode: 1 } as any);
 
     const result = await new CodexProvider().invoke({ ...base, resume: true });
-    const [, args] = mockExeca.mock.calls[1] as [string, string[]];
+    const [, args] = mockExeca.mock.calls[1];
 
     expect(result.success).toBe(false);
     expect(args).toEqual(expect.arrayContaining([
@@ -265,7 +278,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       .mockResolvedValueOnce({ stdout: 'dependency installed; migration committed and branch published', stderr: '', exitCode: 0 } as any);
 
     const result = await new CodexProvider().invoke({ ...base, prompt: lifecycleRequest });
-    const [command, args, options] = mockExeca.mock.calls[1] as [string, string[], any];
+    const [command, args, options] = mockExeca.mock.calls[1];
 
     expect(result).toMatchObject({ success: true });
     expect(command).toBe('codex');
@@ -275,7 +288,7 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       'approvals_reviewer="auto_review"',
     ]));
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(options.input).toContain(lifecycleRequest);
+    expect(options?.input).toContain(lifecycleRequest);
     expect(mockExeca.mock.calls.map(([calledCommand]) => calledCommand)).toEqual(['codex', 'codex']);
   });
 
@@ -289,14 +302,14 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     await provider.invoke(base);
 
     expect(mockExeca).toHaveBeenCalledTimes(2);
-    const [doctorCommand, doctorArgs, doctorOptions] = mockExeca.mock.calls[0] as [string, string[], any];
-    const [, execArgs, execOptions] = mockExeca.mock.calls[1] as [string, string[], any];
+    const [doctorCommand, doctorArgs, doctorOptions] = mockExeca.mock.calls[0];
+    const [, execArgs, execOptions] = mockExeca.mock.calls[1];
     expect(doctorCommand).toBe('codex');
     expect(doctorArgs).toEqual(expect.arrayContaining(['doctor', '--json', '--summary']));
     expect(execArgs).toEqual(expect.arrayContaining(['approvals_reviewer="auto_review"']));
-    expect(doctorOptions.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
-    expect(doctorOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
-    expect(execOptions.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
-    expect(execOptions.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(doctorOptions?.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(doctorOptions?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(execOptions?.env?.CLAUDE_CONFIG_DIR).toBeUndefined();
+    expect(execOptions?.env?.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
   });
 });

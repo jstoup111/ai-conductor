@@ -83,7 +83,6 @@ Add tests for sweep.
       residueIds: ['1', '2'],
       featureWorktreePath: dir,
       gitRunner: createMockedGitRunner(),
-      gitRunner: createMockedGitRunner(),
     });
 
     expect(result.success).toBe(true);

@@ -74,7 +74,7 @@ describe('BuildProgressWatcher emits build_progress on the real event bus (S1)',
     const { BuildProgressWatcher } = await import('../../src/engine/build-progress-watcher.js');
 
     const received: ConductorEvent[] = [];
-    emitter.on('build_progress', (e) => received.push(e));
+    emitter.on('build_progress', (e) => { received.push(e); });
 
     const watcher = new BuildProgressWatcher({
       projectRoot: dir,

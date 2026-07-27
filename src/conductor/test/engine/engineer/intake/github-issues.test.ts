@@ -146,6 +146,7 @@ describe('report() cwd resolution (#290)', () => {
     const outcome = await adapter.report('o/a#1', 'done', { prUrl: 'https://x/pr/9' });
 
     expect(outcome.ok).toBe(false);
+    if (outcome.ok) throw new Error('expected report() to fail');
     expect(outcome.remediation?.[0]).toMatch(/^gh issue comment 1 --repo o\/a --body/);
   });
 });

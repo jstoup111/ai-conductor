@@ -228,7 +228,7 @@ describe('SafetyAttemptCache', () => {
     baseline: 'approved-decide-commit',
     terminalRun: 'run-1',
   };
-  const verdict: SafetyVerdict = { passed: true, requiredFailures: [], diagnosticGaps: [] };
+  const verdict: SafetyVerdict = { passed: true, requiredFailures: [], failures: [], diagnosticGaps: [] };
 
   it('permits a same-attempt retry to reuse its verified safety state', () => {
     const cache = new SafetyAttemptCache();

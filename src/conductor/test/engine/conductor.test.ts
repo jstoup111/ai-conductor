@@ -29,7 +29,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
 import { execa } from 'execa';
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import type { StepName, RecoveryOption } from '../../src/types/index.js';
+import type { StepName, RecoveryOption, RecoveryContext } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import {
@@ -71,6 +71,11 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import type { EscalateBuildFailureOpts } from '../../src/engine/build-failure-escalation.js';
+import type {
+  ExecuteProviderCandidatesInput,
+  ProviderExecutionResult,
+} from '../../src/engine/provider-execution.js';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -937,9 +942,8 @@ describe('engine/conductor', () => {
 
   describe('verdict freshness wiring (Task 2, session-fresh-verdict-artifacts)', () => {
     async function seedToBuildReview(): Promise<void> {
-      const seed = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const seedResult = await readState(statePath);
+      const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
       (seed as Record<string, unknown>).complexity_tier = 'M';
       for (const s of ALL_STEPS) {
         if (s.name === 'build_review') break;
@@ -978,9 +982,8 @@ describe('engine/conductor', () => {
       });
 
       // Before any dispatch has occurred, no attempt is in flight.
-      const state = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const initialStateResult = await readState(statePath);
+      const state = initialStateResult.ok ? initialStateResult.value : ({} as ConductState);
       const idleCtx = await (conductor as unknown as {
         completionCtx: (s: ConductState) => Promise<{ attemptStartedAt?: number }>;
       }).completionCtx(state);
@@ -1183,9 +1186,8 @@ describe('engine/conductor', () => {
       // Mirror the daemon: front half pre-seeded done, loop starts at
       // acceptance_specs. The reset BEFORE that first step is what discards a
       // stale session inherited from a reused worktree.
-      const seed = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const seedResult = await readState(statePath);
+      const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
       for (const s of ALL_STEPS) {
         if (s.name === 'acceptance_specs') break;
         (seed as Record<string, unknown>)[s.name] = 'done';
@@ -1211,9 +1213,8 @@ describe('engine/conductor', () => {
       // The daemon stamps DECIDE done and uses `resume: true` (not a hardcoded
       // fromStep). With only DECIDE done, findResumeIndex returns the first
       // pending step — acceptance_specs — so a fresh feature still begins BUILD.
-      const seed = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const seedResult = await readState(statePath);
+      const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
       (seed as Record<string, unknown>).complexity_tier = 'M';
       for (const s of ALL_STEPS) {
         if (s.name === 'acceptance_specs') break;
@@ -1240,9 +1241,8 @@ describe('engine/conductor', () => {
       // acceptance_specs on EVERY re-dispatch even when the feature was far past
       // BUILD. With `resume: true`, a re-dispatch picks up at the real next
       // pending step (here prd_audit), never re-entering at acceptance_specs.
-      const seed = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const seedResult = await readState(statePath);
+      const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
       (seed as Record<string, unknown>).complexity_tier = 'M';
       for (const s of ALL_STEPS) {
         if (s.name === 'prd_audit') break;
@@ -1270,9 +1270,8 @@ describe('engine/conductor', () => {
       // Set up state with all steps before finish marked 'done' (finish is pending).
       // Write SATISFIED verdicts for all gates. Resume must start at finish and
       // equal findResumeIndex's output (parity assertion: no clamping needed).
-      const seed = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const seedResult = await readState(statePath);
+      const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
       (seed as Record<string, unknown>).complexity_tier = 'M';
       // Mark all steps up to (but not including) finish as 'done'
       for (const s of ALL_STEPS) {
@@ -1312,9 +1311,8 @@ describe('engine/conductor', () => {
       // Regression: ensure the existing fresh dispatch behavior remains green.
       // With DECIDE pre-seeded done and no verdict files, resume must start at acceptance_specs,
       // not regress to an earlier step or skip BUILD entirely.
-      const seed = (await readState(statePath)).ok
-        ? (await readState(statePath)).value
-        : ({} as ConductState);
+      const seedResult = await readState(statePath);
+      const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
       (seed as Record<string, unknown>).complexity_tier = 'M';
       for (const s of ALL_STEPS) {
         if (s.name === 'acceptance_specs') break;
@@ -1823,7 +1821,7 @@ describe('engine/conductor', () => {
         halted = true;
       });
       const onRecovery = vi
-        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .fn<(step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>>()
         .mockResolvedValue('quit');
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -1854,7 +1852,7 @@ describe('engine/conductor', () => {
         halted = true;
       });
       const onRecovery = vi
-        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .fn<(step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>>()
         .mockResolvedValue('quit');
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -2165,6 +2163,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const parkEvents: Array<{ type: string; reason?: string }> = [];
       events.on('auto_park', (e) => {
+        if (e.type !== 'auto_park') return;
         parkEvents.push({ type: 'auto_park', reason: e.reason });
       });
 
@@ -2212,6 +2211,7 @@ describe('engine/conductor', () => {
       const parkEvents: Array<{ reason?: string }> = [];
       const contradictionEvents: unknown[] = [];
       events.on('auto_park', (e) => {
+        if (e.type !== 'auto_park') return;
         parkEvents.push({ reason: e.reason });
       });
       events.on('auto_park_contradiction', (e) => {
@@ -2256,6 +2256,7 @@ describe('engine/conductor', () => {
       const parkEvents: Array<{ reason?: string }> = [];
       const contradictionEvents: unknown[] = [];
       events.on('auto_park', (e) => {
+        if (e.type !== 'auto_park') return;
         parkEvents.push({ reason: e.reason });
       });
       events.on('auto_park_contradiction', (e) => {
@@ -2391,6 +2392,7 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner({ success: true });
       const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
       events.on('auto_park', (e) => {
+        if (e.type !== 'auto_park') return;
         parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
       });
 
@@ -2424,11 +2426,12 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const parkEvents: Array<{ type: string; slug?: string; reason?: string }> = [];
       events.on('auto_park', (e) => {
+        if (e.type !== 'auto_park') return;
         parkEvents.push({ type: 'auto_park', slug: e.slug, reason: e.reason });
       });
 
       const onRecovery = vi
-        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .fn<(step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>>()
         .mockResolvedValue('quit');
 
       const conductor = new Conductor({
@@ -2465,11 +2468,12 @@ describe('engine/conductor', () => {
       const runner = createMockStepRunner();
       const parkEvents: Array<{ type: string; reason?: string }> = [];
       events.on('auto_park', (e) => {
+        if (e.type !== 'auto_park') return;
         parkEvents.push({ type: 'auto_park', reason: e.reason });
       });
 
       const onRecovery = vi
-        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .fn<(step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>>()
         .mockResolvedValue('quit');
 
       const conductor = new Conductor({
@@ -2501,7 +2505,7 @@ describe('engine/conductor', () => {
       let recoveryStepName: StepName | undefined;
       let recoveryReason: boolean | undefined;
       const onRecovery = vi
-        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .fn<(step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>>()
         .mockImplementation(async (step, needsReason) => {
           recoveryStepName = step;
           recoveryReason = needsReason;
@@ -2811,7 +2815,7 @@ describe('engine/conductor', () => {
 
       const kickbacks: unknown[] = [];
       const events = new ConductorEventEmitter();
-      events.on('kickback', (e) => kickbacks.push(e));
+      events.on('kickback', (e) => { kickbacks.push(e); });
 
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -3856,7 +3860,10 @@ describe('engine/conductor', () => {
       run: async () => ({ success: true }),
     };
     const started: StepName[] = [];
-    events.on('step_started', (e: { step: StepName }) => started.push(e.step));
+    events.on('step_started', (e) => {
+      if (e.type !== 'step_started') return;
+      started.push(e.step);
+    });
 
     // Daemon parity: the daemon always passes verifyArtifacts: true
     // (daemon-cli.ts), so the tail's artifact gate — the single satisfaction
@@ -3893,7 +3900,7 @@ describe('engine/conductor', () => {
         seed[s.name] = 'failed';
       } else if (s.name === 'finish') {
         seed[s.name] = 'done';
-      } else if (s.name !== 'build') {
+      } else {
         seed[s.name] = 'done';
       }
     }
@@ -3947,7 +3954,7 @@ describe('engine/conductor', () => {
         seed[s.name] = 'failed';
       } else if (s.name === 'finish') {
         seed[s.name] = 'done';
-      } else if (s.name !== 'build') {
+      } else {
         seed[s.name] = 'done';
       }
     }
@@ -5199,7 +5206,7 @@ describe('engine/conductor', () => {
       ]);
       const calls: Array<{ step: StepName; attempt?: number }> = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step, _state, options) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
           calls.push({ step, attempt: options?.attempt });
           await mkdir(join(dir, '.pipeline'), { recursive: true });
           const priorCalls = calls.filter((call) => call.step === step).length;
@@ -5263,7 +5270,7 @@ describe('engine/conductor', () => {
         if (event.type === 'loop_halt') haltReasons.push(event.reason);
       });
       const runner: StepRunner = {
-        run: vi.fn(async (step) => {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
           calls.push(step);
           if (step === 'prd_audit') {
             return {
@@ -5775,7 +5782,7 @@ describe('engine/conductor', () => {
       );
       const { runner } = mtOnlyFailingRunner();
 
-      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
       events.on('kickback', (e) => {
         if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
       });
@@ -5957,7 +5964,7 @@ describe('engine/conductor', () => {
       );
       const { runner, remediateCalls } = mixedFailingRunner();
 
-      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
       events.on('kickback', (e) => {
         if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
       });
@@ -6082,7 +6089,7 @@ describe('engine/conductor', () => {
       );
       const { runner, remediateCalls } = mergedFailingRunner();
 
-      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
       events.on('kickback', (e) => {
         if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
       });
@@ -6410,7 +6417,7 @@ describe('engine/conductor', () => {
         }),
       };
 
-      const kickbacks: Array<{ from: string; to: string; evidence: string }> = [];
+      const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
       events.on('kickback', (e) => {
         if (e.type === 'kickback') kickbacks.push({ from: e.from, to: e.to, evidence: e.evidence });
       });
@@ -8596,6 +8603,9 @@ describe('engine/conductor', () => {
           tokenUsage: event.tokenUsage,
         };
       }
+      if (event.type !== 'step_completed') {
+        throw new Error(`unexpected observed event type: ${event.type}`);
+      }
       return {
         type: event.type,
         step: event.step,
@@ -9336,7 +9346,7 @@ describe('engine/conductor', () => {
 
     it('halts an unknown Codex review result without consuming a retry', async () => {
       const runner: StepRunner = {
-        run: vi.fn(async () => ({
+        run: vi.fn(async (): Promise<StepRunResult> => ({
           success: false,
           output: 'Codex automatic review returned an unknown result for workspace escape',
           permissionDenied: true,
@@ -9358,7 +9368,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect({ calls: runner.run.mock.calls.length, haltReasons }).toEqual({
+      expect({
+        calls: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length,
+        haltReasons,
+      }).toEqual({
         calls: 1,
         haltReasons: [expect.stringMatching(/Codex permission review denied[\s\S]*cached-login/i)],
       });
@@ -9525,7 +9538,7 @@ describe('engine/conductor', () => {
       const fakePrUrl = 'https://github.com/test/repo/pull/999';
       const capturedOpts: EscalateBuildFailureOpts[] = [];
 
-      const fakeEscalation = vi.fn<any>(async (opts: EscalateBuildFailureOpts) => {
+      const fakeEscalation = vi.fn(async (opts: EscalateBuildFailureOpts) => {
         capturedOpts.push(opts);
         return { prUrl: fakePrUrl };
       });
@@ -9723,8 +9736,8 @@ describe('engine/conductor', () => {
 
       const retryEvents: unknown[] = [];
       const failedEvents: unknown[] = [];
-      events.on('step_retry', (e) => retryEvents.push(e));
-      events.on('step_failed', (e) => failedEvents.push(e));
+      events.on('step_retry', (e) => { retryEvents.push(e); });
+      events.on('step_failed', (e) => { failedEvents.push(e); });
 
       await conductor.run();
 
@@ -10150,7 +10163,7 @@ describe('engine/conductor', () => {
       // First call to onRecovery: 'retry' (still no files — will fail again → quit)
       // Second call: 'quit' to end the run cleanly.
       const onRecovery = vi
-        .fn<[StepName, boolean], Promise<RecoveryOption>>()
+        .fn<(step: StepName, isGating: boolean, context?: RecoveryContext) => Promise<RecoveryOption>>()
         .mockResolvedValueOnce('retry')
         .mockResolvedValue('quit');
       const conductor = new Conductor({
@@ -10183,7 +10196,7 @@ describe('engine/conductor', () => {
       });
 
       const failedEvents: unknown[] = [];
-      events.on('step_failed', (e) => failedEvents.push(e));
+      events.on('step_failed', (e) => { failedEvents.push(e); });
 
       await conductor.run();
 
@@ -10816,7 +10829,7 @@ describe('build-step stall circuit breaker', () => {
     };
 
     const stallEvents: unknown[] = [];
-    events.on('build_stall', (e) => stallEvents.push(e));
+    events.on('build_stall', (e) => { stallEvents.push(e); });
 
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
     const conductor = new Conductor({
@@ -10898,7 +10911,7 @@ describe('build-step stall circuit breaker', () => {
       };
 
       const stallEvents: unknown[] = [];
-      events.on('build_stall', (e) => stallEvents.push(e));
+      events.on('build_stall', (e) => { stallEvents.push(e); });
 
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
       const conductor = new Conductor({
@@ -12725,7 +12738,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       };
 
       const parkEvents: unknown[] = [];
-      events.on('auto_park', (e) => parkEvents.push(e));
+      events.on('auto_park', (e) => { parkEvents.push(e); });
       const onRecovery = vi.fn().mockResolvedValue('quit' as const);
 
       const conductor = new Conductor({
@@ -13173,7 +13186,10 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
         },
       });
       const executeOneShot = (runner as unknown as {
-        executeProviderAwareOneShot: (step: StepName, options: InvokeOptions) => Promise<InvokeResult>;
+        executeProviderAwareOneShot: (
+          step: StepName,
+          options: ExecuteProviderCandidatesInput['options'],
+        ) => Promise<ProviderExecutionResult | undefined>;
       }).executeProviderAwareOneShot.bind(runner);
 
       const initial = await runner.run('build', {} as ConductState, { attempt: 1 });

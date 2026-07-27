@@ -130,7 +130,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
       prUrl,
       slug: 'widget',
       repoCwd: projectRoot,
-      // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
       ciFixAttempts: 2,
     });
 
@@ -145,7 +144,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     expect(removeCalls.length).toBeGreaterThanOrEqual(1);
 
     const [persisted] = await readEntries(projectRoot);
-    // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.ciFixAttempts).toBe(0);
   });
 
@@ -160,7 +158,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await sweepMergeableLabels({
       projectRoot,
       runGh: gh,
-      // @ts-expect-error ciFix seam not yet on SweepOpts (RED, pre-implementation)
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -186,7 +183,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await sweepMergeableLabels({
       projectRoot,
       runGh: gh,
-      // @ts-expect-error ciFix seam not yet on SweepOpts (RED, pre-implementation)
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -196,15 +192,11 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
       },
     });
 
-    // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
     expect(observedAtDispatch?.ciFixAttempts).toBe(1);
-    // @ts-expect-error lastCiFixAt not yet on WatchEntry (RED, pre-implementation)
     expect(observedAtDispatch?.lastCiFixAt).toBeDefined();
 
     const [persisted] = await readEntries(projectRoot);
-    // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.ciFixAttempts).toBe(1);
-    // @ts-expect-error lastCiFixAt not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.lastCiFixAt).toBeDefined();
   });
 
@@ -226,7 +218,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
       projectRoot,
       runGh: gh,
       log: (msg) => logs.push(msg),
-      // @ts-expect-error ciFix seam not yet on SweepOpts (RED, pre-implementation)
       ciFix: {
         enabled: true,
         isEligible: async () => ({ eligible: true }),
@@ -251,9 +242,7 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await sweepMergeableLabels({ projectRoot, runGh: gh });
 
     const [persisted] = await readEntries(projectRoot);
-    // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
-    // @ts-expect-error lastCiFixAt not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.lastCiFixAt).toBeUndefined();
 
     // The ci-failed label lifecycle itself still applies even with dispatch disabled.
@@ -274,7 +263,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await sweepMergeableLabels({
       projectRoot,
       runGh: gh,
-      // @ts-expect-error ciFix seam not yet on SweepOpts (RED, pre-implementation)
       ciFix: {
         enabled: true,
         // Real isEligibleForCiFix (ci-fix.ts, Task 13) rejects CONFLICTING; this
@@ -290,7 +278,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
 
     expect(dispatched).toHaveLength(0);
     const [persisted] = await readEntries(projectRoot);
-    // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
   });
 
@@ -308,7 +295,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await sweepMergeableLabels({
       projectRoot,
       runGh: gh,
-      // @ts-expect-error ciFix seam not yet on SweepOpts (RED, pre-implementation)
       ciFix: {
         enabled: true,
         isEligible: async (entry: WatchEntry, state: PrMergeState) => {
@@ -362,7 +348,6 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await sweepMergeableLabels({ projectRoot, runGh: gh });
 
     const [persisted] = await readEntries(projectRoot);
-    // @ts-expect-error ciFixAttempts not yet on WatchEntry (RED, pre-implementation)
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
   });
 });

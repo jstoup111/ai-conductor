@@ -9,7 +9,7 @@ import {
 describe('recovery', () => {
   describe('getRecoveryOptions', () => {
     it('returns 5 options for non-gating step', () => {
-      const opts = getRecoveryOptions('brainstorm', false);
+      const opts = getRecoveryOptions('explore', false);
       expect(opts).toHaveLength(5);
       expect(opts).toContain('retry');
       expect(opts).toContain('interactive');

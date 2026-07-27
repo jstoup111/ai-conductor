@@ -22,7 +22,7 @@ const createMockRunner = (): TmuxRunner => {
   return (args, opts) => {
     // For this e2e test, we use a fake supervisor that doesn't require real tmux.
     // Return success for all tmux commands to simulate a running daemon.
-    return { code: 0, stdout: '' };
+    return { code: 0, stdout: '', stderr: '' };
   };
 };
 

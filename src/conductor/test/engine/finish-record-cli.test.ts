@@ -48,6 +48,7 @@ import {
   FINISH_RECORD_USAGE,
   type FinishRecordRunners,
 } from '../../src/engine/finish-record-cli.js';
+import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 
 const validEvidence = {
   kind: 'valid' as const,
@@ -196,7 +197,7 @@ describe('engine/finish-record-cli', () => {
         }),
         runGit: vi.fn(async (args: string[]) => {
           calls.push(`git:${args.join(' ')}`);
-          return undefined;
+          return { stdout: '' };
         }),
       };
     });
@@ -277,7 +278,7 @@ describe('engine/finish-record-cli', () => {
     it('binds the supplied PR URL and refuses a different GitHub PR identity before terminal writes', async () => {
       const requestedPr = 'https://github.com/org/repo/pull/1';
       const before = await snapshotDir(existingAbsDir);
-      const runGh = vi.fn(async () => ({
+      const runGh = vi.fn(async (_args: string[]) => ({
         stdout: JSON.stringify({
           url: 'https://github.com/org/repo/pull/2',
           headRefOid: 'b'.repeat(40),
@@ -315,7 +316,7 @@ describe('engine/finish-record-cli', () => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const before = await snapshotDir(existingAbsDir);
       const runGh = vi.fn(async () => ({ stdout: '' }));
-      const runGit = vi.fn(async () => undefined);
+      const runGit = vi.fn(async () => ({ stdout: '' }));
       const code = await dispatchFinishRecord(
         {
           kind: 'record',
@@ -342,7 +343,7 @@ describe('engine/finish-record-cli', () => {
       const runGh = vi.fn(async () => {
         throw enoent;
       });
-      const runGit = vi.fn(async () => undefined);
+      const runGit = vi.fn(async () => ({ stdout: '' }));
       const code = await dispatchFinishRecord(
         {
           kind: 'record',
@@ -411,7 +412,7 @@ describe('engine/finish-record-cli', () => {
     });
 
     it('strips sanctioned worktree branch prefixes for durable evidence evaluation', async () => {
-      const evaluateEvidence = vi.fn(async () => validEvidence);
+      const evaluateEvidence = vi.fn(async (_input: ShipmentEvidenceInput) => validEvidence);
       const runGh = vi.fn(async () => ({
         stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
       }));

@@ -49,6 +49,7 @@ describe('self-host/daemon-build-token — readDaemonBuildToken (TR-3, TR-2)', (
       const result = await readDaemonBuildToken(tokenPath);
 
       expect(result.state).toBe('ok');
+      if (result.state !== 'ok') throw new Error('Expected ok state');
       expect(result.token).toBe(expectedToken);
     });
 
@@ -116,6 +117,7 @@ describe('self-host/daemon-build-token — readDaemonBuildToken (TR-3, TR-2)', (
       const result = await readDaemonBuildToken(tokenPath);
 
       expect(result.state).toBe('error');
+      if (result.state !== 'error') throw new Error('Expected error state');
       expect(result.detail).toBeDefined();
       // The detail should name the path
       expect(result.detail).toContain(tokenPath);
@@ -128,6 +130,7 @@ describe('self-host/daemon-build-token — readDaemonBuildToken (TR-3, TR-2)', (
       const result = await readDaemonBuildToken(tokenPath);
 
       expect(result.state).toBe('error');
+      if (result.state !== 'error') throw new Error('Expected error state');
       expect(typeof result.detail).toBe('string');
       expect(result.detail.length).toBeGreaterThan(0);
       expect(result.detail).toContain(tokenPath);
@@ -152,8 +155,12 @@ describe('self-host/daemon-build-token — readDaemonBuildToken (TR-3, TR-2)', (
       const result = await readDaemonBuildToken(tokenPath);
 
       if (result.state === 'missing') {
-        expect(result.token).toBeUndefined();
-        expect(result.detail).toBeUndefined();
+        // The 'missing' variant has no `token`/`detail` fields at all; this
+        // asserts the runtime object doesn't carry stray properties from
+        // the other union members either.
+        const loose = result as { token?: string; detail?: string };
+        expect(loose.token).toBeUndefined();
+        expect(loose.detail).toBeUndefined();
       } else {
         throw new Error('Expected missing state');
       }

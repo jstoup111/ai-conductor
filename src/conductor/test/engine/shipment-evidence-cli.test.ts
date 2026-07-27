@@ -7,10 +7,14 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   dispatchShipmentEvidence,
 } from '../../src/engine/shipment-evidence-cli.js';
+import type {
+  ShipmentEvidenceDependencies,
+  ShipmentEvidenceInput,
+} from '../../src/engine/shipment-evidence.js';
 
 describe('shipment-evidence CLI', () => {
   it('passes an exactly associated PR with a valid immutable-head record', async () => {
-    const evaluateEvidence = vi.fn(async () => ({
+    const evaluateEvidence = vi.fn(async (_input: ShipmentEvidenceInput, _deps: ShipmentEvidenceDependencies) => ({
       kind: 'valid' as const,
       slug: 'feature',
       pr: 'https://github.com/org/repo/pull/1',
@@ -74,7 +78,7 @@ describe('shipment-evidence CLI', () => {
     const runGh = vi.fn(async () => {
       throw new Error('gh must not run for checked-out event evidence');
     });
-    const evaluateEvidence = vi.fn(async () => ({
+    const evaluateEvidence = vi.fn(async (_input: ShipmentEvidenceInput, _deps: ShipmentEvidenceDependencies) => ({
       kind: 'valid' as const,
       slug: 'feature',
       pr,

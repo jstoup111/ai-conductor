@@ -43,6 +43,7 @@ describe('engine/autoresolve — eligibility gate', () => {
     mergeable: 'CONFLICTING',
     hasFailingOrPendingChecks: false,
     labels: [],
+    checksOutcome: 'none',
   };
 
   const baseConfig: HarnessConfig = {
@@ -503,6 +504,7 @@ describe('engine/autoresolve — suite gate (fail-closed negative paths)', () =>
     const result = await runSuiteGate('exit 13', worktree, logger);
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected failure result');
     expect(result.exitCode).toBe(13);
     expect(result.reason).toBeDefined();
     expect(result.reason).toContain('13'); // exit code in reason
@@ -515,6 +517,7 @@ describe('engine/autoresolve — suite gate (fail-closed negative paths)', () =>
     const result = await runSuiteGate('/nonexistent/command/that/does/not/exist', worktree, logger);
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected failure result');
     expect(result.exitCode).not.toBe(0);
     expect(result.reason).toBeDefined();
     // Should indicate it couldn't find the command
@@ -534,6 +537,7 @@ describe('engine/autoresolve — suite gate (fail-closed negative paths)', () =>
     );
 
     expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('Expected failure result');
     expect(result.reason).toBeDefined();
     expect(result.reason?.toLowerCase()).toMatch(/timeout|timed out/);
     // Duration should be around the timeout value, not 10 seconds

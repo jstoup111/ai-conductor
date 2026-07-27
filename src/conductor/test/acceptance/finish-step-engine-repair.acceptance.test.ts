@@ -50,7 +50,14 @@ function makeGhFake(state: {
   labels: string[];
   isDraft: boolean;
   body?: string;
-}): { gh: GhRunner; calls: string[][]; getState: () => typeof state } {
+}): {
+  gh: GhRunner;
+  calls: string[][];
+  // Return type is deliberately narrower than the `state` param: internally
+  // `body` is always defaulted to a definite string (`state.body ?? ''`), so
+  // callers never actually observe `undefined` here.
+  getState: () => { title: string; labels: string[]; isDraft: boolean; body: string };
+} {
   let title = state.title;
   let labels = [...state.labels];
   let isDraft = state.isDraft;

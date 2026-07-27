@@ -460,6 +460,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
           return { source: 'github-issues', sourceRef, status: 'claimed', attempts: 0 };
         },
         async forget() {},
+        async list() { return []; },
         async reopen() {},
       };
     });
@@ -528,6 +529,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
           return { source: 'github-issues', sourceRef, status: 'claimed', attempts: 0 };
         },
         async forget() {},
+        async list() { return []; },
         async reopen() {},
       };
     });

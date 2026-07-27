@@ -102,7 +102,7 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
   it('isEligibleForResolve: logs exactly one skipped(<reason>) line with the PR identifier when a gate rejects', async () => {
     const logs: string[] = [];
     const entry: WatchEntry = { ...baseEntry, resolveAttempts: 0, lastResolveAt: undefined };
-    const prState: PrMergeState = { state: 'MERGED', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false, labels: [] };
+    const prState: PrMergeState = { state: 'MERGED', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' };
     const cfg: HarnessConfig | undefined = { mergeable_autoresolve: { enabled: true } } as any;
     const fs: AutoresolveFs = { worktreeExists: async () => false };
 
@@ -123,7 +123,7 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
   it('isEligibleForResolve: logs nothing when eligible', async () => {
     const logs: string[] = [];
     const entry: WatchEntry = { ...baseEntry, resolveAttempts: 0, lastResolveAt: undefined };
-    const prState: PrMergeState = { state: 'CONFLICTING', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false, labels: [] };
+    const prState: PrMergeState = { state: 'CONFLICTING', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' };
     const cfg: HarnessConfig | undefined = { mergeable_autoresolve: { enabled: true } } as any;
     const fs: AutoresolveFs = { worktreeExists: async () => false };
 
@@ -152,7 +152,6 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
       git,
       branch: 'feat/widget',
       prUrl: PR_URL,
-      entry: baseEntry,
       gh: { runGh: gh, cwd: '/repo', log: (msg) => logs.push(msg) },
     });
 
@@ -184,7 +183,6 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
       git,
       branch: 'feat/widget',
       prUrl: PR_URL,
-      entry: baseEntry,
       gh: { runGh: gh, cwd: '/repo', log: (msg) => logs.push(msg) },
     });
 
@@ -207,7 +205,6 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
       git,
       branch: 'feat/widget',
       prUrl: PR_URL,
-      entry: baseEntry,
       gh: { runGh: gh, cwd: '/repo', log: (msg) => logs.push(msg) },
       earlierFailure: { stage: 'suite-gate', reason: 'suite command exited with code 1' },
     });

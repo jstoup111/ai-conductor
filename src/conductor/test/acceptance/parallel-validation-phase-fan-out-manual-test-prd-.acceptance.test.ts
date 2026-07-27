@@ -628,7 +628,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const emitted: ConductorEvent[] = [];
       const events = new ConductorEventEmitter();
-      events.on('parallel_started', (e) => emitted.push(e));
+      events.on('parallel_started', (e) => {
+        emitted.push(e);
+      });
 
       const conductor = makeConductor(dir, statePath, runner, events);
       await conductor.run();
@@ -679,7 +681,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const emitted: ConductorEvent[] = [];
       const events = new ConductorEventEmitter();
-      events.on('parallel_started', (e) => emitted.push(e));
+      events.on('parallel_started', (e) => {
+        emitted.push(e);
+      });
 
       const conductor = makeConductor(dir, statePath, runner, events, {
         config: { steps: { manual_test: { disable: true } } },

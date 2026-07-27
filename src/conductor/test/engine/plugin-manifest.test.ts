@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { validateManifest, loadManifestFromFile, PluginManifestError } from '../../src/engine/plugin-manifest.js';
-import { PluginVersionError } from '../../src/types/plugin.js';
+import { validateManifest, loadManifestFromFile } from '../../src/engine/plugin-manifest.js';
+import { PluginManifestError, PluginVersionError } from '../../src/types/plugin.js';
 import { readFileSync, writeFileSync, unlinkSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';

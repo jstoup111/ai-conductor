@@ -14,7 +14,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import { detectsAuthFailure } from '../../src/execution/claude-provider.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
@@ -167,7 +167,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     }]);
     const calls: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step) => {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
         calls.push(step);
         if (step === 'manual_test') {
           await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
@@ -320,7 +320,9 @@ describe('conductor auth-park: daemon-token mode', () => {
     const { runtimes, selectedReadiness, alternateReadiness } = timeoutRuntimes();
     const runner: StepRunner = { run: vi.fn(async () => codexCachedLoginFailure()) };
     const halts: string[] = [];
-    events.on('loop_halt', (event) => halts.push(event.reason));
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
       fromStep: 'build', mode: 'auto', maxRetries: 3, sleepFn: vi.fn(async () => {}),
@@ -331,7 +333,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await conductor.run();
 
     expect({
-      dispatches: runner.run.mock.calls.map(([step, , opts]) => ({ step, attempt: opts?.attempt, model: opts?.modelOverride })),
+      dispatches: (runner.run as ReturnType<typeof vi.fn>).mock.calls.map(([step, , opts]) => ({ step, attempt: opts?.attempt, model: opts?.modelOverride })),
       selectedProbes: selectedReadiness.mock.calls.length,
       alternateProviderProbes: alternateReadiness.mock.calls.length,
       halts,
@@ -352,13 +354,15 @@ describe('conductor auth-park: daemon-token mode', () => {
     const { runtimes, selectedReadiness, alternateReadiness } = timeoutRuntimes();
     const calls: StepName[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step) => {
+      run: vi.fn(async (step: StepName) => {
         calls.push(step);
         return step === 'manual_test' ? codexCachedLoginFailure() : { success: true };
       }),
     };
     const halts: string[] = [];
-    events.on('loop_halt', (event) => halts.push(event.reason));
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
       fromStep: 'manual_test', mode: 'auto', maxRetries: 3, sleepFn: vi.fn(async () => {}),
@@ -386,7 +390,9 @@ describe('conductor auth-park: daemon-token mode', () => {
     const { runtimes, selectedReadiness, alternateReadiness } = timeoutRuntimes();
     const runner: StepRunner = { run: vi.fn(async () => codexCachedLoginFailure()) };
     const halts: string[] = [];
-    events.on('loop_halt', (event) => halts.push(event.reason));
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
     const conductor = new Conductor({
       stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
       fromStep: 'build_review', mode: 'auto', maxRetries: 3, sleepFn: vi.fn(async () => {}),
@@ -397,7 +403,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     await conductor.run();
 
     expect({
-      dispatches: runner.run.mock.calls.map(([step, , opts]) => ({ step, attempt: opts?.attempt, model: opts?.modelOverride })),
+      dispatches: (runner.run as ReturnType<typeof vi.fn>).mock.calls.map(([step, , opts]) => ({ step, attempt: opts?.attempt, model: opts?.modelOverride })),
       selectedProbes: selectedReadiness.mock.calls.length,
       alternateProviderProbes: alternateReadiness.mock.calls.length,
       halts,
@@ -461,7 +467,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect({
       result,
       verifierDispatches: dispatchVerifier.mock.calls.length,
-      ordinaryDispatches: runner.run.mock.calls.length,
+      ordinaryDispatches: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length,
       selectedProbes: selectedReadiness.mock.calls.length,
       alternateProviderProbes: alternateReadiness.mock.calls.length,
     }).toEqual({
@@ -493,7 +499,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
       },
     ]);
-    const sleepFn = vi.fn(async () => {});
+    const sleepFn = vi.fn(async (_delay: number) => {});
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: { run: vi.fn(async () => ({ success: true })) },
@@ -530,8 +536,8 @@ describe('conductor auth-park: daemon-token mode', () => {
       clockOffset += delay;
     });
     const eventsSeen: unknown[] = [];
-    events.on('credentials_park', (event) => eventsSeen.push(event));
-    events.on('credentials_park_progress', (event) => eventsSeen.push(event));
+    events.on('credentials_park', (event) => { eventsSeen.push(event); });
+    events.on('credentials_park_progress', (event) => { eventsSeen.push(event); });
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
@@ -589,8 +595,8 @@ describe('conductor auth-park: daemon-token mode', () => {
       token: rawFragments[1],
     });
     const eventsSeen: unknown[] = [];
-    events.on('credentials_park', (event) => eventsSeen.push(event));
-    events.on('credentials_park_progress', (event) => eventsSeen.push(event));
+    events.on('credentials_park', (event) => { eventsSeen.push(event); });
+    events.on('credentials_park_progress', (event) => { eventsSeen.push(event); });
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'codex',
@@ -824,7 +830,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const realNow = Date.now();
     let clockOffset = 0;
     const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
-    const sleepFn = vi.fn(async () => {
+    const sleepFn = vi.fn(async (_delay: number) => {
       clockOffset += 20_000;
     });
     const readiness = vi.fn();
@@ -838,7 +844,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       },
     ]);
     const parked: unknown[] = [];
-    events.on('credentials_park', (event) => parked.push(event));
+    events.on('credentials_park', (event) => { parked.push(event); });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: { run: vi.fn(async () => ({ success: true })) },
@@ -878,7 +884,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       await utimes(tokenPath, new Date(realNow + clockOffset), new Date(realNow + clockOffset));
     });
     const daemonParked: unknown[] = [];
-    events.on('credentials_park', (event) => daemonParked.push(event));
+    events.on('credentials_park', (event) => { daemonParked.push(event); });
     const daemonConductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: { run: vi.fn(async () => ({ success: true })) },
@@ -910,7 +916,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
     const operatorEvents = new ConductorEventEmitter();
     const operatorParked: unknown[] = [];
-    operatorEvents.on('credentials_park', (event) => operatorParked.push(event));
+    operatorEvents.on('credentials_park', (event) => { operatorParked.push(event); });
     const operatorConductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: { run: vi.fn(async () => ({ success: true })) },
@@ -961,7 +967,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       const buildAttempts: number[] = [];
       const tailSteps: string[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step, _state, options) => {
+        run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
           if (step !== 'build') {
             tailSteps.push(step);
             return { success: false, output: 'auth-park test tail barrier' };
@@ -1040,7 +1046,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const readinessFor = vi.spyOn(runtimes, 'readinessFor');
     const attempts: number[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step, _state, options) => {
+      run: vi.fn(async (step: StepName, _state: ConductState, options?: StepRunOptions): Promise<StepRunResult> => {
         if (step !== 'build') return { success: true };
         attempts.push(options?.attempt ?? -1);
         return attempts.length === 1
@@ -1054,7 +1060,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       }),
     };
     const parked: unknown[] = [];
-    events.on('credentials_park', (event) => parked.push(event));
+    events.on('credentials_park', (event) => { parked.push(event); });
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -1081,9 +1087,9 @@ describe('conductor auth-park: daemon-token mode', () => {
 
   it('does not park an ordinary Codex completion failure', async () => {
     const parked: unknown[] = [];
-    events.on('credentials_park', (event) => parked.push(event));
+    events.on('credentials_park', (event) => { parked.push(event); });
     const runner: StepRunner = {
-      run: vi.fn(async (step) =>
+      run: vi.fn(async (step: StepName) =>
         step === 'build'
           ? { success: false, output: 'network connection reset by peer', actualProvider: 'codex' }
           : { success: true },
@@ -1133,7 +1139,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       },
     ]);
     const runner: StepRunner = {
-      run: vi.fn(async (step) => {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
         if (step !== 'build') return { success: false, output: 'auth-park test tail barrier' };
         process.env.CODEX_API_KEY = 'replacement-must-not-hot-resume';
         return {

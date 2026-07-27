@@ -1063,7 +1063,7 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     const events = new ConductorEventEmitter();
     const seen: string[] = [];
     for (const t of ['rebase_noop', 'rebase_changed', 'rebase_changelog_resolved', 'rebase_conflict_halt'] as const) {
-      events.on(t, (e) => seen.push(e.type));
+      events.on(t, (e) => { seen.push(e.type); });
     }
     await emitRebaseEvent(events, { kind: 'noop' });
     await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['src/a.ts'] });
@@ -1099,6 +1099,7 @@ describe('engine/rebase — rebase_gate_reverified event', () => {
     }> = [];
 
     events.on('rebase_gate_reverified', (e) => {
+      if (e.type !== 'rebase_gate_reverified') return;
       seen.push({
         type: e.type,
         step: e.step,

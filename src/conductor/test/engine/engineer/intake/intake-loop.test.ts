@@ -17,6 +17,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { Envelope } from '../../../../src/engine/engineer/intake/port.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const INTAKE_LOOP_SRC = join(here, '..', '..', '..', '..', 'src', 'engine', 'engineer', 'intake', 'intake-loop.ts');
@@ -312,7 +313,7 @@ describe('intakeTick — origin-unresolved (preserve, do not drop)', () => {
     };
 
     const poll = async () => [envelope];
-    const enqueue = vi.fn(async (_envelope: unknown) => {});
+    const enqueue = vi.fn(async (_envelope: Envelope) => {});
     const notify = async (_ideas: unknown[]) => {};
     const sleep = async (_ms: number) => {};
     const now = () => new Date('2026-06-30T00:00:00.000Z');

@@ -107,7 +107,7 @@ describe('FR-9: default local provider — category layout matches today\'s expe
     const actual = new Set(entries);
 
     for (const item of actual) {
-      expect(expected.has(item)).toBe(true, `unexpected item at .memory root: ${item}`);
+      expect(expected.has(item), `unexpected item at .memory root: ${item}`).toBe(true);
     }
     expect(actual.size).toBe(expected.size);
   });

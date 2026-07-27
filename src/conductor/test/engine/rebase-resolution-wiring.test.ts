@@ -114,7 +114,7 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
     await seedPreRebaseState(statePath);
-    const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.toString().trim();
     await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
   });
 

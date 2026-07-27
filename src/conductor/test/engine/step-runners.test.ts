@@ -21,6 +21,7 @@ import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
+import type { ExecuteProviderCandidatesInput } from '../../src/engine/provider-execution.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -59,7 +60,7 @@ const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
   it('forwards task-local attribution to provider-aware normal dispatch', async () => {
-    const providerExecutor = vi.fn(async () => ({
+    const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
       success: true,
       output: 'done',
       exitCode: 0,
@@ -92,7 +93,7 @@ describe('DefaultStepRunner', () => {
 
   it('forwards the daemon feature diagnostic logger to a streaming provider invocation', async () => {
     const featureLog = vi.fn();
-    const providerExecutor = vi.fn(async () => ({
+    const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
       success: true,
       output: 'done',
       exitCode: 0,
@@ -327,7 +328,7 @@ describe('DefaultStepRunner', () => {
     const executeOneShot = (runner as unknown as {
       executeProviderAwareOneShot: (
         step: StepName,
-        options: InvokeOptions,
+        options: ExecuteProviderCandidatesInput['options'],
       ) => Promise<InvokeResult>;
     }).executeProviderAwareOneShot.bind(runner);
     await executeOneShot('attribution_verify', {
@@ -848,7 +849,7 @@ describe('DefaultStepRunner', () => {
 
   it('routes interactive recovery through the selected provider candidates', async () => {
     const capturedInteractive = vi.fn().mockResolvedValue(undefined);
-    const unavailableCodex = vi.fn(async (): Promise<InvokeResult> => ({
+    const unavailableCodex = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: false,
       output: 'codex executable missing',
       exitCode: 127,
@@ -856,7 +857,7 @@ describe('DefaultStepRunner', () => {
       providerUnavailableScope: 'run',
       providerUnavailableReason: 'codex executable missing',
     }));
-    const claudeFallback = vi.fn(async (): Promise<InvokeResult> => ({
+    const claudeFallback = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: true,
       output: 'claude recovered',
       exitCode: 0,
@@ -1104,7 +1105,7 @@ describe('DefaultStepRunner', () => {
       { step: 'finish', prompt: '$finish' },
     ] satisfies ReadonlyArray<{ step: StepName; prompt: string }>;
     const codexBoundary = vi.fn(
-      async (): Promise<InvokeResult> => ({
+      async (_options: InvokeOptions): Promise<InvokeResult> => ({
         success: true,
         output: 'done',
         exitCode: 0,
@@ -1187,10 +1188,10 @@ describe('DefaultStepRunner', () => {
   // StepRunResult so downstream cost accounting can attribute usage per step.
   it('forwards tokenUsage and resolved model on successful autonomous run', async () => {
     const tokenUsage = {
-      inputTokens: 100,
-      outputTokens: 50,
-      cacheCreationInputTokens: 0,
-      cacheReadInputTokens: 0,
+      input: 100,
+      output: 50,
+      cacheCreation: 0,
+      cacheRead: 0,
       costUsd: 0.0123,
     };
     const provider: LLMProvider = {

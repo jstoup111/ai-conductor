@@ -218,7 +218,7 @@ describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-prov
     const registry = new PluginRegistry();
     const events = new ConductorEventEmitter();
 
-    registerBuiltins(registry, events, () => null);
+    registerBuiltins(registry, events, () => {});
     registry.markInitialized();
 
     const provider = registry.get('memory_provider', 'local');
@@ -232,7 +232,7 @@ describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-prov
     const registry = new PluginRegistry();
     const events = new ConductorEventEmitter();
 
-    registerBuiltins(registry, events, () => null);
+    registerBuiltins(registry, events, () => {});
     registry.markInitialized();
 
     const provider = registry.get<{ name: string; kind: string }>('memory_provider', 'local');

@@ -35,7 +35,7 @@ interface FakeGhOpts {
   closeResponses: Array<{ shouldFail?: boolean; error?: string }>;
 }
 
-class FakeGh implements Partial<TrackerClient> {
+class FakeGh implements TrackerClient {
   private editIndex = 0;
   private commentIndex = 0;
   private closeIndex = 0;
@@ -99,6 +99,39 @@ class FakeGh implements Partial<TrackerClient> {
   getCommentBodies(repo: string, issue: string): string[] {
     const key = `${repo}/${issue}`;
     return this.commentBodies.get(key) ?? [];
+  }
+
+  // The remaining TrackerClient methods are not exercised by this suite —
+  // closeIssue()/stampIssue() only call the methods implemented above.
+  async getIssueState(): Promise<string> {
+    throw new Error('not used in this test');
+  }
+  async viewerIdentity(): Promise<string> {
+    throw new Error('not used in this test');
+  }
+  async getBlockedBy(): Promise<unknown> {
+    throw new Error('not used in this test');
+  }
+  async listAssignedIssues(): ReturnType<TrackerClient['listAssignedIssues']> {
+    throw new Error('not used in this test');
+  }
+  async commentOnIssue(): Promise<void> {
+    throw new Error('not used in this test');
+  }
+  async createIssue(): Promise<string> {
+    throw new Error('not used in this test');
+  }
+  async addIssueLabel(): Promise<void> {
+    throw new Error('not used in this test');
+  }
+  async viewPullRequest(): Promise<{ state?: string; mergedAt?: string | null }> {
+    throw new Error('not used in this test');
+  }
+  async createLabel(): Promise<void> {
+    throw new Error('not used in this test');
+  }
+  async removeIssueLabel(): Promise<void> {
+    throw new Error('not used in this test');
   }
 }
 
