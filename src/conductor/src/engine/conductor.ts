@@ -88,6 +88,7 @@ import {
   writeState,
   saveStepStatus,
   getStepStatus,
+  stepSatisfied,
   markDownstreamStale,
   savePrUrl,
   extractPrUrl,
@@ -2237,7 +2238,23 @@ export class Conductor {
         // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
         // demotion inside the loop.
         if (earliestGateIdx >= 0 && earliestGateIdx < startIndex) {
-          startIndex = earliestGateIdx;
+          // The clamp's satisfaction predicate (`gateSatisfied`) is VERDICT-
+          // authoritative, but the loop's own entry check (`checkGate` →
+          // `stepSatisfied`) is STATE-only. When a step's verdict says
+          // satisfied while its state says `failed` (e.g. build passed review
+          // once, then a later build attempt failed without rewriting the
+          // verdict), the clamp lands PAST that step on a downstream gate
+          // whose `checkGate` can never pass. The loop then takes the
+          // markerless `gate_blocked` return and the finally-backstop parks
+          // the run with "loop exited without a terminal verdict" — a
+          // deterministic livelock that re-parks identically on every resume
+          // and never dispatches a session (#1052).
+          //
+          // Walk the prerequisite chain back to the earliest step the loop
+          // will actually accept, using the SAME predicate `checkGate` uses,
+          // so the entry point is never one the very next check rejects.
+          // Backward-only and bounded by steps.length, so it cannot loop.
+          startIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
         }
       } catch (err) {
         // Verdict reading errors (missing file, parse failures) are non-fatal.
@@ -6962,6 +6979,52 @@ export function findResumeIndex(
   }
 
   return lastDoneIndex + 1;
+}
+
+/**
+ * Walk a candidate resume index BACKWARD to the earliest step the gate loop
+ * will actually admit.
+ *
+ * The verdict-aware resume clamp picks the earliest gate whose VERDICT is
+ * unsatisfied, but the loop admits a step only when `checkGate` — which reads
+ * STATE, not verdicts — passes. Those two predicates can disagree: a step whose
+ * verdict says satisfied but whose state is `failed` is skipped by the clamp
+ * and then rejected as an unsatisfied prerequisite by `checkGate`, so the loop
+ * exits immediately through the markerless `gate_blocked` return (#1052).
+ *
+ * Given a candidate index, repeatedly replace it with the index of its earliest
+ * unsatisfied prerequisite until `checkGate` passes. Movement is strictly
+ * backward and bounded by `steps.length`, so this always terminates — even for
+ * a malformed registry with a prerequisite cycle. Returns the candidate
+ * unchanged when its gate already passes (the overwhelmingly common case) or
+ * when no earlier prerequisite can be resolved.
+ */
+export function clampToRunnablePrerequisite(
+  steps: StepDefinition[],
+  state: ConductState,
+  candidate: number,
+): number {
+  let idx = candidate;
+  for (let guard = 0; guard < steps.length; guard++) {
+    const step = steps[idx];
+    if (!step) return idx;
+    const gate = checkGate(step, state);
+    if (gate.passed) return idx;
+
+    // Earliest unsatisfied prerequisite that sits BEFORE the candidate. A
+    // prerequisite the registry cannot locate, or one at/after `idx`, is not
+    // something moving backward can fix — stop rather than spin.
+    let earliest = -1;
+    for (const prereq of step.prerequisites) {
+      if (stepSatisfied(state, prereq)) continue;
+      const prereqIdx = steps.findIndex((s) => s.name === prereq);
+      if (prereqIdx < 0 || prereqIdx >= idx) continue;
+      if (earliest === -1 || prereqIdx < earliest) earliest = prereqIdx;
+    }
+    if (earliest === -1) return idx;
+    idx = earliest;
+  }
+  return idx;
 }
 
 /**
