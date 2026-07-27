@@ -910,22 +910,30 @@ export function validateConfig(
   // Contract (total — never throws, never undefined):
   //   C1  absent / null → { enabled: true } (no warning)
   //   C2  { enabled: true|false } → as given (no warning)
-  //   C3  malformed (non-object, unknown key, or non-boolean enabled) →
-  //       { enabled: true } without warning (fail-safe)
+  //   C3  malformed values warn and are omitted; valid sibling keys are kept.
   if (obj.ci_watch !== undefined && obj.ci_watch !== null) {
     if (isPlainObject(obj.ci_watch)) {
-      const cw = obj.ci_watch as Record<string, unknown>;
-      const unknownKey = Object.keys(cw).find((k) => k !== 'enabled');
-      if (unknownKey !== undefined) {
-        obj.ci_watch = { enabled: true };
-      } else if (cw.enabled === undefined) {
-        obj.ci_watch = { enabled: true };
-      } else if (typeof cw.enabled === 'boolean') {
-        obj.ci_watch = { enabled: cw.enabled };
-      } else {
-        obj.ci_watch = { enabled: true };
-      }
+      const cw = normalizeKeyedBlock(
+        'ci_watch',
+        obj.ci_watch,
+        [
+          { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
+          {
+            key: 'cooldownMinutes',
+            isValid: (value) =>
+              typeof value === 'number' && Number.isFinite(value) && value >= 0,
+          },
+        ],
+        warnings,
+      );
+      obj.ci_watch = {
+        ...cw,
+        enabled: typeof cw.enabled === 'boolean' ? cw.enabled : true,
+      };
     } else {
+      warnings.push(
+        `ci_watch has invalid value ${JSON.stringify(obj.ci_watch)}, falling back to enabled.`,
+      );
       obj.ci_watch = { enabled: true };
     }
   } else if (obj.ci_watch === null || materializeDefaults) {
