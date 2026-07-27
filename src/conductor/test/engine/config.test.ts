@@ -1657,6 +1657,28 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('preserves enabled and cooldownMinutes with no warnings', () => {
+      const result = validateConfig({ ci_watch: { enabled: true, cooldownMinutes: 15 } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true, cooldownMinutes: 15 },
+        warnings: [],
+      });
+    });
+
+    it('defaults enabled while preserving a zero cooldownMinutes with no warnings', () => {
+      const result = validateConfig({ ci_watch: { cooldownMinutes: 0 } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true, cooldownMinutes: 0 },
+        warnings: [],
+      });
+    });
+
     it('keeps cooldownMinutes when an unknown sibling is ignored', () => {
       const result = validateConfig({ ci_watch: { cooldownMinutes: 15, bogus: 1 } });
       expect(result.ok).toBe(true);
