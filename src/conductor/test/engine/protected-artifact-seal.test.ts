@@ -167,6 +167,32 @@ describe('verifyProtectedArtifactSeal', () => {
       ).resolves.toMatchObject({ ok: true });
     });
 
+    it('reports only its own tolerated amendment when base-tip content also matches', async () => {
+      const repo = await makeRepo({
+        '.docs/architecture/feature.md': 'approved architecture\n',
+        '.docs/plans/feature.md': 'approved plan\n',
+      });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/architecture/feature.md', 'base-tip architecture\n');
+      await git(repo, ['add', '.docs/architecture/feature.md']);
+      await git(repo, ['commit', '-q', '-m', 'base updates architecture']);
+      await writeProjectFile(repo, '.docs/plans/feature.md', 'self-amended plan\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
+      ).resolves.toMatchObject({
+        ok: true,
+        selfAmendments: [{
+          path: '.docs/plans/feature.md',
+          sealedFingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+          currentFingerprint: `sha256:${createHash('sha256').update('self-amended plan\n').digest('hex')}`,
+        }],
+      });
+    });
+
     it('still rejects a changed artifact belonging to a DIFFERENT feature', async () => {
       const repo = await makeRepo({ '.docs/architecture/feature.md': 'approved architecture\n' });
       await createProtectedArtifactSeal({
