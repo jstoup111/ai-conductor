@@ -16,11 +16,25 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  *   `.worktrees` — the per-feature checkouts the build is SUPPOSED to mutate;
  *                  they only fall inside this surface because the live checkout
  *                  and the project root are the same directory.
+ *   `.pipeline`  — per-run pipeline state (task-status, evidence sidecar, gate
+ *                  verdicts, `.memory-count-at-start`). The daemon writes into
+ *                  the LIVE checkout's own `.pipeline/` while a self-host build
+ *                  is in flight, so fingerprinting it halts the run on the
+ *                  harness's own bookkeeping.
+ *   `.claude/worktrees`
+ *                — the throwaway checkouts agents isolate into. They live under
+ *                  the live checkout but are NOT reached by `.worktrees` above,
+ *                  so isolating an agent tripped the guard mid-run. Scoped to
+ *                  this SUBTREE deliberately: `.claude/settings.json` and
+ *                  `.claude/hooks/` are harness state the guard must protect,
+ *                  and excluding all of `.claude` would blind it to them.
  * None of these is harness SOURCE, so everything the guard exists to protect
  * stays fingerprinted: adding, modifying or deleting a tracked source file
  * under the live checkout still trips it.
  */
-const LIVE_CHECKOUT_VOLATILE: readonly string[] = ['.git', '.daemon', '.worktrees'];
+const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
+  '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
+];
 
 /** True iff `path` (root-relative, POSIX-ish) is an excluded path or sits under one. */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
