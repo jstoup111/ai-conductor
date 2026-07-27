@@ -235,11 +235,11 @@ Running either outside a conduct project prints `not inside a conduct project �
 ### Daemon management verbs
 
 ```bash
-conduct-ts daemon start [-D | --detach]
+conduct-ts daemon start [-D | --detach] [--attach-into <target>]
 conduct-ts daemon stop
 conduct-ts daemon restart [<name>…] [--all]
-conduct-ts daemon connect
-conduct-ts daemon debug
+conduct-ts daemon connect [--write] [--attach-into <target>]
+conduct-ts daemon debug [--attach-into <target>]
 conduct-ts daemon pause [<name>…] [--all]
 conduct-ts daemon resume [<name>…] [--all]
 ```
@@ -249,17 +249,19 @@ being installed.
 
 | Verb | Behavior |
 | --- | --- |
-| `start` | Refreshes a stale install first — a stale install never starts a daemon — then starts the session. Auto-attaches read-only when the terminal is interactive and `--detach` was not passed; otherwise prints `daemon started (detached). Attach with 'conduct daemon connect'.` or `daemon started (no interactive terminal to attach to)…`. |
+| `start` | Refreshes a stale install first — a stale install never starts a daemon — then starts the session. Auto-attaches read-only when the terminal is interactive and `--detach` was not passed; otherwise prints `daemon started (detached). Attach with 'conduct daemon connect'.` or `daemon started (no interactive terminal to attach to)…`. `--attach-into <target>` (see below) always attaches, even with `--detach` or no TTY. |
 | `stop` | Kills the tmux session. |
 | `restart` | A paused daemon counts as idle. Busy: writes `.daemon/RESTART-PENDING` and returns `restart queued: daemon is busy on <slug>; it will restart automatically once idle.` Idle: clears a stale lock, reconciles an orphaned process (SIGTERM, 100 ms, SIGKILL, reclaim), relinks skills, and recreates the session. The outcome message always prints, so a degraded restart is visible. |
-| `connect` | Attaches read-only. Detach with `Ctrl-b d`. |
-| `debug` | Attaches read-write. |
+| `connect` | Attaches read-only. Detach with `Ctrl-b d`. Pass `--write` to attach read-write instead — the same subcommand you already reached for to look, now with input, no need to already know about `debug`. |
+| `debug` | Attaches read-write. Unchanged; kept as a discoverable alias alongside `connect --write`. |
 | `pause` | Writes the durable pause marker; an already-paused daemon reports `already paused`. Not listed in `--help`. |
 | `resume` | Removes the pause marker; a daemon that is not paused reports `not paused`. Not listed in `--help`. |
 
 | Flag | Applies to | Effect |
 | --- | --- | --- |
 | `-D`, `--detach` | `start` | Skips the auto-attach. Parsed on every verb but only meaningful here. |
+| `--write` | `connect` | Requests a read-write attach instead of the default read-only. Ignored elsewhere — `debug` is already read-write. |
+| `--attach-into <target>` | `start`, `connect`, `debug` | Delivers the attach into an already-open tmux pane elsewhere on the same tmux server — a session, `session:window`, or `session:window.pane` target string — instead of taking over this process's own controlling terminal. Fixes running any of these from a shell that is itself already inside a tmux client, which otherwise hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX to force`): the attach command is typed into the target pane via `tmux send-keys`, wrapped in `env -u TMUX` so tmux does not refuse it there. Never touches this process's own stdio, so it works with no TTY and bypasses `start`'s `--detach`/no-TTY skip. Example: `conduct daemon connect --write --attach-into mywindow:1.0` to view-and-drive the daemon in a specific pane you already have open. |
 | `--all` | `pause`, `resume`, `restart` | Applies the verb to every registered repo instead of the cwd repo. Not listed in `--help`. |
 | `<name>…` | `pause`, `resume`, `restart` | Bare tokens after the verb select named repos from the registry. Not listed in `--help`. |
 

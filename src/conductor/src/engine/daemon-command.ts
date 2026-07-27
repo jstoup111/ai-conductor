@@ -71,6 +71,21 @@ export interface DaemonSupervisorCommand {
   names?: string[];
   /** `pause`/`resume`/`restart --all`: target every registered repo. */
   all?: boolean;
+  /**
+   * `connect` only (`--write`): request a read-write attach instead of the
+   * default read-only. Ignored for other verbs — `debug` is already
+   * read-write and `start`'s auto-attach stays read-only regardless.
+   */
+  write?: boolean;
+  /**
+   * `connect`/`debug`/`start` (`--attach-into <target>`): deliver the attach
+   * into an already-open tmux pane elsewhere on the server (a session,
+   * `session:window`, or `session:window.pane` target string) instead of
+   * taking over this process's own controlling terminal. Needed when the
+   * invoking shell is itself already inside a tmux client — a plain
+   * `tmux attach-session` there hits tmux's own nesting guard.
+   */
+  attachInto?: string;
 }
 
 const MANAGEMENT_VERBS = new Set([
@@ -90,6 +105,9 @@ const MANAGEMENT_VERBS = new Set([
  * `-D` / `--detach` (anywhere after the verb) sets `detach` so `start` skips the
  * auto-attach. The flag is harmless on the other verbs.
  *
+ * `--write` (connect) and `--attach-into <target>` (connect/debug/start) are
+ * parsed here too; harmless on verbs that ignore them.
+ *
  * argv is process.argv: [node, entry, sub, verb, ...rest].
  */
 export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorCommand | null {
@@ -99,15 +117,25 @@ export function detectDaemonSupervisorCommand(argv: string[]): DaemonSupervisorC
   const rest = argv.slice(4);
   const detach = rest.some((a) => a === '-D' || a === '--detach');
   const all = rest.includes('--all');
+  const write = rest.includes('--write');
+  const attachInto = flagValue(rest, '--attach-into') ?? undefined;
   // Fleet selectors (FR-3/FR-17/FR-18): bare positional tokens after the verb
-  // are named-repo targets; flags (anything starting with `-`) are excluded.
-  const names = rest.filter((a) => !a.startsWith('-'));
+  // are named-repo targets; flags (anything starting with `-`) are excluded,
+  // as is the value token immediately following `--attach-into` (it is a tmux
+  // target, not a repo name).
+  const names = rest.filter((a, i) => {
+    if (a.startsWith('-')) return false;
+    if (i > 0 && rest[i - 1] === '--attach-into') return false;
+    return true;
+  });
   // Only attach optional fields when set, so callers/tests comparing the bare
   // `{ verb }` shape stay unaffected for the no-flag, no-name case.
   return {
     verb: verb as DaemonSupervisorCommand['verb'],
     ...(detach ? { detach: true } : {}),
     ...(all ? { all: true } : {}),
+    ...(write ? { write: true } : {}),
+    ...(attachInto ? { attachInto } : {}),
     ...(names.length > 0 ? { names } : {}),
   };
 }

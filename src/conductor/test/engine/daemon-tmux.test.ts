@@ -217,6 +217,48 @@ describe('attachSession: argv, -r flag, and inherit:true', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// attachSession: `into` — deliver via send-keys into an external tmux target
+// instead of attach-session on this process's own stdio (nesting-guard fix).
+// ─────────────────────────────────────────────────────────────────────────────
+describe('attachSession: into (attach delivered into an existing external pane)', () => {
+  it('sends a wrapped attach-session command via send-keys, inherit:false, readOnly:false', async () => {
+    const attachSession = requireFn(await load(), 'attachSession');
+    const { run, calls } = spyRunner();
+    await attachSession('cc-daemon-myapp-abc123', { readOnly: false, into: 'othersession:0' }, run);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args).toEqual([
+      'send-keys',
+      '-t',
+      'othersession:0',
+      "env -u TMUX tmux attach-session -t '=cc-daemon-myapp-abc123'",
+      'Enter',
+    ]);
+    expect(calls[0].inherit).toBe(false);
+  });
+
+  it('appends -r inside the wrapped command when readOnly:true', async () => {
+    const attachSession = requireFn(await load(), 'attachSession');
+    const { run, calls } = spyRunner();
+    await attachSession('cc-daemon-myapp-abc123', { readOnly: true, into: 'othersession:0' }, run);
+    expect(calls[0].args).toEqual([
+      'send-keys',
+      '-t',
+      'othersession:0',
+      "env -u TMUX tmux attach-session -t '=cc-daemon-myapp-abc123' -r",
+      'Enter',
+    ]);
+  });
+
+  it('never calls attach-session (with inherit:true) when into is set', async () => {
+    const attachSession = requireFn(await load(), 'attachSession');
+    const { run, calls } = spyRunner();
+    await attachSession('cc-daemon-myapp-abc123', { into: 'othersession' }, run);
+    expect(calls.every((c) => !c.args.includes('attach-session'))).toBe(true);
+    expect(calls.every((c) => c.inherit === false)).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // capturePane — exact argv; returns stdout on exit 0; empty string on non-zero
 // ─────────────────────────────────────────────────────────────────────────────
 describe('capturePane: argv and stdout return', () => {

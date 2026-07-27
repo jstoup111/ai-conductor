@@ -80,11 +80,24 @@ lines are daemon-wide, not feature work. The exact shapes and the slug length bo
 To watch the session itself:
 
 ```bash
-conduct-ts daemon connect    # attach READ-ONLY
-conduct-ts daemon debug      # attach READ-WRITE
+conduct-ts daemon connect             # attach READ-ONLY
+conduct-ts daemon connect --write     # attach READ-WRITE (same as `debug`)
+conduct-ts daemon debug               # attach READ-WRITE
 ```
 
-`Ctrl-b d` detaches from either.
+`Ctrl-b d` detaches from any of these.
+
+If you're already inside a tmux client (an interactive shell in a tmux pane), attaching directly
+hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX to force`). Use
+`--attach-into <target>` to deliver the attach into an already-open pane elsewhere on the same
+tmux server instead of taking over the current process's terminal:
+
+```bash
+conduct-ts daemon connect --write --attach-into mywindow:1.0
+```
+
+`<target>` is a tmux session, `session:window`, or `session:window.pane` string. This also works on
+`daemon start`.
 
 ## Pause and resume dispatch
 

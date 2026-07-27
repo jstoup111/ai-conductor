@@ -171,6 +171,121 @@ describe('dispatchDaemonSupervisor: verb → supervisor method routing', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// connect --write: read-write attach from the same subcommand, without needing
+// to already know to invoke `debug` instead.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('dispatchDaemonSupervisor: connect --write', () => {
+  it('connect with write:true → supervisor.attach(cwd, {readOnly:false})', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'connect', write: true },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+    );
+
+    expect(code).toBe(0);
+    expect(calls[0].method).toBe('attach');
+    expect(calls[0].args[1]).toMatchObject({ readOnly: false });
+  });
+
+  it('connect without write → still defaults to readOnly:true (unchanged behavior)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch({ verb: 'connect' }, { supervisor, cwd: CWD, out: (l: string) => out.push(l) });
+
+    expect(calls[0].args[1]).toMatchObject({ readOnly: true });
+  });
+
+  it('debug still forces readOnly:false regardless of write (unaffected)', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch({ verb: 'debug' }, { supervisor, cwd: CWD, out: (l: string) => out.push(l) });
+
+    expect(calls[0].args[1]).toMatchObject({ readOnly: false });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// --attach-into <target>: connect/debug/start deliver the attach into an
+// existing external tmux pane rather than this process's own terminal.
+// ═════════════════════════════════════════════════════════════════════════════
+describe('dispatchDaemonSupervisor: --attach-into', () => {
+  it('connect with attachInto forwards it through opts.into', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch(
+      { verb: 'connect', attachInto: 'othersession:0' },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+    );
+
+    expect(calls[0].method).toBe('attach');
+    expect(calls[0].args[1]).toMatchObject({ readOnly: true, into: 'othersession:0' });
+  });
+
+  it('debug with attachInto forwards it through opts.into', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch(
+      { verb: 'debug', attachInto: 'othersession:0' },
+      { supervisor, cwd: CWD, out: (l: string) => out.push(l) },
+    );
+
+    expect(calls[0].args[1]).toMatchObject({ readOnly: false, into: 'othersession:0' });
+  });
+
+  it('start with attachInto attaches into the target even with no interactive terminal', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    const code: number = await dispatch(
+      { verb: 'start', attachInto: 'othersession:0' },
+      {
+        supervisor,
+        cwd: CWD,
+        out: (l: string) => out.push(l),
+        isInteractive: false,
+        ensureFresh: async () => {},
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(calls.map((c) => c.method)).toEqual(['start', 'attach']);
+    expect(calls[1].args[1]).toMatchObject({ readOnly: true, into: 'othersession:0' });
+    expect(out.join('\n')).toMatch(/othersession:0/);
+  });
+
+  it('start with attachInto attaches into the target even with -D/--detach', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const { calls, supervisor } = makeFakeSupervisor();
+    const out: string[] = [];
+
+    await dispatch(
+      { verb: 'start', detach: true, attachInto: 'othersession:0' },
+      {
+        supervisor,
+        cwd: CWD,
+        out: (l: string) => out.push(l),
+        isInteractive: true,
+        ensureFresh: async () => {},
+      },
+    );
+
+    expect(calls.map((c) => c.method)).toEqual(['start', 'attach']);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // start auto-attach: interactive start drops into the session (read-only) unless
 // -D (detach) or no interactive terminal.
 // ═════════════════════════════════════════════════════════════════════════════

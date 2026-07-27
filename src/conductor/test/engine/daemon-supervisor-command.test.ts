@@ -105,6 +105,65 @@ describe('detectDaemonSupervisorCommand: -D / --detach', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
+// detectDaemonSupervisorCommand — `--write` (connect read-write opt-in)
+// ═════════════════════════════════════════════════════════════════════════════
+describe('detectDaemonSupervisorCommand: --write', () => {
+  it('sets write:true for "daemon connect --write"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'connect', '--write'))).toEqual({ verb: 'connect', write: true });
+  });
+
+  it('omits write (bare verb shape) when the flag is absent', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'connect'))).toEqual({ verb: 'connect' });
+    expect(detect(argv('daemon', 'connect'))).not.toHaveProperty('write');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// detectDaemonSupervisorCommand — `--attach-into <target>`
+// ═════════════════════════════════════════════════════════════════════════════
+describe('detectDaemonSupervisorCommand: --attach-into', () => {
+  it('parses the target for "daemon connect --attach-into mysession:1.0"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'connect', '--attach-into', 'mysession:1.0'))).toEqual({
+      verb: 'connect',
+      attachInto: 'mysession:1.0',
+    });
+  });
+
+  it('parses the target for "daemon debug --attach-into othersession"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'debug', '--attach-into', 'othersession'))).toEqual({
+      verb: 'debug',
+      attachInto: 'othersession',
+    });
+  });
+
+  it('parses the target for "daemon start --attach-into othersession"', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'start', '--attach-into', 'othersession'))).toEqual({
+      verb: 'start',
+      attachInto: 'othersession',
+    });
+  });
+
+  it('does not leak the --attach-into value into fleet-selector names', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'restart', 'repoA', '--attach-into', 'mysession'))).toEqual({
+      verb: 'restart',
+      attachInto: 'mysession',
+      names: ['repoA'],
+    });
+  });
+
+  it('omits attachInto (bare verb shape) when the flag is absent', async () => {
+    const detect = requireFn(await load(), 'detectDaemonSupervisorCommand');
+    expect(detect(argv('daemon', 'connect'))).not.toHaveProperty('attachInto');
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
 // detectDaemonSupervisorCommand — null for non-management invocations
 // ═════════════════════════════════════════════════════════════════════════════
 describe('detectDaemonSupervisorCommand: returns null for non-management invocations', () => {

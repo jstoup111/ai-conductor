@@ -266,7 +266,8 @@ export function createProgram(): Command {
   daemon
     .command('start')
     .description('Start the tmux-supervised daemon for this repo; auto-attaches read-only unless -D')
-    .option('-D, --detach', 'Start detached: do not auto-attach to the tmux session (default attaches when interactive)');
+    .option('-D, --detach', 'Start detached: do not auto-attach to the tmux session (default attaches when interactive)')
+    .option('--attach-into <target>', 'Deliver the attach into an already-open tmux pane elsewhere (session, session:window, or session:window.pane) instead of this process\'s own terminal');
   daemon
     .command('stop')
     .description('Stop this repo\'s tmux-supervised daemon');
@@ -275,10 +276,13 @@ export function createProgram(): Command {
     .description('Restart this repo\'s tmux-supervised daemon');
   daemon
     .command('connect')
-    .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)');
+    .description('Attach READ-ONLY to this repo\'s daemon tmux session (Ctrl-b d to detach)')
+    .option('--write', 'Attach read-write instead of read-only (same as `daemon debug`)')
+    .option('--attach-into <target>', 'Deliver the attach into an already-open tmux pane elsewhere (session, session:window, or session:window.pane) instead of this process\'s own terminal');
   daemon
     .command('debug')
-    .description('Attach READ-WRITE to this repo\'s daemon tmux session (Ctrl-b d to detach)');
+    .description('Attach READ-WRITE to this repo\'s daemon tmux session (Ctrl-b d to detach)')
+    .option('--attach-into <target>', 'Deliver the attach into an already-open tmux pane elsewhere (session, session:window, or session:window.pane) instead of this process\'s own terminal');
 
   return program;
 }

@@ -170,12 +170,31 @@ export async function killSession(
  * Attaches the current terminal to the named tmux session.
  * Pass `readOnly: true` to append '-r' (watch-only, no input).
  * Uses inherit:true so the terminal hands over to tmux.
+ *
+ * Pass `into: <target>` to attach into an ALREADY-OPEN tmux pane elsewhere on
+ * the same tmux server (a session, `session:window`, or `session:window.pane`
+ * target string) instead of taking over the current process's own controlling
+ * terminal. This exists because running `tmux attach-session` from a shell
+ * that is itself already inside a tmux client hits tmux's nesting guard
+ * ("sessions should be nested with care, unset $TMUX to force") — there is no
+ * controlling terminal for THIS process to hand over in that case. Instead,
+ * the attach command is typed into the target pane via `send-keys`, wrapped
+ * with `env -u TMUX` so tmux does not refuse it there (mirrors the documented
+ * manual workaround: `tmux send-keys -t <pane> 'env -u TMUX tmux attach-session
+ * -t <session>' Enter`). This never touches the current process's stdio, so it
+ * is safe to call from a non-interactive/no-TTY caller.
  */
 export async function attachSession(
   name: string,
-  opts: { readOnly?: boolean } = {},
+  opts: { readOnly?: boolean; into?: string } = {},
   run: TmuxRunner = defaultTmuxRunner,
 ): Promise<void> {
+  if (opts.into) {
+    const roFlag = opts.readOnly ? ' -r' : '';
+    const cmd = `env -u TMUX tmux attach-session -t '=${name}'${roFlag}`;
+    run(['send-keys', '-t', opts.into, cmd, 'Enter'], { inherit: false });
+    return;
+  }
   const args = ['attach-session', '-t', `=${name}`];
   if (opts.readOnly) {
     args.push('-r');
@@ -422,8 +441,13 @@ export interface Supervisor {
    * respawn tooling fails.
    */
   restart(repo: string): Promise<RestartOutcome>;
-  /** Attaches the terminal to the daemon session. Pass readOnly:true to watch. */
-  attach(repo: string, opts?: { readOnly?: boolean }): Promise<void>;
+  /**
+   * Attaches the terminal to the daemon session. Pass readOnly:true to watch.
+   * Pass `into: <tmux target>` to deliver the attach into an already-open pane
+   * elsewhere on the tmux server (via send-keys) instead of taking over this
+   * process's own controlling terminal — see attachSession for why.
+   */
+  attach(repo: string, opts?: { readOnly?: boolean; into?: string }): Promise<void>;
   /** Returns a snapshot of the session's visible pane output (the daemon log). */
   logs(repo: string): Promise<string>;
   /** Sends a shell command to the running daemon session. */
@@ -526,7 +550,7 @@ export function makeTmuxSupervisor(run: TmuxRunner = defaultTmuxRunner): Supervi
       }
     },
 
-    async attach(repo: string, opts: { readOnly?: boolean } = {}): Promise<void> {
+    async attach(repo: string, opts: { readOnly?: boolean; into?: string } = {}): Promise<void> {
       await requireTmux(run);
       const name = sessionNameForRepo(repo);
       if (!(await hasSession(name, run))) {
