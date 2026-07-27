@@ -536,6 +536,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
   valid step, instead of silently resolving an unrecognized name to index `-1` (via
   `Array.prototype.findIndex`'s not-found sentinel) and starting the run "before the first step"
   ([#1027](https://github.com/jstoup111/ai-conductor/issues/1027)).
+- `build_review` and `ci_watch` preserve valid sibling keys, so `perTaskFloor` and `cooldownMinutes` reach their consumers while invalid keys warn by name (#1002).
 - `finish-record` now deterministically refuses `--choice keep` in unattended (auto/daemon) mode
   whenever the repo has a configured git remote, instead of trusting the finish skill's prompt-level
   "decide deterministically" instruction. `step-runners.ts` sets a `CONDUCT_DAEMON_AUTO_FINISH=1`
