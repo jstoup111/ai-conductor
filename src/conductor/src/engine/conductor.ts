@@ -137,6 +137,7 @@ import {
   type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
 import {
+  buildReviewFailRoute,
   extractFlaggedPaths,
   runScopeFailDisposition,
   readRegradeCount,
@@ -4993,19 +4994,59 @@ export class Conductor {
                     failureDetails.length > 0
                       ? failureDetails.join('\n')
                       : 'grader returned FAIL without reasons';
+
+                  // #989: a build_review FAIL resolves a structured routing
+                  // decision instead of assuming `build`. A completeness
+                  // failure implicates the PLAN (the diff does not cover what
+                  // the plan describes), so it dispatches the existing
+                  // remediation planner, which chooses the target step per gap
+                  // — or HALTs for a human. Every other rubric item is a local
+                  // diff defect and keeps kicking straight back to `build`.
+                  // Kickback counting semantics are deliberately unchanged
+                  // (that is #984's territory).
+                  let reworkTarget: StepName = 'build';
+                  let reworkHint =
+                    `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
+                    `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
+                    `this build.`;
+                  let reworkEvidence = evidence;
+                  if (buildReviewFailRoute(parsed) === 'remediate') {
+                    const outcome = await this.planRemediation(
+                      state,
+                      steps,
+                      `build_review FAILED on completeness:\n${evidence}\nThe plan task ` +
+                        `may be under-decomposed. Plan remediation per the /remediate ` +
+                        `skill and write .pipeline/remediation.json.`,
+                      { source: 'build_review', evidenceFile: BUILD_REVIEW_VERDICT },
+                    );
+                    if (outcome.kind === 'halt') {
+                      const reason =
+                        `build_review completeness FAIL needs a human: ${outcome.detail}`;
+                      await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+                      await writeState(this.stateFilePath, state);
+                      const prUrl = await this.surfaceRemediationPr(reason);
+                      await emitTracked({ type: 'loop_halt', reason, prUrl });
+                      process.off('SIGINT', sigintHandler);
+                      process.off('SIGTERM', sigterm);
+                      return;
+                    }
+                    if (outcome.kind === 'route') {
+                      reworkTarget = outcome.target;
+                      reworkHint = outcome.hint;
+                      reworkEvidence = outcome.evidence;
+                    }
+                    // outcome.kind === 'none' — no usable remediation plan;
+                    // fall through to the unchanged kickback-to-build path.
+                  }
+
                   await emitTracked({
                     type: 'kickback',
                     from: 'build_review',
-                    to: 'build',
-                    evidence,
+                    to: reworkTarget,
+                    evidence: reworkEvidence,
                     count,
                   });
-                  pendingRetryHints.set(
-                    'build',
-                    `build_review FAILED with these reasons:\n${evidence}\nFix the ` +
-                      `flagged issue(s) in build, then COMMIT — build_review re-runs after ` +
-                      `this build.`,
-                  );
+                  pendingRetryHints.set(reworkTarget, reworkHint);
 
                   // Task 7: Merged-PR guard on build_review kickback (TS-1).
                   // Before committing the rewind, check if the recorded PR has been
@@ -5015,7 +5056,7 @@ export class Conductor {
                     return;
                   }
                   await captureKickbackToBuildContext('build_review');
-                  const nav = navigateBack(state, 'build', steps);
+                  const nav = navigateBack(state, reworkTarget, steps);
                   state = nav.state;
                   // markDownstreamStale only restages `done` steps; build_review
                   // is `failed` here, so restage it (and manual_test) explicitly
@@ -5023,7 +5064,7 @@ export class Conductor {
                   (state as Record<string, unknown>).build_review = 'stale';
                   (state as Record<string, unknown>).manual_test = 'stale';
                   await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on build
+                  i = nav.index - 1; // for-loop i++ lands on the rework target
                   continue;
                 }
                 const reason =

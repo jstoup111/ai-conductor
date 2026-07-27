@@ -10,6 +10,7 @@ import {
   resetRegradeCounter,
   readRegradeCount,
   incrementRegradeCounter,
+  buildReviewFailRoute,
 } from '../../src/engine/build-review-disposition.js';
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 
@@ -257,5 +258,81 @@ describe('engine/build-review-disposition — runScopeFailDisposition', () => {
       expect(result.regradeCount).toBe(1);
     }
     expect(regradeCalls).toBe(0);
+  });
+});
+
+// ── build_review FAIL routing decision (#989) ─────────────────────────────────
+//
+// A build_review FAIL now resolves to a structured routing decision instead of
+// an unconditional kickback to `build`. The rule is deterministic and derived
+// from the grader verdict already on disk: a completeness failure means the
+// PLAN may be under-decomposed (a judgement only remediation can route), while
+// the other three rubric items are local diff defects that `build` fixes.
+describe('engine/build-review-disposition — buildReviewFailRoute', () => {
+  it('routes a completeness-only FAIL to remediate', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'FAIL',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      }),
+    ).toBe('remediate');
+  });
+
+  it('routes a completeness FAIL carried only in findings to remediate', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'FAIL',
+        rubric: { tautology: false, scope: false, rootCause: false },
+        findings: { completeness: ['missing teardown transition output'] },
+      }),
+    ).toBe('remediate');
+  });
+
+  it('routes a mixed FAIL that includes completeness to remediate', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'FAIL',
+        rubric: { tautology: false, scope: true, rootCause: false, completeness: true },
+      }),
+    ).toBe('remediate');
+  });
+
+  it.each([
+    ['tautology', { tautology: true, scope: false, rootCause: false, completeness: false }],
+    ['scope', { tautology: false, scope: true, rootCause: false, completeness: false }],
+    ['rootCause', { tautology: false, scope: false, rootCause: true, completeness: false }],
+  ])('routes a %s FAIL to build (unchanged common path)', (_name, rubric) => {
+    expect(buildReviewFailRoute({ verdict: 'FAIL', rubric })).toBe('build');
+  });
+
+  it('routes a FAIL with no rubric detail to build (fail-open to today’s behavior)', () => {
+    expect(buildReviewFailRoute({ verdict: 'FAIL', rubric: {} })).toBe('build');
+  });
+
+  it('routes nowhere on a PASS verdict', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+      }),
+    ).toBe('none');
+  });
+
+  it('routes nowhere on a PASS verdict even if stale findings linger', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'PASS',
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+        findings: { completeness: ['stale finding from a prior lap'] },
+      }),
+    ).toBe('none');
+  });
+
+  it('is idempotent across repeated calls with identical input', () => {
+    const input = {
+      verdict: 'FAIL' as const,
+      rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+    };
+    expect(buildReviewFailRoute(input)).toBe(buildReviewFailRoute(input));
   });
 });

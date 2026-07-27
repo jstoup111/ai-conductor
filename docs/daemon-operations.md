@@ -277,6 +277,26 @@ freshness once more (before any rework routing) and classifies the FAIL as eithe
   `.pipeline/build-review-regrade.json`; the counter resets when a new feature-session
   starts.
 
+**FAIL routing decision (BUILD vs REMEDIATE).** A `build_review` FAIL no longer
+routes unconditionally to `build`. The conductor derives a routing decision
+deterministically from the grader verdict already on disk
+(`.pipeline/build-review.json`):
+
+- **completeness failed** (`rubric.completeness`, or any `findings.completeness`
+  entry) → **REMEDIATE**. The diff does not cover everything the plan describes,
+  which often means the plan task is under-decomposed rather than the diff being
+  sloppy. The conductor dispatches the existing `remediate` planner, which emits
+  per-gap dispositions and routes to the earliest named step (build,
+  acceptance_specs, …) — or HALTs when a gap genuinely needs a human. The kickback
+  event records that target, not `build`.
+- **tautology / scope / root-cause failed** → **BUILD**. These are local diff
+  defects; the kickback, retry hint, and stale cascade are exactly as before.
+
+Fail-open: a FAIL with no completeness signal, or a remediation plan with no
+usable dispositions, routes to `build` unchanged. Kickback counting and the
+`MAX_KICKBACKS_PER_GATE` cap are untouched (see
+[#984](https://github.com/jstoup111/ai-conductor/issues/984)).
+
 **HALT: second stale-mirage detection this feature-session.** If a SECOND
 `stale-mirage` classification occurs in the same feature-session — the regrade bound
 already consumed — the conductor writes `.pipeline/HALT` instead of re-entering

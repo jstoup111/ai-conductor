@@ -31,6 +31,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- `build_review` FAIL now resolves a structured routing decision — BUILD or
+  REMEDIATE — instead of an unconditional kickback to `build`. The decision is
+  derived deterministically from the grader verdict already on disk: a
+  completeness failure (the diff does not cover what the plan describes, which
+  may mean the plan task is under-decomposed) dispatches the existing
+  `remediate` planner, which routes per gap or HALTs for a human; tautology,
+  scope, and root-cause failures are local diff defects and keep kicking
+  straight back to `build` exactly as before. A FAIL with no completeness signal,
+  or a remediation plan with no usable dispositions, falls open to the unchanged
+  build kickback. Kickback counting semantics are unchanged (see #984).
+
 - Implement the per-step provider routing (#927) retrospective follow-ups:
   missing or unreadable event ledgers now produce visibly incomplete shipped
   cost records that clean KPI aggregates exclude, while the provider candidate
