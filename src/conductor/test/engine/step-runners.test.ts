@@ -836,7 +836,7 @@ describe('DefaultStepRunner', () => {
     }).toEqual({
       failed: {
         success: false,
-        output: 'Session for explore exited with error',
+        output: 'Session for explore exited with error: interactive process rejected',
       },
       afterFailure: { id: 'retry-claude-session', created: true },
       retryInvocations: [
@@ -1357,6 +1357,51 @@ describe('DefaultStepRunner', () => {
     const result = await runner.run('explore', emptyState);
 
     expect(result.success).toBe(false);
+  });
+
+  it('logs and surfaces the real thrown error instead of swallowing it (interactive dispatch)', async () => {
+    const provider = createMockProvider();
+    (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error('ECONNRESET: provider process died'),
+    );
+    const log = vi.fn();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { log });
+
+    const result = await runner.run('explore', emptyState);
+
+    expect(result).toEqual({
+      success: false,
+      output: 'Session for explore exited with error: ECONNRESET: provider process died',
+    });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('ECONNRESET: provider process died'),
+    );
+  });
+
+  it('logs and surfaces the real thrown error instead of swallowing it (provider-aware normal dispatch)', async () => {
+    const log = vi.fn();
+    const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => {
+      throw new Error('candidate ladder exhausted: no live model');
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      log,
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+      },
+    });
+
+    const result = await runner.run('build', emptyState);
+
+    expect(result).toEqual({
+      success: false,
+      output: 'Session for build exited with error: candidate ladder exhausted: no live model',
+    });
+    expect(log).toHaveBeenCalledWith(
+      expect.stringContaining('candidate ladder exhausted: no live model'),
+    );
   });
 
   it('first step does not resume, subsequent steps do', async () => {
