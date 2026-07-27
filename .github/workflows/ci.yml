@@ -69,7 +69,7 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: npx vitest run
+      - run: npm test
         working-directory: src/conductor
 
   ci-gate:

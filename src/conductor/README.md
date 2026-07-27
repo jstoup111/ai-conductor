@@ -1644,12 +1644,15 @@ attempt's verdict forever instead of being scored "no fresh verdict"; the same f
 `prd_audit` and `architecture_review_as_built` (below).
 
 **Cap / HALT behavior.** A FAIL verdict kicks back to `build` with the FAIL reasons as evidence
-(daemon only), the same anti-ping-pong mechanism used elsewhere in the gate loop. Kickbacks are
-capped by the shared `MAX_KICKBACKS_PER_GATE` constant (`conductor.ts`, currently 2) — once
-exhausted, the loop HALTs with the unresolved FAIL reasons rather than looping forever or
-silently passing the build through. Separately, each `build_review` dispatch attempt itself
-gets up to `DEFAULT_STEP_RETRIES.build_review` (3) retries before being reported failed, same
-as any other step.
+(daemon only), the same anti-ping-pong mechanism used elsewhere in the gate loop. The verdict
+may additionally carry `findings`, an exhaustive array of independently actionable items grouped
+by failed rubric; those items are included in both the build retry hint and any final HALT. Legacy
+artifacts containing only `reasons` remain valid. Kickbacks are capped by the shared
+`MAX_KICKBACKS_PER_GATE` constant (`conductor.ts`, currently 2) — once exhausted, the loop HALTs
+with the unresolved FAIL reasons rather than looping forever or silently passing the build
+through. Separately, each `build_review` dispatch attempt itself gets up to
+`DEFAULT_STEP_RETRIES.build_review` (3) retries before being reported failed, same as any other
+step.
 
 **Grader-dispatch failure vs FAIL verdict (#814).** A grader that *runs and returns a not-PASS
 verdict* is a code-quality kickback (above). A grader that *could not run at all* — the
@@ -1750,9 +1753,14 @@ waived, closed means the waiver has expired (gap), and a `gh` error fails closed
 `gh` is never invoked for path-form refs.
 
 **Evidence.** The probe's findings are written to `.pipeline/wiring-evidence.json`
-(`WiringEvidence` schema) with a freshness check — a stale HEAD sha invalidates the evidence
-and forces a re-check. `CompletionContext.wiringProbe` is the injection seam the completion
-predicate uses to invoke the probe live and durably write evidence.
+(`WiringEvidence` schema) with a freshness check against the current HEAD sha. Evidence
+matching HEAD short-circuits the completion check without invoking the probe at all. Evidence
+recorded at a prior HEAD is no longer rejected outright — it is re-derived in-process, once,
+via `CompletionContext.wiringProbe` (the injection seam the completion predicate uses to
+invoke the probe live and durably write fresh evidence); this re-derivation is single-shot,
+at most one probe invocation per completion check. A schema-invalid evidence file, or a probe
+that fails or throws during re-derivation, still fails closed — it is never treated as
+passing or silently recomputed into a passing result.
 
 **Config.**
 

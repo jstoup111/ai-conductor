@@ -56,13 +56,17 @@ async function readJson(p: string): Promise<any> {
   return JSON.parse(await readFile(p, 'utf-8'));
 }
 
-/** Seeds `.pipeline/conduct-state.json` with every step before `rebase` marked done. */
+/** Seeds a real `rebase` dispatch while resolving the unrelated post-rebase finish tail. */
 async function seedPreRebaseState(statePath: string): Promise<void> {
   const state: ConductState = {};
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;
     (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
   }
+  // The acceptance subject is the real rebase call site and its translation
+  // artifacts. Keeping finish pending would exercise unrelated SHIP validation
+  // after rebase, including #922's publication fence.
+  state.finish = 'done';
   await writeState(statePath, state);
 }
 

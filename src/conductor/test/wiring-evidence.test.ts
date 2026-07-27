@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -173,5 +173,343 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(result.done).toBe(false);
     expect(result.reason).toBeDefined();
     expect(result.reason).toContain('wiring evidence not found');
+  });
+
+  it('missing evidence file with a wiringProbe injected computes evidence live and persists it to .pipeline/wiring-evidence.json', async () => {
+    const computed: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => computed,
+    });
+
+    expect(result.done).toBe(true);
+    const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
+    expect(written).toEqual(computed);
+  });
+
+  it('non-JSON evidence file fails closed with an "invalid JSON" reason and never invokes the probe', async () => {
+    await writeFile(join(dir, WIRING_EVIDENCE), 'not json {{{', 'utf-8');
+
+    let probeCalls = 0;
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => {
+        probeCalls++;
+        throw new Error('probe should not be called');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe(`invalid JSON in ${WIRING_EVIDENCE}`);
+    expect(probeCalls).toBe(0);
+  });
+
+  it('schema-invalid evidence (missing required field) fails closed with the validator reason and never invokes the probe', async () => {
+    const invalidEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      // layer2 intentionally omitted
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(invalidEvidence);
+
+    let probeCalls = 0;
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => {
+        probeCalls++;
+        throw new Error('probe should not be called');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe(`${WIRING_EVIDENCE} must include a "layer2" object`);
+    expect(probeCalls).toBe(0);
+  });
+
+  it('wiringProbe throwing is unsatisfied with a reason naming the probe failure', async () => {
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe: async () => {
+        throw new Error('probe boom');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain('wiring probe failed: probe boom');
+  });
+
+  it('stale evidence (recorded head != current head) with a wiringProbe injected re-derives fresh evidence instead of failing closed', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H2',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => freshEvidence,
+    });
+
+    expect(result.done).toBe(true);
+    if (result.reason) {
+      expect(result.reason).not.toMatch(/stale/i);
+    }
+
+    const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
+    expect(written.head).toBe('H2');
+  });
+
+  it('stale evidence re-derived into a fresh verdict with gaps surfaces the gap message verbatim, not as staleness', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const gapMessage = 'someExport has no non-test reference';
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H2',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [
+        {
+          id: '1',
+          contract: 'src/x.ts#someExport',
+          gaps: [{ kind: 'no-reference', message: gapMessage }],
+        },
+      ],
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => freshEvidence,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toContain(gapMessage);
+    expect(result.reason).not.toMatch(/stale/i);
+  });
+
+  it('stale evidence with a throwing wiringProbe fails closed instead of accepting the stale verdict', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => {
+        throw new Error('probe boom');
+      },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toMatch(/wiring probe failed/);
+  });
+
+  it('fresh evidence (recorded head === current head) never invokes the probe', async () => {
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(freshEvidence);
+
+    let calls = 0;
+    const wiringProbe = async (): Promise<WiringEvidence> => {
+      calls++;
+      return freshEvidence;
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'head456',
+      wiringProbe,
+    });
+
+    expect(result.done).toBe(true);
+    expect(calls).toBe(0);
+  });
+
+  it('stale evidence with no wiringProbe injected fails closed with the plain staleness reason', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      // ctx.wiringProbe intentionally omitted — the re-derivation guard
+      // must not fire without it, so the stale evidence is rejected
+      // exactly as validateWiringEvidence's freshness check reports.
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toBe(
+      `${WIRING_EVIDENCE} is stale — evidence recorded for H1 but HEAD is H2; re-run wiring-reachability analysis at the current HEAD`,
+    );
+  });
+
+  it('indeterminate current HEAD (getHeadSha absent or null) skips the freshness check and never invokes the probe', async () => {
+    const ev: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(ev);
+
+    let calls = 0;
+    const wiringProbe = async (): Promise<WiringEvidence> => {
+      calls++;
+      return ev;
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+
+    // ctx.getHeadSha entirely absent.
+    const resultAbsent = await predicate(dir, { wiringProbe });
+    expect(resultAbsent.done).toBe(true);
+    if (resultAbsent.reason) expect(resultAbsent.reason).not.toMatch(/stale/i);
+
+    // ctx.getHeadSha present but resolves to null.
+    const resultNull = await predicate(dir, {
+      getHeadSha: async () => null,
+      wiringProbe,
+    });
+    expect(resultNull.done).toBe(true);
+    if (resultNull.reason) expect(resultNull.reason).not.toMatch(/stale/i);
+
+    expect(calls).toBe(0);
+  });
+
+  it('probe result still stale against currentHead (HEAD moved again mid-probe) is called exactly once, no retry loop', async () => {
+    const staleEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+    await writeEvidence(staleEvidence);
+
+    // The probe's own result is stamped at H3, which still doesn't match
+    // currentHead (H2) — simulating HEAD advancing again mid-probe.
+    const probeResultStaleAgain: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H3',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
+    };
+
+    let probeCalls = 0;
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => {
+        probeCalls++;
+        return probeResultStaleAgain;
+      },
+    });
+
+    expect(probeCalls).toBe(1);
+    expect(result.done).toBe(false);
+    expect(result.reason).toBeDefined();
+    expect(result.reason).toMatch(/stale/i);
+  });
+
+  it('single-shot re-derivation replaces the evidence file wholesale, not merged with the stale content', async () => {
+    const staleEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H1',
+      layer2: { applicable: true },
+      waivers: [{ id: 'old-waiver', reason: 'leftover from stale run' }],
+      tasks: [
+        { id: '1', contract: 'src/old.ts#oldThing', gaps: [] },
+        { id: '2', contract: 'src/old2.ts#oldThing2', gaps: [] },
+      ],
+    };
+    await writeEvidence(staleEvidence);
+
+    const freshEvidence: WiringEvidence = {
+      schema: 1,
+      base: 'base123',
+      head: 'H2',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '9', contract: 'src/new.ts#newThing', gaps: [] }],
+    };
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, {
+      getHeadSha: async () => 'H2',
+      wiringProbe: async () => freshEvidence,
+    });
+
+    expect(result.done).toBe(true);
+
+    const written = JSON.parse(await readFile(join(dir, WIRING_EVIDENCE), 'utf-8'));
+    expect(written).toEqual(freshEvidence);
   });
 });

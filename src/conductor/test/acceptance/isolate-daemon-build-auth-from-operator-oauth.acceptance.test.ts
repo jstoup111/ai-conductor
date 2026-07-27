@@ -59,6 +59,23 @@ const READY_STATE: ConductState = {
   test_suite: 'done',
 } as ConductState;
 
+/**
+ * These specs exercise only the daemon-owned build/auth dispatch.  Keep the
+ * post-build tail resolved so a successful fixture cannot fall through into
+ * the unrelated SHIP validators (and, ultimately, the finish fence).
+ */
+const BUILD_AUTH_READY_STATE: ConductState = {
+  ...READY_STATE,
+  build_review: 'done',
+  wiring_check: 'done',
+  manual_test: 'done',
+  prd_audit: 'done',
+  architecture_review_as_built: 'done',
+  retro: 'done',
+  rebase: 'done',
+  finish: 'done',
+} as ConductState;
+
 describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-from-operator-oauth)', () => {
   let dir: string;
   let statePath: string;
@@ -126,7 +143,7 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
     process.env.CLAUDE_CONFIG_DIR = operatorDir;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeState(statePath, READY_STATE);
+    await writeState(statePath, BUILD_AUTH_READY_STATE);
     // Fresh operator credentials present throughout: proves the new flow never
     // depends on (or is blocked/parked by) the operator's expiry state at all.
     await writeOperatorCreds(Date.now() + 3_600_000);
@@ -815,7 +832,7 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       dir = await mkdtemp(join(tmpdir(), 'build-auth-acceptance-'));
       statePath = join(dir, 'conduct-state.json');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeState(statePath, READY_STATE);
+      await writeState(statePath, BUILD_AUTH_READY_STATE);
       await writeOperatorCreds(Date.now() + 3_600_000);
       await writeToken('tok-v2');
 
@@ -872,7 +889,7 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       dir = await mkdtemp(join(tmpdir(), 'build-auth-acceptance-'));
       statePath = join(dir, 'conduct-state.json');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeState(statePath, READY_STATE);
+      await writeState(statePath, BUILD_AUTH_READY_STATE);
       await writeOperatorCreds(Date.now() + 3_600_000);
       await writeToken('tok-v3');
 
@@ -908,7 +925,7 @@ describe('acceptance: daemon build-auth isolation (isolate-daemon-build-auth-fro
       dir = await mkdtemp(join(tmpdir(), 'build-auth-acceptance-'));
       statePath = join(dir, 'conduct-state.json');
       await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeState(statePath, READY_STATE);
+      await writeState(statePath, BUILD_AUTH_READY_STATE);
       await writeOperatorCreds(Date.now() + 3_600_000);
       // No daemon token file at all — proves api-key mode never touches it either.
 

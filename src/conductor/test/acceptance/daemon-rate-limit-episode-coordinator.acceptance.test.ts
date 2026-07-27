@@ -168,6 +168,18 @@ describe('acceptance: the exact observed session-limit message routes to a coord
     test_suite: 'done',
   } as ConductState;
 
+  const BUILD_ONLY_READY_STATE: ConductState = {
+    ...READY_STATE,
+    build_review: 'done',
+    wiring_check: 'done',
+    manual_test: 'done',
+    prd_audit: 'done',
+    architecture_review_as_built: 'done',
+    retro: 'done',
+    rebase: 'done',
+    finish: 'done',
+  } as ConductState;
+
   let dir: string;
   let statePath: string;
   let events: ConductorEventEmitter;
@@ -178,7 +190,7 @@ describe('acceptance: the exact observed session-limit message routes to a coord
     statePath = join(dir, 'conduct-state.json');
     events = new ConductorEventEmitter();
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeState(statePath, READY_STATE);
+    await writeState(statePath, BUILD_ONLY_READY_STATE);
     mockedExeca.mockReset();
   });
 

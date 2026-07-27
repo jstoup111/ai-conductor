@@ -5,7 +5,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -30,6 +30,13 @@ const DONE_TO_BUILD: ConductState = {
   track: 'technical', feature_desc: 'codex-self-host-acceptance',
 } as ConductState;
 
+function fullSuiteVerifierStub() {
+  return {
+    ensure: vi.fn().mockResolvedValue({ status: 'REUSED', evidence: {} as never }),
+    inspect: vi.fn().mockResolvedValue({ status: 'CURRENT', evidence: {} as never }),
+  };
+}
+
 describe('acceptance: Codex self-host provider isolation (#905)', () => {
   let projectRoot: string;
   let stateFilePath: string;
@@ -45,6 +52,18 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
   });
 
   it('selects Codex before setup and skips Claude collaborators', async () => {
+    await writeState(stateFilePath, {
+      ...DONE_TO_BUILD,
+      build_review: 'done',
+      wiring_check: 'done',
+      test_suite: 'done',
+      manual_test: 'done',
+      prd_audit: 'done',
+      architecture_review_as_built: 'done',
+      retro: 'skipped',
+      rebase: 'done',
+      finish: 'done',
+    } as ConductState);
     const relink = vi.fn(async () => {});
     const provisionSandbox = vi.fn(async () => ({
       configDir: '/tmp/should-not-exist', childEnv: () => ({}), teardown: vi.fn(async () => {}),
@@ -54,12 +73,20 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: '/installed/harness' })),
       relink, provisionSandbox,
     };
-    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'finish') {
+          await writeFile(join(projectRoot, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+        }
+        return { success: true };
+      }),
+    };
 
     await new Conductor({
       stateFilePath, stepRunner: runner, events: new ConductorEventEmitter(), projectRoot,
       mode: 'auto', daemon: true, selfHost: true, baseBranch: 'main', fromStep: 'build',
       selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}),
+      fullSuiteVerifier: fullSuiteVerifierStub(),
       config: { steps: { build: { llm_provider: 'codex' } } } as never,
     }).run();
 
@@ -71,7 +98,12 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
   });
 
   it('runs common release gates at the self-host finish boundary', async () => {
-    await writeState(stateFilePath, { ...DONE_TO_BUILD, rebase: 'done' } as ConductState);
+    const finishState = {
+      ...DONE_TO_BUILD,
+      test_suite: 'done',
+      rebase: 'done',
+    } as ConductState;
+    await writeState(stateFilePath, finishState as ConductState);
     const versionGate = vi.fn(async () => ({ ok: true as const }));
     const releaseGate = vi.fn(async () => ({ ok: true as const }));
     const guardrails: SelfHostGuardrails = {
@@ -83,12 +115,26 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       })),
       versionGate, releaseGate,
     };
-    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'finish') {
+          await writeFile(join(projectRoot, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+        }
+        return { success: true };
+      }),
+    };
 
     await new Conductor({
       stateFilePath, stepRunner: runner, events: new ConductorEventEmitter(), projectRoot,
       mode: 'auto', daemon: true, selfHost: true, baseBranch: 'main', fromStep: 'finish',
       selfHostGuardrails: guardrails,
+      fullSuiteVerifier: fullSuiteVerifierStub(),
+      config: {
+        steps: {
+          manual_test: { disable: true },
+          architecture_review_as_built: { disable: true },
+        },
+      } as never,
     }).run();
 
     expect(versionGate).toHaveBeenCalledOnce();

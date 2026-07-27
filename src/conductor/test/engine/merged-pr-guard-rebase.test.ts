@@ -60,6 +60,7 @@ async function seedPreRebaseState(
     if (s.name === 'rebase') break;
     (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
   }
+  (state as Record<string, unknown>).finish = 'done';
   Object.assign(state, overrides);
   await writeState(statePath, state);
   const baselineCommit = (

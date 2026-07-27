@@ -271,7 +271,7 @@ export const ALL_STEPS: StepDefinition[] = [
     label: 'Rebase',
     phase: 'SHIP',
     enforcement: 'structural',
-    prerequisites: ['manual_test'],
+    prerequisites: ['retro'],
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,

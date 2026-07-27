@@ -300,6 +300,15 @@ parallel joins, and evaluators use pipeline's existing named `BATCH_AFFECTED_TES
 union. A known scoped failure blocks its current BUILD activity; it is never
 deferred to the aggregate gate.
 
+**Test isolation policy:** Automated unit, acceptance, integration, and end-to-end tests
+must not call real third-party systems. Unit tests inject mocked adapters. Acceptance,
+integration, and end-to-end tests exercise the real application entry point, internal wiring,
+and locally controlled infrastructure while replacing each third-party boundary with a faithful
+fake through the production adapter seam. This includes LLM providers, hosted APIs, GitHub,
+email/payment services, webhooks, package registries, and other network services. Only explicitly
+named smoke tests (`test/smoke/**` or `*.smoke.test.*`) may use the real third party. Smoke tests
+are opt-in and excluded from the default test command and CI aggregate suite.
+
 Broad fallback is permitted only when one of these four triggers makes the
 affected-test scope genuinely uncertain:
 

@@ -99,6 +99,7 @@ import {
   shouldSkipForUpstreamSkip,
   getGroupForStep,
   getStepDefinition,
+  VALIDATION_GROUP,
 } from './steps.js';
 import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
@@ -118,6 +119,7 @@ import {
   planStem,
   readManualTestFailRows,
   BUILD_REVIEW_VERDICT,
+  buildReviewFailureDetails,
   validateBuildReviewVerdict,
   WIRING_EVIDENCE,
   validateWiringEvidence,
@@ -1176,6 +1178,52 @@ export class Conductor {
         }),
       fullSuiteInspect: () => this.fullSuiteVerifier.inspect(),
     };
+  }
+
+  /**
+   * Re-evaluate the applicable SHIP validators immediately before finish. The
+   * registry establishes ordinary ordering, but an already-done rebase or an
+   * explicit finish target can otherwise reach this publication boundary
+   * without revisiting validation.
+   */
+  private async nonGreenFinishValidators(
+    state: ConductState,
+  ): Promise<Array<{ name: StepName; verdict: GateObjectiveVerdict; reason: string }>> {
+    // `verifyArtifacts:false` is the intentional mocked-dispatch mode used by
+    // focused unit tests. Its success authority is the runner result, so the
+    // publication fence must not reintroduce artifact-only validation and
+    // invalidate an otherwise green SHIP round indefinitely.
+    if (!this.verifyArtifacts && !this.daemon) return [];
+
+    const track = await this.resolveTrack(state);
+    const membership = resolveGroupMembership(
+      VALIDATION_GROUP,
+      state,
+      track,
+      this.modelPolicyForStep('finish'),
+      this.config,
+    );
+    const ctx = await this.completionCtx(state);
+    const nonGreen: Array<{ name: StepName; verdict: GateObjectiveVerdict; reason: string }> = [];
+
+    for (const member of membership.members) {
+      if (member.outcome.kind === 'skipped') continue;
+      const name = member.name as StepName;
+      const verdict = await computeAndWriteVerdict(this.projectRoot, name, ctx);
+      const manualTestFailed =
+        name === 'manual_test' && (await readManualTestFailRows(this.projectRoot)).length > 0;
+      if (getStepStatus(state, name) !== 'done' || !verdict.satisfied || manualTestFailed) {
+        nonGreen.push({
+          name,
+          verdict,
+          reason: manualTestFailed
+            ? 'manual test evidence contains FAIL rows'
+            : verdict.reason ?? `state is ${getStepStatus(state, name)}`,
+        });
+      }
+    }
+
+    return nonGreen;
   }
 
   constructor(opts: ConductorOptions) {
@@ -2674,23 +2722,18 @@ export class Conductor {
             this.modelPolicyForStep(step.name),
             this.config,
           );
-          // Engagement is keyed to the group's first NON-SKIPPED member, not
-          // blindly to members[0]. A nominal entry the serial walk already
-          // skip-marked (e.g. manual_test config-disabled for self-host
-          // builds) hits a `continue` in the skip branches above and never
-          // reaches this code — keying engagement to members[0] therefore
-          // left the whole group permanently serial in any repo that
-          // disables its first member (zero `parallel_started` events ever).
-          // The first member surviving the skip cascade is the group's real
-          // entry point. Deliberately "first non-SKIPPED", not "first
-          // dispatchable": a member that is `done` (VerdictOutcome — e.g.
-          // manual_test on a kickback re-entry that navigateBack'd to
-          // prd_audit) still anchors engagement, so mid-loop re-entries at a
-          // later member keep the pre-existing SERIAL walk (and its
-          // gap-aware kickback machinery) exactly as before this fix.
-          const groupEntryName = membership.members.find(
-            (m) => m.outcome.kind !== 'skipped',
-          )?.name;
+          // Engagement is keyed to the first member that still needs work,
+          // rather than blindly to members[0]. A nominal entry that was
+          // config-skipped or is already green hits a `continue` before this
+          // branch; using it as the anchor would strand later non-green
+          // validators on the serial path. This especially matters for the
+          // finish fence: it preserves green siblings while re-fanning the
+          // remaining failed/stale validators together.
+          //
+          // With no dispatchable members, retain the first non-skipped member
+          // as the harmless fallback for the all-complete walk.
+          const groupEntryName = membership.dispatchable[0]?.name ??
+            membership.members.find((m) => m.outcome.kind !== 'skipped')?.name;
           if (membership.allSkipped && builtinGroup.members[0] === step.name) {
             for (const member of membership.members) {
               await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
@@ -3394,6 +3437,37 @@ export class Conductor {
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
+        }
+
+        // Publication is a safety boundary, not merely the next registry
+        // node. Always re-evaluate current-HEAD validation here, including
+        // when `fromStep: 'finish'` intentionally bypassed the resume clamp.
+        if (step.name === 'finish') {
+          const nonGreen = await this.nonGreenFinishValidators(state);
+          if (nonGreen.length > 0) {
+            for (const member of nonGreen) {
+              state[member.name] = 'stale';
+              await saveStepStatus(this.stateFilePath, member.name, 'stale');
+              await emitTracked({
+                type: 'gate_verdict',
+                step: member.name,
+                satisfied: member.verdict.satisfied,
+                reason: member.reason,
+              });
+            }
+            await writeState(this.stateFilePath, state);
+            const target = nonGreen[0]!;
+            await emitTracked({
+              type: 'kickback',
+              from: 'finish',
+              to: target.name,
+              evidence: `finish validation fence: ${target.reason}`,
+              count: 1,
+            });
+            const targetIndex = indexOf(target.name);
+            i = targetIndex - 1;
+            continue;
+          }
         }
 
         // Self-host release gates (TR-7/8/9/10): a harness self-build must clear
@@ -4813,6 +4887,7 @@ export class Conductor {
               }
               const parsed = verdictRaw !== null ? validateBuildReviewVerdict(verdictRaw) : null;
               if (parsed?.ok && parsed.verdict === 'FAIL') {
+                const failureDetails = buildReviewFailureDetails(parsed);
                 // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o):
                 // scope-FAIL disposition, BEFORE any rework routing decision
                 // below (and before the #569 no_task_progress remediation
@@ -4840,7 +4915,7 @@ export class Conductor {
                       git: makeGitRunner(this.projectRoot),
                       root: this.projectRoot,
                       gradedBaseSha: lastBuildReviewMergeBase,
-                      flaggedPaths: extractFlaggedPaths(parsed.reasons),
+                      flaggedPaths: extractFlaggedPaths(failureDetails),
                       regrade: async () => 'pass',
                     });
                   } catch {
@@ -4915,8 +4990,8 @@ export class Conductor {
                 if (count <= MAX_KICKBACKS_PER_GATE) {
                   kickbackCounts.set('build_review', count);
                   const evidence =
-                    parsed.reasons && parsed.reasons.length > 0
-                      ? parsed.reasons.join('\n')
+                    failureDetails.length > 0
+                      ? failureDetails.join('\n')
                       : 'grader returned FAIL without reasons';
                   await emitTracked({
                     type: 'kickback',
@@ -4953,7 +5028,7 @@ export class Conductor {
                 }
                 const reason =
                   `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
-                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${parsed.reasons?.[0] ?? 'no reasons recorded'}`;
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${failureDetails.join('; ') || 'no reasons recorded'}`;
                 await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
                   () => {},
                 );
@@ -6758,6 +6833,7 @@ export function resolveGroupMembership(
       { tier: state.complexity_tier },
     );
     const skip =
+      getStepStatus(state, name) === 'skipped' ||
       stepDef.skippableForTiers.includes(tier) ||
       (stepDef.skippableForTracks ?? []).includes(track) ||
       shouldSkipForUpstreamSkip(stepDef, state) ||

@@ -51,7 +51,15 @@ describe('Integration: config flow', () => {
   });
 
   it('Conductor with config disabling steps skips them', async () => {
-    await writeState(statePath, { complexity_tier: 'L', test_suite: 'done' } as ConductState);
+    // Exercise the config-skip cascade directly. An all-success synthetic
+    // workflow would continue into the independent validator convergence loop.
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      complexity_tier: 'L',
+      architecture_review: 'pending',
+      architecture_review_as_built: 'pending',
+      retro: 'pending',
+    } as ConductState);
 
     const config: HarnessConfig = {
       steps: {
@@ -67,6 +75,7 @@ describe('Integration: config flow', () => {
       mode: 'auto',
       config,
       projectRoot: dir,
+      fromStep: 'architecture_review',
     });
 
     await conductor.run();
@@ -78,16 +87,7 @@ describe('Integration: config flow', () => {
     // audit) via skipWhenSkipped — even on L tier where it isn't tier-skipped.
     expect(runner.calls).not.toContain('architecture_review_as_built');
 
-    // Dispatched to runner.run: everything except the 3 engine-managed steps
-    // (complexity + worktree + rebase), the 2 disabled steps (retro +
-    // architecture_review), and architecture_review_as_built (cascade-skipped
-    // via skipWhenSkipped because architecture_review is disabled). `prd` runs
-    // here because no track is set (defaults to product); `explore` + `prd`
-    // replace the former single `brainstorm` step, and prd_audit still runs
-    // (the PRD exists regardless of the architecture review). build_review is
-    // a prerequisite of manual_test so it also runs, and wiring_check (the
-    // reachability gate between build_review and manual_test) dispatches too.
-    expect(runner.calls).toHaveLength(15);
+    expect(runner.calls).toEqual([]);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -97,11 +97,6 @@ describe('Integration: config flow', () => {
     expect(result.value.retro).toBe('skipped');
     expect(result.value.architecture_review).toBe('skipped');
     expect(result.value.architecture_review_as_built).toBe('skipped');
-
-    // Non-disabled steps should be 'done'
-    expect(result.value.build).toBe('done');
-    expect(result.value.finish).toBe('done');
-    expect(result.value.feature_status).toBe('complete');
 
     // config_skip events emitted for each disabled step, plus the cascade-skip
     // of architecture_review_as_built (skipWhenSkipped → also a config_skip).

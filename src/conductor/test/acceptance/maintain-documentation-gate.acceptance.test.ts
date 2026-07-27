@@ -59,6 +59,9 @@ describe('repository-local documentation gate — real Conductor.run flow', () =
       feature_desc: 'maintain-documentation',
     };
     for (const step of ALL_STEPS) state[step.name] = 'done';
+    state.manual_test = 'skipped';
+    state.prd_audit = 'skipped';
+    state.architecture_review_as_built = 'skipped';
     delete state.finish;
     await writeState(statePath, state as ConductState);
   });

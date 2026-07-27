@@ -55,6 +55,7 @@ import {
   HALT_MARKER,
   planStem,
   planHasDependencyTree,
+  buildReviewFailureDetails,
   validateBuildReviewVerdict,
   isSkipAttempt,
   MANUAL_TEST_SKIP_SENTINEL,
@@ -2867,6 +2868,57 @@ Task 1 → Task 2
   });
 
   describe('validateBuildReviewVerdict', () => {
+    it('preserves multiple independent findings for one failed rubric', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        reasons: ['completeness has two independent gaps'],
+        findings: {
+          completeness: [
+            'The feature logger does not cover retry transition output.',
+            'The feature logger does not cover teardown transition output.',
+          ],
+        },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'FAIL',
+        reasons: ['completeness has two independent gaps'],
+        findings: {
+          completeness: [
+            'The feature logger does not cover retry transition output.',
+            'The feature logger does not cover teardown transition output.',
+          ],
+        },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+    });
+
+    it('rejects malformed structured findings without rejecting legacy artifacts', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        findings: { completeness: 'two gaps' },
+        rubric: { completeness: true },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: '.pipeline/build-review.json "findings.completeness" must be a string array when present',
+      });
+    });
+
+    it('renders legacy summaries and every structured finding for completion feedback', () => {
+      expect(buildReviewFailureDetails({
+        reasons: ['completeness has gaps'],
+        findings: { completeness: ['missing setup output', 'missing teardown output'] },
+      })).toEqual([
+        'completeness has gaps',
+        '[completeness] missing setup output',
+        '[completeness] missing teardown output',
+      ]);
+    });
+
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',

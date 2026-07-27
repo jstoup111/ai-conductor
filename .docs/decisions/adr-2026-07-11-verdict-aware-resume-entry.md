@@ -1,7 +1,8 @@
 # ADR: Verdict-Aware Resume Entry (Backward-Only Clamp)
 
 **Date:** 2026-07-11
-**Status:** APPROVED
+**Status:** APPROVED; finish-boundary behavior amended by
+`adr-2026-07-26-rebase-tail-current-branch-before-publication`
 **Deciders:** James Stoup (operator), engineer session for #532
 
 ## Context
@@ -74,9 +75,11 @@ Adopt **Option A**. On `resume: true`, the start index is
    must not drag the entry forward — forward selection remains the loop tail's job.
 2. **Both branches covered.** The clamp applies to the final resume index regardless of which
    `findResumeIndex` branch produced it (`in_progress` hit or lastDone+1 walk).
-3. **`--from-step` is exempt.** An explicitly targeted step (`fromStep`) is an operator override;
-   the clamp applies only to the `resume` derivation. (The daemon no longer uses `fromStep` for
-   re-dispatch.)
+3. **`--from-step` is exempt from this clamp.** An explicitly targeted step (`fromStep`) remains
+   an operator navigation override; the clamp applies only to the `resume` derivation. This does
+   not bypass step-local safety boundaries. In particular, the later #922 finish publication fence
+   may redirect an explicitly targeted finish to non-green current-HEAD validation before finish
+   is dispatched. (The daemon no longer uses `fromStep` for re-dispatch.)
 4. **`checkGate` unchanged.** Prerequisite checking stays state-only; the authority for "is this
    gate actually satisfied" is the verdict layer, applied at entry (this ADR) and in the loop tail
    (existing `advanceTail`/`selectNextGate`).

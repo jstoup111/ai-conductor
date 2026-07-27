@@ -34,6 +34,18 @@ const READY_STATE: ConductState = {
   test_suite: 'done',
 } as ConductState;
 
+const BUILD_ONLY_READY_STATE: ConductState = {
+  ...READY_STATE,
+  build_review: 'done',
+  wiring_check: 'done',
+  manual_test: 'done',
+  prd_audit: 'done',
+  architecture_review_as_built: 'done',
+  retro: 'done',
+  rebase: 'done',
+  finish: 'done',
+} as ConductState;
+
 describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', () => {
   let dir: string;
   let statePath: string;
@@ -60,7 +72,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeState(statePath, READY_STATE);
+    await writeState(statePath, BUILD_ONLY_READY_STATE);
     await writeFile(tokenPath, 'tok-injected-v1', 'utf-8');
   });
 
