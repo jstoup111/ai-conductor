@@ -35,59 +35,23 @@ import { applyTeardownDecision } from '../global-setup.js';
 // kill-authorization tests below can never pass — that's not a guard bug
 // (the guard's fail-closed refusal per #437's two-signal contract is
 // correct), it's an environment capability gap. Skip rather than fail.
-type PaneCwdStickyDeps = {
-  createSession: typeof newDetachedSession;
-  paneCwd: typeof sessionPaneCwd;
-  killSession: typeof killDaemonSession;
-};
-
-async function paneCwdSticky({
-  createSession = newDetachedSession,
-  paneCwd = sessionPaneCwd,
-  killSession = killDaemonSession,
-}: Partial<PaneCwdStickyDeps> = {}): Promise<boolean> {
+async function paneCwdSticky(): Promise<boolean> {
   const name = `cc-daemon-cwdprobe-${randomBytes(4).toString('hex')}`;
   const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
   delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
   try {
-    await createSession(name, 'bash -c "sleep 5"', os.tmpdir());
-    const cwd = paneCwd(name);
+    await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir());
+    const cwd = sessionPaneCwd(name);
     return isTmpdirRooted(cwd);
-  } catch {
-    return false;
   } finally {
     if (prevFlag === undefined) {
       delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     } else {
       process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
     }
-    killSession(name);
+    killDaemonSession(name);
   }
 }
-
-it('returns false when it cannot create the real-tmux capability-probe session', async () => {
-  const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-  const killed: string[] = [];
-  process.env.AI_CONDUCTOR_NO_REAL_EXEC = 'sentinel';
-
-  try {
-    await expect(paneCwdSticky({
-      createSession: async () => {
-        throw new Error('tmux new-session exited with code 1');
-      },
-      killSession: (name) => killed.push(name),
-    })).resolves.toBe(false);
-
-    expect(process.env.AI_CONDUCTOR_NO_REAL_EXEC).toBe('sentinel');
-    expect(killed).toEqual([expect.stringMatching(/^cc-daemon-cwdprobe-[0-9a-f]{8}$/)]);
-  } finally {
-    if (prevFlag === undefined) {
-      delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-    } else {
-      process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
-    }
-  }
-});
 
 describe('isTmpdirRooted (#437) — TR-2 tmpdir cwd corroboration', () => {
   it('is true for os.tmpdir() itself', () => {
