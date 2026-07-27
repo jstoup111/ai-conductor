@@ -100,6 +100,19 @@ describe('createProtectedArtifactSeal', () => {
 });
 
 describe('verifyProtectedArtifactSeal', () => {
+  it('returns an empty self-amendment list for a clean workspace', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual(expect.objectContaining({
+      ok: true,
+      selfAmendments: [],
+    }));
+  });
+
   it('rejects a changed protected artifact against the durable original seal', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     await createProtectedArtifactSeal({
@@ -135,9 +148,7 @@ describe('verifyProtectedArtifactSeal', () => {
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({ ok: false, reason });
   });
 
-  // TEMPORARY LOOSENING coverage (operator-directed; see protected-artifact-seal.ts
-  // inspectSeal's inline comment and the follow-up intake for the durable fix).
-  describe('own-feature self-amendment loosening', () => {
+  describe('own-feature self-amendment durable reporting behavior', () => {
     it('tolerates a feature changing its own protected artifact when featureDesc matches', async () => {
       const repo = await makeRepo({ '.docs/architecture/feature.md': 'approved architecture\n' });
       await createProtectedArtifactSeal({
@@ -148,7 +159,14 @@ describe('verifyProtectedArtifactSeal', () => {
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
-      ).resolves.toMatchObject({ ok: true });
+      ).resolves.toEqual(expect.objectContaining({
+        ok: true,
+        selfAmendments: [{
+          path: '.docs/architecture/feature.md',
+          sealedFingerprint: `sha256:${createHash('sha256').update('approved architecture\n').digest('hex')}`,
+          currentFingerprint: `sha256:${createHash('sha256').update('self-amended architecture\n').digest('hex')}`,
+        }],
+      }));
     });
 
     it('tolerates the match across a dated-vs-undated stem, mirroring #1024', async () => {
@@ -164,7 +182,29 @@ describe('verifyProtectedArtifactSeal', () => {
       // featureDesc carries no date prefix; artifact stem does — still the same feature.
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'widget' }),
-      ).resolves.toMatchObject({ ok: true });
+      ).resolves.toEqual(expect.objectContaining({
+        ok: true,
+        selfAmendments: [{
+          path: '.docs/architecture/2026-07-27-widget.md',
+          sealedFingerprint: `sha256:${createHash('sha256').update('approved architecture\n').digest('hex')}`,
+          currentFingerprint: `sha256:${createHash('sha256').update('self-amended architecture\n').digest('hex')}`,
+        }],
+      }));
+    });
+
+    it('reports no self-amendment when its changed artifact exactly matches the base tip', async () => {
+      const repo = await makeRepo({ '.docs/architecture/feature.md': 'approved architecture\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/architecture/feature.md', 'base-tip architecture\n');
+      await git(repo, ['add', '.docs/architecture/feature.md']);
+      await git(repo, ['commit', '-q', '-m', 'base updates architecture']);
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
+      ).resolves.toEqual(expect.objectContaining({ ok: true, selfAmendments: [] }));
     });
 
     it('reports only its own tolerated amendment when base-tip content also matches', async () => {
