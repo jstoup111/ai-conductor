@@ -206,6 +206,139 @@ describe('verifyProtectedArtifactSeal', () => {
       ).resolves.toEqual({ ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' });
     });
   });
+
+  // #976 base-inheritance tolerance. A feature's seal baseline goes stale the
+  // moment ANOTHER feature's PR merges to the base branch and this feature
+  // rebases onto it. `advanceBase` models exactly that post-rebase state: the
+  // base branch tip carries the new content, and the workspace matches it.
+  describe('base-branch inheritance tolerance', () => {
+    async function advanceBase(
+      repo: string,
+      files: Record<string, string>,
+    ): Promise<void> {
+      for (const [path, content] of Object.entries(files)) {
+        await writeProjectFile(repo, path, content);
+      }
+      await git(repo, ['add', '.']);
+      await git(repo, ['commit', '-q', '-m', "another feature's merged PR"]);
+    }
+
+    it("tolerates ANOTHER feature's artifact changed to exactly the base branch tip", async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await advanceBase(repo, { '.docs/plans/other-feature.md': 'amended by its owner\n' });
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it("tolerates ANOTHER feature's artifact ADDED by the base branch tip", async () => {
+      const repo = await makeRepo({ '.docs/plans/mine.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await advanceBase(repo, { '.docs/plans/other-feature.md': 'a newly merged plan\n' });
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it('STILL HALTS when the content does not match the base branch tip', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await advanceBase(repo, { '.docs/plans/other-feature.md': 'amended by its owner\n' });
+      // An in-worktree mutation ON TOP of the inherited content: the base branch
+      // does not vouch for this, so tamper detection must still fire.
+      await writeProjectFile(repo, '.docs/plans/other-feature.md', 'tampered by the build agent\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+      });
+    });
+
+    it('STILL HALTS on an ADDED artifact the base branch does not contain', async () => {
+      const repo = await makeRepo({ '.docs/plans/mine.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/plans/invented.md', 'authored in-worktree\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact added: .docs/plans/invented.md',
+      });
+    });
+
+    it('applies NO tolerance when no baseBranch is supplied (prior behavior)', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await advanceBase(repo, { '.docs/plans/other-feature.md': 'amended by its owner\n' });
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+      });
+    });
+
+    it('applies NO tolerance when the base branch ref does not exist', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await advanceBase(repo, { '.docs/plans/other-feature.md': 'amended by its owner\n' });
+
+      await expect(
+        verifyProtectedArtifactSeal({
+          projectRoot: repo,
+          featureDesc: 'mine',
+          baseBranch: 'no-such-branch',
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+      });
+    });
+
+    it('still HALTS on a deletion even when the base branch tip also lacks the file', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await rm(join(repo, '.docs/plans/other-feature.md'));
+      await git(repo, ['add', '-A']);
+      await git(repo, ['commit', '-q', '-m', 'base removes the plan']);
+
+      // Deliberately out of scope for this fix — see the follow-up intake.
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact deleted: .docs/plans/other-feature.md',
+      });
+    });
+  });
 });
 
 describe('isActiveStepArtifactException', () => {

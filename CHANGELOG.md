@@ -10,6 +10,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- A feature no longer halts BUILD/SHIP because it rebased onto a base branch that changed or added
+  someone else's protected DECIDE artifact. The protected-artifact seal is immutable from first BUILD
+  entry, so it went stale the moment any other feature's pull request merged, and an operator had to
+  hand-edit `.pipeline/protected-artifact-seal.json` to unblock the feature. Verification now tolerates
+  a changed or newly appeared artifact whose workspace content is byte-identical to that path at the
+  base branch tip — the content the feature's own rebase brought in, vouched for by the base branch
+  itself. Content the base branch does not vouch for, additions it does not contain, and deletions all
+  still halt before dispatch, and no tolerance applies when the base branch cannot be resolved
+  ([#976](https://github.com/jstoup111/ai-conductor/issues/976)).
+
 ### Added
 
 - Contributors now get a failing build instead of a review comment for dropped promises, broken shell,
