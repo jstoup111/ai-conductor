@@ -83,6 +83,21 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- A config-declared custom step no longer kills the run it was correctly scheduled
+  into. `.ai-conductor/config.yml` custom steps are assembled and dispatched from the
+  resolved registry (`buildStepRegistry`), but several lookups on the dispatch path
+  resolve a step by NAME with no registry in scope — `phaseForStep`, `isGatingStep`,
+  `resolveSkill`, the audit trail — and those consulted only the static `ALL_STEPS`
+  table plus `OUT_OF_BAND_STEPS`. A custom step is in neither, so the conductor
+  logged `▶ <step>` in the right position and then halted the feature with
+  `Error: Unknown step: <step>`. `buildStepRegistry` now records each custom
+  definition it successfully inserts, and `getStepDefinition` falls back to that
+  record after the built-in and out-of-band tables. A name no assembled config
+  declared still throws (typos are not masked), a custom step can never shadow a
+  built-in, and custom steps still claim no slot in the static linear index space —
+  every ordering decision is registry-relative, derived from the step's `after:`
+  target.
+
 - The self-build sandbox again propagates the operator's workspace trust. The
   throwaway `CLAUDE_CONFIG_DIR` stopped seeding `.claude.json` when the self-host
   isolation refactor rewrote `sandbox-build-env.ts`, so every headless self-build
