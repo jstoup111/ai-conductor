@@ -25,7 +25,7 @@ is prd_audit's mandate).
 Score the diff against exactly these four rubric items:
 
 1. Tautology: every new/changed test would fail without the diff.
-2. Scope: diff scoped to the plan, no unrelated files.
+2. Scope: diff scoped to the plan, no unrelated files. \`.docs/architecture/\`, \`.docs/plans/\`, \`.docs/specs/\`, and \`.docs/stories/\` are already-approved DECIDE artifacts; modification of one passes Scope only when the approved plan justifies it, otherwise it is a Scope failure.
 3. Root cause: the change addresses the stated defect, not a symptom.
 4. Completeness: every planned task's work is present in the diff.
 

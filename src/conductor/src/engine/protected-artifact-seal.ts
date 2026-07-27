@@ -34,6 +34,17 @@ export interface ProtectedArtifactSeal {
   protectedArtifacts: ProtectedArtifactFingerprint[];
 }
 
+/**
+ * An in-scope amendment to the current feature's own sealed DECIDE artifact.
+ * The seal remains immutable; this records the observed divergence for the
+ * caller's later policy decision rather than silently refreshing that seal.
+ */
+export interface ProtectedArtifactSelfAmendment {
+  path: string;
+  sealedFingerprint: string;
+  currentFingerprint: string;
+}
+
 export interface CreateProtectedArtifactSealOptions {
   projectRoot: string;
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
@@ -45,9 +56,9 @@ export interface VerifyProtectedArtifactSealOptions {
   /** Required only while validating a first BUILD entry before it may persist a seal. */
   baselineCommit?: string;
   /**
-   * The current feature's own slug. Scopes the temporary self-amendment
-   * loosening in `inspectSeal` — absent means no loosening (fully protected,
-   * prior behavior). See that function's inline comment for the rationale.
+   * The current feature's own slug. Scopes durable reporting of its
+   * self-amendments in `inspectSeal` — absent means no self-amendments are
+   * tolerated (fully protected, prior behavior).
    */
   featureDesc?: string;
   /**
@@ -61,7 +72,7 @@ export interface VerifyProtectedArtifactSealOptions {
 }
 
 export type ProtectedArtifactSealVerdict =
-  | { ok: true; seal: ProtectedArtifactSeal }
+  | { ok: true; seal: ProtectedArtifactSeal; selfAmendments: ProtectedArtifactSelfAmendment[] }
   | { ok: false; reason: string };
 
 export interface ActiveStepArtifactExceptionInput {
@@ -259,8 +270,8 @@ async function workspaceProtectedPaths(projectRoot: string, directory: string): 
  * True when `path`'s filename stem (basename minus `.md`) names the SAME
  * feature as `featureDesc`, tolerating a leading `YYYY-MM-DD-` date-prefix
  * mismatch on either side (mirrors the dated-vs-undated stem ambiguity fixed
- * for backlog metadata lookups in #1024). Used ONLY to scope the temporary
- * self-amendment loosening below — it never affects whether a path is
+ * for backlog metadata lookups in #1024). Used ONLY to scope the durable
+ * self-amendment reporting below — it never affects whether a path is
  * discovered/protected in the first place.
  */
 function namesOwnFeature(path: string, featureDesc: string): boolean {
@@ -327,6 +338,7 @@ async function inspectSeal(
   featureDesc?: string,
   baseBranch?: string,
 ): Promise<ProtectedArtifactSealVerdict> {
+  const selfAmendments: ProtectedArtifactSelfAmendment[] = [];
   // Resolved at most once per verification, and only lazily — a fully clean
   // workspace never shells out to git here at all.
   let baseTipRef: string | undefined | null = null;
@@ -371,22 +383,19 @@ async function inspectSeal(
     if (content === undefined) {
       return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
     }
-    if (fingerprint(content) !== expected.get(path)) {
-      // TEMPORARY LOOSENING (operator-directed, see intake filed for the
-      // durable fix): a feature legitimately amending ITS OWN DECIDE artifact
-      // mid-build — e.g. updating its own architecture doc to reflect
-      // in-scope work surfaced by a build_review kickback — currently halts
-      // identically to a THIRD PARTY tampering with that same file. Tolerate
-      // the former; still halt on the latter (any other artifact) and on any
-      // addition/deletion (handled above/below, unaffected by this branch).
-      if (!featureDesc || !namesOwnFeature(path, featureDesc)) {
+    const sealedFingerprint = expected.get(path);
+    const currentFingerprint = fingerprint(content);
+    if (currentFingerprint !== sealedFingerprint) {
+      // #1047 / ADR: verify inherited base content before treating drift as a
+      // self-amendment. The base branch is an independent authority, so content
+      // it already contains is neither a local amendment nor a seal violation.
+      if (await inheritedFromBase(path)) continue;
+      if (featureDesc && namesOwnFeature(path, featureDesc)) {
+        selfAmendments.push({ path, sealedFingerprint: sealedFingerprint!, currentFingerprint });
+      } else {
         // BASE-INHERITANCE TOLERANCE (#976). The mismatch is not this feature's
-        // own amendment, so the loosening above does not apply — but it is still
-        // routinely legitimate: the seal's baseline goes stale relative to the
-        // base branch the moment ANOTHER feature's PR merges and this feature
-        // rebases. Tolerate exactly the drift the base branch itself vouches for;
-        // anything else is an in-worktree mutation and still halts.
-        if (await inheritedFromBase(path)) continue;
+        // own amendment, and was not inherited from the base branch. The seal
+        // therefore remains authoritative and the mutation must halt.
         return { ok: false, reason: `Protected artifact changed: ${path}` };
       }
     }
@@ -397,7 +406,7 @@ async function inspectSeal(
       return { ok: false, reason: `Protected artifact deleted: ${path}` };
     }
   }
-  return { ok: true, seal };
+  return { ok: true, seal, selfAmendments };
 }
 
 /**
