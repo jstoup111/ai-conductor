@@ -97,6 +97,80 @@ describe('minimal Claude self-host sandbox', () => {
     }
   });
 
+  describe('workspace-trust propagation (.claude.json)', () => {
+    const stateFile = () => join(globalConfig, '.claude.json');
+    const seeded = async (sandbox: { configDir: string }) =>
+      JSON.parse(await readFile(join(sandbox.configDir, '.claude.json'), 'utf8'));
+
+    it('seeds trust for the harness root the operator already trusts', async () => {
+      await writeFile(
+        stateFile(),
+        JSON.stringify({
+          hasCompletedOnboarding: true,
+          oauthAccount: { accessToken: 'PERSONAL_TOKEN' },
+          projects: { [worktree]: { hasTrustDialogAccepted: true, history: ['PERSONAL_HISTORY'] } },
+        }),
+      );
+
+      const sandbox = await provisionSandboxBuildEnv(options());
+      try {
+        const raw = await readFile(join(sandbox.configDir, '.claude.json'), 'utf8');
+        // The consulted key is the harness (git main) root — see the module docs.
+        expect((await seeded(sandbox)).projects[worktree]).toEqual({ hasTrustDialogAccepted: true });
+        // Propagation carries the trust bit ONLY — never operator secrets/history.
+        expect(raw).not.toContain('PERSONAL_TOKEN');
+        expect(raw).not.toContain('PERSONAL_HISTORY');
+      } finally {
+        await sandbox.teardown();
+      }
+    });
+
+    it('seeds the build worktree key alongside the harness root', async () => {
+      const buildWorktree = join(root, 'wt-build');
+      await mkdir(join(buildWorktree, 'skills'), { recursive: true });
+      await writeFile(
+        stateFile(),
+        JSON.stringify({ projects: { [worktree]: { hasTrustDialogAccepted: true } } }),
+      );
+
+      const sandbox = await provisionSandboxBuildEnv(options({ worktreeRoot: buildWorktree }));
+      try {
+        const state = await seeded(sandbox);
+        expect(state.projects[worktree]).toEqual({ hasTrustDialogAccepted: true });
+        expect(state.projects[buildWorktree]).toEqual({ hasTrustDialogAccepted: true });
+      } finally {
+        await sandbox.teardown();
+      }
+    });
+
+    it('never fabricates trust the operator has not granted', async () => {
+      await writeFile(
+        stateFile(),
+        JSON.stringify({ projects: { [worktree]: { hasTrustDialogAccepted: false } } }),
+      );
+
+      const sandbox = await provisionSandboxBuildEnv(options());
+      try {
+        expect(existsSync(join(sandbox.configDir, '.claude.json'))).toBe(false);
+      } finally {
+        await sandbox.teardown();
+      }
+    });
+
+    it('seeds nothing when the operator state file is missing or malformed', async () => {
+      for (const body of [null, 'not json', JSON.stringify({ projects: null })]) {
+        if (body === null) await rm(stateFile(), { force: true });
+        else await writeFile(stateFile(), body);
+        const sandbox = await provisionSandboxBuildEnv(options());
+        try {
+          expect(existsSync(join(sandbox.configDir, '.claude.json'))).toBe(false);
+        } finally {
+          await sandbox.teardown();
+        }
+      }
+    });
+  });
+
   it('fails closed and removes the exact partial home when worktree skills are absent', async () => {
     await rm(join(worktree, 'skills'), { recursive: true, force: true });
     await expect(provisionSandboxBuildEnv(options())).rejects.toBeInstanceOf(SandboxProvisionError);

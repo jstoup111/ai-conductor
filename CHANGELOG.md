@@ -83,6 +83,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The self-build sandbox again propagates the operator's workspace trust. The
+  throwaway `CLAUDE_CONFIG_DIR` stopped seeding `.claude.json` when the self-host
+  isolation refactor rewrote `sandbox-build-env.ts`, so every headless self-build
+  ran untrusted, silently dropped all `permissions.allow` entries from the repo's
+  `.claude/settings.json` ("this workspace has not been trusted") and wedged on
+  denied tools. `provisionSandboxBuildEnv` once more writes a minimal `.claude.json`
+  trusting the harness root and build worktree (as-passed and realpath-canonicalized
+  — Claude Code keys trust by the git MAIN worktree root, so a build inside
+  `.worktrees/<slug>` is looked up under the harness root). Propagate-only: a missing
+  state file, malformed JSON, or an untrusted harness root seeds nothing, and only
+  the trust bit crosses the boundary — never operator tokens, history, or project
+  state.
 - The self-host live-boundary guard no longer halts a run on the harness's own
   bookkeeping ([#985](https://github.com/jstoup111/ai-conductor/issues/985)). Its
   live-checkout fingerprint walked the whole tree including `.git/`, `.daemon/`
