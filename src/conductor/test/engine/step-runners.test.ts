@@ -1319,6 +1319,71 @@ describe('DefaultStepRunner', () => {
     expect(opts.dangerouslySkipPermissions).toBe(true);
   });
 
+  describe('CONDUCT_DAEMON_AUTO_FINISH env marker', () => {
+    const previousEnv = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+
+    afterEach(() => {
+      if (previousEnv === undefined) delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      else process.env.CONDUCT_DAEMON_AUTO_FINISH = previousEnv;
+    });
+
+    it('sets CONDUCT_DAEMON_AUTO_FINISH=1 for the duration of an auto-mode finish dispatch, then clears it', async () => {
+      delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      const provider = createMockProvider();
+      let seenDuringDispatch: string | undefined;
+      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+        return { success: true, output: '', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
+
+      await runner.run('finish', emptyState);
+
+      expect(seenDuringDispatch).toBe('1');
+      expect(process.env.CONDUCT_DAEMON_AUTO_FINISH).toBeUndefined();
+    });
+
+    it('does not set CONDUCT_DAEMON_AUTO_FINISH for other steps in auto mode', async () => {
+      delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      const provider = createMockProvider();
+      let seenDuringDispatch: string | undefined;
+      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+        return { success: true, output: '', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
+
+      await runner.run('explore', emptyState);
+
+      expect(seenDuringDispatch).toBeUndefined();
+    });
+
+    it('does not set CONDUCT_DAEMON_AUTO_FINISH for the finish step outside auto mode', async () => {
+      delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      const provider = createMockProvider();
+      let seenDuringDispatch: string | undefined;
+      (provider.invokeInteractive as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        seenDuringDispatch = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+        return { success: true, output: '', exitCode: 0 };
+      });
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
+
+      await runner.run('finish', emptyState);
+
+      expect(seenDuringDispatch).toBeUndefined();
+    });
+
+    it('restores a pre-existing CONDUCT_DAEMON_AUTO_FINISH value after an auto-mode finish dispatch', async () => {
+      process.env.CONDUCT_DAEMON_AUTO_FINISH = 'preexisting';
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', { mode: 'auto' });
+
+      await runner.run('finish', emptyState);
+
+      expect(process.env.CONDUCT_DAEMON_AUTO_FINISH).toBe('preexisting');
+    });
+  });
+
   it('worktree is autonomous', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');

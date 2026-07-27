@@ -434,7 +434,37 @@ export class DefaultStepRunner implements StepRunner {
     return this.sessionStore.beginBranch(step);
   }
 
+  /**
+   * `run()` is the single dispatch entry point for every step, across every
+   * invocation path (autonomous, interactive REPL, provider-aware, streaming,
+   * every provider). For the `finish` step in unattended (`auto`) mode, wrap
+   * the whole dispatch so `CONDUCT_DAEMON_AUTO_FINISH=1` is set in this
+   * process's environment BEFORE any subprocess is spawned — every provider's
+   * child process inherits `process.env` by default (see the
+   * `CLAUDE_CODE_EFFORT_LEVEL` precedent below), so the marker reaches any
+   * shell/CLI command the agent runs regardless of what flags it types.
+   * `finish-record-cli.ts` reads this marker to deterministically refuse
+   * `--choice keep` when a git remote is configured (Daemon Operations Safety
+   * rule 4 — "a manual PR is NOT a harness finish"). This makes PR-forcing
+   * machinery, not prompt discipline: the SKILL.md/prompt instructions below
+   * are guidance for the happy path, but this env marker is what the CLI
+   * actually enforces.
+   */
   async run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult> {
+    if (step === 'finish' && this.mode === 'auto') {
+      const previous = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      process.env.CONDUCT_DAEMON_AUTO_FINISH = '1';
+      try {
+        return await this.runDispatch(step, state, opts);
+      } finally {
+        if (previous === undefined) delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+        else process.env.CONDUCT_DAEMON_AUTO_FINISH = previous;
+      }
+    }
+    return this.runDispatch(step, state, opts);
+  }
+
+  private async runDispatch(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult> {
     if (step === 'complexity') {
       throw new Error(
         'complexity is handled by the engine via assessComplexity(); it must not be dispatched to run()',

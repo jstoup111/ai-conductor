@@ -12,6 +12,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `finish-record` now deterministically refuses `--choice keep` in unattended (auto/daemon) mode
+  whenever the repo has a configured git remote, instead of trusting the finish skill's prompt-level
+  "decide deterministically" instruction. `step-runners.ts` sets a `CONDUCT_DAEMON_AUTO_FINISH=1`
+  environment marker (inherited by every subprocess a daemon finish spawns, mirroring the existing
+  `CLAUDE_CODE_EFFORT_LEVEL` cascade pattern) for the duration of an auto-mode `finish` dispatch;
+  `finish-record-cli.ts` checks that marker plus `git remote` and fails closed (exit 1, no marker
+  written) rather than silently recording `keep` when a remote is present. Interactive/default-mode
+  finishes and remote-less repos are unaffected — a human can still choose Keep, and daemon finishes
+  with no remote configured still fall back to Keep as before. Closes the gap where an agent's
+  misjudged or ignored auto-mode instructions could produce a "false ship" the daemon only detected
+  after the fact (Daemon Operations Safety rule 4 — "a manual PR is NOT a harness finish").
 - Tolerated own-feature DECIDE-artifact amendments are now logged and judged by `build_review`'s Scope rubric, so unjustified changes fail review instead of passing silently ([implementation PR #1056](https://github.com/jstoup111/ai-conductor/pull/1056)).
 - `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
   of reading only the project file, so daemon-only operators no longer lose user-level settings that
