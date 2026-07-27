@@ -39,6 +39,14 @@ describe('buildGraderPrompt', () => {
     );
   });
 
+  it('treats approved DECIDE artifacts as plan-governed Scope changes', () => {
+    const prompt = buildGraderPrompt(inputs);
+
+    expect(prompt).toMatch(
+      /Scope:.*\.docs\/architecture\/.*\.docs\/plans\/.*\.docs\/specs\/.*\.docs\/stories\/.*already-approved DECIDE artifacts.*modification.*passes Scope only.*approved plan justifies it.*otherwise.*Scope failure/is,
+    );
+  });
+
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
