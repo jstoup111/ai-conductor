@@ -148,4 +148,163 @@ describe('live self-host boundary', () => {
         .toEqual([{ path: 'stale-worktree', digest: '3a290960b8a3c3913dfd9c042d391b18e7afa36617c19b37f134e3ea2883573b' }]);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
+
+  // --- #907 provider-state exclusions (counterpart to #985's live-checkout exclusions) ---
+  //
+  // Verified tonight: 18 files under a LIVE ~/.claude changed in a 12-minute window during
+  // a self-host run, written by an unrelated interactive session and background jobs, not
+  // the sandboxed build: settings.json, history.jsonl, .last-cleanup,
+  // plugins/known_marketplaces.json, shell-snapshots/*, backups/*, sessions/*. Everything
+  // else below each provider's excluded list is the same category of noise, confirmed by
+  // read-only inspection of a live ~/.claude and ~/.codex (file purpose + observed churn),
+  // not by a second incident.
+
+  it('ignores Claude provider-state noise from concurrent sessions/background jobs, not the sandboxed build (#907)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-claude-noise-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(live),
+      mkdir(join(provider, 'plugins'), { recursive: true }),
+      mkdir(join(provider, 'shell-snapshots'), { recursive: true }),
+      mkdir(join(provider, 'backups'), { recursive: true }),
+      mkdir(join(provider, 'sessions'), { recursive: true }),
+      mkdir(join(provider, 'session-env', 'abc'), { recursive: true }),
+      mkdir(join(provider, 'projects', 'proj'), { recursive: true }),
+      mkdir(join(provider, 'tasks', 'task-1'), { recursive: true }),
+      mkdir(join(provider, 'cache'), { recursive: true }),
+    ]);
+    await writeFile(join(provider, 'history.jsonl'), 'before');
+    await writeFile(join(provider, '.last-cleanup'), 'before');
+    await writeFile(join(provider, 'plugins', 'known_marketplaces.json'), 'before');
+    await writeFile(join(provider, 'shell-snapshots', 'a.sh'), 'before');
+    await writeFile(join(provider, 'backups', '.claude.json.backup.1'), 'before');
+    await writeFile(join(provider, 'sessions', '123.json'), 'before');
+    await writeFile(join(provider, 'session-env', 'abc', 'env'), 'before');
+    await writeFile(join(provider, 'projects', 'proj', 'transcript.jsonl'), 'before');
+    await writeFile(join(provider, 'tasks', 'task-1', '.lock'), 'before');
+    await writeFile(join(provider, '.last-update-result.json'), 'before');
+    await writeFile(join(provider, 'stats-cache.json'), 'before');
+    await writeFile(join(provider, 'mcp-needs-auth-cache.json'), 'before');
+    await writeFile(join(provider, 'cache', 'my-closed-issues.json'), 'before');
+    await writeFile(join(provider, 'settings.json'), 'unchanged');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+    // Every write below simulates an unrelated concurrent session or background job.
+    await writeFile(join(provider, 'history.jsonl'), 'after');
+    await writeFile(join(provider, '.last-cleanup'), 'after');
+    await writeFile(join(provider, 'plugins', 'known_marketplaces.json'), 'after');
+    await writeFile(join(provider, 'shell-snapshots', 'a.sh'), 'after');
+    await writeFile(join(provider, 'shell-snapshots', 'b.sh'), 'new');
+    await writeFile(join(provider, 'backups', '.claude.json.backup.2'), 'new');
+    await writeFile(join(provider, 'sessions', '123.json'), 'after');
+    await writeFile(join(provider, 'sessions', '456.json'), 'new');
+    await writeFile(join(provider, 'session-env', 'abc', 'env'), 'after');
+    await mkdir(join(provider, 'session-env', 'def'), { recursive: true });
+    await writeFile(join(provider, 'session-env', 'def', 'env'), 'new');
+    await writeFile(join(provider, 'projects', 'proj', 'transcript.jsonl'), 'after');
+    await writeFile(join(provider, 'tasks', 'task-1', '.lock'), 'after');
+    await rm(join(provider, 'tasks', 'task-1', '.lock'));
+    await writeFile(join(provider, '.last-update-result.json'), 'after');
+    await writeFile(join(provider, 'stats-cache.json'), 'after');
+    await writeFile(join(provider, 'mcp-needs-auth-cache.json'), 'after');
+    await writeFile(join(provider, 'cache', 'my-closed-issues.json'), 'after');
+    await writeFile(join(provider, 'cache', 'changelog.md'), 'new');
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('deliberately still trips on Claude settings.json — leak-indicative, kept fingerprinted despite noise cost (#907)', async () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['settings.json', 'settings.json'],
+      ['settings.local.json', 'settings.local.json'],
+      ['CLAUDE.md', 'CLAUDE.md'],
+      ['rules', join('rules', 'context7.md')],
+      ['skills', join('skills', 'some-skill', 'SKILL.md')],
+    ];
+    for (const [label, relPath] of cases) {
+      const root = await mkdtemp(join(tmpdir(), `live-boundary-claude-config-${label}-`));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(join(provider, ...relPath.split('/').slice(0, -1)), { recursive: true })]);
+      await writeFile(join(provider, relPath), 'before');
+      // Noise churns alongside the config-like mutation and must not mask it.
+      await writeFile(join(provider, 'history.jsonl'), 'noise');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'claude' });
+      await writeFile(join(provider, relPath), 'after');
+      await writeFile(join(provider, 'history.jsonl'), 'more noise');
+      try { expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false }); }
+      finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('ignores Codex provider-state noise from concurrent sessions/background jobs, not the sandboxed build (#907)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-codex-noise-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(live),
+      mkdir(join(provider, 'sessions', '2026', '07'), { recursive: true }),
+      mkdir(join(provider, 'shell_snapshots'), { recursive: true }),
+      mkdir(join(provider, 'cache', 'codex_app_directory'), { recursive: true }),
+      mkdir(join(provider, 'plugins', 'cache'), { recursive: true }),
+      mkdir(join(provider, 'mcp-oauth-locks'), { recursive: true }),
+      mkdir(join(provider, '.tmp', 'plugins'), { recursive: true }),
+      mkdir(join(provider, 'tmp'), { recursive: true }),
+      mkdir(join(provider, 'packages', 'standalone'), { recursive: true }),
+    ]);
+    await writeFile(join(provider, 'history.jsonl'), 'before');
+    await writeFile(join(provider, 'sessions', '2026', '07', 'a.jsonl'), 'before');
+    await writeFile(join(provider, 'shell_snapshots', 'a.sh'), 'before');
+    await writeFile(join(provider, 'cache', 'codex_app_directory', 'x.json'), 'before');
+    await writeFile(join(provider, 'plugins', 'cache', 'x.json'), 'before');
+    await writeFile(join(provider, 'mcp-oauth-locks', 'file-store.lock'), 'before');
+    await writeFile(join(provider, '.tmp', 'plugins', 'x'), 'before');
+    await writeFile(join(provider, 'tmp', 'arg0'), 'before');
+    await writeFile(join(provider, 'packages', 'standalone', 'install.lock'), 'before');
+    await writeFile(join(provider, 'models_cache.json'), 'before');
+    await writeFile(join(provider, 'goals_1.sqlite'), 'before');
+    await writeFile(join(provider, 'goals_1.sqlite-wal'), 'before');
+    await writeFile(join(provider, 'logs_2.sqlite'), 'before');
+    await writeFile(join(provider, 'logs_2.sqlite-wal'), 'before');
+    await writeFile(join(provider, 'memories_1.sqlite'), 'before');
+    await writeFile(join(provider, 'state_5.sqlite'), 'before');
+    await writeFile(join(provider, 'config.toml'), 'unchanged');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'codex' });
+    // Every write below simulates an unrelated concurrent session or background job.
+    await writeFile(join(provider, 'history.jsonl'), 'after');
+    await writeFile(join(provider, 'sessions', '2026', '07', 'a.jsonl'), 'after');
+    await writeFile(join(provider, 'shell_snapshots', 'a.sh'), 'after');
+    await writeFile(join(provider, 'cache', 'codex_app_directory', 'x.json'), 'after');
+    await writeFile(join(provider, 'plugins', 'cache', 'x.json'), 'after');
+    await writeFile(join(provider, 'mcp-oauth-locks', 'file-store.lock'), 'after');
+    await writeFile(join(provider, '.tmp', 'plugins', 'x'), 'after');
+    await writeFile(join(provider, 'tmp', 'arg0'), 'after');
+    await writeFile(join(provider, 'packages', 'standalone', 'install.lock'), 'after');
+    await writeFile(join(provider, 'models_cache.json'), 'after');
+    await writeFile(join(provider, 'goals_1.sqlite'), 'after');
+    await writeFile(join(provider, 'goals_1.sqlite-wal'), 'after');
+    await writeFile(join(provider, 'logs_2.sqlite'), 'after');
+    await writeFile(join(provider, 'logs_2.sqlite-wal'), 'after');
+    await writeFile(join(provider, 'memories_1.sqlite'), 'after');
+    await writeFile(join(provider, 'state_5.sqlite'), 'after');
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('still trips on Codex config-like state beside the excluded noise (#907)', async () => {
+    const cases: ReadonlyArray<readonly [string, string]> = [
+      ['config.toml', 'config.toml'],
+      ['hooks.json', 'hooks.json'],
+      ['rules', join('rules', 'default.rules')],
+    ];
+    for (const [label, relPath] of cases) {
+      const root = await mkdtemp(join(tmpdir(), `live-boundary-codex-config-${label}-`));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(join(provider, ...relPath.split('/').slice(0, -1)), { recursive: true })]);
+      await writeFile(join(provider, relPath), 'before');
+      await writeFile(join(provider, 'history.jsonl'), 'noise');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider, provider: 'codex' });
+      await writeFile(join(provider, relPath), 'after');
+      await writeFile(join(provider, 'history.jsonl'), 'more noise');
+      try { expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false }); }
+      finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
 });

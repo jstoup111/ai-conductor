@@ -1992,6 +1992,7 @@ export class Conductor {
         const boundary = await fingerprintLiveBoundary({
           liveCheckout,
           unrelatedProviderState: providerHome,
+          provider: codex ? 'codex' : 'claude',
           selectedAuthPaths: codex ? ['auth.json'] : ['.credentials.json'],
         });
         const verify = async () => {

@@ -36,6 +36,91 @@ const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
 ];
 
+/**
+ * Noise the CURRENT provider's home accumulates from parties OTHER than the
+ * sandboxed build: an unrelated interactive session sharing the machine, or a
+ * background job the provider CLI runs on its own schedule. Unlike
+ * `LIVE_CHECKOUT_VOLATILE` above, this surface is a LEAK DETECTOR — the
+ * sandboxed build gets a throwaway provider home, so the LIVE home should
+ * never change at all. Excluding a path here therefore trades away real
+ * detection power, not just harness self-bookkeeping; see
+ * `.docs/architecture/sequences/provider-neutral-self-host-isolation-907.md`.
+ *
+ * Every entry below is usage/log/cache telemetry that a genuine leak would
+ * not plausibly announce itself through on its own — it is written by any
+ * concurrent Claude process regardless of whether a self-host build is
+ * running. Verified for #907: 18 files under a live `~/.claude` changed in a
+ * 12-minute window during a real self-host run, written by an unrelated
+ * interactive session and background jobs, not the sandboxed build:
+ * `settings.json`, `history.jsonl`, `.last-cleanup`,
+ * `plugins/known_marketplaces.json`, `shell-snapshots/*`, `backups/*`,
+ * `sessions/*`. The remaining entries are the same category of noise,
+ * confirmed by read-only inspection of a live `~/.claude` (file purpose +
+ * observed churn), not by a second incident.
+ *
+ * DELIBERATELY NOT excluded, despite being verified noise in that same
+ * incident: `settings.json`. It is genuinely ambiguous — most of the time an
+ * unrelated interactive session changing a permission or hook setting, but a
+ * self-host process reaching back and rewriting operator config/hooks is
+ * exactly what this surface exists to catch. There is no clean way to tell
+ * those apart from a diff alone. Excluding it would blind the guard to a
+ * real leak into the most sensitive file this surface protects; keeping it
+ * fingerprinted means an interactive settings change can trip a concurrent
+ * build. This implementation keeps detection: `settings.json`,
+ * `settings.local.json`, `CLAUDE.md`, `rules/`, `skills/`, and any other
+ * config-like path not listed below stay fingerprinted.
+ */
+const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
+  'history.jsonl',                    // append-only prompt/response log for every session on the machine
+  '.last-cleanup',                    // background cleanup job's last-run timestamp
+  'plugins/known_marketplaces.json',  // marketplace list cache refreshed by CLI startup/polling
+  'shell-snapshots',                  // per-session recorded shell env for the Bash tool
+  'backups',                          // rolling `.claude.json.backup.*` snapshots the CLI writes on its own save cycle
+  'sessions',                         // per-process session index files, one per running Claude process
+  'session-env',                      // per-session scratch env directories; churns continuously with any session
+  'projects',                         // per-project session transcripts, appended on every turn of every session
+  'tasks',                            // background task/loop bookkeeping (.lock/.highwatermark), unrelated to the build
+  '.last-update-result.json',         // auto-updater's last-run result stamp
+  'stats-cache.json',                 // usage/statistics aggregation cache
+  'mcp-needs-auth-cache.json',        // cache of which MCP servers still need an auth prompt
+  'cache',                            // misc read-through caches (issue lists, changelog mirrors, etc.)
+];
+
+/** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
+const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
+  'history.jsonl',        // append-only prompt/response log for every session on the machine
+  'sessions',              // per-day session transcripts under sessions/YYYY/MM/DD
+  'shell_snapshots',       // per-session recorded shell env for the exec tool
+  'cache',                 // read-through app-directory/server-info/tools/plugin-catalog caches
+  'plugins/cache',         // installed-plugin cache refreshed on CLI startup
+  'plugins/.remote-plugin-install-staging', // transient staging dir for plugin installs
+  'mcp-oauth-locks',       // ephemeral lock files for the MCP oauth flow, not credential material
+  '.tmp',                  // plugin-sync staging/lock files written by the CLI's own updater
+  'tmp',                   // scratch dir (e.g. `arg0`) written by the CLI at startup
+  'packages/standalone',   // self-update installer bookkeeping (current release, install lock)
+  'models_cache.json',     // cache of available models, refreshed periodically
+  'goals_1.sqlite', 'goals_1.sqlite-shm', 'goals_1.sqlite-wal',       // Codex's own goal-tracking DB, written by any running session
+  'logs_2.sqlite', 'logs_2.sqlite-shm', 'logs_2.sqlite-wal',          // Codex's own internal log DB, written continuously
+  'memories_1.sqlite', 'memories_1.sqlite-shm', 'memories_1.sqlite-wal', // Codex's own memory-store DB
+  'state_5.sqlite', 'state_5.sqlite-shm', 'state_5.sqlite-wal',       // Codex's own session-state DB
+];
+
+/**
+ * DELIBERATELY NOT excluded for Codex, for the same reason as Claude's
+ * `settings.json`: `config.toml` (provider config) and `hooks.json` (hook
+ * wiring — executes code) stay fingerprinted even though an unrelated
+ * interactive Codex session editing either of them will trip a concurrent
+ * build. `rules/`, `.sandbox_migration`, `installation_id`, and
+ * `version.json` also stay fingerprinted: no churn was observed for them, so
+ * excluding them buys no false-positive relief and would only cost
+ * detection.
+ */
+function providerStateVolatile(provider: 'claude' | 'codex' | undefined): readonly string[] {
+  if (provider === 'codex') return CODEX_PROVIDER_STATE_VOLATILE;
+  if (provider === 'claude') return CLAUDE_PROVIDER_STATE_VOLATILE;
+  return [];
+}
+
 /** True iff `path` (root-relative, POSIX-ish) is an excluded path or sits under one. */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
   return exclude.some(ex => path === ex || path.startsWith(`${ex}/`));
@@ -68,9 +153,10 @@ async function manifest(root: string, exclude: readonly string[]): Promise<Entry
 }
 
 export async function fingerprintLiveBoundary(args: {
-  liveCheckout: string; unrelatedProviderState: string; selectedAuthPaths?: readonly string[];
+  liveCheckout: string; unrelatedProviderState: string;
+  provider?: 'claude' | 'codex'; selectedAuthPaths?: readonly string[];
 }): Promise<LiveBoundarySnapshot> {
-  const excluded = args.selectedAuthPaths ?? [];
+  const excluded = [...providerStateVolatile(args.provider), ...(args.selectedAuthPaths ?? [])];
   return { surfaces: [
     { root: args.liveCheckout, label: 'live checkout', exclude: LIVE_CHECKOUT_VOLATILE, manifest: await manifest(args.liveCheckout, LIVE_CHECKOUT_VOLATILE) },
     { root: args.unrelatedProviderState, label: 'provider state', exclude: excluded, manifest: await manifest(args.unrelatedProviderState, excluded) },
