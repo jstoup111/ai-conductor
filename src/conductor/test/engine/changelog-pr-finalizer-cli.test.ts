@@ -185,6 +185,37 @@ describe('finalizeChangelogPr', () => {
     });
   });
 
+  it('finalizes the actionable token while preserving a backticked documentation reference', async () => {
+    const changelogPath = '/repo/CHANGELOG.md';
+    const original =
+      '## [Unreleased]\n\n- Documents the `{{IMPLEMENTATION_PR}}` placeholder.\n- Add widgets ({{IMPLEMENTATION_PR}}).\n';
+    const files = new Map([[changelogPath, original]]);
+    const writeFile = vi.fn<ChangelogPrFinalizerRunners['writeFile']>(async (path, contents) => {
+      files.set(path, contents);
+    });
+    const rename = vi.fn<ChangelogPrFinalizerRunners['rename']>(async (from, to) => {
+      files.set(to, files.get(from) ?? '');
+      files.delete(from);
+    });
+
+    const result = await finalizeChangelogPr(
+      changelogPath,
+      'https://github.com/octo/widgets/pull/456',
+      {
+        readFile: vi.fn(async (path: string) => files.get(path) ?? ''),
+        writeFile,
+        rename,
+        rm: vi.fn(),
+      },
+    );
+
+    expect({ result, changelog: files.get(changelogPath) }).toEqual({
+      result: 'changed',
+      changelog:
+        '## [Unreleased]\n\n- Documents the `{{IMPLEMENTATION_PR}}` placeholder.\n- Add widgets ([implementation PR #456](https://github.com/octo/widgets/pull/456)).\n',
+    });
+  });
+
   it('refuses an unreadable changelog without attempting a write', async () => {
     const original = '## [Unreleased]\n\n- Add widget support ({{IMPLEMENTATION_PR}}).\n';
     const writeFile = vi.fn<ChangelogPrFinalizerRunners['writeFile']>();

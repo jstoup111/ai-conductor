@@ -2,6 +2,7 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 const IMPLEMENTATION_PR_TOKEN = '{{IMPLEMENTATION_PR}}';
+const ACTIONABLE_IMPLEMENTATION_PR_TOKEN = /(?<!`)\{\{IMPLEMENTATION_PR\}\}(?!`)/g;
 
 export const FINALIZE_CHANGELOG_PR_USAGE =
   'Usage: conduct-ts finalize-changelog-pr --pr-url <canonical-github-pr-url>';
@@ -66,12 +67,12 @@ export async function finalizeChangelogPr(
   }
 
   const changelog = await runners.readFile(changelogPath);
-  const tokenCount = changelog.split(IMPLEMENTATION_PR_TOKEN).length - 1;
-  if (tokenCount === 0) return 'no-op';
-  if (tokenCount > 1) throw new Error('multiple implementation PR tokens found');
+  const actionableTokens = [...changelog.matchAll(ACTIONABLE_IMPLEMENTATION_PR_TOKEN)];
+  if (actionableTokens.length === 0) return 'no-op';
+  if (actionableTokens.length > 1) throw new Error('multiple implementation PR tokens found');
 
   const replacement = `[implementation PR #${match[1]}](${prUrl})`;
-  const updatedChangelog = changelog.replace(IMPLEMENTATION_PR_TOKEN, replacement);
+  const updatedChangelog = changelog.replace(ACTIONABLE_IMPLEMENTATION_PR_TOKEN, replacement);
   const tempPath = `${changelogPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
 
   try {
