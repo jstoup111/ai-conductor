@@ -17,10 +17,11 @@ missing. Consequence: the daemon executes a DECIDE *authoring* step inside the b
 is production-observed on eight features, and one M-tier run exhausted its retry budget on a
 provider rate limit and halted the build (`.daemon/daemon.log:7906-7911`).
 
-Three files carry the change: `daemon-cli.ts` (preseed + stamping), `daemon-backlog.ts`
+Four production/test seams carry the change: `engineer/authoring.ts` and its focused authoring
+test (the M/L DECIDE producer), `daemon-cli.ts` (preseed + stamping), `daemon-backlog.ts`
 (discovery vetting), and `audit-trail-daemon-wiring.integration.test.ts` (a contract test that
-currently asserts the *wrong* behavior and must be inverted). Plus `docs/daemon-operations.md`
-and `CHANGELOG.md`.
+currently asserts the *wrong* behavior and must be inverted). Plus the engineer and daemon
+guides and `CHANGELOG.md`.
 
 **Two ordering hazards you must respect** (they are why Tasks 3 and 7 precede Tasks 5 and 8):
 the tier is currently resolved *after* the stamping loop in `daemon-cli.ts`, and *after* the
@@ -207,12 +208,40 @@ the existing `.daemon/warned/<slug>` channel.
 
 ---
 
+### Task 8a: Author the coherence artifact in the engineer DECIDE flow
+
+**Story:** 7
+**Type:** feature (happy path and negative path — RED then GREEN)
+
+`runAuthoring` has a canonical DECIDE sequence separate from the daemon resume path. Extend its
+`DecideStep` union and sequence so M/L authoring invokes `coherence_check` immediately after
+`plan`; retain the S-tier exemption. On approval, create `.docs/coherence/<slug>.md`, guard its
+path with `AuthoringGuard`, and stage it in the same spec-branch commit as the other DECIDE
+artifacts. A rejected coherence gate must preserve the existing all-or-nothing contract: no
+spec-branch artifacts or commit are created.
+
+**RED:** in `src/conductor/test/engine/engineer/authoring.test.ts`, prove that M and L invoke
+`coherence_check` after `plan` and commit the returned artifact under the plan stem; prove S does
+not invoke it or write a stub; prove a rejected M/L coherence gate leaves no authored branch.
+
+**GREEN:** implement the tier-aware gate and guarded write in
+`src/conductor/src/engine/engineer/authoring.ts`. Keep the injected `decide` seam as the boundary;
+do not call a provider, subprocess, or the daemon from this authoring flow.
+
+**Files likely touched:** `src/conductor/src/engine/engineer/authoring.ts`,
+`src/conductor/test/engine/engineer/authoring.test.ts`.
+
+**Done when:** engineer-authored M/L specs carry the required coherence artifact before merge,
+and S specs remain artifact-free.
+
+---
+
 ### Task 9: Document the new discovery rejection
 
 **Story:** 6
 **Type:** documentation (happy path and negative path)
 
-Update `docs/daemon-operations.md` to document the coherence rejection alongside the two existing
+Update `docs/guides/running-the-daemon.md` to document the coherence rejection alongside the two existing
 discovery warn-skips (stories-not-approved, plan-has-no-dependency-tree): what triggers it, that
 it applies to non-Small tiers only, the exact log line, that it is emitted once per slug via
 `.daemon/warned/<slug>`, and the remedy (author `.docs/coherence/<stem>.md` on the default
@@ -220,6 +249,10 @@ branch, or confirm the spec is genuinely Small).
 
 Also state the phase-ownership invariant the ADR establishes: a step declared `phase: 'DECIDE'`
 is owned by DECIDE and is never executed by the daemon.
+
+Update `docs/guides/engineer-loop.md` and `docs/guides/first-feature.md` to make the producer
+side explicit: engineer authoring runs `coherence_check` after `plan` for M/L tiers and commits
+`.docs/coherence/<plan-stem>.md`; S does neither.
 
 Required by the repo's documentation-upkeep rule — new daemon operational behavior must be
 documented in the same PR.
@@ -233,9 +266,9 @@ documented in the same PR.
 **Story:** none (infrastructure: release bookkeeping supporting Stories 1-6)
 **Type:** infrastructure
 
-Add a `CHANGELOG.md` `[Unreleased]` entry: the daemon no longer executes the DECIDE-phase
-coherence step, and merged non-Small specs without a coherence artifact are now warn-skipped at
-discovery.
+Add a `CHANGELOG.md` `[Unreleased]` entry: engineer authoring now produces the required M/L
+coherence artifact, the daemon no longer executes the DECIDE-phase coherence step, and merged
+non-Small specs without an artifact are now warn-skipped at discovery.
 
 Do **not** edit `VERSION` (locked until v1). Assess whether a `## Migration` block is required:
 this change touches none of the four canonical breaking surfaces (`bin/conduct CLI`, `skill
@@ -274,7 +307,8 @@ graph TD
     T6["T6 invert integration contract"]
     T7["T7 hoist tier above vetting checks"]
     T8["T8 discovery rejection check"]
-    T9["T9 daemon-operations.md"]
+    T8A["T8a engineer coherence authoring"]
+    T9["T9 daemon and engineer guides"]
     T10["T10 CHANGELOG + release gate"]
     T11["T11 integrity + full suite"]
 
@@ -284,7 +318,8 @@ graph TD
     T5 --> T6
     T6 --> T7
     T7 --> T8
-    T8 --> T9
+    T8 --> T8A
+    T8A --> T9
     T9 --> T10
     T10 --> T11
     T1 -.-> T8
@@ -304,3 +339,4 @@ blast-radius report but does not block it technically.
 | Story 4 — missing/invalid artifact rejected before BUILD | T1, T7, T8 |
 | Story 5 — Small-tier exemption preserved | T5, T8 |
 | Story 6 — operational documentation | T9 |
+| Story 7 — engineer authoring commits coherence artifact | T8a |

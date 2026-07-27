@@ -82,13 +82,16 @@ function fsTreeSource(root: string): BacklogTreeSource {
 
 const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
 const planWithDeps = () => '# Plan\n\n### Task 1\n**Dependencies:** none\n';
+const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
 
 /** Seed a fully eligible plan+stories pair, optionally carrying a Source-Ref marker. */
 async function seedSpec(dir: string, slug: string, opts: { sourceRef?: string } = {}): Promise<void> {
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  await mkdir(join(dir, '.docs/coherence'), { recursive: true });
   await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps());
   await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+  await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
   if (opts.sourceRef !== undefined) {
     await mkdir(join(dir, '.docs/intake'), { recursive: true });
     await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${opts.sourceRef}\n`);

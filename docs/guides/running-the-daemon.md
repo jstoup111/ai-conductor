@@ -17,6 +17,26 @@ so an unmerged `spec/<slug>` branch is invisible to it.
 | A fresh install | `bin/install --check` exits 0 or 2 — the freshness gate accepts both |
 | At least one merged spec on the default branch | `.docs/plans/<slug>.md` present on `main` |
 
+## Fix a discovery rejection
+
+Discovery reads only the default branch. It skips a merged spec, rather than starting a build, when
+it logs one of these lines:
+
+```text
+skip <slug>: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.
+skip <slug>: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.
+skip <slug>: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/<slug>.md) required for tier <tier>. Author it on the default branch; logged once.
+```
+
+The first two reject an unapproved stories artifact or a plan without a task dependency tree. The
+third applies only outside tier S: author a parseable `.docs/coherence/<stem>.md` on the default
+branch, or verify that the feature is correctly classified as tier S. Each reason is logged once
+per slug through `.daemon/warned/<slug>`; the marker suppresses repeated poll warnings until the
+spec is fixed.
+
+DECIDE artifacts are human-authored before merge. The daemon pre-seeds every DECIDE step (recording
+tier-skipped steps as skipped) and starts at BUILD; it never authors or reruns DECIDE work.
+
 ## Start the daemon
 
 ```bash

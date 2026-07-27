@@ -186,3 +186,27 @@ source.
 - **When** the repo's documentation-upkeep rule is applied at review,
 - **Then** the change is incomplete — new daemon operational behavior requires the guide update
   in the same PR.
+
+## Story 7 — Engineer authoring produces the required coherence artifact
+
+As an operator authoring a non-S spec through the engineer flow, when the plan is approved, the
+engine must run `coherence_check` and commit its artifact with the spec so that daemon discovery
+can build the merged spec without re-entering DECIDE.
+
+### Happy Path
+
+- **Given** an M- or L-tier `runAuthoring` invocation whose plan and coherence gates are approved,
+- **When** it creates the `spec/<slug>` branch,
+- **Then** it invokes `coherence_check` immediately after `plan`,
+- **And** it writes `.docs/coherence/<slug>.md`,
+- **And** that artifact is included in the authoring commit with the other DECIDE artifacts.
+
+### Negative Paths
+
+- **Given** an S-tier `runAuthoring` invocation,
+- **When** the plan is approved,
+- **Then** it does not invoke `coherence_check` and does not create a coherence artifact.
+
+- **Given** the M- or L-tier `coherence_check` gate is not approved,
+- **When** authoring would otherwise write artifacts,
+- **Then** authoring fails before creating the spec-branch artifacts or commit.

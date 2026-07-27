@@ -27,7 +27,8 @@ conduct-ts engineer
 
 This spawns an interactive `claude` session with `/engineer` as the opening prompt, inheriting your
 terminal. Drive the loop from there: it walks the DECIDE phase — explore, complexity, PRD (product
-track only), architecture, stories, conflict-check, plan — inside a dedicated per-idea git worktree,
+track only), architecture, stories, conflict-check, plan, and (for Medium and Large tiers)
+coherence-check — inside a dedicated per-idea git worktree,
 then lands the artifacts on a `spec/<slug>` branch and opens the spec PR.
 
 To skip the chat prompt and hand it the idea directly:
