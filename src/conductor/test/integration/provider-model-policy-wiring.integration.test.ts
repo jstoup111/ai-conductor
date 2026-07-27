@@ -187,6 +187,7 @@ it('composes one ordered provider context across the interactive run after regis
       sessions: 'new ProviderSessionStore()',
       config: 'config',
       modelOverride: 'opts.model',
+      effortOverride: 'opts.effort',
       onAttempt:
         "(step, attempt) =>\n      events.emit({ type: 'provider_attempt', step, ...attempt })",
       warn: '(_message, transition) => events.emit(transition)',

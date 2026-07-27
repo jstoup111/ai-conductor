@@ -216,11 +216,6 @@ conflict-check` is not the same string as `conflict_check`.
 > error and no event, and the run proceeds from that index. Check spelling and underscore form before
 > relying on it. Tracked in [#1027](https://github.com/jstoup111/ai-conductor/issues/1027).
 
-> **Known limitation.** `--step <step>` is advertised in `--help` and parsed into the CLI options, but
-> the value is never passed to the engine's conductor object. In `conduct-ts` its only effect is to suppress the
-> fresh-run state reset; it does not run a single step. Use `--from` instead. See
-> [cli](cli.md). Tracked in [#1013](https://github.com/jstoup111/ai-conductor/issues/1013).
-
 ## Step-to-skill mapping
 
 Dispatch reads a single map keyed by step name. That map is the authority for what a step invokes; the

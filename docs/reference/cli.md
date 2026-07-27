@@ -52,7 +52,7 @@ for an unknown command.
 | `[feature]` | 0..1 | conditional | Feature description. Drives slug and worktree naming and auto-resume matching. |
 
 A feature description is required unless at least one state flag is present. The state flags are
-`--resume`, `--status`, `--cleanup`, `--reset`, `--diagnose`, `--report`, `--from`, and `--step`.
+`--resume`, `--status`, `--cleanup`, `--reset`, `--diagnose`, `--report`, and `--from`.
 Without one, parsing throws `Feature description is required when no state flags are provided` and the
 run exits 1.
 
@@ -63,13 +63,14 @@ run exits 1.
 | `--auto` | boolean | `false` | mutually exclusive with `--interactive` | Run mode `auto`: skips checkpoint prompts, never opens a REPL, sets `dangerouslySkipPermissions` on dispatch, takes the existing tier or defaults to `L` without prompting (one of four tier paths — see [where the tier comes from](steps.md#where-the-tier-comes-from)), auto-skips advisory step failures, and skips the assess-staleness prompt. |
 | `--interactive` | boolean | `false` | mutually exclusive with `--auto` | Run mode `interactive`: opens a Claude REPL for every conversational step except `complexity`, `conflict_check`, `architecture_diagram`, `retro`, and `rebase`. `dangerouslySkipPermissions` stays off, so a human approves each action. |
 | `--status` | boolean | `false` | — | Prints `## Conductor State` and the state file as pretty JSON, then returns. No provider session. |
-| `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. |
+| `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. An unrecognized step name exits 1, printing the invalid value and every valid step name (built-ins plus any config-declared custom steps). |
 | `--cleanup` | boolean | `false` | — | Scans resumable features, reads `pr_url` from each `conduct-state.json`, checks whether the PR merged, and prompts `Remove merged worktree "<name>"? [y/n]` per merged feature. Prints a count. |
 | `--reset` | boolean | `false` | — | Writes an empty state object, prints `State cleared.`, and returns. |
 | `--diagnose` | boolean | `false` | — | Non-mutating. Resolves the worktree, then verifies state completeness. State OK prints `State OK…` and exits 0; gaps print a gap report plus remediation text to stderr and exit 1; an orphaned state exits 1. |
 | `--report` | boolean | `false` | — | Read-only. Renders `.pipeline/events.jsonl` as step durations, retry hotspots, and token spend, then exits 0. A report error exits 1. No provider session. |
 | `--cooldown <seconds>` | integer | `10` | no range check | Seconds to pause between steps. A non-numeric value parses to `NaN`. |
 | `--model <name>` | string | — | alias or full model ID | Overrides the model for every step. Beats every configured source. See [models](models.md). |
+| `--effort <level>` | string | — | one of `low`, `medium`, `high`, `xhigh`, `max` | Overrides the effort for every step. Beats every configured source. An invalid level exits 1, printing the invalid value and the valid levels. |
 | `--view <mode>` | enum | `full` | `full`, `focus`, `log` | Dashboard layout. Anything other than exactly `focus` or `log` silently coerces to `full`. |
 | `--tail-lines <n>` | integer | `20` | `0` disables the pane | Maximum lines of post-step stdout shown in the tail pane. |
 | `-h`, `--help` | boolean | — | — | Prints help and exits 0. |
@@ -80,7 +81,7 @@ flag's help string mentions it.
 
 ### Auto-resume
 
-When a feature description is given and none of `--resume`, `--fresh`, `--from`, or `--step` is
+When a feature description is given and none of `--resume`, `--fresh`, or `--from` is
 present, the engine looks for an existing worktree for that slug.
 
 | Detection | Behavior | Exit |
@@ -536,13 +537,3 @@ These are dispatched by skills, hooks, and the daemon rather than typed by an op
 | `manual-test-record` | `conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>` · `conduct-ts manual-test-record --results <path\|-> --pipeline-dir <dir>` | Appends a `## Attempt N` section to `<pipelineDir>/manual-test-results.md`, atomically. `--results -` reads stdin. `--skip` and `--results` are mutually exclusive and one is required. `--pipeline-dir` must be absolute. | 0; 1 on a usage error, an empty results payload, or any read/write error |
 | `derive-feedback` | `conduct-ts derive-feedback --sha <sha> [--plan <path>]` | Read-only advisory check for whether commit `<sha>` carries `Task: <id>` evidence, or touches files declared under a task in the given plan. Prints one JSON line. Never writes task status or the evidence sidecar. | **0 evidenced, 1 not evidenced, 2 usage.** Informational only — the calling hook must not propagate them |
 | `build-auth-status` | `conduct-ts build-auth-status` | Reports the self-host build auth mode and token state as `build-auth-status: mode=<mode> state=<state>[ path=<path>][ (<detail>)]`. Probes the real dispatch auth path when a token is present. | 0 when the mode is not `daemon-token` (`state=api-key`) or the token is `valid`; 1 for `missing`, `unreadable`, `invalid`, or `unverifiable`, each with a remediation message |
-
-## Accepted but non-functional
-
-These flags parse without error and appear in `--help`, but nothing consumes them. They are listed here
-so a reader who finds them in help output is not misled.
-
-| Flag | Help text | Actual effect |
-| --- | --- | --- |
-| `--output` | `Raw output mode` | None. The parsed value has no readers anywhere in the entry point. |
-| `--step <step>` | `Run single step` | Does not run a single step. It is never passed to the engine's conductor object. Its only observable effect is that it counts as a state flag — it satisfies the "feature description required" check and suppresses auto-resume. Use `--from <step>` to control where a run starts. |

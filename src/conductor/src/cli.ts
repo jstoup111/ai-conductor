@@ -1,5 +1,8 @@
 import { Command } from 'commander';
 import type { ViewMode } from './ui/types.js';
+import type { EffortLevel } from './types/config.js';
+
+const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 export interface CLIOptions {
   featureDesc?: string;
@@ -9,15 +12,18 @@ export interface CLIOptions {
   status: boolean;
   from?: string;
   cleanup: boolean;
-  step?: string;
   reset: boolean;
-  output: boolean;
   cooldown: number;
   /**
    * Claude model override applied to every step. Overrides config and defaults.
    * Useful for testing ("--model haiku") or forcing a specific model across the board.
    */
   model?: string;
+  /**
+   * Effort level override applied to every step. Overrides config and defaults.
+   * Must be one of the known levels: low | medium | high | xhigh | max.
+   */
+  effort?: EffortLevel;
   /** Dashboard layout: full (default), focus (current step + tail), log (tail only). */
   view: ViewMode;
   /** Max lines of last-step stdout to display. 0 disables the tail pane. */
@@ -56,11 +62,10 @@ function applyPipelineOptions(cmd: Command): Command {
     .option('--status', 'Show dashboard only')
     .option('--from <step>', 'Start from specific step')
     .option('--cleanup', 'Clean up worktrees')
-    .option('--step <step>', 'Run single step')
     .option('--reset', 'Clear state')
-    .option('--output', 'Raw output mode')
     .option('--cooldown <seconds>', 'Cooldown between steps in seconds', '10')
     .option('--model <name>', 'Override Claude model for every step (e.g. haiku, sonnet, opus, or full model ID)')
+    .option('--effort <level>', 'Override effort for every step: low | medium | high | xhigh | max')
     .option('--view <mode>', 'Dashboard layout: full | focus | log', 'full')
     .option('--tail-lines <n>', 'Max lines to show in post-step tail pane (0 disables)', '20')
     .option('--interactive', 'Run every step in interactive Claude REPL mode (no -p flag)')
@@ -342,6 +347,12 @@ export function parseArgs(argv: string[]): CLIOptions {
   const view: ViewMode =
     opts.view === 'focus' || opts.view === 'log' ? opts.view : 'full';
 
+  if (opts.effort !== undefined && !VALID_EFFORT_LEVELS.includes(opts.effort)) {
+    throw new Error(
+      `Invalid --effort "${opts.effort}". Valid levels: ${VALID_EFFORT_LEVELS.join(', ')}`,
+    );
+  }
+
   const result: CLIOptions = {
     featureDesc,
     resume: opts.resume ?? false,
@@ -350,11 +361,10 @@ export function parseArgs(argv: string[]): CLIOptions {
     status: opts.status ?? false,
     from: opts.from,
     cleanup: opts.cleanup ?? false,
-    step: opts.step,
     reset: opts.reset ?? false,
-    output: opts.output ?? false,
     cooldown: parseInt(opts.cooldown ?? '10', 10),
     model: opts.model,
+    effort: opts.effort as EffortLevel | undefined,
     view,
     tailLines: parseInt(opts.tailLines ?? '20', 10),
     interactive: opts.interactive ?? false,
@@ -369,7 +379,6 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.reset ||
     result.diagnose ||
     result.report ||
-    !!result.step ||
     !!result.from;
   if (!result.featureDesc && !hasStateFlag) {
     throw new Error('Feature description is required when no state flags are provided');

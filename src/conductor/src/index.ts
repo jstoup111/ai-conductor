@@ -35,7 +35,7 @@ import { readState, writeState } from './engine/state.js';
 import { parseArgs, renderFullHelp, renderDaemonHelp, detectInline, type CLIOptions } from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
-import { ALL_STEPS } from './engine/steps.js';
+import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
 import { scanResumableFeatures, selectFeature, formatResumeMenu } from './engine/resume.js';
 import { WorktreeManager, checkPrMerged } from './engine/worktree.js';
@@ -725,6 +725,14 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  // Validate --from against the resolved step registry (built-ins + any
+  // config-declared custom steps) BEFORE it reaches the conductor (#1027).
+  const fromStepError = validateFromStep(opts.from, config ?? {});
+  if (fromStepError) {
+    console.error(fromStepError);
+    process.exit(1);
+  }
+
   // Resolve the Mermaid renderer from the MERGED config (the user-level
   // ~/.ai-conductor/config.yml is where `install` writes the chosen preset).
   // The host renders diagrams at the approval gate; best-effort, with a notice
@@ -822,7 +830,7 @@ async function main(): Promise<void> {
   // Auto-resume: if a feature description was provided and a worktree for its
   // slug already exists with in-progress state, silently redirect to that
   // worktree and enable resume. --fresh bypasses this.
-  if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from && !opts.step) {
+  if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from) {
     const detection = await detectAutoResume(projectRoot, opts.featureDesc);
     if (detection.kind === 'resume') {
       projectRoot = detection.worktreePath;
@@ -1014,6 +1022,7 @@ async function main(): Promise<void> {
     sessions: new ProviderSessionStore(),
     config: config,
     modelOverride: opts.model,
+    effortOverride: opts.effort,
     // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
     // Conductor composes self-host authority around it when applicable.
     withCandidateSafety: createCandidateSafetyBoundary(),

@@ -10,6 +10,39 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Removed
+
+- `conduct-ts`'s `--output` and `--step <step>` CLI flags are gone. Neither did what its `--help`
+  text claimed: `--output` ("Raw output mode") had no reader anywhere in the entry point, and
+  `--step <step>` ("Run single step") was never passed to the engine's conductor object — its only
+  effect was to count as a state flag that suppressed auto-resume. `--from <step>` remains the
+  correct, functional way to start a run at a specific step; it is unchanged. `docs/reference/cli.md`
+  and `docs/reference/steps.md` already documented both flags as non-functional — that documentation
+  is now removed along with the flags ([#1013](https://github.com/jstoup111/ai-conductor/issues/1013)).
+
+## Migration
+
+`--output` and `--step <step>` are no longer accepted by `conduct-ts` — passing either now fails
+argument parsing with `error: unknown option`. Neither flag ever changed run behavior (see Removed,
+above), so no config or state migration is needed; the only action is removing them from any script,
+alias, or cron entry that still passes them. Audit your own invocations:
+
+```bash migration
+# Find shell scripts/aliases/CI configs in the current directory tree that still pass the
+# removed --output or --step flags to conduct-ts, so they can be edited by hand (nothing here
+# is auto-rewritten — these are external, not tracked in this repo).
+grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
+  --include='*.sh' --include='*.yml' --include='*.yaml' . 2>/dev/null \
+  || echo "No conduct-ts invocations with --output/--step found."
+```
+### Added
+
+- `conduct-ts` accepts `--effort <level>` (`low | medium | high | xhigh | max`) to override the
+  effort of every step, mirroring `--model`. The `effortCliOverride`/`effortOverride` resolution
+  seam already existed and was referenced by `resolveProviderNativeStepConfig` and the provider
+  execution context, but no CLI flag ever set it — `--effort` was silently unavailable
+  ([#1027](https://github.com/jstoup111/ai-conductor/issues/1027)).
+
 ### Fixed
 
 - A self-host live-boundary violation no longer retroactively fails the step that was already in
@@ -27,6 +60,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   attempt, each step entry including the parallel-group fan-out, and once more when the loop
   converges), so an in-flight step always concludes on its own merits and the new provider/config
   state applies from the next dispatch onward.
+- `--from <step>` now validates the step name against the resolved step registry (built-ins plus
+  any config-declared custom steps) and exits non-zero naming the invalid value and listing every
+  valid step, instead of silently resolving an unrecognized name to index `-1` (via
+  `Array.prototype.findIndex`'s not-found sentinel) and starting the run "before the first step"
+  ([#1027](https://github.com/jstoup111/ai-conductor/issues/1027)).
 - `finish-record` now deterministically refuses `--choice keep` in unattended (auto/daemon) mode
   whenever the repo has a configured git remote, instead of trusting the finish skill's prompt-level
   "decide deterministically" instruction. `step-runners.ts` sets a `CONDUCT_DAEMON_AUTO_FINISH=1`

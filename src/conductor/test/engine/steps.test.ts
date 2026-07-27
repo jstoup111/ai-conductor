@@ -14,6 +14,7 @@ import {
   getPrerequisites,
   buildStepRegistry,
   tryGetStepIndex,
+  validateFromStep,
   __resetCustomStepRegistrations,
 } from '../../src/engine/steps.js';
 import { phaseForStep } from '../../src/engine/resolved-config.js';
@@ -488,6 +489,40 @@ describe('engine/steps', () => {
 
     it('finish requires rebase', () => {
       expect(getPrerequisites('finish')).toEqual(['rebase']);
+    });
+  });
+
+  // --- validateFromStep (#1027) ---
+
+  describe('validateFromStep', () => {
+    it('returns null when --from is absent', () => {
+      expect(validateFromStep(undefined, {})).toBeNull();
+    });
+
+    it('returns null for a valid built-in step name', () => {
+      expect(validateFromStep('plan', {})).toBeNull();
+    });
+
+    it('returns an error naming the bad value and listing valid steps for an invalid step name', () => {
+      const error = validateFromStep('bogus_step', {});
+      expect(error).not.toBeNull();
+      expect(error).toContain('bogus_step');
+      for (const name of ALL_STEPS.map((s) => s.name)) {
+        expect(error).toContain(name);
+      }
+    });
+
+    it('accepts a config-declared custom step name', () => {
+      const config: HarnessConfig = {
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+          },
+        },
+      };
+      expect(validateFromStep('lint', config)).toBeNull();
     });
   });
 
