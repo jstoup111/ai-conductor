@@ -71,10 +71,12 @@ describe('S-tier pipeline knobs (#668)', () => {
       expect(l.effort).toBe(DEFAULT_STEP_EFFORT.explore);
     });
 
-    it('resolves build under L byte-identically to today (no build.L row is introduced)', () => {
+    it('keeps the #668 S retry profile out of L while retaining the approved L build effort', () => {
       const before = resolveStepConfig('build', 'BUILD', undefined, {});
       const afterL = resolveStepConfig('build', 'BUILD', undefined, { tier: 'L' });
-      expect(afterL).toEqual(before);
+      // #931 deliberately adds build.L = high to the provider-native policy.
+      // #668's S-only retry row must not overwrite that independent L choice.
+      expect(afterL).toEqual({ ...before, effort: 'high' });
     });
   });
 

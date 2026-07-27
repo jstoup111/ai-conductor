@@ -31,6 +31,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- `build_review` FAIL now resolves a structured routing decision — BUILD or
+  REMEDIATE — instead of an unconditional kickback to `build`. The decision is
+  derived deterministically from the grader verdict already on disk: a
+  completeness failure (the diff does not cover what the plan describes, which
+  may mean the plan task is under-decomposed) dispatches the existing
+  `remediate` planner, which routes per gap or HALTs for a human; tautology,
+  scope, and root-cause failures are local diff defects and keep kicking
+  straight back to `build` exactly as before. A FAIL with no completeness signal,
+  or a remediation plan with no usable dispositions, falls open to the unchanged
+  build kickback. Kickback counting semantics are unchanged (see #984).
+
 - Implement the per-step provider routing (#927) retrospective follow-ups:
   missing or unreadable event ledgers now produce visibly incomplete shipped
   cost records that clean KPI aggregates exclude, while the provider candidate
@@ -97,6 +108,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   built-in, and custom steps still claim no slot in the static linear index space —
   every ordering decision is registry-relative, derived from the step's `after:`
   target.
+- Daemon discovery no longer silently misclassifies a feature whose complexity/track
+  markers were landed under an undated stem. `.docs/complexity/<stem>.md` and
+  `.docs/track/<stem>.md` were read by the raw plan slug only, so a plan named
+  `YYYY-MM-DD-<name>.md` with markers at `<name>.md` missed both reads and the build
+  silently used the most-expensive defaults (`M` / `product`) — running `prd_audit`
+  and `architecture_review_as_built` that the real `S`/`technical` metadata would have
+  skipped, then blocking at SHIP on artifacts that were never required. Discovery now
+  falls back to the date-stripped stem, but only when exactly one plan maps to it, so
+  the relaxed lookup can never guess between two features; ambiguity refuses the
+  fallback. Any tier/track that still falls back to a default now logs the paths tried.
 
 - The self-build sandbox again propagates the operator's workspace trust. The
   throwaway `CLAUDE_CONFIG_DIR` stopped seeding `.claude.json` when the self-host

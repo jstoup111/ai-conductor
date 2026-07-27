@@ -557,6 +557,16 @@ export interface GatedRepoItem {
 }
 export type GatedItem = GatedSpecItem | GatedRepoItem;
 
+/**
+ * The plan stem with a leading `YYYY-MM-DD-` date prefix removed.
+ * Companion to `planStem()` — used ONLY as a relaxed second lookup key for the
+ * per-feature metadata markers, and only when it is unambiguous (see
+ * `readFeatureMarker` in `discoverBacklog`). Never used to key state.
+ */
+export function undatedStem(stem: string): string {
+  return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
+}
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
@@ -631,6 +641,54 @@ export async function discoverBacklog(
   // candidate — `listShippedRecords` already batches this via a single
   // `listShippedFiles()` call), then match each candidate by stem below.
   const shippedRecords = await listShippedRecords(tree);
+
+  // Dated-plan/undated-marker mismatch: per-feature metadata markers (`.docs/complexity/<stem>.md`,
+  // `.docs/track/<stem>.md`) are keyed by the PLAN STEM, but specs exist whose
+  // plan carries a `YYYY-MM-DD-` prefix while their markers were landed under
+  // the UNDATED stem. The slug-keyed read then missed, and the run silently
+  // fell back to the most-expensive defaults (M / product), running steps the
+  // real tier/track would have skipped. Allow one date-prefix-relaxed fallback
+  // — but only when exactly ONE candidate plan maps to that undated stem, so
+  // the relaxed lookup can never guess between two features (#407/#993).
+  const undatedPlanStemCounts = new Map<string, number>();
+  for (const f of planFiles) {
+    const base = undatedStem(planStem(f));
+    undatedPlanStemCounts.set(base, (undatedPlanStemCounts.get(base) ?? 0) + 1);
+  }
+  const readFeatureMarker = async (
+    markerDir: string,
+    slug: string,
+  ): Promise<{ content: string | null; tried: string[]; ambiguous: boolean }> => {
+    const exact = `${markerDir}/${slug}.md`;
+    const content = await tree.readFile(exact);
+    if (content !== null) return { content, tried: [exact], ambiguous: false };
+    const undated = undatedStem(slug);
+    if (undated === slug) return { content: null, tried: [exact], ambiguous: false };
+    if ((undatedPlanStemCounts.get(undated) ?? 0) > 1) {
+      return { content: null, tried: [exact], ambiguous: true };
+    }
+    const relaxed = `${markerDir}/${undated}.md`;
+    return { content: await tree.readFile(relaxed), tried: [exact, relaxed], ambiguous: false };
+  };
+  // A miss is silent downstream (daemon-cli fills in `M`/`product`), so name
+  // the paths tried in the log — logging only; no control-flow change. Scoped
+  // to slugs where a relaxed candidate was in play (a dated stem, or a refused
+  // ambiguous one): an UNDATED slug with no marker is the documented legacy
+  // case (pre-track/pre-complexity specs), and logging that on every poll for
+  // every such spec would be pure noise.
+  const warnMarkerDefault = async (
+    kind: 'tier' | 'track',
+    slug: string,
+    lookup: { tried: string[]; ambiguous: boolean },
+  ): Promise<void> => {
+    if (lookup.tried.length < 2 && !lookup.ambiguous) return;
+    await warnOnce(
+      `__${kind}-marker-default-${slug}__`,
+      `${slug}: no ${kind} marker resolved (tried ${lookup.tried.join(', ')}` +
+        `${lookup.ambiguous ? '; undated fallback refused — several plans share that stem' : ''})` +
+        ` — falling back to the daemon default; logged once.`,
+    );
+  };
 
   const items: BacklogItem[] = [];
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
@@ -768,7 +826,8 @@ export async function discoverBacklog(
     // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — so it is
     // resolvable here from the base-branch tree. Absent/garbled → undefined, and
     // the daemon falls back to 'M' (legacy behavior, no breakage).
-    const tier = parseComplexityTier(await tree.readFile(`.docs/complexity/${slug}.md`));
+    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
+    const tier = parseComplexityTier(tierMarker.content);
 
     // Carry the originating issue ref (if this spec came from github-issues
     // intake) so the daemon can put `Closes owner/repo#N` on the implementation
@@ -832,7 +891,15 @@ export async function discoverBacklog(
     // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
     // daemon treats the feature as `product` (back-compat: pre-track specs are
     // PRDs), so `prd`/`prd-audit` still run. Carried only when explicitly set.
-    const track = parseTrack(await tree.readFile(`.docs/track/${slug}.md`));
+    const trackMarker = await readFeatureMarker('.docs/track', slug);
+    const track = parseTrack(trackMarker.content);
+
+    // Observability for the two markers, emitted here — after every
+    // skip/gate `continue` above — so only a spec that actually dispatches
+    // reports its metadata resolution, and the owner-gate notices stay the
+    // first line logged for a slug.
+    if (!tier) await warnMarkerDefault('tier', slug, tierMarker);
+    if (!track) await warnMarkerDefault('track', slug, trackMarker);
 
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to

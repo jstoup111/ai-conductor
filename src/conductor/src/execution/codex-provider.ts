@@ -180,6 +180,8 @@ export class CodexProvider implements LLMProvider {
       env: this.invocationEnv(options, authentication),
     });
 
+    this.logDiagnostics(result, options.diagnosticLog);
+
     return this.classifyCompletion(result, true, authentication, true);
   }
 
@@ -201,13 +203,25 @@ export class CodexProvider implements LLMProvider {
       reject: false,
       input: this.composePrompt(options),
       stdin: 'pipe',
-      stdout: options.interactive ? ['pipe', 'inherit'] : 'pipe',
-      stderr: options.interactive ? ['pipe', 'inherit'] : 'pipe',
+      stdout: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
+      stderr: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
       cwd: options.cwd,
       env: this.invocationEnv(options, authentication),
     });
 
+    this.logDiagnostics(result, options.diagnosticLog);
+
     return this.classifyCompletion(result, false, authentication, !options.interactive);
+  }
+
+  private logDiagnostics(
+    result: { stdout?: unknown; stderr?: unknown },
+    diagnosticLog: InvokeOptions['diagnosticLog'],
+  ): void {
+    if (!diagnosticLog) return;
+    for (const output of [result.stdout, result.stderr]) {
+      if (typeof output === 'string' && output.length > 0) diagnosticLog(output);
+    }
   }
 
   private classifyCompletion(

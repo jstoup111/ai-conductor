@@ -11,7 +11,7 @@ Introduce a composable daemon text logger with an optional bounded feature tag, 
 
 ## Technical Approach
 
-Keep repository-global logging on the existing daemon logger. Add a pure feature-display formatter and a logger-derivation function that preserves the existing console/file behavior while inserting `[<feature>]` immediately after `[daemon]`. `beginFeatureRun` derives one immutable logger per backlog item; `makeRunFeature` uses that logger for feature preparation, conductor/event/provider execution, diagnostics, and terminal outcomes. This avoids ambient mutable feature state and makes overlapping loggers independently testable. The persisted timestamp remains outside the textual prefix, and ANSI stripping/rotation remain sink responsibilities.
+Keep repository-global logging on the existing daemon logger. Add a pure feature-display formatter and a logger-derivation function that preserves the existing console/file behavior while inserting `[<feature>]` immediately after `[daemon]`. `beginFeatureRun` derives one immutable logger per backlog item; `makeRunFeature` uses that logger for feature preparation, conductor/event/provider execution, feature-owned diagnostics, and terminal outcomes. Ambient process-wide diagnostics that do not pass through this boundary remain global. This avoids ambient mutable feature state and makes overlapping loggers independently testable. The persisted timestamp remains outside the textual prefix, and ANSI stripping/rotation remain sink responsibilities.
 
 ## Prerequisites
 
@@ -40,7 +40,7 @@ Keep repository-global logging on the existing daemon logger. Add a pure feature
 
 ### Task 2: Give each feature run an immutable logger
 
-**Story:** Story 1 — every feature-owned lifecycle line and overlapping logger negative path
+**Story:** Story 1 — feature-owned lifecycle lines and overlapping logger negative path
 **Type:** infrastructure
 
 **Steps:**
@@ -106,7 +106,7 @@ Keep repository-global logging on the existing daemon logger. Add a pure feature
 
 | Story criterion | Tasks |
 |---|---|
-| Every active-feature line has `[daemon][feature]` | 2, 3 |
+| Every feature-owned lifecycle line has `[daemon][feature]` | 2, 3 |
 | Long slugs truncate deterministically to a 24-character display | 1 |
 | Short slugs remain complete | 1 |
 | Global lines retain `[daemon]` only | 1, 4 |

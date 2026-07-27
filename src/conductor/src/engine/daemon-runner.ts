@@ -65,6 +65,8 @@ export interface FeatureWorktree {
 export interface FeatureRunScope {
   events: ConductorEventEmitter;
   providerExecution: ProviderExecutionContext;
+  /** Immutable logger that attributes runner-owned output to this feature. */
+  log?: (message: string) => void;
   stop: () => void | Promise<void>;
 }
 
@@ -87,13 +89,14 @@ export interface FeatureRunnerDeps {
    * aborts the feature (worktree kept) rather than building against a
    * half-prepared environment.
    */
-  prepareWorktree?: (worktree: FeatureWorktree) => Promise<void>;
+  prepareWorktree?: (worktree: FeatureWorktree, log?: (message: string) => void) => Promise<void>;
   /** Run the conductor's gate loop in the worktree to DONE/HALT (finish=open PR). */
   runConductor: (
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
     events?: ConductorEventEmitter,
+    log?: (message: string) => void,
   ) => Promise<void>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
@@ -174,6 +177,7 @@ export interface FeatureRunnerDeps {
   escalateBuildFailure?: (opts: {
     projectRoot: string;
     failureReason: string;
+    log?: (message: string) => void;
   }) => Promise<{ prUrl?: string }>;
   /**
    * Task 13: Setup-failure triage handler (daemon mode only). When a
@@ -186,6 +190,7 @@ export interface FeatureRunnerDeps {
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
+    log?: (message: string) => void,
   ) => Promise<TriageOutcome>;
   /**
    * Task 14 (TS-5): Surface quarantine evidence to the resuming build agent.
@@ -201,6 +206,7 @@ export interface FeatureRunnerDeps {
     worktree: FeatureWorktree,
     slug: string,
     outcome: TriageOutcome,
+    log?: (message: string) => void,
   ) => Promise<void>;
 }
 
@@ -297,12 +303,14 @@ export function makeRunFeature(
   return async (item: BacklogItem): Promise<FeatureOutcome> => {
     let worktree: FeatureWorktree | null = null;
     let featureRun: FeatureRunScope | undefined;
+    let featureLog = log;
     let providerExecution: ProviderExecutionContext | undefined;
     try {
       // The worktree is cut from the fast-forwarded default branch, so the vetted
       // stories+plan are already committed in it — no materialization/copy needed.
       worktree = await deps.createWorktree(item.slug);
       featureRun = await deps.beginFeatureRun?.(worktree, item);
+      featureLog = featureRun?.log ?? log;
       providerExecution =
         featureRun?.providerExecution ?? deps.providerExecution?.();
       // Prepare the worktree before the build: write WORKTREE_NAMESPACE and run
@@ -311,7 +319,7 @@ export function makeRunFeature(
       // other primitive throw (worktree kept, feature errored).
       if (deps.prepareWorktree) {
         try {
-          await deps.prepareWorktree(worktree);
+          await deps.prepareWorktree(worktree, featureLog);
         } catch (prepareErr) {
           // Check if error is a SetupFailureError (by name and presence of outputTail)
           const isSetupFailure = prepareErr instanceof Error &&
@@ -328,13 +336,14 @@ export function makeRunFeature(
               worktree,
               item,
               providerExecution,
+              featureLog,
             );
             if (triageOutcome.kind === 'park') {
               // Triage returned park: error outcome, worktree kept
-              log(
+              featureLog(
                 `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
               );
-              await writeErrorHalt(worktree, triageOutcome.outputTail, log, triageOutcome);
+              await writeErrorHalt(worktree, triageOutcome.outputTail, featureLog, triageOutcome);
               await deps.teardownWorktree(worktree, true);
               return {
                 slug: item.slug,
@@ -343,16 +352,16 @@ export function makeRunFeature(
               };
             }
             // Other triage outcomes (pass, quarantined-pass, fixed-pass) → continue to runConductor
-            log(`[daemon-runner] triage outcome: ${triageOutcome.kind}, continuing to runConductor`);
+            featureLog(`[daemon-runner] triage outcome: ${triageOutcome.kind}, continuing to runConductor`);
 
             // Task 14 (TS-5): surface quarantine evidence to the resuming build
             // agent before dispatch. Fail-open — a surfacing failure must never
             // block the build; it is diagnostic only.
             if (deps.surfaceQuarantineRef) {
               try {
-                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome);
+                await deps.surfaceQuarantineRef(worktree, item.slug, triageOutcome, featureLog);
               } catch (err) {
-                log(
+                featureLog(
                   `[daemon-runner] quarantine surfacing error (non-fatal): ${err instanceof Error ? err.message : String(err)}`,
                 );
               }
@@ -368,6 +377,7 @@ export function makeRunFeature(
         item,
         providerExecution,
         featureRun?.events,
+        featureLog,
       );
       const outcome = await deps.readOutcome(worktree);
 
@@ -378,7 +388,7 @@ export function makeRunFeature(
       // Best-effort inside emitEngineerSignal — never throws, so it cannot affect
       // the feature outcome or teardown discipline below.
       if (deps.daemon) {
-        await emitDaemonSignal(deps, worktree, item, outcome, providerExecution);
+        await emitDaemonSignal(deps, worktree, item, outcome, providerExecution, featureLog);
       }
 
       if (outcome.done) {
@@ -393,10 +403,15 @@ export function makeRunFeature(
           // enroll + teardown still run regardless.
           if (outcome.prUrl && deps.projectRoot) {
             try {
-              const cleanupResult = await cleanupHaltPresentation(gh, deps.projectRoot, outcome.prUrl, log);
-              log(`[daemon-runner] cleanup result: ${cleanupResult}`);
+              const cleanupResult = await cleanupHaltPresentation(
+                gh,
+                deps.projectRoot,
+                outcome.prUrl,
+                featureLog,
+              );
+              featureLog(`[daemon-runner] cleanup result: ${cleanupResult}`);
             } catch (err) {
-              log(
+              featureLog(
                 `[daemon-runner] clear-on-success error: ${err instanceof Error ? err.message : String(err)}`,
               );
             }
@@ -414,7 +429,7 @@ export function makeRunFeature(
                 repoCwd: deps.projectRoot,
               });
             } catch (err) {
-              log(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
+              featureLog(`[daemon-runner] enrollWatch error: ${err instanceof Error ? err.message : String(err)}`);
             }
           }
 
@@ -429,7 +444,7 @@ export function makeRunFeature(
           // `.daemon/processed/` ledger marker written above.
 
           await deps.teardownWorktree(worktree, false);
-          log(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
+          featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
           // FR-14: sweep mergeable labels after feature completes.
           await maybeSweep();
           return {
@@ -449,7 +464,7 @@ export function makeRunFeature(
         const reason = shipmentFailure;
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree, reason, log);
+        await writeErrorHalt(worktree, reason, featureLog);
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -460,16 +475,17 @@ export function makeRunFeature(
             await deps.escalateBuildFailure({
               projectRoot: worktree.path,
               failureReason: reason,
+              log: featureLog,
             });
           } catch (err) {
-            log(
+            featureLog(
               `[daemon-runner] escalateBuildFailure error: ${err instanceof Error ? err.message : String(err)}`,
             );
           }
         }
 
         await deps.teardownWorktree(worktree, true);
-        log(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
+        featureLog(`✋ ${item.slug} false-ship halted — worktree kept (${reason})`);
         // FR-14: sweep mergeable labels after feature completes (failed-ship).
         await maybeSweep();
         return {
@@ -482,7 +498,7 @@ export function makeRunFeature(
 
       if (outcome.halted) {
         await deps.teardownWorktree(worktree, true); // keep for the human
-        log(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
+        featureLog(`✋ ${item.slug} halted — worktree kept (${outcome.reason ?? 'see .pipeline/HALT'})`);
         // FR-14: sweep mergeable labels after feature completes (halted).
         await maybeSweep();
         return {
@@ -500,7 +516,7 @@ export function makeRunFeature(
         outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
           ? outcome.triageEvidence
           : undefined;
-      await writeErrorHalt(worktree, noMarkerReason, log, triageEvidenceForHalt);
+      await writeErrorHalt(worktree, noMarkerReason, featureLog, triageEvidenceForHalt);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -517,7 +533,7 @@ export function makeRunFeature(
       // inspection instead of being silently excluded for the run's lifetime.
       const reason = err instanceof Error ? err.message : String(err);
       if (worktree) {
-        await writeErrorHalt(worktree, reason, log);
+        await writeErrorHalt(worktree, reason, featureLog);
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
       return {
@@ -594,6 +610,7 @@ async function emitDaemonSignal(
   item: BacklogItem,
   outcome: WorktreeOutcome,
   providerExecution?: ProviderExecutionContext,
+  log?: (message: string) => void,
 ): Promise<void> {
   const featureOutcome: FeatureOutcome = {
     slug: item.slug,
@@ -615,7 +632,7 @@ async function emitDaemonSignal(
     provider: deps.provider,
     providerExecution,
     tierSkippedRetro,
-    log: deps.log,
+    log,
   });
 }
 

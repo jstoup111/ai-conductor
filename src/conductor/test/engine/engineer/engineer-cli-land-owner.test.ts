@@ -166,7 +166,16 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  await rm(workDir, { recursive: true, force: true });
+  // `workDir` contains a real git repo (`alpha/.git`) plus, for the `land`
+  // tests, a NESTED linked worktree under `alpha/.worktrees/engineer-<slug>`
+  // (see createEngineerWorktree). Removing a live git worktree's tree can
+  // race a still-settling git process (index/HEAD lock teardown, packed-refs
+  // rewrite) that briefly repopulates a directory (e.g. `.git/info`) between
+  // this recursive rm's readdir and rmdir — Node's `fs.rm` does not retry
+  // ENOTEMPTY unless `maxRetries` is set. `maxRetries`/`retryDelay` are the
+  // built-in Node mechanism for exactly this race (EBUSY/ENOTEMPTY/EPERM);
+  // this is not a masking retry loop layered on top.
+  await rm(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
 });
 
 describe('engineer land — owner-gate wiring (CLI seam)', () => {

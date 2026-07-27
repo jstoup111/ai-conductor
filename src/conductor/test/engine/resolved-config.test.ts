@@ -86,20 +86,20 @@ describe('engine/resolved-config', () => {
       expect(CLAUDE_MODEL_POLICY.stepEfforts.assess).toBe('high');
     });
 
-    it('mechanical steps get low effort', () => {
+    it('mechanical steps get low effort while orchestration retains its policy effort', () => {
       expect(CLAUDE_MODEL_POLICY.stepEfforts.bootstrap).toBe('low');
       expect(CLAUDE_MODEL_POLICY.stepEfforts.memory).toBe('low');
       expect(CLAUDE_MODEL_POLICY.stepEfforts.worktree).toBe('low');
-      expect(CLAUDE_MODEL_POLICY.stepEfforts.finish).toBe('low');
-      expect(CLAUDE_MODEL_POLICY.stepEfforts.build).toBe('low'); // dispatcher
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.finish).toBe('medium');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.build).toBe('medium');
       expect(CLAUDE_MODEL_POLICY.stepEfforts.test_suite).toBe('low');
     });
 
-    it('recovery steps (rebase, remediate) use fable with high+ effort', () => {
-      expect(CLAUDE_MODEL_POLICY.stepModels.rebase).toBe('fable');
-      expect(CLAUDE_MODEL_POLICY.stepEfforts.rebase).toBe('max');
+    it('recovery steps use their approved provider-policy defaults', () => {
+      expect(CLAUDE_MODEL_POLICY.stepModels.rebase).toBe('opus');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.rebase).toBe('high');
       expect(CLAUDE_MODEL_POLICY.stepModels.remediate).toBe('fable');
-      expect(CLAUDE_MODEL_POLICY.stepEfforts.remediate).toBe('high');
+      expect(CLAUDE_MODEL_POLICY.stepEfforts.remediate).toBe('medium');
     });
 
     it('review modes match the per-step design', () => {
@@ -189,27 +189,27 @@ describe('engine/resolved-config', () => {
         { step: 'bootstrap', model: 'sonnet', effort: 'low' },
         { step: 'memory', model: 'haiku', effort: 'low' },
         { step: 'assess', model: 'sonnet', effort: 'high' },
-        { step: 'explore', model: 'fable', effort: 'high' },
+        { step: 'explore', model: 'opus', effort: 'high' },
         { step: 'prd', model: 'fable', effort: 'high' },
         { step: 'complexity', model: 'sonnet', effort: 'low' },
         { step: 'stories', model: 'sonnet', effort: 'medium' },
-        { step: 'conflict_check', model: 'sonnet', effort: 'medium' },
-        { step: 'plan', model: 'sonnet', effort: 'high' },
+        { step: 'conflict_check', model: 'opus', effort: 'medium' },
+        { step: 'plan', model: 'opus', effort: 'high' },
         { step: 'architecture_diagram', model: 'sonnet', effort: 'medium' },
         { step: 'architecture_review', model: 'fable', effort: 'high' },
         { step: 'worktree', model: 'haiku', effort: 'low' },
-        { step: 'acceptance_specs', model: 'sonnet', effort: 'medium' },
-        { step: 'build', model: 'sonnet', effort: 'low' },
-        { step: 'build_review', model: 'opus', effort: 'high' },
+        { step: 'acceptance_specs', model: 'opus', effort: 'medium' },
+        { step: 'build', model: 'sonnet', effort: 'medium' },
+        { step: 'build_review', model: 'fable', effort: 'high' },
         { step: 'wiring_check', model: 'sonnet', effort: 'low' },
         { step: 'test_suite', model: 'sonnet', effort: 'low' },
         { step: 'manual_test', model: 'sonnet', effort: 'medium' },
-        { step: 'prd_audit', model: 'opus', effort: 'high' },
-        { step: 'architecture_review_as_built', model: 'sonnet', effort: 'medium' },
+        { step: 'prd_audit', model: 'fable', effort: 'high' },
+        { step: 'architecture_review_as_built', model: 'fable', effort: 'high' },
         { step: 'retro', model: 'sonnet', effort: 'medium' },
-        { step: 'rebase', model: 'fable', effort: 'max' },
-        { step: 'finish', model: 'haiku', effort: 'low' },
-        { step: 'remediate', model: 'fable', effort: 'high' },
+        { step: 'rebase', model: 'opus', effort: 'high' },
+        { step: 'finish', model: 'haiku', effort: 'medium' },
+        { step: 'remediate', model: 'fable', effort: 'medium' },
         { step: 'attribution_verify', model: 'opus', effort: 'high' },
       ]);
     });
@@ -452,14 +452,12 @@ describe('engine/resolved-config', () => {
       expect(rL.model).toBe('fable');
     });
 
-    it('conflict_check bumps to fable on Large, stays sonnet on S/M', () => {
-      // Regression: HARNESS.md promised "sonnet (S/M), fable (L)" but the engine
-      // never bumped the model — L ran on sonnet. Now enforced via tier override.
+    it('conflict_check uses opus on S/M and fable on Large', () => {
       expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'S' }).model).toBe(
-        'sonnet',
+        'opus',
       );
       expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'M' }).model).toBe(
-        'sonnet',
+        'opus',
       );
       expect(resolveStepConfig('conflict_check', 'DECIDE', CLAUDE_MODEL_POLICY, undefined, { tier: 'L' }).model).toBe(
         'fable',
@@ -468,13 +466,13 @@ describe('engine/resolved-config', () => {
 
     it('front-of-funnel discovery steps use reasoning-capable defaults', () => {
       // Under-modeling here cascades into everything downstream.
-      expect(resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
+      expect(resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('opus');
       expect(resolveStepConfig('explore', 'DECIDE', CLAUDE_MODEL_POLICY).effort).toBe('high');
       expect(resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
       expect(resolveStepConfig('prd', 'DECIDE', CLAUDE_MODEL_POLICY).effort).toBe('high');
       expect(resolveStepConfig('architecture_review', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
       expect(resolveStepConfig('architecture_review', 'DECIDE', CLAUDE_MODEL_POLICY).effort).toBe('high');
-      expect(resolveStepConfig('architecture_review_as_built', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
+      expect(resolveStepConfig('architecture_review_as_built', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('fable');
       expect(resolveStepConfig('complexity', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
       expect(resolveStepConfig('bootstrap', 'UNDERSTAND', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
     });
@@ -717,20 +715,20 @@ describe('engine/resolved-config', () => {
   });
 
   describe('resolveStepConfig — collateral-drift guard on untouched steps', () => {
-    it('finish stays haiku/low; build runs on sonnet (coding lane) at low effort', () => {
+    it('finish stays haiku/medium; build runs on sonnet at medium effort', () => {
       // Regression guard: verify that changes to recovery/failure-response steps
       // (rebase, remediate) do not inadvertently affect unrelated steps.
-      // finish stays on its mechanical haiku/low baseline.
+      // finish stays on its haiku/medium baseline.
       const rFinish = resolveStepConfig('finish', 'SHIP', CLAUDE_MODEL_POLICY);
       expect(rFinish.model).toBe('haiku');
-      expect(rFinish.effort).toBe('low');
+      expect(rFinish.effort).toBe('medium');
 
       // build was intentionally bumped haiku→sonnet: it launches the code-
       // authoring implementation session, so it needs a capable model. Effort
-      // is unchanged at low (the dispatch itself is light).
+      // is medium for reliable code authoring.
       const rBuild = resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY);
       expect(rBuild.model).toBe('sonnet');
-      expect(rBuild.effort).toBe('low');
+      expect(rBuild.effort).toBe('medium');
     });
   });
 
@@ -739,10 +737,10 @@ describe('engine/resolved-config', () => {
       // Regression: Task 2 changed DECIDE-step defaults (explore/prd/architecture_review→fable).
       // This test verifies BUILD-step models remain at their expected values:
       // - build (code-authoring implementation session) → sonnet (bumped from haiku)
-      // - acceptance_specs (test generation) → sonnet
+      // - acceptance_specs (test generation) → opus
       // - stories (feature tasks) → sonnet
       expect(resolveStepConfig('build', 'BUILD', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
-      expect(resolveStepConfig('acceptance_specs', 'BUILD', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
+      expect(resolveStepConfig('acceptance_specs', 'BUILD', CLAUDE_MODEL_POLICY).model).toBe('opus');
       expect(resolveStepConfig('stories', 'DECIDE', CLAUDE_MODEL_POLICY).model).toBe('sonnet');
     });
   });

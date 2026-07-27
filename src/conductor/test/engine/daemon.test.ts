@@ -182,6 +182,7 @@ describe('engine/daemon — runDaemon', () => {
 
   it('re-dispatches a halted feature after its HALT marker is cleared', async () => {
     const halted = new Set<string>();
+    const featureLines: string[] = [];
     let dispatches = 0;
     let slept = 0;
     const deps: DaemonDeps = {
@@ -199,10 +200,17 @@ describe('engine/daemon — runDaemon', () => {
         slept++;
         if (slept === 2) halted.delete('f0'); // human removes .pipeline/HALT
       },
+      featureLog: (slug) => (message) => featureLines.push(`[${slug}] ${message}`),
     };
     const res = await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 6 });
     expect(dispatches).toBe(2); // parked, then re-dispatched after the clear
     expect(res.processed.filter((o) => o.slug === 'f0' && o.status === 'done')).toHaveLength(1);
+    expect(featureLines).toEqual([
+      '[f0] ▶ start f0',
+      '[f0] ■ done f0: halted — needs human',
+      '[f0] ↻ resume f0',
+      '[f0] ■ done f0: done',
+    ]);
   });
 
   it('re-parks a feature that halts again until cleared (no tight re-dispatch loop)', async () => {

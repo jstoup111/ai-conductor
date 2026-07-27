@@ -1038,7 +1038,7 @@ describe('executeProviderCandidates', () => {
             sessionId: 'live-claude-session',
             resume: false,
             model: 'opus',
-            effort: 'medium',
+            effort: 'high',
           },
         ],
         [
@@ -1048,7 +1048,7 @@ describe('executeProviderCandidates', () => {
             sessionId: 'cached-claude-session',
             resume: false,
             model: 'opus',
-            effort: 'medium',
+            effort: 'high',
           },
         ],
       ],
@@ -1095,7 +1095,7 @@ describe('executeProviderCandidates', () => {
         preferredProvider: 'codex',
         actualProvider: 'claude',
         resolvedModel: 'opus',
-        resolvedEffort: 'medium',
+        resolvedEffort: 'high',
         attempts: [
           {
             provider: 'codex',
@@ -1120,7 +1120,7 @@ describe('executeProviderCandidates', () => {
         preferredProvider: 'codex',
         actualProvider: 'claude',
         resolvedModel: 'opus',
-        resolvedEffort: 'medium',
+        resolvedEffort: 'high',
         attempts: [
           {
             provider: 'codex',
@@ -1349,7 +1349,7 @@ describe('executeProviderCandidates', () => {
             sessionId: 'full-claude-session',
             resume: false,
             model: 'sonnet',
-            effort: 'medium',
+            effort: 'high',
           },
         ],
         sessions: {
@@ -1363,7 +1363,7 @@ describe('executeProviderCandidates', () => {
           preferredProvider: 'codex',
           actualProvider: 'claude',
           resolvedModel: 'sonnet',
-          resolvedEffort: 'medium',
+          resolvedEffort: 'high',
           attempts: [
             {
               provider: 'codex',
@@ -1574,7 +1574,7 @@ describe('executeProviderCandidates', () => {
           preferredProvider: 'codex',
           actualProvider: 'codex',
           resolvedModel: 'gpt-5.6-terra',
-          resolvedEffort: 'low',
+          resolvedEffort: 'medium',
           attempts: [
             {
               provider: 'codex',
@@ -1646,7 +1646,7 @@ describe('executeProviderCandidates', () => {
       preferredProvider: 'codex',
       actualProvider: 'claude',
       resolvedModel: 'sonnet',
-      resolvedEffort: 'low',
+      resolvedEffort: 'medium',
       attempts: [
         {
           provider: 'codex',

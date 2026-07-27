@@ -219,6 +219,8 @@ export interface ProviderExecutionContext {
   executor?: typeof executeProviderCandidates;
   onAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   warn?: ExecuteProviderCandidatesInput['warn'];
+  /** Feature-owned persisted sink for provider subprocess diagnostics. */
+  diagnosticLog?: (message: string) => void;
 }
 
 function hasRecoveryPrecedence(result: InvokeResult): boolean {
@@ -504,7 +506,15 @@ export async function executeProviderCandidates({
       modelOverride,
       effortOverride,
     });
-    const candidateOptions = optionsForCandidate?.(providerKey) ?? options;
+    // Candidate-specific options are a LAYER over the shared options, never a
+    // replacement. Callers attach run-scoped fields to `options` (e.g. a
+    // daemon feature's `diagnosticLog` sink) and express only the per-candidate
+    // delta — usually a re-rendered prompt — in `optionsForCandidate`. Merging
+    // instead of replacing keeps every scoped field alive for any future
+    // candidate-options provider that does not know to re-thread it.
+    const candidateOptions = optionsForCandidate
+      ? { ...options, ...optionsForCandidate(providerKey) }
+      : options;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     const invoke = async (): Promise<InvokeResult> => {
       const candidate = {

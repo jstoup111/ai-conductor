@@ -35,7 +35,7 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { startFeatureEventPersistence } from './engine/event-persister.js';
+import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
@@ -45,6 +45,10 @@ import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon
 import {
   openDaemonLog,
   formatDaemonLogLine,
+  formatDaemonActivityLine,
+  formatDaemonFeatureTag,
+  createDaemonModeLogger,
+  createFeatureDaemonLogger,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName } from './types/index.js';
@@ -520,10 +524,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // after `log` is defined.
   let ciFixEnabled = true;
 
-  // Task 16: Transition-only per-slug status logging + resume line
-  // Track the last status for each slug so we only emit log lines when status changes
-  const lastStatus = new Map<string, string>();
-
   // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime
   // of this daemon run. Constructed once, outside the sweep loop, and reused on
   // every startup + idle-poll sweep so steady-state (unchanged) PRs stay silent
@@ -531,52 +531,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
-  const log = (msg: string) => {
-    // Task 16: Parse per-feature log lines and suppress unchanged status
-    // Pattern 1: "▶ start <slug>" → { slug, status: 'start' }
-    const startMatch = msg.match(/▶.*start\s+(\S+)/);
-    if (startMatch) {
-      const slug = startMatch[1];
-      const status = 'start';
-      if (lastStatus.get(slug) === status) {
-        return; // Suppress unchanged status
-      }
-      lastStatus.set(slug, status);
-      // Fall through to log
-    }
-
-    // Pattern 2: "↻ resume <slug>" → { slug, status: 'resume' }
-    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
-    if (resumeMatch) {
-      const slug = resumeMatch[1];
-      const oldStatus = lastStatus.get(slug);
-      const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
-      lastStatus.set(slug, 'resume');
-      console.log(`${chalk.dim('[daemon]')} ${newMsg}`);
-      logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(newMsg)}`));
-      return; // Resume lines always logged with (was: ...) appended
-    }
-
-    // Pattern 3: "■ done <slug>: <outcome_status>" → { slug, status: outcome_status }
-    // This captures the outcome status (done, halted, error)
-    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
-    if (doneMatch) {
-      const slug = doneMatch[1];
-      const outcomeStatus = doneMatch[2]; // e.g., "done", "halted", "error"
-      if (lastStatus.get(slug) === outcomeStatus) {
-        return; // Suppress unchanged status
-      }
-      lastStatus.set(slug, outcomeStatus);
-      // Fall through to log
-    }
-
-    // For all other lines (discovery, sweeps, etc.), always log
-    console.log(`${chalk.dim('[daemon]')} ${msg}`);
-    // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
-    // back via `conduct daemon logs` can be correlated in time; the console stays
-    // uncluttered for live watching.
-    logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
-  };
+  const log = createDaemonModeLogger({
+    formatActivityLine: formatDaemonActivityLine,
+    writeLive: (line) =>
+      console.log(`${chalk.dim('[daemon]')}${line.slice('[daemon]'.length)}`),
+    // The persisted record gets a leading ISO-8601 UTC timestamp so activity
+    // read back via `conduct daemon logs` can be correlated in time; the
+    // console stays uncluttered for live watching.
+    writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
+  });
 
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
@@ -791,14 +754,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
   const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  // Surface per-step loop progress on the console. Without this the daemon was
-  // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
-  // step_started/gate_verdict/kickback away). Events don't carry a feature slug,
-  // so with concurrency > 1 lines from different workers interleave; the `·`
-  // prefix marks them as inner-loop progress under the active feature.
-  const subscriber = registerBuiltins(registry, events, (event) =>
-    renderDaemonEvent(event, log),
-  );
+  // Feature-scoped renderers are installed in beginFeatureRun (and via
+  // createSlugScopedProviderExecution below) with the feature-owned logger.
+  // This global subscriber renders anything emitted directly on the
+  // daemon-wide bus (untagged) so those events keep reaching daemon.log
+  // exactly as they did before per-feature tagging was introduced.
+  const subscriber = registerBuiltins(registry, events, (event) => {
+    // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
+    // are already rendered, tagged, by that feature's own listeners
+    // (beginFeatureRun below) — render them here too and every one of the 19
+    // TerminalSubscriber event types would double-print, once tagged and once
+    // untagged.
+    if ((event as Record<PropertyKey, unknown>)[FORWARDED_FROM_FEATURE]) return;
+    renderDaemonEvent(event, log);
+  });
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
@@ -808,9 +777,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const configuredProviders = normalizeProviderSelection(config?.llm_provider);
   const createProviderExecution = (
     eventTarget = events,
+    runtimeLog = log,
   ): ProviderExecutionContext => ({
     configuredProviders,
-    runtimes: createProviderRuntimeSet(registry, log),
+    runtimes: createProviderRuntimeSet(registry, runtimeLog),
     sessions: new ProviderSessionStore(),
     config,
     // The per-feature Conductor composes self-host authority around this
@@ -819,13 +789,63 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     onAttempt: (step, attempt) =>
       eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
     warn: (_message, transition) => eventTarget.emit(transition),
+    ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
-  const beginFeatureRun = (worktree: FeatureWorktree) => {
+  // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
+  // feature slug but have no persistent per-feature event bus like
+  // beginFeatureRun's featureEvents. Give them their own scoped bus + logger
+  // so their provider_fallback transitions and subprocess diagnostics render
+  // tagged with the slug (e.g. `[daemon][<slug>] ...`) instead of falling
+  // back to the untagged global logger.
+  const createSlugScopedProviderExecution = (slug: string): ProviderExecutionContext => {
+    const scopedEvents = new ConductorEventEmitter();
+    const scopedLog = createFeatureDaemonLogger(
+      slug,
+      (message) => log(message, true),
+      formatDaemonFeatureTag(slug),
+    );
+    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
+    return createProviderExecution(scopedEvents, scopedLog);
+  };
+  // The pool emits a feature's start/resume/done records before and after its
+  // worktree scope exists. Cache the scoped logger by slug so those lifecycle
+  // records and the worktree-owned records share one immutable attribution.
+  const featureLogs = new Map<string, (message: string) => void>();
+  const featureLogFor = (slug: string): ((message: string) => void) => {
+    let featureLog = featureLogs.get(slug);
+    if (!featureLog) {
+      featureLog = createFeatureDaemonLogger(
+        slug,
+        (message) => log(message, true),
+        formatDaemonFeatureTag(slug),
+      );
+      featureLogs.set(slug, featureLog);
+    }
+    return featureLog;
+  };
+  const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
     const persistence = startFeatureEventPersistence(worktree.path, events);
     const featureEvents = persistence.events;
+    const featureLog = featureLogFor(item.slug);
+    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+    const renderableEvents: ConductorEvent['type'][] = [
+      'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
+      'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
+      'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
+      'build_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
+      'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
+      'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
+      'auto_park_contradiction',
+    ];
+    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
     return {
       ...persistence,
-      providerExecution: createProviderExecution(featureEvents),
+      providerExecution: createProviderExecution(featureEvents, featureLog),
+      log: featureLog,
+      stop: () => {
+        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+        persistence.stop();
+      },
     };
   };
   // Resolve the active memory provider once at run start so all steps see the
@@ -845,6 +865,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     item: BacklogItem,
     providerExecution = createProviderExecution(),
     featureEvents: ConductorEventEmitter = events,
+    featureLog = log,
   ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
@@ -907,6 +928,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         modelPolicy: selectedRuntime.policy,
         mode: 'auto',
         providerExecution,
+        log: featureLog,
       },
     );
 
@@ -928,6 +950,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       modelPolicy: selectedRuntime.policy,
       providerExecution,
       projectRoot: wt.path,
+      log: featureLog,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon
       // is building the harness itself. `baseBranch` feeds the release-artifact
       // migration classifier (`<base>...HEAD`).
@@ -966,7 +989,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // or for the eventual un-park to resume normally.
     const parked = await isOperatorParked(projectRoot, item.slug);
     if (parked) {
-      log(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
+      featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
       return;
     }
     const resume = await resumeRebaseFirst({
@@ -985,13 +1008,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       runGh: ownerGh,
       prUrl: baseState.pr_url,
       slug: item.slug,
-      log,
+      log: featureLog,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
     if (resume === 'already_shipped') {
       // The merged record was verified on merged history. Do not manufacture
       // local success markers; let the ordinary completion boundary converge.
-      log(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
+      featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
     await conductor.run();
@@ -1009,7 +1032,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       prUrl: finalState.ok ? finalState.value.pr_url : undefined,
       cwd: wt.path,
       slug: item.slug,
-      log,
+      log: featureLog,
     });
 
   };
@@ -1023,6 +1046,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution = createProviderExecution(),
+    featureLog = log,
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -1034,11 +1058,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     // Inject prepareWorktree for retry after quarantine
     const runPrepare = (worktreePath: string) =>
-      prepareWorktree(worktreePath, log, { verbose: config?.daemon_verbose ?? false });
+      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false });
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
-    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log: featureLog });
 
     // A park with no quarantineRef is a genuine PRESERVATION failure (the
     // quarantine commit/branch itself could not be created) — stop immediately,
@@ -1074,11 +1098,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           featureDesc: `setup-fix-${item.slug}`,
           config,
           modelPolicy: selectedRuntime.policy,
-          mode: 'auto',
-          providerExecution,
+        mode: 'auto',
+        providerExecution,
+        log: featureLog,
         },
       );
-      log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+      featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
       await stepRunner.resolveSetupFailure({
         worktreePath: worktree.path,
         outputTail: error.outputTail ?? '',
@@ -1372,6 +1397,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         }
       },
       runFeature,
+      featureLog: featureLogFor,
       log,
       staleEngineChecker,
       requestRestart,
@@ -1624,7 +1650,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                   try {
                     // Create a fresh step runner for this rebase resolution attempt
                     const sessionId = uuidv4();
-                    const providerExecution = createProviderExecution();
+                    const providerExecution = createSlugScopedProviderExecution(entry.slug);
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
@@ -1638,6 +1664,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                         modelPolicy: selectedRuntime.policy,
                         mode: 'auto',
                         providerExecution,
+                        log: createFeatureDaemonLogger(
+                          entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(entry.slug),
+                        ),
                       },
                     );
                     return await stepRunner.resolveRebaseConflict(ctx);
@@ -1710,7 +1741,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
-                    const providerExecution = createProviderExecution();
+                    const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
@@ -1724,6 +1755,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                         modelPolicy: selectedRuntime.policy,
                         mode: 'auto',
                         providerExecution,
+                        log: createFeatureDaemonLogger(
+                          ctx.entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(ctx.entry.slug),
+                        ),
                       },
                     );
                     await stepRunner.resolveCiFailure({

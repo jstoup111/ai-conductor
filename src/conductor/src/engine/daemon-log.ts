@@ -20,6 +20,115 @@ const DAEMON_LOG_NAME = 'daemon.log';
 const ROTATED_LOG_NAME = 'daemon.log.1';
 /** Single-file rotation cap (~1 MB). On open, an oversized log is moved aside once. */
 const ROTATE_SIZE_BYTES = 1_000_000;
+const FEATURE_TAG_DISPLAY_LENGTH = 24;
+
+/** Render a feature slug for a daemon log tag, bounded for readable live output. */
+export function formatDaemonFeatureTag(featureSlug: string): string {
+  const display =
+    featureSlug.length > FEATURE_TAG_DISPLAY_LENGTH
+      ? `${featureSlug.slice(0, FEATURE_TAG_DISPLAY_LENGTH - 1)}…`
+      : featureSlug;
+  return `[${display}]`;
+}
+
+/**
+ * Compose the daemon-owned prefix with one message for both live and durable
+ * output. Feature loggers put their tag at the start of a message, where it
+ * deliberately joins `[daemon]` without whitespace; ordinary repository-wide
+ * messages retain the familiar separating space.
+ */
+export function formatDaemonActivityLine(message: string, featureOwned = false): string {
+  if (featureOwned) return `[daemon]${message}`;
+  return `[daemon] ${message}`;
+}
+
+/**
+ * Build the daemon's contextual activity logger. Keeping transition state in
+ * this shared logging boundary makes status suppression apply equally to the
+ * console and durable-log sinks, including feature-owned messages.
+ */
+export function createDaemonModeLogger(sinks: {
+  writeLive: (line: string) => void;
+  writePersisted: (line: string) => void;
+  formatActivityLine?: (message: string, featureOwned: boolean) => string;
+}): (msg: string, featureOwned?: boolean) => void {
+  const lastStatus = new Map<string, string>();
+  const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
+
+  return (msg: string, featureOwned = false) => {
+    // Subprocess output is commonly a single captured string containing many
+    // lines. Attribute and persist each physical line independently: otherwise
+    // only the first one receives the daemon/feature prefix and timestamp.
+    const lines = msg.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    for (const lineMessage of lines) {
+      writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
+    }
+  };
+}
+
+function writeDaemonMessage(
+  msg: string,
+  featureOwned: boolean,
+  lastStatus: Map<string, string>,
+  formatActivityLine: (message: string, featureOwned: boolean) => string,
+  sinks: Pick<Parameters<typeof createDaemonModeLogger>[0], 'writeLive' | 'writePersisted'>,
+): void {
+    // Lifecycle transition suppression (start/resume/done) tracks repository-global
+    // status per feature slug. A genuine lifecycle line always opens with the glyph
+    // (optionally behind a bracketed tag and/or ANSI color codes) — real emitters
+    // (daemon.ts dispatch/collect) never embed the glyph mid-sentence. Anchoring the
+    // match to the message's leading content means feature-owned prose that merely
+    // quotes another feature's lifecycle text elsewhere in the line (e.g. "note: ▶
+    // start feature-b was logged") cannot be mistaken for a real transition and
+    // wrongly suppress that feature's later genuine line.
+    const LEADING_NOISE = /^(?:\[[^\]]*\]\s*)*(?:\x1b\[[0-9;]*m)*/;
+    const startMatch = msg.match(new RegExp(LEADING_NOISE.source + '▶.*start\\s+(\\S+)'));
+    if (startMatch) {
+      const slug = startMatch[1];
+      if (lastStatus.get(slug) === 'start') return;
+      lastStatus.set(slug, 'start');
+    }
+
+    const resumeMatch = msg.match(new RegExp(LEADING_NOISE.source + '↻.*resume\\s+(\\S+)'));
+    if (resumeMatch) {
+      const slug = resumeMatch[1];
+      const oldStatus = lastStatus.get(slug);
+      lastStatus.set(slug, 'resume');
+      const resumed = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
+      const line = formatActivityLine(resumed, featureOwned);
+      sinks.writeLive(line);
+      sinks.writePersisted(line);
+      return;
+    }
+
+    const doneMatch = msg.match(new RegExp(LEADING_NOISE.source + '■.*done\\s+(\\S+):\\s+(\\S+)'));
+    if (doneMatch) {
+      const [, slug, outcomeStatus] = doneMatch;
+      if (lastStatus.get(slug) === outcomeStatus) return;
+      lastStatus.set(slug, outcomeStatus);
+    }
+
+    const line = formatActivityLine(msg, featureOwned);
+    sinks.writeLive(line);
+    sinks.writePersisted(line);
+}
+
+/**
+ * Derive an immutable feature-owned logger from a daemon logger. The base logger
+ * remains responsible for adding its `[daemon]` prefix and choosing live/file sinks.
+ */
+export function createFeatureDaemonLogger(
+  featureSlug: string,
+  baseLog: (message: string, featureOwned?: boolean) => void,
+  featureTag = formatDaemonFeatureTag(featureSlug),
+): (message: string) => void {
+  return (message) => {
+    const lines = message.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    for (const line of lines) baseLog(`${featureTag} ${line}`, true);
+  };
+}
 
 /** Absolute path to a repo's daemon activity log. */
 export function daemonLogPath(repoPath: string): string {

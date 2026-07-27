@@ -306,6 +306,12 @@ export interface DaemonDeps {
   rateLimitEpisode?: RateLimitEpisode;
   /** Optional progress line (narrator). */
   log?: (msg: string) => void;
+  /**
+   * Returns the immutable, feature-scoped logger for lifecycle records owned
+   * by the pool (start, resume, and terminal outcome). Absent keeps the
+   * pure-core/global-log behavior used by existing callers and tests.
+   */
+  featureLog?: (slug: string) => (msg: string) => void;
   /** Injectable sleep (tests pass a no-op / fake clock). */
   sleep?: (ms: number) => Promise<void>;
   /** Injectable clock for the wall-clock ceiling (tests pass a fake). */
@@ -790,6 +796,7 @@ export async function runDaemon(
   };
 
   const dispatch = (item: BacklogItem): void => {
+    const featureLog = deps.featureLog?.(item.slug) ?? log;
     // Task 16: Detect if this is a re-dispatch (slug was parked)
     const isResume = parked.has(item.slug);
 
@@ -805,9 +812,9 @@ export async function runDaemon(
 
     // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
     if (isResume) {
-      log(`${chalk.cyan('↻')} resume ${chalk.bold(item.slug)}`);
+      featureLog(`${chalk.cyan('↻')} resume ${chalk.bold(item.slug)}`);
     } else {
-      log(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
+      featureLog(`${chalk.cyan('▶')} start ${chalk.bold(item.slug)}`);
     }
     const tagged: Tagged = deps
       .runFeature(item)
@@ -863,7 +870,7 @@ export async function runDaemon(
     // Surface the reason for non-done outcomes — without it the log showed a bare
     // `error`/`halted` and the operator had to re-run by hand to find the cause.
     const why = !ok && outcome.reason ? ` — ${outcome.reason.split('\n')[0]}` : '';
-    log(
+    (deps.featureLog?.(slug) ?? log)(
       `${marker} done ${chalk.bold(slug)}: ${status}${why}${outcome.prUrl ? ` ${chalk.cyan(outcome.prUrl)}` : ''}`,
     );
   };
