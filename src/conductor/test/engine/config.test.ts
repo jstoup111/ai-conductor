@@ -1657,6 +1657,15 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('keeps cooldownMinutes when an unknown sibling is ignored', () => {
+      const result = validateConfig({ ci_watch: { cooldownMinutes: 15, bogus: 1 } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch).toEqual({ enabled: true, cooldownMinutes: 15 });
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/bogus/);
+    });
+
     it('resolves null to enabled silently', () => {
       const result = validateConfig({ ci_watch: null });
       expect(result.ok).toBe(true);
