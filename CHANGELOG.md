@@ -45,6 +45,21 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 ### Fixed
 
+- A self-host live-boundary violation no longer retroactively fails the step that was already in
+  flight when it happened. The boundary fingerprint is taken when a provider candidate is prepared
+  and re-verified in that candidate's teardown, so any concurrent change to the live checkout or the
+  operator's provider home — an unrelated interactive session, a credential refresh, an operator
+  repairing a stale auth override — landed inside the window of a running step. Because the verifier
+  threw from teardown, and a throw inside the `finally` that calls teardown replaces the invocation's
+  return value, a step that had genuinely succeeded was reported as `failed` and its work was redone
+  on re-kick (observed: a 9-minute, ~$6 `acceptance_specs` dispatch that returned
+  `"subtype":"success"` and was still logged as `✗ acceptance_specs failed (try 1)`). Detection is
+  unchanged and is not weakened — the verdict is computed over exactly the same surfaces and the run
+  still halts with the same reason and the same `mechanical` HALT class. Only the enforcement point
+  moves: the violation is now recorded and consumed at the NEXT dispatch boundary (each retry
+  attempt, each step entry including the parallel-group fan-out, and once more when the loop
+  converges), so an in-flight step always concludes on its own merits and the new provider/config
+  state applies from the next dispatch onward.
 - `--from <step>` now validates the step name against the resolved step registry (built-ins plus
   any config-declared custom steps) and exits non-zero naming the invalid value and listing every
   valid step, instead of silently resolving an unrecognized name to index `-1` (via
