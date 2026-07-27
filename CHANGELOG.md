@@ -94,6 +94,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Codex readiness no longer reports `unverifiable` when `codex doctor` returns
+  `overallStatus: "warning"`. `parseDoctorEvidence` accepted only `ok` and `fail`
+  envelopes, so a `warning` envelope was discarded as unparseable and a perfectly
+  healthy `auth.credentials` check was classified as `unverifiable`. Because the
+  auth park re-probes the same command every ~30s, and `codex doctor`'s unrelated
+  `updates.status` check warns whenever its version probe is rate-limited
+  (HTTP 403) — which the park's own polling reliably provokes — this parked and
+  then HALTed every Codex-authenticated build for the full `authParkTimeoutMinutes`
+  window with "Codex cached-login authentication did not become ready". `warning`
+  is now accepted alongside `ok`/`fail`, and any non-`ok` envelope is reported as
+  `unrelatedHealth: 'degraded'` while `auth.credentials` remains the sole authority
+  on readiness — extending the same unrelated-health tolerance already added for
+  `fail` envelopes.
+
 - A config-declared custom step no longer kills the run it was correctly scheduled
   into. `.ai-conductor/config.yml` custom steps are assembled and dispatched from the
   resolved registry (`buildStepRegistry`), but several lookups on the dispatch path
