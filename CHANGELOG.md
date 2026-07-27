@@ -116,6 +116,25 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   exclusion is scoped to the `.claude/worktrees` SUBTREE on purpose:
   `.claude/settings.json` and `.claude/hooks/` remain fingerprinted, since they are
   exactly the harness state this guard exists to protect.
+- The live-boundary guard's *provider-state* surface — the leak detector proving a
+  self-hosted build never reached back into the operator's real `~/.claude` or
+  `~/.codex` — halted a run on ordinary noise: an unrelated interactive session and
+  background jobs changed 18 files in a 12-minute window
+  (`settings.json`, `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`,
+  `shell-snapshots/*`, `backups/*`, `sessions/*`), none written by the sandboxed build
+  ([#985](https://github.com/jstoup111/ai-conductor/issues/985) counterpart —
+  provider-state, not live-checkout). `fingerprintLiveBoundary` now takes a `provider`
+  argument selecting an explicit, per-entry-commented noise list —
+  `CLAUDE_PROVIDER_STATE_VOLATILE` / `CODEX_PROVIDER_STATE_VOLATILE` in
+  `live-boundary.ts` — covering usage/log/cache telemetry no genuine leak would
+  plausibly announce itself through (session transcripts, shell snapshots, task
+  bookkeeping, plugin/model caches, Codex's own sqlite state/log/goal/memory DBs).
+  **Deliberately NOT excluded**, despite being observed noise in the same incident:
+  `settings.json` (Claude) and `config.toml`/`hooks.json` (Codex) — these are config
+  surfaces a real leak could plausibly rewrite, so they stay fingerprinted and a
+  concurrent interactive settings change can still trip a build. There is no exclusion
+  list that cleanly separates "unrelated session" from "leak" for those files; this
+  trade is documented in `live-boundary.ts` rather than silently resolved.
 
 - Engine-computed steps now get a retry budget of ONE instead of the configured
   `max_retries`. A step declared `kind: 'engine-native'` that dispatches no agent
