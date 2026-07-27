@@ -1,8 +1,17 @@
 {
+  // Type-checks BOTH src/ and test/. `npm run typecheck` (tsconfig.json) covers
+  // src/ only, so before this project existed no test file was ever type-checked
+  // and vitest — which transpiles without checking — could not catch it (#1015).
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
+    // Tests are resolved by vitest (a bundler), not by Node's ESM resolver, so
+    // they import `../../src/engine/foo` without a `.js` extension. Checking them
+    // under NodeNext reports 31 TS2835s against imports that resolve correctly at
+    // runtime. `bundler` matches the resolver that actually runs this code.
+    "moduleResolution": "bundler",
+    "module": "preserve",
     "types": ["node"]
   },
   "include": ["src/**/*", "test/**/*", "vitest.config.ts"],

@@ -104,21 +104,15 @@ cd src/conductor
 npx vitest run test/path/to/file.test.ts --reporter=dot --silent
 npm run typecheck       # src/ only — does NOT cover test/
 npm run typecheck:test  # src/ AND test/ (tsconfig.test.json)
+npm run lint            # type-aware ESLint over src/ AND test/
 ```
 
 `npm run typecheck` excludes `test/`, so it can never see an error in the file you
-just wrote. Only `npm run typecheck:test` type-checks tests. Vitest transpiles
-without type-checking, so a test can carry a type error indefinitely and still
-pass — the error surfaces later, for whoever edits nearby code.
+just wrote. `npm run typecheck:test` type-checks tests, and `npm run lint` covers
+`test/` as well as `src/`. CI runs all three; all three must be clean.
 
-`typecheck:test` currently reports a known pre-existing backlog of errors in
-already-committed tests (829 errors across 177 files as of #1028, #1015), so it is
-not yet a clean gate and CI does not run it. Judge your own change against it:
-the files you added or edited must contribute no errors. Filter to your own work:
-
-```sh
-npm run typecheck:test 2>&1 | grep 'test/path/to/file.test.ts'
-```
+Vitest transpiles without type-checking, so a test can carry a type error and still
+pass. Do not treat a green Vitest run as evidence the test compiles.
 
 Before handoff, run the repository-owned aggregate command that CI runs:
 
@@ -148,7 +142,6 @@ The ordinary suite must finish in under five minutes. The expected healthy range
 - Every async operation has an awaited terminal path.
 - Conductor fixtures declare and satisfy only their required gates.
 - The test passes both alone and with affected neighboring files.
-- `npm run typecheck` passes, and `npm run typecheck:test` reports no error in the
-  files this change added or edited (it does not have to be clean tree-wide yet).
+- `npm run typecheck`, `npm run typecheck:test`, and `npm run lint` all pass.
 - CI and local aggregate execution use `npm test`.
 - The aggregate suite completes under five minutes.

@@ -7,6 +7,11 @@
 //
 // This is an async daemon built on execa/chokidar. A dropped promise does not throw
 // — it presents as a silent stall, which is this repository's dominant failure mode.
+//
+// POLICY: errors only, never warnings. Every rule below is `error`; a rule too noisy
+// to run at `error` is turned off outright and recorded here with the reason. There
+// is no advisory tier — a warning nobody reads only teaches people to ignore the
+// tool. `npm run lint` additionally passes `--max-warnings=0`.
 import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
@@ -18,7 +23,12 @@ export default tseslint.config(
     files: ['src/**/*.ts', 'test/**/*.ts'],
     languageOptions: {
       parserOptions: {
-        projectService: true,
+        // tsconfig.test.json, NOT tsconfig.json — the latter excludes `test/`, so
+        // the project service cannot resolve a single test file and every one of
+        // the 599 reports as "not found by the project service" instead of being
+        // linted. tsconfig.test.json includes src/ and test/, so one project
+        // covers the whole linted surface.
+        project: ['./tsconfig.test.json'],
         tsconfigRootDir: import.meta.dirname,
       },
     },

@@ -39,9 +39,15 @@ evidence.
 
 Three linters run in CI, each scoped to what `tsc` and `bash -n` cannot tell you.
 
+**Errors only — there is no advisory tier.** Every enabled rule fails the build. Nothing is configured
+to `warn`: a rule too noisy to run at `error` is turned off outright and the reason recorded, because a
+warning nobody reads only teaches people to ignore the tool. `npm run lint` runs with
+`--max-warnings=0`; ShellCheck runs at `--severity=error` and never prints info/style findings. A clean
+run prints almost nothing.
+
 | Linter | Config | Scope | Threshold |
 | --- | --- | --- | --- |
-| ESLint (typescript-eslint, type-aware) | `src/conductor/eslint.config.mjs` | `src/**/*.ts` | `no-floating-promises`, `await-thenable`, `no-misused-promises` (with `checksVoidReturn.arguments` off) |
+| ESLint (typescript-eslint, type-aware) | `src/conductor/eslint.config.mjs` | `src/**/*.ts` **and** `test/**/*.ts` | `no-floating-promises`, `await-thenable`, `no-misused-promises` (with `checksVoidReturn.arguments` off) |
 | ShellCheck | `test/lint_shell.sh` | `bin/*` (by shebang), `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh` | `--severity=error` |
 | lychee | `lychee.toml` | `docs/`, `README.md`, `AGENT_INSTRUCTIONS.md`, `src/conductor/README.md` | internal links only (offline) |
 
@@ -67,12 +73,13 @@ Raising it is not mechanical — 45 of the 91 warnings are SC2319 against the de
 `CHANGELOG.md` is excluded from link checking on purpose: an entry correctly names the document that
 existed when it was written, so entries pointing at since-deleted pages are history, not rot.
 
-> **Known limitation.** `npm run typecheck` covers `src/` only. `npm run typecheck:test`
-> (`tsconfig.test.json`) additionally type-checks `test/`, but it is not yet a CI gate: it reports a
-> pre-existing backlog of 829 errors across 177 already-committed test files. Vitest transpiles
-> without type-checking, so those errors never surfaced. Until the backlog is cleared, judge a change
-> by whether the files it touched contribute errors, not by a clean run. Tracked in
-> [#1015](https://github.com/jstoup111/ai-conductor/issues/1015).
+Tests are linted on the same terms as engine source. ESLint resolves types through
+`tsconfig.test.json`, not `tsconfig.json` — the latter excludes `test/`, which would make the project
+service fail to resolve every test file and report 599 parse errors instead of linting them.
+
+`no-floating-promises` matters more in a test than in engine code: an unawaited promise in a test does
+not fail the test, it leaks async work into whichever test runs next, which is how a suite starts
+failing in groups but passing in isolation.
 
 ## Test tiers
 
@@ -98,10 +105,10 @@ Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with `maxForks:
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
 — it comes from the command line.
 
-`npm run typecheck` still never sees the tests: `src/conductor/tsconfig.json` sets
-`"exclude": ["node_modules", "dist", "test"]`, so `tsc --noEmit` compiles `src/**/*` only. Use
-`npm run typecheck:test` (`tsconfig.test.json`) to type-check the file you just wrote — see the
-[Linters](#linters) note above for the state of its pre-existing backlog.
+`npm run typecheck` covers `src/` only — `src/conductor/tsconfig.json` sets
+`"exclude": ["node_modules", "dist", "test"]`. `npm run typecheck:test` (`tsconfig.test.json`) covers
+`src/` **and** `test/`, and CI runs both. Use it to check the test you just wrote; Vitest transpiles
+without type-checking, so it will happily run a test that does not compile.
 
 ## Isolation policy
 
