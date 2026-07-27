@@ -108,10 +108,16 @@ jobs:
 
   # DELIBERATELY UNGATED — no `if: docs_only != 'true'`.
   #
-  # Every other job here is skipped on a docs-only PR. A docs link checker wired
-  # that way would be skipped on exactly the pull requests that can break links,
-  # and would only ever run on the ones that cannot. So this job runs on both
-  # paths; it is cheap (no npm install, no network) and its inputs are docs.
+  # `docs_only` is true only when EVERY changed path is under `.docs/` (the internal
+  # spec-artifact tree), per .github/scripts/ci-detect-docs-only.sh. Such a pull
+  # request skips every other job in this file. A link checker carrying the same
+  # gate would inherit that hole: the one class of PR that runs no checks at all
+  # would also skip its links.
+  #
+  # Leaving it ungated also means the guarantee does not depend on how `docs_only`
+  # is defined tomorrow — widen the predicate to cover `docs/` and this job keeps
+  # running. It is cheap enough to always run: no npm install and no network,
+  # roughly six seconds.
   links:
     runs-on: ubuntu-latest
     steps:
