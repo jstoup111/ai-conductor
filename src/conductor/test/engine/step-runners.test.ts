@@ -185,6 +185,49 @@ describe('DefaultStepRunner', () => {
     expect(safety).toHaveBeenCalledOnce();
   });
 
+  it('keeps Codex self-host capabilities on the streaming finish candidate', async () => {
+    const prepareSelfHostAuth = vi.fn(async () => ({ args: [] }));
+    const resolveSelfHostExecutable = vi.fn(async () => '/resolved/codex');
+    const executor = vi.fn(async (input: any) => {
+      const runtime = input.runtimes.get('codex');
+      const candidate = { step: 'finish', providerKey: 'codex', model: 'gpt', effort: 'medium' };
+      const selfHost = await input.prepareCandidateSelfHost(candidate, runtime);
+      await selfHost.teardown();
+      return { success: true, output: 'shipped', exitCode: 0, preferredProvider: 'codex', actualProvider: 'codex', attempts: [] };
+    });
+    const prepared = vi.fn(async (_candidate: unknown, runtime: any) => {
+      await runtime.provider.prepareSelfHostAuth({ provider: 'codex', homeDir: '/isolated' });
+      const executable = await runtime.provider.resolveSelfHostExecutable();
+      return { executable, env: {}, args: [], teardown: async () => {} };
+    });
+    const provider: LLMProvider = {
+      invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'wrong path', exitCode: 0 })),
+      invokeInteractive: vi.fn(async (): Promise<InvokeResult> => ({ success: true, output: 'shipped', exitCode: 0 })),
+      prepareSelfHostAuth,
+      resolveSelfHostExecutable,
+    };
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([{
+          key: 'codex', provider, policy: CODEX_MODEL_POLICY, builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+        }]),
+        sessions: new ProviderSessionStore(),
+        executor,
+        prepareCandidateSelfHost: prepared,
+        withCandidateSafety: async (_candidate, invoke) => invoke(),
+      },
+    });
+
+    await runner.run('finish', emptyState);
+
+    expect({
+      authPrepared: prepareSelfHostAuth.mock.calls.length,
+      executableResolved: resolveSelfHostExecutable.mock.calls.length,
+    }).toEqual({ authPrepared: 1, executableResolved: 1 });
+  });
+
   it('forwards the live self-host preparation hook through build_review one-shot dispatch', async () => {
     const executor = vi.fn(async (input: any) => {
       const candidate = { step: 'build_review', providerKey: 'claude', model: 'sonnet', effort: 'medium' };

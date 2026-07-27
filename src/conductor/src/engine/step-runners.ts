@@ -872,6 +872,18 @@ export class DefaultStepRunner implements StepRunner {
               },
             invokeInteractive: (options) =>
               runtime.provider.invokeInteractive(options),
+            ...(runtime.provider.prepareSelfHostAuth
+              ? {
+                  prepareSelfHostAuth: (context) =>
+                    runtime.provider.prepareSelfHostAuth!(context),
+                }
+              : {}),
+            ...(runtime.provider.resolveSelfHostExecutable
+              ? {
+                  resolveSelfHostExecutable: () =>
+                    runtime.provider.resolveSelfHostExecutable!(),
+                }
+              : {}),
           },
         };
       }),
