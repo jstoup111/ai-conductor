@@ -13,6 +13,8 @@ export interface ProviderHomeFs {
   mkdtemp(prefix: string): Promise<string>;
   mkdir(path: string): Promise<void>;
   symlink(target: string, path: string): Promise<void>;
+  /** Recursively copy a worktree asset into the throwaway home; never a live link. */
+  cp(source: string, destination: string): Promise<void>;
   rm(path: string, opts: { recursive?: boolean; force?: boolean }): Promise<void>;
   pathExists(path: string): Promise<boolean>;
 }
@@ -21,6 +23,7 @@ export const realProviderHomeFs: ProviderHomeFs = {
   mkdtemp: (prefix) => fsp.mkdtemp(prefix),
   mkdir: async (path) => { await fsp.mkdir(path, { recursive: true }); },
   symlink: (target, path) => fsp.symlink(target, path),
+  cp: (source, destination) => fsp.cp(source, destination, { recursive: true }),
   rm: (path, opts) => fsp.rm(path, opts),
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
 };
@@ -138,11 +141,19 @@ export async function provisionProviderHome(
           `Self-host worktree is missing required asset '${asset}' at ${target}.`,
         );
       }
-      await fs.symlink(target, join(homeDir, asset));
+      // Copy rather than symlink: a live link lets provider-owned warmup/init
+      // writes (for example Codex's skill-discovery `.system/` bookkeeping)
+      // land back inside the git-tracked worktree through the link, defeating
+      // the throwaway home's isolation. A one-time copy of the (small,
+      // markdown-only) skills asset keeps discovery in sync with whatever is
+      // currently checked out without exposing the worktree path itself.
+      await fs.cp(target, join(homeDir, asset));
     }
     if (options.provider.id === 'codex') {
       await fs.mkdir(join(homeDir, '.agents'));
-      await fs.symlink(join(options.worktreeRoot, 'skills'), join(homeDir, '.agents', 'skills'));
+      // Link into the already-copied throwaway skills, not the worktree, so
+      // this view can't become a second write-through path into the worktree.
+      await fs.symlink(join(homeDir, 'skills'), join(homeDir, '.agents', 'skills'));
     }
 
     const auth = await options.provider.prepareSelfHostAuth?.(context);

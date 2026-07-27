@@ -94,6 +94,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Self-host `provider-home` provisioning no longer symlinks the throwaway
+  `CODEX_HOME`/`CLAUDE_CONFIG_DIR`'s `skills` (and Codex's `.agents/skills`) directly to
+  the feature worktree's own `skills/` directory. That live link let provider-owned
+  session-init skill warmup write its `.system/` bookkeeping straight through into the
+  git-tracked worktree under test (observed as untracked `skills/.system/` noise in
+  worktree `git status` during self-host builds), defeating the isolation the throwaway
+  home exists to provide. `provisionProviderHome` now copies `skills` into the throwaway
+  home once per attempt (the catalog is small — a few dozen markdown files) and points
+  Codex's `.agents/skills` view at that copy instead of the worktree; skill discovery is
+  unaffected, but no warmup write can land outside the throwaway home anymore. Added
+  `skills/.system/` to `.gitignore` as defense-in-depth. (#1042)
 - Self-host provider dispatch no longer resumes a session into a freshly provisioned
   isolated provider home. Each self-host invocation provisions its own throwaway home
   (`/tmp/self-host-<provider>-<random>`) and tears it down afterwards, so no session or

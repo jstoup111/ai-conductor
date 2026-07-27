@@ -97,7 +97,16 @@ describe('acceptance: Codex safety and self-host parity (#907)', () => {
     const before = await readFile(join(live, 'HARNESS'), 'utf8');
     const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
     try {
-      expect(await realpath(join(home.homeDir, '.agents', 'skills'))).toBe(await realpath(join(worktree, 'skills')));
+      // The child sees the worktree's skill content, but through a throwaway
+      // copy rather than a live link back into the worktree itself (a link
+      // would let provider warmup writes land inside the git checkout under
+      // test).
+      expect(
+        await readFile(join(home.homeDir, '.agents', 'skills', 'HARNESS', 'SKILL.md'), 'utf8'),
+      ).toBe('WORKTREE');
+      expect(await realpath(join(home.homeDir, '.agents', 'skills'))).not.toBe(
+        await realpath(join(worktree, 'skills')),
+      );
       expect(await readFile(join(live, 'HARNESS'), 'utf8')).toBe(before);
     } finally { await home.teardown(); await rm(root, { recursive: true, force: true }); }
   });

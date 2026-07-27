@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { access, lstat, mkdir, mkdtemp, realpath, rm } from 'node:fs/promises';
+import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { provisionProviderHome } from '../../../src/engine/self-host/provider-home.js';
@@ -59,8 +59,10 @@ describe('provider-aware self-host homes', () => {
           provider === 'claude' ? home.homeDir : undefined,
         );
         expect(home.childEnv().CODEX_HOME).toBe(provider === 'codex' ? home.homeDir : undefined);
-        expect(await realpath(join(home.homeDir, 'skills'))).toBe(await realpath(join(worktree, 'skills')));
-        expect((await lstat(join(home.homeDir, 'skills'))).isSymbolicLink()).toBe(true);
+        // Skills are copied, not symlinked: a live link would let provider
+        // warmup writes land back inside the git-tracked worktree.
+        expect((await lstat(join(home.homeDir, 'skills'))).isSymbolicLink()).toBe(false);
+        expect(await realpath(join(home.homeDir, 'skills'))).toBe(join(home.homeDir, 'skills'));
       } finally {
         await home.teardown();
         await home.teardown();
@@ -95,15 +97,47 @@ describe('provider-aware self-host homes', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('gives Codex a child-only .agents/skills view of worktree skills', async () => {
+  it('gives Codex a child-only .agents/skills view backed by the throwaway copy, not the worktree', async () => {
     const root = await mkdtemp(join(tmpdir(), 'codex-skill-home-'));
     const worktree = join(root, 'worktree');
     await mkdir(join(worktree, 'skills', 'HARNESS'), { recursive: true });
     const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
     try {
       expect(await realpath(join(home.homeDir, '.agents', 'skills'))).toBe(
+        await realpath(join(home.homeDir, 'skills')),
+      );
+      expect(await realpath(join(home.homeDir, '.agents', 'skills'))).not.toBe(
         await realpath(join(worktree, 'skills')),
       );
+    } finally {
+      await home.teardown();
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('never lets provider skill-discovery writes land inside the worktree (isolation regression)', async () => {
+    // Regression for the leak where $CODEX_HOME/skills symlinked straight to
+    // <worktree>/skills, so Codex's own session-init skill warmup wrote
+    // `.system/` bookkeeping through the link into the live git worktree
+    // under test (observed as untracked `skills/.system/` in worktree git
+    // status during self-host builds). Simulates that warmup write against
+    // both provisioned skill paths without requiring a real Codex binary.
+    const root = await mkdtemp(join(tmpdir(), 'codex-skill-leak-'));
+    const worktree = join(root, 'worktree');
+    await mkdir(join(worktree, 'skills', 'HARNESS'), { recursive: true });
+    const home = await provisionProviderHome({ provider: { id: 'codex' }, worktreeRoot: worktree, baseDir: root });
+    try {
+      // Simulate Codex's skill-warmup writing its `.system/` bookkeeping
+      // through both surfaces the child sees.
+      await mkdir(join(home.homeDir, 'skills', '.system'), { recursive: true });
+      await writeFile(join(home.homeDir, 'skills', '.system', 'warmup.json'), '{}');
+      await mkdir(join(home.homeDir, '.agents', 'skills', '.system-agents'), { recursive: true });
+      await writeFile(join(home.homeDir, '.agents', 'skills', '.system-agents', 'warmup.json'), '{}');
+
+      const worktreeSkillEntries = await readdir(join(worktree, 'skills'));
+      expect(worktreeSkillEntries).not.toContain('.system');
+      expect(worktreeSkillEntries).not.toContain('.system-agents');
+      expect(worktreeSkillEntries.sort()).toEqual(['HARNESS']);
     } finally {
       await home.teardown();
       await rm(root, { recursive: true, force: true });
