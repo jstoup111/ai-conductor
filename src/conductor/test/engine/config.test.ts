@@ -1366,6 +1366,30 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('preserves enabled:false with perTaskFloor:false without warnings', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, perTaskFloor: false },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false, perTaskFloor: false },
+        warnings: [],
+      });
+    });
+
+    it('defaults enabled after preserving a partial perTaskFloor:false block', () => {
+      const result = validateConfig({ build_review: { perTaskFloor: false } });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: true, perTaskFloor: false },
+        warnings: [],
+      });
+    });
+
     it('drops unknown build_review keys while preserving an explicit opt-out', () => {
       const result = validateConfig({
         build_review: { enabled: false, perTaskFlooor: true },
