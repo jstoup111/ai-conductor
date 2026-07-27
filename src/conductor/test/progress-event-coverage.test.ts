@@ -2,11 +2,28 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import type { ConductorEvent } from '../src/types/events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const SRC_ROOT = join(__dirname, '..', 'src');
 
-const PROGRESS_KINDS = ['build_progress', 'build_no_progress', 'build_stall'] as const;
+const PROGRESS_KINDS = [
+  'build_progress',
+  'build_no_progress',
+  'build_stall',
+  'unattributed_progress',
+] as const;
+
+// This must remain a direct union assignment: adding a new emitted event type
+// without extending ConductorEvent should fail typecheck at this seam.
+const UNATTRIBUTED_PROGRESS_EVENT: ConductorEvent = {
+  type: 'unattributed_progress',
+  step: 'build',
+  attempt: 1,
+  resolvedCount: 0,
+  headBefore: 'before-sha',
+  headAfter: 'after-sha',
+};
 
 /**
  * Guard against subscriber-list drift: every progress/stall event kind must
@@ -17,6 +34,17 @@ const PROGRESS_KINDS = ['build_progress', 'build_no_progress', 'build_stall'] as
  * plain string-literal arrays / switch statements, not exhaustive unions.
  */
 describe('progress event coverage guard', () => {
+  it('accepts the exact unattributed_progress payload in the ConductorEvent union', () => {
+    expect(UNATTRIBUTED_PROGRESS_EVENT).toEqual({
+      type: 'unattributed_progress',
+      step: 'build',
+      attempt: 1,
+      resolvedCount: 0,
+      headBefore: 'before-sha',
+      headAfter: 'after-sha',
+    });
+  });
+
   const lists: Array<{ name: string; file: string }> = [
     { name: 'EventPersister.ALL_EVENT_TYPES', file: join(SRC_ROOT, 'engine', 'event-persister.ts') },
     { name: 'ui/subscriber.ts eventTypes', file: join(SRC_ROOT, 'ui', 'subscriber.ts') },
@@ -26,7 +54,7 @@ describe('progress event coverage guard', () => {
   ];
 
   for (const { name, file } of lists) {
-    it(`${name} includes build_progress, build_no_progress, and build_stall`, () => {
+    it(`${name} explicitly handles every progress event, including unattributed_progress`, () => {
       const contents = readFileSync(file, 'utf-8');
       const missing = PROGRESS_KINDS.filter((kind) => !contents.includes(`'${kind}'`));
 
