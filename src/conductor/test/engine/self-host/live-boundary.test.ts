@@ -27,6 +27,69 @@ describe('live self-host boundary', () => {
     finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('ignores the harness bookkeeping it writes itself during the run (#985)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-bookkeeping-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, '.git', 'refs'), { recursive: true }),
+      mkdir(join(live, '.daemon'), { recursive: true }),
+      mkdir(join(live, '.worktrees', 'feature'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await writeFile(join(live, 'sentinel'), 'harness source');
+    await writeFile(join(live, '.git', 'refs', 'head'), 'before');
+    await writeFile(join(live, '.daemon', 'daemon.log'), 'before');
+    await writeFile(join(live, '.worktrees', 'feature', 'file.ts'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    // Every write below is the harness mutating its own runtime state.
+    await writeFile(join(live, '.git', 'refs', 'head'), 'after');
+    await writeFile(join(live, '.git', 'ORIG_HEAD'), 'new file');
+    await writeFile(join(live, '.daemon', 'daemon.log'), 'appended log line');
+    await writeFile(join(live, '.worktrees', 'feature', 'file.ts'), 'after');
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('still rejects real harness-source mutation beside the excluded paths', async () => {
+    const cases: ReadonlyArray<readonly [string, (live: string) => Promise<void>]> = [
+      ['modified', async live => { await writeFile(join(live, 'src', 'engine.ts'), 'after'); }],
+      ['added', async live => { await writeFile(join(live, 'src', 'extra.ts'), 'new'); }],
+      ['deleted', async live => { await rm(join(live, 'src', 'engine.ts')); }],
+    ];
+    for (const [label, mutate] of cases) {
+      const root = await mkdtemp(join(tmpdir(), `live-boundary-source-${label}-`));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([
+        mkdir(join(live, 'src'), { recursive: true }),
+        mkdir(join(live, '.git'), { recursive: true }),
+        mkdir(provider),
+      ]);
+      await writeFile(join(live, 'src', 'engine.ts'), 'before');
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      await writeFile(join(live, '.git', 'index'), 'churn');
+      await mutate(live);
+      try { expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false }); }
+      finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('excludes a nested provider-state path by prefix without excluding its lookalikes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-provider-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(join(provider, 'auth'), { recursive: true })]);
+    await writeFile(join(provider, 'auth', 'token.json'), 'before');
+    await writeFile(join(provider, 'auth-notes'), 'before');
+    const baseline = await fingerprintLiveBoundary({
+      liveCheckout: live, unrelatedProviderState: provider, selectedAuthPaths: ['auth'],
+    });
+    await writeFile(join(provider, 'auth', 'token.json'), 'refreshed');
+    try {
+      expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true });
+      await writeFile(join(provider, 'auth-notes'), 'after');
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('fingerprints a broken live-checkout symlink by its target without throwing', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-broken-link-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
