@@ -131,10 +131,9 @@ components.
 > written to perform never happens. Tracked in
 > [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
-> **Known limitation.** `templates/ai-conductor-config.yml.template:8` ships
-> `harness_version: ">=1.0.0"` while `VERSION` is `0.99.20`. Copy the template verbatim and, if a
-> `harnessVersion` is supplied, the config fails its own version check. Delete or lower the line after
-> copying. Tracked in [#1010](https://github.com/jstoup111/ai-conductor/issues/1010).
+`templates/ai-conductor-config.yml.template:8` ships `harness_version: ">=0.99.0"`, satisfiable by the
+repo's current pre-1.0 `VERSION`. (Formerly shipped an unsatisfiable `">=1.0.0"`; fixed in
+[#1010](https://github.com/jstoup111/ai-conductor/issues/1010).)
 
 ## defaults
 
@@ -195,9 +194,10 @@ other key declares a custom step. `steps` must be an object, and each value must
 > missing the custom-step fields. `steps: { bootstrap: { model: haiku } }` fails the load with
 > `Custom step "bootstrap" requires 'after: <existing-step>'`, and the same happens for `assess`,
 > `remediate`, and `attribution_verify`. Their model, effort, and retry values can only be changed
-> through `defaults` or `phases`. `templates/ai-conductor-config.yml.template` ships exactly this
-> `steps: bootstrap: { model: haiku }` example, commented out — uncommenting it breaks the config.
-> Tracked in [#1010](https://github.com/jstoup111/ai-conductor/issues/1010).
+> through `defaults` or `phases`. (`templates/ai-conductor-config.yml.template` formerly shipped exactly
+> this `steps: bootstrap: { model: haiku }` example, commented out, which broke the config if
+> uncommented; the template now illustrates the `steps:` block with `explore`, a real `ALL_STEPS` entry.
+> Fixed in [#1010](https://github.com/jstoup111/ai-conductor/issues/1010).)
 
 ### Per-step keys
 
