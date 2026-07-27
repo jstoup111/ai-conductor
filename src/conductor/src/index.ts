@@ -822,7 +822,7 @@ async function main(): Promise<void> {
   // Auto-resume: if a feature description was provided and a worktree for its
   // slug already exists with in-progress state, silently redirect to that
   // worktree and enable resume. --fresh bypasses this.
-  if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from && !opts.step) {
+  if (opts.featureDesc && !opts.resume && !opts.fresh && !opts.from) {
     const detection = await detectAutoResume(projectRoot, opts.featureDesc);
     if (detection.kind === 'resume') {
       projectRoot = detection.worktreePath;
