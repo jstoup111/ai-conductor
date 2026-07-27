@@ -136,6 +136,11 @@ async function writePlanAndStatus(
     return { id, status: completed.has(id) ? 'completed' : 'pending' };
   });
   await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  // The real BUILD loop enters only after DECIDE artifacts are approved and
+  // committed. Commit the protected fixture tree so the artifact seal can
+  // establish its immutable baseline before exercising the retry loop.
+  await execa('git', ['add', '.docs'], { cwd: dir });
+  await execa('git', ['commit', '-m', 'docs: approve decide artifacts'], { cwd: dir });
 }
 
 interface UnattributedProgressEvent {
