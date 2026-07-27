@@ -83,6 +83,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The self-host live-boundary guard no longer halts a run on the harness's own
+  bookkeeping ([#985](https://github.com/jstoup111/ai-conductor/issues/985)). Its
+  live-checkout fingerprint walked the whole tree including `.git/`, `.daemon/`
+  (where `daemon.log` is appended continuously) and `.worktrees/`, so every
+  self-hosted build eventually reported `live checkout changed during self-host
+  execution.` Those three volatile, harness-written paths are now skipped during
+  the walk — not hashed and not read — while harness source under the live
+  checkout stays fingerprinted, so a real add/modify/delete there still halts the
+  run. Exclusion matching is now path-segment aware, so a subtree (and a nested
+  provider-state auth path) can actually be excluded instead of only an exact
+  top-level filename.
+
 - Engine-computed steps now get a retry budget of ONE instead of the configured
   `max_retries`. A step declared `kind: 'engine-native'` that dispatches no agent
   (`wiring_check`, `test_suite`) is a deterministic function of the tree it runs

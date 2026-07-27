@@ -6,9 +6,33 @@ interface Surface { root: string; label: string; exclude: readonly string[]; man
 interface Entry { path: string; digest: string; }
 export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
 
+/**
+ * Volatile paths the harness WRITES ITSELF while a self-hosted build runs.
+ * Fingerprinting them made the guard fail on its own bookkeeping (#985) — the
+ * canary halted at the exact millisecond the daemon appended to `.daemon/`:
+ *   `.git`       — the shared git dir; commits/fetches made from inside the
+ *                  sandboxed worktree rewrite objects/refs/logs/index here.
+ *   `.daemon`    — daemon runtime state; `daemon.log` is appended continuously.
+ *   `.worktrees` — the per-feature checkouts the build is SUPPOSED to mutate;
+ *                  they only fall inside this surface because the live checkout
+ *                  and the project root are the same directory.
+ * None of these is harness SOURCE, so everything the guard exists to protect
+ * stays fingerprinted: adding, modifying or deleting a tracked source file
+ * under the live checkout still trips it.
+ */
+const LIVE_CHECKOUT_VOLATILE: readonly string[] = ['.git', '.daemon', '.worktrees'];
+
+/** True iff `path` (root-relative, POSIX-ish) is an excluded path or sits under one. */
+function isExcluded(path: string, exclude: readonly string[]): boolean {
+  return exclude.some(ex => path === ex || path.startsWith(`${ex}/`));
+}
+
 async function manifest(root: string, exclude: readonly string[]): Promise<Entry[]> {
+  // Filter DURING the walk: an excluded subtree is never descended into, so
+  // `.git` is neither hashed nor a source of transient mid-run read errors.
   const walk = async (dir: string): Promise<string[]> => {
-    const entries = await readdir(dir, { withFileTypes: true });
+    const entries = (await readdir(dir, { withFileTypes: true }))
+      .filter(entry => !isExcluded(relative(root, join(dir, entry.name)), exclude));
     return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(entry =>
       entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]))).flat();
   };
@@ -34,7 +58,7 @@ export async function fingerprintLiveBoundary(args: {
 }): Promise<LiveBoundarySnapshot> {
   const excluded = args.selectedAuthPaths ?? [];
   return { surfaces: [
-    { root: args.liveCheckout, label: 'live checkout', exclude: [], manifest: await manifest(args.liveCheckout, []) },
+    { root: args.liveCheckout, label: 'live checkout', exclude: LIVE_CHECKOUT_VOLATILE, manifest: await manifest(args.liveCheckout, LIVE_CHECKOUT_VOLATILE) },
     { root: args.unrelatedProviderState, label: 'provider state', exclude: excluded, manifest: await manifest(args.unrelatedProviderState, excluded) },
   ] };
 }
