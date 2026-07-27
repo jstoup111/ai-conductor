@@ -118,5 +118,14 @@ describe('daemon-mode feature log integration', () => {
       true,
     );
     expect(persisted).not.toMatch(/\[daemon\]\[feature-a\]\[feature-a\]/);
+
+    // step_started is one of the 19 TerminalSubscriber-rendered event types.
+    // It must render exactly once (tagged) — not a second time untagged via
+    // the daemon-wide bus the feature-scoped bus forwards onto.
+    const buildLineOccurrences = live
+      .split('\n')
+      .filter((line) => line.includes('▶ build')).length;
+    expect(buildLineOccurrences).toBe(1);
+    expect(live).not.toContain('[daemon] · ▶ build');
   });
 });

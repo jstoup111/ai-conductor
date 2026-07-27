@@ -334,14 +334,14 @@ it('composes isolated provider execution state for every daemon feature after on
       ),
     rebaseRecoveryContext:
       (rebaseBody.match(
-        /const providerExecution = createProviderExecution\(\);/g,
+        /const providerExecution = createSlugScopedProviderExecution\(entry\.slug\);/g,
       )?.length ?? 0) === 1 &&
       /featureDesc:\s*`rebase-resolution-\$\{entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
         rebaseBody,
       ),
     ciRecoveryContext:
       (ciBody.match(
-        /const providerExecution = createProviderExecution\(\);/g,
+        /const providerExecution = createSlugScopedProviderExecution\(ctx\.entry\.slug\);/g,
       )?.length ?? 0) === 1 &&
       /featureDesc:\s*`ci-fix-resolution-\$\{ctx\.entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
         ciBody,

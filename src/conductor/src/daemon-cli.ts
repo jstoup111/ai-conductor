@@ -35,7 +35,7 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { startFeatureEventPersistence } from './engine/event-persister.js';
+import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
@@ -759,7 +759,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // This global subscriber renders anything emitted directly on the
   // daemon-wide bus (untagged) so those events keep reaching daemon.log
   // exactly as they did before per-feature tagging was introduced.
-  const subscriber = registerBuiltins(registry, events, (event) => renderDaemonEvent(event, log));
+  const subscriber = registerBuiltins(registry, events, (event) => {
+    // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
+    // are already rendered, tagged, by that feature's own listeners
+    // (beginFeatureRun below) — render them here too and every one of the 19
+    // TerminalSubscriber event types would double-print, once tagged and once
+    // untagged.
+    if ((event as Record<PropertyKey, unknown>)[FORWARDED_FROM_FEATURE]) return;
+    renderDaemonEvent(event, log);
+  });
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
