@@ -96,7 +96,14 @@ carries that observation to its conclusion.
   operator's stated end state, but Claude's resume mechanism is functional and removing it
   changes token cost and behavior on the default execution path. Making it a declared capability
   is exactly the seam that lets Claude flip later as its own change with its own evidence; this
-  feature does not flip it. Filed as follow-up.
+  feature does not flip it. Tracked as **#1071**, which depends on this one.
+
+  Sizing recorded there (full sweep of `src/conductor`, legacy `SessionManager` / `bin/conduct`
+  excluded): 6 source files and ~8 test files, plus two findings that make it more than a flag
+  flip — `prepare()` returns the same id within a step scope, so suppressing only the resume flag
+  would collide on `--session-id` and burn a `SESSION_IN_USE_RE` recovery cycle per retry; and
+  `runInteractive` (`step-runners.ts:1141-1165`) sends a 12-word stub prompt with an empty system
+  prompt, so its failure context lives entirely in the resumed conversation.
 
 ## Consequences
 
