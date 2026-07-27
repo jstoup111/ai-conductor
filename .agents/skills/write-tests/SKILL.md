@@ -97,43 +97,33 @@ An integration label does not justify a broad path. Preserve the real boundary a
 
 ## 8. Verify with CI parity
 
-During authoring, run the smallest affected set:
+During authoring, run the project's narrowest test invocation for the file under work, then the
+project's configured static checks: its typecheck command and, where one is configured, its lint
+command. Each project supplies its own concrete commands; this repository documents them in
+`docs/contributing/testing.md`.
 
-```sh
-cd src/conductor
-npx vitest run test/path/to/file.test.ts --reporter=dot --silent
-npm run typecheck       # src/ only — does NOT cover test/
-npm run typecheck:test  # src/ AND test/ (tsconfig.test.json)
-npm run lint            # type-aware ESLint over src/ AND test/
-```
+The typecheck command MUST be one that covers test files. Many projects' default typecheck target
+excludes the test directory, and many test runners transpile without type-checking — together those
+mean a test can carry a type error indefinitely, pass every run, and surface only when someone edits
+nearby code. If the project's default typecheck skips tests, use the target that includes them.
 
-`npm run typecheck` excludes `test/`, so it can never see an error in the file you
-just wrote. `npm run typecheck:test` type-checks tests, and `npm run lint` covers
-`test/` as well as `src/`. CI runs all three; all three must be clean.
+A green test run is not evidence that the test compiles. Verify both.
 
-Vitest transpiles without type-checking, so a test can carry a type error and still
-pass. Do not treat a green Vitest run as evidence the test compiles.
-
-Before handoff, run the repository-owned aggregate command that CI runs:
-
-```sh
-cd src/conductor
-npm test
-```
-
-Do not substitute a raw broad Vitest command for the configured aggregate operation in CI or completion evidence.
+Before handoff, run the project's configured aggregate test command — the one CI runs, declared in
+`test_suite.command`. Do not substitute a raw, broad test-runner invocation for the configured
+aggregate operation in CI or completion evidence.
 
 The ordinary suite must finish in under five minutes. The expected healthy range is roughly two to three minutes. If it exceeds five minutes, inspect active workers and recent temporary fixture state; do not wait indefinitely.
 
 ## 9. Diagnose a slow or wedged suite
 
-1. Stop only the exact local Vitest workers started by the current diagnostic run.
+1. Stop only the exact local test-runner workers started by the current diagnostic run.
 2. Re-run the last reported file or test name in isolation with a concise reporter.
 3. If it times out, inspect its live temporary `conduct-state.json` and `.pipeline/phase-active` before cleanup.
 4. Look for repeated `stale` validator states, unchanged gate evidence, or a mocked-success runner traversing an artifact-driven finish fence.
 5. Fix the inconsistent authority or fixture boundary.
 6. Run the formerly failing files together; isolation-only success is insufficient.
-7. Run `npm test` once from a clean process set.
+7. Run the project's aggregate test command once from a clean process set.
 
 ## Completion checklist
 
@@ -142,6 +132,8 @@ The ordinary suite must finish in under five minutes. The expected healthy range
 - Every async operation has an awaited terminal path.
 - Conductor fixtures declare and satisfy only their required gates.
 - The test passes both alone and with affected neighboring files.
-- `npm run typecheck`, `npm run typecheck:test`, and `npm run lint` all pass.
-- CI and local aggregate execution use `npm test`.
+- The project's typecheck command passes, AND it is one that covers test files — not a target that
+  excludes the test directory.
+- The project's lint command passes, where one is configured.
+- CI and local aggregate execution use the project's configured aggregate test command.
 - The aggregate suite completes under five minutes.

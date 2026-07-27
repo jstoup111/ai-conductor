@@ -12,6 +12,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Contributors now get a failing build instead of a review comment for dropped promises, broken shell,
+  and dead documentation links: type-aware ESLint over `src/` and `test/`, ShellCheck over all 59 bash
+  scripts (also wired as integrity check 1b), a `lychee` documentation link check that is the one CI job
+  a docs-only pull request cannot skip, and `npm run typecheck:test`, which type-checks `test/` for the
+  first time ([implementation PR #1040](https://github.com/jstoup111/ai-conductor/pull/1040)).
 - Add an opt-in repository-local documentation gate that verifies fresh review evidence and
   finalizes the implementation PR link in notable changelog entries ([implementation PR #956](https://github.com/jstoup111/ai-conductor/pull/956)).
 - Add the native `test_suite` project declaration and documentation for the

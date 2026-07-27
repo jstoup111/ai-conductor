@@ -278,9 +278,12 @@ For where `test_suite` sits in the flow and what happens when it fails, see
 8. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
    required-status aggregator.
 
-`links` is deliberately the one job with no `docs_only` gate. Every other job is skipped on a
-docs-only pull request, so a link checker wired the usual way would be skipped on exactly the changes
-that can break links and would run only on the ones that cannot.
+`links` is deliberately the one job with no `docs_only` gate. `docs_only` is true only when every
+changed path is under `.docs/` (the internal spec-artifact tree) — see
+`.github/scripts/ci-detect-docs-only.sh` — and such a pull request skips every other job here. A link
+checker carrying the same gate would inherit that hole. Leaving it ungated also means the guarantee
+survives any future widening of the predicate, and it costs about six seconds with no npm install and
+no network.
 
 Node comes from `src/conductor/.tool-versions` (`nodejs 20.19.2`) and the npm cache keys on
 `src/conductor/package-lock.json`.
