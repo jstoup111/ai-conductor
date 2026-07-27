@@ -259,7 +259,7 @@ describe('ProviderSessionStore', () => {
         calls: [{ sessionId: 'branch-throw', resume: false }],
         result: {
           success: false,
-          output: 'Session for manual_test exited with error',
+          output: 'Session for manual_test exited with error: branch failed',
         },
         serial: { id: 'serial-throw', created: false },
         legacyId: 'serial-throw',

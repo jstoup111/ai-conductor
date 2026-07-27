@@ -44,6 +44,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `DefaultStepRunner`'s three provider session-launch catch sites in `step-runners.ts`
+  (the one-shot `remediate` dispatch, the legacy `invokeInteractive` path, and
+  `runProviderAwareNormal`) no longer discard the exception thrown by a crashed provider
+  session. Each now logs the real error via the existing `this.log` sink and appends its
+  message to the returned `output` string (`Session for ${step} exited with error: ${message}`),
+  so a halted step (e.g. the generic, undiagnosable `Session for finish exited with error`)
+  now carries the actual cause in `daemon.log` and the halt reason instead of losing it
+  permanently. The `{ success: false, output }` shape is unchanged, so retry/halt handling
+  in `conductor.ts` is unaffected.
 - **Temporary, deliberate loosening (operator-directed) of the protected-artifact seal**:
   a feature amending ITS OWN DECIDE artifact mid-build (e.g. updating its own architecture
   doc to reflect in-scope work surfaced by a `build_review` kickback) no longer halts

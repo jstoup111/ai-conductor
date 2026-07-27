@@ -541,11 +541,13 @@ export class DefaultStepRunner implements StepRunner {
               this.callCount++;
               return this.toStepRunResult(result);
             }
-          } catch {
+          } catch (error) {
             this.callCount++;
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            this.log(`Session for ${step} exited with error: ${errorMessage}`);
             return {
               success: false,
-              output: `Session for ${step} exited with error`,
+              output: `Session for ${step} exited with error: ${errorMessage}`,
             };
           }
         }
@@ -632,12 +634,14 @@ export class DefaultStepRunner implements StepRunner {
       }
 
       return { success: true };
-    } catch {
+    } catch (error) {
       if (branchSessionId === undefined) {
         await this.sessionStore?.markCreated(this.providerKey);
       }
       this.callCount++;
-      return { success: false, output: `Session for ${step} exited with error` };
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log(`Session for ${step} exited with error: ${errorMessage}`);
+      return { success: false, output: `Session for ${step} exited with error: ${errorMessage}` };
     }
   }
 
@@ -712,9 +716,11 @@ export class DefaultStepRunner implements StepRunner {
         await this.persistProviderAwareSuccess(verifiedResult);
       }
       return this.toStepRunResult(verifiedResult);
-    } catch {
+    } catch (error) {
       this.callCount++;
-      return { success: false, output: `Session for ${step} exited with error` };
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      this.log(`Session for ${step} exited with error: ${errorMessage}`);
+      return { success: false, output: `Session for ${step} exited with error: ${errorMessage}` };
     }
   }
 
