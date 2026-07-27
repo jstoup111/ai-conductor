@@ -22,7 +22,10 @@
 //     `.claude/settings.json` ("this workspace has not been trusted") and
 //     wedged on denied tools. Trust is copied from the operator's live state
 //     file ONLY when it already trusts the harness root — the sandbox never
-//     fabricates a trust grant the operator has not made.
+//     fabricates a trust grant the operator has not made. Claude Code keys
+//     workspace trust by the GIT MAIN worktree root, so a build running inside
+//     `.worktrees/<slug>` is looked up under the harness root; both keys (and
+//     their realpath canonicalizations) are seeded so either resolution hits.
 // The sandbox is torn down after the build (pass OR fail) under a try/finally
 // guarantee; global ~/.claude is never touched. Isolation is a contract:
 //   - Settings are COPIED (not symlinked) — no sandbox symlink ever resolves to a
@@ -35,7 +38,7 @@
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
 export {
   provisionProviderHome,
@@ -108,11 +111,21 @@ export interface ProvisionOptions {
   parentEnv?: NodeJS.ProcessEnv;
   /** Filesystem seam (defaults to real fs). */
   fs?: SandboxFs;
+  /**
+   * The operator's live Claude state file — the SOURCE of workspace-trust
+   * propagation (read-only; never written). Defaults to
+   * `$CLAUDE_CONFIG_DIR/.claude.json` when the parent env sets
+   * CLAUDE_CONFIG_DIR, else `~/.claude.json` (with the default `~/.claude`
+   * config dir, Claude Code keeps state BESIDE the dir, not in it).
+   */
+  globalStateFile?: string;
 }
 
 /** Only edited harness skills are exposed from the worktree. */
 const LINKED_DIRS = ['skills'] as const;
 const SETTINGS_FILE = 'settings.json';
+/** Claude Code state file — holds per-project workspace-trust grants. */
+const STATE_FILE = '.claude.json';
 
 class ThrowawaySandbox implements SandboxBuildEnv {
   private tornDown = false;
@@ -185,6 +198,16 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
       worktreeRoot: opts.worktreeRoot,
     });
 
+    // .claude.json: propagate the operator's EXISTING workspace trust so the
+    // headless build honors the repo's `.claude/settings.json` permissions.
+    // Propagate-only — when the operator has not trusted the harness root,
+    // nothing is written and the build runs untrusted (fails safe, not open).
+    await provisionTrustState(fs, {
+      src: opts.globalStateFile ?? defaultGlobalStateFile(parentEnv),
+      dest: join(configDir, STATE_FILE),
+      harnessRoot: opts.harnessRoot,
+      worktreeRoot: opts.worktreeRoot,
+    });
   } catch (err) {
     // Remove any partial sandbox so a half-built dir is never launched (TR-5).
     if (configDir) {
@@ -201,6 +224,77 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
   return new ThrowawaySandbox(configDir, parentEnv, fs);
 }
 
+
+/**
+ * Where the operator's live state file lives: inside CLAUDE_CONFIG_DIR when
+ * that is set, else at `~/.claude.json` (beside, not inside, `~/.claude`).
+ * Derived at runtime — no hardcoded path.
+ */
+function defaultGlobalStateFile(parentEnv: NodeJS.ProcessEnv): string {
+  return parentEnv.CLAUDE_CONFIG_DIR
+    ? join(parentEnv.CLAUDE_CONFIG_DIR, STATE_FILE)
+    : join(homedir(), STATE_FILE);
+}
+
+/** realpath(p), or null when it cannot be resolved (missing/broken link). */
+async function canonicalize(fs: SandboxFs, p: string): Promise<string | null> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Seed the sandbox `.claude.json` by PROPAGATING the operator's existing
+ * workspace trust. Writes a minimal state file trusting the harness root and
+ * the build worktree (both as-passed and realpath-canonicalized) IFF the
+ * operator's live state file already trusts the harness root. Everything else
+ * — a missing state file, malformed JSON, or an untrusted harness root —
+ * writes NOTHING: the sandbox never fabricates a trust grant, it only re-homes
+ * one the operator already made. Only the trust bit crosses the boundary: the
+ * operator's tokens, history and per-project state are never copied. The
+ * seeded file is a fresh write (never a symlink), preserving the TR-6
+ * no-global-symlink invariant; the live state file is only ever read.
+ */
+async function provisionTrustState(
+  fs: SandboxFs,
+  args: { src: string; dest: string; harnessRoot: string; worktreeRoot: string },
+): Promise<void> {
+  const raw = await fs.readFile(args.src);
+  if (raw === null) return; // no operator state file → nothing to propagate
+  let state: unknown;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    return; // malformed operator state → propagate nothing (never guess trust)
+  }
+  const projects = (state as { projects?: unknown }).projects;
+  if (projects === null || typeof projects !== 'object' || projects === undefined) return;
+  const trustedByOperator = (p: string | null): boolean =>
+    p !== null &&
+    (projects as Record<string, { hasTrustDialogAccepted?: unknown } | undefined>)[p]
+      ?.hasTrustDialogAccepted === true;
+
+  const canonHarness = await canonicalize(fs, args.harnessRoot);
+  if (!trustedByOperator(args.harnessRoot) && !trustedByOperator(canonHarness)) return;
+
+  const canonWorktree = await canonicalize(fs, args.worktreeRoot);
+  const seeded: Record<string, { hasTrustDialogAccepted: true }> = {};
+  for (const p of [args.harnessRoot, canonHarness, args.worktreeRoot, canonWorktree]) {
+    if (p !== null) seeded[p] = { hasTrustDialogAccepted: true };
+  }
+  const onboarded =
+    (state as { hasCompletedOnboarding?: unknown }).hasCompletedOnboarding === true;
+  await fs.writeFile(
+    args.dest,
+    `${JSON.stringify(
+      { ...(onboarded ? { hasCompletedOnboarding: true } : {}), projects: seeded },
+      null,
+      2,
+    )}\n`,
+  );
+}
 
 /** Generate and provision the write-fence script, then merge it into settings.json. */
 async function provisionWriteFence(
