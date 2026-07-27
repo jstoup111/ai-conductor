@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Tolerated own-feature DECIDE-artifact amendments are now logged and judged by `build_review`'s Scope rubric, so unjustified changes fail review instead of passing silently (#1047).
 - `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
   of reading only the project file, so daemon-only operators no longer lose user-level settings that
   every other entry point already applied ([implementation PR #1031](https://github.com/jstoup111/ai-conductor/pull/1031)).
