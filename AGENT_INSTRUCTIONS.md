@@ -93,10 +93,13 @@ controls implementation order.
 ### Validation Suite
 
 Run `test/test_harness_integrity.sh`. The checks below are the ones you break most often; the script
-actually runs 15 numbered and 2 unnumbered checks. The canonical enumeration — every check, what makes it
+actually runs 15 numbered and 2 unnumbered checks, several of which carry lettered
+sub-checks (1b, 5a-5c, 9a-9c). The canonical enumeration — every check, what makes it
 fail, and how to fix it — is [`docs/contributing/validation.md`](docs/contributing/validation.md).
 
 1. **Bash syntax** — All scripts in `bin/`, `hooks/claude/`, and `test/` pass `bash -n`.
+1b. **ShellCheck** — The same scripts pass `shellcheck --severity=error` via
+   `test/lint_shell.sh`. Catches shell bugs that parse cleanly but misbehave at runtime.
 2. **SKILL.md frontmatter** — Every `skills/*/SKILL.md` has YAML frontmatter with required
    fields: `name`, `description`, `enforcement`, `phase`.
 3. **Agent references** — Every `agents/*.md` referenced in skills or HARNESS.md exists on disk.

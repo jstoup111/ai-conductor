@@ -17,7 +17,11 @@ Run everything from `src/conductor` unless stated otherwise.
 | Full suite (what CI runs) | `cd src/conductor && npm test` |
 | One file while authoring | `cd src/conductor && npx vitest run test/<path>.test.ts --reporter=dot --silent` |
 | Watch mode | `cd src/conductor && npm run test:watch` |
-| Type check | `cd src/conductor && npm run typecheck` |
+| Type check (`src/` only) | `cd src/conductor && npm run typecheck` |
+| Type check including `test/` | `cd src/conductor && npm run typecheck:test` |
+| Lint TypeScript | `cd src/conductor && npm run lint` (`npm run lint:fix` to autofix) |
+| Lint shell scripts | `bash test/lint_shell.sh` (from the repo root) |
+| Check documentation links | `lychee --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md` |
 | Build the engine | `cd src/conductor && npm run build` |
 | Structural integrity of the repo | `bash test/test_harness_integrity.sh` (from the repo root) |
 
@@ -31,12 +35,44 @@ The `AGGREGATE_TEST_SUITE_PASS` sentinel is load-bearing: it is the success toke
 `test_suite` gate reads. Do not replace `npm test` with a raw `vitest run` when producing completion
 evidence.
 
-> **Known limitation.** No lint script exists — `src/conductor/package.json` has only `build`, `test`,
-> `test:watch`, and `typecheck`, and there is no ESLint, Prettier, or shellcheck config anywhere in the
-> repo. The one lint hook, `hooks/claude/lint-after-edit.sh`, gates on `*.rb` and shells out to
-> `bundle exec standardrb`, so it exits 0 for every file in this TypeScript-and-bash repository.
-> `npm run typecheck` is the only static check you get. Tracked in
-> [#1028](https://github.com/jstoup111/ai-conductor/issues/1028).
+## Linters
+
+Three linters run in CI, each scoped to what `tsc` and `bash -n` cannot tell you.
+
+| Linter | Config | Scope | Threshold |
+| --- | --- | --- | --- |
+| ESLint (typescript-eslint, type-aware) | `src/conductor/eslint.config.mjs` | `src/**/*.ts` | `no-floating-promises`, `await-thenable`, `no-misused-promises` (with `checksVoidReturn.arguments` off) |
+| ShellCheck | `test/lint_shell.sh` | `bin/*` (by shebang), `hooks/**/*.sh`, `test/*.sh`, `.github/scripts/*.sh` | `--severity=error` |
+| lychee | `lychee.toml` | `docs/`, `README.md`, `AGENT_INSTRUCTIONS.md`, `src/conductor/README.md` | internal links only (offline) |
+
+The ESLint rule set is deliberately tiny. `strict: true` already covers the ground a stock preset
+would, so the only rules enabled are ones `tsc` structurally cannot provide: promises created and
+then dropped. This is an async daemon on execa/chokidar, where a dropped promise does not throw —
+it presents as a silent stall.
+
+No formatter is configured, deliberately: Prettier or Biome across ~85k lines would produce a diff
+that buries every real change.
+
+`no-misused-promises` runs with `checksVoidReturn.arguments` disabled. With it on it fires 90 times,
+every one of them an async callback passed to a void-return API (`process.on('SIGINT', handler)`,
+commander `.action()`), where the only available fix is a `void` wrapper that changes nothing at
+runtime. `require-await` is not enabled for the same reason: 40 hits, dominated by `async` functions
+that conform to an awaited interface without needing `await` themselves.
+
+ShellCheck's `error` floor is the bar the tree passes today, chosen so the gate enforces from the day
+it lands instead of being advisory. Deferred: 91 findings at `warning`, 171 at `info`, 191 at `style`.
+Raising it is not mechanical — 45 of the 91 warnings are SC2319 against the deliberate
+`assert "desc" "$(cmd; echo $?)"` idiom used throughout the bash suite.
+
+`CHANGELOG.md` is excluded from link checking on purpose: an entry correctly names the document that
+existed when it was written, so entries pointing at since-deleted pages are history, not rot.
+
+> **Known limitation.** `npm run typecheck` covers `src/` only. `npm run typecheck:test`
+> (`tsconfig.test.json`) additionally type-checks `test/`, but it is not yet a CI gate: it reports a
+> pre-existing backlog of 829 errors across 177 already-committed test files. Vitest transpiles
+> without type-checking, so those errors never surfaced. Until the backlog is cleared, judge a change
+> by whether the files it touched contribute errors, not by a clean run. Tracked in
+> [#1015](https://github.com/jstoup111/ai-conductor/issues/1015).
 
 ## Test tiers
 
@@ -62,12 +98,10 @@ Runner shape (`src/conductor/vitest.config.ts`): `pool: 'forks'` with `maxForks:
 `testTimeout: 20000`, `hookTimeout: 30000`, `environment: 'node'`. No reporter is configured in the file
 — it comes from the command line.
 
-> **Known limitation.** `npm run typecheck` never sees the tests.
-> `src/conductor/tsconfig.json:17` sets `"exclude": ["node_modules", "dist", "test"]`, so `tsc --noEmit`
-> compiles `src/**/*` only. The write-tests skill's completion checklist asserts "Typecheck passes"
-> (`.agents/skills/write-tests/SKILL.md:136`) and its authoring loop runs `npm run typecheck` (`:105`);
-> neither statement covers the file you just wrote. A type error in a test surfaces only when Vitest
-> transpiles and runs it. Tracked in [#1015](https://github.com/jstoup111/ai-conductor/issues/1015).
+`npm run typecheck` still never sees the tests: `src/conductor/tsconfig.json` sets
+`"exclude": ["node_modules", "dist", "test"]`, so `tsc --noEmit` compiles `src/**/*` only. Use
+`npm run typecheck:test` (`tsconfig.test.json`) to type-check the file you just wrote — see the
+[Linters](#linters) note above for the state of its pre-existing backlog.
 
 ## Isolation policy
 
@@ -189,10 +223,11 @@ real binary.
 
 > **Known limitation.** The other 30 scripts — `test_bin_update.sh`, `test_conduct_worktree.sh`, the five
 > `test_install_*.sh`, the ten `test_examples_*.sh`, `test_skill_pipeline_contract.sh`,
-> `test_release_unreleased_state.sh` and the rest — are only `bash -n` syntax-checked by integrity check
-> 1. Nothing executes them, in CI or locally, and no documented command runs them as a suite. A behavioral
-> regression in `bin/install`, `bin/update`, or `bin/setup` will not be caught by any automated gate; run
-> the relevant script by hand (`bash test/test_bin_update.sh`) when you change those surfaces.
+> `test_release_unreleased_state.sh` and the rest — are statically checked only: `bash -n` by integrity
+> check 1 and ShellCheck by check 1b. Nothing *executes* them, in CI or locally, and no documented
+> command runs them as a suite. Static analysis raises the floor but does not make them tests: a
+> behavioral regression in `bin/install`, `bin/update`, or `bin/setup` is still caught by no automated
+> gate. Run the relevant script by hand (`bash test/test_bin_update.sh`) when you change those surfaces.
 > Tracked in [#1021](https://github.com/jstoup111/ai-conductor/issues/1021).
 
 `examples/` holds runnable end-to-end scenarios (`inline.sh`, `interactive.sh`, `daemon.sh`,
@@ -225,11 +260,20 @@ For where `test_suite` sits in the flow and what happens when it fails, see
 
 1. `changes` — computes `docs_only` by piping `git diff --name-only BASE HEAD` through
    `.github/scripts/ci-detect-docs-only.sh`.
-2. `integrity` — skipped when `docs_only` is true; runs `bash test/test_harness_integrity.sh`.
-3. `typecheck` — `npm ci` then `npm run typecheck` in `src/conductor`.
-4. `conductor` — `npm ci`, `npm run build`, `npm test` in `src/conductor`.
-5. `ci-gate` — `if: always()`; fails when any of the four is `failure` or `cancelled`. This is the
+2. `integrity` — skipped when `docs_only` is true; installs `shellcheck`, then runs
+   `bash test/test_harness_integrity.sh`.
+3. `shellcheck` — skipped when `docs_only` is true; runs `bash test/lint_shell.sh`, the same script
+   integrity check 1b calls.
+4. `lint` — skipped when `docs_only` is true; `npm ci` then `npm run lint` in `src/conductor`.
+5. `typecheck` — `npm ci` then `npm run typecheck` in `src/conductor`.
+6. `conductor` — `npm ci`, `npm run build`, `npm test` in `src/conductor`.
+7. `links` — **never skipped.** Checks documentation links via `lycheeverse/lychee-action`.
+8. `ci-gate` — `if: always()`; fails when any of the above is `failure` or `cancelled`. This is the
    required-status aggregator.
+
+`links` is deliberately the one job with no `docs_only` gate. Every other job is skipped on a
+docs-only pull request, so a link checker wired the usual way would be skipped on exactly the changes
+that can break links and would run only on the ones that cannot.
 
 Node comes from `src/conductor/.tool-versions` (`nodejs 20.19.2`) and the npm cache keys on
 `src/conductor/package-lock.json`.

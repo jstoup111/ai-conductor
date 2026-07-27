@@ -89,6 +89,59 @@ for script in "${HARNESS_DIR}"/.github/scripts/*.sh; do
   assert "${name}" $?
 done
 
+# ── 1b. ShellCheck static analysis ───────────────────────────────────────────
+# Check 1 proves each script *parses*; this proves it is not one of the classes
+# of shell bug that parse fine and misbehave at runtime — unquoted expansions,
+# `local` outside a function, arrays that silently come back empty. That last one
+# is not hypothetical here: an empty array guard once deleted 74 worktrees
+# instead of 4.
+#
+# The file set and severity threshold live in test/lint_shell.sh so this check and
+# the CI job can never enforce different things. Threshold is `error` (the bar the
+# tree passes today, so the gate is enforcing rather than advisory); warning/info/
+# style counts are deferred and recorded in that script's header.
+#
+# The tool is not a dependency of the rest of the suite, so when it is absent this
+# degrades to WARN rather than aborting — same contract as 5a/5b when
+# src/conductor/node_modules is missing.
+# (Careful: a comment line beginning with the tool's own name followed by a space
+# is parsed as an inline directive, not prose, and fails with SC1072/SC1073.)
+#
+# Exit codes (see test/lint_shell.sh):
+#   0   - clean at the configured severity (PASS)
+#   1   - findings (FAIL, gcc-format findings echoed)
+#   2   - enumeration returned no scripts (FAIL — never report success on empty)
+#   127 - shellcheck not installed (WARN/skip)
+
+echo ""
+echo -e "${BOLD}1b. ShellCheck static analysis${NC}"
+
+if ! command -v shellcheck >/dev/null 2>&1; then
+  warn_check "shellcheck not installed — skipping shell static analysis" 1
+else
+  set +e
+  shellcheck_output=$(bash "${HARNESS_DIR}/test/lint_shell.sh" 2>&1)
+  shellcheck_exit=$?
+  shellcheck_count=$(bash "${HARNESS_DIR}/test/lint_shell.sh" --list 2>/dev/null | wc -l | tr -d ' ')
+  set -e
+
+  case "$shellcheck_exit" in
+    0)
+      assert "shellcheck (severity=error) — ${shellcheck_count} shell scripts clean" 0
+      ;;
+    2)
+      echo -e "  ${RED}FAIL${NC} shellcheck — script enumeration returned no files"
+      echo "$shellcheck_output" | sed 's/^/    /'
+      assert "shellcheck — script enumeration returned no files (remediation: fix collect_scripts in test/lint_shell.sh)" 1
+      ;;
+    *)
+      echo -e "  ${RED}FAIL${NC} shellcheck (severity=error) — findings in shell scripts"
+      echo "$shellcheck_output" | sed 's/^/    /'
+      assert "shellcheck (severity=error) — findings in shell scripts (remediation: run 'test/lint_shell.sh')" 1
+      ;;
+  esac
+fi
+
 # ── 2. SKILL.md frontmatter ─────────────────────────────────────────────────
 
 echo ""

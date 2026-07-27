@@ -132,7 +132,9 @@ async function manifest(root: string, exclude: readonly string[]): Promise<Entry
   const walk = async (dir: string): Promise<string[]> => {
     const entries = (await readdir(dir, { withFileTypes: true }))
       .filter(entry => !isExcluded(relative(root, join(dir, entry.name)), exclude));
-    return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(entry =>
+    // `async` on the callback is load-bearing for lint, not for behaviour: it makes
+    // every element a promise so `Promise.all` is not handed a mixed array.
+    return (await Promise.all(entries.sort((a, b) => a.name.localeCompare(b.name)).map(async entry =>
       entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]))).flat();
   };
   let files: string[];
