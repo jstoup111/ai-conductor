@@ -34,6 +34,7 @@ import {
 } from './engine/provider-selection.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
+import { ALL_STEPS } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
@@ -285,18 +286,13 @@ export interface DaemonModeOptions {
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
-// specs, so the loop starts at BUILD (acceptance_specs onward).
-const PRESEEDED_DONE: StepName[] = [
+// specs, so the loop starts at BUILD (acceptance_specs onward). DECIDE phase
+// membership owns the derived portion; worktree and memory are intentional
+// non-DECIDE exceptions.
+export const PRESEEDED_DONE: StepName[] = [
   'worktree',
   'memory',
-  'explore',
-  'prd',
-  'complexity',
-  'stories',
-  'conflict_check',
-  'plan',
-  'architecture_diagram',
-  'architecture_review',
+  ...ALL_STEPS.filter((step) => step.phase === 'DECIDE').map((step) => step.name),
 ];
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
