@@ -50,6 +50,54 @@ describe('live self-host boundary', () => {
     finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('ignores live-checkout pipeline state and agent worktrees (#985)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-nested-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, '.pipeline', 'gates'), { recursive: true }),
+      mkdir(join(live, '.claude', 'worktrees', 'agent-abc'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await writeFile(join(live, 'sentinel'), 'harness source');
+    // .claude itself stays fingerprinted — only the worktrees subtree is volatile.
+    await writeFile(join(live, '.claude', 'settings.json'), '{"permissions":{}}');
+    await writeFile(join(live, '.pipeline', '.memory-count-at-start'), 'before');
+    await writeFile(join(live, '.pipeline', 'gates', 'verdict.json'), 'before');
+    await writeFile(join(live, '.claude', 'worktrees', 'agent-abc', 'file.ts'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    // Every write below is the harness mutating its own runtime state.
+    await writeFile(join(live, '.pipeline', '.memory-count-at-start'), 'after');
+    await writeFile(join(live, '.pipeline', 'gates', 'verdict.json'), 'after');
+    await writeFile(join(live, '.pipeline', 'task-evidence.json'), 'new file');
+    await writeFile(join(live, '.claude', 'worktrees', 'agent-abc', 'file.ts'), 'after');
+    await mkdir(join(live, '.claude', 'worktrees', 'agent-new'), { recursive: true });
+    await writeFile(join(live, '.claude', 'worktrees', 'agent-new', 'file.ts'), 'new worktree');
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('still trips on .claude harness state beside the excluded worktrees subtree', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-claude-state-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, '.claude', 'worktrees', 'agent-abc'), { recursive: true }),
+      mkdir(join(live, '.claude', 'hooks'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await writeFile(join(live, '.claude', 'settings.json'), 'before');
+    await writeFile(join(live, '.claude', 'hooks', 'guard.sh'), 'before');
+    await writeFile(join(live, '.claude', 'worktrees', 'agent-abc', 'file.ts'), 'before');
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, '.claude', 'worktrees', 'agent-abc', 'file.ts'), 'churn');
+    await writeFile(join(live, '.claude', 'settings.json'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+      await writeFile(join(live, '.claude', 'settings.json'), 'before');
+      await writeFile(join(live, '.claude', 'hooks', 'guard.sh'), 'after');
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({ ok: false });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('still rejects real harness-source mutation beside the excluded paths', async () => {
     const cases: ReadonlyArray<readonly [string, (live: string) => Promise<void>]> = [
       ['modified', async live => { await writeFile(join(live, 'src', 'engine.ts'), 'after'); }],

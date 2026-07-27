@@ -106,6 +106,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   run. Exclusion matching is now path-segment aware, so a subtree (and a nested
   provider-state auth path) can actually be excluded instead of only an exact
   top-level filename.
+- Two more live-checkout paths the harness writes itself are now skipped by the
+  live-boundary guard ([#985](https://github.com/jstoup111/ai-conductor/issues/985)):
+  `.pipeline/` (per-run task-status, evidence sidecar, gate verdicts and
+  `.memory-count-at-start`, which the daemon writes into the LIVE checkout while a
+  self-host build is in flight) and `.claude/worktrees/` (the throwaway checkouts
+  agents isolate into, which sit under the live checkout but are not reached by the
+  existing `.worktrees` entry — isolating an agent halted the run mid-build). The
+  exclusion is scoped to the `.claude/worktrees` SUBTREE on purpose:
+  `.claude/settings.json` and `.claude/hooks/` remain fingerprinted, since they are
+  exactly the harness state this guard exists to protect.
 
 - Engine-computed steps now get a retry budget of ONE instead of the configured
   `max_retries`. A step declared `kind: 'engine-native'` that dispatches no agent
