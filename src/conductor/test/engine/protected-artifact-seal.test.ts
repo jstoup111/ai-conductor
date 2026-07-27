@@ -134,6 +134,78 @@ describe('verifyProtectedArtifactSeal', () => {
 
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({ ok: false, reason });
   });
+
+  // TEMPORARY LOOSENING coverage (operator-directed; see protected-artifact-seal.ts
+  // inspectSeal's inline comment and the follow-up intake for the durable fix).
+  describe('own-feature self-amendment loosening', () => {
+    it('tolerates a feature changing its own protected artifact when featureDesc matches', async () => {
+      const repo = await makeRepo({ '.docs/architecture/feature.md': 'approved architecture\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/architecture/feature.md', 'self-amended architecture\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it('tolerates the match across a dated-vs-undated stem, mirroring #1024', async () => {
+      const repo = await makeRepo({
+        '.docs/architecture/2026-07-27-widget.md': 'approved architecture\n',
+      });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/architecture/2026-07-27-widget.md', 'self-amended architecture\n');
+
+      // featureDesc carries no date prefix; artifact stem does — still the same feature.
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'widget' }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it('still rejects a changed artifact belonging to a DIFFERENT feature', async () => {
+      const repo = await makeRepo({ '.docs/architecture/feature.md': 'approved architecture\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/architecture/feature.md', 'tampered by someone else\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'unrelated-other-feature' }),
+      ).resolves.toEqual({ ok: false, reason: 'Protected artifact changed: .docs/architecture/feature.md' });
+    });
+
+    it('still rejects an ADDED artifact even when it names the current feature', async () => {
+      const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/architecture/feature.md', 'unexpected new architecture doc\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
+      ).resolves.toEqual({ ok: false, reason: 'Protected artifact added: .docs/architecture/feature.md' });
+    });
+
+    it('still rejects a DELETED artifact even when it names the current feature', async () => {
+      const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await rm(join(repo, '.docs/plans/feature.md'));
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
+      ).resolves.toEqual({ ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' });
+    });
+  });
 });
 
 describe('isActiveStepArtifactException', () => {

@@ -1,8 +1,18 @@
 import { createHash } from 'node:crypto';
 import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
 import { resolveDocsAllowlist } from './phase-marker.js';
+
+/**
+ * The stem with a leading `YYYY-MM-DD-` date prefix removed. Duplicated here
+ * (rather than imported from `daemon-backlog.ts`'s `undatedStem`) to avoid
+ * adding a new cross-module dependency for one regex; keep both in sync if
+ * the date-prefix convention ever changes.
+ */
+function undatedStem(stem: string): string {
+  return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
+}
 
 const PROTECTED_ARTIFACT_DIRECTORIES = [
   '.docs/architecture',
@@ -34,6 +44,12 @@ export interface VerifyProtectedArtifactSealOptions {
   projectRoot: string;
   /** Required only while validating a first BUILD entry before it may persist a seal. */
   baselineCommit?: string;
+  /**
+   * The current feature's own slug. Scopes the temporary self-amendment
+   * loosening in `inspectSeal` — absent means no loosening (fully protected,
+   * prior behavior). See that function's inline comment for the rationale.
+   */
+  featureDesc?: string;
 }
 
 export type ProtectedArtifactSealVerdict =
@@ -231,9 +247,23 @@ async function workspaceProtectedPaths(projectRoot: string, directory: string): 
   }
 }
 
+/**
+ * True when `path`'s filename stem (basename minus `.md`) names the SAME
+ * feature as `featureDesc`, tolerating a leading `YYYY-MM-DD-` date-prefix
+ * mismatch on either side (mirrors the dated-vs-undated stem ambiguity fixed
+ * for backlog metadata lookups in #1024). Used ONLY to scope the temporary
+ * self-amendment loosening below — it never affects whether a path is
+ * discovered/protected in the first place.
+ */
+function namesOwnFeature(path: string, featureDesc: string): boolean {
+  const pathStem = basename(path, '.md');
+  return pathStem === featureDesc || undatedStem(pathStem) === undatedStem(featureDesc);
+}
+
 async function inspectSeal(
   projectRoot: string,
   seal: ProtectedArtifactSeal,
+  featureDesc?: string,
 ): Promise<ProtectedArtifactSealVerdict> {
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
   const discoveredPaths = (await Promise.all(
@@ -262,7 +292,16 @@ async function inspectSeal(
       return { ok: false, reason: `Indeterminate protected artifact target: ${path}` };
     }
     if (fingerprint(content) !== expected.get(path)) {
-      return { ok: false, reason: `Protected artifact changed: ${path}` };
+      // TEMPORARY LOOSENING (operator-directed, see intake filed for the
+      // durable fix): a feature legitimately amending ITS OWN DECIDE artifact
+      // mid-build — e.g. updating its own architecture doc to reflect
+      // in-scope work surfaced by a build_review kickback — currently halts
+      // identically to a THIRD PARTY tampering with that same file. Tolerate
+      // the former; still halt on the latter (any other artifact) and on any
+      // addition/deletion (handled above/below, unaffected by this branch).
+      if (!featureDesc || !namesOwnFeature(path, featureDesc)) {
+        return { ok: false, reason: `Protected artifact changed: ${path}` };
+      }
     }
   }
 
@@ -284,13 +323,14 @@ export async function verifyProtectedArtifactSeal(
   options: VerifyProtectedArtifactSealOptions,
 ): Promise<ProtectedArtifactSealVerdict> {
   const existing = await readExistingSeal(join(options.projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
-  if (existing) return inspectSeal(options.projectRoot, existing);
+  if (existing) return inspectSeal(options.projectRoot, existing, options.featureDesc);
   if (!options.baselineCommit) {
     return { ok: false, reason: 'Protected artifact seal is missing' };
   }
   return inspectSeal(
     options.projectRoot,
     await createSeal({ projectRoot: options.projectRoot, baselineCommit: options.baselineCommit }),
+    options.featureDesc,
   );
 }
 

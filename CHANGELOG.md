@@ -44,6 +44,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- **Temporary, deliberate loosening (operator-directed) of the protected-artifact seal**:
+  a feature amending ITS OWN DECIDE artifact mid-build (e.g. updating its own architecture
+  doc to reflect in-scope work surfaced by a `build_review` kickback) no longer halts
+  identically to a third party tampering with that same file. `verifyProtectedArtifactSeal`
+  now accepts an optional `featureDesc`; a content-changed protected artifact whose filename
+  stem names the current feature (tolerating a `YYYY-MM-DD-` date-prefix mismatch on either
+  side, mirroring #1024) is tolerated. Every other case is unchanged: a changed artifact
+  belonging to a DIFFERENT feature, or any addition/deletion, still halts exactly as before.
+  This is an explicit, scoped loosening pending a more precise mechanism — see the follow-up
+  intake for the durable fix (distinguishing legitimate self-amendment from an agent silently
+  rewriting its own approved spec to dodge review).
 - `conduct register` now refuses to register a LINKED git worktree (e.g. a daemon
   feature worktree under a project's `.worktrees/`) as its own top-level project.
   Previously `bootstrap`'s auto-register step (`conduct register .`) ran unconditionally

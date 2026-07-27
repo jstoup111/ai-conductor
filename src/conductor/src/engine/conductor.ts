@@ -3747,6 +3747,7 @@ export class Conductor {
               const sealVerdict = await verifyProtectedArtifactSeal({
                 projectRoot: this.projectRoot,
                 baselineCommit: baselineCommit ?? undefined,
+                featureDesc: state.feature_desc,
               });
               if (!sealVerdict.ok) {
                 protectedArtifactIssue = sealVerdict.reason;
