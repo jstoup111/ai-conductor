@@ -1414,6 +1414,19 @@ complexity:
       });
     });
 
+    it('names every unknown key while preserving an explicit build_review opt-out', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, a: 1, b: 2 },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
+      });
+    });
+
     it('resolves enabled:true to enabled, identical to the default', () => {
       const result = validateConfig({ build_review: { enabled: true } });
       expect(result.ok).toBe(true);
@@ -1474,20 +1487,24 @@ complexity:
       });
     });
 
-    it('never throws — always returns ok: true', () => {
-      const testCases = [
-        { build_review: { enabled: true } },
-        { build_review: { enabled: false } },
-        { build_review: 'yes' },
-        { build_review: 1 },
-        { build_review: [] },
-        { build_review: {} },
-        { build_review: null },
-        {},
+    it('is total across build_review shapes', () => {
+      const testCases: Array<[string, Record<string, unknown>]> = [
+        ['absent', {}],
+        ['null', { build_review: null }],
+        ['empty object', { build_review: {} }],
+        ['string', { build_review: 'yes' }],
+        ['number', { build_review: 1 }],
+        ['array', { build_review: [] }],
+        ['valid', { build_review: { enabled: false, perTaskFloor: false } }],
+        ['partially valid', { build_review: { perTaskFloor: false } }],
+        ['fully invalid', { build_review: { enabled: 'no', perTaskFloor: 'no' } }],
       ];
-      for (const testCase of testCases) {
+      for (const [, testCase] of testCases) {
+        expect(() => validateConfig(testCase)).not.toThrow();
         const result = validateConfig(testCase);
         expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.config.build_review).toBeDefined();
       }
     });
 
@@ -1730,6 +1747,19 @@ complexity:
       expect(result.warnings[0]).toMatch(/bogus/);
     });
 
+    it('names every unknown key while preserving an explicit ci_watch opt-out', () => {
+      const result = validateConfig({
+        ci_watch: { enabled: false, a: 1, b: 2 },
+      });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: false },
+        warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
+      });
+    });
+
     it('resolves null to enabled silently', () => {
       const result = validateConfig({ ci_watch: null });
       expect(result.ok).toBe(true);
@@ -1759,20 +1789,24 @@ complexity:
       expect(result.config.ci_watch?.enabled).toBe(true);
     });
 
-    it('never throws — always returns ok: true', () => {
-      const testCases = [
-        { ci_watch: { enabled: true } },
-        { ci_watch: { enabled: false } },
-        { ci_watch: 'yes' },
-        { ci_watch: 1 },
-        { ci_watch: [] },
-        { ci_watch: {} },
-        { ci_watch: null },
-        {},
+    it('is total across ci_watch shapes', () => {
+      const testCases: Array<[string, Record<string, unknown>]> = [
+        ['absent', {}],
+        ['null', { ci_watch: null }],
+        ['empty object', { ci_watch: {} }],
+        ['string', { ci_watch: 'yes' }],
+        ['number', { ci_watch: 1 }],
+        ['array', { ci_watch: [] }],
+        ['valid', { ci_watch: { enabled: false, cooldownMinutes: 0 } }],
+        ['partially valid', { ci_watch: { cooldownMinutes: 15 } }],
+        ['fully invalid', { ci_watch: { enabled: 'no', cooldownMinutes: -1 } }],
       ];
-      for (const testCase of testCases) {
+      for (const [, testCase] of testCases) {
+        expect(() => validateConfig(testCase)).not.toThrow();
         const result = validateConfig(testCase);
         expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.config.ci_watch).toBeDefined();
       }
     });
   });
