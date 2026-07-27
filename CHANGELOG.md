@@ -21,6 +21,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   itself. Content the base branch does not vouch for, additions it does not contain, and deletions all
   still halt before dispatch, and no tolerance applies when the base branch cannot be resolved
   ([#976](https://github.com/jstoup111/ai-conductor/issues/976)).
+- `finish` no longer ships a PR whose CHANGELOG entry still carries the literal
+  `{{IMPLEMENTATION_PR}}` placeholder token. The `skills/finish/SKILL.md` execution steps for
+  "Push & PR" never actually instructed running `conduct-ts finalize-changelog-pr` — that
+  instruction existed only in a separate auto-mode narrative block the dispatched agent didn't
+  follow — so the token could reach `main` unsubstituted (as happened for
+  [#967](https://github.com/jstoup111/ai-conductor/issues/967)). The skill's Option 2 execution
+  steps now run `finalize-changelog-pr` unconditionally right after the PR/push STOP gate, for
+  every outcome that produces a PR URL, and the `finish` completion gate itself now fails closed
+  (deterministically, independent of the prompt) when `choice="pr"` and `CHANGELOG.md` still
+  contains an unsubstituted token.
 
 ### Added
 

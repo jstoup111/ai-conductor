@@ -2303,6 +2303,30 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
 
       const durableEvidence = await verifyDurableShipmentEvidence(dir, ctx, prUrl);
       if (durableEvidence) return durableEvidence;
+
+      // adr-2026-07-06-daemon-false-ship-guard follow-up: a shipped PR whose
+      // CHANGELOG entry still carries the maintain-documentation placeholder
+      // token means `conduct-ts finalize-changelog-pr` never ran (or ran and
+      // was never pushed) before finish converged. Fail closed rather than
+      // let a literal `{{IMPLEMENTATION_PR}}` token reach the base branch —
+      // this was previously only caught by an operator noticing after the
+      // fact. Scoped to choice === 'pr': merge-local never creates a PR URL
+      // to substitute, so the token-substitution contract doesn't apply.
+      if (choice === 'pr') {
+        try {
+          const changelog = await readFile(join(dir, 'CHANGELOG.md'), 'utf-8');
+          if (changelog.includes('{{IMPLEMENTATION_PR}}')) {
+            return {
+              done: false,
+              reason: `CHANGELOG.md still contains an unsubstituted {{IMPLEMENTATION_PR}} token — run 'conduct-ts finalize-changelog-pr --pr-url ${prUrl}', commit, and push before finish can complete`,
+              missing: 'other',
+            };
+          }
+        } catch {
+          // No CHANGELOG.md at this path, or unreadable — not this gate's
+          // concern; other checks cover repo-layout problems.
+        }
+      }
     }
 
     // ---- Order-gate: repair invocation (Task 8, ADR D1) — runs after Phase 1
