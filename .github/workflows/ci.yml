@@ -81,6 +81,10 @@ jobs:
         working-directory: src/conductor
       - run: npm run typecheck
         working-directory: src/conductor
+      # Type-checks test/ as well. Vitest transpiles without checking, so without
+      # this a test can carry a type error indefinitely and still pass (#1015).
+      - run: npm run typecheck:test
+        working-directory: src/conductor
 
   conductor:
     needs: changes
