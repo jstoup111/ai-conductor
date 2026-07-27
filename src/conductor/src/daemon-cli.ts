@@ -754,10 +754,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
   const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  // Feature event renderers are installed in beginFeatureRun, where the
-  // feature-owned logger is available. Keep this global subscriber inert while
-  // retaining the registry's built-in provider registrations.
-  const subscriber = registerBuiltins(registry, events, () => {});
+  // Feature-scoped renderers are installed in beginFeatureRun (and via
+  // createSlugScopedProviderExecution below) with the feature-owned logger.
+  // This global subscriber renders anything emitted directly on the
+  // daemon-wide bus (untagged) so those events keep reaching daemon.log
+  // exactly as they did before per-feature tagging was introduced.
+  const subscriber = registerBuiltins(registry, events, (event) => renderDaemonEvent(event, log));
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
@@ -781,6 +783,22 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     warn: (_message, transition) => eventTarget.emit(transition),
     ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
   });
+  // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
+  // feature slug but have no persistent per-feature event bus like
+  // beginFeatureRun's featureEvents. Give them their own scoped bus + logger
+  // so their provider_fallback transitions and subprocess diagnostics render
+  // tagged with the slug (e.g. `[daemon][<slug>] ...`) instead of falling
+  // back to the untagged global logger.
+  const createSlugScopedProviderExecution = (slug: string): ProviderExecutionContext => {
+    const scopedEvents = new ConductorEventEmitter();
+    const scopedLog = createFeatureDaemonLogger(
+      slug,
+      (message) => log(message, true),
+      formatDaemonFeatureTag(slug),
+    );
+    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
+    return createProviderExecution(scopedEvents, scopedLog);
+  };
   // The pool emits a feature's start/resume/done records before and after its
   // worktree scope exists. Cache the scoped logger by slug so those lifecycle
   // records and the worktree-owned records share one immutable attribution.
@@ -1624,7 +1642,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                   try {
                     // Create a fresh step runner for this rebase resolution attempt
                     const sessionId = uuidv4();
-                    const providerExecution = createProviderExecution();
+                    const providerExecution = createSlugScopedProviderExecution(entry.slug);
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
@@ -1715,7 +1733,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
-                    const providerExecution = createProviderExecution();
+                    const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
                     const selectedRuntime = providerExecution.runtimes.get(
                       providerExecution.configuredProviders[0],
                     );
