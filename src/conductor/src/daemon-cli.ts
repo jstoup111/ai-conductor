@@ -900,12 +900,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         ? existingResult.value
         : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
 
+    if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
     // Always stamp DECIDE steps as done regardless of whether this is a fresh
     // start or a resume — the human authored them and they never re-run.
     for (const name of PRESEEDED_DONE) {
       (baseState as Record<string, unknown>)[name] = 'done';
     }
-    if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
     // Seed the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) so the conductor's track-skip applies
     // (prd + prd-audit skipped on technical). Default product (back-compat).
     if (!baseState.track) baseState.track = item.track ?? 'product';
