@@ -123,7 +123,9 @@ to the base branch as soon as another feature's pull request merges. Verificatio
 two kinds of drift instead of halting on them:
 
 - **Own-feature amendment** — a changed artifact whose filename stem names the current feature
-  (a date prefix on either side is ignored).
+  (a date prefix on either side is ignored). The engine logs a warning naming each amended path;
+  the mutation is not blocked, but `build_review`'s Scope rubric item judges the diff and fails
+  it unless the approved plan justifies the change.
 - **Base-branch inheritance** — a changed or newly appeared artifact whose current workspace content
   is byte-identical to that path as committed at the base branch tip (`origin/<base>`, falling back
   to the local `<base>`). This is the content the feature's own rebase brought in, and the base
