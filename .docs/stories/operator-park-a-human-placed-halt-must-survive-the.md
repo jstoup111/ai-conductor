@@ -229,9 +229,16 @@ them without checking daemon state first.
 - Given `.daemon/parked/<slug>` exists, when the daemon itself writes any state for `<slug>`
   (ledger, processed, warned), then the parked marker is never modified or removed by any
   daemon code path — only the unpark verb removes it (operator-owned invariant).
+  *Amended 2026-07-27 (#1060, adr-2026-07-27-ancestry-proven-park-reconciliation): the guarded
+  reconcile helper is the single sanctioned additional remover, and only for an
+  ancestry-proven-merged park whose shipped record is on main, under
+  `reconcile_parked_auto_cleanup` (default on) or the `daemon reconcile-parked` verb.*
 
 ### Done When
 - [ ] Re-park test asserts unchanged content + mtime and exit 0
 - [ ] Concurrent double-park test yields one intact marker, two zero exits
 - [ ] Grep-level assertion: no daemon (non-CLI-verb) code path writes to or removes from
-      `.daemon/parked/` (single-writer invariant enforced via the canonical module's API shape)
+      `.daemon/parked/` (single-writer invariant enforced via the canonical module's API shape).
+      *Re-scoped 2026-07-27 (#1060): the guarded reconcile helper is the one sanctioned
+      exception; the assertion becomes "no daemon code path outside the canonical park-marker
+      module and the guarded reconcile helper".*

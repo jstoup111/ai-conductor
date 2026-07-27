@@ -33,6 +33,11 @@ indefinitely, through every automatic recovery path it has.
   explicitly deferred to its own issue).
 - Changing how machine-placed halts are created, cleared, or retried.
 - Any form of scheduled or conditional auto-unpark; a park ends only by operator action.
+  *Amended 2026-07-27 by `adr-2026-07-27-ancestry-proven-park-reconciliation` (#1060): one scoped
+  exception — the guarded reconcile helper may remove the marker of an ancestry-proven-merged park
+  whose shipped record is on main, when `reconcile_parked_auto_cleanup` is enabled (its default) or
+  via the operator verb `conduct daemon reconcile-parked <slug>`. All other autonomous unpark
+  remains forbidden.*
 
 ## Users / Personas
 
@@ -94,8 +99,9 @@ indefinitely, through every automatic recovery path it has.
 features, parked-state visibility, negative-path handling above.
 
 **Out:** durable once-per-base-advance retry accounting across restarts (deferred, own issue);
-changes to machine-halt semantics; automatic or conditional unparking; multi-operator park
-ownership/permissions (single-operator daemon today).
+changes to machine-halt semantics; automatic or conditional unparking (except the scoped
+ancestry-proven reconciliation exception above, adr-2026-07-27-ancestry-proven-park-reconciliation);
+multi-operator park ownership/permissions (single-operator daemon today).
 
 ## Key Decisions & Rationale (product)
 
