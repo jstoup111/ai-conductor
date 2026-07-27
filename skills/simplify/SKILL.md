@@ -14,7 +14,8 @@ Runs at pipeline batch boundaries. Catches accumulated duplication, complexity, 
 over-engineering before they compound across batches. Enforces "dry business logic, not dry code"
 — extract shared *behavior*, not shared *shape*.
 
-This is NOT a full codebase audit. It is scoped to the current batch's changes only.
+This is NOT a full codebase audit. It is scoped to the current batch's changes, except
+that changed tests must be compared with existing tests at the same production seam.
 
 ## Practices
 
@@ -26,7 +27,8 @@ Identify files changed in the current batch:
 git diff <batch-start-commit>..HEAD --name-only
 ```
 
-Only analyze these files. Do not scan the full codebase — that would be slow and noisy.
+Keep non-test analysis limited to these files. For each changed or added test, additionally
+inspect existing tests at the same production seam; do not scan unrelated code or tests.
 The batch-start commit is available from `.pipeline/audit-trail/batch-N/` or from the
 pipeline's progress log.
 
@@ -68,7 +70,28 @@ Identify patterns that should be extracted:
 
 **Do not flag test setup duplication** — test readability trumps DRY in specs.
 
-### 5. Over-Engineering Detection
+### 5. Test and Implementation Value
+
+For every changed or added test, inspect existing tests at the same production seam even
+when those tests are outside the batch. Duplicate cases are must-fix unless they prove a
+distinct failure boundary and state that boundary in the test.
+
+Reject as must-fix:
+
+- Tautologies, no-op assertions, and assertions of test-local constants
+- Cast-only or annotation-only type tests when the test suite is not semantically typechecked
+- Tests that validate mock behavior rather than production behavior
+- Tests of ordinary human-facing documentation wording, headings, links, or source layout
+- Tests retained only to mirror a historical plan or decision whose behavior has been superseded
+- Implementations that exist only to satisfy low-value assertions
+
+Machine-consumed or generated-document contracts are valid only when the test verifies the
+resulting runtime behavior. Every test must plausibly fail under a production regression, and
+every implementation must trace to an operator outcome or acceptance criterion.
+When removing a no-signal test exposes an apparent coverage gap, resolve it against the current
+governing contract before adding a replacement; do not recreate behavior from a superseded artifact.
+
+### 6. Over-Engineering Detection
 
 Flag abstractions that add complexity without value:
 
@@ -82,7 +105,7 @@ Flag abstractions that add complexity without value:
 **Exception:** If an ADR in `.docs/decisions/` explicitly justifies the abstraction
 (e.g., "interface for future payment providers"), do not flag it.
 
-### 6. Dead Code Detection
+### 7. Dead Code Detection
 
 Check for code added in this batch that is never called:
 
@@ -93,7 +116,7 @@ Check for code added in this batch that is never called:
 Use the linter output if available (tech-context may specify one). Otherwise, grep for
 references to each new symbol.
 
-### 7. Output
+### 8. Output
 
 Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
 
@@ -131,13 +154,18 @@ Write findings to `.pipeline/audit-trail/batch-N-simplification.md`:
 |---|--------|-----------|---------------|
 | 1 | [symbol] | [file:line] | [no callers / unreachable branch] |
 
+### Test and Implementation Value
+| # | Test/Implementation | File:Line | Value Violation | Severity |
+|---|---------------------|-----------|-----------------|----------|
+| 1 | [name] | [file:line] | [duplicate/no-signal/no outcome trace] | must-fix |
+
 ## Verdict: CLEAN | SIMPLIFY_REQUIRED
 
 **Must-fix items:** [count]
 **Advisory items:** [count]
 ```
 
-### 8. Verdict and Gating
+### 9. Verdict and Gating
 
 | Verdict | Condition | Action |
 |---------|-----------|--------|
@@ -151,12 +179,18 @@ If the rework budget is exhausted, escalate to user.
 
 ## Verification
 
-- [ ] Scope limited to current batch files only (not full codebase)
+- [ ] Non-test analysis limited to current batch files (not the full codebase)
 - [ ] Duplication checked across batch-changed files (behavior, not shape)
 - [ ] Complexity thresholds applied (>4 branches, >25 lines, >3 nesting, >4 params)
 - [ ] Extract-worthy patterns identified (3+ similar blocks)
 - [ ] Over-engineering flagged (single-caller abstractions, unnecessary indirection)
 - [ ] ADR exceptions respected (documented abstractions not flagged)
 - [ ] Dead code in batch detected
+- [ ] Changed/added tests compared only with existing tests at the same production seam, including outside the batch when needed
+- [ ] Distinct failure boundaries stated for any intentionally overlapping tests
+- [ ] Tests can plausibly fail on production regressions; no tautology, mock-only, type-only, or documentation-layout assertions
+- [ ] Apparent coverage gaps checked against the current governing contract, not preserved from superseded artifacts
+- [ ] Implementations trace to an operator outcome or acceptance criterion
+- [ ] Test and Implementation Value findings included; violations marked must-fix
 - [ ] Output written to `.pipeline/audit-trail/batch-N-simplification.md`
 - [ ] Verdict issued (CLEAN or SIMPLIFY_REQUIRED)

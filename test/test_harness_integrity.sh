@@ -89,6 +89,59 @@ for script in "${HARNESS_DIR}"/.github/scripts/*.sh; do
   assert "${name}" $?
 done
 
+# ── 1b. ShellCheck static analysis ───────────────────────────────────────────
+# Check 1 proves each script *parses*; this proves it is not one of the classes
+# of shell bug that parse fine and misbehave at runtime — unquoted expansions,
+# `local` outside a function, arrays that silently come back empty. That last one
+# is not hypothetical here: an empty array guard once deleted 74 worktrees
+# instead of 4.
+#
+# The file set and severity threshold live in test/lint_shell.sh so this check and
+# the CI job can never enforce different things. Threshold is `error` (the bar the
+# tree passes today, so the gate is enforcing rather than advisory); warning/info/
+# style counts are deferred and recorded in that script's header.
+#
+# The tool is not a dependency of the rest of the suite, so when it is absent this
+# degrades to WARN rather than aborting — same contract as 5a/5b when
+# src/conductor/node_modules is missing.
+# (Careful: a comment line beginning with the tool's own name followed by a space
+# is parsed as an inline directive, not prose, and fails with SC1072/SC1073.)
+#
+# Exit codes (see test/lint_shell.sh):
+#   0   - clean at the configured severity (PASS)
+#   1   - findings (FAIL, gcc-format findings echoed)
+#   2   - enumeration returned no scripts (FAIL — never report success on empty)
+#   127 - shellcheck not installed (WARN/skip)
+
+echo ""
+echo -e "${BOLD}1b. ShellCheck static analysis${NC}"
+
+if ! command -v shellcheck >/dev/null 2>&1; then
+  warn_check "shellcheck not installed — skipping shell static analysis" 1
+else
+  set +e
+  shellcheck_output=$(bash "${HARNESS_DIR}/test/lint_shell.sh" 2>&1)
+  shellcheck_exit=$?
+  shellcheck_count=$(bash "${HARNESS_DIR}/test/lint_shell.sh" --list 2>/dev/null | wc -l | tr -d ' ')
+  set -e
+
+  case "$shellcheck_exit" in
+    0)
+      assert "shellcheck (severity=error) — ${shellcheck_count} shell scripts clean" 0
+      ;;
+    2)
+      echo -e "  ${RED}FAIL${NC} shellcheck — script enumeration returned no files"
+      echo "$shellcheck_output" | sed 's/^/    /'
+      assert "shellcheck — script enumeration returned no files (remediation: fix collect_scripts in test/lint_shell.sh)" 1
+      ;;
+    *)
+      echo -e "  ${RED}FAIL${NC} shellcheck (severity=error) — findings in shell scripts"
+      echo "$shellcheck_output" | sed 's/^/    /'
+      assert "shellcheck (severity=error) — findings in shell scripts (remediation: run 'test/lint_shell.sh')" 1
+      ;;
+  esac
+fi
+
 # ── 2. SKILL.md frontmatter ─────────────────────────────────────────────────
 
 echo ""
@@ -234,6 +287,32 @@ else
       assert "bin/generate-model-table --check — unexpected exit code ${model_table_exit}" 1
       ;;
   esac
+
+  # Fixture sub-test: prove the provider-labelled contract is not a
+  # presence-only check. Run the real binary against a temporary HARNESS.md
+  # whose Codex provider label is changed, then require both drift exit 1 and
+  # a useful unified diff naming the changed and canonical labels.
+  model_table_fixture="$(mktemp)"
+  cp "${HARNESS_DIR}/HARNESS.md" "$model_table_fixture"
+  sed -i '0,/| Codex model |/s//| Codex model-drift |/' "$model_table_fixture"
+
+  set +e
+  model_table_fixture_output=$(
+    GENERATE_MODEL_TABLE_HARNESS_MD="$model_table_fixture" \
+      "${HARNESS_DIR}/bin/generate-model-table" --check 2>&1
+  )
+  model_table_fixture_exit=$?
+  set -e
+  rm -f "$model_table_fixture"
+
+  model_table_fixture_ok=1
+  if [ "$model_table_fixture_exit" -eq 1 ] &&
+     echo "$model_table_fixture_output" | grep -Fq -- '-| Skill/Agent | Execution path | Claude model | Claude effort | Codex model-drift | Codex effort | Why |' &&
+     echo "$model_table_fixture_output" | grep -Fq -- '+| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |'; then
+    model_table_fixture_ok=0
+  fi
+  assert "bin/generate-model-table --check — provider-label fixture reports useful drift diff" \
+    "$model_table_fixture_ok"
 fi
 
 # ── 5b. SKILL.md pin agreement ──────────────────────────────────────────────
@@ -253,13 +332,21 @@ if [ ! -d "${HARNESS_DIR}/src/conductor/node_modules" ]; then
 elif ! command -v jq >/dev/null 2>&1; then
   warn_check "model-table pin check skipped — jq not installed" 1
 else
-  pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
-  pins_exit=$?
+  if [ -n "${HARNESS_INTEGRITY_TEST_PINS_JSON:-}" ]; then
+    pins_json=$HARNESS_INTEGRITY_TEST_PINS_JSON
+    pins_exit=0
+  else
+    set +e
+    pins_json=$("${HARNESS_DIR}/bin/generate-model-table" --pins 2>/dev/null)
+    pins_exit=$?
+    set -e
+  fi
+  pin_skills_dir="${HARNESS_INTEGRITY_TEST_SKILLS_DIR:-${HARNESS_DIR}/skills}"
 
   if [ "$pins_exit" -ne 0 ] || ! echo "$pins_json" | jq -e . >/dev/null 2>&1; then
     assert "bin/generate-model-table --pins produced parseable JSON" 1
   else
-    for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
+    for skill_file in "${pin_skills_dir}"/*/SKILL.md; do
       [ -f "$skill_file" ] || continue
       skill_name=$(basename "$(dirname "$skill_file")")
 
@@ -767,36 +854,48 @@ else
   assert "test/test_ci_detect_docs_only.sh exists" 1
 fi
 
-# ── 14. README/docs relocation acceptance checks ────────────────────────────
-# Runs the three durable acceptance checks produced by Tasks 11-13 of
-# .docs/plans/condense-readme-relocate-docs.md: docs-link-check.sh (no broken
-# relative links/anchors across README.md + docs/*.md), readme-shape-check.sh
-# (README.md stays a condensed front-door), and
-# docs-content-preservation-check.sh (relocated content isn't silently
-# dropped). Without this wiring, step 1's `bash -n` only proves these scripts
-# are syntactically valid, not that they actually pass — wire them in as real
-# invoked checks, same pattern as step 13's ci-detect-docs-only.sh.
+# ── 14. Provider-compatible shared-skill contract ───────────────────────────
+# The canonical skill sources are loaded directly by both supported hosts.
+# Keep the negative provider-boundary fixtures in the normal integrity path so
+# a compatibility edit cannot silently reintroduce an unscoped Claude command,
+# model, tool, delegation, interaction, or weakened shared gate.
 echo ""
-echo -e "${BOLD}14. README/docs relocation acceptance checks${NC}"
+echo -e "${BOLD}14. Provider-compatible shared-skill contract${NC}"
 
-for docs_check in docs-link-check.sh readme-shape-check.sh docs-content-preservation-check.sh; do
-  docs_check_path="${HARNESS_DIR}/test/${docs_check}"
-  if [ -f "$docs_check_path" ]; then
-    set +e
-    docs_check_output=$(bash "$docs_check_path" 2>&1)
-    docs_check_exit=$?
-    set -e
+provider_contract_test="${HARNESS_DIR}/test/test_provider_skill_contracts.sh"
+if [ -f "$provider_contract_test" ]; then
+  set +e
+  provider_contract_output=$(bash "$provider_contract_test" 2>&1)
+  provider_contract_exit=$?
+  set -e
 
-    if [ "$docs_check_exit" -eq 0 ]; then
-      assert "test/${docs_check} — passes" 0
-    else
-      echo "$docs_check_output" | sed 's/^/    /'
-      assert "test/${docs_check} — failed" 1
-    fi
+  if [ "$provider_contract_exit" -eq 0 ]; then
+    assert "test/test_provider_skill_contracts.sh — provider boundary fixtures and canonical audit pass" 0
   else
-    assert "test/${docs_check} exists" 1
+    echo "$provider_contract_output" | sed 's/^/    /'
+    assert "test/test_provider_skill_contracts.sh — provider boundary fixtures and canonical audit pass" 1
   fi
-done
+else
+  assert "test/test_provider_skill_contracts.sh exists" 1
+fi
+
+# ── 15. Root agent-instruction parity ───────────────────────────────────────
+# Claude and Codex must load the same repository contract. Keep the named
+# provider entry points as symlinks to one canonical source so additions cannot
+# silently drift between CLAUDE.md and AGENTS.md.
+echo ""
+echo -e "${BOLD}15. Root agent-instruction parity${NC}"
+
+agent_instructions="${HARNESS_DIR}/AGENT_INSTRUCTIONS.md"
+if [ -f "$agent_instructions" ] \
+  && [ -L "${HARNESS_DIR}/CLAUDE.md" ] \
+  && [ -L "${HARNESS_DIR}/AGENTS.md" ] \
+  && [ "$(readlink "${HARNESS_DIR}/CLAUDE.md")" = "AGENT_INSTRUCTIONS.md" ] \
+  && [ "$(readlink "${HARNESS_DIR}/AGENTS.md")" = "AGENT_INSTRUCTIONS.md" ]; then
+  assert "CLAUDE.md and AGENTS.md share canonical agent instructions" 0
+else
+  assert "CLAUDE.md and AGENTS.md share canonical agent instructions" 1
+fi
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

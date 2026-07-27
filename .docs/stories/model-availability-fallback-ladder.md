@@ -6,6 +6,20 @@
 **Design:** adr-2026-07-03-reactive-model-fallback-ladder (APPROVED)
 **Tier:** M
 
+> **Provider-aware amendment (#902, approved 2026-07-23):** The concrete
+> `fable → opus → sonnet` default below is the built-in **Claude** policy.
+> Detection, in-attempt walking, exact-string caching, logging, and explicit
+> `model_fallback_ladder` behavior remain provider-neutral. Codex uses the
+> independent `gpt-5.6-sol → gpt-5.6-terra → gpt-5.6-luna` default specified in
+> `model-and-effort-resolution-provider-aware-902.md`.
+>
+> **Per-step routing amendment (#927, approved 2026-07-24):** The availability
+> cache is process-scoped **within a provider runtime** and keyed by exact model
+> string. An unavailable model reported by one provider never poisons another
+> provider's cache. Exhausting a provider's native ladder permits the
+> step-attempt-scoped provider fallback defined by
+> `per-step-provider-routing-927.md`; it does not globally disable that provider.
+
 ---
 
 ## Story: Detect model-unavailable as a distinct failure class
@@ -118,8 +132,9 @@ the process so that every subsequent step starts directly on the best live model
   marked dead — cache keys are exact opaque strings (no alias resolution guessing).
 
 ### Done When
-- [ ] Cache is a per-process singleton in `engine/model-availability.ts`; no disk state,
-      no cross-worktree state.
+- [ ] Cache is process-scoped per provider runtime in
+      `engine/model-availability.ts`; no disk state, cross-provider state, or
+      cross-worktree state.
 - [ ] Tests assert: no second spawn of a dead model, interactive-path substitution,
       exact-string keying, and fresh-instance behavior (constructing a new cache
       re-allows all models — the restart semantics).
@@ -169,7 +184,7 @@ repo can pin its own degradation policy.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given no `model_fallback_ladder` key in config, when the engine resolves the ladder,
+- Given Claude is selected and no `model_fallback_ladder` key exists, when the engine resolves the ladder,
   then it is `['fable', 'opus', 'sonnet']`.
 - Given `model_fallback_ladder: [opus, sonnet, haiku]`, when the engine resolves the
   ladder, then that exact ordered list is used.

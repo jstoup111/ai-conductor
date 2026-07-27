@@ -32,6 +32,8 @@ function makePrint(): { print: (s: string) => void; out: string[] } {
   return { print: (s: string) => out.push(s), out };
 }
 
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 describe('runHandoff — remote path (PR opened)', () => {
   let tempDir: string;
   beforeEach(async () => {
@@ -49,6 +51,7 @@ describe('runHandoff — remote path (PR opened)', () => {
 
     const entry = await runHandoff(target, 'spec/feat', {
       gh: async () => ({ stdout: `Opening pull request…\n${PR_URL}\n` }),
+      git: noOpGit,
       engineerDir: tempDir,
       launchFn: (p) => {
         launchCalls.push(p);
@@ -75,11 +78,41 @@ describe('runHandoff — remote path (PR opened)', () => {
         seenCwd = opts.cwd;
         return { stdout: 'https://github.com/acme/cwd-proj/pull/1' };
       },
+      git: noOpGit,
       engineerDir: tempDir,
       launchFn: () => {},
       print,
     });
     expect(seenCwd).toBe(tempDir);
+  });
+
+  it('passes the injected git runner through before creating the remote spec PR', async () => {
+    const branch = 'spec/run-handoff-idea';
+    const target = makeTarget(tempDir, 'wired-proj', 'git@github.com:acme/wired-proj.git');
+    const { print } = makePrint();
+    const trace: Array<{ command: string; args: string[]; cwd: string }> = [];
+    const injectedGit = async (args: string[], opts: { cwd: string }) => {
+      trace.push({ command: 'git', args: [...args], cwd: opts.cwd });
+      return { stdout: '', stderr: '' };
+    };
+    const gh = async (args: string[], opts: { cwd: string }) => {
+      trace.push({ command: 'gh', args: [...args], cwd: opts.cwd });
+      return { stdout: 'https://github.com/acme/wired-proj/pull/42' };
+    };
+    const deps = {
+      gh,
+      git: injectedGit,
+      engineerDir: tempDir,
+      launchFn: () => {},
+      print,
+    } as Parameters<typeof runHandoff>[2] & { git: typeof injectedGit };
+
+    await runHandoff(target, branch, deps).catch(() => undefined);
+
+    expect(trace).toEqual([
+      { command: 'git', args: ['push', '-u', 'origin', branch], cwd: tempDir },
+      { command: 'gh', args: ['pr', 'create', '--head', branch, '--fill'], cwd: tempDir },
+    ]);
   });
 
   // A-3: the remote branch is reached only via an explicit gh-present guard,

@@ -21,27 +21,39 @@ describe('TerminalSubscriber event forwarding', () => {
     vi.useRealTimers();
   });
 
-  it('forwards tier_skip events', () => {
+  it('forwards tier_skip events', async () => {
     const event: ConductorEvent = { type: 'tier_skip', step: 'conflict_check', tier: 'S' };
-    emitter.emit(event);
+    await emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 
-  it('forwards config_skip events', () => {
+  it('forwards config_skip events', async () => {
     const event: ConductorEvent = { type: 'config_skip', step: 'retro' };
-    emitter.emit(event);
+    await emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 
-  it('forwards gate_blocked events', () => {
+  it('forwards gate_blocked events', async () => {
     const event: ConductorEvent = { type: 'gate_blocked', step: 'build', reason: 'no plan' };
-    emitter.emit(event);
+    await emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 
-  it('forwards feature_complete events', () => {
+  it('forwards feature_complete events', async () => {
     const event: ConductorEvent = { type: 'feature_complete', prUrl: 'https://example.com' };
-    emitter.emit(event);
+    await emitter.emit(event);
+    expect(renderCallback).toHaveBeenCalledWith(event);
+  });
+
+  it('forwards provider_fallback events', async () => {
+    const event: ConductorEvent = {
+      type: 'provider_fallback',
+      step: 'plan',
+      failedProvider: 'codex',
+      reason: 'executable not found',
+      nextProvider: 'claude',
+    };
+    await emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 });

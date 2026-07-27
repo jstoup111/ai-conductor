@@ -245,62 +245,6 @@ exports[`parsePlanTaskVerifyOnly > regression: existing plan corpus (no markers)
 ]
 `;
 
-exports[`parsePlanTaskVerifyOnly > regression: existing plan corpus (no markers) is inert > 2026-07-05-changelog-migration-block-enforcement.md: zero verify-only true entries, unchanged parsePlanTaskPaths > parsePlanTaskPaths 1`] = `
-[
-  [
-    "1",
-    [],
-  ],
-  [
-    "2",
-    [],
-  ],
-  [
-    "3",
-    [],
-  ],
-  [
-    "4",
-    [],
-  ],
-  [
-    "5",
-    [],
-  ],
-  [
-    "6",
-    [],
-  ],
-  [
-    "7",
-    [],
-  ],
-  [
-    "8",
-    [],
-  ],
-  [
-    "9",
-    [],
-  ],
-  [
-    "10",
-    [],
-  ],
-  [
-    "11",
-    [],
-  ],
-  [
-    "12",
-    [
-      "agents/",
-      "skills/",
-    ],
-  ],
-]
-`;
-
 exports[`parsePlanTaskVerifyOnly > regression: existing plan corpus (no markers) is inert > 2026-07-12-rtk-hook-preservation.md: zero verify-only true entries, unchanged parsePlanTaskPaths > parsePlanTaskPaths 1`] = `
 [
   [

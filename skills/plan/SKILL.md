@@ -29,6 +29,13 @@ Open with a short **Technical Approach** (a paragraph or few bullets: the design
 key modules/files, and sequencing) before the task list, so `build` has the shape of the work
 before the steps.
 
+### Documentation boundary
+
+Never create plan tasks, subtasks, requirements, verification items, or notes for writing or
+updating ordinary project documentation—even when it accompanies functional work. Documentation-only
+requests belong to `/explore`'s direct delivery route. Plans cover only functional behavior and its
+implementation.
+
 ## Practices
 
 ### 1. Validate Preconditions
@@ -74,7 +81,7 @@ Break stories into tasks at **2-5 minute granularity**. Each task follows the TD
 **Files likely touched:**
 - [file path] — [what changes]
 
-Write file paths **repo-relative** (e.g. `src/conductor/src/engine/foo.ts`, not
+Write file paths **repo-relative** (e.g. `src/engine/foo.ts`, not
 `foo.ts`): the build evidence gate corroborates each task's commits against these
 paths. Basename/suffix forms are tolerated (matched at `/` boundaries, #425), but
 repo-relative paths corroborate precisely and never collide.
@@ -105,7 +112,7 @@ Compliance Gate later checks against real `file:line` callers after implementati
 
 1. **Declared call site(s):** `path#symbol` — repo-relative path plus the calling
    symbol, comma-separated for multiple call sites:
-   `src/conductor/src/engine/loop.ts#dispatchStep, src/conductor/bin/conduct-ts#commandTable`
+   `src/engine/loop.ts#dispatchStep, bin/harness#commandTable`
 2. **Inheritance:** `same as Task N` — this task's surface is wired in by the same
    call site(s) declared for Task N (e.g. a follow-up task adding a branch to
    already-wired dispatch logic).
@@ -113,7 +120,7 @@ Compliance Gate later checks against real `file:line` callers after implementati
    tests, docs, or refactors existing wired code without adding a new call target.
 4. **Deferred/waived:** `none (inert until <ref>)` — the surface is intentionally
    not yet reachable, where `<ref>` is either a repo-relative path (path-form,
-   e.g. `none (inert until src/conductor/src/engine/loop.ts)`) or a tracked issue
+   e.g. `none (inert until src/engine/loop.ts)`) or a tracked issue
    (issue-form, e.g. `none (inert until #431)`) naming where/when it will be wired.
 
 **Repo-relative paths only:** as with `**Files:**`, every path used in a
@@ -256,8 +263,8 @@ Save the plan to `.docs/plans/YYYY-MM-DD-<feature>.md`
 
 ### 8a. Advisory Overlap Scan
 
-Before the plan is committed, run `conduct-ts overlap-scan --files <comma-separated
-Files set>` over the union of every task's `**Files:**` paths (add `--source-ref
+Before the plan is committed, run `conduct-ts overlap-scan --files <comma-separated Files set>` over
+the union of every task's `**Files:**` paths (add `--source-ref
 <issue ref>` when the feature's originating issue/intake ref is known). Surface the
 rendered report to the author as-is.
 

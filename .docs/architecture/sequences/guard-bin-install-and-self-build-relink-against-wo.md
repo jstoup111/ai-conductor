@@ -1,5 +1,9 @@
 # Sequence: Self-build relink preflight with worktree-root guards (#363)
 
+> **Historical self-host sequence amended by #907 on 2026-07-26:** the relink flow below
+> is retired for self-host dispatch. Worktree assets now resolve inside a minimal isolated
+> provider home; non-self-host installer safeguards remain current.
+
 **Last updated:** 2026-07-06
 **Scope:** The self-build dispatch preflight (`runSelfBuildDispatch` → `relinkSkillsForSelfBuild`)
 after the fix, including both refusal branches — a worktree-resolved harness root and a direct

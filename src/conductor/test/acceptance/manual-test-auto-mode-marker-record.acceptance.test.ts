@@ -30,8 +30,8 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 // `dispatchManualTestRecord`, written task-by-task during `/pipeline` in
 // `test/engine/manual-test-record-cli.test.ts` (plan Tasks 2-5) — NOT
 // duplicated here. This file drives the REAL `bin/conduct-ts` binary (spawned
-// as a genuine child process, mirroring `finish-record-real-binary.acceptance
-// .test.ts`) and the REAL `Conductor.run()` entry point (mirroring
+// as a genuine child process, mirroring `test/smoke/finish-record.smoke.test.ts`)
+// and the REAL `Conductor.run()` entry point (mirroring
 // `daemon-mode-route-halt-user-input-required-through.acceptance.test.ts`) —
 // the two places the story's "no HALT" outcome and "argv actually dispatches"
 // wiring can only be proven end-to-end, never by a unit calling the CLI
@@ -254,6 +254,10 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
           verifyArtifacts: true,
           maxRetries: 1,
           fromStep: 'manual_test',
+          fullSuiteVerifier: {
+            ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+            inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+          },
         });
 
         await conductor.run();
@@ -330,6 +334,10 @@ describe('daemon auto-mode manual_test — SKIP clears the gate without a HALT (
           verifyArtifacts: true,
           maxRetries: 1,
           fromStep: 'manual_test',
+          fullSuiteVerifier: {
+            ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+            inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+          },
         });
 
         await conductor.run();

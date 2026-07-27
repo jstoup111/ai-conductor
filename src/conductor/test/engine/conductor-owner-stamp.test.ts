@@ -19,10 +19,10 @@ vi.mock('execa', () => ({ execa: vi.fn() }));
 
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName } from '../../src/engine/conductor.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
 import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
 import { writeState } from '../../src/engine/state.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 
 const PLAN_STEM = 'my-feature';
 const PLAN_BODY = [

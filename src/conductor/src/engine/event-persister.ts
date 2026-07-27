@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
-import type { ConductorEventEmitter, EventHandler } from '../ui/events.js';
+import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 
 /**
  * Thrown when EventPersister cannot append to the event log file.
@@ -25,6 +25,8 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'step_started',
   'step_completed',
   'step_failed',
+  'provider_attempt',
+  'provider_fallback',
   'step_retry',
   'checkpoint_reached',
   'recovery_needed',
@@ -34,11 +36,14 @@ const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'navigation_back',
   'rate_limit',
   'session_reset',
+  'credentials_park',
+  'credentials_park_progress',
   'feature_complete',
   'dashboard_refresh',
   'auto_heal',
   'mode_skip',
   'build_progress',
+  'unattributed_progress',
   'build_no_progress',
   'build_stall',
   'renderer_error',
@@ -101,4 +106,58 @@ export class EventPersister {
       throw new EventPersistError(this.filePath, err);
     }
   }
+}
+
+/**
+ * Marker property stamped on every event forwarded from a feature-scoped bus
+ * onto the daemon-wide bus. The feature-scoped bus already renders the event
+ * (tagged) via its own listeners before forwarding; without this marker the
+ * daemon-wide TerminalSubscriber would render the same event a second time,
+ * untagged (see beginFeatureRun in daemon-cli.ts).
+ */
+export const FORWARDED_FROM_FEATURE = Symbol('forwardedFromFeature');
+
+class ForwardingEventEmitter extends ConductorEventEmitter {
+  constructor(private readonly globalEvents: ConductorEventEmitter) {
+    super();
+  }
+
+  override async emit(event: ConductorEvent): Promise<void> {
+    await super.emit(event);
+    const forwarded = { ...event } as ConductorEvent & { [FORWARDED_FROM_FEATURE]?: true };
+    forwarded[FORWARDED_FROM_FEATURE] = true;
+    await this.globalEvents.emit(forwarded);
+  }
+}
+
+export async function withFeatureEventPersistence<T>(input: {
+  worktreePath: string;
+  globalEvents: ConductorEventEmitter;
+  run: (featureEvents: ConductorEventEmitter) => Promise<T>;
+}): Promise<T> {
+  const scope = startFeatureEventPersistence(
+    input.worktreePath,
+    input.globalEvents,
+  );
+  try {
+    return await input.run(scope.events);
+  } finally {
+    scope.stop();
+  }
+}
+
+export function startFeatureEventPersistence(
+  worktreePath: string,
+  globalEvents: ConductorEventEmitter,
+): { events: ConductorEventEmitter; stop: () => void } {
+  const featureEvents = new ForwardingEventEmitter(globalEvents);
+  const persister = new EventPersister(
+    join(worktreePath, '.pipeline', 'events.jsonl'),
+    featureEvents,
+  );
+  persister.start();
+  return {
+    events: featureEvents,
+    stop: () => persister.stop(),
+  };
 }

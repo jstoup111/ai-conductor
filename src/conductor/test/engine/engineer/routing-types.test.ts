@@ -50,18 +50,6 @@ describe('RoutingOutcome discriminated union', () => {
     expect(dispatch(outcome)).toBe('declined');
   });
 
-  it('declined variant has no project property (type-level assertion)', () => {
-    const outcome: RoutingOutcome = { kind: 'declined' };
-    if (outcome.kind === 'declined') {
-      // @ts-expect-error — 'project' does not exist on the declined variant
-      const _noop = outcome.project;
-      void _noop;
-    }
-    // If TypeScript compiles without error on the @ts-expect-error line above,
-    // the type correctly has no `project` field on 'declined'.
-    expect(true).toBe(true);
-  });
-
   it('assertNever throws for impossible values at runtime', () => {
     // Cast to force a runtime call to assertNever — simulates a future variant
     // that wasn't handled in the switch.

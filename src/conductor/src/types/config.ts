@@ -21,6 +21,9 @@ export type EffortLevel = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
  */
 export type ReviewMode = 'auto' | 'manual' | 'conditional';
 
+/** One provider key or an ordered provider fallback sequence. */
+export type ProviderSelection = string | string[];
+
 /**
  * Overrides that kick in when the feature's current complexity tier matches.
  * Every field is optional — unset falls back to the step/phase/default value.
@@ -54,6 +57,24 @@ export interface ParallelBranch {
 }
 
 /**
+ * Advisory model selection for one TDD generator phase. The build agent reads
+ * this configuration and passes the native model to its RED or GREEN child
+ * dispatch; it does not create a separate conductor step.
+ */
+export interface TddPhaseConfig {
+  model?: string;
+}
+
+/**
+ * Optional model overrides for the RED and GREEN generator phases inside the
+ * structural build step.
+ */
+export interface TddConfig {
+  red?: TddPhaseConfig;
+  green?: TddPhaseConfig;
+}
+
+/**
  * Configuration for a single step. Every key is optional — unset values fall
  * back through phases > defaults > hardcoded baselines.
  *
@@ -62,6 +83,9 @@ export interface ParallelBranch {
  * registry knows where and how to insert them.
  */
 export interface StepConfig {
+  /** Provider selection for this step. Unset steps inherit the first run-level entry. */
+  llm_provider?: ProviderSelection;
+
   /** Claude model: alias ("haiku"|"sonnet"|"opus"|"fable") or full ID. */
   model?: string;
 
@@ -93,6 +117,9 @@ export interface StepConfig {
   /** Tier-specific overrides applied when state.complexity_tier matches. */
   by_tier?: Partial<Record<ComplexityTier, TierOverride>>;
 
+  /** Advisory child-agent model overrides. Valid only for `steps.build`. */
+  tdd?: TddConfig;
+
   // --- Custom-step-only fields -----------------------------------------------
 
   /** (Custom steps only) Insert after this existing step. */
@@ -100,6 +127,9 @@ export interface StepConfig {
 
   /** (Custom steps only) Enforcement level. Required when adding a step. */
   enforcement?: EnforcementLevel;
+
+  /** (Custom steps only) Exact repository-relative completion marker path. */
+  completion_artifact?: string;
 
   /**
    * (Custom steps only) Force gate-loop membership. When omitted, the step
@@ -358,6 +388,15 @@ export interface HarnessSelfHostConfig {
   };
 }
 
+/** Project-owned aggregate test operation used by full-suite verification. */
+export interface TestSuiteConfig {
+  command: string;
+  working_directory?: string;
+  timeout_seconds?: number;
+  inputs?: string[];
+  environment?: string[];
+}
+
 export interface HarnessConfig {
   harness_version?: string;
   defaults?: DefaultsConfig;
@@ -389,8 +428,13 @@ export interface HarnessConfig {
    * too. (The `\` above is only to keep this comment from closing early.)
    */
   acceptance_spec_globs?: string[];
-  /** Plugin selection: which LLM provider to use (defaults to 'claude'). */
-  llm_provider?: string;
+  /** Project-owned aggregate test operation used by the full-suite gate. */
+  test_suite?: TestSuiteConfig;
+  /**
+   * Ordered LLM provider selection. The first entry is inherited by steps
+   * without an explicit `llm_provider` selection.
+   */
+  llm_provider?: ProviderSelection;
   /** Plugin selection: which UI renderer to use (defaults to 'terminal'). */
   ui_renderer?: string;
   /**
@@ -513,6 +557,12 @@ export interface HarnessConfig {
    * false with a single warning. Default: false. Never throws.
    */
   auto_restart_on_stale_engine?: boolean;
+  /**
+   * Minimum interval, in seconds, between engine-refresh (origin fetch)
+   * attempts. Non-numeric, non-finite, zero, or negative values resolve to
+   * the default with a single warning. Default: 300. Never throws.
+   */
+  engine_refresh_min_interval_seconds?: number;
   /**
    * Auto-resolve merge conflicts on open harness PRs. Extends rebase-resolution
    * beyond finish-time by dispatching a daemon task that polls for and resolves

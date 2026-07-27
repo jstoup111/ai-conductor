@@ -76,6 +76,10 @@ const slugOf = (idea: string) =>
 
 async function writeDocs(dir: string, idea: string): Promise<void> {
   const slug = slugOf(idea);
+  // These pre-FR-14 tests aren't about the coherence gate — strip the
+  // production-stamped `.docs/coherence/` signal so land keeps exercising the
+  // no-retroactivity legacy disengage.
+  await rm(join(dir, '.docs', 'coherence'), { recursive: true, force: true });
   for (const d of ['specs', 'stories', 'plans']) {
     await mkdir(join(dir, '.docs', d), { recursive: true });
   }

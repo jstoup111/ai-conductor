@@ -3,15 +3,19 @@ import type { ConductorEvent } from '../../src/types/index.js';
 
 // Import the subscriber from the plugin directory.
 // Path: test/ui/ -> ../../../../plugins/json-stdout-subscriber/index.ts
-import { JsonStdoutSubscriber } from '../../../../plugins/json-stdout-subscriber/index.ts';
+import { JsonStdoutSubscriber } from '../../../../plugins/json-stdout-subscriber/index.js';
+
+function spyOnStdoutWrite() {
+  return vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+}
 
 describe('JsonStdoutSubscriber', () => {
   let subscriber: JsonStdoutSubscriber;
-  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutWriteSpy: ReturnType<typeof spyOnStdoutWrite>;
 
   beforeEach(() => {
     subscriber = new JsonStdoutSubscriber();
-    stdoutWriteSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+    stdoutWriteSpy = spyOnStdoutWrite();
   });
 
   afterEach(() => {
@@ -23,7 +27,7 @@ describe('JsonStdoutSubscriber', () => {
     it('writes a newline-delimited JSON line when handle() called after start()', () => {
       subscriber.start();
 
-      const event: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 0 };
+      const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
       subscriber.handle(event);
 
       expect(stdoutWriteSpy).toHaveBeenCalledOnce();
@@ -32,7 +36,7 @@ describe('JsonStdoutSubscriber', () => {
 
       const parsed = JSON.parse(written.trimEnd());
       expect(parsed.type).toBe('step_started');
-      expect(parsed.step).toBe('brainstorm');
+      expect(parsed.step).toBe('explore');
       expect(parsed.index).toBe(0);
     });
 
@@ -74,7 +78,7 @@ describe('JsonStdoutSubscriber', () => {
 
   describe('Task 4: handle() before start() is a no-op', () => {
     it('does not write to stdout when handle() called before start()', () => {
-      const event: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 0 };
+      const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
       subscriber.handle(event);
 
       expect(stdoutWriteSpy).not.toHaveBeenCalled();
@@ -91,7 +95,7 @@ describe('JsonStdoutSubscriber', () => {
       subscriber.start();
       subscriber.stop();
 
-      const event: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 0 };
+      const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 0 };
       subscriber.handle(event);
 
       expect(stdoutWriteSpy).not.toHaveBeenCalled();
@@ -116,5 +120,23 @@ describe('JsonStdoutSubscriber', () => {
       expect(parsed.rendererName).toBe('terminal');
       expect(parsed.error).toBe('render crashed');
     });
+  });
+
+  it('renders stale test-suite verification details without declared environment values', () => {
+    subscriber.start();
+
+    const declaredEnvironment = 'API_TOKEN=never-expose-this-value';
+    subscriber.handle({
+      type: 'test_suite_verification',
+      freshness: { status: 'STALE', reason: 'environment_changed' },
+      declaredEnvironment,
+    } as unknown as ConductorEvent);
+
+    const written = stdoutWriteSpy.mock.calls[0][0] as string;
+    expect(
+      written.includes('STALE') &&
+      written.includes('environment_changed') &&
+      !written.includes(declaredEnvironment),
+    ).toBe(true);
   });
 });

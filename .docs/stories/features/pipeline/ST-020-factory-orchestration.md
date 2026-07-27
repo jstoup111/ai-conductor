@@ -1,5 +1,11 @@
 # Story: Pipeline Factory Orchestration
 
+> **Amended 2026-07-26 by #907:** non-overlapping mutation-bearing tasks continue to
+> dispatch in parallel. Task attribution is task-local telemetry; no singular
+> `.pipeline/current-task` lease may serialize them or authorize mutation. Each task may
+> supply a validated explicit `Task:` trailer, while judgment gates retain completion and
+> wiring authority.
+
 **Status:** ACCEPTED
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** pipeline/SKILL.md

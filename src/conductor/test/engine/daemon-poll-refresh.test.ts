@@ -36,6 +36,7 @@ import { fastForwardRoot, discoverBacklog } from '../../src/engine/daemon-backlo
 import type { GitRunner, GitResult } from '../../src/engine/rebase.js';
 
 const execFile = promisify(execFileCb);
+const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
 
 // ── Fake git runner (mirrors rebase.test.ts pattern) ─────────────────────────
 
@@ -135,7 +136,9 @@ describe('daemon-backlog — fastForwardRoot (per-poll root advance)', () => {
       { match: ['status', '--porcelain'], result: { stdout: ' M src/foo.ts\n' } },
     ]);
     await fastForwardRoot('/fake/repo', (m) => logs.push(m), git);
-    expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+    // Task 1: the dirty-skip outcome now probes origin (fetch, no merge) to
+    // populate `behindOrigin`/`originHead` for TI-4's staleness warnings.
+    expect(calls.some((c) => c[0] === 'fetch')).toBe(true);
     expect(calls.some((c) => c[0] === 'merge')).toBe(false);
     expect(logs.join('\n')).toMatch(/LEAK-SUSPECT/);
   });
@@ -213,7 +216,7 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
 
   beforeEach(async () => {
     originDir = await mkdtemp(join(tmpdir(), 'origin-ff-'));
-    await execFile('git', ['init', '--bare', '-q'], { cwd: originDir });
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
 
     repoDir = await mkdtemp(join(tmpdir(), 'repo-ff-'));
     await execFile('git', ['clone', '-q', originDir, repoDir]);
@@ -240,11 +243,13 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
     await git(['checkout', '-q', '-b', 'spec/remote-only'], repoDir);
     await mkdir(join(repoDir, '.docs/plans'), { recursive: true });
     await mkdir(join(repoDir, '.docs/stories'), { recursive: true });
+    await mkdir(join(repoDir, '.docs/coherence'), { recursive: true });
     await writeFile(
       join(repoDir, '.docs/plans/remote-only.md'),
       planWithDeps('.docs/stories/remote-only.md'),
     );
     await writeFile(join(repoDir, '.docs/stories/remote-only.md'), APPROVED_STORIES);
+    await writeFile(join(repoDir, '.docs/coherence/remote-only.md'), COHERENCE_TABLE);
     await git(['add', '.docs'], repoDir);
     await git(['commit', '-q', '-m', 'merge spec: remote-only'], repoDir);
     await git(['push', '-q', 'origin', `spec/remote-only:${defaultBranch}`], repoDir);

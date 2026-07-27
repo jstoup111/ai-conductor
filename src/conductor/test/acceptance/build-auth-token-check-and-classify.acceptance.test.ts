@@ -78,6 +78,7 @@ import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 
 const MT_PASS = '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n';
 const AUDIT_HEADER = '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n';
@@ -99,6 +100,14 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
       if (s.name === 'manual_test') break;
       state[s.name] = 'done';
     }
+    // This spec covers ONLY the SHIP-tail validation group boundary
+    // (manual_test/prd_audit/architecture_review_as_built) — everything
+    // downstream is pre-seeded done so the run converges right after that
+    // group, instead of continuing into retro/rebase/finish (which this
+    // fixture's fake StepRunner does not implement).
+    state.retro = 'done';
+    state.rebase = 'done';
+    state.finish = 'done';
     state.complexity_tier = 'M';
     state.track = 'product';
     state.feature_desc = 'build-auth-token-check-and-classify';
@@ -122,6 +131,27 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
 
   async function haltBody(dir: string): Promise<string | null> {
     return readFile(join(dir, HALT_MARKER), 'utf-8').catch(() => null);
+  }
+
+  // `selfHost: true` activates the real self-host guardrails (version/
+  // release finish gates) unless a stub is injected — mirrors the
+  // convention in sandbox-auth-expiry-park.acceptance.test.ts and
+  // isolate-daemon-build-auth-from-operator-oauth.acceptance.test.ts. This
+  // file is about the auth-park path, not the finish-time gates, so those
+  // gates are stubbed to a pass-through.
+  function makeGuardrails(dir: string): SelfHostGuardrails {
+    return {
+      resolveHarnessRoot: async () => dir,
+      resolveInstalledHarnessRoot: async () => ({ status: 'ok' as const, root: dir }),
+      relink: async () => {},
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => process.env,
+        teardown: async () => {},
+      })),
+      versionGate: async () => ({ ok: true }),
+      releaseGate: async () => ({ ok: true }),
+    };
   }
 
   it('does NOT write a generic "exhausted its retries" HALT for an authFailure no-verdict — parks instead, zero retry-budget burn, resumes automatically once the token refreshes', async () => {
@@ -151,14 +181,23 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
             await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
             return { success: true };
           }
+          if (step === 'architecture_review_as_built') {
+            await writeFile(
+              join(dir, '.pipeline/architecture-review-as-built.md'),
+              '# As-Built Architecture Review\n\nVerdict: APPROVED\n',
+            );
+            return { success: true };
+          }
           return { success: true };
         }),
       };
 
       const events = new ConductorEventEmitter();
       const haltEvents: unknown[] = [];
-      events.on('event', (e) => {
-        if ((e as { type?: string }).type === 'loop_halt') haltEvents.push(e);
+      // ConductorEventEmitter dispatches strictly by event type (no
+      // wildcard 'event' type exists) — subscribe to the real event.
+      events.on('loop_halt', (e) => {
+        haltEvents.push(e);
       });
 
       // A refreshed, valid-shaped token lands during the park poll — mirrors
@@ -180,6 +219,7 @@ describe('acceptance: build-auth-token-check-and-classify — FR-4 group/join pa
         maxRetries: 1, // a retry-ladder spin on this failure would need > 1
         sleepFn,
         config: selfHostConfig(tokenPath),
+        selfHostGuardrails: makeGuardrails(dir),
       });
 
       await conductor.run();

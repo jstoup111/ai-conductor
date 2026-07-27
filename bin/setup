@@ -4,7 +4,7 @@ set -euo pipefail
 # setup — Prepares the worktree by installing dependencies and building.
 #
 # Resolves the harness repo root from this script's location, then:
-#   1. Runs npm install in src/conductor
+#   1. Copies matching primary-checkout node_modules into a worktree, or runs npm install
 #   2. Runs npm run build in src/conductor (only after install succeeds)
 #
 # Environment:
@@ -21,11 +21,38 @@ echo "Setting up worktree..."
 echo "  Harness directory: $HARNESS_DIR"
 echo "  Conductor directory: $CONDUCTOR_DIR"
 
-# Run npm install in src/conductor
-echo ""
-echo "Running npm install in src/conductor..."
 cd "$CONDUCTOR_DIR"
-npm install
+
+COPIED_PRIMARY_MODULES=0
+PRIMARY_NODE_MODULES=""
+GIT_COMMON_DIR="$(git -C "$HARNESS_DIR" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+if [ -n "$GIT_COMMON_DIR" ]; then
+  PRIMARY_HARNESS_DIR="$(dirname "$GIT_COMMON_DIR")"
+  PRIMARY_CONDUCTOR_DIR="${PRIMARY_HARNESS_DIR}/src/conductor"
+  PRIMARY_NODE_MODULES="${PRIMARY_CONDUCTOR_DIR}/node_modules"
+
+  if [ "$PRIMARY_CONDUCTOR_DIR" != "$CONDUCTOR_DIR" ] \
+    && [ -d "$PRIMARY_NODE_MODULES" ] \
+    && cmp -s "$CONDUCTOR_DIR/package.json" "$PRIMARY_CONDUCTOR_DIR/package.json" \
+    && cmp -s "$CONDUCTOR_DIR/package-lock.json" "$PRIMARY_CONDUCTOR_DIR/package-lock.json"; then
+    if [ -L "$CONDUCTOR_DIR/node_modules" ] \
+      && [ "$(readlink "$CONDUCTOR_DIR/node_modules")" = "$PRIMARY_NODE_MODULES" ]; then
+      rm "$CONDUCTOR_DIR/node_modules"
+    fi
+    if [ ! -e "$CONDUCTOR_DIR/node_modules" ] && [ ! -L "$CONDUCTOR_DIR/node_modules" ]; then
+      cp -a "$PRIMARY_NODE_MODULES" "$CONDUCTOR_DIR/node_modules"
+      COPIED_PRIMARY_MODULES=1
+    fi
+  fi
+fi
+
+echo ""
+if [ "$COPIED_PRIMARY_MODULES" -eq 1 ]; then
+  echo "Copied matching primary-checkout node_modules into the worktree."
+else
+  echo "Running npm install in src/conductor..."
+  npm install
+fi
 
 # Run npm run build in src/conductor (only after install succeeds)
 echo ""

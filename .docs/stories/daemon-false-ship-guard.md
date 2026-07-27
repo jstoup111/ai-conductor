@@ -20,10 +20,11 @@ so a recorded PR URL alone can't fake a ship.
 - **Negative (no tracking ref at all):** Given a branch that has never been pushed (no
   `refs/remotes/origin/<branch>`), When the gate runs with the injectable present, Then it
   returns incomplete with the push-evidence reason (not a crash, not a pass).
-- **Negative (missing injectable = legacy fail-open):** Given a caller that does not thread
-  the push-evidence injectable into `CompletionContext` (non-git environment, legacy tests),
-  When the gate runs on `choice=pr` with `pr_url` set, Then the evidence check is skipped and
-  behavior is byte-identical to today (same contract as #367's `getHeadSha` fail-open).
+- **Negative (missing legacy injectable still cannot ship):** Given a caller does not thread
+  the original push-evidence injectable into `CompletionContext`, when the gate runs on
+  `choice=pr` with `pr_url` set, then that legacy helper may be unavailable but the strict durable
+  evidence contract still refuses terminal completion unless committed/pushed record evidence is
+  independently valid. Missing dependency wiring never becomes a fail-open shipment.
 - **Negative (evidence reader throws):** Given the injectable throws (corrupt repo), When the
   gate runs, Then the gate treats it as evidence-unavailable per the injectable's contract —
   the error is not swallowed into a false pass (incomplete with reason).
@@ -33,9 +34,9 @@ so a recorded PR URL alone can't fake a ship.
       consults it for `choice=pr` only.
 - [ ] Evidence check is offline (local tracking-ref ancestry), with the remote derived from
       the branch's upstream config, falling back to `origin`.
-- [ ] Unit tests cover: pass-with-evidence, stale-URL fail, never-pushed fail, absent
-      injectable fail-open — in `test/engine/artifacts.test.ts` alongside the existing finish
-      predicate tests.
+- [ ] Unit tests cover: pass-with-evidence, stale-URL fail, never-pushed fail, and absent legacy
+      injectable unable to bypass strict durable evidence — in `test/engine/artifacts.test.ts`
+      alongside the existing finish predicate tests.
 
 ---
 

@@ -34,7 +34,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Installed explicitly so integrity check 1b enforces here rather than
+      # degrading to its "tool absent" WARN path on a runner image change.
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
       - run: bash test/test_harness_integrity.sh
+
+  shellcheck:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      # Same script integrity check 1b calls, so the two can never enforce
+      # different file sets or severities.
+      - run: bash test/lint_shell.sh
+
+  lint:
+    needs: changes
+    if: needs.changes.outputs.docs_only != 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run lint
+        working-directory: src/conductor
 
   typecheck:
     needs: changes
@@ -50,6 +80,10 @@ jobs:
       - run: npm ci
         working-directory: src/conductor
       - run: npm run typecheck
+        working-directory: src/conductor
+      # Type-checks test/ as well. Vitest transpiles without checking, so without
+      # this a test can carry a type error indefinitely and still pass (#1015).
+      - run: npm run typecheck:test
         working-directory: src/conductor
 
   conductor:
@@ -69,25 +103,51 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: npx vitest run
+      - run: npm test
         working-directory: src/conductor
 
+  # DELIBERATELY UNGATED — no `if: docs_only != 'true'`.
+  #
+  # `docs_only` is true only when EVERY changed path is under `.docs/` (the internal
+  # spec-artifact tree), per .github/scripts/ci-detect-docs-only.sh. Such a pull
+  # request skips every other job in this file. A link checker carrying the same
+  # gate would inherit that hole: the one class of PR that runs no checks at all
+  # would also skip its links.
+  #
+  # Leaving it ungated also means the guarantee does not depend on how `docs_only`
+  # is defined tomorrow — widen the predicate to cover `docs/` and this job keeps
+  # running. It is cheap enough to always run: no npm install and no network,
+  # roughly six seconds.
+  links:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: lycheeverse/lychee-action@v2
+        with:
+          # Settings (offline-only, CHANGELOG.md excluded) live in lychee.toml.
+          args: --config lychee.toml docs README.md AGENT_INSTRUCTIONS.md src/conductor/README.md
+          fail: true
+
   ci-gate:
-    needs: [changes, integrity, typecheck, conductor]
+    needs: [changes, integrity, shellcheck, lint, typecheck, conductor, links]
     runs-on: ubuntu-latest
     if: always()
     steps:
       - env:
           CHANGES: ${{ needs.changes.result }}
           INTEGRITY: ${{ needs.integrity.result }}
+          SHELLCHECK: ${{ needs.shellcheck.result }}
+          LINT: ${{ needs.lint.result }}
           TYPECHECK: ${{ needs.typecheck.result }}
           CONDUCTOR: ${{ needs.conductor.result }}
+          LINKS: ${{ needs.links.result }}
         run: |
-          for r in "$CHANGES" "$INTEGRITY" "$TYPECHECK" "$CONDUCTOR"; do
+          summary="changes=$CHANGES integrity=$INTEGRITY shellcheck=$SHELLCHECK lint=$LINT typecheck=$TYPECHECK conductor=$CONDUCTOR links=$LINKS"
+          for r in "$CHANGES" "$INTEGRITY" "$SHELLCHECK" "$LINT" "$TYPECHECK" "$CONDUCTOR" "$LINKS"; do
             case "$r" in
               failure|cancelled)
-                echo "CI gate failed: changes=$CHANGES integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR" >&2
+                echo "CI gate failed: $summary" >&2
                 exit 1 ;;
             esac
           done
-          echo "CI gate satisfied (changes=$CHANGES integrity=$INTEGRITY typecheck=$TYPECHECK conductor=$CONDUCTOR)"
+          echo "CI gate satisfied ($summary)"

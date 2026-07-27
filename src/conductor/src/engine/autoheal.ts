@@ -269,7 +269,7 @@ export async function getEvidenceRange(
     const range = `${lowerBound}..HEAD`;
 
     // Use %x1e (ASCII record separator) to delimit commits, since trailers can contain newlines
-    const args = ['log', '--format=%H%x09%s%x00%(trailers)%x1e', range];
+    const args = ['log', `--format=${COMMIT_RECORD_FORMAT}`, range];
 
     const log = await execa('git', args, { cwd: projectRoot, reject: false });
     if (log.exitCode === 0 && typeof log.stdout === 'string') {
@@ -277,23 +277,7 @@ export async function getEvidenceRange(
         .split('\x1e') // Split by record separator
         .map((record) => record.trim())
         .filter((record) => record.length > 0)
-        .map((record) => {
-          const nullIndex = record.indexOf('\x00');
-          if (nullIndex < 0) return null;
-
-          const metaPart = record.slice(0, nullIndex);
-          const trailersPart = record.slice(nullIndex + 1);
-
-          const tabIndex = metaPart.indexOf('\t');
-          if (tabIndex < 0) return null;
-
-          const sha = metaPart.slice(0, tabIndex);
-          const subject = metaPart.slice(tabIndex + 1);
-
-          const trailers = parseTrailers(trailersPart);
-
-          return { sha, subject, trailers };
-        })
+        .map(parseCommitRecord)
         .filter((item): item is CommitWithTrailers => item !== null);
     }
   } catch (err) {
@@ -375,8 +359,8 @@ export async function listCommitsWithTrailers(
   // Use %x1e (ASCII record separator) to delimit commits, since trailers can contain newlines
   const args =
     range === 'HEAD'
-      ? ['log', '-n', '100', '--format=%H%x09%s%x00%(trailers)%x1e', 'HEAD']
-      : ['log', '--format=%H%x09%s%x00%(trailers)%x1e', range];
+      ? ['log', '-n', '100', `--format=${COMMIT_RECORD_FORMAT}`, 'HEAD']
+      : ['log', `--format=${COMMIT_RECORD_FORMAT}`, range];
 
   const log = await execa('git', args, { cwd: projectRoot, reject: false });
   if (log.exitCode !== 0 || typeof log.stdout !== 'string') return [];
@@ -385,24 +369,69 @@ export async function listCommitsWithTrailers(
     .split('\x1e') // Split by record separator
     .map((record) => record.trim())
     .filter((record) => record.length > 0)
-    .map((record) => {
-      const nullIndex = record.indexOf('\x00');
-      if (nullIndex < 0) return null;
-
-      const metaPart = record.slice(0, nullIndex);
-      const trailersPart = record.slice(nullIndex + 1);
-
-      const tabIndex = metaPart.indexOf('\t');
-      if (tabIndex < 0) return null;
-
-      const sha = metaPart.slice(0, tabIndex);
-      const subject = metaPart.slice(tabIndex + 1);
-
-      const trailers = parseTrailers(trailersPart);
-
-      return { sha, subject, trailers };
-    })
+    .map(parseCommitRecord)
     .filter((item): item is CommitWithTrailers => item !== null);
+}
+
+/**
+ * Log format shared by the trailer-reading paths: sha, TAB, subject, NUL,
+ * git-parsed trailers (final paragraph block only), NUL, raw body (%b —
+ * message minus subject), record separator. The raw body feeds the mid-body
+ * `Task:` fallback in {@link parseCommitRecord}.
+ */
+const COMMIT_RECORD_FORMAT = '%H%x09%s%x00%(trailers)%x00%b%x1e';
+
+/**
+ * Fallback Task-id extraction for commits whose `Task: <id>` attribution line
+ * is NOT in the final paragraph block, where git's `%(trailers)` parser cannot
+ * see it (#912 stall shape: subject, blank, `Task: 3`, blank, body prose).
+ *
+ * Matching rule (kept deliberately narrow): a flush-left line that is exactly
+ * `Task: <id>` — no leading whitespace, nothing else on the line. Indented or
+ * quoted lines (`    Task: 9`, `> Task: 9` inside log excerpts) never match.
+ */
+export function extractBodyTaskIds(body: string): string[] {
+  const lineRe = new RegExp(`^Task: (${TASK_ID_PATTERN})[ \\t]*$`);
+  const ids: string[] = [];
+  for (const line of body.split('\n')) {
+    const match = line.match(lineRe);
+    if (match) ids.push(match[1]);
+  }
+  return ids;
+}
+
+/**
+ * Parse one {@link COMMIT_RECORD_FORMAT} record into a CommitWithTrailers.
+ *
+ * Precedence: git's final-block trailer parse is authoritative — the mid-body
+ * fallback ({@link extractBodyTaskIds}) is consulted only when the trailer
+ * parse yielded no `Task` key, so a commit carrying both a mid-body line and a
+ * real final trailer resolves to the final trailer alone.
+ */
+function parseCommitRecord(record: string): CommitWithTrailers | null {
+  const nullIndex = record.indexOf('\x00');
+  if (nullIndex < 0) return null;
+
+  const metaPart = record.slice(0, nullIndex);
+  const rest = record.slice(nullIndex + 1);
+  const secondNull = rest.indexOf('\x00');
+  const trailersPart = secondNull < 0 ? rest : rest.slice(0, secondNull);
+  const bodyPart = secondNull < 0 ? '' : rest.slice(secondNull + 1);
+
+  const tabIndex = metaPart.indexOf('\t');
+  if (tabIndex < 0) return null;
+
+  const sha = metaPart.slice(0, tabIndex);
+  const subject = metaPart.slice(tabIndex + 1);
+
+  const trailers = parseTrailers(trailersPart);
+
+  if (!trailers['Task']) {
+    const bodyTaskIds = extractBodyTaskIds(bodyPart);
+    if (bodyTaskIds.length > 0) trailers['Task'] = bodyTaskIds;
+  }
+
+  return { sha, subject, trailers };
 }
 
 

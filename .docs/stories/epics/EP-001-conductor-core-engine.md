@@ -21,7 +21,9 @@ and directs the user to the correct next skill. It does NOT run skills internall
 - ST-005 Tier-based step skipping (S/M/L complexity)
 - ST-006 Gate enforcement between steps
 - ST-007 Worktree isolation per feature
-- ST-008 Session management (resume, single session per feature)
+- ST-008 Session management (historical single-session scope superseded by
+  #325: fresh per step, resume only within-step retries; #927 isolates that
+  scope by provider)
 - ST-009 Recovery from step failure (retry, interactive fix, skip, go back, quit)
 - ST-010 Feature completion and cleanup
 - ST-011 Complexity assessment after brainstorm

@@ -90,11 +90,14 @@ Concrete check: `grep -rE "criterion keyword" <the project's test directories>`.
 already asserts the expected behavior, skip that criterion. Log skipped criteria so the retro
 can verify nothing was missed.
 
-**End-to-end, not mocked:** Acceptance specs test the real system. Do NOT mock internal
-infrastructure (database, queues, caches, background jobs). Only mock **third-party external
-services** (payment APIs, email providers, external webhooks) that are outside the project's
-control. If a spec requires infrastructure that isn't available in the test environment,
-configure the test environment to provide it — don't mock it away.
+**End-to-end internally; fake third parties:** Acceptance specs test the real application entry
+point and internal system. Do NOT mock internal infrastructure (database, queues, caches,
+background jobs). Replace every **third-party external service** (LLM providers, hosted APIs,
+GitHub, payment APIs, email providers, external webhooks, package registries) with a faithful fake
+through the production adapter seam. If locally controlled infrastructure is unavailable in the
+test environment, configure the test environment to provide it — don't mock it away. Calls to a
+real third party belong only in an explicitly named, opt-in smoke test that is excluded from the
+default suite and CI.
 
 ### 2.5. Schema Consistency Check
 
@@ -321,7 +324,7 @@ verify outcome). Neither duplicates the other.
 - Each test is independent — creates its own data via factories/fixtures
 - Assert outcomes, not intermediate transport details (request/endpoint tests own those)
 - Auth uses helper methods, not hardcoded tokens
-- No mocking external services in acceptance specs — test the real flow
+- Exercise the real internal flow; inject faithful fakes at all third-party adapter boundaries
 - On product track: every generated spec identifies the FR(s) it covers — either in the
   top-level suite/describe name OR as a leading comment line `Covers: FR-N[, FR-M]`
   (framework-agnostic; comma-separated for multiple FRs) — so `grep -rE "FR-[0-9]+"` over the
@@ -356,7 +359,8 @@ SUITE "Authentication" (driven through a real UI driver):
 **Rules for E2E / UI specs:**
 - Every criterion gets concrete driver code — no stubs, no `pending`/skipped placeholders
 - Each test is independent — creates its own data, signs in if needed
-- No mocking — full stack exercise
+- Do not mock the application stack or locally controlled infrastructure; inject faithful fakes
+  at every third-party adapter boundary
 - Sign-in uses the actual login UI, not a session backdoor
 - Assert on user-visible content and navigated location, not internal DOM/implementation details
 - On product track: every generated spec identifies the FR(s) it covers — either in the

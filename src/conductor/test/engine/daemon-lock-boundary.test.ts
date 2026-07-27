@@ -64,7 +64,16 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
     // (operator-park, FR-3) — an unrelated concern from the daemon pidfile/
     // lock boundary this test guards. It never references `daemon.pid` and
     // does not bypass daemon-lock's single-winner semantics.
-    const EXEMPT_REL = ['engine/park-marker.ts'];
+    const EXEMPT_REL = [
+      'engine/park-marker.ts',
+      // The content-addressed suite gate owns a separate process-coordination
+      // lock; it does not participate in daemon single-winner semantics.
+      'engine/full-suite-fingerprint.ts',
+      'engine/full-suite-verifier.ts',
+      // The protected-artifact seal uses create-once publication for an
+      // immutable baseline; it is unrelated to daemon process ownership.
+      'engine/protected-artifact-seal.ts',
+    ];
 
     for (const file of allTs) {
       if (file === DAEMON_LOCK_ABS) continue;

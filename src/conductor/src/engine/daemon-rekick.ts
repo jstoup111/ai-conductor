@@ -1,6 +1,6 @@
 import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { HALT_MARKER } from './halt-marker.js';
+import { HALT_MARKER, HALT_CLASS_MARKER, type HaltClass } from './halt-marker.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -15,7 +15,7 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
-import { checkMergedPrGuard } from './merged-pr-guard.js';
+import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 
@@ -77,6 +77,15 @@ export interface RekickSweepDeps {
    * behavior is unchanged (backward-compatible).
    */
   isOperatorParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Classify a slug's live HALT via `.pipeline/HALT.class`. `needs-human`
+   * halts are skipped (never cleared) — only an operator can resolve them.
+   * Checked AFTER isOperatorParked/isProcessed, BEFORE the FR-9 SHA guard, so
+   * a needs-human halt is skipped on every sweep, not just once per SHA.
+   * Absent, or resolving to `mechanical`/`unclassified` → behavior unchanged
+   * (falls through to the existing FR-9 guard and clear path).
+   */
+  readHaltClass?: (slug: string) => Promise<HaltClass | 'unclassified'>;
 }
 
 export interface RekickSweepResult {
@@ -160,6 +169,31 @@ export async function rekickSweep(
       }
     }
 
+    // needs-human classified halt: only an operator can resolve it. Skip on
+    // EVERY sweep (not bounded by SHA) — never abort/clear/sentinel/lastRekickSha.
+    // The resolved class (when the dep is present) is reused below in the
+    // clear-path log line so mechanical/unclassified re-kicks are observable.
+    let haltClass: HaltClass | 'unclassified' | undefined;
+    if (deps.readHaltClass) {
+      haltClass = 'unclassified';
+      try {
+        haltClass = await deps.readHaltClass(slug);
+      } catch {
+        /* best-effort: an unreadable class falls through as unclassified */
+      }
+      if (haltClass === 'needs-human') {
+        skipped.push(slug);
+        let classReason = 'unknown';
+        try {
+          classReason = await deps.readHaltReason(slug);
+        } catch {
+          /* best-effort */
+        }
+        log(`re-kick ${slug}: skipped — halt class needs-human (${classReason})`);
+        continue;
+      }
+    }
+
     // FR-9: bounded — already re-kicked at this SHA → leave parked.
     if (deps.lastRekickSha.get(slug) === sha) {
       skipped.push(slug);
@@ -172,7 +206,10 @@ export async function rekickSweep(
     } catch {
       /* best-effort: a missing reason is logged as unknown */
     }
-    log(`re-kick ${slug} @ ${sha.slice(0, 12)} — ${reason}`);
+    log(
+      `re-kick ${slug} @ ${sha.slice(0, 12)} — ${reason}` +
+        (haltClass !== undefined ? ` (halt class: ${haltClass})` : ''),
+    );
 
     // FR-7b: abort a paused rebase BEFORE clearing. A failed abort leaves the
     // marker intact (no half-clear of a corrupt rebase state) and skips it.
@@ -280,6 +317,9 @@ export async function clearMarker(worktreePath: string): Promise<void> {
     // no-op (story negative path), not an error.
   });
   await rm(halt, { force: true });
+  // Best-effort: the classification sidecar is stale once the HALT it
+  // classified is cleared. Absent is fine — no-op-safe.
+  await rm(join(worktreePath, HALT_CLASS_MARKER), { force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
 }
 
@@ -294,20 +334,17 @@ export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shi
  * re-verifies against the new base instead of the stale one. One-shot: the
  * sentinel is consumed (deleted) whether or not the rebase conflicts.
  *
- * If `prUrl` is provided, checks if the recorded PR is merged (via `checkMergedPrGuard`)
- * BEFORE rebasing. On MERGED, returns `'already_shipped'` without rebasing — the
- * feature has already landed out-of-band.
+ * If `prUrl` is provided, validates the merged PR's durable record BEFORE
+ * rebasing. Only a valid record on merged history returns `'already_shipped'`.
  *
  *   'skipped'  — no sentinel; caller proceeds normally (no rebase forced).
  *   'rebased'  — rebase ran (noop/clean/changelog-resolved); caller resumes the
  *                gate loop. FR-5 kickbacks (build/manual_test) are written by
  *                `applyRebaseVerdicts` so the loop re-verifies changed code.
- *   'halted'   — the rebase re-conflicted on the new base; 9.0's HALT was
- *                written and the rebase left paused. Caller MUST re-park (skip
- *                `conductor.run()`); FR-9 bounds re-kick at this SHA.
- *   'already_shipped' — the recorded PR is merged out-of-band; no rebase ran, no
- *                       further steps dispatched. Caller writes synthetic ship
- *                       markers, marks processed, and returns (ADR-2026-07-09-mid-run-merged-pr-guard).
+ *   'halted'   — a rebase conflict or durable-evidence gap wrote HALT. Caller
+ *                preserves the worktree and skips `conductor.run()`.
+ *   'already_shipped' — merged history evidence is valid; no rebase ran and
+ *                       the caller routes through its normal completion boundary.
  *
  * Reuses the exact 9.0 rebase primitives (`performRebase`/`applyRebaseVerdicts`/
  * `emitRebaseEvent`/`writeHalt`) — it never reimplements the rebase logic.
@@ -346,6 +383,10 @@ export async function resumeRebaseFirst(opts: {
   runGh?: GhRunner;
   /** Optional: recorded PR URL for merged-PR guard. Absent → no guard. */
   prUrl?: string;
+  /** Feature identity required for strict durable-evidence verification. */
+  slug?: string;
+  /** Test seam; production uses the strict merged-history verifier. */
+  verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
   log?: (msg: string) => void;
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
@@ -354,19 +395,25 @@ export async function resumeRebaseFirst(opts: {
   // One-shot: consume the sentinel up front so a crash can't loop on it.
   await rm(sentinel, { force: true });
 
-  // ADR-2026-07-09-mid-run-merged-pr-guard: check if the recorded PR is merged
-  // BEFORE rebasing. If merged, return 'already_shipped' — the feature landed
-  // out-of-band and needs no further work.
-  if (opts.runGh && opts.prUrl) {
-    const guardVerdict = await checkMergedPrGuard(
-      opts.runGh,
-      opts.worktreePath,
-      opts.prUrl,
-      opts.log,
-    );
-    if (guardVerdict === 'merged') {
-      opts.log?.(`re-kick ${basename(opts.worktreePath)}: recorded PR already merged out-of-band`);
+  // Check and verify merged history BEFORE rebasing. Merge state alone is never
+  // completion evidence: every refusal and unavailable dependency parks the
+  // worktree without writing synthetic success markers.
+  if (opts.prUrl && !opts.slug) {
+    await writeHalt(opts.worktreePath, [], 'durable shipment evidence: shipment-evidence-inputs-incomplete');
+    return 'halted';
+  }
+  if (opts.runGh && opts.prUrl && opts.slug) {
+    const verifiedMerge = await (opts.verifyMergedShipment
+      ? opts.verifyMergedShipment()
+      : verifyMergedPrShipment(opts.runGh, opts.worktreePath, opts.prUrl, opts.slug));
+    if (verifiedMerge.kind === 'verified') {
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: merged shipment evidence verified`);
       return 'already_shipped';
+    }
+    if (verifiedMerge.kind === 'halt') {
+      await writeHalt(opts.worktreePath, [], `durable shipment evidence: ${verifiedMerge.reason}`);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: halted — ${verifiedMerge.reason}`);
+      return 'halted';
     }
   }
 

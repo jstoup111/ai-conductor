@@ -4,14 +4,21 @@
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** finish/SKILL.md
 
+> **Amended 2026-07-25 by issue #940:** “fresh verification” means a
+> content-current full-suite proof. Finish reuses the explicit pre-SHIP gate's
+> proof and launches the aggregate operation only when evidence is missing or
+> stale.
+
 As a developer, I want the finish skill to verify completion with fresh evidence and present
 structured options so that I can confidently close out the feature.
 
 ## Acceptance Criteria
 
 ### Happy Path
-- Given all prior steps are complete, when finish runs, then it runs the full test suite
-  fresh (not cached), checks git status, and runs linters/type checkers
+- Given all prior steps are complete, when finish runs, then it verifies a
+  content-current full-suite proof, reuses it without a process launch when
+  current, and runs the shared missing/stale fallback otherwise; it also checks
+  git status and runs linters/type checkers
 - Given all verification passes, when changes are reviewed, then the user sees a diff summary
   (`git diff --stat` and `git log --oneline`) with an option to view the full diff
 - Given the review is complete, when options are presented, then the user chooses from:
@@ -23,7 +30,7 @@ structured options so that I can confidently close out the feature.
   and the feature branch is deleted
 
 ### Negative Paths
-- Given tests fail during fresh verification, when detected, then finish BLOCKS: "Build
+- Given the reused proof is stale/missing and fallback tests fail, when detected, then finish BLOCKS: "Build
   incomplete — [N] tests failing"
 - Given uncommitted changes exist, when git status is checked, then finish BLOCKS:
   "uncommitted changes exist"
@@ -39,7 +46,8 @@ structured options so that I can confidently close out the feature.
   options menu is re-displayed
 
 ### Done When
-- [ ] Test suite runs fresh (not cached results)
+- [ ] Current full-suite evidence is reused; missing/stale evidence runs the
+      shared fallback
 - [ ] Git status verified clean
 - [ ] Linters/type checkers run if present
 - [ ] All story acceptance criteria cross-referenced

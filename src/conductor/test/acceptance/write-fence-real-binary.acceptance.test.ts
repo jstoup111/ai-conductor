@@ -52,7 +52,6 @@ describe('acceptance (real-binary): write-fence blocks checkout escapes, allows 
     const sandbox = await provisionSandboxBuildEnv({
       worktreeRoot: worktree,
       harnessRoot,
-      globalConfigDir: globalConfig,
       baseDir: base,
     });
     teardown = () => sandbox.teardown();

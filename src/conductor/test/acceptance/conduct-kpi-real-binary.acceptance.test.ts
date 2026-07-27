@@ -8,7 +8,7 @@
  * would pass even if the CLI dispatch chain is never wired to call it — the
  * exact "new command function exists, main() never routes to it" class
  * writing-system-tests §3b exists to catch (same convention as
- * `finish-record-real-binary.acceptance.test.ts`). This file spawns the REAL
+ * `test/smoke/finish-record.smoke.test.ts`). This file spawns the REAL
  * `bin/conduct-ts` binary as a genuine child process against a scratch cwd
  * with real `.docs/shipped/*.md` files on disk — never importing
  * `renderKpi`/`detectKpiCommand`/`dispatchKpi` in-process.
@@ -138,6 +138,7 @@ describe('conduct kpi — real-binary acceptance smoke (Story 4, #537)', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toMatch(/feat-partial/);
       expect(result.stdout).toMatch(/partial|incomplete/i);
+      expect(result.stdout).toMatch(/Aggregate \/ trend across 0 feature\(s\): total tokens=0/i);
     },
     30_000,
   );

@@ -51,7 +51,15 @@ describe('Integration: config flow', () => {
   });
 
   it('Conductor with config disabling steps skips them', async () => {
-    await writeState(statePath, { complexity_tier: 'L' } as ConductState);
+    // Exercise the config-skip cascade directly. An all-success synthetic
+    // workflow would continue into the independent validator convergence loop.
+    await writeState(statePath, {
+      ...Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done'])),
+      complexity_tier: 'L',
+      architecture_review: 'pending',
+      architecture_review_as_built: 'pending',
+      retro: 'pending',
+    } as ConductState);
 
     const config: HarnessConfig = {
       steps: {
@@ -67,6 +75,7 @@ describe('Integration: config flow', () => {
       mode: 'auto',
       config,
       projectRoot: dir,
+      fromStep: 'architecture_review',
     });
 
     await conductor.run();
@@ -78,16 +87,7 @@ describe('Integration: config flow', () => {
     // audit) via skipWhenSkipped — even on L tier where it isn't tier-skipped.
     expect(runner.calls).not.toContain('architecture_review_as_built');
 
-    // Dispatched to runner.run: everything except the 3 engine-managed steps
-    // (complexity + worktree + rebase), the 2 disabled steps (retro +
-    // architecture_review), and architecture_review_as_built (cascade-skipped
-    // via skipWhenSkipped because architecture_review is disabled). `prd` runs
-    // here because no track is set (defaults to product); `explore` + `prd`
-    // replace the former single `brainstorm` step, and prd_audit still runs
-    // (the PRD exists regardless of the architecture review). build_review is
-    // a prerequisite of manual_test so it also runs, and wiring_check (the
-    // reachability gate between build_review and manual_test) dispatches too.
-    expect(runner.calls).toHaveLength(14);
+    expect(runner.calls).toEqual([]);
 
     // Verify final state marks disabled steps as 'skipped'
     const result = await readState(statePath);
@@ -97,11 +97,6 @@ describe('Integration: config flow', () => {
     expect(result.value.retro).toBe('skipped');
     expect(result.value.architecture_review).toBe('skipped');
     expect(result.value.architecture_review_as_built).toBe('skipped');
-
-    // Non-disabled steps should be 'done'
-    expect(result.value.build).toBe('done');
-    expect(result.value.finish).toBe('done');
-    expect(result.value.feature_status).toBe('complete');
 
     // config_skip events emitted for each disabled step, plus the cascade-skip
     // of architecture_review_as_built (skipWhenSkipped → also a config_skip).
@@ -126,12 +121,17 @@ describe('Integration: config flow', () => {
 
     const registry = buildStepRegistry(config);
     const buildIdx = registry.findIndex((s) => s.name === 'build');
-    const customIdx = registry.findIndex((s) => s.name === 'security_scan');
+    // 'security_scan' is a config-declared custom step name, not a member of
+    // the built-in StepName union — StepDefinition.name is typed StepName
+    // even though buildStepRegistry legitimately inserts custom names into it
+    // at runtime. Widen to `string` for this one comparison rather than
+    // narrowing/hiding the check.
+    const customIdx = registry.findIndex((s) => (s.name as string) === 'security_scan');
     const manualTestIdx = registry.findIndex((s) => s.name === 'manual_test');
 
     expect(customIdx).toBe(buildIdx + 1);
-    // build_review and wiring_check are steps between custom step and manual_test
-    expect(manualTestIdx).toBe(customIdx + 3);
+    // build_review, wiring_check, and test_suite are between custom step and manual_test.
+    expect(manualTestIdx).toBe(customIdx + 4);
 
     const customStep = registry[customIdx];
     expect(customStep.phase).toBe('BUILD');
@@ -155,12 +155,16 @@ describe('Integration: config flow', () => {
     const registry = buildStepRegistry(config);
     const archIdx = registry.findIndex((s) => s.name === 'architecture_review');
     const planIdx = registry.findIndex((s) => s.name === 'plan');
-    const customIdx = registry.findIndex((s) => s.name === 'tech_review');
+    // 'tech_review' is a config-declared custom step name (see the note above).
+    const customIdx = registry.findIndex((s) => (s.name as string) === 'tech_review');
     const specsIdx = registry.findIndex((s) => s.name === 'acceptance_specs');
 
     expect(archIdx).toBeLessThan(planIdx); // architecture precedes plan (reorder)
     expect(customIdx).toBe(planIdx + 1); // custom step lands right after plan
-    expect(specsIdx).toBe(customIdx + 1);
+    // coherence_check (built-in, S-skippable) sits between the custom step
+    // and acceptance_specs — it's inserted immediately after plan in
+    // ALL_STEPS and the custom "after: plan" insertion lands ahead of it.
+    expect(specsIdx).toBe(customIdx + 2);
     expect(registry[customIdx].prerequisites).toEqual(['plan']);
   });
 

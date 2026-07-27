@@ -22,7 +22,10 @@
 //     `.claude/settings.json` ("this workspace has not been trusted") and
 //     wedged on denied tools. Trust is copied from the operator's live state
 //     file ONLY when it already trusts the harness root — the sandbox never
-//     fabricates a trust grant the operator has not made.
+//     fabricates a trust grant the operator has not made. Claude Code keys
+//     workspace trust by the GIT MAIN worktree root, so a build running inside
+//     `.worktrees/<slug>` is looked up under the harness root; both keys (and
+//     their realpath canonicalizations) are seeded so either resolution hits.
 // The sandbox is torn down after the build (pass OR fail) under a try/finally
 // guarantee; global ~/.claude is never touched. Isolation is a contract:
 //   - Settings are COPIED (not symlinked) — no sandbox symlink ever resolves to a
@@ -35,8 +38,14 @@
 
 import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir, homedir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { generateFenceScript, mergeFenceIntoSettings } from './write-fence.js';
+export {
+  provisionProviderHome,
+  type ProviderHome,
+  type ProvisionProviderHomeOptions,
+  type ResolvedSelfHostProvider,
+} from './provider-home.js';
 
 /** Injectable filesystem seam so the adversarial branches are deterministic. */
 export interface SandboxFs {
@@ -49,8 +58,6 @@ export interface SandboxFs {
   /** Read a file's text, or null when it does not exist. */
   readFile(path: string): Promise<string | null>;
   writeFile(path: string, data: string): Promise<void>;
-  /** Copy `src` → `dest`; callers guard with `pathExists` first. */
-  copyFile(src: string, dest: string): Promise<void>;
   /** Set file mode (permissions) — used to make scripts executable. */
   chmod(path: string, mode: number): Promise<void>;
 }
@@ -63,7 +70,6 @@ export const realSandboxFs: SandboxFs = {
   pathExists: (path) => fsp.access(path).then(() => true, () => false),
   readFile: (path) => fsp.readFile(path, 'utf-8').then((t) => t, () => null),
   writeFile: (path, data) => fsp.writeFile(path, data, 'utf-8'),
-  copyFile: (src, dest) => fsp.copyFile(src, dest),
   chmod: (path, mode) => fsp.chmod(path, mode),
 };
 
@@ -99,11 +105,6 @@ export interface ProvisionOptions {
    * differs from `worktreeRoot`; when equal, the retarget is a no-op.
    */
   harnessRoot: string;
-  /**
-   * The operator's live config dir — the source of `settings.json`.
-   * Defaults to `$CLAUDE_CONFIG_DIR` or `~/.claude`.
-   */
-  globalConfigDir?: string;
   /** Base dir for the throwaway config dir (defaults to the OS temp dir). */
   baseDir?: string;
   /** Parent env the child env is derived from (defaults to process.env). */
@@ -112,16 +113,16 @@ export interface ProvisionOptions {
   fs?: SandboxFs;
   /**
    * The operator's live Claude state file — the SOURCE of workspace-trust
-   * propagation. Defaults to `$CLAUDE_CONFIG_DIR/.claude.json` when the parent
-   * env sets CLAUDE_CONFIG_DIR, else `~/.claude.json` (with the default
-   * `~/.claude` config dir, Claude Code keeps state BESIDE the dir, not in it).
+   * propagation (read-only; never written). Defaults to
+   * `$CLAUDE_CONFIG_DIR/.claude.json` when the parent env sets
+   * CLAUDE_CONFIG_DIR, else `~/.claude.json` (with the default `~/.claude`
+   * config dir, Claude Code keeps state BESIDE the dir, not in it).
    */
   globalStateFile?: string;
 }
 
-/** The two links a sandbox exposes into the worktree. */
-const LINKED_DIRS = ['skills', 'hooks'] as const;
-/** Config files copied (never symlinked) from the operator's global config. */
+/** Only edited harness skills are exposed from the worktree. */
+const LINKED_DIRS = ['skills'] as const;
 const SETTINGS_FILE = 'settings.json';
 /** Claude Code state file — holds per-project workspace-trust grants. */
 const STATE_FILE = '.claude.json';
@@ -167,8 +168,6 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
   const fs = opts.fs ?? realSandboxFs;
   const base = opts.baseDir ?? tmpdir();
   const parentEnv = opts.parentEnv ?? process.env;
-  const globalConfigDir =
-    opts.globalConfigDir ?? parentEnv.CLAUDE_CONFIG_DIR ?? join(homedir(), '.claude');
 
   let configDir: string | null = null;
   try {
@@ -186,14 +185,9 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
       await fs.symlink(target, join(configDir, name));
     }
 
-    // settings.json: copy + retarget harness-checkout paths to the worktree, so
-    // hooks declared by absolute path fire against the EDITED hooks.
-    await provisionSettings(fs, {
-      src: join(globalConfigDir, SETTINGS_FILE),
-      dest: join(configDir, SETTINGS_FILE),
-      harnessRoot: opts.harnessRoot,
-      worktreeRoot: opts.worktreeRoot,
-    });
+    // Start from engine-owned empty settings. Operator preferences/hooks never
+    // enter this home; the fence below is the sole generated control.
+    await fs.writeFile(join(configDir, SETTINGS_FILE), '{}\n');
 
     // write-fence.sh: provision the fence script that blocks edits to the live
     // harness checkout. The script is materialized with +x mode and wired into
@@ -230,20 +224,76 @@ export async function provisionSandboxBuildEnv(opts: ProvisionOptions): Promise<
   return new ThrowawaySandbox(configDir, parentEnv, fs);
 }
 
-/** Copy `src` → `dest` only when `src` exists; a missing source is not an error. */
-async function copyIfPresent(fs: SandboxFs, src: string, dest: string): Promise<void> {
-  if (await fs.pathExists(src)) await fs.copyFile(src, dest);
+
+/**
+ * Where the operator's live state file lives: inside CLAUDE_CONFIG_DIR when
+ * that is set, else at `~/.claude.json` (beside, not inside, `~/.claude`).
+ * Derived at runtime — no hardcoded path.
+ */
+function defaultGlobalStateFile(parentEnv: NodeJS.ProcessEnv): string {
+  return parentEnv.CLAUDE_CONFIG_DIR
+    ? join(parentEnv.CLAUDE_CONFIG_DIR, STATE_FILE)
+    : join(homedir(), STATE_FILE);
 }
 
-/** Read the global settings.json, retarget harness-checkout paths, write the copy. */
-async function provisionSettings(
+/** realpath(p), or null when it cannot be resolved (missing/broken link). */
+async function canonicalize(fs: SandboxFs, p: string): Promise<string | null> {
+  try {
+    return await fs.realpath(p);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Seed the sandbox `.claude.json` by PROPAGATING the operator's existing
+ * workspace trust. Writes a minimal state file trusting the harness root and
+ * the build worktree (both as-passed and realpath-canonicalized) IFF the
+ * operator's live state file already trusts the harness root. Everything else
+ * — a missing state file, malformed JSON, or an untrusted harness root —
+ * writes NOTHING: the sandbox never fabricates a trust grant, it only re-homes
+ * one the operator already made. Only the trust bit crosses the boundary: the
+ * operator's tokens, history and per-project state are never copied. The
+ * seeded file is a fresh write (never a symlink), preserving the TR-6
+ * no-global-symlink invariant; the live state file is only ever read.
+ */
+async function provisionTrustState(
   fs: SandboxFs,
   args: { src: string; dest: string; harnessRoot: string; worktreeRoot: string },
 ): Promise<void> {
   const raw = await fs.readFile(args.src);
-  if (raw === null) return; // no global settings.json → nothing to provision
-  const rewritten = await retargetHarnessPaths(fs, raw, args.harnessRoot, args.worktreeRoot);
-  await fs.writeFile(args.dest, rewritten);
+  if (raw === null) return; // no operator state file → nothing to propagate
+  let state: unknown;
+  try {
+    state = JSON.parse(raw);
+  } catch {
+    return; // malformed operator state → propagate nothing (never guess trust)
+  }
+  const projects = (state as { projects?: unknown }).projects;
+  if (projects === null || typeof projects !== 'object' || projects === undefined) return;
+  const trustedByOperator = (p: string | null): boolean =>
+    p !== null &&
+    (projects as Record<string, { hasTrustDialogAccepted?: unknown } | undefined>)[p]
+      ?.hasTrustDialogAccepted === true;
+
+  const canonHarness = await canonicalize(fs, args.harnessRoot);
+  if (!trustedByOperator(args.harnessRoot) && !trustedByOperator(canonHarness)) return;
+
+  const canonWorktree = await canonicalize(fs, args.worktreeRoot);
+  const seeded: Record<string, { hasTrustDialogAccepted: true }> = {};
+  for (const p of [args.harnessRoot, canonHarness, args.worktreeRoot, canonWorktree]) {
+    if (p !== null) seeded[p] = { hasTrustDialogAccepted: true };
+  }
+  const onboarded =
+    (state as { hasCompletedOnboarding?: unknown }).hasCompletedOnboarding === true;
+  await fs.writeFile(
+    args.dest,
+    `${JSON.stringify(
+      { ...(onboarded ? { hasCompletedOnboarding: true } : {}), projects: seeded },
+      null,
+      2,
+    )}\n`,
+  );
 }
 
 /** Generate and provision the write-fence script, then merge it into settings.json. */
@@ -272,94 +322,6 @@ async function provisionWriteFence(
   await fs.writeFile(settingsPath, updatedSettings);
 }
 
-/**
- * Replace every `<harnessRoot>/` prefix with `<worktreeRoot>/` in the settings
- * text, so absolute harness-checkout paths (hook commands, statusLine) resolve
- * into the worktree's edited copies. Both roots are realpath-canonicalized first
- * (settings paths are canonical); the trailing `/` keeps a sibling like
- * `<harnessRoot>-old/` from matching. A no-op when the roots are equal or
- * either fails to resolve.
- */
-async function retargetHarnessPaths(
-  fs: SandboxFs,
-  settingsText: string,
-  harnessRoot: string,
-  worktreeRoot: string,
-): Promise<string> {
-  const from = await canonicalize(fs, harnessRoot);
-  const to = await canonicalize(fs, worktreeRoot);
-  if (from === null || to === null || from === to) return settingsText;
-  return settingsText.split(`${from}/`).join(`${to}/`);
-}
-
-/** realpath a path, or null if it does not resolve (never throws). */
-async function canonicalize(fs: SandboxFs, p: string): Promise<string | null> {
-  try {
-    return await fs.realpath(p);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Where the operator's live state file lives: inside CLAUDE_CONFIG_DIR when
- * that is set, else at `~/.claude.json` (beside, not inside, `~/.claude`).
- */
-function defaultGlobalStateFile(parentEnv: NodeJS.ProcessEnv): string {
-  return parentEnv.CLAUDE_CONFIG_DIR
-    ? join(parentEnv.CLAUDE_CONFIG_DIR, STATE_FILE)
-    : join(homedir(), STATE_FILE);
-}
-
-/**
- * Seed the sandbox `.claude.json` by PROPAGATING the operator's existing
- * workspace trust. Writes a minimal state file trusting the harness root and
- * the build worktree (both as-passed and realpath-canonicalized — Claude Code
- * may key trust by either) IFF the operator's live state file already trusts
- * the harness root. Everything else — a missing state file, malformed JSON, or
- * an untrusted harness root — writes NOTHING: the sandbox never fabricates a
- * trust grant, it only re-homes one the operator already made. The seeded file
- * is a fresh write (never a symlink), preserving the TR-6 no-global-symlink
- * invariant; the operator's live state file is only ever read.
- */
-async function provisionTrustState(
-  fs: SandboxFs,
-  args: { src: string; dest: string; harnessRoot: string; worktreeRoot: string },
-): Promise<void> {
-  const raw = await fs.readFile(args.src);
-  if (raw === null) return; // no operator state file → nothing to propagate
-  let state: unknown;
-  try {
-    state = JSON.parse(raw);
-  } catch {
-    return; // malformed operator state → propagate nothing (never guess trust)
-  }
-  const projects = (state as { projects?: unknown }).projects;
-  if (projects === null || typeof projects !== 'object') return;
-  const trustedByOperator = (p: string | null): boolean =>
-    p !== null &&
-    (projects as Record<string, { hasTrustDialogAccepted?: unknown }>)[p]
-      ?.hasTrustDialogAccepted === true;
-
-  const canonHarness = await canonicalize(fs, args.harnessRoot);
-  if (!trustedByOperator(args.harnessRoot) && !trustedByOperator(canonHarness)) return;
-
-  const canonWorktree = await canonicalize(fs, args.worktreeRoot);
-  const seeded: Record<string, { hasTrustDialogAccepted: true }> = {};
-  for (const p of [args.harnessRoot, canonHarness, args.worktreeRoot, canonWorktree]) {
-    if (p !== null) seeded[p] = { hasTrustDialogAccepted: true };
-  }
-  const onboarded =
-    (state as { hasCompletedOnboarding?: unknown }).hasCompletedOnboarding === true;
-  await fs.writeFile(
-    args.dest,
-    `${JSON.stringify(
-      { ...(onboarded ? { hasCompletedOnboarding: true } : {}), projects: seeded },
-      null,
-      2,
-    )}\n`,
-  );
-}
 
 /**
  * Run `fn` with a provisioned sandbox, guaranteeing teardown on BOTH the success
@@ -379,17 +341,13 @@ export async function withSandboxBuildEnv<T>(
 }
 
 /**
- * Resolve the sandbox's linked-dir targets (skills/hooks) — used to assert the
- * no-global-target invariant (TR-6). Returns the sandbox-side link paths, which
- * callers realpath to confirm they resolve into the worktree and never under
- * global config.
+ * Resolve the sandbox's sole worktree-owned link. Engine-owned hooks are files
+ * in the sandbox, never links to an operator or worktree hooks directory.
  */
 export async function sandboxLinkTargets(
   sandbox: SandboxBuildEnv,
 ): Promise<Record<(typeof LINKED_DIRS)[number], string>> {
   return {
     skills: join(sandbox.configDir, 'skills'),
-    hooks: join(sandbox.configDir, 'hooks'),
   };
 }
-

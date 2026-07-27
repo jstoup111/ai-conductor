@@ -20,9 +20,11 @@ operator idea ─▶ [ENGINEER: route → DECIDE → spec PR → nudge]      (th
                  [DAEMON: build the merged spec]                    (separate, independent loop)
 ```
 
-**How it starts.** The operator runs `conduct-ts engineer` (no subcommand) in a terminal; that launches
-an interactive `claude /engineer` session and drops them here. Inside an existing session, the
-operator invokes `/engineer` directly. Either way, this skill is now driving.
+**How it starts.** Inside a live supported host-agent session, the operator invokes this skill with
+the host-native syntax: Claude Code uses `/engineer`; Codex uses `$engineer`. The existing
+`conduct-ts engineer` terminal launcher is a **Claude-only launcher**: it opens an interactive
+`claude /engineer` session. Native persistent-session launching and recovery for other hosts is
+deferred to **#759**; do not imply that this legacy launcher creates a Codex session.
 
 **Two independent loops.** This skill is the *idea→plan* loop. It does NOT build. The *execution*
 loop is the per-repo daemon, which scans **merged** spec PRs and builds them. The only coupling is
@@ -31,8 +33,8 @@ waits on, or owns the daemon.
 
 **Why this is a host-agent skill and not a CLI REPL (ADR-008).** The loop must run your *real*
 skills, agent personas, and hooks (`/explore`, `/prd`, `/stories`, `/plan` with their clarity loops).
-Those exist only inside a live Claude Code session. A Node REPL or a `claude -p` subprocess cannot
-run them interactively — so the engineer **is** the host agent, calling deterministic conduct-ts
+Those exist only inside a live supported host-agent session. A Node REPL or a provider subprocess
+cannot run them interactively — so the engineer **is** the host agent, calling deterministic `conduct-ts`
 primitives for the mechanical parts (registry read, path-guarded commit, PR open, daemon nudge)
 and running the DECIDE skills directly in chat for the reasoning parts.
 
@@ -51,23 +53,25 @@ and running the DECIDE skills directly in chat for the reasoning parts.
 
 ## The Loop
 
-**Handle exactly ONE idea per session, then end.** The launcher (`conduct-ts engineer`) relaunches you
-in a **fresh session with clean context** for the next idea — so do NOT loop over multiple ideas
-in-chat (that bloats and degrades context). Durable state (registry, lessons, processed markers)
-is file-backed, so the next fresh session picks up everything that matters. For this one idea:
+**Handle exactly ONE idea per session, then end.** Do NOT loop over multiple ideas in-chat (that
+bloats and degrades context). Durable state (registry, lessons, processed markers) is file-backed,
+so the next fresh supported host-agent session picks up everything that matters. The existing
+Claude-only launcher (`conduct-ts engineer`) relaunches Claude Code with clean context for the next
+idea; native persistent-session launching for other hosts remains deferred to #759. For this one
+idea:
 
 ### 1. Capture the idea
 The idea can arrive from **three** sources — resolve them in this order:
 
 1. **GitHub intake.** First run `conduct-ts engineer claim`. It dequeues the oldest pending intake
    idea and prints JSON. On `{ "kind": "claim", "text": "...", "sourceRef": "owner/repo#N" }`, use
-   `text` as the idea and **carry `sourceRef`** — you'll pass it back in steps 4–5 so the originating
+   `text` as the idea and **carry `sourceRef`** — you'll pass it back in steps 3–5 so the originating
    issue gets commented + labelled. On `{ "kind": "claim", "empty": true }`, fall through.
 2. **Launch argument / chat.** If the launch prompt already carried an idea (`conduct-ts engineer
    "<idea>"` or `--idea "<idea>"`), use it. Otherwise take the operator's raw idea from the chat.
 
 Empty/whitespace from all three → re-prompt, do not proceed. There is **no `sourceRef`** for ideas
-that came from the CLI arg or chat — omit `--source-ref` in steps 4–5 for those.
+that came from the CLI arg or chat — omit `--source-ref` in steps 3–5 for those.
 
 > The bare `conduct-ts engineer` launcher pre-polls GitHub issues before this session starts, so a
 > `claim` here returns work captured at launch. You do not poll yourself — just claim.
@@ -103,8 +107,11 @@ spawned `claude`. Present the proposed target and your rationale, then **confirm
 ### 3. Create the per-idea worktree, then run the REAL DECIDE skills inside it
 **Author in an isolated per-idea worktree — never the target's primary checkout.** First create it:
 
-`conduct-ts engineer worktree --project <name> --idea "<idea>"` → prints JSON
-`{ slug, branch, worktreePath, reconcile }`. This creates a dedicated worktree at
+`conduct-ts engineer worktree --project <name> --idea "<idea>" [--source-ref <ref>]` → prints JSON
+`{ slug, branch, worktreePath, reconcile }`. For **intake-claimed ideas**, pass the `sourceRef`
+carried from step 1 as `--source-ref <ref>` — the claim record it resolves lets a later `land`
+auto-resolve the intake body without having to re-thread it by hand. `--source-ref` can be omitted
+for chat/CLI ideas, which have no claim record. This creates a dedicated worktree at
 `<target>/.worktrees/engineer-<slug>` checked out on a fresh `spec/<slug>` branch (based on the
 repo's derived default branch), disjoint from the daemon's own worktrees. **`worktreePath` is your
 working directory for all authoring, `land`, and `handoff`** for this idea.
@@ -137,6 +144,8 @@ DECIDE phase — the daemon only builds — so produce the complete, build-ready
 6. `/stories`   → stories in the target's `.docs/stories/` (must end **Status: Accepted**)
 7. `/conflict-check`        → `.docs/conflicts/` — **skip for Small**
 8. `/plan`      → an implementation plan in the target's `.docs/plans/`
+9. `/coherence-check` → the committed traceability mapping (outcomes → FRs → stories → tasks) in
+   the target's `.docs/coherence/` — **skip for Small; Medium and Large only.**
 
 These produce **Status:Accepted** artifacts via your real harness (agents + hooks). Do NOT
 hand-write stub stories, DRAFT artifacts, or shell out to `claude -p`. If the operator rejects a
@@ -177,13 +186,17 @@ builds.
 
 ### 6. Deliver, then end the session
 The spec PR (or local-commit fallback) is the **final artifact**. Once step 5 reports it, tell the
-operator plainly: **"✅ Spec delivered for `<slug>` → `<PR url / branch>`. Type `/quit` to process the
-next idea in a fresh session."** Then stop — do **not** ask for another idea in this session. The
-launcher regains control when the operator quits and relaunches you clean for the next idea.
+operator plainly: **"✅ Spec delivered for `<slug>` → `<PR url / branch>`."** Then stop — do **not**
+ask for another idea in this session. In a Claude Code session, add: **"Type `/quit` to process the
+next idea in a fresh session."** The Claude-only launcher regains control when the operator quits
+and relaunches Claude Code cleanly. In every other supported host, tell the operator to end or close the session
+with that host's normal session control; native persistent-session launch/recovery
+behavior is deferred to #759.
 
-> Why `/quit` and not automatic: an interactive Claude Code session cannot terminate itself (slash
-> commands are user-only). The operator's single `/quit` is the session boundary that guarantees the
-> next idea starts with fresh context.
+> **Claude Code only — why `/quit` and not automatic:** an interactive Claude Code session cannot
+> terminate itself (slash commands are user-only). The operator's single `/quit` is the session
+> boundary that guarantees the next idea starts with fresh context. Other supported hosts use their
+> normal session-end control; this skill does not define a launcher or recovery contract for them.
 
 ## Non-negotiable gates
 
@@ -201,9 +214,10 @@ launcher regains control when the operator quits and relaunches you clean for th
 
 - [ ] Idea captured from the right source (`claim` first; CLI arg / chat fallback) — `sourceRef` carried only for intake ideas
 - [ ] Idea routed with explicit operator confirmation (redirect + no-fit + decline all handled)
-- [ ] For intake ideas: `--source-ref` threaded into `land` + `handoff` so the originating issue is commented + labelled, the `.docs/intake/<slug>.md` marker is committed, and the spec PR is linked with `Refs <ref>` (the daemon adds `Closes <ref>` to the implementation PR, auto-closing the issue on merge)
+- [ ] For intake ideas: `--source-ref` threaded into `worktree` (to resolve the claim record's body) + `land` + `handoff` so the originating issue is commented + labelled, the `.docs/intake/<slug>.md` marker is committed, and the spec PR is linked with `Refs <ref>` (the daemon adds `Closes <ref>` to the implementation PR, auto-closing the issue on merge)
 - [ ] DECIDE ran the real skills in canonical order — `/explore` → complexity → `/prd` (product) →
-      `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` (not stubs, not DRAFT, no `claude -p`)
+      `/architecture-diagram` → `/architecture-review` → `/stories` → `/conflict-check` → `/plan` →
+      `/coherence-check` (M/L only, skipped for S) (not stubs, not DRAFT, no `claude -p`)
 - [ ] Complexity tier recorded at `.docs/complexity/<plan-stem>.md`; for Small, conflict-check + architecture were skipped
 - [ ] All ADRs are APPROVED (no `Status: DRAFT`) before landing
 - [ ] Authoring + `land` + `handoff` ran inside the per-idea worktree (`--worktree`); the target's

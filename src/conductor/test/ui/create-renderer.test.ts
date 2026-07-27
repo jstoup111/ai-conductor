@@ -30,7 +30,7 @@ describe('createRenderer', () => {
       complexity_tier: 'M',
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'in_progress',
+      explore: 'in_progress',
       // Mark plan 'done' so artifact-status tests exercise the non-pending path.
       plan: 'done',
     };
@@ -100,6 +100,19 @@ describe('createRenderer', () => {
     const output = stream.output();
     expect(output).toContain('STEP FAILED: build');
     expect(output).toContain('compile error');
+  });
+
+  it('renders a loud provider fallback warning', async () => {
+    await renderer({
+      type: 'provider_fallback',
+      step: 'plan',
+      failedProvider: 'codex',
+      reason: 'executable not found',
+      nextProvider: 'claude',
+    });
+    expect(stream.output()).toContain(
+      '⚠ PROVIDER FALLBACK: plan — codex unavailable (executable not found); trying claude',
+    );
   });
 
   it('reads state from file on each dashboard render', async () => {

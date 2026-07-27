@@ -34,6 +34,13 @@ missed when stories preceded the design.
 If writing stories reveals a genuine *structural* gap the design lacks (a missing component/seam), do
 not paper over it in story text — kick back to `architecture` (which re-opens in amendment mode).
 
+### Documentation boundary
+
+Do not create stories, requirements, acceptance criteria, Done-When items, or notes for writing or
+updating ordinary project documentation. When the request is documentation-only, route it to
+`/explore` for direct documentation delivery. When documentation accompanies functional work, omit
+the documentation portion entirely and write stories only for the functional behavior.
+
 ## Practices
 
 ### 1. Load Input

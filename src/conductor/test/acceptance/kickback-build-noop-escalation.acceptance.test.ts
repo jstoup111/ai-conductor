@@ -63,11 +63,11 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName } from '../../src/engine/conductor.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
 const AS_BUILT_MD = '.pipeline/architecture-review-as-built.md';
@@ -153,6 +153,10 @@ describe('acceptance: kickback→build no-op escalation (#647)', () => {
       maxRetries: 1,
       escalateBuildFailure: async () => ({}),
       runGh: makeGhFake(),
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
     } as never);
   }
 

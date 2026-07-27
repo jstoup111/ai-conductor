@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 import type { ConductState } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
@@ -53,6 +53,7 @@ const FRONT_DONE: ConductState = {
   stories: 'done',
   conflict_check: 'skipped',
   plan: 'done',
+  coherence_check: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
@@ -75,10 +76,20 @@ const FRONT_DONE_M: ConductState = {
   stories: 'done',
   conflict_check: 'skipped',
   plan: 'done',
+  coherence_check: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'done',
   acceptance_specs: 'skipped',
 };
+
+const validShipmentEvidence = async () => ({
+  kind: 'valid' as const,
+  slug: 'test-feature',
+  pr: 'https://github.com/org/repo/pull/1',
+  recordPath: '.docs/shipped/test-feature.md',
+  hash: 'verified',
+  commit: 'verified',
+});
 
 describe('integration/rebase-loop', () => {
   let dir: string;
@@ -188,6 +199,7 @@ describe('integration/rebase-loop', () => {
       fromStep: 'build',
       maxRetries: 1,
       git: fakeGit,
+      shipmentEvidence: validShipmentEvidence,
     });
   }
 
@@ -321,7 +333,7 @@ describe('integration/rebase-loop', () => {
       const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
       const ran: string[] = [];
       const runner: StepRunner = {
-        run: async (step) => {
+        run: async (step: string) => {
           ran.push(step);
           return satisfy(step);
         },
@@ -472,6 +484,9 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(false);
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
+    const haltedState = await readState(statePath);
+    expect(haltedState.ok && haltedState.value.pr_url).toBeUndefined();
+    await expect(access(join(dir, '.pipeline/finish-choice'))).rejects.toThrow();
     expect(await rebaseInProgress()).toBe(true);
   });
 
@@ -1061,13 +1076,20 @@ describe('integration/rebase-loop', () => {
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
+        const dispatches: string[] = [];
         const { invalidated } = trackPreservedInvalidated();
         let completed = false;
         events.on('feature_complete', () => {
           completed = true;
         });
 
-        await conductorWith(runCountingRunner(counts)).run();
+        await conductorWith({
+          run: async (step) => {
+            dispatches.push(step);
+            counts[step] = (counts[step] ?? 0) + 1;
+            return satisfy(step);
+          },
+        }).run();
 
         expect(completed).toBe(true);
         expect(counts.prd_audit).toBe(2);
@@ -1085,6 +1107,12 @@ describe('integration/rebase-loop', () => {
         expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
         expect(archInvalidated).toBeDefined();
         expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
+        expect(
+          Math.max(
+            dispatches.lastIndexOf('prd_audit'),
+            dispatches.lastIndexOf('architecture_review_as_built'),
+          ),
+        ).toBeLessThan(dispatches.indexOf('finish'));
       });
 
       it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {
@@ -1289,6 +1317,7 @@ describe('integration/rebase-loop', () => {
         const git2 = makeRebaseGitRunner(dir);
         const outcome = await performRebase(git2, dir, BASE);
         expect(outcome.kind).toBe('changed');
+        if (outcome.kind !== 'changed') throw new Error('expected a changed rebase outcome');
         expect(outcome.featureSurface).toBeUndefined();
 
         const result = await applyRebaseVerdicts(dir, outcome, true);

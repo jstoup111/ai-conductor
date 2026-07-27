@@ -61,6 +61,8 @@ function preBuildDoneState(): ConductState {
     architecture_diagram: 'done',
     architecture_review: 'done',
     acceptance_specs: 'done',
+    test_suite: 'done',
+    rebase: 'done',
     complexity_tier: 'M',
     track: 'technical',
     feature_desc: 'self-build-feat',
@@ -92,6 +94,9 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
+        if (step === 'finish') {
+          await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+        }
         return { success: true };
       }),
     };
@@ -99,9 +104,11 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       resolveHarnessRoot: vi.fn(async () => dir),
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: dir })),
       relink: vi.fn(async () => {}),
-      provisionSandbox: vi.fn(async () => {
-        throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');
-      }),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => ({}),
+        teardown: async () => {},
+      })),
       versionGate: runVersionApprovalGate, // the REAL primitive — no marker, no freeze.
       releaseGate: releaseGateSpy,
     };
@@ -117,7 +124,23 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
-      config: { harness_self_host: { sandbox_build_env: false } },
+      fullSuiteVerifier: {
+        ensure: vi.fn().mockResolvedValue({ status: 'REUSED', evidence: {} as never }),
+        inspect: vi.fn().mockResolvedValue({ status: 'CURRENT', evidence: {} as never }),
+      },
+      config: {
+        harness_self_host: {
+          sandbox_build_env: true,
+          // This fixture owns version-gate composition, not ambient daemon
+          // credentials. Keep the self-host path active while making auth
+          // readiness deterministic on developer machines and clean CI hosts.
+          build_auth: { mode: 'api-key' },
+        },
+        steps: {
+          manual_test: { disable: true },
+          architecture_review_as_built: { disable: true },
+        },
+      },
     } as ConstructorParameters<typeof Conductor>[0]);
     return { conductor, seen };
   }
@@ -193,6 +216,9 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
         seen.push({ step });
+        if (step === 'finish') {
+          await writeFile(join(dir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+        }
         return { success: true };
       }),
     };
@@ -200,9 +226,11 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       resolveHarnessRoot: vi.fn(async () => dir),
       resolveInstalledHarnessRoot: vi.fn(async () => ({ status: 'ok' as const, root: dir })),
       relink: vi.fn(async () => {}),
-      provisionSandbox: vi.fn(async () => {
-        throw new Error('sandbox must not be provisioned — sandbox_build_env is disabled');
-      }),
+      provisionSandbox: vi.fn(async () => ({
+        configDir: dir,
+        childEnv: () => ({}),
+        teardown: async () => {},
+      })),
       versionGate: versionGateSpy,
       releaseGate: releaseGateSpy,
     };
@@ -220,8 +248,13 @@ describe('harness-daemon-profile — real version-gate composition (TR-3)', () =
       escalateBuildFailure: NOOP_ESCALATION,
       config: {
         harness_self_host: {
-          sandbox_build_env: false,
+          sandbox_build_env: true,
+          build_auth: { mode: 'api-key' },
           version_approval_gate: false, // Gate is disabled
+        },
+        steps: {
+          manual_test: { disable: true },
+          architecture_review_as_built: { disable: true },
         },
       },
     } as ConstructorParameters<typeof Conductor>[0]);

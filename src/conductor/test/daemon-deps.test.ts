@@ -147,7 +147,7 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
     const nonExistentBase = join(tempDir, 'does-not-exist');
 
     // Should not throw
-    let dispose;
+    let dispose: (() => void) | undefined;
     expect(() => {
       dispose = watchHaltCleared(nonExistentBase, slug, () => {
         /* should not be called */
@@ -156,10 +156,12 @@ describe('watchHaltCleared — real filesystem watcher for HALT marker', () => {
 
     // dispose should be a function
     expect(typeof dispose).toBe('function');
+    if (!dispose) throw new Error('dispose was not assigned');
+    const disposeFn = dispose;
 
     // Calling dispose should not throw
     expect(() => {
-      dispose();
+      disposeFn();
     }).not.toThrow();
   });
 
@@ -346,7 +348,7 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     const slug = 'audit-missing-dir';
     const nonExistentBase = join(tempDir, 'does-not-exist');
 
-    let dispose;
+    let dispose: (() => void) | undefined;
     expect(() => {
       dispose = watchHaltCleared(nonExistentBase, slug, () => {
         /* should not be called */
@@ -354,6 +356,8 @@ describe('watchHaltCleared — halt_cleared audit record with cause attribution 
     }).not.toThrow();
 
     expect(typeof dispose).toBe('function');
-    expect(() => dispose()).not.toThrow();
+    if (!dispose) throw new Error('dispose was not assigned');
+    const disposeFn = dispose;
+    expect(() => disposeFn()).not.toThrow();
   });
 });

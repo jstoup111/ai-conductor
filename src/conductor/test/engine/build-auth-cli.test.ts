@@ -251,6 +251,55 @@ describe('dispatchBuildAuthStatus', () => {
     expect(readToken).toHaveBeenCalledWith(resolved.buildAuthTokenPath);
     expect(exitCode).toBe(0);
   });
+
+  // Regression for the 2026-07-26 daemon self-host incident
+  // (2026-07-26-daemon-decide-phase-coherence-ownership-971): the real self-host
+  // dispatch resolved `harness_self_host.build_auth.mode: api-key` from a config
+  // on disk (a stale override in ~/.ai-conductor/config.yml deep-merged under
+  // the project config), and correctly halted with the api-key auth-failure
+  // message — but `conduct build-auth-status`, run by the operator to sanity
+  // check, reported `mode=daemon-token state=valid` because its call site
+  // never loaded any config at all, so `resolveSelfHostConfig(undefined)`
+  // silently returned the hardcoded default no matter what was on disk.
+  //
+  // This exercises the REAL (non-stubbed) `resolveSelfHostConfig` against a
+  // `config` object shaped exactly like that merged result, proving the
+  // dispatcher — once actually given the config — reports the true mode
+  // instead of a falsely reassuring default.
+  it('given the real merged config (not the undefined default), reports the actual configured mode — not the hardcoded default', async () => {
+    const print = vi.fn();
+    const readToken = vi.fn();
+    const probeLiveness = vi.fn();
+
+    const configWithStaleApiKeyOverride = {
+      harness_self_host: {
+        build_auth: { mode: 'api-key' as const },
+      },
+    };
+
+    const resolved = resolveSelfHostConfig(configWithStaleApiKeyOverride as never);
+    expect(resolved.buildAuthMode).toBe('api-key');
+    expect(resolved.buildAuthMode).not.toBe(DEFAULT_BUILD_AUTH_MODE);
+
+    const exitCode = await dispatchBuildAuthStatus(
+      { kind: 'status' },
+      {
+        print,
+        config: configWithStaleApiKeyOverride as never,
+        // Deliberately NOT stubbing resolveSelfHostConfig — this must go
+        // through the real resolver, driven purely by the `config` dep, to
+        // prove the dispatcher itself (not just a test double) honors it.
+        readDaemonBuildToken: readToken,
+        verifyTokenLiveness: probeLiveness,
+      },
+    );
+
+    const output = print.mock.calls.map((c) => c[0]).join('\n');
+    expect(output).toMatch(/mode=api-key/);
+    expect(output).not.toMatch(/mode=daemon-token/);
+    expect(readToken).not.toHaveBeenCalled();
+    expect(exitCode).toBe(0);
+  });
 });
 
 describe('Task 11: credential confidentiality sweep', () => {

@@ -2,6 +2,13 @@
 
 **Status:** ACCEPTED
 
+> **Availability amendment (#927, approved 2026-07-24):** In a scalar run, or
+> when no configured alternative is usable, a missing provider executable still
+> fails with the clear diagnostic below. In an ordered multi-provider run, a
+> registered provider whose executable is missing is classified as
+> deterministically unavailable, emits a warning, and permits ordered fallback.
+> Unknown or unregistered provider names still fail validation before dispatch.
+
 ## Description
 
 As the harness maintainer, I want the execution layer to abstract LLM CLI invocation behind

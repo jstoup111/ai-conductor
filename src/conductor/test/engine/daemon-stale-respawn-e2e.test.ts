@@ -1,11 +1,9 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { mkdir, mkdtemp, rm, readFile, writeFile } from 'node:fs/promises';
-import { existsSync, writeFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-import { spawn, type ChildProcess, execSync } from 'node:child_process';
 import {
   tmuxInstalled,
   newDetachedSession,
@@ -18,6 +16,12 @@ import {
 import { createRestartRequester } from '../../src/daemon-cli.js';
 import * as restartIntent from '../../src/engine/restart-intent.js';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { fastForwardRoot } from '../../src/engine/daemon-backlog.js';
+import { captureEngineIdentity, createStaleEngineChecker } from '../../src/engine/engine-identity.js';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFile = promisify(execFileCb);
 
 // Capstone acceptance spec for #353 / adr-2026-07-06-stale-engine-respawn-in-place
 // (TR-2, TR-3, TR-4). The production wiring this drives — createRestartRequester
@@ -65,65 +69,6 @@ function isProcessAlive(pid: number): boolean {
     // EPERM = we don't have permission; process likely exists but we can't signal it
     // Conservative approach: assume it's alive
     return true;
-  }
-}
-
-/**
- * Wait for a process to exit cleanly.
- */
-async function waitForProcessExit(child: ChildProcess, timeoutMs = 5000): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      if (child.pid && isProcessAlive(child.pid)) {
-        reject(new Error(`Process ${child.pid} did not exit within ${timeoutMs}ms`));
-      } else {
-        resolve();
-      }
-    }, timeoutMs);
-
-    child.on('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
-/**
- * Sleep for a given duration in milliseconds.
- */
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-/**
- * Get count of daemon processes for a given session name.
- * Uses pgrep to find processes matching the session.
- */
-function getProcessCount(sessionName: string): number {
-  try {
-    // Count processes in the tmux pane (cautiously using ps to avoid pgrep edge cases)
-    const result = execSync(`tmux capture-pane -p -t "${sessionName}" | grep -c . || true`, {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return Math.max(0, parseInt(result.trim()) || 0);
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Get list of all tmux sessions.
- */
-function getSessionList(): string[] {
-  try {
-    const result = execSync('tmux ls -F "#{session_name}" 2>/dev/null || true', {
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-    return result.split('\n').filter((s) => s.trim());
-  } catch {
-    return [];
   }
 }
 
@@ -187,7 +132,6 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           mockLog,
           mockLock,
           mockProcess,
-          // @ts-expect-error — 5th param does not exist yet (Task 4, RED)
           { relink: relinkStub, triggerSelfRestart: triggerSelfRestartStub },
         );
 
@@ -269,6 +213,484 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     );
   });
 
+  describe('refreshEngineSource wired before rebuildEngine (Task 7, non-fatal)', () => {
+    it('called before rebuildEngine at the pre-dispatch boundary when staleGatesArmed and inFlight empty', async () => {
+      const callOrder: string[] = [];
+      const refreshEngineSource = vi.fn(async () => {
+        callOrder.push('refresh');
+      });
+      const rebuildEngine = vi.fn(async () => {
+        callOrder.push('rebuild');
+      });
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        rebuildEngine,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(callOrder).toEqual(['refresh', 'rebuild']);
+    });
+
+    it('not called again for the second dispatch while the first feature is still in flight', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      let releaseFeature: (() => void) | undefined;
+      const runFeature = vi.fn((it: any) => {
+        if (it.slug === 'f0') {
+          return new Promise((resolve) => {
+            releaseFeature = () => resolve({ slug: it.slug, status: 'done' as const });
+          });
+        }
+        return Promise.resolve({ slug: it.slug, status: 'done' as const });
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }, { slug: 'f1' }],
+        runFeature: runFeature as any,
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      const runPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      // Let the dispatch loop start both features; the first ('f0') stays in
+      // flight (never resolved), so the second's pre-dispatch evaluation
+      // window has inFlight non-empty and must skip the refresh call — it
+      // fired exactly once, for the very first (fully-idle) dispatch.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+
+      releaseFeature?.();
+      await runPromise;
+    });
+
+    it('not called when gates are unarmed (not self-host)', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'stale' },
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      expect(refreshEngineSource).not.toHaveBeenCalled();
+    });
+
+    it('throwing refreshEngineSource is logged and non-fatal: flow continues into rebuildEngine/check(), no restart triggered by the throw', async () => {
+      const logs: string[] = [];
+      const refreshEngineSource = vi.fn(async () => {
+        throw new Error('fetch failed: origin unreachable');
+      });
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        refreshEngineSource,
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1); // continued past the throw
+      expect(requestRestart).not.toHaveBeenCalled(); // 'current' verdict, no restart
+      expect(res.stoppedReason).toBe('idle_timeout'); // no crash, feature still dispatched
+      expect(logs.some((m) => m.toLowerCase().includes('refresh'))).toBe(true);
+    });
+
+    it('suppression path still short-circuits: refreshEngineSource + rebuildEngine run, but suppressed identity prevents restart', async () => {
+      const refreshEngineSource = vi.fn(async () => {});
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: {
+          check: () => 'stale',
+          capturedIdentity: () => 'a',
+          targetIdentity: () => 'b',
+        },
+        refreshEngineSource,
+        rebuildEngine,
+        requestRestart,
+        isSuppressed: async () => true,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+      expect(rebuildEngine).toHaveBeenCalledTimes(1);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+  });
+
+  describe('advisory probeEngineStaleness when self-heal is disabled (Task 9, quiescent-only)', () => {
+    it('HP3: probe is invoked at the quiescent (pre-dispatch) boundary when staleGatesArmed is false (not self-host)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const rebuildEngine = vi.fn(async () => {});
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        rebuildEngine,
+        requestRestart,
+        sleep: async () => {},
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false, // gate 2 fails -> staleGatesArmed false
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+      // Never rebuilds or restarts from the advisory branch.
+      expect(rebuildEngine).not.toHaveBeenCalled();
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+    });
+
+    it('HP3: probe is invoked when the flag is off even under self-host', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: false, // gate 3 fails -> staleGatesArmed false
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+    });
+
+    it('not invoked when staleGatesArmed is true (armed path handles refresh instead)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      const refreshEngineSource = vi.fn(async () => {});
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        refreshEngineSource,
+        sleep: async () => {},
+      };
+
+      await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: true,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).not.toHaveBeenCalled();
+      expect(refreshEngineSource).toHaveBeenCalledTimes(1);
+    });
+
+    it('not invoked while a build is in flight (quiescent-only)', async () => {
+      const probeEngineStaleness = vi.fn(async () => {});
+      let releaseFeature: (() => void) | undefined;
+      const runFeature = vi.fn((it: any) => {
+        if (it.slug === 'f0') {
+          return new Promise((resolve) => {
+            releaseFeature = () => resolve({ slug: it.slug, status: 'done' as const });
+          });
+        }
+        return Promise.resolve({ slug: it.slug, status: 'done' as const });
+      });
+
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }, { slug: 'f1' }],
+        runFeature: runFeature as any,
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        sleep: async () => {},
+      };
+
+      const runPromise = runDaemon(deps, {
+        concurrency: 2,
+        once: false,
+        isSelfHost: false,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 0,
+      });
+
+      // f0 dispatches first (quiescent, fires probe), stays in flight; f1's
+      // pre-dispatch evaluation window has inFlight non-empty and must skip.
+      await new Promise((r) => setTimeout(r, 20));
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+
+      releaseFeature?.();
+      await runPromise;
+    });
+
+    it('a throwing probe is logged and non-fatal (no crash, no restart)', async () => {
+      const logs: string[] = [];
+      const probeEngineStaleness = vi.fn(async () => {
+        throw new Error('fetch failed: origin unreachable');
+      });
+      const requestRestart = vi.fn(async () => ({ fired: true }));
+      const deps: DaemonDeps = {
+        discoverBacklog: async () => [{ slug: 'f0' }],
+        runFeature: async (it: any) => ({ slug: it.slug, status: 'done' as const }),
+        staleEngineChecker: { check: () => 'current' },
+        probeEngineStaleness,
+        requestRestart,
+        sleep: async () => {},
+        log: (m) => logs.push(m),
+      };
+
+      const res = await runDaemon(deps, {
+        concurrency: 1,
+        once: false,
+        isSelfHost: false,
+        autoRestartOnStaleEngine: true,
+        maxIdlePolls: 1,
+      });
+
+      expect(probeEngineStaleness).toHaveBeenCalledTimes(1);
+      expect(requestRestart).not.toHaveBeenCalled();
+      expect(res.stoppedReason).toBe('idle_timeout');
+      expect(logs.some((m) => m.toLowerCase().includes('staleness probe') || m.toLowerCase().includes('probe'))).toBe(true);
+    });
+  });
+
+  describe('merged-fix end-to-end propagation (Task 10; #598 TI-1 HP1/HP2/HP3)', () => {
+    // Reuses the same e2e seams as the refreshEngineSource/probeEngineStaleness
+    // describes above (real git fixture + fake-build-command seam): a bare
+    // "origin" remote plus a working clone, and a `fakeRebuild` that stands in
+    // for the heavy `npm run build` step by making "rebuild" a pure function of
+    // the checked-out engine-source file (so a docs-only advance yields a
+    // byte-identical dist/content-hash while an engine-source advance yields a
+    // different one — the same behavior `publish-engine.mjs`'s content-hash
+    // versioning produces, without paying for a real tsup build per test).
+
+    async function initGitRepo(): Promise<{ dir: string; originDir: string; tmpBase: string }> {
+      const tmpBase = await mkdtemp(join(tmpdir(), 'e2e-propagation-'));
+      const dir = join(tmpBase, 'work');
+      const originDir = join(tmpBase, 'origin.git');
+      await mkdir(dir, { recursive: true });
+      await mkdir(originDir, { recursive: true });
+      await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
+      await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });
+      await mkdir(join(dir, 'src'), { recursive: true });
+      await writeFile(join(dir, 'src', 'engine-entry.txt'), 'v1\n');
+      await writeFile(join(dir, 'README.md'), 'init\n');
+      await execFile('git', ['add', '.'], { cwd: dir });
+      await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+      await execFile('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: dir });
+      return { dir, originDir, tmpBase };
+    }
+
+    /** Simulates a merged PR landing on origin/main without touching `dir`
+     * (which stays behind — the incident this feature fixes). */
+    async function advanceOrigin(
+      originDir: string,
+      tmpBase: string,
+      changeKind: 'engine' | 'docs',
+    ): Promise<string> {
+      const otherDir = join(tmpBase, `other-${changeKind}`);
+      await execFile('git', ['clone', '-q', originDir, otherDir]);
+      await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: otherDir });
+      await execFile('git', ['config', 'user.name', 'Test'], { cwd: otherDir });
+      if (changeKind === 'engine') {
+        await writeFile(join(otherDir, 'src', 'engine-entry.txt'), 'v2 — merged engine fix\n');
+      } else {
+        await writeFile(join(otherDir, 'README.md'), 'docs update\n');
+      }
+      await execFile('git', ['add', '.'], { cwd: otherDir });
+      await execFile(
+        'git',
+        ['commit', '-q', '-m', changeKind === 'engine' ? 'fix: engine bug' : 'docs: update'],
+        { cwd: otherDir },
+      );
+      await execFile('git', ['push', '-q', 'origin', 'main'], { cwd: otherDir });
+      const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: otherDir });
+      return stdout.trim();
+    }
+
+    /** Fake build-command seam: "publish" is standing in for
+     * publish-engine.mjs's content-hash-stamped-version behavior — the
+     * published dist is a pure function of the checked-out engine source, so
+     * an engine-source advance produces a NEW version/content-hash and a
+     * docs-only advance reproduces the SAME one. */
+    async function fakePublish(dir: string, distPath: string): Promise<void> {
+      const content = await readFile(join(dir, 'src', 'engine-entry.txt'), 'utf-8').catch(() => '');
+      await mkdir(dirname(distPath), { recursive: true });
+      await writeFile(distPath, content, 'utf-8');
+    }
+
+    async function headSha(dir: string): Promise<string> {
+      const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: dir });
+      return stdout.trim();
+    }
+
+    it('Scenario A (HP1/HP2): behind-origin engine-source advance -> quiescent fast-forward "advanced" -> publish stamps the merge SHA -> checker reports "stale" -> requestRestart fires', async () => {
+      const { dir, originDir, tmpBase } = await initGitRepo();
+      try {
+        const distPath = join(tmpBase, 'dist', 'index.js');
+        await fakePublish(dir, distPath); // v1: identity currently loaded by the running daemon
+        const capturedIdentity = await captureEngineIdentity(distPath);
+        const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+
+        const mergeSha = await advanceOrigin(originDir, tmpBase, 'engine');
+
+        let ffOutcome: any;
+        const requestRestart = vi.fn(async () => ({ fired: true }));
+        const deps = {
+          discoverBacklog: async () => [{ slug: 'pending' }],
+          runFeature: async () => {
+            throw new Error('must never dispatch: the engine is stale before this item runs');
+          },
+          sleep: async () => {},
+          staleEngineChecker: checker,
+          requestRestart,
+          refreshEngineSource: async () => {
+            ffOutcome = await fastForwardRoot(dir);
+            return ffOutcome;
+          },
+          rebuildEngine: async () => fakePublish(dir, distPath),
+        } as unknown as DaemonDeps;
+
+        await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        });
+
+        // ff outcome: advanced, at the merge commit.
+        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: mergeSha }));
+        expect(await headSha(dir)).toBe(mergeSha);
+
+        // Publish flips to a new (content-hash) version stamped at the merge SHA.
+        const publishedIdentity = await captureEngineIdentity(distPath);
+        expect(publishedIdentity).not.toBe(capturedIdentity);
+
+        // Checker sees the drift -> stale -> restart requested.
+        expect(checker.check()).toBe('stale');
+        expect(requestRestart).toHaveBeenCalledTimes(1);
+      } finally {
+        await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
+    it('Scenario B (HP3): docs-only advance -> publish content-unchanged (same identity) -> no restart invoked', async () => {
+      const { dir, originDir, tmpBase } = await initGitRepo();
+      try {
+        const distPath = join(tmpBase, 'dist', 'index.js');
+        await fakePublish(dir, distPath);
+        const capturedIdentity = await captureEngineIdentity(distPath);
+        const checker = createStaleEngineChecker(capturedIdentity as string, distPath);
+
+        const docsMergeSha = await advanceOrigin(originDir, tmpBase, 'docs');
+
+        let dispatched = false;
+        let ffOutcome: any;
+        const requestRestart = vi.fn(async () => ({ fired: true }));
+        const deps = {
+          discoverBacklog: async () => (dispatched ? [] : [{ slug: 'pending' }]),
+          runFeature: async (item: { slug: string }) => {
+            dispatched = true;
+            return { slug: item.slug, status: 'done' };
+          },
+          sleep: async () => {},
+          staleEngineChecker: checker,
+          requestRestart,
+          refreshEngineSource: async () => {
+            ffOutcome = await fastForwardRoot(dir);
+            return ffOutcome;
+          },
+          rebuildEngine: async () => fakePublish(dir, distPath),
+        } as unknown as DaemonDeps;
+
+        await runDaemon(deps, {
+          concurrency: 1,
+          once: false,
+          maxIdlePolls: 0,
+          isSelfHost: true,
+          autoRestartOnStaleEngine: true,
+        });
+
+        expect(ffOutcome).toEqual(expect.objectContaining({ status: 'advanced', originHead: docsMergeSha }));
+        expect(await headSha(dir)).toBe(docsMergeSha);
+
+        // Docs-only advance: publish reproduces the SAME content-hash identity.
+        const publishedIdentity = await captureEngineIdentity(distPath);
+        expect(publishedIdentity).toBe(capturedIdentity);
+
+        expect(checker.check()).toBe('current');
+        expect(dispatched).toBe(true); // engine wasn't stale, feature ran
+        expect(requestRestart).not.toHaveBeenCalled();
+      } finally {
+        await rm(tmpBase, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+  });
+
   describe('real tmux: session survives, new pid, marker consumed, hyphen marker untouched', () => {
     it(
       'session-hosted stale-engine restart never leaves the daemon stopped',
@@ -320,8 +742,7 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
             mockLog,
             mockLock,
             mockProcess,
-            // @ts-expect-error — 5th param does not exist yet (Task 4, RED)
-            { relink: relinkStub, triggerSelfRestart },
+              { relink: relinkStub, triggerSelfRestart },
           );
 
           // Force the stale verdict: the requester is invoked as the daemon's
@@ -453,9 +874,9 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
           expect(newPid).not.toBeNull();
           expect(newPid).not.toBe(prePid);
 
-          // 4. Verify steady-state after respawn
-          // Give the old process a moment to clean up
-          await new Promise((r) => setTimeout(r, 500));
+          // 4. Verify steady-state after respawn. Proceed as soon as the
+          // predecessor is gone instead of paying a fixed wall-clock delay.
+          await waitFor(() => !isProcessAlive(prePid), 3000);
 
           // 4a. Verify session is still alive (never stopped)
           expect(await hasSession(sessionName)).toBe(true);
@@ -490,330 +911,4 @@ describe('daemon-stale-respawn-e2e — #353 capstone (TR-2/TR-3/TR-4)', () => {
     );
   });
 
-  describe('real-process loser smoke (kill-switch-guarded) — Task 16', () => {
-    it(
-      'start owner daemon, launch loser daemon against same repo, loser exits cleanly, owner untouched, no leaked processes',
-      async () => {
-        // Kill-switch guard: respect AI_CONDUCTOR_NO_REAL_EXEC to allow
-        // disabling real process execution in certain environments
-        if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
-          return; // Skip safely
-        }
-
-        // tmux is required for session-hosted daemon mode
-        if (!(await tmuxInstalled())) {
-          return; // Skip cleanly — no tmux on PATH
-        }
-
-        const suffix = randomBytes(4).toString('hex');
-        const repoPath = await mkdtemp(join(tmpdir(), 'daemon-loser-smoke-'));
-        let ownerProcess: ChildProcess | null = null;
-        let loserProcess: ChildProcess | null = null;
-
-        try {
-          // Construct the path to the conductor CLI entry point.
-          // The test file is at src/conductor/test/engine/, and the CLI is at src/conductor/src/index.ts
-          const __dirname = dirname(fileURLToPath(import.meta.url));
-          const conductorSrcPath = join(__dirname, '..', '..', 'src', 'index.ts');
-
-          // Start owner daemon (should acquire the lock and run continuously)
-          // Using tsx to run the TypeScript CLI entry point
-          ownerProcess = spawn('npx', ['tsx', conductorSrcPath, 'daemon', '--continuous'], {
-            cwd: repoPath,
-            detached: false,
-            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
-            // pipe would wedge the daemon once 64KB of output buffers.
-            stdio: ['ignore', 'ignore', 'ignore'],
-          });
-
-          const ownerPid = ownerProcess.pid;
-          expect(ownerPid).toBeDefined();
-          expect(ownerPid! > 0).toBe(true);
-
-          // Wait for owner to establish the lock and be running
-          await waitFor(() => isProcessAlive(ownerPid!), 3000);
-          expect(isProcessAlive(ownerPid!)).toBe(true);
-
-          // Give owner time to fully initialize the lock
-          await new Promise((r) => setTimeout(r, 500));
-
-          // Launch loser daemon against the same repo (should lose lock and exit)
-          loserProcess = spawn('npx', ['tsx', conductorSrcPath, 'daemon'], {
-            cwd: repoPath,
-            detached: false,
-            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
-            // pipe would wedge the daemon once 64KB of output buffers.
-            stdio: ['ignore', 'ignore', 'ignore'],
-          });
-
-          const loserPid = loserProcess.pid;
-          expect(loserPid).toBeDefined();
-          expect(loserPid! > 0).toBe(true);
-
-          // Verify loser exits quickly (within bounded timeout)
-          await waitForProcessExit(loserProcess, 5000);
-          expect(isProcessAlive(loserPid!)).toBe(false);
-
-          // Verify owner is still alive after loser exited
-          expect(isProcessAlive(ownerPid!)).toBe(true);
-
-          // Clean up: kill owner
-          ownerProcess.kill();
-          await waitForProcessExit(ownerProcess, 2000).catch(() => {
-            // If graceful kill doesn't work, force kill
-            if (ownerProcess && ownerProcess.pid) {
-              process.kill(ownerProcess.pid, 'SIGKILL');
-            }
-          });
-
-          // Verify owner is now dead
-          expect(isProcessAlive(ownerPid!)).toBe(false);
-        } finally {
-          // Cleanup: kill any remaining processes
-          if (ownerProcess && ownerProcess.pid && isProcessAlive(ownerProcess.pid)) {
-            try {
-              process.kill(ownerProcess.pid, 'SIGKILL');
-            } catch {
-              // Already dead
-            }
-          }
-          if (loserProcess && loserProcess.pid && isProcessAlive(loserProcess.pid)) {
-            try {
-              process.kill(loserProcess.pid, 'SIGKILL');
-            } catch {
-              // Already dead
-            }
-          }
-
-          // Cleanup temp directory
-          await rm(repoPath, { recursive: true, force: true });
-        }
-      },
-      30_000, // 30 second timeout for real process test
-    );
-  });
-
-  describe('negative paths: burst respawns, forced-loser, teardown (#400 Task 18)', () => {
-    it(
-      'E2E negative: burst respawns never exceed 2 generations, settle at 1',
-      async () => {
-        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
-
-        const suffix = randomBytes(4).toString('hex');
-        const name = `cc-daemon-burst-${suffix}`;
-        const cwd = await mkdtemp(join(tmpdir(), 'burst-respawn-'));
-        const daemonDir = await mkdtemp(join(tmpdir(), 'burst-respawn-dir-'));
-
-        const bootCmd = 'bash -c "echo DAEMON_$$; sleep 30"';
-
-        const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-
-        function countDaemonLines(): number {
-          try {
-            const result = defaultTmuxRunner(['capture-pane', '-p', '-S', '-', '-t', `=${name}:`], {
-              inherit: false,
-            });
-            if (result.code === 0) {
-              return (result.stdout.match(/DAEMON_/g) || []).length;
-            }
-          } catch {
-            // Silently ignore errors
-          }
-          return 0;
-        }
-
-        try {
-          // Seed session with remain-on-exit
-          await newDetachedSession(name, bootCmd, cwd);
-          await setRemainOnExit(name);
-
-          // Trigger repeated stale conditions (via restart marker)
-          const markerDir = join(daemonDir, '.daemon');
-          await mkdir(markerDir, { recursive: true });
-
-          // Write restart marker multiple times to simulate repeated restarts
-          for (let i = 0; i < 5; i++) {
-            const markerPath = join(markerDir, 'RESTART_PENDING');
-            writeFileSync(markerPath, JSON.stringify({ reason: 'stale-engine' }), 'utf-8');
-            await sleep(200);
-          }
-
-          // Sample process count repeatedly
-          const samples: number[] = [];
-          for (let i = 0; i < 10; i++) {
-            samples.push(countDaemonLines());
-            await sleep(500);
-          }
-
-          // Assertions: never exceed 2 generations, settle at 1
-          const maxCount = Math.max(...samples);
-          expect(maxCount).toBeLessThanOrEqual(2);
-          expect(samples[samples.length - 1]).toBeLessThanOrEqual(2); // Final count
-        } finally {
-          await killSession(name);
-          await rm(cwd, { recursive: true, force: true });
-          await rm(daemonDir, { recursive: true, force: true });
-          if (prevNoRealExec === undefined) {
-            delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-          } else {
-            process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
-          }
-        }
-      },
-      30_000,
-    );
-
-    it(
-      'E2E negative: forced-loser scenario (predecessor held) → loser exits, count returns to 1, no resident loser pid',
-      async () => {
-        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
-
-        if (process.env.AI_CONDUCTOR_NO_REAL_EXEC) {
-          return; // Skip safely — real process execution disabled
-        }
-
-        const suffix = randomBytes(4).toString('hex');
-        const repoPath = await mkdtemp(join(tmpdir(), 'forced-loser-'));
-        let ownerProcess: ChildProcess | null = null;
-        let loserProcess: ChildProcess | null = null;
-        const loserPids: number[] = [];
-
-        try {
-          // Start owner daemon first
-          ownerProcess = spawn('npx', ['ts-node', '-O', '{"module":"esnext"}', './src/conductor/bin/index.ts', 'daemon', '--continuous'], {
-            cwd: repoPath,
-            detached: false,
-            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
-            // pipe would wedge the daemon once 64KB of output buffers.
-            stdio: ['ignore', 'ignore', 'ignore'],
-          });
-
-          const ownerPid = ownerProcess.pid;
-          expect(ownerPid).toBeDefined();
-
-          // Wait for owner to establish lock
-          await waitFor(() => isProcessAlive(ownerPid!), 3000);
-          await sleep(500);
-
-          // Artificially hold the predecessor lock to force loser scenario
-          const lockFile = join(repoPath, '.daemon', 'lock');
-          await mkdir(dirname(lockFile), { recursive: true });
-          writeFileSync(lockFile, JSON.stringify({ pid: ownerPid, ts: Date.now() }), 'utf-8');
-
-          // Launch loser daemon against same repo (should lose due to held lock)
-          loserProcess = spawn('npx', ['ts-node', '-O', '{"module":"esnext"}', './src/conductor/bin/index.ts', 'daemon'], {
-            cwd: repoPath,
-            detached: false,
-            // 'ignore' (not 'pipe'): nothing ever drains these streams, so a
-            // pipe would wedge the daemon once 64KB of output buffers.
-            stdio: ['ignore', 'ignore', 'ignore'],
-          });
-
-          const loserPid = loserProcess.pid;
-          expect(loserPid).toBeDefined();
-          loserPids.push(loserPid!);
-
-          // Loser should exit quickly
-          await waitForProcessExit(loserProcess, 5000);
-          expect(isProcessAlive(loserPid!)).toBe(false);
-
-          // Owner should still be alive
-          expect(isProcessAlive(ownerPid!)).toBe(true);
-
-          // Kill owner cleanly
-          ownerProcess.kill();
-          await waitForProcessExit(ownerProcess, 2000).catch(() => {
-            if (ownerProcess && ownerProcess.pid) {
-              process.kill(ownerProcess.pid, 'SIGKILL');
-            }
-          });
-
-          expect(isProcessAlive(ownerPid!)).toBe(false);
-        } finally {
-          // Cleanup
-          if (ownerProcess && ownerProcess.pid && isProcessAlive(ownerProcess.pid)) {
-            try {
-              process.kill(ownerProcess.pid, 'SIGKILL');
-            } catch {
-              // Already dead
-            }
-          }
-          if (loserProcess && loserProcess.pid && isProcessAlive(loserProcess.pid)) {
-            try {
-              process.kill(loserProcess.pid, 'SIGKILL');
-            } catch {
-              // Already dead
-            }
-          }
-
-          // Verify no loser pids are still resident
-          for (const loserPid of loserPids) {
-            expect(isProcessAlive(loserPid)).toBe(false);
-          }
-
-          await rm(repoPath, { recursive: true, force: true });
-        }
-      },
-      30_000,
-    );
-
-    it(
-      'E2E negative: teardown → tmux sessions identical before/after, no leaked cc-daemon-* sessions',
-      async () => {
-        if (!(await tmuxInstalled())) return; // skip cleanly — no tmux on PATH
-
-        const prevNoRealExec = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-        delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-
-        // Snapshot sessions before test
-        const sessionsBefore = getSessionList().filter((s) => s.includes('cc-daemon'));
-
-        const suffix = randomBytes(4).toString('hex');
-        const name = `cc-daemon-teardown-${suffix}`;
-        const cwd = await mkdtemp(join(tmpdir(), 'teardown-test-'));
-        const daemonDir = await mkdtemp(join(tmpdir(), 'teardown-daemon-'));
-
-        const bootCmd = 'bash -c "while true; do echo BOOT; sleep 1; done"';
-
-        try {
-          // Create and run a simple test session
-          await newDetachedSession(name, bootCmd, cwd);
-          await setRemainOnExit(name);
-          await waitFor(() => /BOOT/.test(defaultTmuxRunner(['capture-pane', '-p', '-t', `=${name}:`], { inherit: false }).stdout || ''), 2000);
-
-          // Verify session exists
-          expect(await hasSession(name)).toBe(true);
-
-          // Now cleanup
-          await killSession(name);
-          await sleep(100);
-
-          // Verify session is gone
-          expect(await hasSession(name)).toBe(false);
-        } finally {
-          // Cleanup resources
-          try {
-            await killSession(name);
-          } catch {
-            // Already killed or doesn't exist
-          }
-          await rm(cwd, { recursive: true, force: true });
-          await rm(daemonDir, { recursive: true, force: true });
-          if (prevNoRealExec === undefined) {
-            delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
-          } else {
-            process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevNoRealExec;
-          }
-        }
-
-        // Snapshot sessions after test
-        const sessionsAfter = getSessionList().filter((s) => s.includes('cc-daemon'));
-
-        // Verify no new leaked sessions
-        expect(sessionsAfter).toEqual(sessionsBefore);
-      },
-      20_000,
-    );
-  });
 });

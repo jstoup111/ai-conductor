@@ -1,10 +1,10 @@
 /**
  * Phase 6 — daemon-loop wiring of the self-host guardrail bundle.
  *
- * These drive a real Conductor with an injected SPY guardrail bundle (relink /
- * sandbox / version+release gates) and a fake step runner, proving that for a
+ * These drive a real Conductor with an injected SPY guardrail bundle (sandbox /
+ * version+release gates) and a fake step runner, proving that for a
  * self-build (`daemon && selfHost`):
- *   - relink runs ONCE before the first build, then the sandbox is provisioned;
+ *   - no operator-global relink runs; the sandbox is provisioned directly;
  *   - `process.env.CLAUDE_CONFIG_DIR` is scoped to the sandbox DURING the build
  *     step and restored afterward — no bleed to later steps (e.g. finish), on
  *     both the pass and the throw branch;
@@ -37,6 +37,10 @@ import { Conductor } from '../../../src/engine/conductor.js';
 import type { StepRunner } from '../../../src/engine/conductor.js';
 import type { SelfHostGuardrails } from '../../../src/engine/self-host/wiring.js';
 import type { SandboxBuildEnv } from '../../../src/engine/self-host/sandbox-build-env.js';
+import {
+  runReleaseArtifactGate,
+  type ReleaseGateOptions,
+} from '../../../src/engine/self-host/release-gate.js';
 
 const NOOP_ESCALATION = async () => ({});
 const SANDBOX_DIR = '/tmp/harness-selfbuild-TESTDIR';
@@ -63,7 +67,15 @@ function preBuildDoneState(): ConductState {
     architecture_diagram: 'done',
     architecture_review: 'done',
     acceptance_specs: 'done',
-    complexity_tier: 'M',
+    test_suite: 'done',
+    build_review: 'done',
+    wiring_check: 'done',
+    manual_test: 'done',
+    prd_audit: 'done',
+    architecture_review_as_built: 'done',
+    retro: 'done',
+    rebase: 'done',
+    complexity_tier: 'S',
     track: 'technical', // no PRD/prd_audit — keeps the SHIP tail minimal
     feature_desc: 'self-build-feat',
   } as ConductState;
@@ -83,7 +95,7 @@ function makeGuardrails(overrides: Partial<SelfHostGuardrails> = {}) {
       status: 'ok' as const,
       root: '/installed/harness',
     })),
-    relink: vi.fn(async () => {}),
+    relink: vi.fn(async () => {}), // retained seam must stay unused by self-host builds
     provisionSandbox: vi.fn(async () => sandbox),
     versionGate: vi.fn(async () => ({ ok: true as const })),
     releaseGate: vi.fn(async () => ({ ok: true as const })),
@@ -118,6 +130,36 @@ describe('self-host wiring — default bundle members forward to the real primit
       resolveInstalledHarnessRoot,
     );
   });
+
+  it('releaseGate is exposed on the production bundle and forwards to the real composed gate', async () => {
+    const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
+    expect(defaultSelfHostGuardrails.releaseGate).toBe(runReleaseArtifactGate);
+  });
+
+  it('exposes the candidate-aware provider-home seam without replacing the legacy sandbox seam', async () => {
+    const { defaultSelfHostGuardrails } = await import('../../../src/engine/self-host/wiring.js');
+    expect(typeof defaultSelfHostGuardrails.provisionProviderHome).toBe('function');
+    expect(typeof defaultSelfHostGuardrails.provisionSandbox).toBe('function');
+  });
+
+  it('keeps Codex self-host setup out of the #904 skill and AGENTS.md surface', async () => {
+    const conductorSrc = join(
+      dirname(fileURLToPath(import.meta.url)),
+      '..',
+      '..',
+      '..',
+      'src',
+      'engine',
+      'conductor.ts',
+    );
+    const text = await readFile(conductorSrc, 'utf-8');
+    const start = text.indexOf('runSelfBuildDispatch');
+    const end = text.indexOf('async run(): Promise<void>');
+
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(text.slice(start, end)).not.toMatch(/\.agents\/skills|AGENTS\.md|discover(?:ed)?Skills/i);
+  });
 });
 
 describe('self-host Phase 6 — daemon-loop wiring', () => {
@@ -144,8 +186,9 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   function selfBuildConductor(
     guardrails: SelfHostGuardrails,
     runner: StepRunner,
-    opts: { selfHost?: boolean; daemon?: boolean } = {},
+    opts: { selfHost?: boolean; daemon?: boolean; config?: Record<string, unknown> } = {},
   ): Conductor {
+    const configuredSteps = (opts.config?.steps ?? {}) as Record<string, unknown>;
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -158,6 +201,13 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
+      config: {
+        ...opts.config,
+        steps: {
+          manual_test: { disable: true },
+          ...configuredSteps,
+        },
+      } as never,
     });
   }
 
@@ -173,16 +223,12 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
 
     await selfBuildConductor(guardrails, runner).run();
 
-    // Bundle members all fired.
-    expect(guardrails.relink).toHaveBeenCalledTimes(1);
+    // Self-host provisioning never repoints the operator-global skill catalog.
+    expect(guardrails.relink).not.toHaveBeenCalled();
     expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
     expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
     expect(guardrails.releaseGate).toHaveBeenCalledTimes(1);
 
-    // relink before provisionSandbox (globals refreshed before the sandbox links).
-    const relinkOrder = (guardrails.relink as any).mock.invocationCallOrder[0];
-    const provisionOrder = (guardrails.provisionSandbox as any).mock.invocationCallOrder[0];
-    expect(relinkOrder).toBeLessThan(provisionOrder);
 
     // Env scoped to the build step ONLY — sandbox during build, original after.
     const build = seen.find((s) => s.step === 'build');
@@ -208,6 +254,53 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
     expect(completed).toEqual(['feature_complete']);
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
+  });
+
+  it('empty [Unreleased] passes through the real release gate and dispatches finish', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const releaseGate = vi.fn(async (opts: ReleaseGateOptions) =>
+      runReleaseArtifactGate({
+        ...opts,
+        readText: async () => `## [Unreleased]\n\n## [0.99.18]\n- old\n`,
+        changedFiles: async () => [
+          { status: 'M', path: 'src/conductor/src/engine/self-host/release-gate.ts' },
+        ],
+        access: async () => {},
+        exec: async () => ({ code: 0, timedOut: false }),
+      }),
+    );
+    const { guardrails } = makeGuardrails({ releaseGate });
+    const { runner, seen } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner).run();
+
+    expect(releaseGate).toHaveBeenCalledTimes(1);
+    expect(seen.find((s) => s.step === 'finish')).toBeDefined();
+    expect(await exists(join(dir, '.pipeline', 'HALT'))).toBe(false);
+  });
+
+  it('selecting Codex skips Claude-only self-build preparation while preserving shared release gates', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const { preflightBuildAuthCheck } = await import(
+      '../../../src/engine/self-host/build-auth-preflight.js'
+    );
+    vi.mocked(preflightBuildAuthCheck).mockClear();
+    const { guardrails, teardown } = makeGuardrails();
+    const { runner, seen } = recordingRunner();
+
+    await selfBuildConductor(guardrails, runner, {
+      config: { steps: { build: { llm_provider: 'codex' } } },
+    }).run();
+
+    expect(guardrails.relink).not.toHaveBeenCalled();
+    expect(preflightBuildAuthCheck).not.toHaveBeenCalled();
+    expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
+    expect(teardown).not.toHaveBeenCalled();
+    expect(seen.find((entry) => entry.step === 'build')?.configDir).toBeUndefined();
+    expect(process.env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+    expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
+    expect(guardrails.releaseGate).toHaveBeenCalledTimes(1);
+    expect(seen.find((entry) => entry.step === 'build')).toBeDefined();
   });
 
   it('passes the INSTALLED root (not the detection root) to provisionSandbox (#363 / TR-4)', async () => {
@@ -305,7 +398,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
   });
 
-  it('a relink failure aborts BEFORE any build dispatch (no sandbox, no build)', async () => {
+  it('does not invoke a failing global relink collaborator during a self-host build', async () => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails, teardown } = makeGuardrails({
       relink: vi.fn(async () => {
@@ -319,11 +412,12 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
 
     await selfBuildConductor(guardrails, runner).run();
 
-    expect(guardrails.provisionSandbox).not.toHaveBeenCalled();
-    expect(seen.find((s) => s.step === 'build')).toBeUndefined(); // build never dispatched
-    expect(teardown).not.toHaveBeenCalled();
+    expect(guardrails.relink).not.toHaveBeenCalled();
+    expect(guardrails.provisionSandbox).toHaveBeenCalledTimes(1);
+    expect(seen.find((s) => s.step === 'build')).toBeDefined();
+    expect(teardown).toHaveBeenCalled();
     expect(process.env.CLAUDE_CONFIG_DIR).toBeUndefined();
-    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(true);
+    expect(await exists(join(dir, '.pipeline/HALT'))).toBe(false);
   });
 
   it('a failing finish gate parks the feature without dispatching finish', async () => {
@@ -374,7 +468,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(completed).toEqual(['feature_complete']);
   });
 
-  it('the sandbox toggle is honored: sandbox_build_env=false skips the sandbox but keeps relink', async () => {
+  it('the sandbox toggle denies unsafe work before any global relink', async () => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails, teardown } = makeGuardrails();
     const { runner, seen } = recordingRunner();
@@ -394,13 +488,12 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       config: { harness_self_host: { sandbox_build_env: false } },
     }).run();
 
-    expect(guardrails.relink).toHaveBeenCalledTimes(1); // relink still runs
+    expect(guardrails.relink).not.toHaveBeenCalled();
     expect(guardrails.provisionSandbox).not.toHaveBeenCalled(); // sandbox skipped
     expect(teardown).not.toHaveBeenCalled();
     expect(seen.find((s) => s.step === 'build')?.configDir).toBeUndefined(); // env untouched
-    // Finish gates still run (their toggles default on).
-    expect(guardrails.versionGate).toHaveBeenCalledTimes(1);
-    expect(guardrails.releaseGate).toHaveBeenCalledTimes(1);
+    expect(guardrails.versionGate).not.toHaveBeenCalled();
+    expect(guardrails.releaseGate).not.toHaveBeenCalled();
   });
 });
 

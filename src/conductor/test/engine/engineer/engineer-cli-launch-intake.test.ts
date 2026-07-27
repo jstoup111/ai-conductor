@@ -139,6 +139,8 @@ function baseOpts(extra: Partial<DispatchEngineerOpts>): DispatchEngineerOpts {
   return { registryPath, engineerDir, print: () => {}, printErr: () => {}, ...extra };
 }
 
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 const envelope = (sourceRef: string, text: string) =>
   parseEnvelope({ id: sourceRef, source: 'github-issues', sourceRef, text, status: 'pending', receivedAt: '2026-06-27T00:00:00.000Z' });
 
@@ -376,6 +378,7 @@ describe('write-back via --source-ref', () => {
     const repoPath = await makeGitRepo('target-repo', workDir);
     await writeRegistry([{ name: 'target-repo', path: repoPath }]);
     const wt = await createEngineerWorktree(repoPath, idea);
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await writeDocsArtifacts(wt.worktreePath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'target-repo#7' });
@@ -395,6 +398,7 @@ describe('write-back via --source-ref', () => {
     const repoPath = await makeGitRepo('target-repo', workDir);
     await writeRegistry([{ name: 'target-repo', path: repoPath, remote: 'https://example.invalid/repo.git' }]);
     const wt = await createEngineerWorktree(repoPath, idea);
+    await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     await writeDocsArtifacts(wt.worktreePath, idea);
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     await ledger.record({ source: 'github-issues', sourceRef: 'target-repo#7' });
@@ -410,7 +414,7 @@ describe('write-back via --source-ref', () => {
 
     const code = await dispatchEngineer(
       { kind: 'handoff', project: 'target-repo', branch, worktree: wt.worktreePath, sourceRef: 'target-repo#7' },
-      baseOpts({ gh, ensureRunningLaunch: () => {} }),
+      baseOpts({ gh, git: noOpGit, ensureRunningLaunch: () => {} }),
     );
     expect(code).toBe(0);
     // Done comment with the PR URL + label applied.

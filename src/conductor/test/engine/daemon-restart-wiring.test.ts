@@ -148,6 +148,7 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
   const baseCmd: DaemonCommandOptions = {
     concurrency: 1,
     continuous: true,
+    showCompleted: false,
   };
 
   it('includes a respawnPane-backed triggerSelfRestart when hasSession resolves true', async () => {
@@ -167,6 +168,7 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
       },
       respawnPane: async (name: string) => {
         respawnPaneCalls.push(name);
+        return { scrollbackPreserved: true };
       },
     });
 
@@ -193,6 +195,7 @@ describe('FR-9 — buildDaemonModeOptions (real index.ts dispatch logic)', () =>
       hasSession: async () => false,
       respawnPane: async () => {
         respawnPaneCalled = true;
+        return { scrollbackPreserved: true };
       },
     });
 

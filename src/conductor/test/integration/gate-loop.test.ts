@@ -1,17 +1,39 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, access, utimes } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 
-vi.mock('execa', () => ({ execa: vi.fn() }));
-import type { ConductState } from '../../src/types/index.js';
+vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
+
+// Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): spy on
+// `runScopeFailDisposition` (the Task 7/8 disposition + HALT-bound
+// orchestrator conductor.ts now calls before rework routing) so the "wired
+// before rework routing" tests can assert it actually runs, without needing
+// a real git remote in this fixture's throwaway repo. Resolves
+// 'kicked-to-build' by default — the classic genuine-FAIL routing this
+// suite pins must stay unchanged.
+const runScopeFailDispositionMock = vi.fn(
+  async (_opts: import('../../src/engine/build-review-disposition.js').RunScopeFailDispositionOpts) =>
+    ({ kind: 'kicked-to-build' as const }),
+);
+vi.mock('../../src/engine/build-review-disposition.js', async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import('../../src/engine/build-review-disposition.js')>();
+  return {
+    ...actual,
+    runScopeFailDisposition: (...args: unknown[]) =>
+      runScopeFailDispositionMock(...(args as [import('../../src/engine/build-review-disposition.js').RunScopeFailDispositionOpts])),
+  };
+});
+import type { ConductState, StepName } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
@@ -36,10 +58,20 @@ const FRONT_DONE: ConductState = {
   stories: 'done',
   conflict_check: 'skipped',
   plan: 'done',
+  coherence_check: 'done',
   architecture_diagram: 'skipped',
   architecture_review: 'skipped',
   acceptance_specs: 'skipped',
 };
+
+const validShipmentEvidence = async () => ({
+  kind: 'valid' as const,
+  slug: 'test-feature',
+  pr: 'https://example.com/pr/1',
+  recordPath: '.docs/shipped/test-feature.md',
+  hash: 'verified',
+  commit: 'verified',
+});
 
 describe('integration/gate-loop', () => {
   let dir: string;
@@ -153,6 +185,9 @@ describe('integration/gate-loop', () => {
       );
     } else if (step === 'finish') {
       await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
+    } else if (step === 'coherence_check') {
+      await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+      await writeFile(join(dir, '.docs/coherence/p.md'), '| Row |\n|---|\n| x |\n');
     }
     return { success: true };
   }
@@ -310,13 +345,128 @@ describe('integration/gate-loop', () => {
       projectRoot: dir,
       mode: 'auto',
       config,
-      fromStep: 'lint',
+      fromStep: 'lint' as StepName,
     });
     await conductor.run();
 
     expect(ran).toContain('lint'); // the custom step was dispatched
     const finalState = JSON.parse(await readFile(statePath, 'utf-8'));
     expect(finalState.lint).toBe('done');
+  });
+
+  it('advances past a custom completion gate only with fresh attempt evidence', async () => {
+    const customStep = 'maintain-documentation' as StepName;
+    const marker = '.pipeline/maintain-documentation-pass';
+    const config: HarnessConfig = {
+      steps: {
+        'maintain-documentation': {
+          after: 'rebase',
+          skill: '.agents/skills/maintain-documentation/SKILL.md',
+          enforcement: 'gating',
+          completion_artifact: marker,
+        },
+      },
+    };
+    const runScenario = async (evidence: 'fresh' | 'missing' | 'stale') => {
+      const root = join(dir, evidence);
+      const scenarioStatePath = join(root, 'conduct-state.json');
+      await mkdir(join(root, '.pipeline'), { recursive: true });
+      const initialState: Record<string, string> = {};
+      for (const step of ALL_STEPS) initialState[step.name] = 'done';
+      delete initialState.finish;
+      await writeState(scenarioStatePath, {
+        ...(initialState as unknown as ConductState),
+        // This scenario exercises only the custom marker's attempt freshness
+        // at the finish boundary. On the S/technical policy, every #922
+        // validation member is a valid skip, so it cannot mask that marker
+        // with unrelated validation evidence requirements.
+        complexity_tier: 'S',
+        track: 'technical',
+      });
+      if (evidence === 'stale') {
+        const markerPath = join(root, marker);
+        await writeFile(markerPath, 'PASS\n');
+        const staleTime = new Date(Date.now() - 60_000);
+        await utimes(markerPath, staleTime, staleTime);
+      }
+
+      const ran: StepName[] = [];
+      let halted = false;
+      let stepFailure: string | undefined;
+      const scenarioEvents = new ConductorEventEmitter();
+      scenarioEvents.on('loop_halt', () => {
+        halted = true;
+      });
+      scenarioEvents.on('step_failed', (event) => {
+        if (event.type === 'step_failed' && event.step === customStep) {
+          stepFailure = event.error;
+        }
+      });
+      const runner: StepRunner = {
+        run: async (step) => {
+          ran.push(step);
+          if (step === customStep && evidence === 'fresh') {
+            await writeFile(join(root, marker), 'PASS\n');
+          }
+          if (step === 'finish') {
+            await writeFile(join(root, '.pipeline/finish-choice'), 'keep\n');
+          }
+          return { success: true };
+        },
+      };
+
+      await new Conductor({
+        stateFilePath: scenarioStatePath,
+        stepRunner: runner,
+        events: scenarioEvents,
+        projectRoot: root,
+        verifyArtifacts: true,
+        mode: 'auto',
+        fromStep: customStep,
+        maxRetries: 2,
+        config,
+      }).run();
+
+      return {
+        customRuns: ran.filter((step) => step === customStep).length,
+        finishRuns: ran.filter((step) => step === 'finish').length,
+        halted,
+        stepFailure,
+        done: await access(join(root, '.pipeline/DONE')).then(() => true).catch(() => false),
+      };
+    };
+
+    const results = {
+      fresh: await runScenario('fresh'),
+      missing: await runScenario('missing'),
+      stale: await runScenario('stale'),
+    };
+
+    expect(results).toEqual({
+      fresh: {
+        customRuns: 1,
+        finishRuns: 1,
+        halted: false,
+        stepFailure: undefined,
+        done: true,
+      },
+      missing: {
+        customRuns: 2,
+        finishRuns: 0,
+        halted: true,
+        stepFailure:
+          'Step \'maintain-documentation\' completed but completion check failed: configured completion artifact ".pipeline/maintain-documentation-pass" is missing — maintain-documentation must write it after a passing review',
+        done: false,
+      },
+      stale: {
+        customRuns: 2,
+        finishRuns: 0,
+        halted: true,
+        stepFailure:
+          'Step \'maintain-documentation\' completed but completion check failed: configured completion artifact ".pipeline/maintain-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+        done: false,
+      },
+    });
   });
 
   // ── Front-half amendment kickback (Story: "Front-half amendment kickback
@@ -704,19 +854,48 @@ describe('integration/gate-loop', () => {
     // All front-half steps done; tail steps pending so they run. Start at build.
     const state: Record<string, string> = {};
     for (const s of ALL_STEPS) state[s.name] = 'done';
-    for (const name of ['build', 'manual_test', 'retro', 'finish']) delete state[name];
+    for (const name of [
+      'build',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'finish',
+    ]) delete state[name];
     await writeState(statePath, {
       ...(state as unknown as ConductState),
-      // M tier: S-tier now skips manual_test too (D5), which would collapse
-      // the tail to just build/finish and defeat this test's purpose of
-      // proving every tail step gets a fresh session. M tier keeps
-      // build, manual_test, retro, and finish all running.
+      // Keep the product validation group applicable: its three current
+      // artifacts are written by the runner below before the publication tail.
       complexity_tier: 'M',
+      track: 'product',
     });
 
-    const resetSession = vi.fn(async () => {});
+    const validators: StepName[] = [
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ];
+    const resetValidators: StepName[] = [];
+    let releaseValidatorResets!: () => void;
+    const validatorResetGate = new Promise<void>((resolve) => {
+      releaseValidatorResets = resolve;
+    });
+    const resetSession = vi.fn(async (step?: StepName) => {
+      if (step === undefined || !validators.includes(step)) return;
+      resetValidators.push(step);
+      if (resetValidators.length === validators.length) releaseValidatorResets();
+      // A serial group would deadlock on its first reset here. Releasing only
+      // after all members entered proves the fan-out retains its parallel
+      // session boundaries before any member dispatches.
+      await validatorResetGate;
+    });
+    const ran: StepName[] = [];
     const runner: StepRunner & { resetSession: typeof resetSession } = {
-      run: async () => ({ success: true }),
+      run: async (step) => {
+        if (validators.includes(step)) expect(resetValidators).toHaveLength(validators.length);
+        ran.push(step);
+        return satisfy(step);
+      },
       resetSession,
     };
     const conductor = new Conductor({
@@ -726,12 +905,28 @@ describe('integration/gate-loop', () => {
       projectRoot: dir,
       mode: 'auto',
       fromStep: 'build',
+      config: { validation_concurrency: 3 },
     });
     await conductor.run();
 
-    // build, manual_test, retro, finish all ran (M tier, nothing skipped in
-    // the tail) → one reset each.
-    expect(resetSession).toHaveBeenCalledTimes(4);
+    // build, the three-member product validation group, retro, and finish
+    // each receive one fresh session.
+    expect(ran).toEqual([
+      'build',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'finish',
+    ]);
+    expect(resetSession.mock.calls.map(([step]) => step)).toEqual([
+      'build',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'finish',
+    ]);
   });
 
   describe('manual-test FAIL routing end-to-end with a real repo (#367)', () => {
@@ -768,6 +963,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         fromStep: 'build',
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
     }
 
@@ -1047,8 +1243,10 @@ describe('integration/gate-loop', () => {
       verdicts: Array<{
         verdict: 'FAIL' | 'PASS';
         reasons: string[];
+        findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[] }>;
         rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
       }>,
+      remediationDispositions?: unknown[],
     ): Promise<{
       buildRuns: number;
       retryReasons: string[];
@@ -1069,6 +1267,38 @@ describe('integration/gate-loop', () => {
             if (opts?.retryReason) retryReasons.push(opts.retryReason);
             return satisfy('build');
           }
+          if (step === 'remediate') {
+            if (remediationDispositions) {
+              await mkdir(join(dir, '.pipeline'), { recursive: true });
+              await writeFile(
+                join(dir, '.pipeline/remediation.json'),
+                JSON.stringify({ dispositions: remediationDispositions }),
+              );
+            }
+            return { success: true };
+          }
+          if (step === 'acceptance_specs') {
+            if (opts?.retryReason) retryReasons.push(opts.retryReason);
+            await mkdir(join(dir, 'test/acceptance'), { recursive: true });
+            await writeFile(
+              join(dir, 'test/acceptance/foo.test.ts'),
+              "it('fails until implemented', () => { expect(true).toBe(false); });\n",
+            );
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(
+              join(dir, '.pipeline/acceptance-specs-red.json'),
+              JSON.stringify({
+                command: 'vitest run test/acceptance',
+                targetSpecs: ['test/acceptance/foo.test.ts'],
+                executed: 1,
+                passed: 0,
+                failed: 1,
+                skipped: 0,
+                errors: 0,
+              }),
+            );
+            return { success: true };
+          }
           if (step === 'build_review') {
             const v = verdicts[Math.min(reviewRuns, verdicts.length - 1)];
             reviewRuns++;
@@ -1077,6 +1307,7 @@ describe('integration/gate-loop', () => {
               JSON.stringify({
                 verdict: v.verdict,
                 reasons: v.reasons,
+                findings: v.findings,
                 rubric: v.rubric ?? { tautology: false, scope: false, rootCause: false },
               }),
             );
@@ -1128,6 +1359,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config: reviewFailConfig(),
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
       await conductor.run();
       return { buildRuns, retryReasons, kicks, completed, ran };
@@ -1168,30 +1400,199 @@ describe('integration/gate-loop', () => {
       );
     });
 
-    // Task 6 (#773): a FAIL driven SOLELY by rubric.completeness (all other
-    // rubric items PASS) must flow through this same kickback mechanism —
-    // no new routing code, per Task 5's finding that the predicate treats a
-    // completeness-only FAIL identically to any other rubric-item FAIL.
-    it('FAIL-completeness (rubric.completeness only) kicks back to build with the grader evidence, then PASS converges', async () => {
+    // #989: a FAIL driven by rubric.completeness is no longer assumed to be a
+    // local diff defect — the plan itself may be under-decomposed, a judgement
+    // only remediation can make. The FAIL path now resolves a structured
+    // routing decision (BUILD vs REMEDIATE) and the kickback honors it.
+    it('FAIL-completeness dispatches remediate and kicks back to the remediation target, not unconditionally to build', async () => {
+      const result = await runWithGraderVerdicts(
+        [
+          {
+            verdict: 'FAIL',
+            reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+          },
+          {
+            verdict: 'PASS',
+            reasons: [],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+          },
+        ],
+        [
+          {
+            id: 'build_review:completeness-1',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'declared scope is not covered by the specs',
+            tasks: [{ id: 'rem-1', title: 'cover the negative path' }],
+          },
+        ],
+      );
+
+      expect(result.ran).toContain('remediate');
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'acceptance_specs' });
+      expect(result.kicks).not.toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('cover the negative path');
+      expect(result.completed).toBe(true);
+    });
+
+    it('FAIL-tautology never dispatches remediate (BUILD decision keeps today’s direct kickback)', async () => {
+      const result = await runWithGraderVerdicts(
+        [
+          { verdict: 'FAIL', reasons: ['tautological test padding'] },
+          { verdict: 'PASS', reasons: [] },
+        ],
+        [
+          {
+            id: 'never-read',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'should not be consulted',
+            tasks: [],
+          },
+        ],
+      );
+
+      expect(result.ran).not.toContain('remediate');
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.buildRuns).toBe(2);
+    });
+
+    it('a PASS verdict routes nowhere — no kickback and no remediate dispatch', async () => {
+      const result = await runWithGraderVerdicts(
+        [{ verdict: 'PASS', reasons: [] }],
+        [
+          {
+            id: 'never-read',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'should not be consulted',
+            tasks: [],
+          },
+        ],
+      );
+
+      expect(result.ran).not.toContain('remediate');
+      expect(result.kicks.filter((k) => k.from === 'build_review')).toEqual([]);
+      expect(result.buildRuns).toBe(1);
+      expect(result.completed).toBe(true);
+    });
+
+    it('passes every independent structured finding to the rework retry hint', async () => {
       const result = await runWithGraderVerdicts([
         {
           verdict: 'FAIL',
-          reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
-        },
-        {
-          verdict: 'PASS',
           reasons: [],
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+          findings: {
+            rootCause: ['patched the symptom, not the cause', 'second symptom-only patch'],
+          },
+          rubric: { tautology: false, scope: false, rootCause: true, completeness: false },
         },
+        { verdict: 'PASS', reasons: [] },
       ]);
 
-      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
-      expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
-      expect(result.retryReasons.join('\n')).toContain(
-        'implementation addresses only part of the declared scope',
-      );
+      expect(result.retryReasons.join('\n')).toContain('[rootCause] patched the symptom, not the cause');
+      expect(result.retryReasons.join('\n')).toContain('[rootCause] second symptom-only patch');
       expect(result.completed).toBe(true);
+    });
+  });
+
+  describe('build_review scope-FAIL disposition classification (Task 8)', () => {
+    // conductor.ts wires `runScopeFailDisposition` to run before rework
+    // routing whenever a build_review dispatch assembled base-freshness
+    // evidence, and acts on its result (invalidate-and-regrade / halt /
+    // kicked-to-build). This pins: (a) it runs, (b) with the graded
+    // merge-base and the FAIL verdict's flagged paths, and (c) a
+    // `kicked-to-build` disposition leaves today's kickback-to-build
+    // routing unchanged.
+    function reviewFailConfig() {
+      return { build_review: { enabled: true } };
+    }
+
+    it('runs the disposition orchestrator on a build_review FAIL and leaves kickback-to-build routing unchanged for a kicked-to-build verdict', async () => {
+      runScopeFailDispositionMock.mockClear();
+      await writeState(statePath, { ...FRONT_DONE });
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
+      let reviewRuns = 0;
+      const runner: StepRunner = {
+        run: async (step, _artifacts?: unknown, opts?: { retryReason?: string }) => {
+          if (step === 'build') return satisfy('build');
+          if (step === 'build_review') {
+            const isFail = reviewRuns === 0;
+            reviewRuns++;
+            await writeFile(
+              join(dir, '.pipeline/build-review.json'),
+              JSON.stringify({
+                verdict: isFail ? 'FAIL' : 'PASS',
+                reasons: isFail ? ['diff touches merged-pr.txt which is out of scope'] : [],
+                rubric: { tautology: false, scope: isFail, rootCause: false },
+              }),
+            );
+            // Simulate `runBuildReview` having assembled fresh-base evidence
+            // (Task 4) — required for Task 6's wiring guard to fire.
+            return {
+              success: true,
+              baseFreshness: {
+                mergeBase: 'stalemergesha0',
+                trackingRefSha: 'stalesha0',
+                remoteHeadSha: 'remotesha1',
+                fresh: false,
+              },
+            };
+          }
+          if (step === 'finish') {
+            await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+            const state = JSON.parse(await readFile(statePath, 'utf-8'));
+            state.pr_url = 'https://example.com/pr/1';
+            await writeFile(statePath, JSON.stringify(state));
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify(state));
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      };
+      const kicks: Array<{ from: string; to: string }> = [];
+      events.on('kickback', (e) => {
+        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
+      });
+      let completed = false;
+      events.on('feature_complete', () => {
+        completed = true;
+      });
+      const fakeGit: GitRunner = async (args) =>
+        args.includes('--symbolic-full-name')
+          ? { stdout: 'refs/remotes/origin/feature/x\n' }
+          : { stdout: '' };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        mode: 'auto',
+        daemon: true,
+        fromStep: 'build',
+        maxRetries: 1,
+        config: reviewFailConfig(),
+        git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
+      });
+      await conductor.run();
+
+      // (a)/(b): disposition orchestrator ran, with the graded merge-base
+      // and the flagged path extracted from the FAIL verdict's reasons.
+      expect(runScopeFailDispositionMock).toHaveBeenCalled();
+      const [opts] = runScopeFailDispositionMock.mock.calls[0] as [
+        { gradedBaseSha: string; flaggedPaths: string[] },
+      ];
+      expect(opts.gradedBaseSha).toBe('stalemergesha0');
+      expect(opts.flaggedPaths).toEqual(['merged-pr.txt']);
+
+      // (c): kickback-to-build routing is unchanged today.
+      expect(kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(completed).toBe(true);
     });
   });
 
@@ -1398,6 +1799,7 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config,
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
 
       await conductor.run();
@@ -1550,6 +1952,28 @@ describe('integration/gate-loop', () => {
       // A single task, no path list — a bare `Task: t1` trailer is enough
       // for deriveCompletion / the evidence-sidecar stamp to resolve it.
       await writeFile(join(dir, '.docs/plans/p.md'), '### Task t1\n**Story:** 1-1 (happy path)\n');
+      await git('add', '.docs/plans/p.md');
+      await git('commit', '-q', '-m', 'docs: approve task plan');
+      const planText = '### Task t1\n**Story:** 1-1 (happy path)\n';
+      const { execa } = await import('execa');
+      // execa's exported type is an intersection of overloads (template-tag,
+      // options-bind, `(file, args, options)`, `(file, options)`);
+      // Parameters<>/ReturnType<> on that intersection collapse to the LAST
+      // overload and its ResultPromise return type, which carries
+      // subprocess-only members no plain mock implements. Re-type to the
+      // actual `(file, args, options)` call/await shape used in production
+      // via `unknown`, bridging execa's overload-collapsing type limitation.
+      type ExecaInvocation = (
+        file: string,
+        args: readonly string[],
+        options?: import('execa').Options,
+      ) => Promise<import('execa').Result>;
+      const mockExeca = vi.mocked(execa) as unknown as import('vitest').Mock<ExecaInvocation>;
+      mockExeca.mockImplementation(async (_command: string, args: readonly string[] = []) => {
+        if (args[0] === 'ls-tree') return { stdout: '.docs/plans/p.md\0' } as never;
+        if (args[0] === 'show') return { stdout: planText } as never;
+        return { stdout: '' } as never;
+      });
       await writeState(statePath, { ...FRONT_DONE, rebase: 'skipped' } as ConductState);
 
       const config = { build_review: { enabled: true } };
@@ -1647,8 +2071,13 @@ describe('integration/gate-loop', () => {
         maxRetries: 1,
         config,
         git: fakeGit,
+        shipmentEvidence: validShipmentEvidence,
       });
-      await conductor.run();
+      try {
+        await conductor.run();
+      } finally {
+        mockExeca.mockImplementation(async () => ({ stdout: '' }) as never);
+      }
 
       // The kickback fired and the loop still converged despite the wipe —
       // the build gate never treated the missing task-status.json as a

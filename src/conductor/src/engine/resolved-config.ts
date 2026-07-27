@@ -6,76 +6,20 @@ import type {
   ReviewMode,
   StepConfig,
   PhaseConfig,
-  TierOverride,
   SelfHostActivation,
 } from '../types/config.js';
 import { getStepDefinition } from './steps.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
+import { escalateAttempt } from './escalation.js';
 
-// ────────────────────────────────────────────────────────────────────────────
-// Built-in defaults
-//
-// These apply when nothing is set in config. The effort values map to Claude's
-// native `/effort` levels and are passed via CLAUDE_CODE_EFFORT_LEVEL env var
-// on the subprocess. Reviews default per step. Tune per step/phase in YAML.
-//
-// Rationale for each step's model/effort choice lives in `STEP_RATIONALE`
-// (./model-table-metadata.ts), which also feeds the generated HARNESS.md
-// model-selection table. Keep these value maps and that metadata in sync.
-// ────────────────────────────────────────────────────────────────────────────
-
-export const DEFAULT_STEP_MODELS: Record<StepName, string> = {
-  bootstrap: 'sonnet',
-  memory: 'haiku',
-  assess: 'sonnet',
-  explore: 'fable',
-  prd: 'fable',
-  complexity: 'sonnet',
-  stories: 'sonnet',
-  conflict_check: 'sonnet',
-  plan: 'sonnet',
-  architecture_diagram: 'sonnet',
-  architecture_review: 'fable',
-  worktree: 'haiku',
-  acceptance_specs: 'sonnet',
-  build: 'sonnet',
-  build_review: 'opus',
-  wiring_check: 'sonnet',
-  manual_test: 'sonnet',
-  prd_audit: 'opus',
-  architecture_review_as_built: 'sonnet',
-  retro: 'sonnet',
-  rebase: 'fable',
-  finish: 'haiku',
-  remediate: 'fable',
-  attribution_verify: 'opus',
-};
-
-export const DEFAULT_STEP_EFFORT: Record<StepName, EffortLevel> = {
-  bootstrap: 'low',
-  memory: 'low',
-  assess: 'high',
-  explore: 'medium',
-  prd: 'medium',
-  complexity: 'low',
-  stories: 'medium',
-  conflict_check: 'medium',
-  plan: 'high',
-  architecture_diagram: 'medium',
-  architecture_review: 'high',
-  worktree: 'low',
-  acceptance_specs: 'medium',
-  build: 'low',
-  build_review: 'high',
-  wiring_check: 'low',
-  manual_test: 'medium',
-  prd_audit: 'high',
-  architecture_review_as_built: 'medium',
-  retro: 'medium',
-  rebase: 'max',
-  finish: 'low',
-  remediate: 'high',
-  attribution_verify: 'high',
-};
+// Legacy aliases retained for existing consumers. New resolution accepts a
+// provider policy explicitly, so these never participate in provider-aware
+// resolution.
+export const DEFAULT_STEP_MODELS = CLAUDE_MODEL_POLICY.stepModels;
+export const DEFAULT_STEP_EFFORT = CLAUDE_MODEL_POLICY.stepEfforts;
 
 export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   bootstrap: 1,
@@ -92,6 +36,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   stories: 3,
   conflict_check: 3,
   plan: 3,
+  coherence_check: 3,
   architecture_diagram: 3,
   architecture_review: 5,
   worktree: 1,
@@ -99,6 +44,7 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   build: 3,
   build_review: 3,
   wiring_check: 3,
+  test_suite: 1,
   manual_test: 3,
   prd_audit: 3,
   architecture_review_as_built: 3,
@@ -119,6 +65,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   stories: 'manual',
   conflict_check: 'conditional',
   plan: 'manual',
+  coherence_check: 'conditional',
   architecture_diagram: 'auto',
   architecture_review: 'conditional',
   worktree: 'auto',
@@ -126,6 +73,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   build: 'auto',
   build_review: 'conditional', // marker written only on FAIL verdict (kickback)
   wiring_check: 'auto', // deterministic gap-carrying evidence file, no LLM verdict to review
+  test_suite: 'auto', // deterministic native verifier; no generative review
   manual_test: 'auto',
   prd_audit: 'conditional',          // marker written only when an FR is non-ALIGNED
   architecture_review_as_built: 'conditional', // marker written only on drift/BLOCKED
@@ -136,32 +84,7 @@ export const DEFAULT_STEP_REVIEW: Record<StepName, ReviewMode> = {
   attribution_verify: 'auto', // automated verification of commit attribution metadata
 };
 
-/**
- * Per-step complexity-tier overrides. Applied on top of step config at
- * resolve time when `state.complexity_tier` matches. Only listed steps are
- * tier-aware; everything else ignores the tier.
- */
-export const DEFAULT_STEP_TIER_OVERRIDES: Partial<
-  Record<StepName, Partial<Record<ComplexityTier, TierOverride>>>
-> = {
-  stories: {
-    S: { effort: 'low' },
-    L: { effort: 'high' },
-  },
-  plan: {
-    S: { effort: 'medium', max_retries: 3 },
-    L: { effort: 'xhigh', model: 'fable' },
-  },
-  conflict_check: {
-    L: { model: 'fable' },
-  },
-  explore: {
-    S: { effort: 'low' },
-  },
-  build: {
-    S: { max_retries: 3 },
-  },
-};
+export const DEFAULT_STEP_TIER_OVERRIDES = CLAUDE_MODEL_POLICY.stepTierOverrides;
 
 export const FALLBACK_MODEL = 'sonnet';
 export const FALLBACK_EFFORT: EffortLevel = 'medium';
@@ -179,10 +102,8 @@ export const DEFAULT_STEP_ESCALATE = true;
 // Resolution
 // ────────────────────────────────────────────────────────────────────────────
 
-export interface ResolvedStepConfig {
+export interface ResolvedProviderNeutralStepConfig {
   step: StepName;
-  model: string;
-  effort: EffortLevel;
   max_retries: number;
   review: ReviewMode;
   skill?: string;
@@ -196,6 +117,15 @@ export interface ResolvedStepConfig {
   escalate: boolean;
 }
 
+export interface ResolvedProviderNativeStepConfig {
+  model: string;
+  effort: EffortLevel;
+}
+
+export interface ResolvedStepConfig
+  extends ResolvedProviderNeutralStepConfig,
+    ResolvedProviderNativeStepConfig {}
+
 export interface ResolveOptions {
   /** CLI `--model` override. Beats every other source. */
   modelCliOverride?: string;
@@ -208,6 +138,29 @@ export interface ResolveOptions {
   tier?: ComplexityTier;
 }
 
+export interface ResolvePreferredProviderNativeInput {
+  step: StepName;
+  phase: Phase;
+  preferredProvider: string;
+  inheritedProvider: string;
+  policy: ProviderModelPolicy;
+  config?: HarnessConfig;
+  options?: ResolveOptions;
+}
+
+export interface ResolveFallbackProviderNativeInput {
+  step: StepName;
+  tier?: ComplexityTier;
+  policy: ProviderModelPolicy;
+  attempt: number;
+  escalate: boolean;
+}
+
+export interface ResolvedFallbackProviderNativeConfig
+  extends ResolvedProviderNativeStepConfig {
+  modelFallbackLadder: readonly string[];
+}
+
 /**
  * Resolve every knob for a step.
  *
@@ -218,15 +171,62 @@ export interface ResolveOptions {
  *   4. phases.<PHASE>.by_tier.<tier>
  *   5. phases.<PHASE>
  *   6. defaults
- *   7. Hardcoded built-in (DEFAULT_STEP_*)
+ *   7. Provider policy
  *   8. Fallback
  */
 export function resolveStepConfig(
   step: StepName,
   phase: Phase,
+  policy: ProviderModelPolicy,
+  config?: HarnessConfig,
+  options?: ResolveOptions,
+): ResolvedStepConfig;
+/** @deprecated Pass a ProviderModelPolicy as the third argument. */
+export function resolveStepConfig(
+  step: StepName,
+  phase: Phase,
+  config?: HarnessConfig,
+  options?: ResolveOptions,
+): ResolvedStepConfig;
+export function resolveStepConfig(
+  step: StepName,
+  phase: Phase,
+  policyOrConfig?: ProviderModelPolicy | HarnessConfig,
+  configOrOptions?: HarnessConfig | ResolveOptions,
+  legacyOptions: ResolveOptions = {},
+): ResolvedStepConfig {
+  const hasExplicitPolicy = policyOrConfig !== undefined && 'stepModels' in policyOrConfig;
+  const policy = hasExplicitPolicy
+    ? policyOrConfig as ProviderModelPolicy
+    : CLAUDE_MODEL_POLICY;
+  const config = hasExplicitPolicy
+    ? configOrOptions as HarnessConfig | undefined
+    : policyOrConfig as HarnessConfig | undefined;
+  const options = hasExplicitPolicy
+    ? legacyOptions
+    : configOrOptions as ResolveOptions | undefined ?? {};
+  const neutral = resolveProviderNeutralStepConfig(step, phase, policy, config, options);
+  const native = resolveProviderNativeStepConfig(step, phase, policy, config, options);
+  return {
+    step: neutral.step,
+    model: native.model,
+    effort: native.effort,
+    max_retries: neutral.max_retries,
+    review: neutral.review,
+    skill: neutral.skill,
+    hooks: neutral.hooks,
+    disabled: neutral.disabled,
+    escalate: neutral.escalate,
+  };
+}
+
+export function resolveProviderNativeStepConfig(
+  step: StepName,
+  phase: Phase,
+  policy: ProviderModelPolicy,
   config?: HarnessConfig,
   options: ResolveOptions = {},
-): ResolvedStepConfig {
+): ResolvedProviderNativeStepConfig {
   const stepCfg: StepConfig | undefined = config?.steps?.[step];
   const phaseCfg: PhaseConfig | undefined = config?.phases?.[phase];
   const defaultsCfg = config?.defaults;
@@ -236,9 +236,8 @@ export function resolveStepConfig(
   const stepTier = tier ? stepCfg?.by_tier?.[tier] : undefined;
   const phaseTier = tier ? phaseCfg?.by_tier?.[tier] : undefined;
 
-  // Tier-specific overrides from hardcoded built-ins
-  const hardcodedStepTier = tier
-    ? DEFAULT_STEP_TIER_OVERRIDES[step]?.[tier]
+  const policyStepTier = tier
+    ? policy.stepTierOverrides[step]?.[tier]
     : undefined;
 
   const model =
@@ -248,8 +247,8 @@ export function resolveStepConfig(
     phaseTier?.model ??
     phaseCfg?.model ??
     defaultsCfg?.model ??
-    hardcodedStepTier?.model ??
-    DEFAULT_STEP_MODELS[step] ??
+    policyStepTier?.model ??
+    policy.stepModels[step] ??
     FALLBACK_MODEL;
 
   const effort: EffortLevel =
@@ -259,9 +258,98 @@ export function resolveStepConfig(
     phaseTier?.effort ??
     phaseCfg?.effort ??
     defaultsCfg?.effort ??
-    hardcodedStepTier?.effort ??
-    DEFAULT_STEP_EFFORT[step] ??
+    policyStepTier?.effort ??
+    policy.stepEfforts[step] ??
     FALLBACK_EFFORT;
+
+  return { model, effort };
+}
+
+/**
+ * Resolve provider-native settings after provider selection.
+ *
+ * Phase/default model and effort belong to the inherited (first configured)
+ * provider. An explicitly specialized step therefore keeps only its own
+ * authored native settings (including tier overrides), CLI overrides, and the
+ * selected provider's policy defaults.
+ */
+export function resolvePreferredProviderNativeStepConfig({
+  step,
+  phase,
+  preferredProvider,
+  inheritedProvider,
+  policy,
+  config,
+  options,
+}: ResolvePreferredProviderNativeInput): ResolvedProviderNativeStepConfig {
+  if (preferredProvider === inheritedProvider) {
+    return resolveProviderNativeStepConfig(step, phase, policy, config, options);
+  }
+
+  const stepConfig = config?.steps?.[step];
+  const specializedConfig: HarnessConfig | undefined =
+    stepConfig === undefined
+      ? undefined
+      : { steps: { [step]: stepConfig } };
+
+  return resolveProviderNativeStepConfig(
+    step,
+    phase,
+    policy,
+    specializedConfig,
+    options,
+  );
+}
+
+/**
+ * Resolve a fallback attempt entirely inside the fallback provider's native
+ * domain. Primary config, CLI overrides, escalation values, and configured
+ * ladders are intentionally absent from the input boundary.
+ */
+export function resolveFallbackProviderNativeStepConfig({
+  step,
+  tier,
+  policy,
+  attempt,
+  escalate,
+}: ResolveFallbackProviderNativeInput): ResolvedFallbackProviderNativeConfig {
+  const base = resolveProviderNativeStepConfig(
+    step,
+    phaseForStep(step),
+    policy,
+    undefined,
+    { tier },
+  );
+  const native = escalateAttempt(
+    base.model,
+    base.effort,
+    attempt,
+    escalate,
+    policy,
+  );
+
+  return {
+    ...native,
+    modelFallbackLadder: policy.modelFallbackLadder,
+  };
+}
+
+export function resolveProviderNeutralStepConfig(
+  step: StepName,
+  phase: Phase,
+  policy: ProviderModelPolicy,
+  config?: HarnessConfig,
+  options: ResolveOptions = {},
+): ResolvedProviderNeutralStepConfig {
+  const stepCfg: StepConfig | undefined = config?.steps?.[step];
+  const phaseCfg: PhaseConfig | undefined = config?.phases?.[phase];
+  const defaultsCfg = config?.defaults;
+  const tier = options.tier;
+  const stepTier = tier ? stepCfg?.by_tier?.[tier] : undefined;
+  const phaseTier = tier ? phaseCfg?.by_tier?.[tier] : undefined;
+  const policyStepTier = tier
+    ? policy.stepTierOverrides[step]?.[tier]
+    : undefined;
 
   const max_retries =
     stepTier?.max_retries ??
@@ -269,7 +357,7 @@ export function resolveStepConfig(
     phaseTier?.max_retries ??
     phaseCfg?.max_retries ??
     defaultsCfg?.max_retries ??
-    hardcodedStepTier?.max_retries ??
+    policyStepTier?.max_retries ??
     DEFAULT_STEP_RETRIES[step] ??
     FALLBACK_RETRIES;
 
@@ -288,8 +376,6 @@ export function resolveStepConfig(
 
   return {
     step,
-    model,
-    effort,
     max_retries,
     review,
     skill: stepCfg?.skill,

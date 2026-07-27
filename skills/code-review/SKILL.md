@@ -20,6 +20,14 @@ confidence % and its basis to each finding (`verified` — reproduced/traced in 
 `inferred`), never asserts a defect it has not verified, and flags a low-confidence finding as
 **tentative** rather than as a hard defect.
 
+### Provider-native delegation
+
+Dispatch the evaluator through the selected host's available subagent facility. Preserve the fresh
+context boundary, skeptical review, verdict output, and blocking gates regardless of host.
+**Claude delegation:** Claude uses the Agent tool; the Claude model choices below apply only to
+that facility. A Codex-selected run uses its available subagent facility and configured Codex
+provider policy, without translating Claude model names.
+
 ## Practices
 
 ### 1. Prepare Review Context
@@ -31,18 +39,20 @@ Gather what the evaluator needs:
   do NOT re-review earlier batches line by line — they already passed their own evaluator gate.
 - The story/acceptance criteria being implemented (from `.docs/stories/`)
 - The implementation plan task (from `.docs/plans/`)
-- The test results (full suite output)
+- The relevant affected-test result set
 - Tech-context review checklist if loaded in session
+
+For batch reviews, use the provided `BATCH_AFFECTED_TESTS` result set; require a full-suite result only when the batch scope was indeterminate.
 
 ### 2. Dispatch Evaluator Agent
 
-Use the Agent tool with `agents/evaluator.md` persona. The evaluator runs in a **fresh context**
+Use `agents/evaluator.md` with the selected host's subagent facility. The evaluator runs in a **fresh context**
 — it does not share conversation history with the generator.
 
-**Model selection by batch content:**
-- **Sonnet** (`model="sonnet"`) — batches containing only: value objects, pure functions,
+**Claude model selection by batch content:**
+- **Claude Code Sonnet** (`model="sonnet"`) — batches containing only: value objects, pure functions,
   configuration files, infrastructure setup, or view templates
-- **Opus** (`model="opus"`) — batches with: concurrency, state mutation, security boundaries,
+- **Claude Code Opus** (`model="opus"`) — batches with: concurrency, state mutation, security boundaries,
   financial calculations, auth logic, or complex domain interactions
 
 Provide the evaluator with:
@@ -50,8 +60,9 @@ Provide the evaluator with:
 - The spec (story + acceptance criteria)
 - The test output
 - The review checklist (generic + tech-context from session if available)
-- **Impacted test file paths** — spec files changed in the diff, plus specs corresponding to
-  changed source files. The evaluator will run these before reviewing.
+- **Impacted test file paths** — for batch reviews, the provided `BATCH_AFFECTED_TESTS` union;
+  otherwise, spec files changed in the diff plus specs corresponding to changed source files.
+  The evaluator will run these before reviewing.
 
 ### 3. Three-Stage Review
 

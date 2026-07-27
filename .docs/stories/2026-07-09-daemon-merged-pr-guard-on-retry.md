@@ -3,8 +3,16 @@
 # Stories: Daemon merged-PR guard on step retry (#358)
 
 Technical track — acceptance criteria derive from issue jstoup111/ai-conductor#358 and
-APPROVED ADR `adr-2026-07-09-mid-run-merged-pr-guard.md`. All Given/When/Then are against
-observable engine behavior (markers, log lines, dispatched steps, ledger writes).
+historical ADR `adr-2026-07-09-mid-run-merged-pr-guard.md` (now SUPERSEDED by
+`adr-2026-07-25-fail-closed-durable-shipment-evidence`, with guard placement carried forward). All
+Given/When/Then are against observable engine behavior (markers, log lines, dispatched steps,
+ledger writes).
+
+> **Conflict resolution 2026-07-25:** accepted stories
+> `durable-shipped-record-enforcement-and-backfill-916-936.md` supersede live-MERGED state as
+> sufficient shipment proof. The guard sites and bounded query cadence remain accepted, but every
+> terminal/processed outcome below now also requires strict-valid durable evidence. A MERGED PR with
+> missing or invalid evidence is surfaced for repair and never receives synthetic success markers.
 
 ---
 
@@ -19,8 +27,8 @@ already-shipped work.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon-mode run with `pr_url` recorded in `.pipeline/conduct-state.json` and a gate
-  failure that routes back to `build` (any of the five kickback routes: manual_test,
+- Given a daemon-mode run with `pr_url` recorded in `.pipeline/conduct-state.json`, strict-valid
+  durable evidence for that PR, and a gate failure that routes back to `build` (any of the five kickback routes: manual_test,
   build_review, prd_audit gap, finish remediation, architecture_review_as_built), when the
   guard queries the PR state and receives `MERGED`, then the rewind is NOT committed, no
   further step (`build`, `manual_test`, `prd_audit`, `architecture_review_as_built`, `rebase`)
@@ -45,12 +53,18 @@ already-shipped work.
   kickback occurs, then the guard makes NO `gh` call and the rewind proceeds unchanged.
 - Given a non-daemon (interactive) run with `pr_url` recorded, when a kickback occurs, then
   the guard is inactive: no `gh` call, behavior identical to today.
+- Given the PR state is `MERGED` but durable evidence is missing or invalid, when the guard runs,
+  then it writes no synthetic finish-choice/DONE success, marks no processed shipment, preserves the
+  branch, and surfaces the evidence gap for postmerge repair.
 
 ### Done When
 - [ ] A daemon-mode engine test drives a gate-failure kickback with a fake GhRunner returning
-      `MERGED` and asserts: no build re-dispatch, `.pipeline/finish-choice` == `pr`,
+      `MERGED` plus strict-valid durable evidence and asserts: no build re-dispatch,
+      `.pipeline/finish-choice` == `pr`,
       `.pipeline/DONE` exists, `pr_url` unchanged, log line contains
       `already shipped out-of-band` + a 40-char SHA.
+- [ ] A companion `MERGED` test with missing/invalid durable evidence asserts no success markers,
+      no processed write, branch preserved, and the evidence gap surfaced for repair.
 - [ ] Table-driven tests for verdicts `OPEN`, `CLOSED`, `NOTFOUND`, `UNKNOWN`, and a throwing
       GhRunner assert the rewind proceeds AND neither marker file exists afterward.
 - [ ] A test with no `pr_url` and a call-counting fake GhRunner asserts zero gh invocations.
@@ -68,8 +82,8 @@ produce the unresolvable duplicate-branch rebase HALT.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a daemon-mode run reaching `runRebaseStep` with `pr_url` recorded, when the guard
-  queries the PR state and receives `MERGED`, then `performRebase` is NEVER invoked, no
+- Given a daemon-mode run reaching `runRebaseStep` with `pr_url` recorded and strict-valid durable
+  evidence, when the guard queries the PR state and receives `MERGED`, then `performRebase` is NEVER invoked, no
   `.pipeline/HALT` is written, the synthetic verified-ship markers are written
   (`finish-choice` == `pr`, `DONE`), and the run terminates successfully.
 - Given the MERGED verdict at rebase entry, when the run terminates, then the local feature
@@ -83,10 +97,14 @@ produce the unresolvable duplicate-branch rebase HALT.
   logged and `performRebase` proceeds — degraded behavior equals today's behavior.
 - Given `pr_url` is absent, when `runRebaseStep` starts, then no `gh` call is made and the
   rebase proceeds unchanged.
+- Given `MERGED` is returned but durable evidence is missing or invalid, when `runRebaseStep`
+  starts, then no verified-ship markers or processed entry are written; the work is preserved and
+  the evidence gap is surfaced rather than hidden as a rebase success.
 
 ### Done When
 - [ ] An engine test enters `runRebaseStep` (daemon:true, isolated repo per existing rebase
-      test pattern) with a fake GhRunner returning `MERGED` and asserts `performRebase` was
+      test pattern) with a fake GhRunner returning `MERGED` plus strict-valid durable evidence and
+      asserts `performRebase` was
       not called (spy/injected), no HALT marker, both synthetic markers present, and the
       branch tip SHA is unchanged.
 - [ ] A companion test with verdict `OPEN` and a conflicting branch asserts the existing
@@ -94,7 +112,7 @@ produce the unresolvable duplicate-branch rebase HALT.
 
 ---
 
-## Story: Synthetic verified-ship flows through the daemon-runner's existing ship path
+## Story: Durably verified merged PR flows through the daemon-runner's existing ship path
 
 **Requirement:** TS-3 (ADR side-effect ownership)
 
@@ -105,31 +123,33 @@ the slug is never re-dispatched.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a worktree whose run ended via the guard (markers `finish-choice` == `pr`, `DONE`,
-  `pr_url` present), when the daemon-runner reads the outcome, then `isVerifiedShip` passes
+- Given a worktree whose run ended via the guard with strict-valid durable evidence (markers
+  `finish-choice` == `pr`, `DONE`, `pr_url` present), when the daemon-runner reads the outcome, then `isVerifiedShip` passes
   and `markProcessed` writes `.daemon/processed/<slug>` containing the recorded `prUrl`.
 - Given the processed marker exists, when the daemon next scans the backlog or a rekick runs,
   then the slug is skipped (existing dedup honors the marker).
 
-> **Invariant exemption (conflict-check 2026-07-09, vs `daemon-false-ship-guard` Story 6):**
-> the `finish-choice=pr` marker still always encodes *proven* ship evidence. The finish skill
-> proves it via `gh pr view` + push-ancestry; the guard proves it via the live `MERGED` state
-> of the recorded PR — the merge itself is the proof, mirroring the Story 5 repair-path
-> exemption ("the ship is proven by the merged record itself"). Push-ancestry may legitimately
-> NOT hold at guard time (mid-retry local commits); that does not weaken the invariant.
+> **Invariant amendment (conflict-check 2026-07-25):** live `MERGED` state alone is no longer
+> sufficient proof. The guard may write `finish-choice=pr` only when the merged PR and its strict-valid
+> durable record agree. Missing/unreadable durable evidence keeps the terminal invariant unsatisfied.
 
 #### Negative Paths
 - Given the guard observed a non-MERGED verdict and the run later halts for an unrelated
   reason, when the daemon-runner reads the outcome, then `isVerifiedShip` is false and NO
   processed marker is written (the guard's mere execution must not fabricate ship evidence).
+- Given the guard observed `MERGED` but durable evidence is absent or invalid, when the daemon-runner
+  reads the outcome, then `isVerifiedShip` is false and no processed marker or destructive cleanup
+  occurs.
 - Given the guard fires on MERGED twice in one run (kickback guard then a second entry —
   idempotency), when markers are written, then repeated writes are harmless: identical marker
   content, single ledger entry, no duplicate cleanup errors.
 
 ### Done When
-- [ ] A daemon-runner test feeds a guard-terminated worktree through `readOutcome` and asserts
-      the verified-ship path runs (`markProcessed` called with the slug + prUrl) — reusing the
-      existing daemon-runner test fixtures.
+- [ ] A daemon-runner test feeds a guard-terminated worktree with strict-valid durable evidence
+      through `readOutcome` and asserts the verified-ship path runs (`markProcessed` called with the
+      slug + prUrl) — reusing the existing daemon-runner test fixtures.
+- [ ] The same fixture with missing/invalid evidence asserts no processed write or destructive
+      cleanup.
 - [ ] A test asserts a halted (non-guard) outcome writes no processed marker.
 - [ ] An idempotency test invokes the guard's stop path twice and asserts stable markers and a
       single ledger entry.
@@ -147,8 +167,8 @@ instead of re-halting on a duplicate-branch rebase conflict.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a halted worktree with `pr_url` recorded whose PR is `MERGED`, when the daemon rekick
-  sweep plays it forward (`resumeRebaseFirst` path), then NO rebase is attempted, the
+- Given a halted worktree with `pr_url` recorded whose PR is `MERGED` and whose durable evidence is
+  strict-valid, when the daemon rekick sweep plays it forward (`resumeRebaseFirst` path), then NO rebase is attempted, the
   processed marker `.daemon/processed/<slug>` is written with the recorded `prUrl`, the
   feature is not re-dispatched, and the log carries the `already shipped out-of-band` line.
 
@@ -160,11 +180,17 @@ instead of re-halting on a duplicate-branch rebase conflict.
   the existing flow proceeds — fail-open, no new HALT class.
 - Given a halted worktree with NO `pr_url` recorded, when rekick plays forward, then no `gh`
   call is made and the existing flow proceeds unchanged.
+- Given the parked PR is `MERGED` but durable evidence is missing or invalid, when rekick plays
+  forward, then no processed marker is written, no worktree is destroyed, and the evidence gap is
+  surfaced for repair.
 
 ### Done When
 - [ ] A rekick test (existing daemon-rekick fixture pattern) with a fake GhRunner returning
-      `MERGED` asserts: no `performRebase` call, processed marker written with prUrl, no
+      `MERGED` plus strict-valid durable evidence asserts: no `performRebase` call, processed marker
+      written with prUrl, no
       re-dispatch, log line present.
+- [ ] A `MERGED` fixture with missing/invalid durable evidence asserts no processed marker or
+      destructive cleanup and a visible repair disposition.
 - [ ] Companion table-driven tests for `OPEN`/gh-failure/no-pr_url assert byte-identical
       pass-through to the existing gated-resolution flow.
 

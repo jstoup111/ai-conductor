@@ -38,15 +38,31 @@ export class SessionManager {
 
   async resetSession(): Promise<string> {
     const id = uuidv4();
-    this.sessionId = id;
-    this.created = false;
-    await writeFile(join(this.pipelineDir, SESSION_FILE), id, 'utf-8');
-    try {
-      await rm(join(this.pipelineDir, MARKER_FILE));
-    } catch {
-      // Marker may not exist
-    }
+    await this.recordCompatibilitySession(id, false);
     return id;
+  }
+
+  /**
+   * Mirror the provider session selected by the provider-aware execution
+   * layer. These scalar files remain readable by older tooling, but callers
+   * must not use them to decide whether another step or provider may resume.
+   */
+  async recordCompatibilitySession(id: string, created: boolean): Promise<void> {
+    this.sessionId = id;
+    this.created = created;
+    await mkdir(this.pipelineDir, { recursive: true });
+    await writeFile(join(this.pipelineDir, SESSION_FILE), id, 'utf-8');
+    if (created) {
+      await writeFile(join(this.pipelineDir, MARKER_FILE), '1', 'utf-8');
+      return;
+    }
+    await rm(join(this.pipelineDir, MARKER_FILE), { force: true });
+  }
+
+  /** Clear only the legacy created marker at a new step-execution boundary. */
+  async clearCompatibilityCreatedMarker(): Promise<void> {
+    this.created = false;
+    await rm(join(this.pipelineDir, MARKER_FILE), { force: true });
   }
 
   async markSessionCreated(): Promise<void> {

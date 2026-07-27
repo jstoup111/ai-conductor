@@ -10,8 +10,181 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- `finish-record` now deterministically refuses `--choice keep` in unattended (auto/daemon) mode
+  whenever the repo has a configured git remote, instead of trusting the finish skill's prompt-level
+  "decide deterministically" instruction. `step-runners.ts` sets a `CONDUCT_DAEMON_AUTO_FINISH=1`
+  environment marker (inherited by every subprocess a daemon finish spawns, mirroring the existing
+  `CLAUDE_CODE_EFFORT_LEVEL` cascade pattern) for the duration of an auto-mode `finish` dispatch;
+  `finish-record-cli.ts` checks that marker plus `git remote` and fails closed (exit 1, no marker
+  written) rather than silently recording `keep` when a remote is present. Interactive/default-mode
+  finishes and remote-less repos are unaffected — a human can still choose Keep, and daemon finishes
+  with no remote configured still fall back to Keep as before. Closes the gap where an agent's
+  misjudged or ignored auto-mode instructions could produce a "false ship" the daemon only detected
+  after the fact (Daemon Operations Safety rule 4 — "a manual PR is NOT a harness finish").
+- Tolerated own-feature DECIDE-artifact amendments are now logged and judged by `build_review`'s Scope rubric, so unjustified changes fail review instead of passing silently ([implementation PR #1056](https://github.com/jstoup111/ai-conductor/pull/1056)).
+- `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
+  of reading only the project file, so daemon-only operators no longer lose user-level settings that
+  every other entry point already applied ([implementation PR #1031](https://github.com/jstoup111/ai-conductor/pull/1031)).
+- `conduct-ts build-auth-status` now loads the real merged config (project `.ai-conductor/config.yml`
+  deep-merged over `~/.ai-conductor/config.yml`) before resolving `harness_self_host.build_auth`, instead
+  of always resolving against no config at all. Previously the command unconditionally reported the
+  hardcoded default (`mode=daemon-token state=valid`) no matter what was actually on disk, so it gave a
+  false all-clear while a real self-host dispatch — which does resolve the merged config — used a
+  different, possibly conflicting mode. This masked a real incident where a stale
+  `harness_self_host.build_auth.mode: api-key` left in an operator's user-level config silently
+  deep-merged into a project whose own config never set it, and the daemon build correctly (per that
+  merged config) halted on a missing API key while `build-auth-status` kept reporting daemon-token/valid.
+- A resumed feature no longer parks forever with `loop exited without a terminal verdict` without ever
+  dispatching a session. The resume clamp decides which step to re-enter from the on-disk gate verdicts,
+  but the loop admits a step by reading `conduct-state.json` — so when a step's verdict said satisfied
+  while its state said `failed` (a build that failed after an earlier passing review, with nothing
+  rewriting its verdict), the clamp entered past it on a downstream gate whose prerequisite check could
+  never pass. The loop exited immediately through its markerless blocked-gate return and the safety-net
+  backstop parked the run, identically on every resume. Resume entry now walks the prerequisite chain
+  back to a step the loop will actually accept, using the same predicate the gate check uses
+  ([#1052](https://github.com/jstoup111/ai-conductor/issues/1052)).
+
+- A feature no longer halts BUILD/SHIP because it rebased onto a base branch that changed or added
+  someone else's protected DECIDE artifact. The protected-artifact seal is immutable from first BUILD
+  entry, so it went stale the moment any other feature's pull request merged, and an operator had to
+  hand-edit `.pipeline/protected-artifact-seal.json` to unblock the feature. Verification now tolerates
+  a changed or newly appeared artifact whose workspace content is byte-identical to that path at the
+  base branch tip — the content the feature's own rebase brought in, vouched for by the base branch
+  itself. Content the base branch does not vouch for, additions it does not contain, and deletions all
+  still halt before dispatch, and no tolerance applies when the base branch cannot be resolved
+  ([#976](https://github.com/jstoup111/ai-conductor/issues/976)).
+- `finish` no longer ships a PR whose CHANGELOG entry carries an unsubstituted implementation PR
+  placeholder. The `skills/finish/SKILL.md` execution steps for "Push & PR" never actually
+  instructed running `conduct-ts finalize-changelog-pr` — that instruction existed only in a
+  separate auto-mode narrative block the dispatched agent didn't follow — so the placeholder
+  token could reach `main` unsubstituted (as happened for
+  [#967](https://github.com/jstoup111/ai-conductor/issues/967)). The skill's Option 2 execution
+  steps now run `finalize-changelog-pr` unconditionally right after the PR/push STOP gate, for
+  every outcome that produces a PR URL, and the `finish` completion gate itself now fails closed
+  (deterministically, independent of the prompt) when `choice="pr"` and `CHANGELOG.md` still
+  contains an unsubstituted placeholder.
+
+### Added
+
+- Contributors now get a failing build instead of a review comment for dropped promises, broken shell,
+  and dead documentation links: type-aware ESLint over `src/` and `test/`, ShellCheck over all 59 bash
+  scripts (also wired as integrity check 1b), a `lychee` documentation link check that is the one CI job
+  a docs-only pull request cannot skip, and `npm run typecheck:test`, which type-checks `test/` for the
+  first time ([implementation PR #1040](https://github.com/jstoup111/ai-conductor/pull/1040)).
+- `conduct daemon connect` accepts `--write` to request a read-write attach from the same
+  subcommand used to "just look", instead of requiring the operator to already know to invoke
+  `debug` for input access. `debug` is unchanged. `conduct daemon start`/`connect`/`debug` also
+  accept `--attach-into <target>` (a tmux session, `session:window`, or `session:window.pane`)
+  to deliver the attach into an already-open pane elsewhere on the tmux server via
+  `send-keys`/`env -u TMUX`, instead of taking over the invoking process's own controlling
+  terminal — fixing the tmux nesting-guard failure (`sessions should be nested with care, unset
+  $TMUX to force`) hit when running these commands from a shell already inside a tmux client.
+- Add an opt-in repository-local documentation gate that verifies fresh review evidence and
+  finalizes the implementation PR link in notable changelog entries ([implementation PR #956](https://github.com/jstoup111/ai-conductor/pull/956)).
+- Add the native `test_suite` project declaration and documentation for the
+  reusable pre-SHIP aggregate gate. Projects identify one project-owned command
+  that composes their unit, acceptance, and other authoritative tests; this
+  repository uses `npm test` from `src/conductor`.
+- `build_review` now resolves its grading base through a read-only `git ls-remote`
+  freshness probe (`resolveFreshBase`) instead of trusting the local `origin/<default>`
+  tracking ref, refetching only when the ref is behind; fail-soft (no remote / probe
+  failure) degrades to the local branch. Every grading emits a `build_review_base`
+  telemetry event so an operator can see which base a verdict graded against. A scope-FAIL
+  verdict found to have graded a since-stale base ("stale-mirage") is discarded and
+  regraded once against a fresh base per feature-session; a second stale-mirage detection
+  in the same session HALTs instead of re-entering grading. See
+  `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+- Add the built-in `codex` LLM provider for non-interactive Codex CLI execution.
+
+### Fixed
+
+- `DefaultStepRunner`'s three provider session-launch catch sites in `step-runners.ts`
+  (the one-shot `remediate` dispatch, the legacy `invokeInteractive` path, and
+  `runProviderAwareNormal`) no longer discard the exception thrown by a crashed provider
+  session. Each now logs the real error via the existing `this.log` sink and appends its
+  message to the returned `output` string (`Session for ${step} exited with error: ${message}`),
+  so a halted step (e.g. the generic, undiagnosable `Session for finish exited with error`)
+  now carries the actual cause in `daemon.log` and the halt reason instead of losing it
+  permanently. The `{ success: false, output }` shape is unchanged, so retry/halt handling
+  in `conductor.ts` is unaffected.
+- **Temporary, deliberate loosening (operator-directed) of the protected-artifact seal**:
+  a feature amending ITS OWN DECIDE artifact mid-build (e.g. updating its own architecture
+  doc to reflect in-scope work surfaced by a `build_review` kickback) no longer halts
+  identically to a third party tampering with that same file. `verifyProtectedArtifactSeal`
+  now accepts an optional `featureDesc`; a content-changed protected artifact whose filename
+  stem names the current feature (tolerating a `YYYY-MM-DD-` date-prefix mismatch on either
+  side, mirroring #1024) is tolerated. Every other case is unchanged: a changed artifact
+  belonging to a DIFFERENT feature, or any addition/deletion, still halts exactly as before.
+  This is an explicit, scoped loosening pending a more precise mechanism — see the follow-up
+  intake for the durable fix (distinguishing legitimate self-amendment from an agent silently
+  rewriting its own approved spec to dodge review).
+- `conduct register` now refuses to register a LINKED git worktree (e.g. a daemon
+  feature worktree under a project's `.worktrees/`) as its own top-level project.
+  Previously `bootstrap`'s auto-register step (`conduct register .`) ran unconditionally
+  in every feature worktree and had no way to distinguish "this is a worktree of an
+  already-registered project" from "this is a genuinely new repo" — the worktree got
+  its own registry record, and once the worktree was cleaned up post-ship that record
+  became a permanent `path-missing` ghost row in `conduct-ts daemon status` output. The
+  guard compares `git rev-parse --git-dir` against `--git-common-dir`: they differ only
+  for linked worktrees. `bootstrap`'s auto-register step now treats this specific
+  refusal as expected (not a failure to surface).
+
 ### Changed
 
+- `build_review` FAIL now resolves a structured routing decision — BUILD or
+  REMEDIATE — instead of an unconditional kickback to `build`. The decision is
+  derived deterministically from the grader verdict already on disk: a
+  completeness failure (the diff does not cover what the plan describes, which
+  may mean the plan task is under-decomposed) dispatches the existing
+  `remediate` planner, which routes per gap or HALTs for a human; tautology,
+  scope, and root-cause failures are local diff defects and keep kicking
+  straight back to `build` exactly as before. A FAIL with no completeness signal,
+  or a remediation plan with no usable dispositions, falls open to the unchanged
+  build kickback. Kickback counting semantics are unchanged (see #984).
+
+- Implement the per-step provider routing (#927) retrospective follow-ups:
+  missing or unreadable event ledgers now produce visibly incomplete shipped
+  cost records that clean KPI aggregates exclude, while the provider candidate
+  executor is decomposed into bounded native-config, invocation/session, and
+  result-construction helpers without changing fallback behavior.
+- Per-step provider routing (#927) preserves scalar `llm_provider` configuration
+  while accepting an ordered provider array and explicit per-step scalar/array
+  selections. The first configured provider remains the inherited default;
+  classified unavailability and provider-native model exhaustion now use
+  selected-first, stable fallback with visible warnings, provider-native
+  settings, isolated step/provider sessions, and actual-provider usage
+  attribution. Authentication, rate-limit, session-expiry, timeout, rejection,
+  and ordinary failures retain their existing recovery behavior without
+  crossing providers. Custom providers retain warned Claude-compatible policy
+  behavior without a guaranteed automatic mixed-provider fallback contract.
+- Autonomous model and effort resolution is now provider-aware (#902). The built-in Claude
+  and Codex providers use independent provider-native step defaults, retry-escalation orders,
+  and unavailable-model fallback ladders; explicit overrides remain opaque and keep their
+  precedence. Normal `explore` and all `prd` dispatches now start at `high` effort
+  (`explore.S` remains `low`), so retry attempt 2 advances them to `xhigh`. Installed
+  third-party providers retain their provider instance while temporarily using the Claude
+  compatibility policy with one warning per composition root; plugin-defined policy
+  registration remains deferred.
+- Bootstrap-generated Claude settings now use portable project-relative permission patterns
+  (`Read(**)`, `Edit(**)`, `Write(**)`) rather than embedding the checkout's absolute path.
+  Generated `CLAUDE.md` and `AGENTS.md` now reference the user-scoped installed copy of
+  `HARNESS.md`, rather than a machine-specific harness checkout path, so they remain valid
+  after a move or worktree checkout.
+- Installation now links every harness skill into both user-scoped client directories:
+  `~/.claude/skills/` for Claude Code and `~/.agents/skills/` for Codex. `~/.codex/skills/` is
+  a legacy migration input, not Codex's active catalog; installer check and uninstall paths
+  reconcile only harness-owned entries in either location. Project-local skills remain explicit
+  overrides. Bootstrap now creates or preserves an `AGENTS.md` from the Codex-aware template so
+  projects can reference the user-scoped harness without copying skills into the repository.
+- Daemon log: a successful `bin/setup` no longer echoes its entire output into
+  `.daemon/daemon.log`. That passthrough was 55% of the log (3,875 of 6,990 lines in one
+  observed run — 748 of them blank, plus `publish-engine`'s raw `{"versionId":…}` JSON) and
+  is only read when setup *fails*, where `SetupFailureError.outputTail` already carries a
+  50-line tail. The default now emits a single `setup: N line(s) of output suppressed`
+  summary; `daemon_verbose: true` restores the full echo. Blank lines are dropped in both
+  modes and failure behavior is unchanged.
 - Source-ref parsing/formatting is now generalized behind a canonical tagged
   `parseSourceRef`/`formatWorkRef` module supporting both GitHub (`owner/repo#N`)
   and Jira (`PROJ-123`) refs. Jira keys now round-trip losslessly through intake
@@ -33,6 +206,226 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `no_task_progress` stall breaker), so the removal proposed in #896 would have silently
   disarmed enforcement. Artifacts only; no engine change in this PR (#896).
 
+- Self-host `provider-home` provisioning no longer symlinks the throwaway
+  `CODEX_HOME`/`CLAUDE_CONFIG_DIR`'s `skills` (and Codex's `.agents/skills`) directly to
+  the feature worktree's own `skills/` directory. That live link let provider-owned
+  session-init skill warmup write its `.system/` bookkeeping straight through into the
+  git-tracked worktree under test (observed as untracked `skills/.system/` noise in
+  worktree `git status` during self-host builds), defeating the isolation the throwaway
+  home exists to provide. `provisionProviderHome` now copies `skills` into the throwaway
+  home once per attempt (the catalog is small — a few dozen markdown files) and points
+  Codex's `.agents/skills` view at that copy instead of the worktree; skill discovery is
+  unaffected, but no warmup write can land outside the throwaway home anymore. Added
+  `skills/.system/` to `.gitignore` as defense-in-depth. (#1042)
+- Self-host provider dispatch no longer resumes a session into a freshly provisioned
+  isolated provider home. Each self-host invocation provisions its own throwaway home
+  (`/tmp/self-host-<provider>-<random>`) and tears it down afterwards, so no session or
+  rollout state survives into the next one — but the provider session scope still flipped
+  to `resume` after the first invocation of a step. Every subsequent self-host dispatch
+  then ran `codex exec resume <harness-uuid>` against an empty home and failed with
+  `thread/resume failed: no rollout found for thread id <id>`, which the Codex classifier
+  did not recognize as an expired session, so daemon `build` steps burned all their retries
+  and halted. Self-host invocations now always start a fresh session, and
+  `no rollout found` / `thread/resume failed` are classified as `sessionExpired` so the
+  existing session-reset heal path applies as a safety net. Non-self-host dispatch keeps
+  resuming within a step as before.
+
+- Codex readiness no longer reports `unverifiable` when `codex doctor` returns
+  `overallStatus: "warning"`. `parseDoctorEvidence` accepted only `ok` and `fail`
+  envelopes, so a `warning` envelope was discarded as unparseable and a perfectly
+  healthy `auth.credentials` check was classified as `unverifiable`. Because the
+  auth park re-probes the same command every ~30s, and `codex doctor`'s unrelated
+  `updates.status` check warns whenever its version probe is rate-limited
+  (HTTP 403) — which the park's own polling reliably provokes — this parked and
+  then HALTed every Codex-authenticated build for the full `authParkTimeoutMinutes`
+  window with "Codex cached-login authentication did not become ready". `warning`
+  is now accepted alongside `ok`/`fail`, and any non-`ok` envelope is reported as
+  `unrelatedHealth: 'degraded'` while `auth.credentials` remains the sole authority
+  on readiness — extending the same unrelated-health tolerance already added for
+  `fail` envelopes.
+
+- Copying `templates/ai-conductor-config.yml.template` now produces a config that actually
+  validates. Its commented `steps:` example named `bootstrap` — an out-of-band step, which
+  the validator classifies as a custom step and rejects for missing `after:` — and its
+  `harness_version: ">=1.0.0"` was unsatisfiable by the repo's pre-1.0 `VERSION`. The example
+  now uses `explore` (a real `ALL_STEPS` entry) and the constraint is `">=0.99.0"`
+  ([implementation PR #1036](https://github.com/jstoup111/ai-conductor/pull/1036)).
+- A config-declared custom step no longer kills the run it was correctly scheduled
+  into. `.ai-conductor/config.yml` custom steps are assembled and dispatched from the
+  resolved registry (`buildStepRegistry`), but several lookups on the dispatch path
+  resolve a step by NAME with no registry in scope — `phaseForStep`, `isGatingStep`,
+  `resolveSkill`, the audit trail — and those consulted only the static `ALL_STEPS`
+  table plus `OUT_OF_BAND_STEPS`. A custom step is in neither, so the conductor
+  logged `▶ <step>` in the right position and then halted the feature with
+  `Error: Unknown step: <step>`. `buildStepRegistry` now records each custom
+  definition it successfully inserts, and `getStepDefinition` falls back to that
+  record after the built-in and out-of-band tables. A name no assembled config
+  declared still throws (typos are not masked), a custom step can never shadow a
+  built-in, and custom steps still claim no slot in the static linear index space —
+  every ordering decision is registry-relative, derived from the step's `after:`
+  target.
+- Daemon discovery no longer silently misclassifies a feature whose complexity/track
+  markers were landed under an undated stem. `.docs/complexity/<stem>.md` and
+  `.docs/track/<stem>.md` were read by the raw plan slug only, so a plan named
+  `YYYY-MM-DD-<name>.md` with markers at `<name>.md` missed both reads and the build
+  silently used the most-expensive defaults (`M` / `product`) — running `prd_audit`
+  and `architecture_review_as_built` that the real `S`/`technical` metadata would have
+  skipped, then blocking at SHIP on artifacts that were never required. Discovery now
+  falls back to the date-stripped stem, but only when exactly one plan maps to it, so
+  the relaxed lookup can never guess between two features; ambiguity refuses the
+  fallback. Any tier/track that still falls back to a default now logs the paths tried.
+
+- The self-build sandbox again propagates the operator's workspace trust. The
+  throwaway `CLAUDE_CONFIG_DIR` stopped seeding `.claude.json` when the self-host
+  isolation refactor rewrote `sandbox-build-env.ts`, so every headless self-build
+  ran untrusted, silently dropped all `permissions.allow` entries from the repo's
+  `.claude/settings.json` ("this workspace has not been trusted") and wedged on
+  denied tools. `provisionSandboxBuildEnv` once more writes a minimal `.claude.json`
+  trusting the harness root and build worktree (as-passed and realpath-canonicalized
+  — Claude Code keys trust by the git MAIN worktree root, so a build inside
+  `.worktrees/<slug>` is looked up under the harness root). Propagate-only: a missing
+  state file, malformed JSON, or an untrusted harness root seeds nothing, and only
+  the trust bit crosses the boundary — never operator tokens, history, or project
+  state.
+- The self-host live-boundary guard no longer halts a run on the harness's own
+  bookkeeping ([#985](https://github.com/jstoup111/ai-conductor/issues/985)). Its
+  live-checkout fingerprint walked the whole tree including `.git/`, `.daemon/`
+  (where `daemon.log` is appended continuously) and `.worktrees/`, so every
+  self-hosted build eventually reported `live checkout changed during self-host
+  execution.` Those three volatile, harness-written paths are now skipped during
+  the walk — not hashed and not read — while harness source under the live
+  checkout stays fingerprinted, so a real add/modify/delete there still halts the
+  run. Exclusion matching is now path-segment aware, so a subtree (and a nested
+  provider-state auth path) can actually be excluded instead of only an exact
+  top-level filename.
+- Two more live-checkout paths the harness writes itself are now skipped by the
+  live-boundary guard ([#985](https://github.com/jstoup111/ai-conductor/issues/985)):
+  `.pipeline/` (per-run task-status, evidence sidecar, gate verdicts and
+  `.memory-count-at-start`, which the daemon writes into the LIVE checkout while a
+  self-host build is in flight) and `.claude/worktrees/` (the throwaway checkouts
+  agents isolate into, which sit under the live checkout but are not reached by the
+  existing `.worktrees` entry — isolating an agent halted the run mid-build). The
+  exclusion is scoped to the `.claude/worktrees` SUBTREE on purpose:
+  `.claude/settings.json` and `.claude/hooks/` remain fingerprinted, since they are
+  exactly the harness state this guard exists to protect.
+- The live-boundary guard's *provider-state* surface — the leak detector proving a
+  self-hosted build never reached back into the operator's real `~/.claude` or
+  `~/.codex` — halted a run on ordinary noise: an unrelated interactive session and
+  background jobs changed 18 files in a 12-minute window
+  (`settings.json`, `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`,
+  `shell-snapshots/*`, `backups/*`, `sessions/*`), none written by the sandboxed build
+  ([#985](https://github.com/jstoup111/ai-conductor/issues/985) counterpart —
+  provider-state, not live-checkout). `fingerprintLiveBoundary` now takes a `provider`
+  argument selecting an explicit, per-entry-commented noise list —
+  `CLAUDE_PROVIDER_STATE_VOLATILE` / `CODEX_PROVIDER_STATE_VOLATILE` in
+  `live-boundary.ts` — covering usage/log/cache telemetry no genuine leak would
+  plausibly announce itself through (session transcripts, shell snapshots, task
+  bookkeeping, plugin/model caches, Codex's own sqlite state/log/goal/memory DBs).
+  **Deliberately NOT excluded**, despite being observed noise in the same incident:
+  `settings.json` (Claude) and `config.toml`/`hooks.json` (Codex) — these are config
+  surfaces a real leak could plausibly rewrite, so they stay fingerprinted and a
+  concurrent interactive settings change can still trip a build. There is no exclusion
+  list that cleanly separates "unrelated session" from "leak" for those files; this
+  trade is documented in `live-boundary.ts` rather than silently resolved.
+
+- Engine-computed steps now get a retry budget of ONE instead of the configured
+  `max_retries`. A step declared `kind: 'engine-native'` that dispatches no agent
+  (`wiring_check`, `test_suite`) is a deterministic function of the tree it runs
+  against, so re-running it over an unchanged tree re-derives the identical verdict —
+  every retry was guaranteed waste. Observed on a live daemon: `wiring_check` failed
+  three times with a byte-identical rejection message in 357ms before terminally
+  failing and costing a full build + build_review cycle. Such a step now runs once, is
+  judged once, and routes its failure (kickback / recovery menu) immediately. The
+  engine-native steps that DO dispatch a one-shot LLM — `build_review` and
+  `attribution_verify`, whose output can legitimately differ between attempts and whose
+  transient dispatch failures the backoff ladder is built to retry — keep the normal
+  budget. See `docs/configuration.md` ([#982](https://github.com/jstoup111/ai-conductor/issues/982)).
+- The `wiring_check` completion predicate rejected evidence recorded at a prior HEAD as
+  stale and forced a costly LLM re-dispatch even when the wiring was still intact. It now
+  re-derives that evidence in-process via `CompletionContext.wiringProbe` instead of
+  discarding it; malformed evidence or a failing probe still fail closed, and fresh
+  evidence still short-circuits without probing (#897,
+  [implementation PR #924](https://github.com/jstoup111/ai-conductor/pull/924)).
+- Needs-human halts are no longer wiped by the main-advance re-kick sweep. Halts now carry
+  a machine-readable class (`needs-human` | `mechanical`) written alongside
+  `.pipeline/HALT`, and the sweep checks it before clearing a marker: `needs-human` halts
+  (validation-group remediation, prd-audit needs-human-DECIDE/un-ALIGNED-FR, build_review
+  scope-FAIL, rebase conflicts, self-host release/version/integrity gates) are skipped
+  outright, while `mechanical` halts (gate-loop-budget-exceeded, build-stall/remediation-
+  budget-exhausted) and legacy `unclassified` sites keep today's auto-clear-and-retry
+  behavior. See `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+- The post-install success banner now prints a command that actually works:
+  `conduct-ts inline "your feature description"` instead of the bare `conduct "your feature
+  description"`, which the CLI rejected (`inline` is mandatory, and `conduct` is the deprecated
+  bash CLI, not `conduct-ts`) ([implementation PR #1037](https://github.com/jstoup111/ai-conductor/pull/1037)).
+- Engineer authoring now commits the required M/L coherence artifact, while daemon runs never execute the DECIDE-phase coherence step and warn-skip non-S features whose artifacts are missing or unparseable during discovery ([spec PR #990](https://github.com/jstoup111/ai-conductor/pull/990); {{IMPLEMENTATION_PR}}).
+
+## Migration
+
+```bash migration
+# Install the user-scoped HARNESS.md links consumed by generated CLAUDE.md and AGENTS.md.
+./bin/install --update
+```
+
+Projects using the native pre-SHIP gate must declare their aggregate operation
+in `.ai-conductor/config.yml`. Compose multiple suites behind this one command:
+
+```yaml
+test_suite:
+  command: npm test
+  working_directory: .
+  timeout_seconds: 1800
+```
+
+### Fixed
+
+- A build step whose retry budget exhausted was terminally HALTed with a generic
+  "retries exhausted" message even when every attempt landed real, committed work that
+  simply never carried a `Task:` trailer — the attributed count is advisory
+  routing/telemetry only, but the exhaustion tail treated it as proof the build was
+  stuck. `Conductor.run()` now tracks whether any attempt moved HEAD
+  (`anyAttemptMovedHead`); when the budget exhausts with real commit movement, the run
+  routes through the same advance seam `completion.done` uses into `build_review` (the
+  sole completion authority) instead of HALTing, recording the unresolved plan task ids
+  into `conduct-state.json`. This is never an always-pass: `build_review` independently
+  re-grades the diff and can still FAIL a routed build, kicking it back to `build` under
+  the same `MAX_KICKBACKS_PER_GATE` bound as any other build_review kickback. A genuine
+  wedge (zero commit movement across every attempt) is unaffected and keeps today's
+  remediation-then-HALT path unchanged. See `adr-2026-07-23-commit-movement-liveness-floor`,
+  `docs/explanation/gates.md`, and `docs/runbooks/stalled-or-stuck-feature.md` for details.
+- Resolved-task accounting missed `Task: <id>` attribution lines that build agents emit
+  mid-message instead of in the final trailer block (git's `%(trailers)` only parses the
+  final paragraph), making real committed work invisible to `countResolvedTasks` and
+  contributing to false `no_task_progress` stalls. `listCommitsWithTrailers` /
+  `getEvidenceRange` now fall back to scanning the raw body for flush-left `Task: <id>`
+  lines (no leading whitespace, nothing else on the line — indented/quoted log excerpts
+  never match) when the final-block parse yields no `Task` trailer; a real final trailer
+  still wins, and `canonicalTaskId` aliasing is unchanged.
+- `conduct daemon logs --follow` did not tail: it printed the current snapshot and exited
+  after ~0.3s. The follow poll timer was unconditionally `unref()`'d, and the `SIGINT`
+  listener that was supposed to hold the process open does not keep node's event loop
+  alive — so the loop drained immediately. `followDaemonLog` now takes an `unref` option
+  (default `true`, unchanged for embedders) and the CLI follow path passes `unref: false`.
+- `conduct daemon logs --lines N` (and `-n N`) was accepted by `runDaemonLogs` but never
+  parsed from argv, so the flag was silently ignored and the whole log printed. The flag is
+  now parsed (`--lines N`, `--lines=N`, `-n N`); a non-numeric or non-positive value falls
+  back to the full file rather than truncating the snapshot to nothing.
+- `build_review` could grade a diff against a stale local `origin/<default>` tracking ref
+  instead of the true remote head, producing false out-of-scope scope-FAIL verdicts on
+  content already merged upstream. Grading now resolves its base through a freshness
+  probe before every run (see Added, above).
+- Spec (DECIDE only): intake issues filed via `bin/intake-file` accumulated contradictory
+  duplicate `priority:`/`size:` labels — 23 of 109 open issues were affected. The
+  `intake-label-sync` workflow cannot parse a CLI-authored body (its `extractField` matches
+  only the GitHub issue-form's `### Heading` rendering), so it fell through to its defaults
+  and **added** `priority: medium` / `size: M` on top of the values the CLI had already
+  applied, because the shared `syncIssueLabels` seam writes with an additive `addLabel` —
+  contradicting the same workflow's header claim of a "set labels" full replace. The spec
+  gives the seam a label-authority ladder (explicit > existing > default) applied by a
+  namespace-scoped replace that preserves `engineer:handled`/`blocked_by:#N`, teaches
+  `bin/intake-file` to emit the `### Priority`/`### Size` shape the parser already
+  understands (leaving the issue-form path untouched), and adds a dry-run-by-default
+  `intake-backfill --dedupe` sweep for the already-affected issues (#889).
 - Fixed a false `no_task_progress` halt that could fire even when a build was already 100%
   complete: the build step's own completion predicate only checked
   `.pipeline/task-status.json` rows and missed tasks resolved solely via `Task:` trailer
@@ -349,6 +742,39 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `conductor.ts`'s group-dispatch JOIN (both the concurrent and serial paths) now
   parks an `authFailure` without consuming retry/escalation budget, matching the
   serial-path behavior (#498, closes #484).
+- Self-host daemon builds now self-refresh their engine checkout from origin before a
+  quiescent engine rebuild, so the rebuild never runs against a stale commit. When the
+  running engine falls behind origin, the daemon logs a loud staleness warning (deduped
+  by cause + SHA so it doesn't repeat every poll tick); when self-heal / auto-restart is
+  disabled, an advisory staleness probe still surfaces the same signal without acting on
+  it. Published engine versions are now stamped with a `.engine-source-sha` sidecar
+  recording the exact source commit they were built from. The origin-fetch cadence is
+  throttled by the new `engine_refresh_min_interval_seconds` config key (default `300`)
+  (#598).
+- **DECIDE-phase artifact coherence gate.** A deterministic, land-time check that the
+  intake outcomes → PRD FRs → stories → plan tasks actually agree with each other, so a
+  spec can't land with a plausible plan that quietly drops an outcome, invents an FR, or
+  orphans a story/task. Claiming an idea from intake now stages its Desired-outcome bullets
+  to `.pipeline/intake-outcomes.md` so they travel with the worktree; the new
+  `/coherence-check` skill (Medium/Large tier only) authors the committed traceability
+  record at `.docs/coherence/<plan-stem>.md` at the end of DECIDE; and `land-spec.ts` runs
+  `runCoherenceGate` (`engine/engineer/coherence-validator.ts`), which cross-checks every
+  cited id against the real artifacts (fabricated-citation reject), runs five
+  coverage/consistency layers (outcome, FR, story, orphan-task, coverage-table), scans for
+  duplicate intake claims offline via local git state, and blocks the land on any
+  unresolved gap. Every coverage layer collects ALL of its findings (e.g. every orphan
+  task, every uncovered story), not just its first, so one refusal names the complete gap
+  set and a waiver can cover it in a single pass. Tier S is exempt outright, and specs
+  authored before this gate existed are never retroactively blocked (no
+  `.docs/coherence/` signal in the diff disengages the gate) — worktree creation now
+  always stamps `.docs/coherence/.gitkeep`, so every engineer-authored post-gate spec
+  carries a coherence signal and a skipped `/coherence-check` fails closed at parse
+  instead of disengaging. Outcome bullets are read from `.pipeline/intake-outcomes.md`
+  with a fallback to the committed `.docs/intake/<plan-stem>.md` marker
+  (`readCommittedIntakeOutcomes`) so the outcome layer survives worktree recreation and
+  re-lands. A genuine exception is waivable via a committed
+  `.docs/coherence-waivers/<plan-stem>.md` (`Waives: <gap-id>[, ...]` / `Rationale: <prose>`,
+  fresh-in-diff, partial coverage still blocks).
 
 ## Migration
 
@@ -4235,8 +4661,11 @@ fi
 - conduct-ts: hybrid session model — new `freshContextPerStep` option. When on,
   the conductor resets the LLM session before each new step in the looped region
   (`build`…`finish`), so each runs on fresh context (Ralph-style — context never
-  bloats across the SHIP phase) while a step's own retries still resume. The
-  front half keeps the persistent session. Default off (persistent everywhere).
+  bloats across the SHIP phase) while a step's own retries still resume.
+  **Historical intermediate behavior:** the front half remained persistent and
+  the option defaulted off. This was later superseded by
+  ai-conductor#325 / PR #365, which makes fresh-per-step unconditional across
+  all phases and retains resume only within a step's retries.
 - conduct-ts: the conductor now drives the **resolved step registry**
   (`buildStepRegistry(config)`) instead of the static `ALL_STEPS`, so **custom
   steps** defined in `.ai-conductor/config.yml` (via `after:` + `skill:`) are

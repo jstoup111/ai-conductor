@@ -41,6 +41,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
 import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-rekick.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCb);
 
@@ -55,13 +56,17 @@ async function readJson(p: string): Promise<any> {
   return JSON.parse(await readFile(p, 'utf-8'));
 }
 
-/** Seeds `.pipeline/conduct-state.json` with every step before `rebase` marked done. */
+/** Seeds a real `rebase` dispatch while resolving the unrelated post-rebase finish tail. */
 async function seedPreRebaseState(statePath: string): Promise<void> {
   const state: ConductState = {};
   for (const s of ALL_STEPS) {
     if (s.name === 'rebase') break;
     (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
   }
+  // The acceptance subject is the real rebase call site and its translation
+  // artifacts. Keeping finish pending would exercise unrelated SHIP validation
+  // after rebase, including #922's publication fence.
+  state.finish = 'done';
   await writeState(statePath, state);
 }
 
@@ -69,6 +74,13 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
 async function runFinishTimeRebase(repo: string): Promise<void> {
   const statePath = join(repo, 'conduct-state.json');
   await seedPreRebaseState(statePath);
+  const baselineCommit = (
+    await execFile('git', ['rev-parse', 'HEAD'], { cwd: repo })
+  ).stdout.trim();
+  // A real finish-time rebase follows BUILD, where the approved DECIDE
+  // baseline is sealed. Seed that lifecycle prerequisite before entering
+  // directly at the SHIP-native rebase step.
+  await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
   const events = new ConductorEventEmitter();
   const runner: StepRunner = {
     run: async () => ({ success: true }) satisfies StepRunResult,
@@ -83,7 +95,6 @@ async function runFinishTimeRebase(repo: string): Promise<void> {
     fromStep: 'rebase',
   } as never);
   await conductor.run();
-  console.error('[DEBUG after run]', await readFile(join(repo, '.pipeline/rebase-rewrites.json'), 'utf-8').catch((e) => `ERR:${e}`));
 }
 
 interface Scratch {
@@ -143,7 +154,6 @@ async function buildTranslationRepo(): Promise<
 
 /** Seeds the three sha-anchored stores per Stories 2-4. */
 async function seedStores(repo: string, c1Sha: string, c2Sha: string): Promise<void> {
-  console.error('[DEBUG seedStores]', { c1Sha, c2Sha });
   await mkdir(join(repo, '.pipeline'), { recursive: true });
 
   const evidence = {
@@ -190,7 +200,7 @@ async function shaForSubject(
   subject: string,
 ): Promise<string> {
   const { stdout } = await g(['log', branch, '--format=%H %s']);
-  const line = stdout.split('\n').find((l) => l.endsWith(subject));
+  const line = stdout.toString().split('\n').find((l: string) => l.endsWith(subject));
   if (!line) throw new Error(`commit with subject "${subject}" not found on ${branch} after rebase`);
   return line.split(' ')[0];
 }

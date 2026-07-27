@@ -8,6 +8,51 @@ export interface TokenUsage {
   durationMs?: number;
 }
 
+export type ProviderUnavailableScope = 'run';
+
+/** The credential mechanism selected by the Codex provider for a run. */
+export type AuthenticationSource = 'api-key' | 'cached-login';
+
+/** A conclusive provider-owned authentication readiness outcome. */
+export type AuthenticationReadinessState =
+  | 'ready'
+  | 'missing'
+  | 'unusable'
+  | 'unverifiable';
+
+/** A closed indication that non-authentication doctor checks are degraded. */
+export type UnrelatedHealth = 'degraded';
+
+/**
+ * Safe metadata a provider may return for authentication recovery. Diagnostic
+ * output and credential material deliberately have no representation here.
+ */
+export interface AuthenticationReadiness {
+  provider: 'codex';
+  source: AuthenticationSource;
+  state: AuthenticationReadinessState;
+  unrelatedHealth?: UnrelatedHealth;
+  remediation?: string;
+}
+
+/** Opaque, child-only invocation settings prepared by a selected provider. */
+export interface SelfHostInvocation {
+  executable: string;
+  env: NodeJS.ProcessEnv;
+  args: readonly string[];
+  teardown(): Promise<void>;
+}
+
+export interface SelfHostAuthPreparation {
+  env?: NodeJS.ProcessEnv;
+  args: readonly string[];
+}
+
+export interface SelfHostAuthContext {
+  provider: 'codex';
+  homeDir: string;
+}
+
 export interface InvokeResult {
   success: boolean;
   output: string;
@@ -39,6 +84,26 @@ export interface InvokeResult {
    * Indicates the daemon's OAuth token may be stale or missing.
    */
   authFailure?: boolean;
+  /**
+   * Set when Codex's automatic permission review was denied or could not
+   * complete. This is distinct from authentication, rate, model, and session
+   * recovery signals so unattended work fails closed with an operator action.
+   */
+  permissionDenied?: boolean;
+  /**
+   * Explicitly identifies deterministic provider-wide unavailability.
+   * Consumers must also require providerUnavailableScope === 'run'; output
+   * text alone never authorizes provider fallback or run-wide caching.
+   */
+  providerUnavailable?: boolean;
+  providerUnavailableScope?: ProviderUnavailableScope;
+  providerUnavailableReason?: string;
+  /** Set by the execution layer when a cached unavailable provider is skipped. */
+  providerInvocationSkipped?: boolean;
+  /** Provider-owned, safe authentication source/readiness metadata. */
+  authentication?: AuthenticationReadiness;
+  /** Sanitized diagnostic-only safety notices; never an authorization input. */
+  safetyDiagnostics?: readonly string[];
 }
 
 export interface InvokeOptions {
@@ -69,9 +134,28 @@ export interface InvokeOptions {
    * omitted, the subprocess inherits the parent process cwd.
    */
   cwd?: string;
+  /**
+   * Optional feature-scoped sink for subprocess diagnostics. Daemon feature
+   * runs supply their persisted logger; ordinary CLI runs leave this unset and
+   * continue inheriting stdio directly.
+   */
+  diagnosticLog?: (message: string) => void;
+  /** Set only for the resolved self-host provider candidate. */
+  selfHost?: SelfHostInvocation;
 }
 
 export interface LLMProvider {
   invoke(options: InvokeOptions): Promise<InvokeResult>;
-  invokeInteractive(options: InvokeOptions): Promise<void>;
+  /** Optional so legacy and custom providers need not implement auth recovery. */
+  readiness?(): Promise<AuthenticationReadiness>;
+  /** Optional provider-owned selected-auth handoff for an isolated self-host home. */
+  prepareSelfHostAuth?(context: SelfHostAuthContext): Promise<SelfHostAuthPreparation>;
+  /** Resolve the provider executable before a child home overrides provider state. */
+  resolveSelfHostExecutable?(): Promise<string>;
+  /**
+   * Built-in providers return classified completion after their streamed
+   * process exits. Legacy custom providers may keep returning void; absence of
+   * a result carries no provider-fallback authority.
+   */
+  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void>;
 }

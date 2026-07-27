@@ -55,7 +55,7 @@ attribution_audit_sample_pct: 10
 # park fires on the very trailer-corroboration wedges #773 removes, halting otherwise-
 # healthy builds. enabled:false stops the park (attempt/wall-clock retry bounds still apply).
 build_progress_halt:
-  enabled: false
+  enabled: true
 
 # Wiring-reachability gate Layer 2 (TS import-graph reachability, Task 22).
 # entry_points are the roots the import graph is walked from to check that
@@ -81,6 +81,14 @@ wiring:
     - src/conductor/src/intake-loop-cli.ts
     - src/conductor/src/engine/engineer-cli.ts
 
+# Native pre-SHIP aggregate verification. The project-owned npm script runs
+# Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
+# in one operation. Harness integrity remains a separate self-host gate.
+test_suite:
+  command: npm test
+  working_directory: src/conductor
+  timeout_seconds: 1800
+
 # Per-step overrides.
 #
 # manual_test is disabled for this repo's self-host builds (operator order,
@@ -90,11 +98,41 @@ wiring:
 # downstream prerequisites (prd_audit, rebase) and the SHIP-tail selector —
 # the pipeline flows build → build_review (opt-in, currently off) → prd_audit
 # (skipped on technical track) → architecture_review_as_built → rebase →
-# finish. manual_test is the only gating step whose definition opts into
+# maintain-documentation → finish. manual_test is the only gating step whose definition opts into
 # config-disable (`configDisableAllowed`); structural steps can never be
 # disabled. Read per conduct run; new builds pick it up once the engine
 # supporting `configDisableAllowed` is deployed (rebuild + daemon reload) —
 # an OLDER engine rejects this key as "Cannot disable gating step".
+llm_provider: [codex, claude]
+
 steps:
+  explore:
+    llm_provider: claude
+  prd:
+    llm_provider: claude
+  architecture_review:
+    llm_provider: claude
+  conflict_check:
+    llm_provider: claude
+  coherence_check:
+    llm_provider: claude
+  acceptance_specs:
+    llm_provider: claude
+  build_review:
+    llm_provider: claude
+  prd_audit:
+    llm_provider: claude
+  architecture_review_as_built:
+    llm_provider: claude
+  rebase:
+    llm_provider: claude
+  finish:
+    llm_provider: claude
   manual_test:
     disable: true
+  maintain-documentation:
+    llm_provider: claude
+    after: rebase
+    skill: .agents/skills/maintain-documentation/SKILL.md
+    enforcement: gating
+    completion_artifact: .pipeline/maintain-documentation-pass

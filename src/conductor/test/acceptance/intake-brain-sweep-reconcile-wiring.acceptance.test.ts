@@ -27,24 +27,23 @@
 // inside `intakeTick` in a try/catch. `poll`/`enqueue`/`notify`/`log` are
 // faked (per the intake-loop module's own established zero-real-I/O
 // convention, see background-intake-conduct-loop.test.ts) — irrelevant to
-// this wiring question. `reconcile` is a fake here too; the deps object is
-// cast `as any` because `IntakeLoopDeps` does not carry `reconcile` yet
-// (pre-implementation) — the RED signal is the runtime assertion below
-// failing today (reconcile is never invoked), not a type error.
+// this wiring question. `reconcile` is a fake here too, now a typed
+// (optional) member of `IntakeLoopDeps` per Task 15's completed seam.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect } from 'vitest';
 import { intakeTick, type IntakeLoopDeps } from '../../src/engine/engineer/intake/intake-loop.js';
 
-function baseDeps(over: Record<string, unknown> = {}): IntakeLoopDeps {
+function baseDeps(over: Partial<IntakeLoopDeps> = {}): IntakeLoopDeps {
   return {
     poll: async () => [],
     enqueue: async () => {},
     notify: async () => {},
+    sleep: async () => {},
     now: () => new Date('2026-07-22T00:00:00.000Z'),
     log: () => {},
     ...over,
-  } as IntakeLoopDeps;
+  };
 }
 
 describe('TR-6 — the brain sweep is wired into intakeTick', () => {

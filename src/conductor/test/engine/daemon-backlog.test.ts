@@ -66,6 +66,11 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
+  const writeCoherence = async (slug: string) => {
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
+  };
 
   // Convenience: run discoverBacklog against the working tree (fs source).
   const discover = async (
@@ -96,6 +101,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       planWithDeps('.docs/stories/feature-shape.md'),
     );
     await writeFile(join(dir, '.docs/stories/feature-shape.md'), APPROVED_STORIES);
+    await writeCoherence('feature-shape');
 
     const result = await discoverBacklog(dir, undefined, undefined, {
       treeSource: fsTreeSource(dir),
@@ -109,6 +115,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
       await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
       await mkdir(join(dir, '.docs/intake'), { recursive: true });
       await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${sourceRef}\n`);
     }
@@ -150,6 +157,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     it('a spec with no Source-Ref is left in items without invoking the resolver', async () => {
       await writeFile(join(dir, '.docs/plans/no-ref-spec.md'), planWithDeps('.docs/stories/no-ref-spec.md'));
       await writeFile(join(dir, '.docs/stories/no-ref-spec.md'), APPROVED_STORIES);
+      await writeCoherence('no-ref-spec');
       let called = false;
       const resolver = {
         resolve: async () => {
@@ -173,6 +181,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
       await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
       await mkdir(join(dir, '.docs/intake'), { recursive: true });
       await writeFile(join(dir, `.docs/intake/${slug}.md`), `Source-Ref: ${sourceRef}\n`);
     }
@@ -279,6 +288,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
         planWithDeps('.docs/stories/no-marker-spec.md'),
       );
       await writeFile(join(dir, '.docs/stories/no-marker-spec.md'), APPROVED_STORIES);
+      await writeCoherence('no-marker-spec');
       // Deliberately no `.docs/intake/no-marker-spec.md` at all.
 
       const resolver = alwaysThrowingResolver();
@@ -299,6 +309,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
         planWithDeps('.docs/stories/malformed-ref-spec.md'),
       );
       await writeFile(join(dir, '.docs/stories/malformed-ref-spec.md'), APPROVED_STORIES);
+      await writeCoherence('malformed-ref-spec');
       await mkdir(join(dir, '.docs/intake'), { recursive: true });
       // Not a valid owner/repo#N form — parseIntakeSourceRef rejects it, so the
       // item carries no sourceRef. A malformed marker is distinct from an ABSENT
@@ -327,6 +338,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     async function seedEligible(slug: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
       await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
     }
     async function seedTrack(slug: string, value: string) {
       await mkdir(join(dir, '.docs/track'), { recursive: true });
@@ -367,6 +379,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
       planWithDeps('.docs/stories/feature-a.md'),
     );
     await writeFile(join(dir, '.docs/stories/feature-a.md'), APPROVED_STORIES);
+    await writeCoherence('feature-a');
 
     const backlog = await discover();
     expect(backlog).toHaveLength(1);
@@ -378,6 +391,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
   it('falls back to a same-stem stories file when no **Stories:** line', async () => {
     await writeFile(join(dir, '.docs/plans/feature-b.md'), planWithDeps());
     await writeFile(join(dir, '.docs/stories/feature-b.md'), APPROVED_STORIES);
+    await writeCoherence('feature-b');
 
     const backlog = await discover();
     expect(backlog.map((b) => b.slug)).toEqual(['feature-b']);
@@ -393,6 +407,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     for (const slug of ['a', 'b']) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps());
       await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
     }
     const processed = new Set(['a']);
     const backlog = await discover(async (slug) => processed.has(slug));
@@ -460,6 +475,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
   it('carries the engineer-assessed tier from .docs/complexity/<slug>.md', async () => {
     await writeFile(join(dir, '.docs/plans/big.md'), planWithDeps('.docs/stories/big.md'));
     await writeFile(join(dir, '.docs/stories/big.md'), APPROVED_STORIES);
+    await writeCoherence('big');
     await mkdir(join(dir, '.docs/complexity'), { recursive: true });
     await writeFile(join(dir, '.docs/complexity/big.md'), '# Complexity\n\nTier: L\n');
 
@@ -470,10 +486,87 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
   it('leaves tier undefined when no complexity marker is present', async () => {
     await writeFile(join(dir, '.docs/plans/legacy.md'), planWithDeps('.docs/stories/legacy.md'));
     await writeFile(join(dir, '.docs/stories/legacy.md'), APPROVED_STORIES);
+    await writeCoherence('legacy');
 
     const backlog = await discover();
     expect(backlog).toHaveLength(1);
     expect(backlog[0].tier).toBeUndefined();
+  });
+
+  // Dated-plan/undated-marker mismatch: the plan stem carries a `YYYY-MM-DD-` prefix but the complexity/track
+  // markers were landed under the UNDATED stem, so the slug-keyed reads missed
+  // and the feature silently built as M/product — running steps its real tier
+  // and track would have skipped.
+  describe('date-prefix-relaxed metadata lookup', () => {
+    async function seedEligible(slug: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
+    }
+    async function seedTier(stem: string, tier: string) {
+      await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+      await writeFile(join(dir, `.docs/complexity/${stem}.md`), `# Complexity\n\nTier: ${tier}\n`);
+    }
+    async function seedTrack(stem: string, value: string) {
+      await mkdir(join(dir, '.docs/track'), { recursive: true });
+      await writeFile(join(dir, `.docs/track/${stem}.md`), `# Track\n\nTrack: ${value}\n`);
+    }
+
+    it('resolves the live case: dated slug, undated markers → S / technical', async () => {
+      const slug = '2026-07-26-daemon-log-feature-tags-254';
+      await seedEligible(slug);
+      await seedTier('daemon-log-feature-tags-254', 'S');
+      await seedTrack('daemon-log-feature-tags-254', 'technical');
+
+      const [item] = await discover();
+      expect(item.tier).toBe('S');
+      expect(item.track).toBe('technical');
+    });
+
+    it('exact-slug markers still win over an undated same-base marker', async () => {
+      const slug = '2026-07-26-exact-wins';
+      await seedEligible(slug);
+      await seedTier(slug, 'L');
+      await seedTrack(slug, 'product');
+      await seedTier('exact-wins', 'S');
+      await seedTrack('exact-wins', 'technical');
+
+      const [item] = await discover();
+      expect(item.tier).toBe('L');
+      expect(item.track).toBe('product');
+    });
+
+    it('a genuine absence still yields undefined (daemon defaults downstream)', async () => {
+      await seedEligible('2026-07-26-no-markers');
+      const [item] = await discover();
+      expect(item.tier).toBeUndefined();
+      expect(item.track).toBeUndefined();
+    });
+
+    it('never guesses when two plans share one undated base (#407/#993)', async () => {
+      await seedEligible('2026-07-01-shared-base');
+      await seedEligible('2026-07-26-shared-base');
+      await seedTier('shared-base', 'S');
+      await seedTrack('shared-base', 'technical');
+
+      const items = await discover();
+      expect(items).toHaveLength(2);
+      for (const item of items) {
+        expect(item.tier).toBeUndefined();
+        expect(item.track).toBeUndefined();
+      }
+    });
+
+    it('logs the paths tried when tier/track fall back to a default', async () => {
+      await seedEligible('2026-07-26-observable-miss');
+      const logs: string[] = [];
+      await discover(undefined, (m) => logs.push(m));
+      const joined = logs.join('\n');
+      expect(joined).toMatch(/\.docs\/complexity\/2026-07-26-observable-miss\.md/);
+      expect(joined).toMatch(/\.docs\/complexity\/observable-miss\.md/);
+      expect(joined).toMatch(/\.docs\/track\/2026-07-26-observable-miss\.md/);
+      expect(joined).toMatch(/\.docs\/track\/observable-miss\.md/);
+    });
   });
 });
 
@@ -487,6 +580,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
 describe('engine/daemon-backlog — land-authored intake marker keyed by plan stem (Task 9)', () => {
   let dir: string;
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
@@ -546,6 +640,8 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
     const stem = '2026-07-03-some-feature';
     await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
     await writeFile(join(dir, `.docs/stories/${stem}.md`), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${stem}.md`), COHERENCE_TABLE);
     // Marker keyed by the PLAN STEM itself — not by any idea slug.
     await writeFile(
       join(dir, `.docs/intake/${stem}.md`),
@@ -571,6 +667,8 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
     const legacyIdeaSlug = 'my-cool-old-idea-name';
     await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
     await writeFile(join(dir, `.docs/stories/${stem}.md`), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${stem}.md`), COHERENCE_TABLE);
     // Simulates a pre-fix landed marker: keyed by the OLD idea slug, not the
     // plan's own stem. This must be invisible to discovery — no fallback lookup.
     await writeFile(
@@ -620,6 +718,7 @@ describe('engine/daemon-backlog — land-authored intake marker keyed by plan st
 describe('discoverBacklog — un-owned arrival default-builds with a loud escalation (Story 3, FR-3)', () => {
   const stem = '2026-07-10-unowned-defaulted';
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
@@ -659,8 +758,10 @@ describe('discoverBacklog — un-owned arrival default-builds with a loud escala
     dir = await mkdtemp(join(tmpdir(), 'daemon-backlog-unowned-defaulted-'));
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
     await writeFile(join(dir, `.docs/plans/${stem}.md`), planWithDeps(`.docs/stories/${stem}.md`));
     await writeFile(join(dir, `.docs/stories/${stem}.md`), APPROVED_STORIES);
+    await writeFile(join(dir, `.docs/coherence/${stem}.md`), COHERENCE_TABLE);
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
@@ -748,6 +849,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
   let baseBranch: string;
 
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
@@ -760,8 +862,10 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
   async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
     await mkdir(join(dir, '.docs/plans'), { recursive: true });
     await mkdir(join(dir, '.docs/stories'), { recursive: true });
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
     await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
     await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
   }
 
   beforeEach(async () => {
@@ -852,6 +956,7 @@ describe('engine/daemon-backlog — FR-24 merge is the build-ready trigger (git)
 describe('engine/daemon-backlog — owner-gate integration', () => {
   let dir: string;
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
@@ -883,6 +988,8 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
   async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
     await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
     await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
   }
 
   beforeEach(async () => {
@@ -1429,6 +1536,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
 describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () => {
   let dir: string;
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
@@ -1459,6 +1567,8 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
   async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
     await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
     await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
   }
 
   async function writeShipped(slug: string): Promise<void> {
@@ -1627,6 +1737,7 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
 describe('engine/daemon-backlog — content-hash match dedups renamed specs (Story 4/Task 6)', () => {
   let dir: string;
   const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
+  const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
   const planWithDeps = (storiesRef?: string) =>
     `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
 
@@ -1662,6 +1773,8 @@ describe('engine/daemon-backlog — content-hash match dedups renamed specs (Sto
   async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
     await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps());
     await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+    await mkdir(join(dir, '.docs/coherence'), { recursive: true });
+    await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
   }
 
   async function writeShippedWithHash(oldSlug: string, hash: string): Promise<void> {
@@ -1926,7 +2039,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
         }
       }
       // For all other commands, use the real git runner
-      return (await makeGitRunner(dir))(args);
+      return makeGitRunner(dir)(args);
     };
 
     // Call fastForwardRoot with the mocked git runner
@@ -2001,7 +2114,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
         }
       }
       // For all other commands, use the real git runner
-      return (await makeGitRunner(dir))(args);
+      return makeGitRunner(dir)(args);
     };
 
     // Call fastForwardRoot with the mocked git runner
@@ -2136,7 +2249,7 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
       if (args[0] === 'rm' || (args[0] === 'remove' && args[1])) {
         deleteCount += 1;
       }
-      return (await makeGitRunner(dir))(args);
+      return makeGitRunner(dir)(args);
     };
 
     // Call fastForwardRoot with the partially-explained dirty tree
@@ -2277,7 +2390,9 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
 
     // Call fastForwardRoot with the mocked git runner
     // This should NOT throw — fastForwardRoot must never crash the poll loop
-    await expect(fastForwardRoot(dir, log, triageFailingGit)).resolves.toBeUndefined();
+    const outcome = await fastForwardRoot(dir, log, triageFailingGit);
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('dirty');
 
     // Verify: an error was logged with details
     const errorLog = logs.find((l) => l.includes('ERROR') || l.includes('triage'));
@@ -2408,5 +2523,140 @@ describe('engine/daemon-backlog — fastForwardRoot heal integration (Task 7)', 
         expect(thirdWarn).not.toContain('src/file2.ts');
       }
     });
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Task 1 (TI-1 HP1; TI-4) — fastForwardRoot returns a structured outcome.
+// ─────────────────────────────────────────────────────────────────────────────
+describe('engine/daemon-backlog — fastForwardRoot structured outcome (Task 1)', () => {
+  let dir: string;
+  let originDir: string;
+  let baseBranch: string;
+  let tmpBase: string;
+
+  beforeEach(async () => {
+    tmpBase = await mkdtemp(join(tmpdir(), 'fast-forward-outcome-'));
+    dir = join(tmpBase, 'work');
+    originDir = join(tmpBase, 'origin.git');
+
+    await mkdir(dir);
+    await mkdir(originDir);
+
+    await execFile('git', ['init', '--bare', '-q', '-b', 'main'], { cwd: originDir });
+    await execFile('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await execFile('git', ['remote', 'add', 'origin', originDir], { cwd: dir });
+
+    await writeFile(join(dir, 'README.md'), 'init\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
+    baseBranch = await execFile('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: dir }).then(
+      (r) => r.stdout.trim(),
+    );
+    await execFile('git', ['push', '-q', '-u', 'origin', baseBranch], { cwd: dir });
+  });
+
+  afterEach(async () => {
+    await rm(tmpBase, { recursive: true, force: true });
+  });
+
+  it('no origin remote → {status: "skipped", cause: "no-origin"}', async () => {
+    await execFile('git', ['remote', 'remove', 'origin'], { cwd: dir });
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome).toEqual({ status: 'skipped', cause: 'no-origin' });
+  });
+
+  it('not on the default branch → {status: "skipped", cause: "not-default-branch"}', async () => {
+    await execFile('git', ['checkout', '-q', '-b', 'feat/other'], { cwd: dir });
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('not-default-branch');
+  });
+
+  it('dirty, unhealable tree → {status: "skipped", cause: "dirty"} with behindOrigin/originHead when determinable', async () => {
+    // Advance origin so the root is genuinely behind.
+    await execFile('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: dir });
+    await writeFile(join(dir, 'upstream.txt'), 'from feat/x\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'feat commit'], { cwd: dir });
+    await execFile('git', ['push', '-q', 'origin', 'feat/x:' + baseBranch], { cwd: dir });
+    await execFile('git', ['checkout', '-q', baseBranch], { cwd: dir });
+
+    // Dirty the tree with content that matches no candidate branch (unhealable).
+    await writeFile(join(dir, 'README.md'), 'dirty and unexplained\n');
+
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('dirty');
+    expect(outcome.behindOrigin).toBe(true);
+    expect(typeof outcome.originHead).toBe('string');
+  });
+
+  it('fetch fails (origin unreachable) → {status: "skipped", cause: "fetch-failed"}', async () => {
+    const realGit = makeGitRunner(dir);
+    const failingFetchGit = async (args: string[]) => {
+      if (args[0] === 'fetch') {
+        return { exitCode: 1, stdout: '', stderr: 'simulated offline' };
+      }
+      return realGit(args);
+    };
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m), failingFetchGit);
+    expect(outcome).toEqual({ status: 'skipped', cause: 'fetch-failed' });
+  });
+
+  it('diverged (ff-only merge fails) → {status: "skipped", cause: "diverged", behindOrigin: true, originHead}', async () => {
+    // Diverge: commit locally AND on origin so a --ff-only merge is impossible.
+    await writeFile(join(dir, 'local-only.txt'), 'local change\n');
+    await execFile('git', ['add', '.'], { cwd: dir });
+    await execFile('git', ['commit', '-q', '-m', 'local divergent commit'], { cwd: dir });
+
+    // Advance origin independently via a second clone.
+    const cloneDir = join(tmpBase, 'clone2');
+    await execFile('git', ['clone', '-q', originDir, cloneDir]);
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: cloneDir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: cloneDir });
+    await writeFile(join(cloneDir, 'origin-only.txt'), 'origin change\n');
+    await execFile('git', ['add', '.'], { cwd: cloneDir });
+    await execFile('git', ['commit', '-q', '-m', 'origin divergent commit'], { cwd: cloneDir });
+    await execFile('git', ['push', '-q', 'origin', baseBranch], { cwd: cloneDir });
+
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('skipped');
+    expect(outcome.cause).toBe('diverged');
+    expect(outcome.behindOrigin).toBe(true);
+    expect(typeof outcome.originHead).toBe('string');
+  });
+
+  it('already up to date → {status: "current"}', async () => {
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome).toEqual({ status: 'current' });
+  });
+
+  it('origin has new commits, ff-only succeeds → {status: "advanced", originHead}', async () => {
+    const cloneDir = join(tmpBase, 'clone1');
+    await execFile('git', ['clone', '-q', originDir, cloneDir]);
+    await execFile('git', ['config', 'user.email', 'test@test.com'], { cwd: cloneDir });
+    await execFile('git', ['config', 'user.name', 'Test'], { cwd: cloneDir });
+    await writeFile(join(cloneDir, 'new.txt'), 'new content\n');
+    await execFile('git', ['add', '.'], { cwd: cloneDir });
+    await execFile('git', ['commit', '-q', '-m', 'origin advances'], { cwd: cloneDir });
+    await execFile('git', ['push', '-q', 'origin', baseBranch], { cwd: cloneDir });
+
+    const expectedHead = (
+      await execFile('git', ['rev-parse', baseBranch], { cwd: cloneDir })
+    ).stdout.trim();
+
+    const logs: string[] = [];
+    const outcome = await fastForwardRoot(dir, (m) => logs.push(m));
+    expect(outcome.status).toBe('advanced');
+    expect(outcome.originHead).toBe(expectedHead);
   });
 });

@@ -16,14 +16,31 @@
 // primary working tree. There is no fallback to authoring in the shared checkout.
 
 import { join } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { execa } from 'execa';
 import {
   ensureWorktree,
   removeWorktree,
-  worktreeStatus,
   type EnsureWorktreeResult,
   type WorktreeReconcile,
 } from '../worktree-shared.js';
 import { deriveDefaultBranch, slugify } from './authoring.js';
+import { stageIntakeOutcomes } from './outcome-staging.js';
+
+/**
+ * Like `worktreeStatus`, but excludes the given pathspec from the porcelain
+ * output — used to keep the FR-14 coherence stamp (which every creation call
+ * writes unconditionally, including the one that produced a leftover) from
+ * itself tripping the FR-11 dirty-leftover refusal.
+ */
+async function worktreeStatusExcluding(path: string, excludePathspec: string): Promise<string> {
+  const { stdout } = await execa(
+    'git',
+    ['status', '--porcelain', '--', '.', `:(exclude)${excludePathspec}`],
+    { cwd: path },
+  );
+  return stdout.trim();
+}
 
 export interface EngineerWorktree {
   slug: string;
@@ -54,6 +71,7 @@ export async function createEngineerWorktree(
   canonicalPath: string,
   idea: string,
   log?: (m: string) => void,
+  claim?: { sourceRef?: string | null; body?: string | null },
 ): Promise<EngineerWorktree> {
   const slug = slugify(idea);
   const branch = `spec/${slug}`;
@@ -80,8 +98,14 @@ export async function createEngineerWorktree(
 
   // FR-11 negative: a reused/attached leftover worktree that is DIRTY must not silently
   // land stale artifacts. Surface it so the operator recreates it.
+  //
+  // The FR-14 coherence stamp (`.docs/coherence/.gitkeep`, written unconditionally
+  // below on every creation call, including the one that produced this leftover)
+  // is excluded from the dirty check — it is engine-written, content-invariant,
+  // and reused verbatim by this same call, so it must never itself trip the
+  // stale-artifact refusal.
   if (res.reconcile !== 'created') {
-    const status = await worktreeStatus(worktreePath).catch(() => '');
+    const status = await worktreeStatusExcluding(worktreePath, '.docs/coherence');
     if (status !== '') {
       throw new Error(
         `engineer worktree: leftover worktree at "${worktreePath}" (${res.reconcile}) is dirty:\n${status}\n` +
@@ -89,6 +113,22 @@ export async function createEngineerWorktree(
       );
     }
   }
+
+  // Task 1 (Story 1 happy path): stage the intake's Desired-outcome bullets into
+  // the worktree's gitignored .pipeline/ BEFORE any DECIDE artifact is authored.
+  // No-op for chat/CLI-originated ideas (no sourceRef/body) — Story 1 negative path.
+  if (claim?.sourceRef && claim?.body) {
+    await stageIntakeOutcomes(worktreePath, claim.sourceRef, claim.body);
+  }
+
+  // FR-14: stamp .docs/coherence/ on every worktree so a post-gate spec's
+  // idea-attributable change set always carries a coherence signal — this is
+  // what distinguishes an M/L spec that skipped /coherence-check (fail-closed)
+  // from a legacy spec authored before the gate existed (no-retroactivity
+  // disengage in coherence-validator.ts). Always written, unconditionally.
+  const coherenceDir = join(worktreePath, '.docs', 'coherence');
+  await mkdir(coherenceDir, { recursive: true });
+  await writeFile(join(coherenceDir, '.gitkeep'), '', 'utf8');
 
   return { slug, branch, worktreePath, reconcile: res.reconcile };
 }

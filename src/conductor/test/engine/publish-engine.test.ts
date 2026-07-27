@@ -536,6 +536,102 @@ describe('publish-engine.mjs pre-build source-cache skip (Task 2)', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Task 5 — `.engine-source-sha` sidecar stamped on finalize. Plan ref:
+// .docs/plans/daemon-stale-engine-origin-advance.md, Task 5.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('publish-engine.mjs .engine-source-sha sidecar (Task 5)', () => {
+  function makeCountingRunCommand() {
+    let calls = 0;
+    const runCommand = async (cmd: string[], execOpts: { cwd: string }) => {
+      calls += 1;
+      const outDirIdx = cmd.indexOf('--out-dir');
+      const outDir = cmd[outDirIdx + 1];
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, 'index.js'), `export const built = ${calls};\n`, 'utf-8');
+      void execOpts;
+    };
+    return { runCommand, getCalls: () => calls };
+  }
+
+  it('a finalizing publish writes .engine-source-sha with the source HEAD SHA next to .engine-source-key', async () => {
+    const { runCommand } = makeCountingRunCommand();
+    const getSourceSha = async () => 'deadbeefcafef00d';
+    const computeSourceKey = async () => 'stub-source-key';
+
+    const result = await publish({
+      conductorRoot,
+      tsupCommand: ['node', stubPath],
+      runCommand,
+      getSourceSha,
+      computeSourceKey,
+    });
+
+    const sidecar = await readFile(join(result.dir, '.engine-source-sha'), 'utf-8');
+    expect(sidecar).toBe('deadbeefcafef00d');
+    // Composes with the existing source-key sidecar in the same finalize region.
+    const keySidecar = await readFile(join(result.dir, '.engine-source-key'), 'utf-8');
+    expect(keySidecar).toBe('stub-source-key');
+  });
+
+  it('when git rev-parse fails, publish still succeeds with no .engine-source-sha sidecar written', async () => {
+    const { runCommand } = makeCountingRunCommand();
+    const getSourceSha = async () => {
+      throw new Error('fatal: not a git repository');
+    };
+
+    const stderrLines: string[] = [];
+    const origError = console.error;
+    console.error = (...args: unknown[]) => {
+      stderrLines.push(args.map(String).join(' '));
+    };
+    let result;
+    try {
+      result = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, getSourceSha });
+    } finally {
+      console.error = origError;
+    }
+
+    await expect(readFile(join(result.dir, '.engine-source-sha'), 'utf-8')).rejects.toThrow();
+    expect(stderrLines.some((line) => line.includes('engine-source-sha'))).toBe(true);
+  });
+
+  it('the content-unchanged skip path leaves an existing .engine-source-sha sidecar untouched', async () => {
+    // Fixed output content on every call (not the per-call-marker variant
+    // above) so a second publish hashes to the SAME versionId and hits the
+    // content-unchanged skip path, which returns before finalize.
+    const runCommand = async (cmd: string[], execOpts: { cwd: string }) => {
+      const outDirIdx = cmd.indexOf('--out-dir');
+      const outDir = cmd[outDirIdx + 1];
+      await mkdir(outDir, { recursive: true });
+      await writeFile(join(outDir, 'index.js'), 'export const built = true;\n', 'utf-8');
+      void execOpts;
+    };
+    let shaCalls = 0;
+    const getSourceSha = async () => {
+      shaCalls += 1;
+      return `sha-${shaCalls}`;
+    };
+
+    const first = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, getSourceSha });
+    expect(shaCalls).toBe(1);
+    const original = await readFile(join(first.dir, '.engine-source-sha'), 'utf-8');
+    expect(original).toBe('sha-1');
+
+    // Second publish with the identical stub content hashes to the same
+    // versionId, hitting the content-unchanged skip path (returns before
+    // finalize) — getSourceSha must not be invoked again and the sidecar
+    // must be left untouched.
+    const second = await publish({ conductorRoot, tsupCommand: ['node', stubPath], runCommand, getSourceSha });
+    expect(second.versionId).toBe(first.versionId);
+    expect(shaCalls).toBe(1);
+
+    const stillThere = await readFile(join(second.dir, '.engine-source-sha'), 'utf-8');
+    expect(stillThere).toBe('sha-1');
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Task 3 — changed-source and fail-open rebuild paths. Plan ref:
 // .docs/plans/engine-rebuild-content-cache.md, Design "Pre-build skip"
 // steps 1-3, Task 3.

@@ -38,7 +38,9 @@ vi.mock('../src/engine/build-progress-watcher.js', () => {
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { Conductor } from '../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../src/engine/conductor.js';
-import type { StepName } from '../src/types/index.js';
+import { writeState } from '../src/engine/state.js';
+import { ALL_STEPS } from '../src/engine/steps.js';
+import type { ConductState, StepName } from '../src/types/index.js';
 
 /** Step runner that succeeds every step immediately, recording call order. */
 function makeSucceedingRunner(callOrder: string[]): StepRunner {
@@ -58,6 +60,9 @@ describe('conductor/build-progress-watcher wiring', () => {
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'conductor-build-progress-'));
     statePath = join(dir, 'conduct-state.json');
+    const state = Object.fromEntries(ALL_STEPS.map((step) => [step.name, 'done']));
+    delete state.build;
+    await writeState(statePath, state as ConductState);
     events = new ConductorEventEmitter();
     starts.length = 0;
     stops.length = 0;
@@ -77,6 +82,7 @@ describe('conductor/build-progress-watcher wiring', () => {
       projectRoot: dir,
       mode: 'auto',
       daemon: true,
+      fromStep: 'build',
       maxRetries: 1,
     });
 
@@ -101,12 +107,13 @@ describe('conductor/build-progress-watcher wiring', () => {
       projectRoot: dir,
       mode: 'auto',
       daemon: true,
+      fromStep: 'build',
       maxRetries: 1,
     });
 
     await conductor.run();
 
-    expect(callOrder).toContain('plan');
+    expect(callOrder).toContain('build');
 
     const nonBuildSteps = constructedWith.filter((c) => c.step !== 'build');
     expect(nonBuildSteps).toEqual([]);
@@ -129,6 +136,7 @@ describe('conductor/build-progress-watcher wiring', () => {
       projectRoot: dir,
       mode: 'auto',
       daemon: true,
+      fromStep: 'build',
       maxRetries: 1,
     });
 
@@ -150,6 +158,7 @@ describe('conductor/build-progress-watcher wiring', () => {
       projectRoot: dir,
       mode: 'auto',
       daemon: true,
+      fromStep: 'build',
       maxRetries: 1,
       config: { build_progress: { enabled: false } },
     });

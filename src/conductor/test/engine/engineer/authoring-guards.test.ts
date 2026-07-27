@@ -28,7 +28,11 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
-import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
+import {
+  runAuthoring,
+  type RunAuthoringResult,
+  type SpecAuthoringResult,
+} from '../../../src/engine/engineer/authoring.js';
 
 const execFile = promisify(execFileCb);
 
@@ -60,6 +64,20 @@ async function makeGitRepo(): Promise<{ repoPath: string; defaultBranch: string 
 // ---------------------------------------------------------------------------
 function makeTarget(repoPath: string) {
   return { name: 'test-project', canonicalPath: repoPath };
+}
+
+/**
+ * These guard tests only ever drive the spec track (approvedDecide/blockingDecide
+ * never return a documentation-only delivery), so a successful result is always
+ * a SpecAuthoringResult carrying `branch`. Narrow the union here — loudly, by
+ * throwing — rather than casting, so a real regression to the documentation
+ * track would fail the test instead of being silently typed away.
+ */
+function expectSpec(result: RunAuthoringResult): SpecAuthoringResult {
+  if (result.kind !== 'spec') {
+    throw new Error(`expected a spec authoring result, got kind "${result.kind}"`);
+  }
+  return result;
 }
 
 /** An approving DECIDE seam that returns real artifacts. */
@@ -163,7 +181,7 @@ describe('runAuthoring — dirty-tree guard (migrated Task 22, FR-6)', () => {
     const idea = 'add analytics dashboard';
 
     // No dirty files — should succeed
-    const result = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     expect(result.branch).toMatch(/^spec\//);
     expect(result.project).toBe('test-project');
   });
@@ -200,7 +218,7 @@ describe('runAuthoring — existing-branch guard (migrated Task 22, FR-6)', () =
     const idea = 'add search feature';
 
     // First authoring run — creates spec/add-search-feature
-    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result1 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     expect(result1.branch).toBe('spec/add-search-feature');
 
     // runAuthoring leaves stories as untracked working-tree files — clean them
@@ -208,7 +226,7 @@ describe('runAuthoring — existing-branch guard (migrated Task 22, FR-6)', () =
     await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
 
     // Second authoring run — spec/add-search-feature exists; must use a suffix
-    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result2 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     expect(result2.branch).toBe('spec/add-search-feature-2');
   });
 
@@ -217,14 +235,14 @@ describe('runAuthoring — existing-branch guard (migrated Task 22, FR-6)', () =
     const idea = 'add search feature';
 
     // First run — record the resulting branch tip
-    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result1 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     const originalTip = await git(['rev-parse', result1.branch], repoPath);
 
     // Clean untracked stories before second run
     await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
 
     // Second run with same idea — must NOT touch the first branch
-    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result2 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
 
     // The original branch's tip must be unchanged
     const tipAfter = await git(['rev-parse', result1.branch], repoPath);
@@ -238,11 +256,11 @@ describe('runAuthoring — existing-branch guard (migrated Task 22, FR-6)', () =
     const target = makeTarget(repoPath);
     const idea = 'add search feature';
 
-    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result1 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
-    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result2 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
-    const result3 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result3 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
 
     expect(result1.branch).toBe('spec/add-search-feature');
     expect(result2.branch).toBe('spec/add-search-feature-2');
@@ -259,12 +277,12 @@ describe('runAuthoring — existing-branch guard (migrated Task 22, FR-6)', () =
     const target = makeTarget(repoPath);
     const idea = 'add search feature';
 
-    const result1 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result1 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     const tip1 = await git(['rev-parse', result1.branch], repoPath);
 
     await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
 
-    const result2 = await runAuthoring(target, idea, { decide: approvedDecide() });
+    const result2 = expectSpec(await runAuthoring(target, idea, { decide: approvedDecide() }));
     const tip2 = await git(['rev-parse', result2.branch], repoPath);
 
     await execFile('git', ['clean', '-fd', '.docs'], { cwd: repoPath });
@@ -427,7 +445,7 @@ describe('runAuthoring — failed DECIDE gate: no PR + spec-only output (migrate
     };
 
     // runAuthoring must reject — no return value means nothing to pass to a PR opener
-    let returnedResult: { branch: string; project: string } | undefined;
+    let returnedResult: RunAuthoringResult | undefined;
     try {
       returnedResult = await runAuthoring(target, idea, { decide: blockingDecide });
     } catch {

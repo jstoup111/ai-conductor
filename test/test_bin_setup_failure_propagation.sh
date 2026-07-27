@@ -174,6 +174,98 @@ SHIM
 }
 test_npm_success
 
+# ─── Test 4: matching primary node_modules are copied into a worktree ────────
+
+test_matching_primary_node_modules_copied() {
+  local repo="${TMPDIR_ROOT}/test_dependency_reuse"
+  setup_mock_repo "$repo"
+
+  cat > "$repo/src/conductor/package-lock.json" << 'JSON'
+{
+  "name": "conductor",
+  "version": "0.99.19",
+  "lockfileVersion": 3,
+  "packages": {}
+}
+JSON
+  mkdir -p "$repo/src/conductor/node_modules/reuse-probe"
+  printf '%s\n' 'primary dependency tree' > "$repo/src/conductor/node_modules/reuse-probe/marker"
+
+  git -C "$repo" init -q -b main
+  git -C "$repo" config user.email test@example.com
+  git -C "$repo" config user.name Test
+  git -C "$repo" add bin/setup src/conductor/package.json src/conductor/package-lock.json
+  git -C "$repo" commit -q -m 'seed setup fixture'
+
+  local worktree="$repo/worktree"
+  git -C "$repo" worktree add -q -b feature/reuse "$worktree"
+
+  local shim_dir="$repo/shim"
+  mkdir -p "$shim_dir"
+  cat > "$shim_dir/npm" << 'SHIM'
+#!/usr/bin/env bash
+if [ "$1" = "install" ]; then
+  echo "npm install should not run when matching primary dependencies exist" >&2
+  exit 9
+fi
+if [ "$1" = "run" ] && [ "$2" = "build" ]; then
+  test -f node_modules/reuse-probe/marker
+  mkdir -p dist
+  printf '%s\n' 'built in worktree' > dist/index.js
+  exit 0
+fi
+exit 1
+SHIM
+  chmod +x "$shim_dir/npm"
+
+  local exit_code=0
+  PATH="$shim_dir:$PATH" "$worktree/bin/setup" > /dev/null 2>&1 || exit_code=$?
+
+  assert "matching primary node_modules let worktree setup skip npm install" \
+    "$([ "$exit_code" -eq 0 ] && echo 0 || echo 1)"
+  assert "worktree node_modules is an independent copy" \
+    "$([ -d "$worktree/src/conductor/node_modules" ] && \
+       [ ! -L "$worktree/src/conductor/node_modules" ] && \
+       [ "$(ls -di "$worktree/src/conductor/node_modules" | awk '{print $1}')" != \
+         "$(ls -di "$repo/src/conductor/node_modules" | awk '{print $1}')" ] && echo 0 || echo 1)"
+  assert "worktree build output remains local" \
+    "$([ -f "$worktree/src/conductor/dist/index.js" ] && \
+       [ ! -f "$repo/src/conductor/dist/index.js" ] && echo 0 || echo 1)"
+
+  cat > "$worktree/src/conductor/package.json" << 'JSON'
+{
+  "name": "conductor",
+  "version": "0.99.20",
+  "type": "module"
+}
+JSON
+  cat > "$shim_dir/npm" << 'SHIM'
+#!/usr/bin/env bash
+if [ "$1" = "install" ]; then
+  test ! -L node_modules || exit 8
+  mkdir -p node_modules/local-probe
+  printf '%s\n' 'worktree dependency tree' > node_modules/local-probe/marker
+  exit 0
+fi
+if [ "$1" = "run" ] && [ "$2" = "build" ]; then
+  test -f node_modules/local-probe/marker
+  exit 0
+fi
+exit 1
+SHIM
+  chmod +x "$shim_dir/npm"
+
+  exit_code=0
+  PATH="$shim_dir:$PATH" "$worktree/bin/setup" > /dev/null 2>&1 || exit_code=$?
+
+  assert "manifest drift runs npm install against the worktree-local copy" \
+    "$([ "$exit_code" -eq 0 ] && [ -d "$worktree/src/conductor/node_modules" ] && \
+       [ ! -L "$worktree/src/conductor/node_modules" ] && echo 0 || echo 1)"
+  assert "manifest-drift fallback leaves primary node_modules unchanged" \
+    "$([ -f "$repo/src/conductor/node_modules/reuse-probe/marker" ] && echo 0 || echo 1)"
+}
+test_matching_primary_node_modules_copied
+
 # ─── Summary ─────────────────────────────────────────────────────────────────
 
 echo ""

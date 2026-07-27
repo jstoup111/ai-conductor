@@ -1,0 +1,34 @@
+{
+  // Type-checks BOTH src/ and test/. `npm run typecheck` (tsconfig.json) covers
+  // src/ only, so before this project existed no test file was ever type-checked
+  // and vitest — which transpiles without checking — could not catch it (#1015).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // Widened to the repository root because tests import root-level `plugins/`,
+    // which sits above src/conductor. Nothing is emitted from this project, so
+    // rootDir only governs which files may be included.
+    "rootDir": "../..",
+    // Tests are resolved by vitest (a bundler), not by Node's ESM resolver, so
+    // they import `../../src/engine/foo` without a `.js` extension. Checking them
+    // under NodeNext reports 31 TS2835s against imports that resolve correctly at
+    // runtime. `bundler` matches the resolver that actually runs this code.
+    "moduleResolution": "bundler",
+    "module": "preserve",
+    // Some tests import a plugin entry point as `index.ts` directly. vitest
+    // resolves that, and with noEmit there is no output extension to break.
+    "allowImportingTsExtensions": true,
+    // test/engine/publish-interrupted.test.ts imports scripts/publish-engine.mjs,
+    // plain JS with no declarations. allowJs lets TS infer its shape; checkJs stays
+    // off so the build scripts are not themselves type-checked here.
+    "allowJs": true,
+    "checkJs": false,
+    "types": ["node"]
+  },
+  // `plugins/` is deliberately NOT globbed in. TypeScript follows imports, so the
+  // one plugin entry point a test imports is checked anyway; globbing the tree
+  // would also drag in each plugin's own vitest suite, which resolves its
+  // dependencies from a different package root.
+  "include": ["src/**/*", "test/**/*", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist"]
+}

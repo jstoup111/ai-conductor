@@ -9,16 +9,17 @@ requires: [".docs/plans/ with implementation plan"]
 
 ## Purpose
 
-Orchestrates execution of an implementation plan through quality-gated stages. The conductor
-(`bin/conduct`) drives the task loop — it parses the plan, iterates tasks, and sends one prompt
-per task. Claude orchestrates each task by dispatching subagents for implementation. Subagent
+Orchestrates execution of an implementation plan through quality-gated stages. The configured
+harness runner drives the task loop — it parses the plan, iterates tasks, and sends one prompt
+per task. The selected host agent orchestrates each task by dispatching implementers through its
+available subagent facility. Subagent
 context is isolated and discarded after completion, keeping the orchestrator's context lean.
 
 ## Execution Model
 
 ```
-bin/conduct (bash)          Claude (orchestrator)         Subagent (implementer)
-─────────────────          ─────────────────────         ──────────────────────
+Harness runner              Host agent (orchestrator)    Subagent (implementer)
+──────────────              ─────────────────────         ──────────────────────
 Parse plan, extract task →  Receive task context    →     Full TDD cycle
                             Dispatch subagent       →     RED → DOMAIN → GREEN
                             Verify result           ←     → DOMAIN → COMMIT
@@ -26,9 +27,14 @@ Check task-status.json  ←   Report PASS/FAIL              (context discarded)
 Next task or evaluator
 ```
 
-**Key constraint:** Claude MUST dispatch subagents for implementation via the Agent tool.
-It must NOT implement directly in the orchestration session. This keeps the orchestrator's
+**Key constraint:** The selected host agent MUST dispatch implementers through its available
+subagent facility. It must NOT implement directly in the orchestration session. This keeps the orchestrator's
 context bounded to ~2-3 summary lines per task regardless of feature size.
+
+**Host mechanics:** Claude Code uses its Agent tool and Claude model labels for this delegation.
+Other supported hosts use their native equivalent. These mechanics may differ, but they MUST
+preserve the shared task scope, TDD cycle, task attribution, verification, review, and gate
+contracts below.
 
 ## Practices
 
@@ -44,8 +50,8 @@ Default to **Standard** unless the user specifies otherwise.
 
 ### Per-Task Execution
 
-Task stamping is engine machinery, not an orchestrator instruction. A Claude-session
-PreToolUse hook, installed into the build worktree at provisioning time (see
+Task stamping is engine machinery, not an orchestrator instruction. In Claude Code, a
+Claude Code session PreToolUse hook, installed into the build worktree at provisioning time (see
 `adr-2026-07-10-session-hook-task-stamping.md`), inspects **line 1 only** of every
 subagent dispatch prompt. `Task: <id>` (id = bare plan header id, e.g. `Task: 9`, never
 `task-9`) flips that row to `in_progress` in `.pipeline/task-status.json` and writes
@@ -55,7 +61,9 @@ instructive stderr — fix the dispatch prompt's first line and redispatch. If a
 task's stamp is already present (overlap), the hook still flips the new row but clears
 the stamp file, so the commit-msg hook abstains from attribution rather than guessing —
 never a wrong stamp. A symmetric PostToolUse hook removes `.pipeline/current-task` on
-subagent return iff its content still matches that dispatch's id. Claude orchestrates
+subagent return iff its content still matches that dispatch's id. Other supported hosts use their
+native task-attribution mechanism to preserve the same marker, state, and recovery contract.
+The selected host agent orchestrates
 the task through these steps:
 
 ```
@@ -67,7 +75,7 @@ PLAN VALIDATION (at pipeline start):
 DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dependencies.
   Never skip a task unless its acceptance criteria are already satisfied (verified by test run).
 
-0. DISPATCH MARKER — Before dispatching, ensure the subagent prompt's FIRST LINE will be
+0. DISPATCH MARKER — Before dispatching, ensure the implementer prompt's FIRST LINE will be
                    `Task: <id>` (bare plan header id, e.g. `Task: 9`, never `task-9`). This is
                    the contract the session hook enforces mechanically (see above) — you do not
                    run any CLI command for this step. If the hook blocks the dispatch (exit 2,
@@ -77,20 +85,22 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                    Crash recovery: if a session restarts mid-task, manually reset the task back to
                    `pending` in .pipeline/task-status.json (same approach as before).
 1. DECOMPOSE    — Read task, identify files to touch, check dependencies met
-2. DISPATCH     — Send task to a TDD subagent via Agent tool with model="sonnet" (scoped context only)
+2. DISPATCH     — Send task to a TDD implementer through the selected host's available subagent facility
+                  with scoped context only. In Claude Code, dispatch through the Agent tool with
+                  Claude Code model="sonnet"; other supported hosts use their native model-selection mechanism.
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
-                  Subagent includes it as a trailer in all commits (including refactors); subagent amends before PASS
-                  if the trailer is malformed. Subagent runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
-3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the subagent's work
-4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch subagent with error context
-5. COMMIT       — Verify the subagent's commit carries the `Task: <id>` trailer with <id> as the bare plan id
+                  Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
+                  if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
+3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
+4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
+5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
                   telemetry: it routes the build→build_review handoff, but `build_review`
                   judges/derives actual completion from a plan-vs-diff comparison (union of
                   trailer-tagged and diff-resolved tasks); the orchestrator never writes
                   `completed` itself. If the trailer uses task-N format, report FAIL and dispatch for fix
-6. DONE         — After the subagent's commit lands on the branch, the PostToolUse session hook
-                  (same matcher as step 0/2) removes `.pipeline/current-task` once the subagent
+6. DONE         — After the implementer's commit lands on the branch, the host-native attribution mechanism
+                  (the Claude Code PostToolUse hook uses the same matcher as step 0/2) removes `.pipeline/current-task` once the implementer
                   returns, iff its content still matches this dispatch's id — no CLI invocation
                   needed. It never writes `completed`; the `Task: <id>` trailer verified in step 5
                   only routes the handoff to `build_review`, which is the actual completion
@@ -114,7 +124,7 @@ listed in the task's `**Dependencies:**` field are marked as completed in
 **Design-conformance check (step 1):** Before dispatching the subagent, confirm the task builds
 toward — not against — the governing APPROVED design (the relevant ADR in `.docs/decisions/`
 and the FR in the approved PRD). This is the BUILD-phase instance of the harness-wide
-**design-conformance-before-effort** convention (HARNESS.md → Key Conventions). If a task would
+**design-conformance-before-effort** convention in the repository harness documentation. If a task would
 implement or harden a code path that a current APPROVED ADR/PRD supersedes or forbids, do NOT
 dispatch it — report BLOCKED and escalate as a conformance finding. Writing code slated for
 deletion is wasted effort; the cheapest check (one ADR/PRD read) precedes the most expensive
@@ -157,7 +167,8 @@ step or instruction you must remember to run:
   `Edit|Write|NotebookEdit|Bash` blocks a direct file mutation or `git commit`
   invocation made in the orchestrator session — i.e. outside a stamped subagent
   dispatch — while a build step is active. The redirect message tells you to dispatch
-  the work via the Agent tool with a `Task: <id>` (or `Task: none`) line-1 marker
+  the work through the selected host's available subagent facility with a `Task: <id>` (or
+  `Task: none`) line-1 marker; in Claude Code this facility is the Agent tool
   instead of mutating files directly.
 
 **Three exemption surfaces (both gates abstain rather than reject):**
@@ -182,16 +193,16 @@ CLI verbs still exist for operator/recovery use (e.g. resetting a task after a c
 step you invoke mid-pipeline. You report the subagent's result (PASS/FAIL) to inform the
 conductor's logging and audit trail.
 
-**Subagent context scoping:** The subagent receives ONLY:
+**Subagent context scoping:** The implementer receives ONLY:
 - The task description and acceptance criteria (from the plan)
 - File paths to modify (from the plan's "Files likely touched")
 - The TDD skill instructions
 
-The subagent does NOT receive the full plan, all stories, or prior task history.
-The subagent handles the commit as part of the TDD COMMIT phase.
+The implementer does NOT receive the full plan, all stories, or prior task history.
+The implementer handles the commit as part of the TDD COMMIT phase.
 
-**No branch hygiene by the subagent — stay on the branch as-is.** Every dispatch prompt MUST
-instruct the implementation subagent to NOT run `git fetch`, `git pull`, `git rebase`, or switch
+**No branch hygiene by the implementer — stay on the branch as-is.** Every dispatch prompt MUST
+instruct the implementer to NOT run `git fetch`, `git pull`, `git rebase`, or switch
 branches. It commits only to the current feature branch. Mid-build fetch/rebase is how a feature
 branch silently auto-rebased onto a moved `origin/main` and stalled in a CHANGELOG conflict that
 blocked the commit. The **only** sanctioned rebase is the daemon's finish-time rebase-onto-latest
@@ -200,10 +211,10 @@ per-task loop. Implementation agents never integrate upstream themselves.
 
 **Context efficiency:** Do not inline file contents in subagent prompts. Provide: file path,
 line range of interest, and method signature. The subagent reads files as needed. For
-sequential tasks on the same files, reuse the existing subagent via SendMessage instead of
+sequential tasks on the same files, reuse the existing host-native implementer session instead of
 spawning a new agent — this preserves file cache and avoids redundant reads.
 
-**Scope discipline:** Subagents MUST only modify lines directly related to their assigned task.
+**Scope discipline:** Implementers MUST only modify lines directly related to their assigned task.
 Changes to unrelated code in the same file (e.g., changing a CI command while fixing a service
 definition, or "improving" a method signature while adding a validation) are scope violations.
 The evaluator should flag scope violations as IMPORTANT severity.
@@ -216,9 +227,7 @@ Scoping logic:
    `src/foo/bar.ts` → `test/foo/bar.test.ts`) and by grepping test files for imports of or
    references to modified modules.
 3. Run the project's test runner with explicit file arguments targeting only the scoped set.
-4. **Batch boundaries are an exception:** At the end of a batch, run the FULL test suite before
-   starting the next batch (pre-batch verification, line 200). This ensures no test interdependencies
-   were missed across the task sequence.
+4. Retain the named affected-test set for the batch-boundary union described below.
 
 **Fallback to full suite:**
 - Trigger (a): Diff touches a shared/core module imported/required by 3+ other production modules
@@ -226,18 +235,22 @@ Scoping logic:
 - Trigger (c): The scoped set is empty
 - Trigger (d): The module→test mapping cannot be made confidently
 
-Uncertainty always resolves toward the FULL suite — scoping is an optimization, never a gate change.
+For per-task VERIFY, uncertainty resolves toward this fallback scope — scoping is an
+optimization, never a gate change.
 
 When a trigger fires, the task REPORT names it.
 
-**Contrast with pre-batch verification:** Pre-batch verification (step 379 onward) runs the
-full test suite to catch regressions from task interactions. Per-task VERIFY uses scoping to
-keep iteration fast; only the batch boundary re-test with full coverage. Scoped VERIFY is an
-optimization within the batch; full-suite runs anchor quality at batch transitions.
+**Batch affected-test union:** At each batch boundary, compute one named
+`BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set, then run
+that union once to catch regressions from task interactions.
+
+Batch verification MUST run only the named `BATCH_AFFECTED_TESTS` union.
+The evaluator MUST receive that same `BATCH_AFFECTED_TESTS` union and its result set.
+Only when `BATCH_AFFECTED_TESTS` cannot be determined with confidence MUST the full test suite run instead.
 
 **REPORT requirement (step 6):** The task's step 6 REPORT must list the files included in the
-scoped test set (or, if a fallback trigger fired, state which trigger caused the full suite
-to run instead). This provides audit-trail visibility into the scoping decision.
+scoped test set (or, if a fallback trigger fired, state the trigger and fallback scope).
+This provides audit-trail visibility into the scoping decision.
 
 ### Quality Gates
 
@@ -246,14 +259,15 @@ to run instead). This provides audit-trail visibility into the scoping decision.
 **Rate limit cooldown: sleep 15 seconds before dispatching the evaluator** to avoid stacking
 on top of the just-completed TDD agent's API usage.
 
-At batch boundaries, dispatch an evaluator agent (see the model table below for the right
+At batch boundaries, dispatch an evaluator through the selected host's available subagent facility (see the model table below for the right
 model per tier and batch position) with **fresh, scoped context** (no shared state with the
 generator). The evaluator dispatch prompt's FIRST LINE MUST be exactly `Task: none` — the
-session hook (see Per-Task Execution) enforces this marker on every Agent-tool dispatch,
-evaluator included; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
+host-native attribution mechanism (the Claude Code session hook on Agent-tool dispatches) enforces
+this marker; a missing or malformed line 1 blocks the dispatch. Provide the evaluator with:
 - The **git diff** for this batch only (not the full codebase)
 - The **acceptance criteria** for this batch's tasks (extracted from stories, not full story files)
-- The **test output summary** (pass/fail counts + failure snippets, not full verbose output)
+- The named **`BATCH_AFFECTED_TESTS` union and its result summary** (pass/fail counts + failure
+  snippets, not full verbose output), or the full-suite fallback result when the union was indeterminate
 - The tech-context review checklist if loaded in session
 - **Prior known issues** (batch 2+) — collect findings from previous `audit-trail/batch-*/review.json`
   files and pass as a deduplicated list. This prevents the evaluator from re-raising the same
@@ -277,16 +291,16 @@ reasoning pays off. Retro on the 2026-04-17 Medium run (31 tasks, 7 batches) sho
 4 intermediate evaluators could have run on Sonnet without verdict drift — they were the
 largest single token line item in that run.
 
-Pre-batch verification (full test suite, linter, `/simplify`) still runs at EVERY boundary
-regardless of tier.
+Pre-batch verification (`BATCH_AFFECTED_TESTS` or its indeterminate-scope fallback, linter,
+`/simplify`) still runs at EVERY boundary regardless of tier.
 
 **Evaluator diff scope:** Always scope the evaluator to the **current batch's diff only**
 (`git diff <batch-start-commit>..HEAD`), not the full branch diff. For the final batch,
 add a lightweight integration check (full branch stat summary) but do NOT re-review earlier
 batches line by line — they already passed their own evaluator gate.
 
-**Enforcement — orchestrator writes, not the subagent.** After the evaluator agent
-returns, the orchestrator (not the evaluator subagent) MUST perform these three actions
+**Enforcement — orchestrator writes, not the evaluator.** After the evaluator
+returns, the orchestrator (not the evaluator) MUST perform these three actions
 atomically before advancing one single token further:
 
 1. `mkdir -p .pipeline/audit-trail/batch-N`
@@ -337,7 +351,7 @@ mismatch between the complexity tier and the task list, an ambiguous requirement
 that needs user judgement, a decision between two approaches where the plan
 doesn't specify, etc. — do NOT output a rhetorical question like "here are
 three options, what would you prefer?" as a wrap-up. Autonomous retries will
-re-dispatch Claude against the same unresolved question and burn the retry
+re-dispatch the host agent against the same unresolved question and burn the retry
 budget without producing new task completions.
 
 If you're tempted to ask "resolve now or exit to the harness?", you must
@@ -357,10 +371,10 @@ present, it:
 
 1. Emits a `build_stall` event (reason: `halt_marker`).
 2. Clears the marker (ack).
-3. Opens an interactive Claude REPL scoped to the build step, so the user
-   can discuss the blocker with Claude and take action.
+3. Opens the selected host's native interactive session scoped to the build step; in Claude Code,
+   this is an interactive Claude REPL, so the user can discuss the blocker and take action.
 4. Re-checks the completion predicate once the REPL exits.
-5. Either succeeds (user + Claude resolved enough tasks) or falls into the
+5. Either succeeds (user + host agent resolved enough tasks) or falls into the
    normal recovery menu.
 
 This REPL escalation path is unaffected by daemon-mode routing below — it applies only
@@ -392,10 +406,15 @@ escalating to a human:
 subsequent stalls go straight to HALT without remediation dispatch. This prevents ask→answer→ask
 loops while keeping the fallback path safe.
 
-**Also triggered implicitly** when two consecutive build attempts produce zero
-new task completions (measured via `.pipeline/task-status.json` resolved count).
-So even if you forget to write the marker, the circuit breaker catches the
-stall — but writing the marker is the polite contract: it labels the reason
+**Also triggered implicitly** when a build attempt produces zero new task
+completions (the attributed count from `.pipeline/task-status.json`/`Task:`
+trailers doesn't move) AND HEAD doesn't move that same attempt — the
+attributed count alone is advisory routing/telemetry and can never by itself
+kill a build; commit movement is the liveness authority
+(adr-2026-07-23-commit-movement-liveness-floor). An attempt that lands real,
+committed work without a `Task:` trailer is never misread as a stall. So even
+if you forget to write the marker, the circuit breaker catches a genuine
+wedge — but writing the marker is the polite contract: it labels the reason
 and prevents a speculative second retry.
 
 ### User-requested exit during a run
@@ -419,7 +438,7 @@ This contract is mandatory. Without the marker, the conductor reads
 is done — silently cascading through `manual-test` / `retro` / `finish`
 to mark the entire feature complete while the user's actual blocker is
 still open. The build-completion predicate in
-`src/conductor/src/engine/artifacts.ts` (`build` predicate) checks for the
+the build-completion predicate checks for the
 halt marker on every attempt; a marker present at gate-check time fails
 the gate.
 
@@ -454,7 +473,7 @@ Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `
 ### Parallel Execution (Standard and Full Autonomy)
 
 When tasks within a batch have no file-level dependencies on each other, dispatch them
-in parallel using the Agent tool. This does NOT require worktrees — parallel agents work
+in parallel through the selected host's available subagent facility. This does NOT require worktrees — parallel agents work
 in the same directory on non-overlapping files.
 
 **When to parallelize:**
@@ -465,15 +484,18 @@ in the same directory on non-overlapping files.
 **How to parallelize:**
 1. Read the plan and identify tasks with no mutual dependencies
 2. Group independent tasks into parallel batches (max 3 concurrent agents)
-3. Dispatch each task as a separate Agent tool call in a single message
+3. Dispatch each task through the selected host's available subagent facility in a single message
 4. Each agent receives: the task description, the test directory, the source directory
 5. Wait for all agents to complete
-6. Run the full test suite to verify no conflicts
+6. Compute `BATCH_AFFECTED_TESTS` from every task's scoped affected-test set and run that union
+   once to verify no conflicts; use the full-suite fallback only if the union is indeterminate
 7. If tests fail: identify the conflict, fix sequentially, re-run
 
 **Worktree-based parallelism (Full autonomy only):**
 For tasks that touch overlapping files or need full isolation:
-- Dispatch the `worktree-manager` agent with `model="haiku"` to create parallel worktrees under `.worktrees/`
+- In Claude Code, dispatch the `worktree-manager` agent with `model="haiku"` to create parallel
+  worktrees under `.worktrees/`; other supported hosts use the native equivalent with the same
+  isolated-worktree responsibility.
 - Each worktree gets its own task batch
 - After completion, merge results back sequentially
 - The worktree-manager handles merge order, conflict resolution, and post-merge testing
@@ -485,18 +507,23 @@ For tasks that touch overlapping files or need full isolation:
 At natural batch boundaries (after completing a group of related tasks):
 
 **Pre-batch verification (before starting next batch):**
-- Run the full test suite — if ANY test fails that is NOT an expected RED test, stop and fix
-  before proceeding. Previous session bugs must not accumulate.
+- Compute `BATCH_AFFECTED_TESTS` as the union of every task's scoped affected-test set and run
+  the named union once. If ANY test fails that is NOT an expected RED test, stop and fix before
+  proceeding. If the union cannot be determined confidently, run the full suite instead.
+  Previous session bugs must not accumulate.
 - Verify the current branch is merge-ready: no WIP commits, no TODO-fixme code added this batch,
   all new code has tests. The branch should be shippable at any batch boundary, even if the
   feature is incomplete.
 
 **Post-batch checks:**
 - Run the linter (if tech-context specifies one)
-- Run `/simplify` to check for accumulated duplication (dry business logic, not dry code).
-  If dispatched via the Agent tool, the `/simplify` dispatch prompt's first line MUST be
+- Run the `simplify` workflow to check for accumulated duplication (dry business logic, not dry
+  code; Claude `/simplify`; Codex `$simplify`).
+  If dispatched through the selected host's available subagent facility, the `/simplify` dispatch prompt's first line MUST be
   `Task: none` (session-hook marker contract, see Per-Task Execution).
-- Verify architecture diagrams are current (if structural files changed in this batch, run `/architecture-diagram` in verification mode)
+- Verify architecture diagrams are current (if structural files changed in this batch, run the
+  `architecture-diagram` workflow in verification mode; Claude `/architecture-diagram`; Codex
+  `$architecture-diagram`)
 - Run a **micro-retro** (see below)
 - Append to `.pipeline/progress.log` — a chronological narrative of what was done, what was
   tried, what worked, and what's next (see Progress Log below)
@@ -507,13 +534,13 @@ At natural batch boundaries (after completing a group of related tasks):
 
 ### Micro-Retros (Per-Phase)
 
-At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched via the Agent tool, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
+At each batch boundary, perform a lightweight retro: spec compliance, duplication, complexity, gate accuracy, and autonomy friction. Record findings in `.pipeline/audit-trail/batch-N-retro.md`. These feed the full `/retro` with phase-level granularity. If dispatched through the selected host's available subagent facility, the micro-retro dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Memory Checkpoint (Per-Batch)
 
 **GATE: Every batch must persist at least one `.memory/` entry before proceeding.**
 
-Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write. If dispatched via the Agent tool, the memory-checkpoint dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
+Persist decisions, patterns, gotchas, or context learned during the batch. Update `.memory/index.md` after each write. If dispatched through the selected host's available subagent facility, the memory-checkpoint dispatch prompt's first line MUST be `Task: none` (session-hook marker contract, see Per-Task Execution).
 
 ### Progress Log
 

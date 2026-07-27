@@ -1,13 +1,10 @@
 // Tests for Task T32 — fleet restart with per-repo outcomes (FR-3/FR-17/FR-18).
-// Exercises `runFleetAction` with restart verb against a REAL temp registry file,
-// testing mixed outcomes: idle→restarted, busy→queued, stopped→started, missing→error.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { writeRegistry, type ProjectRecord } from '../../src/engine/registry.js';
-import { runFleetAction } from '../../src/engine/daemon-fleet.js';
 import { dispatchDaemonSupervisor } from '../../src/engine/daemon-supervisor-cli.js';
 import { writeRestartPending, consumeOnBoot } from '../../src/engine/restart-marker.js';
 import { isPaused } from '../../src/engine/pause-marker.js';
@@ -38,141 +35,6 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(root, { recursive: true, force: true });
-});
-
-describe('runFleetAction for restart (Task T32)', () => {
-  it('a named subset acts on exactly those repos — the third is untouched', async () => {
-    const a = await repo('a');
-    const b = await repo('b');
-    const c = await repo('c');
-    await writeRegistry(registryPath, [record('a', a), record('b', b), record('c', c)]);
-
-    const touched: string[] = [];
-    const out: string[] = [];
-    const result = await runFleetAction(
-      { names: ['a', 'b'] },
-      async (rec) => {
-        touched.push(rec.name);
-        return 'restarted';
-      },
-      { registryPath, out: (l) => out.push(l) },
-    );
-
-    expect(touched.sort()).toEqual(['a', 'b']);
-    expect(result.code).toBe(0);
-    expect(out.some((l) => l.includes('c:'))).toBe(false);
-  });
-
-  it('--all iterates the registry, one outcome line per repo', async () => {
-    const a = await repo('a');
-    const b = await repo('b');
-    await writeRegistry(registryPath, [record('a', a), record('b', b)]);
-
-    const out: string[] = [];
-    const result = await runFleetAction({ all: true }, async () => 'restarted', {
-      registryPath,
-      out: (l) => out.push(l),
-    });
-
-    expect(result.code).toBe(0);
-    expect(result.outcomes).toHaveLength(2);
-    expect(out).toHaveLength(2);
-    expect(out.some((l) => l.startsWith('a:'))).toBe(true);
-    expect(out.some((l) => l.startsWith('b:'))).toBe(true);
-  });
-
-  it('one repo with a broken path errors per-repo; the others still succeed', async () => {
-    const a = await repo('a');
-    const b = await repo('b');
-    // Make `b`'s "path" a file, not a directory, so any fs op that expects a
-    // dir under it throws — simulating a broken/missing-path registration.
-    const brokenLeaf = join(root, 'b-is-a-file');
-    await mkdir(root, { recursive: true });
-    await writeFile(brokenLeaf, 'not a dir', 'utf-8');
-    const broken = join(brokenLeaf, 'nested');
-    await writeRegistry(registryPath, [record('a', a), record('b', broken)]);
-
-    const out: string[] = [];
-    const result = await runFleetAction(
-      { all: true },
-      async (rec) => {
-        if (rec.name === 'b') {
-          await mkdir(rec.path); // throws ENOTDIR — parent is a file
-        }
-        return 'ok';
-      },
-      { registryPath, out: (l) => out.push(l) },
-    );
-
-    expect(result.code).toBe(1);
-    const aOutcome = result.outcomes.find((o) => o.name === 'a');
-    const bOutcome = result.outcomes.find((o) => o.name === 'b');
-    expect(aOutcome?.ok).toBe(true);
-    expect(bOutcome?.ok).toBe(false);
-    expect(out.some((l) => l.startsWith('a: ok'))).toBe(true);
-    expect(out.some((l) => l.startsWith('b: error:'))).toBe(true);
-  });
-
-  it('an unknown name is reported verbatim; valid names in the same request are still acted on', async () => {
-    const a = await repo('a');
-    await writeRegistry(registryPath, [record('a', a)]);
-
-    const touched: string[] = [];
-    const out: string[] = [];
-    const result = await runFleetAction(
-      { names: ['a', 'ghost'] },
-      async (rec) => {
-        touched.push(rec.name);
-        return 'restarted';
-      },
-      { registryPath, out: (l) => out.push(l) },
-    );
-
-    expect(touched).toEqual(['a']);
-    expect(out).toContain('unknown repo: ghost');
-    expect(result.unknownNames).toEqual(['ghost']);
-    // A partially-unknown request still surfaces non-zero (an unknown name is
-    // itself a failure to fully honor the request), even though `a` succeeded.
-    expect(result.code).toBe(1);
-  });
-
-  it('all names unknown → non-zero, zero side effects', async () => {
-    const a = await repo('a');
-    await writeRegistry(registryPath, [record('a', a)]);
-
-    const touched: string[] = [];
-    const result = await runFleetAction(
-      { names: ['ghost1', 'ghost2'] },
-      async (rec) => {
-        touched.push(rec.name);
-        return 'restarted';
-      },
-      { registryPath, out: () => {} },
-    );
-
-    expect(touched).toEqual([]);
-    expect(result.code).not.toBe(0);
-    expect(result.outcomes).toEqual([]);
-  });
-
-  it('empty registry + --all → "no registered repos", exit 0', async () => {
-    await writeRegistry(registryPath, []);
-
-    const out: string[] = [];
-    const touched: string[] = [];
-    const result = await runFleetAction(
-      { all: true },
-      async (rec) => {
-        touched.push(rec.name);
-        return 'restarted';
-      },
-      { registryPath, out: (l) => out.push(l) },
-    );
-
-    expect(result.code).toBe(0);
-    expect(touched).toEqual([]);
-    expect(out).toEqual(['no registered repos']);
-  });
 });
 
 describe('restart verb dispatch through the fleet selector (FR-3/FR-17/FR-18, Task T32)', () => {

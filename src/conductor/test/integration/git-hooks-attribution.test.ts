@@ -71,7 +71,7 @@ describe('integration/git-hooks-attribution', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; code: number }> {
+  async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; stderr: string; code: number }> {
     await writeFile(join(dir, name), body, 'utf-8');
     await git('add', name);
     return git('commit', '-m', message);
@@ -88,13 +88,16 @@ describe('integration/git-hooks-attribution', () => {
       expect(msg).toMatch(/^Task: 7$/m);
     });
 
-    it('reconciles a self-stamped Task: trailer to the engine current-task id (engine wins)', async () => {
+    it('preserves an explicit valid trailer when concurrent tasks make the workspace-global stamp ambiguous', async () => {
+      await seedTaskStatus([
+        { id: '7', status: 'in_progress' },
+        { id: '9', status: 'in_progress' },
+      ]);
       await writeCurrentTask('7');
       const res = await commitFile('b.txt', 'b', 'feat: add thing\n\nTask: 9');
       expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
-      expect(msg).toMatch(/^Task: 7$/m);
-      expect(msg).not.toMatch(/^Task: 9$/m);
+      expect(msg).toMatch(/^Task: 9$/m);
     });
 
     it('is a no-op when the self-stamped Task: trailer already agrees with current-task (no duplicate trailer)', async () => {
@@ -106,7 +109,7 @@ describe('integration/git-hooks-attribution', () => {
       expect(matches).toHaveLength(1);
     });
 
-    it('reconciles to current-task even when the old id also appears in the commit body (not confused by body text)', async () => {
+    it('preserves an explicit trailer even when its id also appears in the commit body', async () => {
       await writeCurrentTask('7');
       const res = await commitFile(
         'b2.txt',
@@ -115,8 +118,7 @@ describe('integration/git-hooks-attribution', () => {
       );
       expect(res.code).toBe(0);
       const msg = await lastCommitMessage();
-      expect(msg).toMatch(/^Task: 7$/m);
-      expect(msg).not.toMatch(/^Task: 9$/m);
+      expect(msg).toMatch(/^Task: 9$/m);
       expect(msg).toContain('See also task 9 in the backlog for related work.');
     });
 
@@ -422,7 +424,7 @@ describe('integration/git-hooks-attribution', () => {
         expect(result.stdout + result.stderr).not.toContain('rejected');
       } catch (err) {
         const e = err as { stdout?: string; stderr?: string };
-        fail(`Expected engine commit to succeed, got error: ${e.stderr}`);
+        throw new Error(`Expected engine commit to succeed, got error: ${e.stderr}`);
       }
     });
   });

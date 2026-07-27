@@ -15,6 +15,18 @@ import { tmpdir } from 'os';
 // never forks real git processes even if featureDesc were set.
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
+const repairFailure = vi.hoisted(() => ({ enabled: false }));
+vi.mock('../../src/engine/halt-pr-rehabilitation.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/halt-pr-rehabilitation.js')>();
+  return {
+    ...actual,
+    retitleFloor: async (...args: Parameters<typeof actual.retitleFloor>) => {
+      if (repairFailure.enabled) throw new Error('retitle sentinel');
+      return actual.retitleFloor(...args);
+    },
+  };
+});
+
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
@@ -56,6 +68,7 @@ describe('conductor/finish-repair', () => {
   });
 
   afterEach(async () => {
+    repairFailure.enabled = false;
     await rm(dir, { recursive: true, force: true });
   });
 
@@ -241,5 +254,27 @@ describe('conductor/finish-repair', () => {
     expect(readyIdx).toBeGreaterThanOrEqual(0);
     expect(editBodyIdx).toBeGreaterThan(editTitleIdx);
     expect(readyIdx).toBeGreaterThan(editBodyIdx);
+  });
+
+  it('routes a daemon finish-repair exception through its supplied feature logger', async () => {
+    const featureLogs: string[] = [];
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      log: (message) => featureLogs.push(message),
+      gh: makeFakeGh().runner,
+    });
+    repairFailure.enabled = true;
+
+    const ctx = await (conductor as any)['completionCtx']({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr('https://github.com/example/repo/pull/1');
+
+    expect(featureLogs).toContain('[conductor-repair] retitleFloor failed: Error: retitle sentinel');
   });
 });

@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { originDefaultBranch, type GitRunner } from './rebase.js';
+import { resolveFreshBase, type GitRunner } from './rebase.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -10,12 +10,30 @@ import { originDefaultBranch, type GitRunner } from './rebase.js';
 
 /** Grader inputs: the diff to review and the plan text it must satisfy. */
 export interface BuildReviewInputs {
-  /** `git diff <merge-base(defaultBranch, HEAD)>..HEAD`. Empty string signals
+  /** `git diff <merge-base(baseRef, HEAD)>..HEAD`. Empty string signals
    * no changes to grade — the caller must write a FAIL verdict
    * "no diff to grade" rather than dispatch a grader. */
   diff: string;
   /** Raw contents of the plan file at `planPath`. */
   planBody: string;
+  /** The resolved `git merge-base <baseRef> HEAD` sha the diff was computed
+   * from — the exact commit the grader's diff is anchored to. */
+  mergeBase: string;
+  /** The ref the diff's merge-base was computed against (`origin/<default>`
+   * or a local branch on fallback). */
+  baseRef: string;
+  /** Where the base came from — origin's discovered default, or the local
+   * fallback (no remote / probe failure). */
+  baseKind: 'remote' | 'local';
+  /** The local tracking ref's sha at resolution time, or `null` on fallback. */
+  trackingRefSha: string | null;
+  /** The true remote head sha reported by the freshness probe, or `null` on
+   * fallback. */
+  remoteHeadSha: string | null;
+  /** Whether the base was already fresh (tracking ref matched the remote
+   * head, no fetch needed) — `false` on both "fetched a stale ref" and the
+   * no-remote/probe-failure fallback. */
+  fresh: boolean;
 }
 
 /** Raised when the default branch's merge-base with HEAD cannot be computed. */
@@ -27,43 +45,38 @@ export class MergeBaseError extends Error {
 }
 
 /**
- * Discover the default branch name, never hardcoding `main`. Prefers
- * origin's discovered default (`refs/remotes/origin/HEAD`); falls back to
- * `init.defaultBranch` config, then to whichever of the common local
- * candidates actually exists as a branch.
- */
-async function detectDefaultBranch(git: GitRunner): Promise<string> {
-  const originBranch = await originDefaultBranch(git);
-  if (originBranch) return originBranch;
-
-  const cfg = await git(['config', '--get', 'init.defaultBranch']);
-  if (cfg.exitCode === 0 && cfg.stdout.trim()) return cfg.stdout.trim();
-
-  for (const candidate of ['main', 'master']) {
-    const check = await git(['show-ref', '--verify', '--quiet', `refs/heads/${candidate}`]);
-    if (check.exitCode === 0) return candidate;
-  }
-
-  throw new MergeBaseError('Unable to determine the repo default branch', '');
-}
-
-/**
  * Assemble the build_review grader's inputs: the diff since the merge-base
- * of the repo's (derived, never hardcoded) default branch and HEAD, plus the
- * plan body. Inputs are strictly `(git, planPath)` — no conductor state.
+ * of a freshly-resolved base ref and HEAD, plus the plan body. Inputs are
+ * strictly `(git, planPath)` — no conductor state.
+ *
+ * Base resolution goes through `resolveFreshBase` (Task 2): when the local
+ * tracking ref is stale relative to the true remote head, it fetches before
+ * computing the merge-base, so build_review never grades a diff against a
+ * stale origin snapshot. On no-remote/probe-failure, it falls back to the
+ * pre-existing local-branch behavior — degraded, but still functional — and
+ * emits one advisory log so operators can see why the base wasn't fresh.
  */
 export async function assembleBuildReviewInputs(
   git: GitRunner,
   planPath: string,
 ): Promise<BuildReviewInputs> {
-  const defaultBranch = await detectDefaultBranch(git);
+  const resolution = await resolveFreshBase(git);
 
-  const mergeBase = await git(['merge-base', defaultBranch, 'HEAD']);
+  if (resolution.kind === 'local') {
+    console.warn(
+      `[build_review] base resolution degraded to local fallback (ref=${resolution.ref}); ` +
+        'grading against a possibly stale base. No origin remote, or the freshness probe/fetch failed.',
+    );
+  }
+
+  const baseRef = resolution.ref;
+
+  const mergeBase = await git(['merge-base', baseRef, 'HEAD']);
   const mergeBaseSha = mergeBase.stdout.trim();
   if (mergeBase.exitCode !== 0 || !mergeBaseSha) {
     throw new MergeBaseError(
-      `git merge-base ${defaultBranch} HEAD failed: ${mergeBase.stderr || 'no merge base found'}`,
-      defaultBranch,
+      `git merge-base ${baseRef} HEAD failed: ${mergeBase.stderr || 'no merge base found'}`,
+      baseRef,
     );
   }
 
@@ -71,11 +84,20 @@ export async function assembleBuildReviewInputs(
   if (diffResult.exitCode !== 0) {
     throw new MergeBaseError(
       `git diff ${mergeBaseSha}..HEAD failed: ${diffResult.stderr || 'unknown error'}`,
-      defaultBranch,
+      baseRef,
     );
   }
 
   const planBody = await readFile(planPath, 'utf-8');
 
-  return { diff: diffResult.stdout, planBody };
+  return {
+    diff: diffResult.stdout,
+    planBody,
+    mergeBase: mergeBaseSha,
+    baseRef,
+    baseKind: resolution.kind,
+    trackingRefSha: resolution.trackingRefSha,
+    remoteHeadSha: resolution.remoteHeadSha,
+    fresh: resolution.fresh,
+  };
 }

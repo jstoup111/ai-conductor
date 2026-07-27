@@ -1,10 +1,17 @@
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
+import { CLAUDE_MODEL_POLICY } from "./provider-model-policy.js";
 
-export const DEFAULT_MODEL_FALLBACK_LADDER: string[] = ["fable", "opus", "sonnet"];
+/** @deprecated Use CLAUDE_MODEL_POLICY.modelFallbackLadder instead. */
+export const DEFAULT_MODEL_FALLBACK_LADDER: readonly string[] = CLAUDE_MODEL_POLICY.modelFallbackLadder;
 
 export interface EffectiveModelResult {
   model: string;
   downgraded: boolean;
+}
+
+export interface ResolvedModelInvocation {
+  result: InvokeResult;
+  model: string;
 }
 
 /**
@@ -16,11 +23,11 @@ export interface EffectiveModelResult {
  * purely in-memory and does not persist across process restarts.
  */
 export class ModelAvailability {
-  private readonly ladder: string[];
+  private readonly ladder: readonly string[];
   private readonly warn?: (line: string) => void;
   readonly dead: Set<string> = new Set();
 
-  constructor(ladder?: string[], warn?: (line: string) => void) {
+  constructor(ladder?: readonly string[], warn?: (line: string) => void) {
     this.ladder = ladder === undefined ? DEFAULT_MODEL_FALLBACK_LADDER : ladder;
     this.warn = warn;
   }
@@ -38,7 +45,10 @@ export class ModelAvailability {
       return { model: configured, downgraded: false };
     }
 
-    for (const candidate of this.ladder) {
+    const configuredIndex = this.ladder.indexOf(configured);
+    const candidates = configuredIndex >= 0 ? this.ladder.slice(configuredIndex + 1) : this.ladder;
+
+    for (const candidate of candidates) {
       if (!this.dead.has(candidate)) {
         this.emitWarn(configured, candidate, `${configured} is not available (unavailable)`);
         return { model: candidate, downgraded: true };
@@ -56,27 +66,37 @@ export class ModelAvailability {
    * via effectiveModel(). Any other result (success or ordinary failure, e.g.
    * rate-limited) is returned immediately without further ladder walking.
    *
-   * Ordering: authFailure is checked first (transient auth issue, not a model problem)
-   * before modelUnavailable (model is permanently unavailable). This prevents auth
-   * failures from poisoning the ladder.
+   * Ordering: recovery signals are checked before modelUnavailable. Auth,
+   * rate-limit, and session-expiry recovery must never poison the ladder.
    */
   async invokeWithLadder(provider: LLMProvider, options: InvokeOptions): Promise<InvokeResult> {
+    return (await this.invokeWithLadderResolved(provider, options)).result;
+  }
+
+  /**
+   * Engine-internal variant that retains the final model identity alongside
+   * the provider-compatible InvokeResult payload.
+   */
+  async invokeWithLadderResolved(
+    provider: LLMProvider,
+    options: InvokeOptions,
+  ): Promise<ResolvedModelInvocation> {
     const requested = options.model ?? "";
     const result = await provider.invoke({ ...options, model: requested });
 
-    // Auth failure is transient (operator's OAuth token may be stale) — never poison
-    // the ladder. Return immediately without marking the model dead or walking.
-    if (result.authFailure) {
-      return result;
+    // Existing recovery owns these failures, even if a provider reports
+    // conflicting availability metadata.
+    if (result.authFailure || result.rateLimited || result.sessionExpired) {
+      return { result, model: requested };
     }
 
     if (!result.modelUnavailable) {
-      return result;
+      return { result, model: requested };
     }
 
     if (this.ladder.length === 0) {
       // No fallback ladder configured; nothing to walk, nothing to mark dead.
-      return result;
+      return { result, model: requested };
     }
 
     this.markDead(requested);
@@ -84,9 +104,12 @@ export class ModelAvailability {
 
     if (nextModel === requested) {
       // No live ladder entry remains; nothing further to try.
-      return result;
+      return { result, model: requested };
     }
 
-    return this.invokeWithLadder(provider, { ...options, model: nextModel });
+    return this.invokeWithLadderResolved(provider, {
+      ...options,
+      model: nextModel,
+    });
   }
 }

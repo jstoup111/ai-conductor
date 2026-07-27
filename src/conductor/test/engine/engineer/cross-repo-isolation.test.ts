@@ -21,8 +21,18 @@ import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
+import type { RunAuthoringResult, SpecAuthoringResult } from '../../../src/engine/engineer/authoring.js';
 
 const execFile = promisify(execFileCb);
+
+// Narrow RunAuthoringResult to the spec-branch shape. This suite drives a
+// DECIDE flow that approves into a spec branch (not a documentation-only
+// delivery), so a non-spec result here is a genuine test failure.
+function assertSpecResult(result: RunAuthoringResult): asserts result is SpecAuthoringResult {
+  if (result.kind !== 'spec') {
+    throw new Error(`expected a spec authoring result, got kind=${result.kind}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helper: run a git command in the given directory, return trimmed stdout
@@ -99,7 +109,7 @@ function approvedDecide() {
 describe('runAuthoring — cross-repo isolation (Task 21, FR-11)', () => {
   // Set up three independent real git repos before any test runs
   let snapshotBefore: { b: RepoSnapshot; c: RepoSnapshot };
-  let authoringResult: Awaited<ReturnType<typeof runAuthoring>>;
+  let authoringResult: SpecAuthoringResult;
 
   it('setup: creates repos A, B, C and runs runAuthoring against A only', async () => {
     // Create three independent git repos
@@ -116,7 +126,9 @@ describe('runAuthoring — cross-repo isolation (Task 21, FR-11)', () => {
     // Run runAuthoring ONLY against A — B and C must remain untouched
     const targetA = { name: 'project-alpha', canonicalPath: repoA.repoPath };
     const idea = 'add user authentication';
-    authoringResult = await runAuthoring(targetA, idea, { decide: approvedDecide() });
+    const result = await runAuthoring(targetA, idea, { decide: approvedDecide() });
+    assertSpecResult(result);
+    authoringResult = result;
 
     // Sanity: authoring completed without throwing
     expect(authoringResult).toBeDefined();

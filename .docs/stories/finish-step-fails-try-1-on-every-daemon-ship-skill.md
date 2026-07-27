@@ -41,18 +41,25 @@ writing anything, so that a marker never testifies to a ship that did not happen
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the gh runner returns a non-empty PR URL and `headPushedToUpstream` returns `true`, when `finish-record --choice pr` runs, then it exits 0 and both markers are written.
+- Given the gh runner returns a non-empty PR URL, `headPushedToUpstream` returns `true`, and the
+  current PR head contains a strict-valid matching shipped record, when
+  `finish-record --choice pr` runs, then it exits 0 and both markers are written.
 
 #### Negative Paths
 - Given the gh runner returns an empty string for `gh pr view --json url -q .url`, when the command runs, then it exits non-zero, writes NOTHING under the pipeline dir, and stderr states the PR check failed.
 - Given the gh runner throws (spawn ENOENT — the known child-PATH class, bug #290), when the command runs, then it exits non-zero with zero writes and stderr names the gh spawn failure — it does NOT fall back to `keep`.
 - Given `headPushedToUpstream` returns `false` (HEAD not an ancestor of the upstream ref), when the command runs, then it exits non-zero with zero writes and stderr states the push evidence failed.
 - Given `headPushedToUpstream` returns `null` (indeterminate — detached HEAD, no upstream, git error), when the command runs, then it exits non-zero with zero writes — indeterminate is refusal, never fail-open.
+- Given PR existence and push evidence pass but the shipped record is missing, malformed,
+  mismatched, uncommitted, or unpushed, when the command runs, then it exits non-zero with zero new
+  terminal writes and stderr names the durable-evidence refusal — PR/push alone are no longer
+  sufficient.
 - Given a pre-existing valid `finish-choice` from an earlier attempt, when a later `finish-record --choice pr` run refuses, then the pre-existing files are left byte-for-byte untouched (refusal never deletes or rewrites prior state).
 
 ### Done When
 - [ ] `dispatchFinishRecord` imports `headPushedToUpstream` from `./push-evidence.js` — `git merge-base --is-ancestor` appears in no new implementation (grep-verifiable single source).
-- [ ] gh and git runners are injectable; vitest covers every refusal row above asserting BOTH exit code ≠ 0 AND zero filesystem writes (directory snapshot before/after).
+- [ ] gh, git, and durable-evidence dependencies are injectable; vitest covers every refusal row
+      above asserting BOTH exit code ≠ 0 AND zero filesystem writes (directory snapshot before/after).
 - [ ] Each refusal prints exactly one actionable reason line to stderr.
 
 ## Story: marker writes are ordered and preserve state

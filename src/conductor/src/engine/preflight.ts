@@ -33,7 +33,7 @@ export async function ensureClaudeSettings(projectRoot: string): Promise<void> {
 
   await mkdir(claudeDir, { recursive: true });
 
-  const contents = buildSettingsJson(projectRoot);
+  const contents = buildSettingsJson();
   await writeFile(settingsPath, contents, 'utf-8');
 }
 
@@ -64,15 +64,14 @@ const BASELINE_BASH_ALLOWS: readonly string[] = [
   'Bash(glow:*)',
 ];
 
-export function buildSettingsJson(projectRoot: string): string {
-  const scope = projectRoot.startsWith('/') ? projectRoot.slice(1) : projectRoot;
+export function buildSettingsJson(): string {
   const payload = {
     $schema: 'https://json.schemastore.org/claude-code-settings.json',
     permissions: {
       allow: [
-        `Read(//${scope}/**)`,
-        `Edit(//${scope}/**)`,
-        `Write(//${scope}/**)`,
+        'Read(**)',
+        'Edit(**)',
+        'Write(**)',
         ...BASELINE_BASH_ALLOWS,
       ],
     },

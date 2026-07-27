@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -34,6 +34,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt } from '../../src/engine/rebase.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCb);
 
@@ -50,6 +51,7 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
     if (s.name === 'rebase') break;
     (state as Record<string, unknown>)[s.name] = s.name === 'retro' ? 'skipped' : 'done';
   }
+  (state as Record<string, unknown>).finish = 'done';
   await writeState(statePath, state);
 }
 
@@ -88,6 +90,18 @@ async function buildConflictRepo(): Promise<{
 
 // ── Wiring tests ──────────────────────────────────────────────────────────────
 
+it('daemon rebase resolver carries the selected provider model policy', async () => {
+  const source = await readFile(
+    new URL('../../src/daemon-cli.ts', import.meta.url),
+    'utf8',
+  );
+  const marker = source.indexOf('featureDesc: `rebase-resolution-${entry.slug}`');
+  const constructorStart = source.lastIndexOf('new DefaultStepRunner(', marker);
+  const constructorEnd = source.indexOf('});', marker);
+
+  expect(source.slice(constructorStart, constructorEnd)).toContain('modelPolicy');
+});
+
 describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real git)', () => {
   let repo: string;
   let g: (args: string[]) => ReturnType<typeof execFile>;
@@ -100,6 +114,8 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
     await seedPreRebaseState(statePath);
+    const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.toString().trim();
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
   });
 
   afterEach(async () => {

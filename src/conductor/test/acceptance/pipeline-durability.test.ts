@@ -115,19 +115,26 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
 
   async function seedShipTailWithRunState(): Promise<void> {
     const state: Record<string, unknown> = {
-      complexity_tier: 'M',
+      complexity_tier: 'S',
+      track: 'technical',
       feature_desc: 'mid-loop-pipeline-wipe-549',
+    };
+    for (const s of ALL_STEPS) {
+      if (s.name === 'finish') break;
+      state[s.name] = 'done';
+    }
+    // This S/technical fixture deliberately reaches finish without exercising
+    // the SHIP validation tail. Apply its policy-valid skip state after the
+    // generic seed loop, which otherwise overwrites these entries to `done`
+    // and makes the #922 publication fence require unrelated artifacts.
+    Object.assign(state, {
       build_review: 'skipped',
       manual_test: 'skipped',
       prd_audit: 'skipped',
       retro: 'skipped',
       architecture_review_as_built: 'skipped',
       rebase: 'skipped',
-    };
-    for (const s of ALL_STEPS) {
-      if (s.name === 'finish') break;
-      state[s.name] = 'done';
-    }
+    });
     await mkdir(join(pipelineDir, 'gates'), { recursive: true });
     await writeState(statePath, state as unknown as ConductState);
     await writeFile(
@@ -690,7 +697,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
 
     // Create a StepRunner with an LLM provider mock
     const mockProvider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, output: 'mocked' })),
+      invoke: vi.fn(async () => ({ success: true, output: 'mocked', exitCode: 0 })),
       invokeInteractive: vi.fn(async () => undefined),
     };
 
@@ -778,7 +785,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
     };
 
     const mockProvider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, output: 'mocked' })),
+      invoke: vi.fn(async () => ({ success: true, output: 'mocked', exitCode: 0 })),
       invokeInteractive: vi.fn(async () => undefined),
     };
 

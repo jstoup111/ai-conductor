@@ -50,6 +50,7 @@ let baseBranch: string;
 const APPROVED_STORIES = '# Stories\n**Status:** Accepted\n';
 const planWithDeps = (storiesRef?: string) =>
   `# Plan\n${storiesRef ? `**Stories:** ${storiesRef}\n` : ''}\n### Task 1\n**Dependencies:** none\n`;
+const COHERENCE_TABLE = '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n';
 
 const git = async (args: string[]) => {
   const { stdout } = await execFile('git', args, { cwd: dir });
@@ -60,8 +61,10 @@ const git = async (args: string[]) => {
 async function writeSpec(slug: string, stories = APPROVED_STORIES): Promise<void> {
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  await mkdir(join(dir, '.docs/coherence'), { recursive: true });
   await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
   await writeFile(join(dir, `.docs/stories/${slug}.md`), stories);
+  await writeFile(join(dir, `.docs/coherence/${slug}.md`), COHERENCE_TABLE);
 }
 
 /** Hand-author a shipped record per Story 2's committed frontmatter contract. */
@@ -138,6 +141,27 @@ describe('shipped-work dedup acceptance (#204): committed record never re-dispat
 
     expect(backlog).toEqual([]);
     expect(repaired).toContain('billing-export');
+  });
+
+  it('a committed record remains skipped on later scans when cache repair fails', async () => {
+    await commitSpec('cache-write-fails');
+    await commitShippedRecord('cache-write-fails', shippedRecordBody({
+      slug: 'cache-write-fails',
+      specHash: 'irrelevant-for-stem-match',
+    }));
+
+    const repairFailure = async () => {
+      throw new Error('processed cache is read-only');
+    };
+    const options = {
+      baseBranch,
+      repairProcessed: repairFailure,
+    } as Parameters<typeof discoverBacklog>[3];
+
+    const first = await discoverBacklog(dir, emptyLedger, undefined, options);
+    const second = await discoverBacklog(dir, emptyLedger, undefined, options);
+
+    expect([first.items, second.items]).toEqual([[], []]);
   });
 
   it('a shipped record that exists only in the WORKING TREE (uncommitted) is ignored — dispatch proceeds', async () => {

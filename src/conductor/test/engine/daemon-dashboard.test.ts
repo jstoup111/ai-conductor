@@ -131,7 +131,10 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     const gatedOnly: GatedItem = {
       kind: 'spec',
       slug: 'only-gated',
-      reason: 'unowned-post-cutover',
+      // 'other-owner' is the only reason GatedSpecItem produces today;
+      // un-owned specs always default-build, so 'unowned-post-cutover' is no
+      // longer a real gate reason (see GatedSpecItem's doc comment).
+      reason: 'other-owner',
       remedy: 'claim it',
     };
 
@@ -454,7 +457,10 @@ describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, T
         {
           kind: 'spec',
           slug: 'stale-claim',
-          reason: 'unowned-post-cutover',
+          // 'other-owner' is the only reason GatedSpecItem produces today
+          // (see GatedSpecItem's doc comment); this second entry — with no
+          // `otherOwner` — exercises the "owner unknown" render branch.
+          reason: 'other-owner',
           remedy: 'claim it via daemon identity config',
         },
       ],
@@ -466,8 +472,9 @@ describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, T
     expect(out).toContain('alice');
     expect(out).toContain('ask alice to release it');
     expect(out).toContain('stale-claim');
-    expect(out).toContain('unowned-post-cutover');
     expect(out).toContain('claim it via daemon identity config');
+    // No `otherOwner` on this entry → no "(owner: ...)" suffix on its line.
+    expect(out).toContain('stale-claim — other-owner — claim it via daemon identity config');
   });
 
   it('renders repo-kind gated entries as section-level warning lines', () => {
@@ -478,11 +485,17 @@ describe('engine/daemon-dashboard — renderDashboard GATED group (FR-7/FR-11, T
       processed: [],
       processedCount: 0,
       gated: [
+        // `GatedRepoItem.warning` only ever carries 'identity-unresolved'
+        // today ('no-cutover' is observability-only and never constructed as
+        // an item — see GatedItem's doc comment), but renderDashboard's
+        // gatedRepoLine keeps a defensive branch for it. Deliberately
+        // construct the out-of-domain value via `unknown` to exercise that
+        // still-live defensive rendering path.
         {
           kind: 'repo',
           warning: 'no-cutover',
           remedy: 'configure a grandfather cutover date',
-        },
+        } as unknown as GatedItem,
       ],
     };
     const out = renderDashboard(state);

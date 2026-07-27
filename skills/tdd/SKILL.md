@@ -10,8 +10,21 @@ requires: []
 ## Purpose
 
 Enforces test-driven development with domain integrity as a first-class concern. Every change
-goes through a five-step cycle with subagent isolation — the RED agent only sees tests, the
+goes through a five-step cycle with implementer isolation — the RED agent only sees tests, the
 GREEN agent only sees source, and the DOMAIN reviewer has veto authority over both.
+
+**Host mechanics:** Delegate RED, GREEN, and DOMAIN work through the selected host's available
+subagent facility. Claude Code uses its Agent tool and Claude model labels; other supported hosts
+use their native equivalents. The host mechanism may differ, but it MUST preserve this cycle's
+RED → DOMAIN → GREEN → DOMAIN → COMMIT order, scoped verification, review vetoes, and commit gates.
+
+### Documentation boundary
+
+Do not start a RED/GREEN cycle for ordinary human-facing documentation, and do not add tests that
+assert documentation wording, headings, formatting, placement, links, or repository explanations.
+Documentation-only requests are delivered from `/explore`. Keep tests for machine-consumed documents
+only when they assert generated or runtime behavior (for example OpenAPI contracts or generated
+repository-harness functionality), never prose shape.
 
 ## Practices
 
@@ -20,7 +33,7 @@ GREEN agent only sees source, and the DOMAIN reviewer has veto authority over bo
 ```
 RED → DOMAIN → GREEN → DOMAIN → COMMIT
  │       │        │        │        │
- │       │        │        │        └─ Full suite green, clean tree, commit
+ │       │        │        │        └─ Scoped affected-test union green, clean tree, commit
  │       │        │        └─ Review implementation for domain integrity
  │       │        └─ Implement minimally (scope check: ~20 lines, 1 file, 1 function)
  │       └─ Review test for primitive obsession, invalid states
@@ -29,13 +42,29 @@ RED → DOMAIN → GREEN → DOMAIN → COMMIT
 
 ### Phase 1: RED
 
-**Agent:** Generator (test-files-only context) — dispatch with `model="sonnet"`
+**Agent:** Generator (test-files-only context).
 **Goal:** Write exactly one failing test that captures the next behavior.
+
+**Advisory model selection:** Before dispatching RED or GREEN, read
+`.ai-conductor/config.yml`. If `steps.build.tdd.red.model` or
+`steps.build.tdd.green.model` is configured, dispatch that phase's generator with the
+configured `model`. The config validator guarantees the model belongs to the selected
+`llm_provider`'s native family. If a phase is not configured, retain the build session's
+normal model. This is an orchestration instruction, not a separate conductor step.
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
-3. Run the test — **watch it fail**
-4. Paste the failure output
+3. Run the scoped union of affected tests, retaining the test under change as
+   an expected failing member
+4. Confirm that the test under change fails for the expected reason and every
+   other affected test passes
+5. Paste the expected failure output
+
+Any unrelated scoped test failure blocks the current RED phase; fix that
+failure before proceeding to DOMAIN. If one of the repository's documented
+intermediate fallback triggers makes the affected set genuinely unsafe, name
+the exact trigger and reason and invoke the configured aggregate verifier.
+Never call a raw project aggregate command directly.
 
 **Rules:**
 - One test, one behavior, one assertion
@@ -64,7 +93,8 @@ production call site of any security/correctness derivation, with real adversari
 
 ### Phase 3: GREEN
 
-**Agent:** Generator (source-files-only context) — dispatch with `model="sonnet"`
+**Agent:** Generator (source-files-only context) — use
+`steps.build.tdd.green.model` when configured (see RED's advisory model selection rule).
 **Goal:** Write the simplest code that makes the failing test pass.
 
 1. **Scope check BEFORE writing code:**
@@ -75,7 +105,13 @@ production call site of any security/correctness derivation, with real adversari
 
 2. Write the minimum code to pass the test
 3. Run the test — **watch it pass**
-4. Run the affected/scoped test set (the task's own tests + the files this change touches) — the full suite runs at finish + CI, not per-cycle
+4. Run the affected/scoped test set (the task's own tests + the files this change touches). The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+
+A known failure in that scoped set blocks the current GREEN phase; fix it here
+rather than deferring it to a later gate. If one of the repository's documented
+intermediate fallback triggers makes the affected set genuinely unsafe, name
+the exact trigger and invoke the configured aggregate verifier. Never call a
+raw project aggregate command directly.
 
 **Rules:**
 - Simplest code that passes. Not the "best" code — that's for refactoring.
@@ -84,13 +120,14 @@ production call site of any security/correctness derivation, with real adversari
 - If tech-context loaded: follow stack conventions (e.g., Rails model/controller patterns)
 
 **When GREEN won't go green — escalate to debugging, do not thrash.**
-The GREEN generator runs on Sonnet. If the target test still fails after a bounded attempt
-(≈2 edits), or step 4 shows the change broke other tests and the cause is not immediately
-obvious, STOP editing. A Sonnet generator guessing at a non-obvious failure burns tokens and
-risks masking the bug rather than fixing it. Dispatch the `/debugging` protocol in a fresh
-sub-session on **`model="opus"`** (root-cause analysis is reasoning-heavy — see the model
-table in HARNESS.md), handing it the failing test, the current diff, and the full failure
-output. Return to GREEN only once debugging has produced an evidence-backed root cause.
+If the target test still fails after a bounded attempt (≈2 edits), or step 4 shows the change
+broke other tests and the cause is not immediately obvious, STOP editing. A generator guessing
+at a non-obvious failure burns tokens and risks masking the bug rather than fixing it. Dispatch
+the `/debugging` protocol in a fresh sub-session. In Claude Code, use **`model="opus"** for this
+reasoning-heavy root-cause analysis (see the repository's model table); other supported hosts use
+their native high-reasoning equivalent. Hand it the failing test, the current
+diff, and the full failure output. Return to GREEN only once debugging has produced an
+evidence-backed root cause.
 
 See `references/green.md` for detailed GREEN phase guidance.
 See `references/drill-down.md` for nested TDD cycle instructions.
@@ -115,7 +152,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
 
 **Hard gate — all conditions must be met:**
 
-1. Scoped affected-test set passes (the full suite runs at the feature's final verification / finish and at CI, not per-task)
+1. Scoped affected-test set passes (the engine's dedicated aggregate gate and CI own broad verification, not each task)
 2. Linter passes (if tech-context specifies one — e.g., `bundle exec standardrb` for Rails)
 3. Type-check passes (if tech-context specifies a type-checker — e.g., `tsc --noEmit` /
    `npm run typecheck` for TypeScript). Already run as the Phase 4 pre-check; re-confirm clean here.
@@ -155,7 +192,7 @@ inputs without failing open or closed). Has veto authority to send back to GREEN
    `git fetch`, `git pull`, `git rebase`, or switch branches during the cycle. Mid-build
    rebase onto a moved `origin/<default>` rewrites history under active work. The only
    sanctioned rebases are the daemon's finish-time rebase-onto-latest and the `/rebase`
-   resolver — both outside this loop. See HARNESS.md → Rebase Policy.
+   resolver — both outside this loop. See the repository's rebase policy.
 
 **After commit:** Return to RED for the next cycle, or stop if all criteria for the current
 task are covered.
@@ -163,7 +200,8 @@ task are covered.
 ### Commit-less Completions: Evidence Trailers
 
 Not all tasks require code commits. Some tasks verify that existing behavior meets acceptance
-criteria, and some have no implementation work (documentation, architectural decisions, etc.).
+criteria, and some have no implementation work (architectural decisions, etc.). Ordinary
+documentation maintenance is not a TDD task; `/explore` delivers it directly.
 When a task completes without code changes, emit an empty commit with Evidence trailers.
 
 A plan task may carry a `**Verify-only:** yes` marker (see `skills/plan/SKILL.md` §5d)
@@ -217,7 +255,7 @@ Most cycles will NOT trigger a memory write — that is correct. Only persist ge
 more. Refactoring happens at **batch boundaries** (after completing a group of related tasks),
 as a distinct step between batches.
 
-At batch boundaries, run `/simplify` and check for:
+At batch boundaries, run the `simplify` workflow (Claude `/simplify`; Codex `$simplify`) and check for:
 
 1. **Duplicated business logic** — same authorization check, same event recording pattern,
    same calculation appearing in 2+ places. Extract on the **second** occurrence, don't wait
@@ -250,8 +288,9 @@ commits.
 
 ### Structural Enforcement
 
-When using the Agent tool for subagent dispatch, **inline the relevant context directly in the
-prompt** rather than giving broad file access. This keeps each dispatch focused and token-efficient.
+When dispatching through the selected host's available subagent facility, **inline the relevant
+context directly in the prompt** rather than giving broad file access. This keeps each dispatch
+focused and token-efficient. In Claude Code, this applies to Agent tool dispatches.
 
 | Phase | Agent | Provide in Prompt | Do NOT Provide |
 |-------|-------|-------------------|----------------|
@@ -275,9 +314,9 @@ prompt** rather than giving broad file access. This keeps each dispatch focused 
 - **Pre-gather decisions** — the TDD orchestrator checks `.memory/decisions/` for relevant
   prior decisions and includes them in the domain reviewer prompt. The reviewer does not
   search `.memory/` itself.
-- **Reuse subagents for sequential tasks on same files.** When consecutive tasks modify the
-  same files, use SendMessage to continue the existing subagent instead of spawning a new
-  one — this preserves the file cache and avoids redundant reads.
+- **Reuse host-native implementer sessions for sequential tasks on same files.** When consecutive
+tasks modify the same files, continue the existing host-native session instead of spawning a new
+one — this preserves the file cache and avoids redundant reads.
 
 This isolation prevents the RED agent from peeking at implementation (biasing the test)
 and the GREEN agent from over-engineering beyond what the test requires.
@@ -286,8 +325,10 @@ and the GREEN agent from over-engineering beyond what the test requires.
 
 Right-size the model to the diff size to reduce API cost and rate limit pressure:
 
-- **Diffs under 50 lines:** dispatch with `model="sonnet"` — sufficient for focused domain checks
-- **Diffs of 50+ lines:** dispatch with `model="opus"` — deep analysis for larger changes
+- **In Claude Code, diffs under 50 lines:** dispatch with `model="sonnet"` — sufficient for focused domain checks
+- **In Claude Code, diffs of 50+ lines:** dispatch with `model="opus"` — deep analysis for larger changes
+- **Other supported hosts:** select the native equivalent of the same focused versus deep-review
+  capability; do not weaken the review boundary or veto authority.
 
 Most TDD diffs are small (under 20 lines), so the majority of domain reviews will use Sonnet.
 
@@ -316,8 +357,8 @@ No narration, no explanation of what just happened, no preview of what comes nex
 - [ ] Domain review ran after RED (test reviewed for domain integrity)
 - [ ] Implementation is minimal (passes scope check)
 - [ ] Domain review ran after GREEN (implementation reviewed)
-- [ ] Scoped affected-test set passes before commit (the full suite runs at the feature's
-      final verification task, not per-task)
+- [ ] Scoped affected-test set passes before commit (the engine's dedicated aggregate gate owns
+      broad pre-SHIP verification, not each task)
 - [ ] Commit carries the `Task: <id>` trailer (bare plan id — auto-stamped from
       `.pipeline/current-task` when dispatched correctly; verify it parsed, never paragraph-split)
 - [ ] Linter passes before commit

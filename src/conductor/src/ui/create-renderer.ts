@@ -154,6 +154,14 @@ export function createRenderer(
         region.log(chalk.yellow(`  ⟳  Session reset: ${event.reason}`));
         break;
 
+      case 'provider_fallback':
+        region.log(
+          chalk.bold.yellow(
+            `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+          ),
+        );
+        break;
+
       case 'when_skip': {
         currentStep = undefined;
         const undefinedNote = event.undefinedKey
@@ -219,6 +227,17 @@ export function createRenderer(
         );
         region.log(
           chalk.cyan(`  ⠿ ${event.step} — progress ${displayResolved}/${event.total}${task}`),
+        );
+        break;
+      }
+
+      case 'unattributed_progress': {
+        const headBefore = event.headBefore?.slice(0, 12) ?? '(none)';
+        const headAfter = event.headAfter?.slice(0, 12) ?? '(none)';
+        region.log(
+          chalk.dim(
+            `  · ${event.step} — unattributed progress on attempt ${event.attempt}: ${event.resolvedCount} resolved (${headBefore} → ${headAfter})`,
+          ),
         );
         break;
       }

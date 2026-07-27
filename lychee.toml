@@ -1,0 +1,30 @@
+# Link checker configuration for the human-facing documentation surface.
+#
+# Checked inputs are listed in the `links` job of .github/workflows/ci.yml:
+#   docs/  README.md  AGENT_INSTRUCTIONS.md  src/conductor/README.md
+#
+# SCOPE: internal links only (`offline = true`).
+#
+# This is deliberate. The failure this gate exists to catch is a docs page
+# pointing at a doc that was moved or deleted — a purely local question with a
+# deterministic answer. Resolving external URLs instead would make a docs PR's
+# CI depend on third-party uptime and GitHub rate limits, which turns a green
+# gate into a coin flip and trains people to re-run it until it passes.
+#
+# EXCLUDED: CHANGELOG.md.
+#
+# A changelog entry correctly names the document that existed on the day it was
+# written, so entries pointing at since-deleted pages are accurate history, not
+# rot. "Fixing" them would falsify the record. It is excluded by omission from
+# the input list and by `exclude_path` here, so it stays excluded even if someone
+# later runs lychee across the whole tree.
+exclude_path = ["CHANGELOG.md", "node_modules", "dist", ".docs"]
+
+# Resolve only what is on disk; do not touch the network.
+offline = true
+
+# Anchors (`#section-name`) are left unverified — that is lychee's default, and
+# opting in (`--include-fragments`) produces false failures against the
+# GitHub-flavoured heading slugs this repo uses.
+
+no_progress = true

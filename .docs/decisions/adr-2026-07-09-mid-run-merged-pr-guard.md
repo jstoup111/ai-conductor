@@ -1,7 +1,11 @@
 # ADR: Mid-run merged-PR guard — synthetic verified-ship stop on out-of-band merge
 
 **Date:** 2026-07-09
-**Status:** APPROVED
+**Status:** SUPERSEDED
+
+**Superseded by:** `adr-2026-07-25-fail-closed-durable-shipment-evidence` (2026-07-25). The newer ADR
+replaces synthetic completion without a durable record and carries forward the guard placement and
+live merge-state reuse.
 **Relates to:** adr-2026-07-03-committed-shipped-record-dispatch-dedup (dispatch/rekick dedup),
 issue jstoup111/ai-conductor#358
 

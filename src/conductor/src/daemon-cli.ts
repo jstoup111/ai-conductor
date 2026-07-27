@@ -1,8 +1,8 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
-import { join } from 'node:path';
+import { join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
@@ -20,16 +20,25 @@ import {
 import { resolveRebaseResolutionAttempts, resolveSelfHostConfig } from './engine/resolved-config.js';
 import { readDaemonBuildToken } from './engine/self-host/daemon-build-token.js';
 import { buildAuthRemediationMessage } from './engine/self-host/build-auth-message.js';
-import type { LLMProvider } from './execution/llm-provider.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
-import { registerBuiltins } from './engine/plugin-loader.js';
+import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { createProviderRuntimeSet } from './engine/provider-runtime.js';
+import { ProviderSessionStore } from './engine/provider-session.js';
+import type { ProviderExecutionContext } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import {
+  normalizeProviderSelection,
+  validateRegisteredProviderSelections,
+} from './engine/provider-selection.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import { Conductor } from './engine/conductor.js';
+import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
+import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
-import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
+import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
@@ -37,12 +46,22 @@ import { holdLock, readPidRecord, ownsLock, selfGuardEnv } from './engine/daemon
 import {
   openDaemonLog,
   formatDaemonLogLine,
+  formatDaemonActivityLine,
+  formatDaemonFeatureTag,
+  createDaemonModeLogger,
+  createFeatureDaemonLogger,
   type DaemonLogSink,
 } from './engine/daemon-log.js';
-import type { ConductState, ConductorEvent, StepName } from './types/index.js';
+import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
+import type { ComplexityTier } from './types/steps.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
+import {
+  createRefreshThrottle,
+  createStalenessWarner,
+  probeStampedShaBehindOrigin,
+} from './engine/engine-refresh.js';
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
@@ -97,6 +116,7 @@ import {
   clearMarker,
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
+import { readHaltClass } from './engine/halt-marker.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
@@ -164,6 +184,33 @@ async function rebuildEngineFromSource(conductorRoot: string): Promise<void> {
  */
 export function engineEntryPathForRepo(projectRoot: string): string {
   return join(projectRoot, 'src', 'conductor', 'dist', 'index.js');
+}
+
+/** Sidecar filename stamped by `publish-engine.mjs` at finalize (Task 4). */
+const ENGINE_SOURCE_SHA_SIDECAR = '.engine-source-sha';
+
+/**
+ * Read the source-commit SHA stamped into the pinned `dist-versions/<id>`
+ * directory this daemon is booting out of (`.engine-source-sha`, written by
+ * `publish-engine.mjs` at finalize — Task 4). Resolves `dist` (a symlink to
+ * `dist-versions/<id>`) relative to the given engine entry path
+ * (`<conductorRoot>/dist/index.js`).
+ *
+ * Never throws: returns `'unknown'` whenever `dist` isn't a symlink (e.g. a
+ * plain directory in tests, or a corrupt layout) or the sidecar is absent
+ * (pre-feature published versions never wrote it) — the boot log must never
+ * crash over a missing/optional stamp.
+ */
+export async function readEngineSourceSha(engineEntryPath: string): Promise<string> {
+  const distDir = dirname(engineEntryPath);
+  try {
+    const target = await readlink(distDir);
+    const versionDir = isAbsolute(target) ? target : join(dirname(distDir), target);
+    const sha = await readFile(join(versionDir, ENGINE_SOURCE_SHA_SIDECAR), 'utf-8');
+    return sha.trim();
+  } catch {
+    return 'unknown';
+  }
 }
 
 /**
@@ -240,19 +287,31 @@ export interface DaemonModeOptions {
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
-// specs, so the loop starts at BUILD (acceptance_specs onward).
-const PRESEEDED_DONE: StepName[] = [
+// specs, so the loop starts at BUILD (acceptance_specs onward). DECIDE phase
+// membership owns the derived portion; worktree and memory are intentional
+// non-DECIDE exceptions.
+export const PRESEEDED_DONE: StepName[] = [
   'worktree',
   'memory',
-  'explore',
-  'prd',
-  'complexity',
-  'stories',
-  'conflict_check',
-  'plan',
-  'architecture_diagram',
-  'architecture_review',
+  ...ALL_STEPS.filter((step) => step.phase === 'DECIDE').map((step) => step.name),
 ];
+
+/**
+ * Resolve daemon-owned front-half steps to their durable state for a tier.
+ * An unresolved tier deliberately falls back to M before evaluating skips, so
+ * a missing complexity marker can never receive the Small-tier exemption.
+ */
+export function preseedStepStatuses(
+  tier: ComplexityTier | undefined,
+): Record<string, StepStatus> {
+  const resolvedTier = tier ?? 'M';
+  return Object.fromEntries(
+    PRESEEDED_DONE.map((name) => [
+      name,
+      getStepDefinition(name).skippableForTiers.includes(resolvedTier) ? 'skipped' : 'done',
+    ]),
+  );
+}
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
 // plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
@@ -449,6 +508,12 @@ export function buildProgressReKickDeps(
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot, showCompleted } = opts;
+  const configResult = await loadMergedConfig(projectRoot);
+  if (!configResult.ok && configResult.error.type !== 'missing') {
+    throw new Error(`Config error: ${configResult.error.message}`);
+  }
+  const config = configResult.ok ? configResult.config : undefined;
+
   // Backstop for every daemon launch path: refuse to run on a stale harness
   // install (missing/stale skill symlinks) — non-interactively, so it throws an
   // actionable error rather than silently dispatching unregistered skills (which
@@ -473,10 +538,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // after `log` is defined.
   let ciFixEnabled = true;
 
-  // Task 16: Transition-only per-slug status logging + resume line
-  // Track the last status for each slug so we only emit log lines when status changes
-  const lastStatus = new Map<string, string>();
-
   // Task 4 (#521): own the halt-PR reconciliation outcome cache for the lifetime
   // of this daemon run. Constructed once, outside the sweep loop, and reused on
   // every startup + idle-poll sweep so steady-state (unchanged) PRs stay silent
@@ -484,52 +545,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
 
-  const log = (msg: string) => {
-    // Task 16: Parse per-feature log lines and suppress unchanged status
-    // Pattern 1: "▶ start <slug>" → { slug, status: 'start' }
-    const startMatch = msg.match(/▶.*start\s+(\S+)/);
-    if (startMatch) {
-      const slug = startMatch[1];
-      const status = 'start';
-      if (lastStatus.get(slug) === status) {
-        return; // Suppress unchanged status
-      }
-      lastStatus.set(slug, status);
-      // Fall through to log
-    }
-
-    // Pattern 2: "↻ resume <slug>" → { slug, status: 'resume' }
-    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
-    if (resumeMatch) {
-      const slug = resumeMatch[1];
-      const oldStatus = lastStatus.get(slug);
-      const newMsg = oldStatus ? `${msg} (was: ${oldStatus})` : msg;
-      lastStatus.set(slug, 'resume');
-      console.log(`${chalk.dim('[daemon]')} ${newMsg}`);
-      logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(newMsg)}`));
-      return; // Resume lines always logged with (was: ...) appended
-    }
-
-    // Pattern 3: "■ done <slug>: <outcome_status>" → { slug, status: outcome_status }
-    // This captures the outcome status (done, halted, error)
-    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
-    if (doneMatch) {
-      const slug = doneMatch[1];
-      const outcomeStatus = doneMatch[2]; // e.g., "done", "halted", "error"
-      if (lastStatus.get(slug) === outcomeStatus) {
-        return; // Suppress unchanged status
-      }
-      lastStatus.set(slug, outcomeStatus);
-      // Fall through to log
-    }
-
-    // For all other lines (discovery, sweeps, etc.), always log
-    console.log(`${chalk.dim('[daemon]')} ${msg}`);
-    // The persisted record gets a leading ISO-8601 UTC timestamp so activity read
-    // back via `conduct daemon logs` can be correlated in time; the console stays
-    // uncluttered for live watching.
-    logSink?.write(formatDaemonLogLine(`[daemon] ${stripAnsi(msg)}`));
-  };
+  const log = createDaemonModeLogger({
+    formatActivityLine: formatDaemonActivityLine,
+    writeLive: (line) =>
+      console.log(`${chalk.dim('[daemon]')}${line.slice('[daemon]'.length)}`),
+    // The persisted record gets a leading ISO-8601 UTC timestamp so activity
+    // read back via `conduct daemon logs` can be correlated in time; the
+    // console stays uncluttered for live watching.
+    writePersisted: (line) => logSink?.write(formatDaemonLogLine(stripAnsi(line))),
+  });
 
   // Task 17: Create the transition-aware discovery logger
   // Logs fetch failures/recovery only on state transitions
@@ -694,9 +718,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     log(`restart marker consumed${blockingSlug}${requestedBy} at boot.`);
   }
 
-  const configResult = await loadConfig(projectRoot);
-  const config = configResult.ok ? configResult.config : undefined;
-
   // Self-host classification (Phase 6). Decided ONCE per daemon against the MAIN
   // repo root (`projectRoot`) — "is this daemon building the harness itself?" — not
   // per-worktree (a worktree path never equals the harness root). Honors the
@@ -715,11 +736,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // - Handle non-convergence suppression (target ≠ fresh identity)
   const engineEntryPath = engineEntryPathForRepo(projectRoot);
   const isArmed = (config?.auto_restart_on_stale_engine ?? false) && isSelfHost;
+  // Task 8: append the pinned version's stamped source SHA to the boot
+  // "daemon identity: ..." log line (never crashes — 'unknown' when the
+  // `.engine-source-sha` sidecar is absent, e.g. pre-feature versions).
+  const engineSourceSha = await readEngineSourceSha(engineEntryPath);
+  const logWithEngineSourceSha = (msg: string): void => {
+    log(msg.startsWith('daemon identity: ') ? `${msg} (source sha: ${engineSourceSha})` : msg);
+  };
   const engineIdentity = await initStaleEngineState({
     repoPath: projectRoot,
     entryPath: engineEntryPath,
     flag: isArmed,
-    log,
+    log: logWithEngineSourceSha,
   });
 
   // Production stale-engine checker (adr-2026-07-03-daemon-auto-restart-stale-engine §1-2):
@@ -729,24 +757,111 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       ? createStaleEngineChecker(engineIdentity, engineEntryPath, log)
       : createStaleEngineChecker(null, log);
 
-  // One shared provider + event bus across workers (rate limits are shared).
+  // One daemon-wide forwarding bus keeps rendering global. Each feature owns a
+  // local persistence bus plus provider runtime/session state; rate limits remain shared.
   const events = new ConductorEventEmitter();
   const rateLimitEpisode = createRateLimitEpisode();
   // Task 20: track which parks were episode-caused so the episode-end sweep
   // (runDaemon's active→inactive transition hook) can recover exactly those.
   const episodeHaltTracker = createEpisodeHaltTracker();
   const registry = new PluginRegistry();
-  // Surface per-step loop progress on the console. Without this the daemon was
-  // silent between `▶ start` and `✓ shipped` (the no-op renderer threw every
-  // step_started/gate_verdict/kickback away). Events don't carry a feature slug,
-  // so with concurrency > 1 lines from different workers interleave; the `·`
-  // prefix marks them as inner-loop progress under the active feature.
-  const subscriber = registerBuiltins(registry, events, (event) =>
-    renderDaemonEvent(event, log),
-  );
+  const globalPluginsDir = join(process.env.HOME || '', '.ai-conductor', 'plugins');
+  const projectPluginsDir = join(projectRoot, '.ai-conductor', 'plugins');
+  await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
+  // Feature-scoped renderers are installed in beginFeatureRun (and via
+  // createSlugScopedProviderExecution below) with the feature-owned logger.
+  // This global subscriber renders anything emitted directly on the
+  // daemon-wide bus (untagged) so those events keep reaching daemon.log
+  // exactly as they did before per-feature tagging was introduced.
+  const subscriber = registerBuiltins(registry, events, (event) => {
+    // Events forwarded from a feature-scoped bus (see ForwardingEventEmitter)
+    // are already rendered, tagged, by that feature's own listeners
+    // (beginFeatureRun below) — render them here too and every one of the 19
+    // TerminalSubscriber event types would double-print, once tagged and once
+    // untagged.
+    if ((event as Record<PropertyKey, unknown>)[FORWARDED_FROM_FEATURE]) return;
+    renderDaemonEvent(event, log);
+  });
   registry.markInitialized();
+  validateRegisteredProviderSelections({
+    config: config ?? {},
+    registeredProviders: registry.list('llm_provider'),
+  });
   subscriber.start();
-  const provider = registry.get<LLMProvider>('llm_provider', config?.llm_provider ?? 'claude');
+  const configuredProviders = normalizeProviderSelection(config?.llm_provider);
+  const createProviderExecution = (
+    eventTarget = events,
+    runtimeLog = log,
+  ): ProviderExecutionContext => ({
+    configuredProviders,
+    runtimes: createProviderRuntimeSet(registry, runtimeLog),
+    sessions: new ProviderSessionStore(),
+    config,
+    // The per-feature Conductor composes self-host authority around this
+    // resolved-candidate boundary; keep it present for every daemon context.
+    withCandidateSafety: createCandidateSafetyBoundary(),
+    onAttempt: (step, attempt) =>
+      eventTarget.emit({ type: 'provider_attempt', step, ...attempt }),
+    warn: (_message, transition) => eventTarget.emit(transition),
+    ...(runtimeLog ? { diagnosticLog: runtimeLog } : {}),
+  });
+  // Slug-aware recovery dispatchers (rebase-autoresolve, ci-fix) know the
+  // feature slug but have no persistent per-feature event bus like
+  // beginFeatureRun's featureEvents. Give them their own scoped bus + logger
+  // so their provider_fallback transitions and subprocess diagnostics render
+  // tagged with the slug (e.g. `[daemon][<slug>] ...`) instead of falling
+  // back to the untagged global logger.
+  const createSlugScopedProviderExecution = (slug: string): ProviderExecutionContext => {
+    const scopedEvents = new ConductorEventEmitter();
+    const scopedLog = createFeatureDaemonLogger(
+      slug,
+      (message) => log(message, true),
+      formatDaemonFeatureTag(slug),
+    );
+    scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
+    return createProviderExecution(scopedEvents, scopedLog);
+  };
+  // The pool emits a feature's start/resume/done records before and after its
+  // worktree scope exists. Cache the scoped logger by slug so those lifecycle
+  // records and the worktree-owned records share one immutable attribution.
+  const featureLogs = new Map<string, (message: string) => void>();
+  const featureLogFor = (slug: string): ((message: string) => void) => {
+    let featureLog = featureLogs.get(slug);
+    if (!featureLog) {
+      featureLog = createFeatureDaemonLogger(
+        slug,
+        (message) => log(message, true),
+        formatDaemonFeatureTag(slug),
+      );
+      featureLogs.set(slug, featureLog);
+    }
+    return featureLog;
+  };
+  const beginFeatureRun = (worktree: FeatureWorktree, item: BacklogItem) => {
+    const persistence = startFeatureEventPersistence(worktree.path, events);
+    const featureEvents = persistence.events;
+    const featureLog = featureLogFor(item.slug);
+    const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
+    const renderableEvents: ConductorEvent['type'][] = [
+      'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
+      'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
+      'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
+      'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
+      'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
+      'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
+      'auto_park_contradiction',
+    ];
+    for (const type of renderableEvents) featureEvents.on(type, renderEvent);
+    return {
+      ...persistence,
+      providerExecution: createProviderExecution(featureEvents, featureLog),
+      log: featureLog,
+      stop: () => {
+        for (const type of renderableEvents) featureEvents.off(type, renderEvent);
+        persistence.stop();
+      },
+    };
+  };
   // Resolve the active memory provider once at run start so all steps see the
   // same single provider (adr-2026-06-29-per-project-memory-provider-selection / FR-10). Uses a per-run ctx so warnings are
   // bounded and no module-level state is mutated (resolver is pure over config).
@@ -759,9 +874,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const worktreeBase = join(projectRoot, '.worktrees');
   await mkdir(worktreeBase, { recursive: true });
 
-  const runConductorInWorktree = async (wt: FeatureWorktree, item: BacklogItem) => {
+  const runConductorInWorktree = async (
+    wt: FeatureWorktree,
+    item: BacklogItem,
+    providerExecution = createProviderExecution(),
+    featureEvents: ConductorEventEmitter = events,
+    featureLog = log,
+  ) => {
     const pipelineDir = join(wt.path, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
+    const selectedRuntime = providerExecution.runtimes.get(
+      providerExecution.configuredProviders[0],
+    );
 
     // Sweep stale session markers before constructing the runner. A KEPT
     // worktree (reused on a later daemon cycle after a prior halt/error —
@@ -790,12 +914,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         ? existingResult.value
         : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
 
-    // Always stamp DECIDE steps as done regardless of whether this is a fresh
-    // start or a resume — the human authored them and they never re-run.
-    for (const name of PRESEEDED_DONE) {
-      (baseState as Record<string, unknown>)[name] = 'done';
-    }
     if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
+    // Stamp all daemon-owned front-half steps before resume. A tier-skipped
+    // step has no authored artifact, so it must not be recorded as done.
+    for (const [name, status] of Object.entries(preseedStepStatuses(baseState.complexity_tier))) {
+      (baseState as Record<string, unknown>)[name] = status;
+    }
     // Seed the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) so the conductor's track-skip applies
     // (prd + prd-audit skipped on technical). Default product (back-compat).
     if (!baseState.track) baseState.track = item.track ?? 'product';
@@ -807,12 +931,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     await writeState(stateFilePath, baseState);
 
-    const stepRunner = new DefaultStepRunner(provider, uuidv4(), wt.path, {
-      featureDesc: item.slug,
-      pipelineDir,
-      config,
-      mode: 'auto',
-    });
+    const stepRunner = new DefaultStepRunner(
+      selectedRuntime.provider,
+      uuidv4(),
+      wt.path,
+      {
+        featureDesc: item.slug,
+        pipelineDir,
+        config,
+        modelPolicy: selectedRuntime.policy,
+        mode: 'auto',
+        providerExecution,
+        log: featureLog,
+      },
+    );
 
     // Wire AuditTrailWriter: appends friction/positive-evidence records to
     // <worktree>/.pipeline/audit-trail/events.jsonl, rooted at the worktree
@@ -821,15 +953,18 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Daemon runs the engine in-process, so one writer per run covers all
     // steps for this worktree.
     const auditWriter = new AuditTrailWriter(wt.path);
-    auditWriter.subscribe(events);
+    auditWriter.subscribe(featureEvents);
 
     const conductor = new Conductor({
       stateFilePath,
       stepRunner,
-      events,
+      events: featureEvents,
       mode: 'auto',
       config,
+      modelPolicy: selectedRuntime.policy,
+      providerExecution,
       projectRoot: wt.path,
+      log: featureLog,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon
       // is building the harness itself. `baseBranch` feeds the release-artifact
       // migration classifier (`<base>...HEAD`).
@@ -868,13 +1003,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // or for the eventual un-park to resume normally.
     const parked = await isOperatorParked(projectRoot, item.slug);
     if (parked) {
-      log(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
+      featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
       return;
     }
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,
       localBase: baseBranch,
-      events,
+      events: featureEvents,
       ranManualTest,
       // #300: give the play-forward conflict the SAME gated /rebase attempts the
       // finish-time step gets, before parking for a human.
@@ -886,27 +1021,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // so the guard can check if the feature was merged out-of-band before rebasing.
       runGh: ownerGh,
       prUrl: baseState.pr_url,
-      log,
+      slug: item.slug,
+      log: featureLog,
     });
     if (resume === 'halted') return; // re-parked: HALT re-written, do not resume the gate
     if (resume === 'already_shipped') {
-      // ADR-2026-07-09: the recorded PR is merged out-of-band. Write the synthetic
-      // verified-ship markers and return without invoking conductor.run().
-      const headSha = await (async () => {
-        try {
-          const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt.path });
-          return stdout.trim();
-        } catch {
-          return 'unknown';
-        }
-      })();
-      await mkdir(join(wt.path, '.pipeline'), { recursive: true });
-      const finishChoicePath = join(wt.path, '.pipeline', 'finish-choice');
-      const donePath = join(wt.path, '.pipeline', 'DONE');
-      await writeFile(finishChoicePath, 'pr', 'utf-8');
-      await writeFile(donePath, '', 'utf-8');
-      log(`already shipped out-of-band; local branch retained at ${headSha}`);
-      return;
+      // The merged record was verified on merged history. Do not manufacture
+      // local success markers; let the ordinary completion boundary converge.
+      featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
     await conductor.run();
@@ -924,7 +1046,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       prUrl: finalState.ok ? finalState.value.pr_url : undefined,
       cwd: wt.path,
       slug: item.slug,
-      log,
+      log: featureLog,
     });
 
   };
@@ -937,6 +1059,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     error: any, // SetupFailureError
     worktree: FeatureWorktree,
     item: BacklogItem,
+    providerExecution = createProviderExecution(),
+    featureLog = log,
   ) => {
     // Kill-switch for testing: prevent actual LLM dispatch
     if (process.env.CONDUCT_SETUP_TRIAGE_KILLSWITCH) {
@@ -947,11 +1071,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const git: GitRunner = makeGitRunner(worktree.path);
 
     // Inject prepareWorktree for retry after quarantine
-    const runPrepare = (worktreePath: string) => prepareWorktree(worktreePath, log);
+    const runPrepare = (worktreePath: string) =>
+      prepareWorktree(worktreePath, featureLog, { verbose: config?.daemon_verbose ?? false });
 
     // Triage stage 1: run-triage (TS-2/TS-3)
     // Classify tree state and route: clean → pass, dirty → quarantine+retry
-    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log });
+    const triageOutcome = await runTriage(git, worktree.path, item.slug, error, runPrepare, { log: featureLog });
 
     // A park with no quarantineRef is a genuine PRESERVATION failure (the
     // quarantine commit/branch itself could not be created) — stop immediately,
@@ -976,12 +1101,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const dispatchFixSession = async () => {
       // Construct a fresh DefaultStepRunner for this fix session
       const sessionId = uuidv4();
-      const stepRunner = new DefaultStepRunner(provider, sessionId, worktree.path, {
-        featureDesc: `setup-fix-${item.slug}`,
-        config,
+      const selectedRuntime = providerExecution.runtimes.get(
+        providerExecution.configuredProviders[0],
+      );
+      const stepRunner = new DefaultStepRunner(
+        selectedRuntime.provider,
+        sessionId,
+        worktree.path,
+        {
+          featureDesc: `setup-fix-${item.slug}`,
+          config,
+          modelPolicy: selectedRuntime.policy,
         mode: 'auto',
-      });
-      log(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
+        providerExecution,
+        log: featureLog,
+        },
+      );
+      featureLog(`[setup-triage] fix-session dispatched for ${item.slug} (session ${sessionId})`);
       await stepRunner.resolveSetupFailure({
         worktreePath: worktree.path,
         outputTail: error.outputTail ?? '',
@@ -1007,9 +1143,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     worktreeBase,
     baseBranch,
     runConductorInWorktree,
-    provider,
+    providerExecution: createProviderExecution,
+    beginFeatureRun,
     memoryProvider,
     log,
+    verbose: config?.daemon_verbose ?? false,
     runSetupTriage,
   });
   const runFeature = makeRunFeature(deps);
@@ -1170,6 +1308,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     hasRebaseInProgress: (slug) => hasRebaseInProgress(join(worktreeBase, slug)),
     abortRebase: (slug) => abortRebase(join(worktreeBase, slug)),
     clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
+    // Task 5: real classification read wired into the sweep — a needs-human
+    // HALT is skipped instead of re-kicked (see daemon-rekick.ts rekickSweep).
+    readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
     lastRekickSha,
     log,
     hasWarned: (slug) => hasWarned(projectRoot, slug),
@@ -1270,6 +1411,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         }
       },
       runFeature,
+      featureLog: featureLogFor,
       log,
       staleEngineChecker,
       requestRestart,
@@ -1280,6 +1422,61 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       rebuildEngine: isSelfHost
         ? () => rebuildEngineFromSource(join(projectRoot, 'src', 'conductor'))
         : undefined,
+      // Fast-forward the harness checkout to origin before each dispatch
+      // (self-host only, NP4) so rebuildEngine above builds from
+      // merge-driven drift instead of a stale local branch (TI-1 HP1).
+      // Throttled (TI-2) via engine_refresh_min_interval_seconds so an idle
+      // daemon does not fetch on every poll. Degraded outcomes (dirty,
+      // diverged, fetch-failed) with a determinable originHead are routed
+      // into the deduped staleness warner (TI-4 HP1/HP2); other causes
+      // (no-origin, unknown-default, not-default-branch) and clean outcomes
+      // (current, advanced) never warn.
+      refreshEngineSource: isSelfHost
+        ? (() => {
+            const minIntervalMs =
+              (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+            const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+            const warner = createStalenessWarner(log);
+            return async () => {
+              if (!throttle.shouldRun()) return;
+              throttle.markRan();
+              const outcome = await fastForwardRoot(projectRoot, log);
+              if (
+                outcome.status === 'skipped' &&
+                (outcome.cause === 'dirty' ||
+                  outcome.cause === 'diverged' ||
+                  outcome.cause === 'fetch-failed') &&
+                outcome.originHead
+              ) {
+                warner.warn(outcome.cause, outcome.originHead, baseBranch);
+              }
+            };
+          })()
+        : undefined,
+      // Task 9 (TI-4 HP3/NP3/NP4): advisory-only staleness probe, wired
+      // UNCONDITIONALLY — it only ever fires at the quiescent boundary where
+      // the armed self-heal gate (staleGatesArmed) declines, i.e. self-host
+      // is off, or the auto-restart flag is off. NEVER rebuilds, NEVER
+      // restarts. Shares the same throttle mechanism as refreshEngineSource
+      // above (TI-2) so a daemon running without self-heal still doesn't
+      // fetch origin on every idle poll. Uses the boot-read `engineSourceSha`
+      // (Task 8) so the ancestry check reflects exactly what this daemon
+      // booted with, not a re-read mid-run.
+      probeEngineStaleness: (() => {
+        const minIntervalMs =
+          (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
+        const throttle = createRefreshThrottle(minIntervalMs, Date.now);
+        const warner = createStalenessWarner(log);
+        const git = makeGitRunner(projectRoot);
+        return async () => {
+          if (!throttle.shouldRun()) return;
+          throttle.markRan();
+          const result = await probeStampedShaBehindOrigin(git, engineSourceSha);
+          if (result.outcome === 'behind' && result.originHead && result.defaultBranch) {
+            warner.warn('self-heal-disabled', result.originHead, result.defaultBranch);
+          }
+        };
+      })(),
       isSuppressed: suppressionChecker,
       // ── Halt-reconciliation (ADR-013) real-I/O hooks ──────────────────────
       // FR-1: scan inherited state and render the dashboard to both sinks
@@ -1467,11 +1664,27 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                   try {
                     // Create a fresh step runner for this rebase resolution attempt
                     const sessionId = uuidv4();
-                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.projectRoot, {
-                      featureDesc: `rebase-resolution-${entry.slug}`,
-                      config,
-                      mode: 'auto',
-                    });
+                    const providerExecution = createSlugScopedProviderExecution(entry.slug);
+                    const selectedRuntime = providerExecution.runtimes.get(
+                      providerExecution.configuredProviders[0],
+                    );
+                    const stepRunner = new DefaultStepRunner(
+                      selectedRuntime.provider,
+                      sessionId,
+                      ctx.projectRoot,
+                      {
+                        featureDesc: `rebase-resolution-${entry.slug}`,
+                        config,
+                        modelPolicy: selectedRuntime.policy,
+                        mode: 'auto',
+                        providerExecution,
+                        log: createFeatureDaemonLogger(
+                          entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(entry.slug),
+                        ),
+                      },
+                    );
                     return await stepRunner.resolveRebaseConflict(ctx);
                   } catch (err) {
                     return {
@@ -1542,11 +1755,27 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
                 const ciFixDispatcher = {
                   resolveCiFailure: async (ctx: { worktreePath: string; hint: string; entry: typeof entry }) => {
                     const sessionId = uuidv4();
-                    const stepRunner = new DefaultStepRunner(provider, sessionId, ctx.worktreePath, {
-                      featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
-                      config,
-                      mode: 'auto',
-                    });
+                    const providerExecution = createSlugScopedProviderExecution(ctx.entry.slug);
+                    const selectedRuntime = providerExecution.runtimes.get(
+                      providerExecution.configuredProviders[0],
+                    );
+                    const stepRunner = new DefaultStepRunner(
+                      selectedRuntime.provider,
+                      sessionId,
+                      ctx.worktreePath,
+                      {
+                        featureDesc: `ci-fix-resolution-${ctx.entry.slug}`,
+                        config,
+                        modelPolicy: selectedRuntime.policy,
+                        mode: 'auto',
+                        providerExecution,
+                        log: createFeatureDaemonLogger(
+                          ctx.entry.slug,
+                          (message) => log(message, true),
+                          formatDaemonFeatureTag(ctx.entry.slug),
+                        ),
+                      },
+                    );
                     await stepRunner.resolveCiFailure({
                       worktreePath: ctx.worktreePath,
                       prUrl: ctx.entry.prUrl,
@@ -1690,6 +1919,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.yellow('↻')} ${event.step} retry (try ${event.attempt}/${event.maxAttempts}: ${formatRetryReason(event.reason)})${deltaFragment}`);
       break;
     }
+    case 'provider_fallback':
+      log(
+        chalk.bold.yellow(
+          `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+        ),
+      );
+      break;
     case 'gate_verdict':
       if (!event.satisfied) {
         log(
@@ -1722,6 +1958,25 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
       break;
+    case 'build_review_base': {
+      // Task 4: dim one-liner summarizing base-freshness evidence for this
+      // grading — routine telemetry, not a warning, so it stays dim
+      // regardless of `fresh` (mirrors session_reset's styling).
+      const base = event.mergeBase.slice(0, 12);
+      log(
+        `${dot} ${chalk.dim(`build_review base ${base} — fresh: ${event.fresh}`)}`,
+      );
+      break;
+    }
+    case 'build_review_stale_mirage_regrade': {
+      // Task 7: a stale-mirage FAIL was discarded and build_review is
+      // re-running against fresh inputs — routine, not a warning.
+      const base = event.mergeBase ? event.mergeBase.slice(0, 12) : '(unknown)';
+      log(
+        `${dot} ${chalk.dim(`build_review stale-mirage regrade (base ${base}, count ${event.regradeCount})`)}`,
+      );
+      break;
+    }
     case 'build_progress': {
       // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
       // step, N/total, current task, feature slug. No warning coloring —
@@ -1734,6 +1989,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const slug = event.featureSlug ? ` · ${event.featureSlug}` : '';
       const position = displayBuildPosition(event.resolved, event.total, Boolean(event.currentTaskId || event.currentTaskName));
       log(`${dot} ${chalk.cyan('▶')} ${event.step} ${position}/${event.total}${task}${slug}`);
+      break;
+    }
+    case 'unattributed_progress': {
+      const headBefore = event.headBefore?.slice(0, 12) ?? '(none)';
+      const headAfter = event.headAfter?.slice(0, 12) ?? '(none)';
+      log(
+        `${dot} ${chalk.dim(`unattributed progress: ${event.step} attempt ${event.attempt}, ${event.resolvedCount} resolved (${headBefore} → ${headAfter})`)}`,
+      );
       break;
     }
     case 'build_no_progress': {

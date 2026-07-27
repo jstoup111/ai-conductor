@@ -8,7 +8,7 @@
 // `runAuthoring` (Tasks 32/33, FR-6, C2, ADR-008):
 //   Runs the FULL DECIDE phase via an AGENT-HOSTED seam (no subprocess), in
 //   canonical conduct order: explore → complexity → prd → architecture_diagram →
-//   architecture_review → stories → conflict_check → plan. The complexity tier
+//   architecture_review → stories → conflict_check → plan → coherence_check. The complexity tier
 //   gates architecture + conflict-check (Small skips them); the track gates the
 //   PRD (technical skips it).
 //   - deps.decide is INJECTABLE — called once per markdown step.
@@ -44,6 +44,7 @@ import { writeIntakeMarker } from './intake-marker.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
 import { writeTrackMarker } from './track-marker.js';
+import { findDocumentationDelivery } from '../documentation-delivery.js';
 import type { ComplexityTier, Track } from '../../types/index.js';
 import { withEngineCommitEnv } from '../engine-commit-env.js';
 
@@ -258,7 +259,8 @@ export type DecideStep =
   | 'conflict_check'
   | 'architecture_diagram'
   | 'architecture_review'
-  | 'plan';
+  | 'plan'
+  | 'coherence_check';
 
 /**
  * Result of the complexity-assessment seam. Unlike `decide` (which returns a
@@ -332,10 +334,20 @@ export interface RunAuthoringDeps {
 /**
  * Return value of runAuthoring — mirrors AuthoringResult for consistency.
  */
-export interface RunAuthoringResult {
+export interface SpecAuthoringResult {
+  kind: 'spec';
   branch: string;
   project: string;
 }
+
+/** A documentation-only explore delivery needs no DECIDE artifacts or handoff. */
+export interface DocumentationAuthoringResult {
+  kind: 'documentation_delivery';
+  prUrl: string;
+  project: string;
+}
+
+export type RunAuthoringResult = SpecAuthoringResult | DocumentationAuthoringResult;
 
 /**
  * runAuthoring — real DECIDE seam → Status:Accepted artifacts on spec/<slug> (FR-6, C2).
@@ -345,7 +357,8 @@ export interface RunAuthoringResult {
  *  2. Runs the full DECIDE phase IN CANONICAL ORDER: decide('explore') →
  *     assessComplexity() → decide('stories') → (when tier !== 'S')
  *     decide('conflict_check') → decide('architecture_diagram') →
- *     decide('architecture_review') → decide('plan'). If ANY gate returns
+ *     decide('architecture_review') → decide('plan') → decide('coherence_check').
+ *     If ANY gate returns
  *     { approved: false } (or a DRAFT ADR is detected) → throws; nothing is written.
  *  3. On all-approved: creates spec/<slug> branch, writes artifacts via AuthoringGuard
  *     (always specs/stories/plans + `.docs/complexity/<slug>.md`; non-Small also
@@ -409,7 +422,24 @@ export async function runAuthoring(
 
   // Divergent step — context + approaches; decides the track. Its output is not
   // the spec (the PRD is authored by the `prd` gate on the product track).
+  const authoringStartedAt = Date.now();
   await gate('explore');
+
+  const delivery = await findDocumentationDelivery({
+    projectRoot: repoPath,
+    gh: deps.gh ?? (async () => {
+      throw new Error('runAuthoring: no gh runner injected for documentation delivery verification');
+    }),
+    notBeforeMs: authoringStartedAt,
+  });
+  if (delivery) {
+    if (deps.sourceRef && delivery.sourceRef !== deps.sourceRef) {
+      throw new Error(
+        `runAuthoring: documentation delivery source does not match intake: ${delivery.sourceRef}`,
+      );
+    }
+    return { kind: 'documentation_delivery', prUrl: delivery.prUrl, project: target.name };
+  }
 
   // Default (no seam): an approved Small tier — skips conflict-check + architecture,
   // preserving the lightweight explore→stories→plan flow. Production supplies a real seam.
@@ -463,6 +493,7 @@ export async function runAuthoring(
   }
 
   const planResult = await gate('plan');
+  const coherenceResult = tier !== 'S' ? await gate('coherence_check') : null;
 
   // All gates approved. Now write artifacts.
 
@@ -485,7 +516,7 @@ export async function runAuthoring(
     const date = new Date().toISOString().slice(0, 10);
 
     // Paths under target repo. Always: specs/stories/plans + the complexity
-    // marker. Tier-conditional (non-Small): conflicts/architecture/decisions.
+    // marker. Tier-conditional (non-Small): conflicts/architecture/decisions/coherence.
     const storiesDir = join(repoPath, '.docs', 'stories');
     const plansDir = join(repoPath, '.docs', 'plans');
     const specsDir = join(repoPath, '.docs', 'specs');
@@ -537,24 +568,30 @@ export async function runAuthoring(
       const conflictsDir = join(repoPath, '.docs', 'conflicts');
       const architectureDir = join(repoPath, '.docs', 'architecture');
       const decisionsDir = join(repoPath, '.docs', 'decisions');
+      const coherenceDir = join(repoPath, '.docs', 'coherence');
       const conflictsFile = join(conflictsDir, `${date}-${fileSlug}.md`);
       const architectureFile = join(architectureDir, `${fileSlug}.md`);
       const reviewFile = join(decisionsDir, `architecture-review-${date}-${fileSlug}.md`);
+      const coherenceFile = join(coherenceDir, `${fileSlug}.md`);
 
       guard.assertWriteAllowed(conflictsDir);
       guard.assertWriteAllowed(architectureDir);
       guard.assertWriteAllowed(decisionsDir);
+      guard.assertWriteAllowed(coherenceDir);
       guard.assertWriteAllowed(conflictsFile);
       guard.assertWriteAllowed(architectureFile);
       guard.assertWriteAllowed(reviewFile);
+      guard.assertWriteAllowed(coherenceFile);
 
       await mkdir(conflictsDir, { recursive: true });
       await mkdir(architectureDir, { recursive: true });
       await mkdir(decisionsDir, { recursive: true });
+      await mkdir(coherenceDir, { recursive: true });
 
       await writeFile(conflictsFile, conflictResult!.artifact, 'utf8');
       await writeFile(architectureFile, architectureDiagramResult!.artifact, 'utf8');
       await writeFile(reviewFile, architectureReviewResult!.artifact, 'utf8');
+      await writeFile(coherenceFile, coherenceResult!.artifact, 'utf8');
     }
 
     // Resolve the authoring owner via the identity chain (configured → gh →
@@ -625,5 +662,5 @@ export async function runAuthoring(
   // 4. Return to the default branch so the repo is left in a clean state.
   await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
 
-  return { branch, project: target.name };
+  return { kind: 'spec', branch, project: target.name };
 }

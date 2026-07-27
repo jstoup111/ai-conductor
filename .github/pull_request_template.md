@@ -2,9 +2,12 @@
 This PR template applies only to PRs against the james-stoup-agents harness
 repo. It does not affect how Claude opens PRs in consumer projects.
 
-CI (.github/workflows/release.yml) will FAIL if the [Unreleased] section of
-CHANGELOG.md is empty after this PR merges. Add your entry below AND paste
-the same entry into CHANGELOG.md under ## [Unreleased].
+A changelog entry is required only when this PR contains a notable reader-visible implementation change. A non-notable implementation may ship without a changelog entry.
+An empty [Unreleased] is a successful no-release path with no changelog rewrite, no VERSION bump, no tag, no release commit, and no GitHub Release.
+Breaking changes still require a runnable bash migration block even when no ordinary changelog entry is required.
+The README rule is a repository-local landing-page refinement of the global harness documentation convention.
+Ordinary reader-visible changes update the canonical affected documentation. Leave README unchanged unless the README landing-page contract changes.
+For consumer projects without this custom-step configuration, the global harness documentation and release conventions remain unchanged.
 -->
 
 ## Summary
@@ -14,13 +17,15 @@ the same entry into CHANGELOG.md under ## [Unreleased].
 ## Changelog
 
 <!--
-Required. Pick one of: Added / Changed / Fixed / Removed.
-Copy this entry into CHANGELOG.md under ## [Unreleased] as part of this PR.
+Required only for a notable reader-visible implementation change. Pick one of:
+Added / Changed / Fixed / Removed, then copy the entry into CHANGELOG.md under
+## [Unreleased]. For a non-notable implementation, leave CHANGELOG.md unchanged
+and keep "none" below.
 -->
 
 ### Added / Changed / Fixed / Removed
 
-- …
+none
 
 ## Migration
 
@@ -39,6 +44,16 @@ Otherwise, write "none".
 -->
 
 none
+
+## Documentation
+
+<!--
+Update the canonical affected documentation for ordinary reader-visible changes.
+Update README only when its landing-page contract changes.
+-->
+
+- [ ] Canonical affected documentation updated, or not applicable
+- [ ] README landing-page contract updated, or not affected
 
 ## Test plan
 

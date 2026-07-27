@@ -7,6 +7,13 @@ import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh, makeProductionGit } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { readState, writeState } from './state.js';
+import {
+  evaluateShipmentEvidence,
+  resolveImplementationPrBinding,
+  type ShipmentEvidenceDependencies,
+  type ShipmentEvidenceInput,
+  type ShipmentEvidenceResult,
+} from './shipment-evidence.js';
 
 export type FinishRecordDispatch =
   | { kind: 'record'; choice: string; prUrl?: string; pipelineDir: string }
@@ -70,6 +77,10 @@ export function dispatchFinishRecordGuide(cmd: FinishRecordDispatch): number {
 export interface FinishRecordRunners {
   runGh: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string } | unknown>;
   runGit: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string }>;
+  evaluateEvidence?: (
+    input: ShipmentEvidenceInput,
+    dependencies: ShipmentEvidenceDependencies,
+  ) => Promise<ShipmentEvidenceResult>;
 }
 
 const noopRunners: FinishRecordRunners = {
@@ -134,27 +145,75 @@ export async function dispatchFinishRecord(
     return 1;
   }
 
+  // Deterministic daemon-safety gate (Daemon Operations Safety rule 4: "a
+  // manual PR is NOT a harness finish"): step-runners.ts sets
+  // CONDUCT_DAEMON_AUTO_FINISH=1 in the environment for the WHOLE finish-step
+  // process tree whenever the conductor is running the finish step in
+  // unattended (auto/daemon) mode — before any agent prompt or shell command
+  // runs. That makes this a machinery check, not prompt discipline: an agent
+  // cannot avoid it by omitting a flag or misjudging remote/gh state, because
+  // this process inherited the marker regardless of what command line it types.
+  //
+  // When that marker is present AND `choice=keep` AND the repo has at least
+  // one configured git remote, refuse — daemon finishes with a remote MUST
+  // resolve to an opened PR (`choice=pr`), never silently fall back to keep.
+  // No remote configured is a legitimately different case (can't open a PR
+  // with nothing to push to) and is left unaffected, as is any invocation
+  // where the marker is absent (interactive/default-mode finishes, where a
+  // human explicitly choosing Keep is a valid choice).
+  if (cmd.choice === 'keep' && process.env.CONDUCT_DAEMON_AUTO_FINISH === '1') {
+    const repoDir = dirname(cmd.pipelineDir);
+    let remoteOutput: string;
+    try {
+      remoteOutput = (await deps.runGit(['remote'], { cwd: repoDir })).stdout;
+    } catch (err) {
+      console.error(
+        `finish-record: unable to check configured git remotes (${err instanceof Error ? err.message : String(err)}) ` +
+          '— refusing to record "keep" in unattended (auto/daemon) mode; a remote check must succeed before ' +
+          'falling back to keep',
+      );
+      return 1;
+    }
+    if (remoteOutput.trim().length > 0) {
+      console.error(
+        'finish-record: refusing to record choice "keep" — a git remote is configured and this run is in ' +
+          'unattended (auto/daemon) mode. Per Daemon Operations Safety rule 4 ("a manual PR is NOT a harness ' +
+          'finish"), an unattended finish with a remote configured MUST resolve to an opened PR. Push the ' +
+          'branch, open the PR with `gh pr create` (or reuse an existing one), and re-run with ' +
+          '`--choice pr --pr-url <url>`. If PR creation itself fails, HALT for human review — do not fall ' +
+          'back to keep.',
+      );
+      return 1;
+    }
+  }
+
   // choice='pr' verification: the PR named by --pr-url must actually exist on
   // GitHub before anything is written. Fail-closed on ANY error — empty
   // stdout, a thrown gh error (missing binary → ENOENT, non-zero exit, etc.)
   // — never falls back to writing the keep/finish-choice marker anyway.
   if (cmd.choice === 'pr') {
-    let stdout: string | undefined;
+    const repoDir = dirname(cmd.pipelineDir);
+    let implementationBinding;
     try {
-      const result = await deps.runGh(['pr', 'view', '--json', 'url', '-q', '.url'], {
-        cwd: dirname(cmd.pipelineDir),
-      });
-      stdout = (result as { stdout?: string } | undefined)?.stdout;
+      implementationBinding = await resolveImplementationPrBinding(
+        async (args, opts) => {
+          const result = await deps.runGh(args, opts);
+          const stdout = (result as { stdout?: string } | undefined)?.stdout;
+          return { stdout: stdout ?? '' };
+        },
+        repoDir,
+        cmd.prUrl!,
+      );
     } catch (err) {
       console.error(
-        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+        `finish-record: gh pr view failed (${err instanceof Error ? err.message : String(err)}) — cannot verify PR ${cmd.prUrl} identity and head; refusing to record`,
       );
       return 1;
     }
 
-    if (!stdout || !stdout.trim()) {
+    if (implementationBinding.url !== cmd.prUrl || !implementationBinding.headRefOid) {
       console.error(
-        `finish-record: gh pr view returned no URL — cannot verify PR ${cmd.prUrl} exists; refusing to record`,
+        `finish-record: gh pr view did not return the requested PR URL and head — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
@@ -169,6 +228,87 @@ export async function dispatchFinishRecord(
     if (pushed !== true) {
       console.error(
         `finish-record: HEAD has not been verified as pushed to its upstream branch (push-evidence check returned ${String(pushed)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    // A PR URL and pushed HEAD only establish that a PR exists. The durable
+    // shipment contract additionally requires the record committed on that
+    // PR head to pass the shared strict evaluator before any terminal write.
+    const statePath = join(cmd.pipelineDir, 'conduct-state.json');
+    const stateResult = await readState(statePath);
+    if (!stateResult.ok) {
+      console.error(
+        `finish-record: cannot read feature state from "${statePath}" (${stateResult.error.message}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    const worktreeBranch = stateResult.value.worktree_branch;
+    const branchSlug = worktreeBranch?.match(/^(?:spec|feature)\/(.+)$/)?.[1];
+    if (worktreeBranch !== undefined && !branchSlug) {
+      console.error(
+        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug> or feature/<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    const featureSlug = branchSlug ?? stateResult.value.feature_desc;
+    if (!featureSlug) {
+      console.error(
+        `finish-record: cannot determine the feature slug from "${statePath}" — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    let candidateCommit: string;
+    try {
+      candidateCommit = (await deps.runGit(['rev-parse', 'HEAD'], { cwd: repoDir })).stdout.trim();
+    } catch (err) {
+      console.error(
+        `finish-record: cannot resolve the PR head for durable evidence (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+
+    let evidence: ShipmentEvidenceResult;
+    try {
+      evidence = await (deps.evaluateEvidence ?? evaluateShipmentEvidence)(
+        {
+          repoDir,
+          slug: featureSlug,
+          implementationPr: cmd.prUrl!,
+          candidateCommit,
+        },
+        {
+          gitRunner: async (args) => {
+            try {
+              const result = await deps.runGit(args, { cwd: repoDir });
+              return isMergeBaseAncestor(args) ? 'true' : result.stdout;
+            } catch (error) {
+              if (isMergeBaseAncestor(args) && exitCode(error) === 1) return 'false';
+              throw error;
+            }
+          },
+          githubRunner: async (implementationPr) => {
+            if (implementationPr !== cmd.prUrl) {
+              throw new Error(`unexpected implementation PR binding request: ${implementationPr}`);
+            }
+            return implementationBinding;
+          },
+        },
+      );
+    } catch (err) {
+      console.error(
+        `finish-record: durable shipment evidence is unavailable (${err instanceof Error ? err.message : String(err)}) — refusing to record PR ${cmd.prUrl}`,
+      );
+      return 1;
+    }
+    if (evidence.kind !== 'valid') {
+      const detail =
+        evidence.kind === 'refusal'
+          ? `${evidence.code}: expected ${evidence.expected}, observed ${evidence.observed ?? 'none'}`
+          : evidence.reason;
+      console.error(
+        `finish-record: durable shipment evidence refused (${detail}) — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
@@ -211,5 +351,20 @@ export async function dispatchFinishRecord(
 
   await writeFile(markerPath, `${cmd.choice}\n`, 'utf-8');
 
+  if (cmd.choice === 'pr') {
+    await writeFile(join(cmd.pipelineDir, 'DONE'), '', 'utf-8');
+  }
+
   return 0;
+}
+
+function isMergeBaseAncestor(args: string[]): boolean {
+  return args[0] === 'merge-base' && args[1] === '--is-ancestor';
+}
+
+function exitCode(error: unknown): number | undefined {
+  return typeof error === 'object' && error !== null && 'code' in error &&
+    typeof (error as { code?: unknown }).code === 'number'
+    ? (error as { code: number }).code
+    : undefined;
 }

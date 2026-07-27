@@ -1,4 +1,4 @@
-import { access, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
+import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
@@ -13,6 +13,18 @@ import { makeGitRunner } from './rebase.js';
 import { gateVerdictStillValid } from './gate-code-validity.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { resolveTaskIds } from './task-progress.js';
+import { FULL_SUITE_EVIDENCE_PATH } from './full-suite-evidence.js';
+import {
+  FullSuiteVerifier,
+  type FullSuiteInspectionResult,
+} from './full-suite-verifier.js';
+import {
+  evaluateShipmentEvidence,
+  resolveImplementationPrBinding,
+  type ShipmentEvidenceInput,
+  type ShipmentEvidenceResult,
+} from './shipment-evidence.js';
+import { currentCommitSha } from './project-prelude.js';
 
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
@@ -37,6 +49,7 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   stories: ['.docs/stories/**/*.md'],
   conflict_check: ['.docs/conflicts/*.md'],
   plan: ['.docs/plans/*.md'],
+  coherence_check: ['.docs/coherence/*.md'],
   architecture_diagram: ['.docs/architecture/*.md'],
   architecture_review: [
     '.docs/decisions/architecture-review-*.md',
@@ -79,6 +92,9 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed, same convention as build_review/manual_test above.
   wiring_check: ['.pipeline/wiring-evidence.json'],
+  // Dashboard/artifact visibility only. The custom predicate below always
+  // re-inspects the content fingerprint; file presence cannot satisfy the gate.
+  test_suite: [FULL_SUITE_EVIDENCE_PATH],
   // Run evidence (gitignored, stable filename, overwritten each run) — NOT
   // committed. These are regenerated every run; tracking them caused date-stamp
   // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
@@ -493,6 +509,11 @@ export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
 
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
+  /**
+   * Optional task-local observability. Completion predicates deliberately do
+   * not read this: the independent build-review verdict remains authority.
+   */
+  taskAttribution?: { status: 'absent' | 'valid' | 'stale' | 'mismatched'; taskId?: string };
   /** Epoch ms; predicates reject artifacts older than this when set. */
   sessionStartedAt?: number;
   /**
@@ -528,6 +549,11 @@ export interface CompletionContext {
    */
   isHeadPushed?: () => Promise<boolean | null>;
   /**
+   * Strict durable shipment-evidence verifier. Absent → use the production
+   * verifier against the current candidate commit.
+   */
+  shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
+  /**
    * Injectable gh runner for presentation checks (finish predicate Phase 2).
    * Used to verify the recorded PR's title is not stale (needs-remediation:).
    * Absent → falls back to makeProductionGh() (fail-open for testing).
@@ -562,6 +588,12 @@ export interface CompletionContext {
    */
   wiringProbe?: () => Promise<WiringEvidence>;
   /**
+   * Process-free current-PASS inspection for the native test_suite gate.
+   * Conductor injects its shared verifier; standalone completion checks use a
+   * verifier rooted at `dir`. This must never call ensure()/launch the suite.
+   */
+  fullSuiteInspect?: () => Promise<FullSuiteInspectionResult>;
+  /**
    * Injectable git runner for the gate-code-validity-on-redispatch decision
    * (`gateVerdictStillValid`, #817): a judged gate's stamped PASS verdict can
    * be preserved across re-dispatch when the code hasn't changed in its
@@ -571,6 +603,42 @@ export interface CompletionContext {
    * so real callers need not wire this; tests inject a scratch-repo runner.
    */
   git?: GitRunner;
+}
+
+async function verifyDurableShipmentEvidence(
+  dir: string,
+  ctx: CompletionContext,
+  prUrl: string,
+): Promise<CompletionResult | null> {
+  const candidateCommit = (await (ctx.getHeadSha?.() ?? currentCommitSha(dir))) ?? '';
+
+  try {
+    const input = {
+      repoDir: dir,
+      slug: ctx.featureDesc ?? '',
+      implementationPr: prUrl,
+      candidateCommit,
+    };
+    const verdict = ctx.shipmentEvidence
+      ? await ctx.shipmentEvidence(input)
+      : await evaluateShipmentEvidence(input, {
+          githubRunner: (implementationPr) =>
+            resolveImplementationPrBinding(ctx.gh ?? makeProductionGh(), dir, implementationPr),
+        });
+    if (verdict.kind === 'valid') return null;
+    const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
+    return {
+      done: false,
+      reason: `durable shipment evidence refused completion: ${detail}`,
+      missing: 'other',
+    };
+  } catch (error) {
+    return {
+      done: false,
+      reason: `durable shipment evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
+      missing: 'other',
+    };
+  }
 }
 
 /**
@@ -980,6 +1048,23 @@ export function validateWiringEvidence(
 export const BUILD_REVIEW_VERDICT = '.pipeline/build-review.json';
 
 /**
+ * Deletes the build_review verdict artifact (build-review-grades-plan-vs-
+ * diff-against-a-stale-o, Task 7). Called on a `stale-mirage` disposition:
+ * the FAIL verdict graded a stale view of the diff, so it must be discarded
+ * outright rather than routed to build rework. `build_review` is deliberately
+ * NOT a member of `STALE_SWEEP_STEPS` / never consulted by
+ * `sweptArtifactStillValid` (gate-code-validity-on-redispatch, #817) — its
+ * verdict artifact carries no `codeStamp`-preserve path that could
+ * reconstruct a deleted verdict, so this removal is final: the next
+ * `build_review` dispatch must write a brand-new verdict from scratch.
+ * Best-effort: a missing file (already removed, or never written) is a no-op,
+ * not an error.
+ */
+export async function removeBuildReviewVerdict(dir: string): Promise<void> {
+  await rm(join(dir, BUILD_REVIEW_VERDICT), { force: true });
+}
+
+/**
  * Which rubric category the grader flagged, when the verdict is FAIL. All
  * fields optional — a grader may flag one, several, or (rarely) none of the
  * categories while still returning FAIL with free-form `reasons`.
@@ -995,12 +1080,23 @@ export interface BuildReviewRubric {
   completeness?: boolean;
 }
 
+/**
+ * Detailed, independently actionable findings grouped by the rubric item
+ * that failed. This is additive: older grader artifacts continue to provide
+ * only the legacy free-form `reasons` array.
+ */
+export type BuildReviewFindings = Partial<{
+  [K in keyof BuildReviewRubric]: string[];
+}>;
+
 export interface BuildReviewVerdict {
   verdict: 'PASS' | 'FAIL';
   /** Free-form explanations; required in practice for FAIL, but not enforced
    * here — an empty/absent reasons array on FAIL still parses (fail-closed
    * validation only guards the shape needed to route PASS vs FAIL safely). */
   reasons?: string[];
+  /** Every independent finding for each failed rubric item. */
+  findings?: BuildReviewFindings;
   rubric: BuildReviewRubric;
   /** The HEAD SHA this verdict was formed against (gate-code-validity-on-
    * redispatch, #817). Additive/optional — absent on legacy verdicts or when
@@ -1009,6 +1105,21 @@ export interface BuildReviewVerdict {
    * (Task 5) to decide whether a PASS verdict can be trusted without a
    * re-run. Never required for a verdict to parse. */
   codeStamp?: string | null;
+}
+
+/**
+ * Flatten a verdict's legacy summaries and structured findings for every
+ * existing consumer that needs actionable build-review feedback. Keeping the
+ * legacy reasons first preserves their prior rendering and artifact contract.
+ */
+export function buildReviewFailureDetails(verdict: Pick<BuildReviewVerdict, 'reasons' | 'findings'>): string[] {
+  const details = [...(verdict.reasons ?? [])];
+  for (const rubric of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+    for (const finding of verdict.findings?.[rubric] ?? []) {
+      details.push(`[${rubric}] ${finding}`);
+    }
+  }
+  return details;
 }
 
 /**
@@ -1028,6 +1139,7 @@ export function validateBuildReviewVerdict(
       ok: true;
       verdict: 'PASS' | 'FAIL';
       reasons?: string[];
+      findings?: BuildReviewFindings;
       rubric: BuildReviewRubric;
       codeStamp?: string | null;
     }
@@ -1055,10 +1167,31 @@ export function validateBuildReviewVerdict(
   if (typeof rubricSrc.rootCause === 'boolean') rubric.rootCause = rubricSrc.rootCause;
   if (typeof rubricSrc.completeness === 'boolean') rubric.completeness = rubricSrc.completeness;
 
+  let findings: BuildReviewFindings | undefined;
+  if (e.findings !== undefined) {
+    if (typeof e.findings !== 'object' || e.findings === null || Array.isArray(e.findings)) {
+      return { ok: false, reason: `${BUILD_REVIEW_VERDICT} "findings" must be an object when present` };
+    }
+    const source = e.findings as Record<string, unknown>;
+    findings = {};
+    for (const rubricName of ['tautology', 'scope', 'rootCause', 'completeness'] as const) {
+      const candidate = source[rubricName];
+      if (candidate === undefined) continue;
+      if (!Array.isArray(candidate) || candidate.some((finding) => typeof finding !== 'string')) {
+        return {
+          ok: false,
+          reason: `${BUILD_REVIEW_VERDICT} "findings.${rubricName}" must be a string array when present`,
+        };
+      }
+      findings[rubricName] = candidate;
+    }
+  }
+
   const result: {
     ok: true;
     verdict: 'PASS' | 'FAIL';
     reasons?: string[];
+    findings?: BuildReviewFindings;
     rubric: BuildReviewRubric;
     codeStamp?: string | null;
   } = {
@@ -1069,6 +1202,7 @@ export function validateBuildReviewVerdict(
   if (Array.isArray(e.reasons)) {
     result.reasons = e.reasons as string[];
   }
+  if (findings !== undefined) result.findings = findings;
   if (typeof e.codeStamp === 'string' || e.codeStamp === null) {
     result.codeStamp = e.codeStamp;
   }
@@ -1143,6 +1277,30 @@ async function writeArchitectureReviewAsBuiltCodeStamp(
   ctx: CompletionContext,
 ): Promise<void> {
   await writeGateCodeStamp(dir, ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP, ctx);
+}
+
+/**
+ * Computes fresh wiring evidence via the injected probe and durably writes it
+ * to `path` (creating `.pipeline/` if needed), mirroring the wiring_check
+ * predicate's absent-evidence-file branch. Returns the computed evidence, or
+ * a `{ reason }` failure object if the probe throws.
+ */
+async function deriveAndPersistWiringEvidence(
+  dir: string,
+  path: string,
+  ctx: CompletionContext,
+): Promise<WiringEvidence | { reason: string }> {
+  let computed: WiringEvidence;
+  try {
+    computed = await ctx.wiringProbe!();
+  } catch (err) {
+    return {
+      reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  await mkdir(join(dir, '.pipeline'), { recursive: true });
+  await writeFile(path, JSON.stringify(computed, null, 2));
+  return computed;
 }
 
 export const CUSTOM_COMPLETION_PREDICATES: Partial<
@@ -1847,8 +2005,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       return { done: false, reason: result.reason, routeClass: 'absent' };
     }
     if (result.verdict === 'FAIL') {
-      const reasons = result.reasons && result.reasons.length > 0
-        ? result.reasons.join('; ')
+      const details = buildReviewFailureDetails(result);
+      const reasons = details.length > 0
+        ? details.join('; ')
         : 'no reasons recorded';
       return {
         done: false,
@@ -1911,18 +2070,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `wiring evidence not found at ${WIRING_EVIDENCE} — the wiring-reachability-gate skill must run and record evidence`,
         };
       }
-      let computed: WiringEvidence;
-      try {
-        computed = await ctx.wiringProbe();
-      } catch (err) {
-        return {
-          done: false,
-          reason: `wiring probe failed: ${err instanceof Error ? err.message : String(err)}`,
-        };
+      const derived = await deriveAndPersistWiringEvidence(dir, path, ctx);
+      if ('reason' in derived) {
+        return { done: false, reason: derived.reason };
       }
-      await mkdir(join(dir, '.pipeline'), { recursive: true });
-      await writeFile(path, JSON.stringify(computed, null, 2));
-      parsed = computed;
+      parsed = derived;
     } else {
       try {
         parsed = JSON.parse(raw);
@@ -1931,9 +2083,39 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
     const currentHead = ctx.getHeadSha ? await ctx.getHeadSha().catch(() => null) : null;
-    const validated = validateWiringEvidence(parsed, currentHead);
-    if (!validated.ok) {
-      return { done: false, reason: validated.reason };
+
+    if (raw !== null) {
+      // Existing evidence file: first check shape/schema only (no head
+      // comparison) so malformed evidence is never "repaired" by recompute.
+      const shapeValidated = validateWiringEvidence(parsed);
+      if (!shapeValidated.ok) {
+        return { done: false, reason: shapeValidated.reason };
+      }
+      const recordedHead = (parsed as WiringEvidence).head;
+      if (currentHead != null && recordedHead !== currentHead && ctx.wiringProbe) {
+        // Stale evidence (HEAD moved) but we can re-derive at the current
+        // HEAD instead of rejecting outright — at most one re-derivation
+        // per completion check.
+        const derived = await deriveAndPersistWiringEvidence(dir, path, ctx);
+        if ('reason' in derived) {
+          return { done: false, reason: `wiring probe failed: ${derived.reason}` };
+        }
+        parsed = derived;
+        const revalidated = validateWiringEvidence(parsed, currentHead);
+        if (!revalidated.ok) {
+          return { done: false, reason: revalidated.reason };
+        }
+      } else {
+        const validated = validateWiringEvidence(parsed, currentHead);
+        if (!validated.ok) {
+          return { done: false, reason: validated.reason };
+        }
+      }
+    } else {
+      const validated = validateWiringEvidence(parsed, currentHead);
+      if (!validated.ok) {
+        return { done: false, reason: validated.reason };
+      }
     }
     const evidence = parsed as WiringEvidence;
     const gapMessages: string[] = [];
@@ -1949,6 +2131,31 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       };
     }
     return { done: true };
+  },
+
+  test_suite: async (dir, ctx): Promise<CompletionResult> => {
+    let inspection: FullSuiteInspectionResult;
+    try {
+      inspection = await (
+        ctx.fullSuiteInspect?.() ?? new FullSuiteVerifier({ projectRoot: dir }).inspect()
+      );
+    } catch (error) {
+      return {
+        done: false,
+        reason: `full-suite completion inspection failed: ${error instanceof Error ? error.message : String(error)}`,
+      };
+    }
+    if (inspection.status === 'CURRENT') return { done: true };
+    if (inspection.status === 'STALE') {
+      return {
+        done: false,
+        reason: `full-suite PASS evidence is stale: ${inspection.reason}`,
+      };
+    }
+    return {
+      done: false,
+      reason: `full-suite completion inspection failed (${inspection.reason}): ${inspection.message}`,
+    };
   },
 
   // Retro passes when a fresh retro file exists for THIS feature. Filename
@@ -2042,14 +2249,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // ---- Phase 1: evidence — all non-presentation conditions. Each miss
     // returns immediately, before any presentation (gh) call is made. ----
     let prUrl: string | undefined;
-    if (choice === 'pr') {
+    if (choice === 'pr' || choice === 'merge-local') {
       try {
         const raw = await readFile(join(dir, '.pipeline/conduct-state.json'), 'utf-8');
         const state = JSON.parse(raw) as { pr_url?: string };
         if (!state.pr_url) {
           return {
             done: false,
-            reason: `${FINISH_CHOICE_MARKER}="pr" but no pr_url in state — the PR URL must be recorded`,
+            reason: `${FINISH_CHOICE_MARKER}="${choice}" but no pr_url in state — the PR URL must be recorded`,
             missing: 'recording',
           };
         }
@@ -2057,7 +2264,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       } catch {
         return {
           done: false,
-          reason: 'cannot read state to confirm pr_url for finish-choice="pr"',
+          reason: `cannot read state to confirm pr_url for finish-choice="${choice}"`,
           missing: 'recording',
         };
       }
@@ -2091,6 +2298,33 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             reason: `Push evidence check failed: ${error instanceof Error ? error.message : String(error)}`,
             missing: 'other',
           };
+        }
+      }
+
+      const durableEvidence = await verifyDurableShipmentEvidence(dir, ctx, prUrl);
+      if (durableEvidence) return durableEvidence;
+
+      // adr-2026-07-06-daemon-false-ship-guard follow-up: a shipped PR whose
+      // CHANGELOG entry still carries the maintain-documentation placeholder
+      // token means `conduct-ts finalize-changelog-pr` never ran (or ran and
+      // was never pushed) before finish converged. Fail closed rather than
+      // let a literal `{{IMPLEMENTATION_PR}}` token reach the base branch —
+      // this was previously only caught by an operator noticing after the
+      // fact. Scoped to choice === 'pr': merge-local never creates a PR URL
+      // to substitute, so the token-substitution contract doesn't apply.
+      if (choice === 'pr') {
+        try {
+          const changelog = await readFile(join(dir, 'CHANGELOG.md'), 'utf-8');
+          if (changelog.includes('{{IMPLEMENTATION_PR}}')) {
+            return {
+              done: false,
+              reason: `CHANGELOG.md still contains an unsubstituted {{IMPLEMENTATION_PR}} token — run 'conduct-ts finalize-changelog-pr --pr-url ${prUrl}', commit, and push before finish can complete`,
+              missing: 'other',
+            };
+          }
+        } catch {
+          // No CHANGELOG.md at this path, or unreadable — not this gate's
+          // concern; other checks cover repo-layout problems.
         }
       }
     }
@@ -2686,7 +2920,7 @@ export async function readRemediationPlan(
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---
 
-interface StoryBlock {
+export interface StoryBlock {
   id?: string;
   text: string;
 }
@@ -2695,7 +2929,7 @@ interface StoryBlock {
  * Split a stories file into per-story blocks on `## Story <id>:` headings.
  * Single-story files (no such heading) return one block spanning the file.
  */
-function splitStoryBlocks(content: string): StoryBlock[] {
+export function splitStoryBlocks(content: string): StoryBlock[] {
   const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;
   const blocks: StoryBlock[] = [];
   let current: { id: string; lines: string[] } | null = null;
@@ -2764,7 +2998,7 @@ function storyIdFromFilename(path: string): string | undefined {
  *       `**Story:** Story 1 (FR-1, FR-2)` + `**Type:** happy-path`
  * A `## Coverage Check` table (`| 1 | happy | ... |`) is also honored.
  */
-function collectPlanCoverage(planText: string): Set<string> {
+export function collectPlanCoverage(planText: string): Set<string> {
   const set = new Set<string>();
 
   for (const block of splitOnHeadings(planText, /^###\s+/)) {
@@ -2880,6 +3114,49 @@ export async function checkStepCompletion(
 ): Promise<CompletionResult> {
   const predicate = CUSTOM_COMPLETION_PREDICATES[step];
   if (predicate) return predicate(dir, ctx);
+
+  const completionArtifact = ctx.config?.steps?.[step]?.completion_artifact;
+  if (completionArtifact) {
+    const artifact = join(dir, completionArtifact);
+    const floor = verdictFreshnessFloor(ctx);
+    if (floor === undefined) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" cannot be verified without an attempt or session freshness floor`,
+      };
+    }
+    const comparand = verdictFreshnessComparand(ctx);
+    const artifactStat = await lstat(artifact).catch(() => undefined);
+    if (artifactStat === undefined) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is missing — ${step} must write it after a passing review`,
+      };
+    }
+    if (!artifactStat.isFile()) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is not a regular file — ${step} must replace it with a file written after a passing review`,
+      };
+    }
+    const mtimeMs = artifactStat.mtimeMs;
+    if (mtimeMs < comparand!) {
+      return {
+        done: false,
+        reason: `configured completion artifact "${completionArtifact}" is stale — ${step} must rewrite it during this attempt`,
+      };
+    }
+    return {
+      done: true,
+      verdictFreshness: {
+        artifact,
+        mtimeMs,
+        floorMs: floor,
+        floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+        fresh: true,
+      },
+    };
+  }
 
   const extra = extraArtifactGlobs(step, ctx.config);
   const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extra];

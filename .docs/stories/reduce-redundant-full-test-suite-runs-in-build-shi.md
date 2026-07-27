@@ -1,8 +1,17 @@
+**Status:** Accepted
+
 # Stories: reduce redundant full test-suite runs in build/ship pipeline (#588, S)
+
+> **Amended 2026-07-25 by issue #940 and
+> `.docs/stories/full-suite-verification-gate-940.md`:** the single local
+> full-suite checkpoint moved from finish to the explicit `test_suite` gate
+> after BUILD quality checks and before SHIP. Finish now reuses current gate
+> evidence and runs only a missing/stale fallback. Scoped-test intent is
+> unchanged.
 
 Scope boundary (binding — issue #588): the FULL conductor test suite must run
 authoritatively at CI (the `conductor` job on the PR), and at most ONCE more in-pipeline
-where a pre-push gate genuinely needs it (finish, before ship). Every intermediate build
+where the pre-SHIP `test_suite` gate needs it. Every intermediate build
 step that today re-runs the whole suite is scoped down to the affected/mapped tests (the
 task's / diff's own test files). No gate semantics change; nothing may ship on a red CI.
 
@@ -15,8 +24,8 @@ Design anchors:
   (`skills/tdd/SKILL.md:312-313`): "Scoped affected-test set passes before commit (the
   full suite runs at the feature's final verification task, not per-task)". Two earlier
   lines in the same file contradict it; this work reconciles them.
-- finish (`skills/finish/SKILL.md:45`) is the single in-pipeline full-suite checkpoint,
-  complementing CI's authoritative run.
+- `test_suite` is the single in-pipeline full-suite checkpoint; finish reuses
+  its current proof or supplies a missing/stale fallback.
 
 Binding non-goal: manual_test (`skills/manual-test/SKILL.md`) exercises endpoints/UI and
 does NOT run the unit suite — it is untouched. CI (`.github/workflows/ci.yml`) is
@@ -48,7 +57,7 @@ observing that the diff's tests pass firsthand.
 - Then it observes the failure firsthand and the rubric still catches a dishonest diff
   (tautology/root-cause FAIL) exactly as before — scoping narrows WHICH tests run, not the
   gate's ability to fail a bad diff. Cross-file regressions outside the diff's scope are
-  caught at finish's full run and at CI, so nothing ships red.
+  caught at the explicit gate and at CI, so nothing ships red.
 
 ---
 
@@ -74,7 +83,7 @@ signal.
 
 ---
 
-## Story 3: TDD per-cycle runs the scoped affected set; the full suite runs at finish + CI
+## Story 3: TDD per-cycle runs the scoped affected set; the full suite runs at the gate + CI
 
 As a build agent running the TDD cycle, I want each GREEN/COMMIT cycle to run only the
 affected/scoped test set (the task's own tests plus the files it touches), so per-task
@@ -85,7 +94,7 @@ already states.
 - Given a TDD cycle for a task,
 - When GREEN verifies the change and the COMMIT hard gate is evaluated,
 - Then both run the SCOPED affected-test set (not the full suite), the cycle commits on a
-  green scoped run, and the full suite is deferred to the feature's finish step and CI —
+  green scoped run, and the full suite is deferred to the feature's explicit pre-SHIP gate and CI —
   and the SKILL.md is internally consistent (GREEN step 4 and the COMMIT gate agree with
   the Verification checklist at `:312-313`).
 
@@ -93,29 +102,26 @@ already states.
 - Given a cycle whose change breaks a test in a file it touches,
 - Then the scoped run fails and the cycle does NOT commit (caught in-cycle) — and given a
   change that breaks an UNRELATED test outside the cycle's scope, that regression is
-  caught by the full suite at finish and by CI before merge, so nothing ships red despite
+  caught by the full suite at the explicit gate and by CI before merge, so nothing ships red despite
   the per-cycle run being scoped.
 
 ---
 
-## Story 4: finish is the single in-pipeline full-suite checkpoint before ship
+## Story 4: the explicit pre-SHIP gate owns the single in-pipeline full-suite checkpoint
 
-As the ship tail, I want finish to remain the one place the full suite runs in-pipeline
-(before push), complementing CI's authoritative run, so a ship cannot leave the machine on
-a red full suite while intermediate steps stay scoped.
+As the delivery flow, I want the explicit `test_suite` step to be the one place
+the full suite normally runs in-pipeline, with finish as a reuse-aware fallback,
+so failures return to BUILD before SHIP while intermediate steps stay scoped.
 
 **Happy path**
-- Given a feature reaching finish,
-- When finish runs its fresh verification,
-- Then it runs the FULL test suite once (unchanged), and the skill documents that this is
-  the single in-pipeline full-suite checkpoint that complements — not duplicates — CI's
-  authoritative `conductor` job.
+- Given a feature passes BUILD quality checks,
+- When the explicit `test_suite` gate runs,
+- Then it runs the FULL test suite once and records reusable evidence; finish
+  accepts that current proof without launching the suite again.
 
 **Negative path (red full suite still blocks the ship)**
-- Given the fresh full suite at finish has real (non-flake) failures,
-- When finish evaluates,
-- Then finish still refuses (writes `.pipeline/test-failures.md`, no `finish-choice`, no
-  push, no PR) exactly as today — the full-suite pre-push gate is retained, and CI remains
-  the authoritative gate that blocks merge on red.
-
-Status: Accepted
+- Given the full suite has real failures,
+- When the explicit gate evaluates,
+- Then SHIP is blocked and work returns to BUILD; if standalone finish supplies
+  a missing/stale fallback and it fails, finish records no choice, push, or PR.
+  CI remains the independent authoritative merge gate.

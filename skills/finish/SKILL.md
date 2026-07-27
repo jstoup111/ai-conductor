@@ -50,21 +50,41 @@ Do NOT trust:
 - Test results from earlier in the session
 - "It was passing last time I checked"
 - Agent reports from subagents (verify their claims independently)
+- A hand-read evidence file without recalculating its content fingerprint
 
 Run these commands and read the full output:
 
-1. **Full test suite** — Run it fresh. Read the output. Count passing/failing/pending. This is the SINGLE in-pipeline full-suite checkpoint before push — it complements, and is not duplicated by, intermediate steps (which run scoped tests) or CI's authoritative `conductor` job.
+1. **Aggregate suite proof** — From the project root, run the repository's
+   configured aggregate verifier. The verifier recalculates freshness and
+   produces one of two successful results:
+   - `EXECUTED` — evidence was missing or stale, so the project suite launched
+     exactly once and recorded a current PASS.
+   - `REUSED` — current PASS evidence matched the verification inputs, so the
+     project suite did not launch.
+
+   Read the complete verifier output. Do not run the project suite command
+   directly or inspect an evidence sidecar as a substitute; the configured
+   verifier owns both the run-versus-reuse decision and the evidence update.
 2. **Git status** — Check for uncommitted files, untracked files, unexpected changes.
 3. **Linting/type checking** — If the project has linters or type checkers, run them.
 
 All must pass before proceeding.
 
-**When the fresh suite fails — flake-check, then record the evidence:**
+**When the configured aggregate verifier exits non-zero — stop before completion choices:**
 
-1. **Flake-check**: re-run JUST the failing specs once. A failure that passes on
-   re-run, or that is plainly transient infra (DB not up, port in use, network
-   timeout), is a flake — note it and proceed normally.
-2. **Real failures remain** → this is NOT a finishable state:
+**STOP before presenting options, executing any choice, pushing, creating a PR,
+or writing `.pipeline/finish-choice`.** Report the actionable, redacted CLI
+failure output. The shared verifier retains its canonical failure in
+`.pipeline/test-suite-evidence.json`.
+
+1. **Flake-check executable test failures only**: if the CLI output identifies
+   failing specs, re-run JUST those specs once. A failure that passes on re-run,
+   or that is plainly transient infra (DB not up, port in use, network timeout),
+   is a flake — note it, then run the configured aggregate verifier again so
+   only that verifier can record the replacement PASS. For configuration, preflight,
+   launch, or timeout failures, do not invent a failing-spec rerun; use the
+   verifier's blocking evidence.
+2. **Real test failures remain** → this is NOT a finishable state:
    - Write **`.pipeline/test-failures.md`** (run evidence — overwrite any prior
      one): one section per failing test file with the test names, a one-line
      failure reason each, and your read on the cause — an implementation bug, or
@@ -224,19 +244,51 @@ describe the choice):
 - Otherwise (no remote, or `gh` unavailable/unauthenticated) → **Option 3: Keep
   as-is** — leave the work committed on the branch.
 
-**The final act in auto mode is always `conduct-ts finish-record`** — it is the
-single source of truth for the `.pipeline/finish-choice` marker and (for `pr`)
-`state.pr_url`; do not hand-write these files yourself in auto mode. Use the
-absolute pipeline directory supplied in the step's system prompt:
+**A PR finish is one ordered shipment sequence.** Derive `<slug>` from the active
+`.docs/plans/<slug>.md`. After `/pr` creates or reuses the PR, run every command below
+from the feature worktree, in order:
 
-- PR variant (after the §5 Option 2 STOP gate passes):
-  ```
-  conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
-  ```
-- Keep variant (no remote, or `gh` unavailable/unauthenticated):
-  ```
-  conduct-ts finish-record --choice keep --pipeline-dir /abs/path/to/.pipeline
-  ```
+```
+conduct-ts finalize-changelog-pr --pr-url <PR_URL>
+if ! git diff --quiet -- CHANGELOG.md; then
+git add CHANGELOG.md
+git commit -m "docs(changelog): link implementation PR"
+git push  # focused changelog finalization push; follow §1b's safe-push rules
+git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
+fi
+conduct-ts shipped-record --slug <slug> --pr <PR_URL>
+git cat-file -e "HEAD:.docs/shipped/<slug>.md"
+git push  # durable shipped-record push; follow §1b's safe-push rules
+git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
+conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
+```
+
+When no implementation-PR token exists, finalization is a successful no-op. `CHANGELOG.md`
+remains unchanged; do not create a changelog commit or push; continue with the existing shipped-record sequence.
+
+If finalization, the focused commit, or its push fails, **STOP immediately.**
+Do NOT run `conduct-ts shipped-record`.
+Do NOT run `conduct-ts finish-record`.
+Do NOT write `.pipeline/finish-choice` manually.
+A failed focused-push ancestry check has the same STOP contract. Do not hand-write any substitute
+shipment record.
+
+`shipped-record` is historically best-effort and may warn while exiting zero, so its exit code
+alone is not evidence. The `git cat-file` and post-push ancestry checks are mandatory. If either
+fails, STOP: do not run `finish-record`, do not write local completion markers, and do not report
+the feature shipped.
+
+For Keep (no remote, or `gh` unavailable/unauthenticated), leave the work committed on the branch
+and run:
+
+```
+conduct-ts finish-record --choice keep --pipeline-dir /abs/path/to/.pipeline
+```
+
+The final act after the durable PR record is verified is always `conduct-ts finish-record`. It is
+the single source of truth for the `.pipeline/finish-choice` marker and (for `pr`) `state.pr_url`;
+do not hand-write these files yourself in auto mode. Use the absolute pipeline directory supplied
+in the step's system prompt.
 
 `finish-record` itself re-verifies the PR exists and that HEAD was pushed
 before writing anything — so it is safe to run as the terminal step even if
@@ -268,20 +320,22 @@ exists, reuse it (`gh pr view --json url -q .url`) rather than failing.
 After executing any choice, **record the outcome** so the conductor's
 completion gate can verify the step actually did something:
 
-- **Auto mode (`pr` or `keep`)**: the outcome MUST be recorded by running
+- **Auto mode (`pr` or `keep`)**: for `pr`, first complete and verify the durable shipped-record
+  sequence above. Then record the outcome by running
   `conduct-ts finish-record --choice <pr|keep> [--pr-url <url>] --pipeline-dir
   /abs/path/to/.pipeline` (see §4) — this is the final act, and it writes both
   `.pipeline/finish-choice` and, for `pr`, `state.pr_url` atomically after
   re-verifying the PR/push. Do NOT hand-write these files yourself when
   running auto/unattended.
-- **Interactive mode (Options 1–4, user chose manually)**: marker semantics
-  are unchanged — write the outcome by hand as described below:
-  - **Always**: write the chosen option to `.pipeline/finish-choice` as one of
-    the literal strings `pr`, `merge-local`, `keep`, or `discard`.
-  - **Option 2 (PR) only**: also write the resulting PR URL to
-    `.pipeline/conduct-state.json` as `pr_url` (the conductor will pick it up
-    from there; if the underlying `/pr` skill prints the URL to stdout the
-    conductor can also scrape it).
+- **Interactive mode (Options 1–4, user chose manually)**:
+  - **Option 2 (PR)**: after the durable shipped-record and PR/push STOP gates pass, the final action MUST
+    be `conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir
+    /abs/path/to/.pipeline`. Do not write `finish-choice` or `pr_url` by hand:
+    the recorder verifies the PR and push, then writes both records plus the
+    terminal `.pipeline/DONE` marker.
+  - **Other outcomes**: write the chosen option to
+    `.pipeline/finish-choice` as one of the literal strings `merge-local`,
+    `keep`, or `discard`, as described below.
 
 Without one of these, the conductor will treat the step as failed and re-run
 it, even if the skill itself reports success.
@@ -296,8 +350,9 @@ conductor reads.
   `conduct-ts shipped-record --slug <slug> --pr local` (where `<slug>` is the
   plan-file stem, `.docs/plans/<slug>.md`). It commits `.docs/shipped/<slug>.md`
   on the branch so the merge lands the code and the shipped-fact atomically.
-  The command NEVER blocks the ship: on any failure it warns and exits 0 —
-  continue regardless.
+  Because the command may warn while exiting zero, verify the record is committed with
+  `git cat-file -e "HEAD:.docs/shipped/<slug>.md"`. If verification fails, STOP before merging
+  or writing `merge-local`.
 - Determine the base branch (main, master, develop)
 - Merge the feature branch
 - Run tests again after merge to verify no merge issues
@@ -320,7 +375,7 @@ conductor reads.
 
 #### STOP Gate: Verify Push + PR Before Recording Choice
 
-Before writing `finish-choice=pr` and `pr_url`, verify both the PR and the push:
+Before running `finish-record` for the PR choice, verify both the PR and the push:
 
 1. **PR exists and has a non-empty URL:**
    ```
@@ -335,7 +390,8 @@ Before writing `finish-choice=pr` and `pr_url`, verify both the PR and the push:
    If this exits non-zero, `HEAD` is not an ancestor of the remote tracking ref —
    the push did not land, or the remote never updated locally (stale tracking ref).
 
-**If EITHER check fails, STOP immediately.** Do NOT write `finish-choice=pr` or `pr_url`.
+**If EITHER check fails, STOP immediately.** Do NOT run `finish-record`, write
+`finish-choice=pr`, or write `pr_url`.
 Explain what failed and what to do next:
 
 - **If the PR check failed:** "The PR URL is empty or inaccessible. Verify `gh pr view`
@@ -347,15 +403,52 @@ Explain what failed and what to do next:
 **In daemon mode:** a missing `finish-choice` marker leaves the completion gate unsatisfied
 (Story 1), routing to HALT for human review.
 
+- **Changelog PR-link finalization (immediately after the PR/push STOP gate passes,
+  before the shipped record):** on the feature branch, run
+  ```
+  conduct-ts finalize-changelog-pr --pr-url <PR_URL>
+  ```
+  using the exact PR URL confirmed by the STOP gate above. This is unconditional —
+  run it for every outcome that reaches this point (auto mode and interactive Option 2
+  alike), not only when you believe a placeholder is present; the command is a
+  no-op when `CHANGELOG.md` has no `{{IMPLEMENTATION_PR}}` token, and this is one of
+  the two valid successful outcomes:
+  - **Token replaced:** `git diff --quiet -- CHANGELOG.md` is non-zero (the file
+    changed). Commit and push it:
+    ```
+    git add CHANGELOG.md
+    git commit -m "docs(changelog): link implementation PR"
+    git push  # follow §1b's safe-push rules
+    git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
+    ```
+  - **No-op (no token present):** `git diff --quiet -- CHANGELOG.md` is zero (no
+    change). Do not create a changelog commit or push; continue.
+  Before moving on, verify no unsubstituted token remains:
+  ```
+  grep -c '{{IMPLEMENTATION_PR}}' CHANGELOG.md
+  ```
+  This MUST print `0` (or the file must not contain the string at all, which greps
+  as exit 1 with no output — either is acceptable, a nonzero count is not). If the
+  count is nonzero, or `finalize-changelog-pr` itself fails, **STOP**: do NOT run
+  `conduct-ts shipped-record` or `conduct-ts finish-record`, and do NOT write
+  `finish-choice` by hand. A CHANGELOG entry with a literal `{{IMPLEMENTATION_PR}}`
+  token merged to the base branch is not a finishable state.
 - **Shipped record (before handing the PR to the human):** on the feature
   branch, run `conduct-ts shipped-record --slug <slug> --pr <PR_URL>` (where
-  `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then `git push` so
-  the record commit rides the PR branch — the human merge lands the code and
-  the shipped-fact atomically. The command NEVER blocks the ship: on any
-  failure it warns and exits 0 — continue (dedup degrades to the local ledger).
+  `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then push using
+  §1b's safe-push rules so the record commit rides the PR branch — the human
+  merge lands the code and the shipped-fact atomically. Verify both
+  `git cat-file -e "HEAD:.docs/shipped/<slug>.md"` and
+  `git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>` after the push.
+  If either fails, STOP without running `finish-record`; ignored local markers are not a
+  substitute for the durable record.
 - Return the PR URL to the user
-- Write the PR URL to `.pipeline/conduct-state.json` (`pr_url` field)
-- Write `pr` to `.pipeline/finish-choice`
+- As the final action, run:
+  ```
+  conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
+  ```
+  This is the only writer for `pr_url`, `finish-choice=pr`, and the terminal
+  `.pipeline/DONE` marker. If it fails, do not hand-write a substitute record.
 
 **Option 3: Keep as-is**
 - No action needed
@@ -373,7 +466,12 @@ Explain what failed and what to do next:
 ### 6. Cleanup
 
 After executing the chosen option:
-- **Worktree merge/cleanup:** Dispatch the `worktree-manager` agent with `model="haiku"` (see `agents/worktree-manager.md`):
+- **Worktree merge/cleanup:** Use the selected host's available subagent facility to delegate the
+  `worktree-manager` responsibilities (see `agents/worktree-manager.md`). Preserve the cleanup
+  outcome below regardless of host; do not replace it with a host-specific shortcut.
+  **Claude Code only:** dispatch the `worktree-manager` through the Agent tool with
+  `model="haiku"` in Claude Code. Other supported hosts use their provider-native subagent facility and
+  configured provider policy, without translating the Claude Agent-tool or model instruction.
   - Options 1 (merge) and 2 (PR): agent merges the feature branch, runs post-merge tests,
     then removes the worktree and prunes the branch
   - Option 4 (discard): agent removes the worktree and deletes the branch
@@ -383,8 +481,8 @@ After executing the chosen option:
 ## Verification
 
 - [ ] GATE 0: checked `git status` first — confirmed NO rebase/merge in progress and no unmerged paths (else stopped without pushing/PR/`finish-choice`)
-- [ ] Test suite ran fresh (not cached) — output read
-- [ ] If the fresh suite failed: flake-check performed; real failures recorded in `.pipeline/test-failures.md`; NO `finish-choice` written
+- [ ] The configured aggregate verifier ran now — output read; success was `EXECUTED` or `REUSED`
+- [ ] If the verifier exited non-zero: applicable flake-check performed; real test failures recorded in `.pipeline/test-failures.md`; NO choices presented and NO `finish-choice` written
 - [ ] Git status clean (no unexpected uncommitted changes)
 - [ ] Outcome recorded via `conduct-ts finish-record --choice <c> [--pr-url <url>]` — the
       completion gate reads `.pipeline/finish-choice` AND the recorded PR URL; a choice of
@@ -395,6 +493,10 @@ After executing the chosen option:
       `needs-remediation:`, halt-PR rehabilitation failed — check conductor logs)
 - [ ] HEAD pushed and present at the recorded PR's head (push evidence — the gate verifies
       `refs/remotes/origin/<branch>` contains HEAD)
+- [ ] PR/merge-local shipment has `.docs/shipped/<slug>.md` committed at HEAD; PR shipment pushed that exact HEAD before `finish-record`
+- [ ] If Option 2 (PR): `conduct-ts finalize-changelog-pr --pr-url <url>` ran (unconditionally, for
+      every PR outcome) and `grep -c '{{IMPLEMENTATION_PR}}' CHANGELOG.md` confirms no unsubstituted
+      token remains at HEAD before `shipped-record`/`finish-record` ran
 - [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog `rebase (finish):` entry) before `--force-with-lease` (never pulled)
 - [ ] On unproven staleness (foreign commits): stopped with no force of any kind
 - [ ] On lease failure: stopped with no plain `--force`, no pull, no `finish-choice`

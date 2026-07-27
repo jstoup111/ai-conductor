@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventPersister, EventPersistError } from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ConductorEvent } from '../../src/types/index.js';
 
 describe('EventPersister', () => {
   let tempDir: string;
@@ -81,6 +82,50 @@ describe('EventPersister', () => {
     expect(line.waitSeconds).toBe(30);
   });
 
+  it('persists typed credential-park progress as JSONL', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'unusable',
+      elapsedSeconds: 3,
+      nextProbeDelaySeconds: 4,
+      degradation: 'credential-failure',
+    });
+
+    persister.stop();
+
+    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toEqual({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'unusable',
+      elapsedSeconds: 3,
+      nextProbeDelaySeconds: 4,
+      degradation: 'credential-failure',
+    });
+  });
+
+  it('persists only the closed progress contract, not doctor diagnostics', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+    const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
+
+    await emitter.emit({
+      type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+      readiness: 'unusable', elapsedSeconds: 60, nextProbeDelaySeconds: 30,
+      degradation: 'credential-failure',
+    });
+    persister.stop();
+
+    const persisted = await readFile(eventsPath, 'utf-8');
+    expect(persisted).not.toContain(rawFragment);
+  });
+
   // ─── Task 4: missing tokenUsage does not crash ──────────────────────────────
 
   it('handles step_completed without tokenUsage without crashing', async () => {
@@ -98,6 +143,59 @@ describe('EventPersister', () => {
     const line = JSON.parse(content.trim());
     expect(line.type).toBe('step_completed');
     expect(line.tokenUsage).toBeUndefined();
+  });
+
+  it('persists provider attempts, fallback diagnostics, and completed-step attribution', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    const providerEvents = [
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        authenticationSource: 'cached-login',
+        outcome: 'unavailable',
+        reason: 'executable not found',
+        model: 'gpt-5.6-sol',
+        invoked: true,
+      },
+      {
+        type: 'provider_fallback',
+        step: 'plan',
+        failedProvider: 'codex',
+        reason: 'executable not found',
+        nextProvider: 'claude',
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        model: 'sonnet',
+        tokenUsage: { input: 120, output: 30 },
+        invoked: true,
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+      },
+    ] satisfies ConductorEvent[];
+
+    for (const event of providerEvents) await emitter.emit(event);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => {
+        const { ts: _ts, ...event } = JSON.parse(line);
+        return event;
+      });
+    expect(records).toEqual(providerEvents);
   });
 
   // ─── Task 6: creates parent directories ───────────────────────────────────

@@ -5,7 +5,20 @@
 # key both files define. The `conductor:` block is user-level only — it
 # holds per-user global state (update channel, last check timestamp).
 
-harness_version: ">=1.0.0"
+harness_version: ">=0.99.0"
+
+# Required in project config for the native pre-SHIP aggregate gate. Declare
+# one project-owned command that composes every authoritative suite. For
+# projects with separate unit and acceptance commands, combine them in a
+# package/script target and name that target here.
+# test_suite:
+#   command: npm test
+#   working_directory: .        # Relative to the project root
+#   timeout_seconds: 1800
+#   inputs:                      # Extra test-relevant paths beyond built-ins
+#     - test-support/**
+#   environment:                 # Names only; values are hashed, never stored
+#     - CI
 
 # User-level global state. Written by bin/install and bin/conduct; safe to
 # edit by hand.
@@ -37,7 +50,7 @@ markdown_viewer:
 #   UNDERSTAND:
 #     effort: low
 # steps:
-#   bootstrap:
+#   explore:
 #     model: haiku
 # complexity:
 #   default_tier: M

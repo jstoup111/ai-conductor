@@ -11,6 +11,10 @@
 
 import { readFile, writeFile, chmod } from 'node:fs/promises';
 import { DOCS_GUARD_HOOK } from '../engine/session-hook-assets.js';
+import {
+  classifyMutationTarget,
+  type MutationTargetClassificationInput,
+} from '../engine/protected-artifact-seal.js';
 
 export const EXIT_OK = 0;
 export const EXIT_DRIFT = 1;
@@ -25,6 +29,15 @@ function expectedContent(): string {
 export type CliMode = 'write' | 'check';
 export type CliOptions = { outPath: string; mode: CliMode };
 export type CliResult = { exitCode: number; diff?: string; message?: string };
+
+/**
+ * The generator owns the hook artifact boundary, while the terminal seal owns
+ * the policy. Re-export the policy through this boundary so both paths use the
+ * exact same canonical target classification.
+ */
+export function classifyDocsGuardMutationTarget(input: MutationTargetClassificationInput) {
+  return classifyMutationTarget(input);
+}
 
 /**
  * Public in-process entry point — the same one `bin/generate-docs-guard-hook`

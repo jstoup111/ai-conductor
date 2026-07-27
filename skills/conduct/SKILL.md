@@ -10,23 +10,29 @@ requires: []
 ## Purpose
 
 Walks a feature through the complete SDLC flow by checking artifact state and directing the user
-to the correct next skill. Run `/conduct` at any point to see where you are and what to do next.
+to the correct next skill. Run the `conduct` workflow at any point to see where you are and what
+to do next (Claude `/conduct`; Codex `$conduct`).
 
 Does NOT run other skills internally — it assesses state and directs. The user invokes each skill.
 
 ### Session Model
 
-**One Claude session per feature/worktree.** All steps — design through retro — share the same
-session. The session ID is stored in `.pipeline/conduct-session-id`.
+**Fresh LLM session per executed step.** Every step — design through retro —
+starts without prior-step conversational context and reads its inputs from the
+persisted artifacts. The session ID/marker under `.pipeline/` supports the
+current step only; it is reset at the next step boundary.
 
-- **Design phase** (bootstrap → plan): Context grows moderately. All artifacts persist to disk.
-- **Build phase** (pipeline): The conductor drives the task loop. Claude orchestrates each task
-  by dispatching subagents. Subagent context is isolated and discarded — only a ~2-3 line summary
-  returns to the orchestrator per task. No context compaction needed.
+- **Design phase** (bootstrap → plan): Each step reads the approved artifact
+  produced by its predecessor.
+- **Build phase** (pipeline): The conductor drives the task loop. The selected host agent orchestrates
+  each task by dispatching subagents. Subagent context is isolated and discarded —
+  only a ~2-3 line summary returns to the orchestrator per task. No context compaction needed.
 - **Ship phase** (finish → retro): Lightweight steps, context stays bounded.
 
-Interactive steps reuse the feature session via `--resume`. No fresh sessions are created
-mid-feature. This prevents redundant cold starts that waste API calls and hit rate limits.
+Retries within the same step resume that step's session so partial work and
+failure context are retained. A later step never resumes it. With per-step
+provider routing, session identity is additionally provider-local: another
+provider starts fresh, and only a same-step retry on the same provider resumes.
 
 ## The Flow
 
@@ -43,21 +49,23 @@ Step 7b: /architecture-review    → DECIDE (skipped for Small, lightweight for 
 Step 8:  /stories               → DECIDE (from PRD FRs on product; technical stories on technical)
 Step 9:  /conflict-check        → DECIDE (skipped for Small; root-routes kickback → prd|architecture|stories)
 Step 10: /plan                  → DECIDE (technical implementation plan, grounded in the architecture + stories)
+Step 10b: /coherence-check       → DECIDE (Medium/Large traceability gate after plan)
 Step 11: /writing-system-tests  → BUILD (skipped for Small)
 Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
+Step 13: /test-suite            → BUILD (repository-configured aggregate verification gate)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
-Step 13: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
+Step 14: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
        ── CHECKPOINT ──         → User reviews test results, can go back or continue
-Step 14: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
-Step 15: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
-Step 16: /retro                 → SHIP
-Step 17: /finish                → SHIP (verify, review changes, present options — delegates to /pr if user chooses Push & PR)
+Step 15: /prd-audit             → SHIP (PRODUCT track only — audit shipped impl vs PRD FRs; GATE; skipped on technical)
+Step 16: /architecture-review --as-built → SHIP (shipped code vs APPROVED ADRs; GATE — BLOCKED on an ADR violation)
+Step 17: /retro                 → SHIP
+Step 18: /finish                → SHIP (verify, review changes, present options, and commit the durable shipped record before completion)
 ```
 
 > **Order note:** architecture (diagram + review) precedes `plan` so the technical
-> implementation plan is grounded in the agreed design. This is the canonical `conduct-ts`
-> order. The legacy bash `bin/conduct` retains the prior plan→architecture order (its
-> `architecture-review` gates on the plan); use `conduct-ts` for the PRD-driven flow.
+> implementation plan is grounded in the agreed design. This is the canonical
+> `conduct-ts` order. Any legacy project runner that preserves the prior
+> plan→architecture order must not be used for the PRD-driven flow.
 
 ## Practices
 
@@ -80,15 +88,19 @@ Check for these artifacts in order. The **first missing artifact** determines th
 | 8b. diagrams | Architecture diagrams exist | Check `.docs/architecture/*.md` exist, or check state is "skipped" |
 | 9. architecture-review | Review exists in `.docs/decisions/` OR skipped (Small tier). **All ADRs must be APPROVED** (no DRAFT ADRs remaining). | Glob `.docs/decisions/architecture-review-*.md` or check state is "skipped". Grep `.docs/decisions/adr-*.md` for `Status: DRAFT` — if any DRAFT ADRs exist, this step is pending. |
 | 10. writing-system-tests | Acceptance specs exist OR skipped (Small tier) | Glob `spec/integration/*_spec.rb` or `spec/system/*_spec.rb`, or check state is "skipped" |
-| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` or test suite passes. Pipeline evaluator satisfies code-review gate. |
-| 12. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
-| 13. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
-| 14. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
-| 15. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
-| 16. finish | User chose a completion option | Step is "done" in state (`pr_url` saved if Option 2 chosen) |
+| 11. build | Implementation tasks completed with passing tests | Check `.pipeline/task-status.json` and the affected-test result set. Pipeline evaluator satisfies code-review gate. |
+| 12. test-suite | Current PASS evidence exists from the repository-configured aggregate verifier | Check `.pipeline/test-suite-evidence.json`; missing, stale, or failing evidence means this BUILD gate is pending. |
+| 13. manual-test | Manual test results exist with no FAILs, OR auto-skipped (non-endpoint feature) | Glob `.pipeline/manual-test-results.md` — if file contains FAIL rows, step is pending. **Auto-skip:** If no stories reference HTTP endpoints, API routes, or user-facing UI, skip `/manual-test` and log reason. For internal components (services, background jobs, mailers, CI config), suggest Rails console or script-based smoke test instead. |
+| 14. prd-audit | Fresh PRD audit exists with every FR ALIGNED (or human-ACCEPTED) | Glob `.pipeline/prd-audit.md` — if any verdict-table row carries an `FR-N` id with `MISSING`/`PARTIAL`/`DIVERGED` and is not `ACCEPTED`, step is pending. |
+| 15. architecture-review-as-built | Fresh as-built review with a clean APPROVED verdict, OR skipped (Small tier / architecture_review skipped) | Glob `.pipeline/architecture-review-as-built.md` — **fail-closed**: step is satisfied only when the `Verdict:` line is `APPROVED` or `APPROVED WITH DRIFT NOTES`; `BLOCKED`, a missing verdict, or any unrecognized verdict means pending. Auto-skipped when `architecture_review` was skipped (no ADRs to audit). |
+| 16. retro | Retro report exists in `.docs/retros/` OR skipped (Small tier) | Glob `.docs/retros/*.md` or check state is "skipped" |
+| 17. finish | User chose a completion option and durable shipment evidence exists | Step is "done" in state (`pr_url` saved if Option 2 chosen). For PR or merge-local, `.docs/shipped/<plan-stem>.md` must be committed on the shipping branch; for PR, the record commit must also be pushed to the PR head. |
 
 **Feature completion:** After all steps finish and PR is created, `feature_status` is set to
-`"complete"` in `conduct-state.json`. Complete features are excluded from `--resume` menus.
+`"complete"` in `conduct-state.json`. Do not mark a PR or merge-local outcome complete until
+`/finish` has created and verified the committed `.docs/shipped/<plan-stem>.md` record. Ignored
+`.pipeline/DONE`, `finish-choice`, or `pr_url` state alone is not durable shipment evidence.
+Complete features are excluded from `--resume` menus.
 
 **Worktree cleanup:** On `--resume` or `--cleanup`, conduct checks all worktrees for merged PRs.
 If a PR is merged, it offers to: remove the worktree, delete the local branch, and mark complete.
@@ -116,7 +128,8 @@ Present a clear status dashboard:
 | SHIP | finish/pr | ⬚ Pending | — |
 
 ### Next Step
-Run `/conflict-check` to check stories for contradictions before planning.
+Run the `conflict-check` workflow to check stories for contradictions before planning (Claude
+`/conflict-check`; Codex `$conflict-check`).
 ```
 
 **Status icons:**
@@ -207,7 +220,8 @@ Before suggesting the next step, verify that the previous step's **quality gates
 **After stories (before suggesting conflict-check):**
 - Open the stories file and verify EVERY story has at least one concrete negative path
 - If any story has only happy paths or vague negative paths ("handle errors gracefully"), BLOCK
-- Say: "Stories incomplete — [story name] is missing concrete negative paths. Run `/stories` again."
+- Say: "Stories incomplete — [story name] is missing concrete negative paths. Run the `stories`
+  workflow again (Claude `/stories`; Codex `$stories`)."
 
 **After conflict-check (before suggesting plan):**
 - Check the conflict report for any **blocking** conflicts still unresolved
@@ -217,7 +231,8 @@ Before suggesting the next step, verify that the previous step's **quality gates
 **After plan (before suggesting build):**
 - Open the plan and verify every acceptance criterion from stories maps to at least one task
 - If coverage gaps exist, BLOCK
-- Say: "Plan has coverage gaps — [criterion] has no corresponding task. Run `/plan` again."
+- Say: "Plan has coverage gaps — [criterion] has no corresponding task. Run the `plan` workflow
+  again (Claude `/plan`; Codex `$plan`)."
 
 **After architecture-review (before suggesting writing-system-tests):**
 - Check all ADR files in `.docs/decisions/adr-*.md` for `Status: DRAFT`
@@ -225,22 +240,32 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "DRAFT ADRs remain unapproved — [list files]. All ADRs must be APPROVED before BUILD."
 - Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
-**After build (before suggesting manual-test):**
-- Run the test suite and verify it passes
+**After build (before suggesting /test-suite):**
+- Run the union of affected tests for the BUILD diff and verify it passes
+- If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
+  not defer it to the later aggregate gate
+- If one of the repository's documented intermediate fallback triggers makes
+  the union genuinely unsafe, name the exact trigger and invoke the configured
+  aggregate verifier; never call the raw aggregate command
 - Check git status for uncommitted changes
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
+
+**After /test-suite (before suggesting /manual-test):**
+- Require current PASS evidence from the repository-configured aggregate verifier.
+- If the verifier fails, BLOCK progression to SHIP and return to `/tdd` or `/pipeline` for remediation.
 
 **After prd-audit (before suggesting architecture-review --as-built):**
 - Open the audit report (`.pipeline/prd-audit.md`) and check the per-FR verdict table
 - If any FR is non-ALIGNED and not human-ACCEPTED, BLOCK
 - Route by gap-class: `impl-gap` → back to BUILD to close the gap; `intended-drift` → back to
   DECIDE to amend the PRD, then re-audit
-- Say: "PRD audit blocked — [FR-N] is [verdict] ([gap-class]). Return to [BUILD/DECIDE] and re-run `/prd-audit`."
+- Say: "PRD audit blocked — [FR-N] is [verdict] ([gap-class]). Return to [BUILD/DECIDE] and re-run
+  the `prd-audit` workflow (Claude `/prd-audit`; Codex `$prd-audit`)."
 - **Daemon (auto) runs** route this automatically: an all-`impl-gap` audit self-heals back to
   BUILD (bounded, then HALTs if unresolved); any product/plan gap (`intended-drift` or an
   unclassifiable row) HALTs immediately for a human, since the DECIDE amendment can't be made
-  autonomously. See `src/conductor/README.md` → "Daemon prd-audit routing".
+  autonomously. Consult the repository's daemon PRD-audit routing documentation.
 
 **After architecture-review --as-built (before suggesting retro):**
 - This gate is **skipped** when `architecture_review` was skipped (Small tier, or a config/`when:`
@@ -248,12 +273,15 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Otherwise open the as-built report (`.pipeline/architecture-review-as-built.md`). The gate is
   **fail-closed**: it passes ONLY on a clean `APPROVED` / `APPROVED WITH DRIFT NOTES` verdict.
 - If the verdict is BLOCKED (shipped code violates an APPROVED ADR), BLOCK
-- Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR (human-approved), then re-run `/architecture-review --as-built`."
+- Say: "As-built review blocked — code violates [ADR slug]. Fix the code or supersede the ADR
+  (human-approved), then re-run `architecture-review --as-built` (Claude `/architecture-review
+  --as-built`; Codex `$architecture-review --as-built`)."
 - If the report has no recognizable `APPROVED`/`BLOCKED` verdict (e.g. a confused review with no
   ADRs), BLOCK and re-run — never treat a missing/garbled verdict as a pass.
 
-**When pipeline reports task failure:** Verify by running tests before escalating or
-re-dispatching. JSON state can become stale — the actual test suite is the source of truth.
+**When pipeline reports task failure:** Re-run the same affected-test scope before escalating or
+re-dispatching (or the same named shared-verifier fallback if one fired). JSON state can become
+stale — the observed scoped result is the source of truth.
 
 **Daemon-only PR labeling (irrecoverable build failure / successful ship):**
 In daemon/auto mode, an irrecoverable build failure that has commits on the branch surfaces a
@@ -263,7 +291,7 @@ kept-in-sync `mergeable` label (added when open + conflict-free + CI-green, remo
 pruned on merge/close). A `needs-remediation` PR is never labeled `mergeable`. If a previously
 failed feature later succeeds on re-dispatch, the daemon clears the stale `needs-remediation`
 label and un-drafts the PR before enrolling it in the sweep. Interactive runs are unchanged.
-See `src/conductor/README.md` → "PR labeling".
+Consult the repository's daemon PR-labeling documentation.
 
 ### 4. Handle Edge Cases
 
@@ -337,6 +365,7 @@ Harness test complete. Review the retro for improvement findings.
 - [ ] Re-entry works (picks up from current state, doesn't restart)
 - [ ] Clean conflict-check creates marker file
 - [ ] Completion message shown when all steps done
+- [ ] PR/merge-local completion includes the committed `.docs/shipped/<plan-stem>.md`; PR completion verifies that commit is pushed to the PR head
 - [ ] Feature marked complete (`feature_status: complete`) after all steps finish
 - [ ] `--resume` cleans up worktrees with merged PRs before showing menu
 - [ ] `--cleanup` removes worktrees, deletes branches, marks features complete

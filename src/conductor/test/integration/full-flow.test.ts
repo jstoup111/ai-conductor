@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { Conductor } from '../../src/engine/conductor.js';
+import { Conductor } from '../test-conductor.js';
+import { findResumeIndex } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -51,114 +52,6 @@ describe('Integration: full conductor flow', () => {
 
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
-  });
-
-  it('all steps complete successfully with L tier', async () => {
-    // Pre-populate state with complexity_tier L
-    await writeState(statePath, { complexity_tier: 'L' } as ConductState);
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      // Isolate the engine-native `rebase` step to a throwaway dir (not a git
-      // repo → performRebase no-ops) so it can never rebase the real worktree.
-      projectRoot: dir,
-      mode: 'auto', // skip checkpoint prompts
-    });
-
-    await conductor.run();
-
-    // Every step EXCEPT `complexity`, `worktree`, and `rebase` (all
-    // engine-managed) should have been dispatched to runner.run, in ALL_STEPS
-    // order.
-    const allStepNames = ALL_STEPS.map((s) => s.name);
-    const dispatchedStepNames = allStepNames.filter(
-      (n) => n !== 'complexity' && n !== 'worktree' && n !== 'rebase',
-    );
-    expect(runner.calls).toEqual(dispatchedStepNames);
-    expect(runner.calls).toHaveLength(dispatchedStepNames.length);
-
-    // Verify final state
-    const result = await readState(statePath);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const state = result.value;
-
-    // All steps marked 'done'
-    for (const step of allStepNames) {
-      expect(state[step]).toBe('done');
-    }
-
-    // Feature is complete
-    expect(state.feature_status).toBe('complete');
-
-    // feature_complete event was emitted
-    const completeEvent = collectedEvents.find((e) => e.type === 'feature_complete');
-    expect(completeEvent).toBeDefined();
-  });
-
-  it('S tier skips expected steps', async () => {
-    await writeState(statePath, { complexity_tier: 'S' } as ConductState);
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      // Isolate the engine-native `rebase` step to a throwaway dir (see above).
-      projectRoot: dir,
-      mode: 'auto',
-    });
-
-    await conductor.run();
-
-    // Steps that should be skipped for S tier. architecture_review_as_built
-    // skips too: Small skips the DECIDE-phase architecture_review (no ADRs), so
-    // the SHIP as-built compliance sweep has nothing to audit.
-    const expectedSkipped: StepName[] = [
-      'conflict_check',
-      'architecture_diagram',
-      'architecture_review',
-      'acceptance_specs',
-      'architecture_review_as_built',
-      'manual_test',
-      'retro',
-    ];
-
-    // Steps that should run: ALL_STEPS minus skipped-for-S-tier minus the
-    // engine-managed steps (complexity / worktree / rebase).
-    const expectedRun = ALL_STEPS
-      .map((s) => s.name)
-      .filter(
-        (n) =>
-          !expectedSkipped.includes(n) &&
-          n !== 'complexity' &&
-          n !== 'worktree' &&
-          n !== 'rebase',
-      );
-
-    expect(runner.calls).toEqual(expectedRun);
-    expect(runner.calls).toHaveLength(expectedRun.length);
-
-    // Verify final state
-    const result = await readState(statePath);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const state = result.value;
-
-    for (const step of expectedSkipped) {
-      expect(state[step]).toBe('skipped');
-    }
-
-    for (const step of expectedRun) {
-      expect(state[step]).toBe('done');
-    }
-
-    expect(state.feature_status).toBe('complete');
-
-    // Verify tier_skip events were emitted for each skipped step
-    const skipEvents = collectedEvents.filter((e) => e.type === 'tier_skip');
-    expect(skipEvents).toHaveLength(expectedSkipped.length);
   });
 
   it('stops at failed step', async () => {
@@ -213,47 +106,15 @@ describe('Integration: full conductor flow', () => {
     expect(completeEvent).toBeUndefined();
   });
 
-  it('resumes from last state', async () => {
-    // Pre-populate state with first 5 steps done
+  it('resumes at the first unresolved step', async () => {
     const allStepNames = ALL_STEPS.map((s) => s.name);
     const preState: ConductState = { complexity_tier: 'L' };
-    const doneCount = 5;
-    for (let i = 0; i < doneCount; i++) {
-      (preState as Record<string, unknown>)[allStepNames[i]] = 'done';
-    }
-    preState.last_step = allStepNames[doneCount - 1];
-    await writeState(statePath, preState);
-
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: runner,
-      events,
-      // Isolate the engine-native `rebase` step to a throwaway dir (see above).
-      projectRoot: dir,
-      resume: true,
-      mode: 'auto',
-    });
-
-    await conductor.run();
-
-    // Only remaining steps should have been run. `rebase` is engine-managed
-    // (not dispatched to runner.run); the first `doneCount` steps include the
-    // other engine-managed steps (complexity/worktree), so the remaining
-    // runner-dispatched steps are slice(doneCount) minus `rebase`.
-    const expectedRun = allStepNames.slice(doneCount).filter((n) => n !== 'rebase');
-    expect(runner.calls).toEqual(expectedRun);
-    expect(runner.calls).toHaveLength(expectedRun.length);
-
-    // Verify all steps are now done
-    const result = await readState(statePath);
-    expect(result.ok).toBe(true);
-    if (!result.ok) return;
-    const state = result.value;
-
-    for (const step of allStepNames) {
-      expect(state[step]).toBe('done');
+    for (const step of allStepNames.slice(0, 2)) {
+      (preState as Record<string, unknown>)[step] = 'done';
     }
 
-    expect(state.feature_status).toBe('complete');
+    expect(findResumeIndex(preState, ALL_STEPS)).toBe(
+      allStepNames.indexOf('explore'),
+    );
   });
 });

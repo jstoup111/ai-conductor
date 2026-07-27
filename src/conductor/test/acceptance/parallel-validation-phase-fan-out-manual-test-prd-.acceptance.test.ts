@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -431,6 +431,65 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     }
   });
 
+  // ── D2. validation-group remediation halt is classified needs-human ─────
+  it('a validation-group /remediate "halt" disposition HALTs with a needs-human HALT.class sidecar', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-halt-class-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath);
+
+      let manualTestCalls = 0;
+      let prdAuditCalls = 0;
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            manualTestCalls++;
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            prdAuditCalls++;
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+          } else if (step === 'remediate') {
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-2',
+                    disposition: 'halt',
+                    category: 'architectural-clarity',
+                    rationale: 'ambiguous aggregate boundary',
+                    tasks: [],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      let halted = false;
+      const events = new ConductorEventEmitter();
+      events.on('loop_halt', () => {
+        halted = true;
+      });
+      const conductor = makeConductor(dir, statePath, runner, events);
+      await conductor.run();
+
+      expect(halted).toBe(true);
+      expect(manualTestCalls).toBeGreaterThanOrEqual(1);
+      expect(prdAuditCalls).toBeGreaterThanOrEqual(1);
+      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      expect(halt).toMatch(/needs human DECIDE/);
+      // A validation-group remediation halt disposition is an operator-only
+      // DECIDE-phase gap — the re-kick sweep must never auto-resume it.
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('needs-human');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   // ── E. rate-limited manual_test does not block prd_audit's dispatch ──────
   it('a rate-limited manual_test does not prevent prd_audit from dispatching while manual_test is still waiting', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-ratelimit-'));
@@ -569,7 +628,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const emitted: ConductorEvent[] = [];
       const events = new ConductorEventEmitter();
-      events.on('parallel_started', (e) => emitted.push(e));
+      events.on('parallel_started', (e) => {
+        emitted.push(e);
+      });
 
       const conductor = makeConductor(dir, statePath, runner, events);
       await conductor.run();
@@ -620,7 +681,9 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
 
       const emitted: ConductorEvent[] = [];
       const events = new ConductorEventEmitter();
-      events.on('parallel_started', (e) => emitted.push(e));
+      events.on('parallel_started', (e) => {
+        emitted.push(e);
+      });
 
       const conductor = makeConductor(dir, statePath, runner, events, {
         config: { steps: { manual_test: { disable: true } } },

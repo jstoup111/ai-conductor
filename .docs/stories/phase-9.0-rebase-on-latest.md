@@ -10,30 +10,32 @@ HTTP/UI surface.
 
 ---
 
-## Story: Rebase runs after green build, before finish
+## Story: Rebase runs after the applicable SHIP validation tail, before finish
 
 **Requirement:** FR-1
 
-As the daemon, I want to rebase the feature branch onto the latest base **after** build and
-manual_test are green and **before** finish, so that the PR I open is built on current base.
+As the daemon, I want to rebase the feature branch onto the latest base **after** the applicable
+SHIP validation tail is green or validly skipped and **before** finish, so that the PR I open is
+built on current base.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a worktree whose `build` and `manual_test` gate verdicts are both `satisfied`, when the
-  loop reaches the point before `finish`, then the rebase step runs exactly once before
-  `finish` executes.
+- Given a worktree whose applicable SHIP validation tail is completed or validly skipped, when the
+  loop reaches the point before `finish`, then the rebase step runs exactly once before `finish`
+  executes.
 - Given the rebase completes (clean, no-op, or auto-resolved), when no HALT is written, then
   `finish` runs and a PR is opened.
 
 #### Negative Paths
-- Given a worktree where `build` is not yet satisfied, when the loop is mid-build, then the
-  rebase step does **not** run (it is gated behind green build+manual_test, never mid-build).
+- Given a worktree where the applicable SHIP validation tail is not yet satisfied, when the loop
+  reaches the tail, then rebase does **not** run and finish remains blocked.
 - Given the rebase writes `.pipeline/HALT`, when the loop continues, then `finish` does **not**
   run and **no PR** is opened.
 
 ### Done When
-- [ ] Rebase is invoked from the loop tail only after build+manual_test verdicts are `satisfied`.
+- [ ] Rebase is invoked from the loop tail only after the applicable SHIP validation tail is
+      completed or validly skipped.
 - [ ] When rebase HALTs, `finish` is not reached and `pr_url` is never set.
 - [ ] Integration test: green front-half → rebase → finish ordering asserted via event log.
 

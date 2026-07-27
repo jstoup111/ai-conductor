@@ -546,7 +546,6 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
 
     // Try to call runTriage without SetupFailureError — should throw at construction
     await expect(
-      // @ts-expect-error Testing runtime guard: intentionally pass null
       runTriage(git, '/path/to/wt', 'slug', null, async () => {}, { log: (msg: string) => logs.push(msg) })
     ).rejects.toThrow();
   });
@@ -556,7 +555,6 @@ describe('engine/setup-triage — runTriage (Task 8: zero-touch guarantees)', ()
 
     // Calling runTriage without SetupFailureError should throw
     await expect(
-      // @ts-expect-error Testing runtime guard: undefined error
       runTriage(git, '/path/to/wt', 'slug', undefined, async () => {})
     ).rejects.toThrow();
   });

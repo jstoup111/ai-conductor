@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, utimes, readFile } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
@@ -8,21 +8,42 @@ import { execa } from 'execa';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // Import the real readStaleHaltTitle for use in spy implementation
-import { readStaleHaltTitle as realReadStaleHaltTitle } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  readStaleHaltTitle as realReadStaleHaltTitle,
+  readStaleHaltBanner as realReadStaleHaltBanner,
+} from '../../src/engine/halt-pr-rehabilitation.js';
 
 // Spy target for the finish predicate's Phase 2 presentation check
 // (readStaleHaltTitle, invoked with a gh runner). Mocked so tests can assert
 // it is never reached when a Phase 1 evidence condition (e.g. push
 // verification) already failed the gate. Default behavior returns null (fail-open);
 // tests can override via mockImplementation to call the real implementation.
-const readStaleHaltTitleSpy = vi.fn(async () => null);
+const readStaleHaltTitleSpy = vi.fn<typeof realReadStaleHaltTitle>(async () => null);
 // Spy target for the finish predicate's Phase 2 presentation banner check
 // (readStaleHaltBanner, invoked with a gh runner). Default behavior returns
 // null (fail-open); tests override via mockImplementation to call the real logic.
-const readStaleHaltBannerSpy = vi.fn(async () => null);
+const readStaleHaltBannerSpy = vi.fn<typeof realReadStaleHaltBanner>(async () => null);
+const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
+  slug: string;
+  implementationPr: string;
+  candidateCommit: string;
+}) => ({
+  kind: 'valid' as const,
+  slug: input.slug,
+  pr: input.implementationPr,
+  recordPath: `.docs/shipped/${input.slug}.md`,
+  hash: 'test-hash',
+  commit: input.candidateCommit,
+}));
 vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
-  readStaleHaltTitle: (...args: unknown[]) => readStaleHaltTitleSpy(...args),
-  readStaleHaltBanner: (...args: unknown[]) => readStaleHaltBannerSpy(...args),
+  readStaleHaltTitle: (...args: Parameters<typeof realReadStaleHaltTitle>) =>
+    readStaleHaltTitleSpy(...args),
+  readStaleHaltBanner: (...args: Parameters<typeof realReadStaleHaltBanner>) =>
+    readStaleHaltBannerSpy(...args),
+}));
+vi.mock('../../src/engine/shipment-evidence.js', () => ({
+  evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>
+    evaluateShipmentEvidenceSpy(...args),
 }));
 
 import {
@@ -39,13 +60,18 @@ import {
   HALT_MARKER,
   planStem,
   planHasDependencyTree,
+  buildReviewFailureDetails,
   validateBuildReviewVerdict,
   isSkipAttempt,
   MANUAL_TEST_SKIP_SENTINEL,
   readManualTestFailRows,
   stampCode,
+  BUILD_REVIEW_VERDICT,
+  removeBuildReviewVerdict,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
+import type { StepName } from '../../src/types/index.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/artifacts', () => {
   let dir: string;
@@ -83,6 +109,25 @@ describe('engine/artifacts', () => {
 
     it('declares manual_test results file', () => {
       expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.pipeline/manual-test-results.md']);
+    });
+  });
+
+  describe('checkStepCompletion: test_suite current-PASS predicate', () => {
+    it('rejects stale evidence through inspection without launching verification', async () => {
+      await createFile('.pipeline/test-suite-evidence.json', JSON.stringify({ outcome: 'PASS' }));
+      const inspect = vi.fn(async () => ({ status: 'STALE', reason: 'fingerprint_mismatch' } as const));
+
+      const result = await checkStepCompletion(dir, 'test_suite', {
+        fullSuiteInspect: inspect,
+      });
+
+      expect({ result, inspectCalls: inspect.mock.calls.length }).toEqual({
+        result: {
+          done: false,
+          reason: 'full-suite PASS evidence is stale: fingerprint_mismatch',
+        },
+        inspectCalls: 1,
+      });
     });
   });
 
@@ -157,6 +202,193 @@ describe('engine/artifacts', () => {
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(false);
       await createFile('App.test.tsx');
       expect(await stepHasArtifacts(dir, 'acceptance_specs')).toBe(true);
+    });
+  });
+
+  describe('checkStepCompletion: configured custom completion artifact', () => {
+    it('accepts the exact marker using the attempt floor or session fallback', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      const markerPath = join(dir, marker);
+      const markerMtime = Date.now() - 10_000;
+      await createFile(marker);
+      await utimes(markerPath, new Date(markerMtime), new Date(markerMtime));
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+      const step = 'maintain-documentation' as StepName;
+
+      const results = await Promise.all([
+        checkStepCompletion(dir, step, {
+          config,
+          attemptStartedAt: markerMtime + 1_000,
+          sessionStartedAt: markerMtime + 60_000,
+        }),
+        checkStepCompletion(dir, step, {
+          config,
+          sessionStartedAt: markerMtime - 1_000,
+        }),
+      ]);
+
+      expect(
+        results.map((result) => ({
+          done: result.done,
+          artifact: result.verdictFreshness?.artifact,
+          floorMs: result.verdictFreshness?.floorMs,
+          floorSource: result.verdictFreshness?.floorSource,
+          fresh: result.verdictFreshness?.fresh,
+        })),
+      ).toEqual([
+        {
+          done: true,
+          artifact: markerPath,
+          floorMs: markerMtime + 1_000,
+          floorSource: 'attempt',
+          fresh: true,
+        },
+        {
+          done: true,
+          artifact: markerPath,
+          floorMs: markerMtime - 1_000,
+          floorSource: 'session',
+          fresh: true,
+        },
+      ]);
+    });
+
+    it('fails closed when configured completion evidence is not fresh and verifiable', async () => {
+      const step = 'maintain-documentation' as StepName;
+      const configFor = (completionArtifact: string): HarnessConfig => ({
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: completionArtifact,
+          },
+        },
+      });
+      const staleMarker = '.pipeline/stale-documentation-pass';
+      const noFloorMarker = '.pipeline/no-floor-documentation-pass';
+      const blockedMarker = '.pipeline/blocked-documentation-pass';
+      const review = '.pipeline/maintain-documentation-review.md';
+      const attemptStartedAt = Date.now();
+      const staleTime = new Date(attemptStartedAt - 60_000);
+
+      await createFile(staleMarker, 'PASS\n');
+      await utimes(join(dir, staleMarker), staleTime, staleTime);
+      await createFile(noFloorMarker, 'PASS\n');
+      await createFile(blockedMarker, 'PASS\n');
+      await utimes(join(dir, blockedMarker), staleTime, staleTime);
+      await createFile(review, '# Documentation review\n\n**Verdict:** BLOCKED\n');
+
+      const results = await Promise.all([
+        checkStepCompletion(dir, step, {
+          config: configFor('.pipeline/missing-documentation-pass'),
+          attemptStartedAt,
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(staleMarker),
+          attemptStartedAt,
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(noFloorMarker),
+        }),
+        checkStepCompletion(dir, step, {
+          config: configFor(blockedMarker),
+          attemptStartedAt,
+        }),
+      ]);
+
+      expect({
+        outcomes: results.map(({ done, reason }) => ({ done, reason })),
+        review: await readFile(join(dir, review), 'utf-8'),
+      }).toEqual({
+        outcomes: [
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/missing-documentation-pass" is missing — maintain-documentation must write it after a passing review',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/stale-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/no-floor-documentation-pass" cannot be verified without an attempt or session freshness floor',
+          },
+          {
+            done: false,
+            reason:
+              'configured completion artifact ".pipeline/blocked-documentation-pass" is stale — maintain-documentation must rewrite it during this attempt',
+          },
+        ],
+        review: '# Documentation review\n\n**Verdict:** BLOCKED\n',
+      });
+    });
+
+    it('rejects a fresh directory at the configured completion artifact path', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      await mkdir(join(dir, marker), { recursive: true });
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+
+      const result = await checkStepCompletion(dir, 'maintain-documentation' as StepName, {
+        config,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason:
+          'configured completion artifact ".pipeline/maintain-documentation-pass" is not a regular file — maintain-documentation must replace it with a file written after a passing review',
+      });
+    });
+
+    it('rejects a fresh symlink at the configured completion artifact path', async () => {
+      const marker = '.pipeline/maintain-documentation-pass';
+      const target = join(dir, 'outside-pass');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(target, 'PASS\n');
+      await symlink(target, join(dir, marker));
+      const config: HarnessConfig = {
+        steps: {
+          'maintain-documentation': {
+            after: 'rebase',
+            skill: '.agents/skills/maintain-documentation/SKILL.md',
+            enforcement: 'gating',
+            completion_artifact: marker,
+          },
+        },
+      };
+
+      const result = await checkStepCompletion(dir, 'maintain-documentation' as StepName, {
+        config,
+        attemptStartedAt: Date.now() - 1_000,
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason:
+          'configured completion artifact ".pipeline/maintain-documentation-pass" is not a regular file — maintain-documentation must replace it with a file written after a passing review',
+      });
     });
   });
 
@@ -297,6 +529,28 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: finish predicate', () => {
+    it('rejects a fresh PR marker when strict shipment evidence refuses it', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        featureDesc: 'add-foo',
+        getHeadSha: async () => 'candidate-sha',
+        shipmentEvidence: async () => ({
+          kind: 'refusal',
+          code: 'shipped-record-missing',
+          expected: '.docs/shipped/add-foo.md',
+          observed: null,
+        }),
+      });
+
+      expect(result.done).toBe(false);
+    });
+
     it('passes when finish-choice="pr" AND state.pr_url is set', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile(
@@ -307,8 +561,8 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
-    it('passes when finish-choice marker holds a recognized non-PR outcome', async () => {
-      for (const choice of ['merge-local', 'keep', 'discard']) {
+    it('passes when finish-choice marker holds a recognized non-shipping outcome', async () => {
+      for (const choice of ['keep', 'discard']) {
         const subDir = join(dir, choice);
         await mkdir(join(subDir, '.pipeline'), { recursive: true });
         await writeFile(join(subDir, FINISH_CHOICE_MARKER), choice);
@@ -416,6 +670,10 @@ describe('engine/artifacts', () => {
 
     it('allows finish-choice="merge-local" in interactive mode (daemon: false)', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         daemon: false,
@@ -470,6 +728,54 @@ describe('engine/artifacts', () => {
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
+    });
+
+    it('fails when finish-choice="pr" and CHANGELOG.md still has an unsubstituted {{IMPLEMENTATION_PR}} token', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile(
+        'CHANGELOG.md',
+        '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/IMPLEMENTATION_PR/);
+      expect(result.reason).toMatch(/finalize-changelog-pr/);
+    });
+
+    it('passes when finish-choice="pr" and CHANGELOG.md has no unsubstituted token', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile(
+        'CHANGELOG.md',
+        `## [Unreleased]\n\n- Fixed the thing (${prUrl}).\n`,
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('does not block finish-choice="merge-local" on a stale {{IMPLEMENTATION_PR}} token (no PR URL to substitute)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      await createFile(
+        'CHANGELOG.md',
+        '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+      });
+      expect(result).toEqual({ done: true });
     });
 
     it('two-phase ordering: does not invoke the presentation (gh) check when push evidence fails', async () => {
@@ -2615,6 +2921,57 @@ Task 1 → Task 2
   });
 
   describe('validateBuildReviewVerdict', () => {
+    it('preserves multiple independent findings for one failed rubric', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        reasons: ['completeness has two independent gaps'],
+        findings: {
+          completeness: [
+            'The feature logger does not cover retry transition output.',
+            'The feature logger does not cover teardown transition output.',
+          ],
+        },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        verdict: 'FAIL',
+        reasons: ['completeness has two independent gaps'],
+        findings: {
+          completeness: [
+            'The feature logger does not cover retry transition output.',
+            'The feature logger does not cover teardown transition output.',
+          ],
+        },
+        rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+      });
+    });
+
+    it('rejects malformed structured findings without rejecting legacy artifacts', () => {
+      const result = validateBuildReviewVerdict({
+        verdict: 'FAIL',
+        findings: { completeness: 'two gaps' },
+        rubric: { completeness: true },
+      });
+
+      expect(result).toEqual({
+        ok: false,
+        reason: '.pipeline/build-review.json "findings.completeness" must be a string array when present',
+      });
+    });
+
+    it('renders legacy summaries and every structured finding for completion feedback', () => {
+      expect(buildReviewFailureDetails({
+        reasons: ['completeness has gaps'],
+        findings: { completeness: ['missing setup output', 'missing teardown output'] },
+      })).toEqual([
+        'completeness has gaps',
+        '[completeness] missing setup output',
+        '[completeness] missing teardown output',
+      ]);
+    });
+
     it('accepts a valid PASS verdict', () => {
       const result = validateBuildReviewVerdict({
         verdict: 'PASS',
@@ -3484,6 +3841,36 @@ Task 1 → Task 2
         const result = await checkStepCompletion(dir, 'build');
         expect(result).toEqual({ done: true });
       });
+    });
+  });
+
+  describe('removeBuildReviewVerdict (build-review-grades-plan-vs-diff-against-a-stale-o, Task 7)', () => {
+    it('deletes an existing build_review verdict artifact', async () => {
+      await createFile(BUILD_REVIEW_VERDICT, JSON.stringify({ verdict: 'FAIL', rubric: {} }));
+      await removeBuildReviewVerdict(dir);
+      await expect(readFile(join(dir, BUILD_REVIEW_VERDICT), 'utf-8')).rejects.toThrow();
+    });
+
+    it('is a no-op (does not throw) when the artifact does not exist', async () => {
+      await expect(removeBuildReviewVerdict(dir)).resolves.toBeUndefined();
+    });
+
+    it('a removed verdict is never reconstructed by the #817 code-stamp preserve path — build_review is not a STALE_SWEEP_STEPS member', async () => {
+      // gate-code-validity-on-redispatch (#817)'s preserve mechanism only
+      // ever applies to STALE_SWEEP_STEPS (manual_test, prd_audit,
+      // architecture_review_as_built); build_review is deliberately absent
+      // from that set (artifacts.ts's `sweptArtifactStillValid` is only ever
+      // called for those three steps), so once this helper deletes the
+      // verdict file, `checkStepCompletion(dir, 'build_review')` can only
+      // read "missing verdict" — never a preserved/reconstructed prior PASS.
+      await createFile(
+        BUILD_REVIEW_VERDICT,
+        JSON.stringify({ verdict: 'PASS', rubric: {}, codeStamp: 'deadbeef' }),
+      );
+      await removeBuildReviewVerdict(dir);
+      const result = await checkStepCompletion(dir, 'build_review');
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/no build-review verdict/i);
     });
   });
 });

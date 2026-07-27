@@ -22,6 +22,8 @@ import type { StepRunResult, StepRunOptions } from "./conductor.js";
 import { sweepStaleReviewArtifacts } from "./artifacts.js";
 import type { ConductorEvent } from "../types/events.js";
 import type { HarnessConfig } from "../types/config.js";
+import type { ProviderSessionScope } from "./provider-session.js";
+import type { AuthenticationReadiness } from "../execution/llm-provider.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -33,6 +35,7 @@ export type Verdict = "pass" | "fail" | "blocked";
 export interface VerdictOutcome {
   kind: "verdict";
   verdict: Verdict;
+  authentication?: AuthenticationReadiness;
 }
 
 /**
@@ -45,6 +48,15 @@ export interface VerdictOutcome {
 export interface NoVerdictOutcome {
   kind: "no-verdict";
   reason: string;
+  authentication?: AuthenticationReadiness;
+}
+
+/** A provider denied a required action under its unattended permission policy. */
+export interface PermissionDeniedOutcome {
+  kind: "permission-denied";
+  provider: string;
+  reason: string;
+  authentication?: Pick<AuthenticationReadiness, "provider" | "source" | "state">;
 }
 
 /**
@@ -61,14 +73,24 @@ export interface SkippedOutcome {
  * boolean flags — so that every consumer is forced to handle each case
  * explicitly (see classifyOutcome below for the exhaustiveness contract).
  */
-export type BranchOutcome = VerdictOutcome | NoVerdictOutcome | SkippedOutcome;
+export type BranchOutcome =
+  | VerdictOutcome
+  | NoVerdictOutcome
+  | PermissionDeniedOutcome
+  | SkippedOutcome;
 
-export function makeVerdictOutcome(verdict: Verdict): VerdictOutcome {
-  return { kind: "verdict", verdict };
+export function makeVerdictOutcome(
+  verdict: Verdict,
+  authentication?: AuthenticationReadiness,
+): VerdictOutcome {
+  return { kind: "verdict", verdict, ...(authentication ? { authentication } : {}) };
 }
 
-export function makeNoVerdictOutcome(reason: string): NoVerdictOutcome {
-  return { kind: "no-verdict", reason };
+export function makeNoVerdictOutcome(
+  reason: string,
+  authentication?: AuthenticationReadiness,
+): NoVerdictOutcome {
+  return { kind: "no-verdict", reason, ...(authentication ? { authentication } : {}) };
 }
 
 export function makeSkippedOutcome(): SkippedOutcome {
@@ -101,6 +123,8 @@ export function classifyOutcome(outcome: BranchOutcome): string {
       return `verdict:${outcome.verdict}`;
     case "no-verdict":
       return "no-verdict";
+    case "permission-denied":
+      return "permission-denied";
     case "skipped":
       return "skipped";
   }
@@ -289,6 +313,9 @@ export function runWithConcurrency<T>(
  */
 export interface BranchStepRunner {
   run(step: StepName, state: ConductState, opts?: StepRunOptions): Promise<StepRunResult>;
+  escalateForStep?(step: StepName, state: ConductState): boolean;
+  beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
+  resetSession?(step?: StepName, providerKey?: string): Promise<void>;
 }
 
 /**
@@ -364,12 +391,13 @@ export interface BranchExecutorDeps {
 }
 
 /**
- * Runs a single concurrent-group branch to completion: mints its own fresh
- * session id (never the shared main-conductor session — adr-2026-07-10-
- * concurrent-group-core.md), dispatches the member's OWN step/skill name
- * (not the group name — the bug the ADR calls out), and retries up to
- * `maxRetries` times, resuming the SAME minted session id on every retry
- * (only the first attempt uses `resume: false`).
+ * Runs a single concurrent-group branch to completion: creates one detached
+ * provider-session scope when the runner supports provider routing, otherwise
+ * mints the legacy scalar session id. Neither path uses the shared
+ * main-conductor session (adr-2026-07-10-concurrent-group-core.md). Dispatches
+ * the member's OWN step/skill name (not the group name — the bug the ADR calls
+ * out), and retries up to `maxRetries` times, resuming the same member/provider
+ * session on retry.
  *
  * Returns a `BranchOutcome`: `verdict:pass` on the first successful
  * dispatch, or `no-verdict` (carrying the last failure's output) once
@@ -406,7 +434,14 @@ async function runGroupBranchInner(
   maxRetries: number,
 ): Promise<BranchOutcome> {
   const mintSessionId = deps.mintSessionId ?? uuidv4;
-  let sessionId = mintSessionId();
+  const memberStep = member.name as StepName;
+  const providerSessions = deps.stepRunner.beginProviderBranch?.(memberStep);
+  // A provider branch is born as its own fresh, detached scope. Legacy
+  // scalar branches need the serial lifecycle reset instead; applying it to
+  // provider branches would mutate the shared serial-session authority.
+  if (!providerSessions) await deps.stepRunner.resetSession?.(memberStep);
+  const escalate = deps.stepRunner.escalateForStep?.(memberStep, state) ?? true;
+  let sessionId = providerSessions ? "" : mintSessionId();
 
   // Task 9: sweep THIS member's own stale marker (if any) before its first
   // dispatch — scoped to member.name so branch A's leftover marker can
@@ -440,10 +475,13 @@ async function runGroupBranchInner(
     });
     let result: StepRunResult;
     try {
-      result = await deps.stepRunner.run(member.name as StepName, state, {
-        sessionId,
-        resume,
-      });
+      result = await deps.stepRunner.run(
+        memberStep,
+        state,
+        providerSessions
+          ? { providerSessions, attempt, escalate }
+          : { sessionId, resume, attempt, escalate },
+      );
     } catch (err) {
       // A THROW from the step runner is an infra failure of THIS branch
       // only — classified exactly like a `success: false` attempt (burns a
@@ -458,7 +496,7 @@ async function runGroupBranchInner(
     hasRun = true;
 
     if (result.success) {
-      return makeVerdictOutcome("pass");
+      return makeVerdictOutcome("pass", result.authentication);
     }
 
     // Rate limit: enter the shared episode with the parsed deadline (or a
@@ -487,7 +525,12 @@ async function runGroupBranchInner(
     // retry budget — mirrors conductor.ts:1757-1769 (resets to a fresh
     // session, not a resume of the expired one).
     if (result.sessionExpired) {
-      sessionId = mintSessionId();
+      const expiredProvider = result.actualProvider ?? result.preferredProvider;
+      if (providerSessions && expiredProvider) {
+        await providerSessions.replace(expiredProvider);
+      } else {
+        sessionId = mintSessionId();
+      }
       hasRun = false;
       attempt -= 1;
       continue;
@@ -500,7 +543,24 @@ async function runGroupBranchInner(
     // no-verdict outcome carrying the "authFailure" reason so the core can
     // route it to halt/park handling instead of silently retrying it.
     if (result.authFailure) {
-      return makeNoVerdictOutcome("authFailure");
+      return makeNoVerdictOutcome("authFailure", result.authentication);
+    }
+
+    if (result.permissionDenied) {
+      return {
+        kind: "permission-denied",
+        provider: result.actualProvider ?? result.preferredProvider ?? "selected provider",
+        reason: result.output ?? "Permission review denied the required action.",
+        ...(result.authentication
+          ? {
+              authentication: {
+                provider: result.authentication.provider,
+                source: result.authentication.source,
+                state: result.authentication.state,
+              },
+            }
+          : {}),
+      };
     }
 
     lastOutput = result.output ?? lastOutput;

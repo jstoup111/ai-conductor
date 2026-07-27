@@ -51,7 +51,210 @@ describe('engine/cost-rollup', () => {
     expect(rollup.unmetered).toEqual({ count: 0, durationMs: 0 });
   });
 
-  it('returns an all-zero rollup when events.jsonl is missing', async () => {
+  it('attributes every provider attempt without double-counting successful step totals', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: true,
+        tokenUsage: {
+          input: 40,
+          output: 10,
+          cacheRead: 4,
+          cacheCreation: 1,
+          costUsd: 0.02,
+        },
+      }),
+      JSON.stringify({
+        type: 'provider_fallback',
+        step: 'plan',
+        failedProvider: 'codex',
+        reason: 'model ladder exhausted',
+        nextProvider: 'claude',
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: {
+          input: 100,
+          output: 20,
+          cacheRead: 10,
+          cacheCreation: 2,
+          costUsd: 0.05,
+        },
+      }),
+      JSON.stringify({
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+        tokenUsage: {
+          input: 100,
+          output: 20,
+          cacheRead: 10,
+          cacheCreation: 2,
+          costUsd: 0.05,
+        },
+      }),
+      JSON.stringify({
+        type: 'step_completed',
+        step: 'legacy',
+        status: 'done',
+        tokenUsage: {
+          input: 7,
+          output: 3,
+          cacheRead: 0,
+          cacheCreation: 0,
+          costUsd: 0.01,
+        },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toEqual({
+      tokens: {
+        input: 147,
+        output: 33,
+        cacheRead: 14,
+        cacheCreation: 3,
+      },
+      costUsd: expect.closeTo(0.08, 5),
+      dispatches: 3,
+      retries: 0,
+      halts: 0,
+      unmetered: { count: 0, durationMs: 0 },
+      providers: {
+        codex: {
+          tokens: {
+            input: 40,
+            output: 10,
+            cacheRead: 4,
+            cacheCreation: 1,
+          },
+          costUsd: expect.closeTo(0.02, 5),
+          dispatches: 1,
+          unmetered: { count: 0, durationMs: 0 },
+        },
+        claude: {
+          tokens: {
+            input: 100,
+            output: 20,
+            cacheRead: 10,
+            cacheCreation: 2,
+          },
+          costUsd: expect.closeTo(0.05, 5),
+          dispatches: 1,
+          unmetered: { count: 0, durationMs: 0 },
+        },
+      },
+    });
+  });
+
+  it('never deduplicates an attributed completion against a future provider attempt', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+        tokenUsage: { input: 7, output: 2, costUsd: 0.01 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 100, output: 20, costUsd: 0.05 },
+      }),
+      JSON.stringify({
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        preferredProvider: 'claude',
+        actualProvider: 'claude',
+        tokenUsage: { input: 100, output: 20, costUsd: 0.05 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toMatchObject({
+      tokens: { input: 107, output: 22 },
+      costUsd: expect.closeTo(0.06, 5),
+      dispatches: 2,
+      providers: {
+        claude: {
+          tokens: { input: 107, output: 22 },
+          costUsd: expect.closeTo(0.06, 5),
+          dispatches: 2,
+        },
+      },
+    });
+  });
+
+  it('preserves provider keys that collide with inherited object properties', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'toString',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 11, output: 2, costUsd: 0.01 },
+      }),
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: '__proto__',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 23, output: 5, costUsd: 0.02 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.providers).toEqual({
+      toString: {
+        tokens: { input: 11, output: 2, cacheRead: 0, cacheCreation: 0 },
+        costUsd: expect.closeTo(0.01, 5),
+        dispatches: 1,
+        unmetered: { count: 0, durationMs: 0 },
+      },
+      ['__proto__']: {
+        tokens: { input: 23, output: 5, cacheRead: 0, cacheCreation: 0 },
+        costUsd: expect.closeTo(0.02, 5),
+        dispatches: 1,
+        unmetered: { count: 0, durationMs: 0 },
+      },
+    });
+  });
+
+  it('marks the rollup unmetered when events.jsonl is missing', async () => {
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toEqual({
+      tokens: { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 },
+      costUsd: 0,
+      dispatches: 0,
+      retries: 0,
+      halts: 0,
+      unmetered: { count: 1, durationMs: 0 },
+    });
+  });
+
+  it('returns a clean all-zero rollup for a readable empty events.jsonl', async () => {
+    await writeEvents([]);
+
     const rollup = await computeCostRollup(dir);
 
     expect(rollup).toEqual({
@@ -62,6 +265,14 @@ describe('engine/cost-rollup', () => {
       halts: 0,
       unmetered: { count: 0, durationMs: 0 },
     });
+  });
+
+  it('marks the rollup unmetered when events.jsonl cannot be read', async () => {
+    await mkdir(join(dir, '.pipeline', 'events.jsonl'), { recursive: true });
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup.unmetered.count).toBeGreaterThan(0);
   });
 
   it('skips unparseable lines, folding them into unmetered.count, and still sums good lines', async () => {

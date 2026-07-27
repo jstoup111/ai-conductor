@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName } from '../../src/engine/conductor.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
+import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -63,6 +64,7 @@ async function seedAllArtifactsExceptTaskStatus(dir: string): Promise<void> {
     ['.docs/specs/2026-07-23-feature.md', 'x'],
     ['.docs/stories/epic-1/a.md', 'x'],
     ['.docs/conflicts/2026-07-23.md', 'x'],
+    ['.docs/coherence/2026-07-23.md', 'x'],
     ['.docs/architecture/arch.md', 'x'],
     ['.docs/decisions/adr-001.md', 'x'],
     ['spec/acceptance/feature_spec.rb', 'x'],
@@ -110,6 +112,11 @@ async function writePlanAndStatus(
     return { id, status: completed.has(id) ? 'completed' : 'pending' };
   });
   await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({ tasks }));
+  // The real BUILD loop enters only after DECIDE artifacts are approved and
+  // committed. Commit the protected fixture tree so #907 can establish its
+  // immutable baseline before exercising trailer-union completion.
+  await execa('git', ['add', '.docs'], { cwd: dir });
+  await execa('git', ['commit', '-m', 'docs: approve decide artifacts'], { cwd: dir });
 }
 
 describe('#859 trailer-union build completion (real Conductor.run() loop)', () => {

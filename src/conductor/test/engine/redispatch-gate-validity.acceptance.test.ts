@@ -76,13 +76,13 @@ async function fileExists(p: string): Promise<boolean> {
 
 interface Scratch {
   repo: string;
-  g: (args: string[]) => ReturnType<typeof execFile>;
+  g: (args: string[]) => Promise<{ stdout: string; stderr: string }>;
   origin?: string;
 }
 
 async function makeRepo(): Promise<Scratch> {
   const repo = await mkdtemp(join(tmpdir(), 'gate-validity-'));
-  const g = (args: string[]) => execFile('git', args, { cwd: repo });
+  const g = (args: string[]) => execFile('git', args, { cwd: repo, encoding: 'utf8' as const });
   await execFile('git', ['init', '-q', '-b', 'main'], { cwd: repo });
   await g(['config', 'user.email', 't@t.com']);
   await g(['config', 'user.name', 'T']);

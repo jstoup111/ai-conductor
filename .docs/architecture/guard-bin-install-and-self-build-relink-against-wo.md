@@ -1,5 +1,9 @@
 # Components: Worktree-rooted global-install guards (#363)
 
+> **Historical self-host path amended by #907 on 2026-07-26:** self-host dispatch no
+> longer performs live-global relink or copied-settings retargeting. The installer guard
+> remains current for non-self-host callers.
+
 **Last updated:** 2026-07-06
 **Scope:** The two guard points that stop a build-worktree checkout from repointing
 operator globals — the `bin/install` self-root refusal and the registry-first,

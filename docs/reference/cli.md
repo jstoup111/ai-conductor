@@ -1,0 +1,548 @@
+# `conduct-ts` CLI reference
+
+Every command, subcommand, flag, and exit code of the `conduct-ts` engine. Commands are grouped
+operator-first: the ones you type, then the ones the engine invokes on your behalf.
+
+The legacy bash `bin/conduct` is deprecated and is not documented here — use `conduct-ts`.
+
+## Launcher
+
+`bin/conduct-ts` is a shim. It parses none of its own arguments and passes everything through to the
+bundled engine at `src/conductor/dist/index.js`, resolving the `dist` symlink to a concrete
+`dist-versions/<id>/index.js` so a running process is pinned to one engine version. It exports
+`ASDF_NODEJS_VERSION` from `src/conductor/.tool-versions` when `asdf` is on `PATH`, then `exec`s node,
+so the engine's exit code is the shim's.
+
+| Condition | Message | Exit |
+| --- | --- | --- |
+| `dist` neither exists nor is a symlink | `conduct-ts: missing …` plus `run 'npm run build' in src/conductor/` | 1 |
+| `dist` symlink unresolvable or not a regular file | `conduct-ts: dist symlink is broken (…)` | 1 |
+| Uncaught engine error | `Fatal: <message>` | 1 |
+
+`bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
+points, not `conduct-ts` subcommands.
+
+## Exit code conventions
+
+| Code | Meaning | Where it appears |
+| --- | --- | --- |
+| 0 | Success, or an advisory command that never blocks | most commands |
+| 1 | Usage error, validation failure, or a refused operation | most commands |
+| 2 | Usage guide printed to stderr | `task`, `evidence`, `derive-feedback` |
+
+Commands that are advisory by contract always exit 0 regardless of outcome: `overlap-scan`, `kpi`,
+`shipped-record`, `shipment-evidence audit`, and `render-diagrams` in its default (non-`--check`) mode.
+
+## `conduct-ts inline`
+
+Runs the SDLC pipeline in the foreground.
+
+```bash
+conduct-ts inline [options] "<feature description>"
+```
+
+The `inline` token is mandatory. A bare `conduct-ts "<feature>"` is rejected with three lines of
+guidance and exit 1. Commander declares an `inline` subcommand so `conduct-ts inline --help` renders,
+but it never dispatches it — the engine strips the `inline` token first and parses the remainder
+against a subcommand-less base program, which is why a free-text feature description is never mistaken
+for an unknown command.
+
+| Positional | Arity | Required | Effect |
+| --- | --- | --- | --- |
+| `[feature]` | 0..1 | conditional | Feature description. Drives slug and worktree naming and auto-resume matching. |
+
+A feature description is required unless at least one state flag is present. The state flags are
+`--resume`, `--status`, `--cleanup`, `--reset`, `--diagnose`, `--report`, `--from`, and `--step`.
+Without one, parsing throws `Feature description is required when no state flags are provided` and the
+run exits 1.
+
+| Flag | Type | Default | Constraints | Effect |
+| --- | --- | --- | --- | --- |
+| `--resume` | boolean | `false` | — | With a feature description, honored by the auto-resume gate and clamps the start index. Without one, cleans up merged worktrees, scans `.worktrees/`, and shows a selection menu (exit 1 when no features are found), then repoints `projectRoot`, `pipelineDir`, and the state file at the selected worktree. |
+| `--fresh` | boolean | `false` | — | Suppresses auto-resume detection so an existing worktree for the same slug is not silently reused. This is its only effect; it is never passed to the engine's conductor object. |
+| `--auto` | boolean | `false` | mutually exclusive with `--interactive` | Run mode `auto`: skips checkpoint prompts, never opens a REPL, sets `dangerouslySkipPermissions` on dispatch, takes the existing tier or defaults to `L` without prompting (one of four tier paths — see [where the tier comes from](steps.md#where-the-tier-comes-from)), auto-skips advisory step failures, and skips the assess-staleness prompt. |
+| `--interactive` | boolean | `false` | mutually exclusive with `--auto` | Run mode `interactive`: opens a Claude REPL for every conversational step except `complexity`, `conflict_check`, `architecture_diagram`, `retro`, and `rebase`. `dangerouslySkipPermissions` stays off, so a human approves each action. |
+| `--status` | boolean | `false` | — | Prints `## Conductor State` and the state file as pretty JSON, then returns. No provider session. |
+| `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. |
+| `--cleanup` | boolean | `false` | — | Scans resumable features, reads `pr_url` from each `conduct-state.json`, checks whether the PR merged, and prompts `Remove merged worktree "<name>"? [y/n]` per merged feature. Prints a count. |
+| `--reset` | boolean | `false` | — | Writes an empty state object, prints `State cleared.`, and returns. |
+| `--diagnose` | boolean | `false` | — | Non-mutating. Resolves the worktree, then verifies state completeness. State OK prints `State OK…` and exits 0; gaps print a gap report plus remediation text to stderr and exit 1; an orphaned state exits 1. |
+| `--report` | boolean | `false` | — | Read-only. Renders `.pipeline/events.jsonl` as step durations, retry hotspots, and token spend, then exits 0. A report error exits 1. No provider session. |
+| `--cooldown <seconds>` | integer | `10` | no range check | Seconds to pause between steps. A non-numeric value parses to `NaN`. |
+| `--model <name>` | string | — | alias or full model ID | Overrides the model for every step. Beats every configured source. See [models](models.md). |
+| `--view <mode>` | enum | `full` | `full`, `focus`, `log` | Dashboard layout. Anything other than exactly `focus` or `log` silently coerces to `full`. |
+| `--tail-lines <n>` | integer | `20` | `0` disables the pane | Maximum lines of post-step stdout shown in the tail pane. |
+| `-h`, `--help` | boolean | — | — | Prints help and exits 0. |
+
+Passing both `--auto` and `--interactive` prints `Error: --auto and --interactive are mutually
+exclusive` and exits 1. This is the only hard mutual exclusion in the pipeline surface, and neither
+flag's help string mentions it.
+
+### Auto-resume
+
+When a feature description is given and none of `--resume`, `--fresh`, `--from`, or `--step` is
+present, the engine looks for an existing worktree for that slug.
+
+| Detection | Behavior | Exit |
+| --- | --- | --- |
+| Resumable | Redirects to the worktree and prints `Resuming "<desc>" at <n>/<total> (after <step>). Use --fresh to start over.` | continues |
+| Complete, evidence intact | Prompts `Feature "<desc>" is already marked complete (<path>). Start over? [y/N]`; anything but `y` returns | 0 |
+| Complete, evidence gaps | Prints the gap report, prompts `Roll back feature_status and resume at the first failing step? [Y/n/q]`; the default deletes `feature_status`, flips each failed step to `pending`, and resumes | continues |
+| Orphaned state | Lists the expected worktree locations and two remedies, then refuses | 1 |
+
+Recovery procedures live in [worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md).
+
+### Side effects of a run
+
+An `inline` run creates `.pipeline/`, ensures `.claude/settings.json` exists with project-scoped
+permissions, loads `.ai-conductor/config.yml` (a non-`missing` config error exits 1) and the merged
+user config, reads or creates `.pipeline/conduct-session-id`, discovers plugins under
+`$HOME/.ai-conductor/plugins` and `<projectRoot>/.ai-conductor/plugins`, appends to
+`.pipeline/events.jsonl` and `.pipeline/audit-trail/events.jsonl`, may run the `/bootstrap` and
+`/assess` prelude, spawns `bin/update --auto` in the background with all failures swallowed, and
+creates or cleans git worktrees. OTel export is opt-in and off unless configured.
+
+## `conduct-ts daemon`
+
+Runs the background build/ship loop, or manages one. Procedures are in
+[running the daemon](../guides/running-the-daemon.md); this section is the flag surface.
+
+`--help` or `-h` anywhere after `daemon` short-circuits to daemon help and exits 0. That guard is
+deliberately checked before every daemon dispatcher — without it, `daemon --help` would be treated as
+an unknown flag and launch a daemon run.
+
+A non-flag token after `daemon` that is not one of `status`, `logs`, `park`, `unpark`, `start`, `stop`,
+`restart`, `connect`, `debug`, `pause`, `resume` prints `conduct daemon: unknown subcommand '<token>'.`
+plus the daemon help to stderr and exits 1.
+
+### Running the daemon
+
+```bash
+conduct-ts daemon [--concurrency <n>] [--max-items <n>] [--continuous] [--max-cost <tokens>]
+                  [--max-runtime <seconds>] [--idle-poll <seconds>] [--max-idle-polls <n>]
+                  [--no-watch] [--completed | --all]
+```
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--concurrency <n>` | integer | `1` | Requested worker count. Any value above 1 is clamped to 1 and logged as `concurrency clamped to 1 (serial …)`. |
+| `--max-items <n>` | integer | unset | Stop after this many features. |
+| `--continuous` | boolean | `false` | Idle-poll instead of draining the backlog once. |
+| `--max-cost <tokens>` | integer | unset | Total output-token ceiling for the run. |
+| `--max-runtime <seconds>` | integer | unset | Wall-clock ceiling for the run. |
+| `--idle-poll <seconds>` | integer | `60` | Seconds between polls when the backlog is empty. |
+| `--max-idle-polls <n>` | integer | unbounded | Stop after this many consecutive empty polls. |
+| `--no-watch` | boolean | watcher on | Drops the HALT-marker filesystem watcher and relies on polling alone. Not listed in `--help`. |
+| `--completed`, `--all` | boolean | `false` | Include already-processed features in the startup dashboard's console output. The persisted log sink never includes them. Not listed in `--help`. |
+
+> **Known limitation.** `--concurrency` accepts any integer, but the run loop clamps every value above
+> 1 down to 1, so `--concurrency 4` behaves exactly like `--concurrency 1` and only the clamp notice
+> tells you. Real multi-feature concurrency is out of scope for the current run loop (ADR-014 /
+> FR-13). Tracked in [#568](https://github.com/jstoup111/ai-conductor/issues/568).
+
+> **Known limitation.** `--idle-poll`'s help string reports a default of 5 seconds; the code supplies
+> 60 when the flag is absent, so an unflagged `--continuous` daemon polls once a minute, not every five
+> seconds. Pass `--idle-poll` explicitly if the interval matters. Tracked in
+> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+
+Every integer flag reads the next token, and a token beginning with `--` is treated as absent. So
+`conduct-ts daemon --max-items --continuous` silently uses the default for `--max-items` rather than
+reporting an error.
+
+`--continuous` with no ceiling — no `--max-items`, `--max-cost`, `--max-runtime`, or
+`--max-idle-polls` — prints `WARNING: --continuous with no ceiling … runs unbounded; Ctrl-C to stop.`
+
+When a tmux session for the repo already exists, a bare `daemon` run wires a self-restart handler so a
+queued restart respawns the pane at the next idle boundary instead of exiting.
+
+### `daemon status`
+
+```bash
+conduct-ts daemon status
+```
+
+Takes no flags. Sweeps the project registry and prints one badge line per repo: state, name, path,
+`pid`, `since`, `version:<engine-version-id>`, pause metadata, the last log line with its mtime, and
+`session:up` or `session:down`. It then prints a `GATED:` section from `.daemon/gated.json` and an
+`attribution agreement: N% (n=…)` line from `.daemon/attribution-accuracy.jsonl`; both are skipped for
+repos whose path is missing.
+
+Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
+badge, but the underlying liveness and pause facts stay on the row.
+
+| Badge | State | Meaning |
+| --- | --- | --- |
+| `● running` | `running` | Live pid owns `.daemon/daemon.pid`. |
+| `⏸ paused` | `paused` | `.daemon/PAUSED` present, pid alive or absent. |
+| `⏸ paused (process dead)` | `paused_dead` | Pause marker present and the pidfile owner is dead. |
+| `○ stale` | `stale` | Pidfile present, its owner pid is dead and reclaimable. |
+| `· stopped` | `stopped` | No pidfile, or a corrupt one, and no pause marker. |
+| `✗ path missing` | `path-missing` | The registered path no longer exists. |
+| `✗ unreadable` | `unreadable` | The repo's daemon state could not be inspected. |
+| `⏳ restart-pending` | `restart-pending` | `.daemon/RESTART-PENDING` is queued. Renders as `⏳ restart-pending (waiting on <slug>)` when it names a blocking feature. |
+| `⚠ session-up/process-dead` | `dead-pane` | The tmux session exists but its pane has died. Never the same as `running`. |
+
+Exit 0 for any sweep, including one that reports stale or missing entries. Exit 1 only when the
+registry itself cannot be read. An empty registry prints
+`No projects registered. Use conduct register [path] to add one.` and exits 0.
+
+### `daemon logs`
+
+```bash
+conduct-ts daemon logs [--repo <path>] [--follow] [--all] [--lines <n>]
+```
+
+Reads `.daemon/daemon.log`.
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--repo <path>`, `--repo=<path>` | path | cwd | Repo whose log is read. |
+| `--follow`, `-f` | boolean | `false` | Streams appended lines from the current end of file until SIGINT. `-f` is not listed in `--help`. |
+| `--all` | boolean | `false` | Iterates the registry, printing a `==> <path> <==` header per repo. |
+| `--lines <n>`, `-n <n>`, `--lines=<n>` | integer | whole file | Tail length. A non-integer or non-positive value is ignored and the whole file is printed. Not listed in `--help`. |
+
+`--follow` with `--all` prints `--follow is not supported with --all; showing a static snapshot.` and
+does not follow. A missing log prints `(no daemon log yet for <path>)` and contributes 0. Exit 1 when a
+log is unreadable, or when `--all` is used and the registry cannot be read.
+
+### `daemon park` and `daemon unpark`
+
+```bash
+conduct-ts daemon park <slug>
+conduct-ts daemon unpark <slug>
+```
+
+Both act directly on the filesystem before any daemon boot, and both resolve the main repo root via
+`git rev-parse --git-common-dir`, so they work from inside any worktree.
+
+`park` validates the slug — either `.docs/plans/<slug>.md` or `.worktrees/<slug>` must exist — and
+writes `.daemon/parked/<slug>`. It prints `Parked '<slug>' — it will not be dispatched or re-kicked
+until unparked.` plus `Marked for park: <path>`. An already-parked slug prints `'<slug>' is already
+parked (originally parked at <ts>) — no change.` and exits 0. An unknown slug exits 1.
+
+`unpark` resets the no-evidence attempt counter first, then removes the park marker, so a failed reset
+leaves the marker in place for a retry. A slug that was never parked prints `'<slug>' was not
+operator-parked — nothing to do.` and exits 0.
+
+Running either outside a conduct project prints `not inside a conduct project — run 'daemon park
+<slug>' from the project root or any directory inside it` and exits 1.
+
+> **Known limitation.** `conduct-ts daemon park` with no slug does not print park usage. The slug-less
+> form falls through every daemon dispatcher to the inline refusal and prints `conduct: the inline SDLC
+> pipeline now runs under the inline subcommand.` before exiting 1 — a message unrelated to parking.
+> Always pass the slug. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+
+### Daemon management verbs
+
+```bash
+conduct-ts daemon start [-D | --detach] [--attach-into <target>]
+conduct-ts daemon stop
+conduct-ts daemon restart [<name>…] [--all]
+conduct-ts daemon connect [--write] [--attach-into <target>]
+conduct-ts daemon debug [--attach-into <target>]
+conduct-ts daemon pause [<name>…] [--all]
+conduct-ts daemon resume [<name>…] [--all]
+```
+
+These drive a tmux-hosted supervisor. All exit 0 on success and 1 on any error, including tmux not
+being installed.
+
+| Verb | Behavior |
+| --- | --- |
+| `start` | Refreshes a stale install first — a stale install never starts a daemon — then starts the session. Auto-attaches read-only when the terminal is interactive and `--detach` was not passed; otherwise prints `daemon started (detached). Attach with 'conduct daemon connect'.` or `daemon started (no interactive terminal to attach to)…`. `--attach-into <target>` (see below) always attaches, even with `--detach` or no TTY. |
+| `stop` | Kills the tmux session. |
+| `restart` | A paused daemon counts as idle. Busy: writes `.daemon/RESTART-PENDING` and returns `restart queued: daemon is busy on <slug>; it will restart automatically once idle.` Idle: clears a stale lock, reconciles an orphaned process (SIGTERM, 100 ms, SIGKILL, reclaim), relinks skills, and recreates the session. The outcome message always prints, so a degraded restart is visible. |
+| `connect` | Attaches read-only. Detach with `Ctrl-b d`. Pass `--write` to attach read-write instead — the same subcommand you already reached for to look, now with input, no need to already know about `debug`. |
+| `debug` | Attaches read-write. Unchanged; kept as a discoverable alias alongside `connect --write`. |
+| `pause` | Writes the durable pause marker; an already-paused daemon reports `already paused`. Not listed in `--help`. |
+| `resume` | Removes the pause marker; a daemon that is not paused reports `not paused`. Not listed in `--help`. |
+
+| Flag | Applies to | Effect |
+| --- | --- | --- |
+| `-D`, `--detach` | `start` | Skips the auto-attach. Parsed on every verb but only meaningful here. |
+| `--write` | `connect` | Requests a read-write attach instead of the default read-only. Ignored elsewhere — `debug` is already read-write. |
+| `--attach-into <target>` | `start`, `connect`, `debug` | Delivers the attach into an already-open tmux pane elsewhere on the same tmux server — a session, `session:window`, or `session:window.pane` target string — instead of taking over this process's own controlling terminal. Fixes running any of these from a shell that is itself already inside a tmux client, which otherwise hits tmux's own nesting guard (`sessions should be nested with care, unset $TMUX to force`): the attach command is typed into the target pane via `tmux send-keys`, wrapped in `env -u TMUX` so tmux does not refuse it there. Never touches this process's own stdio, so it works with no TTY and bypasses `start`'s `--detach`/no-TTY skip. Example: `conduct daemon connect --write --attach-into mywindow:1.0` to view-and-drive the daemon in a specific pane you already have open. |
+| `--all` | `pause`, `resume`, `restart` | Applies the verb to every registered repo instead of the cwd repo. Not listed in `--help`. |
+| `<name>…` | `pause`, `resume`, `restart` | Bare tokens after the verb select named repos from the registry. Not listed in `--help`. |
+
+In fleet mode each repo gets its own error boundary, so one failure never aborts the sweep. Per-repo
+`restart` outcomes are paused → respawn, idle → respawn, busy → queued, stopped with no session →
+`daemon started (was stopped)`, error → reported and the sweep continues.
+
+## `conduct-ts engineer`
+
+The interactive idea-to-spec loop plus its deterministic primitives. The procedure is in
+[the engineer loop guide](../guides/engineer-loop.md).
+
+Two rules apply to every subcommand. `--help` or `-h` is checked before the subcommand's own logic, so
+it prints that subcommand's help and exits 0 with zero side effects. Any `--flag` not on a
+subcommand's allow-list prints `engineer <sub>: unknown flag '<flag>' — run engineer <sub> --help for
+usage.` to stderr and exits 1.
+
+### Launching the loop
+
+| Invocation | Behavior |
+| --- | --- |
+| `conduct-ts engineer` | Spawns an interactive `claude` session with inherited stdio and the `/engineer` prompt. |
+| `conduct-ts engineer --idea "<text>"` | Same, with the idea appended to the prompt. The idea is one-shot — it applies only to the first session. Not declared in `--help`. |
+| `conduct-ts engineer <free text…>` | A bare non-flag positional that is not a known subcommand is joined into an idea string. Not declared in `--help`. |
+| malformed or unknown flag form | Prints the guide text and exits 0. |
+
+The spawn is `claude --permission-mode <mode> '<prompt>'`, where `<mode>` comes from
+[`CONDUCT_ENGINEER_PERMISSION_MODE`](environment.md). If `CLAUDECODE` is set the launch refuses to
+nest a second interactive session, prints guidance to run `/engineer` directly, and returns 0.
+
+Before each fresh session, and only when no idea came from the CLI, the loop polls GitHub issues into
+the durable inbox and prints `Intake: N issue(s) queued.` for a non-zero N. That poll is skipped
+entirely while a background brain loop is alive. Poll failures print and never block.
+
+After each session exits, the loop prompts `Process another idea in a fresh session? [Y/n]` on a TTY.
+Non-TTY stdin answers no, so the loop never runs unattended. The child's exit code is returned; a spawn
+failure — `claude` not on `PATH`, for instance — prints an actionable message plus the guide and
+returns 1.
+
+### `engineer` subcommands
+
+| Command | Syntax | Purpose | Exit codes |
+| --- | --- | --- | --- |
+| `projects` | `engineer projects` | Prints the registry as JSON. Read-only. | 0; 1 on unknown flag |
+| `worktree` | `engineer worktree --project <name> --idea "<text>" [--source-ref <ref>] [--body <text>]` | Resolves the project, resolves the target repo, and creates the per-idea git worktree and branch. Prints `{kind, slug, branch, worktreePath, reconcile}`. With `--source-ref` and no `--body`, loads the Desired-outcome body from the persisted claim record; a missing record degrades to no staging. | 0; 1 on project not found, target resolution error, or worktree creation error |
+| `land` | `engineer land --project <name> --idea "<text>" --worktree <path> [--source-ref <ref>]` | Reads machine owner config, performs a fail-fast identity check, then commits the authored spec artifacts in the worktree onto `spec/<slug>`. With `--source-ref`, comments on the issue and advances the ledger to `routed` — advisory, so a `gh` failure never fails the land. On failure the worktree is kept and its path is reported. | 0; 1 on project not found, unresolved identity, or a land failure |
+| `handoff` | `engineer handoff --project <name> --branch <branch> --worktree <path> [--source-ref <ref>]` | Opens the spec PR with `gh` running inside the per-idea worktree, then removes the worktree and prints `{kind:'pr-opened', url}` or `{kind:'local-commit', branch, repoPath, reason}`. Then starts the target repo's daemon, fire-and-forget. With `--source-ref`, writes back to the ledger and applies the `engineer:handled` label. On failure it records branch evidence and keeps the worktree. | 0, including when worktree removal fails (warned); 1 on project not found, target resolution error, or PR open failure |
+| `poll` | `engineer poll` | One synchronous sweep of the GitHub issues adapter, enqueuing every returned envelope into the durable inbox. Prints `{kind:'poll', enqueued, sourceRefs}`. No routing, no timer, no detached process; the ledger dedups, so a second poll enqueues nothing new. | 0; 1 on unknown flag |
+| `claim` | `engineer claim` | Claims the oldest unblocked inbox entry. Builds a fresh blocker resolver per call and reads issue labels uncached. Prints `{empty:true}`, `{allBlocked:true, entries:[…]}`, or the claimed envelope. A real claim acks the queue, moves the ledger to `claimed`, and persists a claim record for a later `worktree --source-ref`. | always 0; 1 on unknown flag |
+| `forget` | `engineer forget <sourceRef>` | Drops the ledger entry and strips the `engineer:handled` label so `poll` sees the issue again. An absent ref reports `{found:false}` and is not an error. Label removal is best-effort. | always 0; 1 on unknown flag |
+| `resolve` | `engineer resolve <sourceRef> --pr-url <url> [--branch <branch>]` | Recovers a stranded entry that is `claimed` but never delivered by transitioning it to `done` with `{prUrl, branch}`. The branch is preserved when `--branch` is omitted. A missing entry reports `{found:false}`. | 0; 1 on a `--pr-url` that does not match `^https?://`; 1 on unknown flag |
+| `migrate-issue-deps` | `engineer migrate-issue-deps [--confirm]` | One-time prose-to-structured-link dependency migration over open issues. Dry-run by default: prints the proposal, writes nothing, and reports `Dry run — no links written. Re-run with --confirm to apply.` With `--confirm`, applies the links and prints `N link(s) created, M already present.` | 0; 1 when the repo or issue list cannot be resolved; 1 on unknown flag |
+
+`--source-ref` on `worktree`, `--body` on `worktree`, and the `--idea` and free-text launch forms are
+all accepted by the code but absent from the root `--help` output.
+
+> **Known limitation.** Omitting a required flag or positional on `worktree`, `land`, `handoff`,
+> `forget`, or `resolve` prints the full guide text and exits **0**, not a usage error. A script that
+> checks only the exit code will read a malformed invocation as success. Check for the expected JSON on
+> stdout instead. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+
+> **Known limitation.** `engineer land --help` states that land pushes the branch and opens the spec
+> PR. It does not — `land` only commits spec artifacts onto `spec/<slug>`; opening the PR is
+> `engineer handoff`. Run `handoff` after `land` or no PR is ever created. Tracked in
+> [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
+
+## `conduct-ts register`
+
+```bash
+conduct-ts register [path]
+```
+
+Validates that `path` is an existing git repository, derives `{name = basename, path = absolute,
+remote = redacted origin URL}`, and upserts it into the project registry with status `registered`.
+`path` defaults to the current directory; a relative path resolves against it, and a leading-`-` token
+is never taken as the path.
+
+Prints `Registered <name> (<abs>).` and exits 0. Exits 1 when the path does not exist, is not a git
+repository, or the registry write fails. A rejected validation leaves the registry byte-unchanged.
+
+## `conduct-ts create`
+
+```bash
+conduct-ts create <name> [--remote <url>]
+```
+
+No-clobber scaffold: creates the directory, runs `git init -q`, writes a skeleton `CLAUDE.md` and a
+`.gitignore` containing `.pipeline/`, `.daemon/`, and `.worktrees/`, optionally adds the origin remote,
+and upserts the project with status `created`.
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--remote <url>`, `--remote=<url>` | string | — | Adds `origin`. Never pushes. The registry record stores a redacted form of the URL. |
+
+Prints `Created <name> (<target>).` and exits 0. Exits 1 when the target directory is non-empty —
+writing nothing — or when the scaffold or registry write fails. Omitting `<name>` falls through to the
+inline refusal and exits 1.
+
+## `conduct-ts task`
+
+```bash
+conduct-ts task start <id>
+conduct-ts task done <id>
+```
+
+Exactly two positionals: the verb and a task id matching `[A-Za-z0-9._-]+` (for example `7` or
+`rem-fr10-1`). A missing or unknown verb, or a missing id, prints the guide to stderr and exits 2.
+
+`start` reads `.pipeline/task-status.json`, flips the matching row's status to `in_progress`, writes it
+back atomically, then writes the id into `.pipeline/current-task`. It exits 1 when the status file is
+unreadable, corrupt, not an object, or has no `tasks` array; when the id is not found (the error lists
+the valid ids); or when either write fails.
+
+`done` reads `.pipeline/current-task`. An absent stamp exits 0 — the command is idempotent. A stamp
+holding a different id prints `cannot clear task <id>; current stamp is <other>` and exits 1 with the
+stamp untouched. A match removes the stamp. `done` never modifies `task-status.json`; completion is the
+gate authority's decision. See [gates](../explanation/gates.md).
+
+## `conduct-ts test-suite`
+
+```bash
+conduct-ts test-suite
+```
+
+Runs the aggregate verification gate between BUILD and SHIP against the `test_suite` block in
+[configuration](configuration.md). Takes no arguments; any extra argument prints
+`Usage: conduct-ts test-suite` plus `Remove extra arguments and rerun. If verification blocks, return
+to /tdd or /pipeline before SHIP.` to stderr and exits 1.
+
+| Outcome | Output | Exit |
+| --- | --- | --- |
+| Pass | `<status>: full test suite PASS (fingerprint <fp>, duration <n>ms)` on stdout | 0 |
+| Fail | `FAILED: full test suite evidence=<reason>[ freshness=<reason>]. <guidance> Return to /tdd or /pipeline, fix the failure, then rerun conduct-ts test-suite.` on stderr | 1 |
+
+Failure reasons and their guidance:
+
+| Reason | Guidance |
+| --- | --- |
+| `missing_config` | Declare `test_suite.command` in `.ai-conductor/config.yml`. |
+| `invalid_config` | Fix the `test_suite` block in `.ai-conductor/config.yml`. |
+| `invalid_input` | Fix the declared test-suite inputs. |
+| `unlaunchable` | Make the declared aggregate command launchable. |
+| `timeout` | Fix the suite timeout or the command that exceeded it. |
+| `signal` | Fix the suite process termination. |
+| `nonzero_exit` | Fix the aggregate suite failures. |
+| `preflight_failed` | Fix the full-suite preflight failure. |
+| `internal_error` | Fix the full-suite verifier failure. |
+
+This command is dispatched before every other detector and sets the process exit code rather than
+exiting immediately. It does not appear in `--help`.
+
+## `conduct-ts shipped-record`
+
+```bash
+conduct-ts shipped-record --slug <slug> --pr <url|local>
+```
+
+Writes and commits `.docs/shipped/<slug>.md` on the current branch. Run it in the feature worktree, on
+the implementation branch, before the final push, so the merge that lands the code atomically lands the
+fact that the spec shipped and the daemon stops re-dispatching it. Never run it for a `keep` or
+`discard` finish — nothing shipped, so there is no record.
+
+| Flag | Type | Required | Effect |
+| --- | --- | --- | --- |
+| `--slug <slug>` | string | yes | The plan stem to record. |
+| `--pr <url\|local>` | string | yes | The PR URL, or the literal `local` for a merge-local finish. |
+
+It resolves the plan identity, hashes `.docs/plans/<slug>.md` and its stories file — the plan's
+`**Stories:**` reference first, then `.docs/stories/<slug>.md` — renders the record with a cost block
+when one can be computed, then `git add`s the file and commits it as `shipped record: <slug>` only when
+the staged content actually changed. Identical already-committed content produces no duplicate commit.
+
+Either flag missing prints the usage guide to stderr and exits 1.
+
+Every other failure exits **0** with one warning and no record written, so the exit code cannot be
+used to detect success. See
+[shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
+
+Does not appear in `--help`.
+
+## `conduct-ts kpi`
+
+```bash
+conduct-ts kpi
+```
+
+Read-only report over the cost blocks in committed `.docs/shipped/*.md` records. Accepts and ignores
+any trailing arguments. Always exits 0: a missing or empty `.docs/shipped` prints a friendly message
+rather than an error, and malformed records do not throw. Does not appear in `--help`.
+
+## `conduct-ts memory setup`
+
+```bash
+conduct-ts memory setup [dir]
+```
+
+Prepares the memory store for a project. `dir` defaults to the current directory; a relative path
+resolves against it.
+
+| Existing `.memory/` | Action |
+| --- | --- |
+| A real directory | Copy-verify-swap migration, logging `conduct memory setup: migrating existing .memory/ in <dir>` |
+| Absent, or already a symlink | Creates the canonical store and symlink; idempotent |
+
+Prints `conduct memory setup: .memory/ is ready at <dir>` and exits 0. Exits 1 when the directory does
+not exist or anything throws. Only the exact two-token form `memory setup` matches. Does not appear in
+`--help`.
+
+## `conduct-ts halt-issues sweep`
+
+```bash
+conduct-ts halt-issues sweep --repo-dir <dir> --gh-repo <owner/name>
+                             [--monitor-log <path>] [--ledger <path>] [--dry-run]
+```
+
+Parses the halt monitor log, loads or rebuilds the ledger, stamps, resolves, or closes each entry
+against the issue tracker, writes the ledger atomically, and prints a summary.
+
+| Flag | Type | Required | Default |
+| --- | --- | --- | --- |
+| `--repo-dir <dir>` | path | yes | — |
+| `--gh-repo <owner/name>` | string | yes | — |
+| `--monitor-log <path>` | path | no | `~/.ai-conductor/halt-monitor/monitor.log` |
+| `--ledger <path>` | path | no | `~/.ai-conductor/halt-issues/ledger.json` |
+| `--dry-run` | boolean | no | `false` — with it, the ledger is not written |
+
+`--help` or `-h` prints usage to stdout and exits 0. A missing required flag or any unrecognized
+`--flag` prints usage to stderr and exits 1 — a misused subcommand never falls through to the pipeline
+launcher. Otherwise the exit code is the sweep's own; an unrecoverable error prints `halt-issues sweep
+failed: <msg>` and exits 1. Requires network access through `gh`.
+
+## `conduct-ts overlap-scan`
+
+```bash
+conduct-ts overlap-scan [--files <a.ts,b.ts>] [--source-ref <owner/repo#N>] [--base <ref>] [--cwd <dir>]
+```
+
+| Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `--files <list>` | comma-separated paths | none | Candidate paths. Split on commas, trimmed, empties dropped. |
+| `--source-ref <ref>` | string | unset | Linked issue reference swept for open blockers. |
+| `--base <ref>` | string | the origin default branch, else `main` | Base branch that sibling branches are diffed against. |
+| `--cwd <dir>` | path | current directory | Repository to scan. |
+
+Advisory by contract: it always exits 0. Even an unexpected error prints `overlap-scan: unable to
+complete scan (<msg>)` and still returns 0. Reads git and queries `gh`; writes nothing.
+
+## `conduct-ts evidence`
+
+```bash
+conduct-ts evidence
+```
+
+The `evidence judge` gate was removed — per-task commit stamping is telemetry, not a gate, and
+citation-quality sampling now runs as a non-blocking spot audit. The command survives only so the token
+resolves to a clear message instead of an unrecognized-command error. Any argument form prints the
+retirement notice and exits **2**. The help string does not mention the non-zero exit.
+
+## Internal commands, invoked by the engine
+
+These are dispatched by skills, hooks, and the daemon rather than typed by an operator. None appear in
+`--help`. They are listed so a name found in a log or a hook script is findable.
+
+| Command | Syntax | Purpose | Exit codes |
+| --- | --- | --- | --- |
+| `intake-loop` | `conduct-ts intake-loop --continuous \| --once [--interval-ms <n>]` | Polls registered repos into the durable inbox, notifies through the status surface, and reconciles closed GitHub issues each tick so a closed issue cannot be re-claimed. Never spawns a provider session and never opens a PR. `--interval-ms` defaults to 300000. Exactly one of `--continuous` and `--once` is required. | 0 on completion; 1 for the usage guide |
+| `brain start\|stop\|status` | `conduct-ts brain <verb>` | Host-wide singleton that hosts `conduct-ts intake-loop --continuous` in the tmux session `cc-brain-conductor`. `start` is idempotent; `status` prints `brain loop: running\|stopped` and a queued count. | 0; 1 on a tmux error |
+| `render-diagrams` | `conduct-ts render-diagrams <file.md>… [--check]` | Renders the Mermaid blocks in each file using the configured `mermaid_renderer` preset. `--check` parse-checks blocks without opening them. | Default mode always 0. `--check`: 1 when any block fails to parse or a file is unreadable; 0 when everything parses, there are no diagrams, or `mmdc` is unavailable. Zero files: 1 |
+| `shipment-evidence` | `conduct-ts shipment-evidence --pr <url> [--event <path>]` · `shipment-evidence reconcile --pr <url> --shipped <YYYY-MM-DD>` · `shipment-evidence audit [--report <path>]` | Classifies, repairs, or audits the association between a PR and its shipped record. `audit` is report-only and never writes records. `reconcile` requires `GITHUB_REPOSITORY`. | check: 0 valid or not-applicable association, 1 otherwise. reconcile: 0 unless unresolved. audit: 0. Malformed: 1 |
+| `finish-record` | `conduct-ts finish-record --choice <pr\|keep> [--pr-url <url>] --pipeline-dir <dir>` | Records the finish choice. `--choice pr` requires `--pr-url`; `--choice keep` must not carry one; `discard` is not accepted. `--pipeline-dir` must be an absolute path to an existing directory, checked before any spawn or write. The `pr` path is fail-closed across seven checks — PR binding, upstream push, state readability, branch shape, slug derivability, `git rev-parse HEAD`, and a valid shipment-evidence verdict. | 0; 1 on any guide or failed check |
+| `finalize-changelog-pr` | `conduct-ts finalize-changelog-pr --pr-url <url>` | Replaces the single `{{IMPLEMENTATION_PR}}` token in `CHANGELOG.md` with a link. The URL must be strictly canonical `https://github.com/<owner>/<repo>/pull/<n>`. Zero tokens is a no-op. | 0, including the no-op; 1 on a malformed URL, more than one token, or a usage error |
+| `manual-test-record` | `conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>` · `conduct-ts manual-test-record --results <path\|-> --pipeline-dir <dir>` | Appends a `## Attempt N` section to `<pipelineDir>/manual-test-results.md`, atomically. `--results -` reads stdin. `--skip` and `--results` are mutually exclusive and one is required. `--pipeline-dir` must be absolute. | 0; 1 on a usage error, an empty results payload, or any read/write error |
+| `derive-feedback` | `conduct-ts derive-feedback --sha <sha> [--plan <path>]` | Read-only advisory check for whether commit `<sha>` carries `Task: <id>` evidence, or touches files declared under a task in the given plan. Prints one JSON line. Never writes task status or the evidence sidecar. | **0 evidenced, 1 not evidenced, 2 usage.** Informational only — the calling hook must not propagate them |
+| `build-auth-status` | `conduct-ts build-auth-status` | Reports the self-host build auth mode and token state as `build-auth-status: mode=<mode> state=<state>[ path=<path>][ (<detail>)]`. Probes the real dispatch auth path when a token is present. | 0 when the mode is not `daemon-token` (`state=api-key`) or the token is `valid`; 1 for `missing`, `unreadable`, `invalid`, or `unverifiable`, each with a remediation message |
+
+## Accepted but non-functional
+
+These flags parse without error and appear in `--help`, but nothing consumes them. They are listed here
+so a reader who finds them in help output is not misled.
+
+| Flag | Help text | Actual effect |
+| --- | --- | --- |
+| `--output` | `Raw output mode` | None. The parsed value has no readers anywhere in the entry point. |
+| `--step <step>` | `Run single step` | Does not run a single step. It is never passed to the engine's conductor object. Its only observable effect is that it counts as a state flag — it satisfies the "feature description required" check and suppresses auto-resume. Use `--from <step>` to control where a run starts. |

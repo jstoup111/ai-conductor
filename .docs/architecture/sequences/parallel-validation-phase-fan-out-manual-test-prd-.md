@@ -1,6 +1,6 @@
 # Sequence: SHIP-tail validation fan-out, join, and consolidated kickback (#469)
 
-**Last updated:** 2026-07-10
+**Last updated:** 2026-07-26
 **Scope:** One daemon dispatch reaching the validation group after `build_review` —
 capped concurrent branches, a rate-limit episode mid-flight, one FAIL verdict, and
 the single consolidated remediation work order.
@@ -16,6 +16,10 @@ sequenceDiagram
     participant AB as as-built branch
     participant Epi as rate-limit episode
     participant Rem as planRemediation
+    participant Retro as retro
+    participant Rebase as rebase gate
+    participant Fence as finish validation fence
+    participant Finish as finish
 
     RunLoop->>Core: validation group reached after build_review
     Note over Core: resolve members - tier and track skips<br/>cap = validation_concurrency «2»
@@ -36,7 +40,20 @@ sequenceDiagram
     Core->>Rem: ONE call - union of as-built gaps<br/>manual_test rows attached as evidence
     Rem-->>Core: dispositions per gap
     Core-->>RunLoop: one consolidated work order, earliest target wins
-    Note over RunLoop: all-green case instead - group done,<br/>continue to rebase then finish
+    Note over Core,Finish: all-green path: parallel validation joins before the serial publication tail
+    Core-->>RunLoop: all validators green
+    RunLoop->>Retro: complete or validly skip serial retro
+    RunLoop->>Rebase: rebase current validated HEAD
+    Rebase-->>RunLoop: current branch verified or affected gates invalidated
+    RunLoop->>Fence: recompute applicable validators at current HEAD
+    alt any applicable validator non-green
+        Fence-->>RunLoop: kickback to earliest non-green member
+        RunLoop->>Core: rerun only stale members under concurrency cap
+    else all applicable validators current and green
+        Fence-->>RunLoop: publication allowed
+        RunLoop->>Finish: publish or update PR
+        Finish-->>RunLoop: finish recorded
+    end
 ```
 
 ## Legend
@@ -47,6 +64,8 @@ sequenceDiagram
   enters the shared episode so concurrent branches wait for the same window instead
   of independently burning retries.
 - **Join policy** — verdicts join, infra fails fast (operator-locked 2026-07-10).
+- **Finish fence** — resolves the same skip policies, recomputes applicable members at current
+  HEAD, and redirects non-green members through the existing concurrent group before publication.
 - `«…»` — placeholder for a variable value.
 
 ## Change Log
@@ -54,3 +73,4 @@ sequenceDiagram
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-07-10 | Initial generation | DECIDE phase for #469 spec |
+| 2026-07-26 | Added the current-HEAD publication fence | #922 preserves parallel validation and serializes only join → retro → rebase → finish |

@@ -2,6 +2,10 @@
 
 Status: Accepted
 
+> **Amended 2026-07-26 by #907:** a valid explicit `Task:` trailer now wins and is never
+> replaced from `.pipeline/current-task`; the global auto-stamp source is retired to preserve
+> concurrent attribution. Historical engine-wins scenarios below are superseded.
+
 Source issue: jstoup111/ai-conductor#576
 
 These stories specify the behavior of the `PREPARE_COMMIT_MSG_HOOK` template in

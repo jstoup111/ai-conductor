@@ -41,11 +41,31 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
 import { writeFile, mkdir } from 'fs/promises';
 
-function trackingRunner(): { runner: StepRunner; log: string[] } {
+function trackingRunner(projectRoot?: string): { runner: StepRunner; log: string[] } {
   const log: string[] = [];
   const runner: StepRunner = {
     run: async (step: StepName) => {
       log.push(`run:${step}`);
+      // #922 re-checks current validation evidence before publication. Model
+      // the validator skills' real output when a resume fixture re-enters one.
+      if (projectRoot) {
+        if (step === 'manual_test') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'manual-test-results.md'),
+            '| Story | Result |\n|---|---|\n| fixture | PASS |\n',
+          );
+        } else if (step === 'prd_audit') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'prd-audit.md'),
+            '| FR | Verdict | Evidence |\n|---|---|---|\n| FR-1 | ALIGNED | fixture |\n',
+          );
+        } else if (step === 'architecture_review_as_built') {
+          await writeFile(
+            join(projectRoot, '.pipeline', 'architecture-review-as-built.md'),
+            '**Verdict:** APPROVED\n',
+          );
+        }
+      }
       return { success: true };
     },
     resetSession: async () => {
@@ -101,7 +121,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
     it('the #532 fixture resumes at build, not finish', async () => {
       await seed532Fixture();
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       // Daemon parity (daemon-cli.ts passes verifyArtifacts: true): the clamp
       // enters at build, and the artifact gate keeps finish unreachable while
       // the build gate is unsatisfied — the tail selector is the only
@@ -119,9 +139,11 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
     it('daemon-path resume: step_started names build, never finish before the build gate flips', async () => {
       await seed532Fixture();
-      const { runner } = trackingRunner();
+      const { runner } = trackingRunner(dir);
       const started: StepName[] = [];
-      events.on('step_started', (e: { step: StepName }) => started.push(e.step));
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') started.push(e.step);
+      });
 
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
@@ -138,7 +160,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       // Overwrite with unparseable bytes — readVerdict must treat this as absent.
       await writeFile(join(dir, '.pipeline', 'gates', 'build.json'), '{oops', 'utf-8');
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -151,7 +173,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await seed532Fixture();
       await rm(join(dir, '.pipeline', 'gates'), { recursive: true, force: true });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -160,17 +182,29 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:build');
     });
 
-    it('an explicit --from-step finish is exempt from the resume clamp', async () => {
+    it('an explicit --from-step finish remains fenced by non-green validation', async () => {
       await seed532Fixture();
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
+      const kickbacks: Array<{ from: StepName; to: StepName }> = [];
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+      });
+      // The #922 publication fence is an artifact-verifying boundary: with
+      // `verifyArtifacts:false` (the mocked-dispatch unit mode) runner success
+      // is the only authority and `nonGreenFinishValidators` is inert by
+      // design. Production always verifies artifacts (index.ts, daemon-cli.ts),
+      // so the fence oracle must run in that mode.
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
-        fromStep: 'finish',
+        fromStep: 'finish', verifyArtifacts: true,
       });
 
       await conductor.run();
 
-      expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
+      expect(log).not.toContain('run:finish');
+      expect(kickbacks).toContainEqual(
+        expect.objectContaining({ from: 'finish', to: 'manual_test' }),
+      );
     });
   });
 
@@ -187,7 +221,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -203,7 +237,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       // A later gate happens to be unsatisfied too — must not pull entry forward.
       await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -212,7 +246,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:build');
     });
 
-    it('finish marked in_progress with ALL verdicts satisfied resumes at finish (clamp no-op)', async () => {
+    it('finish marked in_progress revalidates current SHIP evidence before dispatching finish', async () => {
       const seed = seedDoneThrough('finish');
       seed.finish = 'in_progress';
       await writeState(statePath, seed as ConductState);
@@ -221,13 +255,14 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
         await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
       }
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
       await conductor.run();
 
-      expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
+      expect(log).toContain('run:finish');
+      expect(log.indexOf('run:manual_test')).toBeLessThan(log.indexOf('run:finish'));
     });
   });
 
@@ -247,7 +282,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
       await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -265,7 +300,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'manual_test', { satisfied: false, checkedAt: 1, kickback });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -285,7 +320,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -294,26 +329,27 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:build_review');
     });
 
-    it('an unsatisfied verdict on a step before regionStart is ignored by the clamp', async () => {
+    it('an unsatisfied verdict before regionStart is ignored by the clamp while current validation still fences finish', async () => {
       const seed = seedDoneThrough('finish');
       await writeState(statePath, seed as ConductState);
       // 'explore' precedes regionStart (the first kickback target, 'prd') —
       // a stray unsatisfied verdict there must not affect the resume entry.
       await writeVerdict(dir, 'explore', { satisfied: false, checkedAt: 1 });
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
       await conductor.run();
 
-      expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
+      expect(log).toContain('run:finish');
+      expect(log.indexOf('run:manual_test')).toBeLessThan(log.indexOf('run:finish'));
     });
   });
 
   // ── Story 4: all-satisfied resumes fast-forward unchanged (regression) ────
   describe('Story 4: parity with pre-fix state-only derivation', () => {
-    it('fully satisfied verdicts resume at finish, identical to today', async () => {
+    it('fully satisfied persisted verdicts still require current validation evidence before finish', async () => {
       const seed = seedDoneThrough('finish');
       await writeState(statePath, seed as ConductState);
       for (const name of ['build', 'build_review', 'manual_test', 'prd_audit',
@@ -321,20 +357,21 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
         await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
       }
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
       await conductor.run();
 
-      expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
+      expect(log).toContain('run:finish');
+      expect(log.indexOf('run:manual_test')).toBeLessThan(log.indexOf('run:finish'));
     });
 
     it('a fresh dispatch (DECIDE done, no verdicts) resumes at acceptance_specs', async () => {
       const seed = seedDoneThrough('acceptance_specs');
       await writeState(statePath, seed as ConductState);
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -349,7 +386,7 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       // No verdict files at all — loop-region gates are pending, not unsatisfied
       // by verdict; the clamp must not pull the entry into the loop region.
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
@@ -359,20 +396,88 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     });
 
     it('skipped tier-S loop steps without verdicts do not attract the clamp', async () => {
-      const seed: Record<string, unknown> = { complexity_tier: 'S' };
+      const seed: Record<string, unknown> = { complexity_tier: 'S', track: 'technical' };
       for (const s of ALL_STEPS) {
         if (s.name === 'finish') break;
         seed[s.name] = s.skippableForTiers.includes('S') ? 'skipped' : 'done';
       }
       await writeState(statePath, seed as ConductState);
 
-      const { runner, log } = trackingRunner();
+      const { runner, log } = trackingRunner(dir);
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
       });
       await conductor.run();
 
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
+    });
+  });
+
+  // ── Story 4 (#1052): a stale verdict must not clamp PAST a failed step ────
+  // Live-daemon fixture: `.pipeline/gates/build.json` said satisfied:true while
+  // conduct-state.json said build:"failed" (a build attempt failed after an
+  // earlier passing review, and nothing rewrote the verdict). The clamp's
+  // verdict-authoritative predicate skipped `build` and landed on
+  // `build_review`, whose STATE-only `checkGate` can never pass while its
+  // `build` prerequisite is failed — so the loop took the markerless
+  // `gate_blocked` return and the finally-backstop parked the run with
+  // "loop exited without a terminal verdict", identically on every resume,
+  // without ever dispatching a session.
+  describe('Story 4: a satisfied verdict over a failed state does not strand the loop (#1052)', () => {
+    async function seed1052Fixture(): Promise<void> {
+      const seed = seedDoneThrough('build');
+      seed.build = 'failed';
+      seed.build_review = 'stale';
+      seed.wiring_check = 'stale';
+      seed.test_suite = 'stale';
+      seed.manual_test = 'stale';
+      seed.architecture_review_as_built = 'stale';
+      seed.rebase = 'done';
+      seed.finish = 'failed';
+      seed.last_step = 'rebase';
+      await writeState(statePath, seed as ConductState);
+      // The divergence: verdict satisfied, state failed.
+      await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+      await writeVerdict(dir, 'wiring_check', { satisfied: false, checkedAt: 1, kickback });
+      await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+    }
+
+    it('resumes at build rather than a build_review the gate check will reject', async () => {
+      await seed1052Fixture();
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:build');
+    });
+
+    it('daemon resume dispatches build instead of exiting with zero dispatches', async () => {
+      await seed1052Fixture();
+      const { runner } = trackingRunner(dir);
+      const started: StepName[] = [];
+      const blocked: StepName[] = [];
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') started.push(e.step);
+      });
+      events.on('gate_blocked', (e) => {
+        if (e.type === 'gate_blocked') blocked.push(e.step);
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        resume: true, daemon: true,
+      });
+      await conductor.run();
+
+      // The bug's exact signature: the run ended having dispatched NOTHING,
+      // because entry landed on a `build_review` whose gate check rejected it.
+      expect(started.length).toBeGreaterThan(0);
+      expect(started[0]).toBe('build');
+      expect(blocked).not.toContain('build_review');
     });
   });
 });

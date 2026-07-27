@@ -39,15 +39,18 @@ build the engine itself judged incomplete.
   derives its start index, then it does not throw and still starts at `build` (state fallback:
   `failed` is unsatisfied).
 - Given the fixture, when the operator instead runs with an explicit `--from-step finish`
-  (`fromStep` set, no `resume`), then the clamp does not apply and `finish` is targeted — the
-  explicit operator override is exempt (ADR Decision §3).
+  (`fromStep` set, no `resume`), then the resume clamp does not apply and `finish` is targeted —
+  the explicit navigation override remains exempt. Before dispatch, the later #922 publication
+  fence independently redirects to non-green validation, so targeting is preserved without
+  authorizing a false ship.
 
 ### Done When
 - [ ] An engine test constructs the verbatim #532 fixture (three unsatisfied kickback verdicts +
       `rebase:'done'`/`build:'failed'` state) and asserts the resolved start step is `build`.
 - [ ] A companion test with the corrupt `build.json` variant asserts no throw and start step
       `build`.
-- [ ] A `fromStep` test asserts the clamp is bypassed for explicitly targeted steps.
+- [ ] A `fromStep` test asserts the clamp is bypassed for explicitly targeted steps while the #922
+      finish-boundary regression proves publication safety remains non-bypassable.
 
 ---
 

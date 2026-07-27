@@ -33,13 +33,11 @@ describe('preflight', () => {
 
       const path = join(dir, '.claude', 'settings.json');
       const parsed = JSON.parse(await readFile(path, 'utf-8'));
-      const scope = dir.slice(1); // strip leading slash
-
-      // Project file-op rules first, path-scoped.
+      // Project file-op rules first, expressed relative to the project.
       expect(parsed.permissions.allow.slice(0, 3)).toEqual([
-        `Read(//${scope}/**)`,
-        `Edit(//${scope}/**)`,
-        `Write(//${scope}/**)`,
+        'Read(**)',
+        'Edit(**)',
+        'Write(**)',
       ]);
     });
 
@@ -132,20 +130,14 @@ describe('preflight', () => {
   });
 
   describe('buildSettingsJson', () => {
-    it('strips the leading slash from the project root in the rule pattern', () => {
-      const json = buildSettingsJson('/tmp/harness-test');
+    it('uses project-relative rule patterns', () => {
+      const json = buildSettingsJson();
       const parsed = JSON.parse(json);
-      expect(parsed.permissions.allow).toContain('Write(//tmp/harness-test/**)');
-    });
-
-    it('handles a project root without a leading slash (edge case)', () => {
-      const json = buildSettingsJson('relative/path');
-      const parsed = JSON.parse(json);
-      expect(parsed.permissions.allow).toContain('Write(//relative/path/**)');
+      expect(parsed.permissions.allow).toContain('Write(**)');
     });
 
     it('emits a trailing newline so editors/diff tools are happy', () => {
-      const json = buildSettingsJson('/tmp/foo');
+      const json = buildSettingsJson();
       expect(json.endsWith('\n')).toBe(true);
     });
   });

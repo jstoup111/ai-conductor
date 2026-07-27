@@ -9,16 +9,29 @@
 // hardcode 'main'.
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
+import { mkdtemp, rm, writeFile, readFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execFile as execFileCb } from 'child_process';
 import { promisify } from 'util';
 import { vi } from 'vitest';
 import { runAuthoring } from '../../../src/engine/engineer/authoring.js';
+import type { RunAuthoringResult, SpecAuthoringResult } from '../../../src/engine/engineer/authoring.js';
 import { discoverBacklog } from '../../../src/engine/daemon-backlog.js';
 
 const execFile = promisify(execFileCb);
+
+// ---------------------------------------------------------------------------
+// Helper: narrow RunAuthoringResult to the spec-branch shape. These tests all
+// drive DECIDE flows that approve into a spec branch (not a documentation-only
+// delivery), so a non-spec result here is a genuine test failure, not a type
+// hole to paper over.
+// ---------------------------------------------------------------------------
+function assertSpecResult(result: RunAuthoringResult): asserts result is SpecAuthoringResult {
+  if (result.kind !== 'spec') {
+    throw new Error(`expected a spec authoring result, got kind=${result.kind}`);
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helper: run a git command in the given directory
@@ -106,6 +119,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
   it('returns { branch: spec/<slug>, project } from approved DECIDE steps', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     expect(result.branch).toMatch(/^spec\//);
     expect(result.project).toBe('alpha');
@@ -114,6 +128,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
   it('commits Status:Accepted stories on the spec branch', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     // Checkout branch and read stories
     const execFileFn = promisify(execFileCb);
@@ -132,6 +147,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
   it('plan becomes daemon-build-ready only once the spec branch is MERGED into the base branch', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     const execFileFn = promisify(execFileCb);
 
@@ -170,6 +186,7 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
   it('creates the spec branch in the target repo', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     const execFileFn = promisify(execFileCb);
     const { stdout } = await execFileFn('git', ['branch', '--list', 'spec/*'], { cwd: repoPath });
@@ -216,12 +233,44 @@ describe('runAuthoring — happy path (Task 32, FR-6)', () => {
 
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     await execFileFn('git', ['checkout', result.branch], { cwd: repoPath });
     const { stdout: subject } = await execFileFn('git', ['log', '-1', '--format=%s'], { cwd: repoPath });
     expect(subject.trim()).toContain('spec: author artifacts for "CSV export"');
 
     await rm(hooksDir, { recursive: true, force: true });
+  });
+});
+
+describe('runAuthoring documentation delivery (issue #933)', () => {
+  let repoPath: string;
+
+  beforeEach(async () => {
+    ({ repoPath } = await makeGitRepo());
+  });
+
+  afterEach(async () => {
+    await rm(repoPath, { recursive: true, force: true });
+  });
+
+  it('fails closed on a malformed result before complexity or artifacts', async () => {
+    const steps: string[] = [];
+    await expect(
+      runAuthoring({ name: 'alpha', canonicalPath: repoPath }, 'refresh docs', {
+        decide: async (step) => {
+          steps.push(step);
+          if (step === 'explore') {
+            await mkdir(join(repoPath, '.pipeline'), { recursive: true });
+            await writeFile(join(repoPath, '.pipeline', 'documentation-delivery.json'), '{bad');
+          }
+          return { approved: true, artifact: ACCEPTED_STORIES_UNIT };
+        },
+      }),
+    ).rejects.toThrow(/documentation delivery result is not valid JSON/i);
+
+    expect(steps).toEqual(['explore']);
+    await expect(readFile(join(repoPath, '.docs', 'stories', 'refresh-docs.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });
 
@@ -250,6 +299,7 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
   it('never writes the stub "_Generated by engineer." string', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     const execFileFn = promisify(execFileCb);
     await execFileFn('git', ['checkout', result.branch], { cwd: repoPath });
@@ -264,6 +314,7 @@ describe('runAuthoring — regression guards (Task 33, FR-6, C2)', () => {
   it('never writes Status:DRAFT in stories', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const result = await runAuthoring(target, 'CSV export', { decide: approvedDecide() });
+    assertSpecResult(result);
 
     const execFileFn = promisify(execFileCb);
     await execFileFn('git', ['checkout', result.branch], { cwd: repoPath });
@@ -412,6 +463,12 @@ const APPROVED_ADR = [
   'Decision rationale.',
   '',
 ].join('\n');
+const MINIMAL_COHERENCE_TABLE = [
+  '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |',
+  '|---|---|---|---|---|',
+  '| story | S1 | Task 1 | covered | CSV export writer |',
+  '',
+].join('\n');
 
 /** A decide seam that approves every DECIDE step with realistic artifacts. */
 function fullDecide(reviewArtifact: string = APPROVED_ADR) {
@@ -431,6 +488,8 @@ function fullDecide(reviewArtifact: string = APPROVED_ADR) {
         return { approved: true, artifact: reviewArtifact };
       case 'plan':
         return { approved: true, artifact: PLAN_WITH_DEPS_FULL };
+      case 'coherence_check':
+        return { approved: true, artifact: MINIMAL_COHERENCE_TABLE };
       default:
         return { approved: true, artifact: '' };
     }
@@ -452,7 +511,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
     await rm(repoPath, { recursive: true, force: true });
   });
 
-  it('Medium tier runs all seven DECIDE steps in canonical order', async () => {
+  it('Medium tier runs all eight DECIDE steps in canonical order', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const steps: string[] = [];
     const trackingDecide = async (step: string) => {
@@ -471,7 +530,59 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       'stories',
       'conflict_check',
       'plan',
+      'coherence_check',
     ]);
+  });
+
+  it.each(['M', 'L'] as const)('%s tier runs coherence_check after plan and commits its minimal traceability table', async (tier) => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const steps: string[] = [];
+    const trackingDecide = async (step: string) => {
+      steps.push(step);
+      return await fullDecide()(step);
+    };
+
+    const result = await runAuthoring(target, 'CSV export', {
+      decide: trackingDecide,
+      assessComplexity: approveTier(tier),
+    });
+    assertSpecResult(result);
+    const coherence = await showOnBranch(result.branch, '.docs/coherence/csv-export.md', repoPath);
+
+    expect({ steps, coherence }).toEqual({
+      steps: [
+        'explore',
+        'prd',
+        'architecture_diagram',
+        'architecture_review',
+        'stories',
+        'conflict_check',
+        'plan',
+        'coherence_check',
+      ],
+      coherence: MINIMAL_COHERENCE_TABLE.trim(),
+    });
+  });
+
+  it.each(['M', 'L'] as const)('rejecting coherence_check for a %s tier leaves no spec branch, artifacts, or commit', async (tier) => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const rejectingCoherenceCheck = async (step: string) => {
+      if (step === 'coherence_check') return { approved: false, artifact: '' };
+      return await fullDecide()(step);
+    };
+
+    await expect(
+      runAuthoring(target, 'CSV export', {
+        decide: rejectingCoherenceCheck,
+        assessComplexity: approveTier(tier),
+      }),
+    ).rejects.toThrow(/coherence/i);
+
+    expect({
+      branches: await git(['branch', '--list', 'spec/*'], repoPath),
+      commits: await git(['rev-list', '--count', 'HEAD'], repoPath),
+      worktree: await git(['status', '--porcelain'], repoPath),
+    }).toEqual({ branches: '', commits: '1', worktree: '' });
   });
 
   it('Medium tier commits the full artifact set + a Tier: M marker', async () => {
@@ -480,6 +591,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       decide: fullDecide(),
       assessComplexity: approveTier('M'),
     });
+    assertSpecResult(result);
 
     await git(['checkout', result.branch], repoPath);
     const read = (rel: string) => readFile(join(repoPath, rel), 'utf8');
@@ -538,6 +650,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       decide: trackingDecide,
       assessComplexity: approveTier('S'),
     });
+    assertSpecResult(result);
     expect(steps).toEqual(['explore', 'prd', 'stories', 'plan']);
 
     await git(['checkout', result.branch], repoPath);
@@ -586,6 +699,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       decide: fullDecide(),
       assessComplexity: approveTier('M'),
     });
+    assertSpecResult(result);
 
     await execFile('git', ['checkout', defaultBranch], { cwd: repoPath });
     await execFile('git', ['merge', '--no-ff', '-m', 'merge spec', result.branch], {
@@ -656,6 +770,7 @@ describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => 
       ownerConfig: { spec_owner: 'Alice' },
       gh: failingGh,
     });
+    assertSpecResult(result);
 
     const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
     expect(marker).toContain('Owner: alice'); // normalized (trim + lowercase)
@@ -668,6 +783,7 @@ describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => 
       decide: approvedDecide(),
       gh,
     });
+    assertSpecResult(result);
 
     const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
     expect(marker).toContain('Owner: bob');
@@ -685,6 +801,7 @@ describe('runAuthoring — owner-gate marker stamping (retro A-1, FR-4)', () => 
       sourceRef: 'acme/app#7',
       gh: failingGh,
     });
+    assertSpecResult(result);
 
     const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
     expect(marker).toContain('Source-Ref: acme/app#7');
@@ -757,6 +874,7 @@ describe('runAuthoring — born owned from machine identity when ownerConfig is 
           gh: failingGh,
           // No ownerConfig injected — this is exactly the autonomous-authoring gap.
         });
+        assertSpecResult(result);
 
         const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
         // Fails today: authoring.ts feeds `{}` into resolveDaemonOwner and never
@@ -778,6 +896,7 @@ describe('runAuthoring — born owned from machine identity when ownerConfig is 
           decide: approvedDecide(),
           gh,
         });
+        assertSpecResult(result);
 
         const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
         // Fails today for the wrong reason if it ever passes: current code
@@ -804,6 +923,7 @@ describe('runAuthoring — born owned from machine identity when ownerConfig is 
           sourceRef: 'acme/app#7', // guarantees a marker is written
           gh: failingGh,
         });
+        assertSpecResult(result);
 
         const marker = await showOnBranch(result.branch, `.docs/intake/dep-bump.md`, repoPath);
         expect(marker).toContain('Source-Ref: acme/app#7');

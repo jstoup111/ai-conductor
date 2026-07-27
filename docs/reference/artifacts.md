@@ -1,0 +1,540 @@
+# Artifacts and state files
+
+Every file the harness writes, file by file: what creates it, what reads it, whether it is committed,
+and what breaks if it disappears. For operators diagnosing a stuck feature and for contributors adding a
+step or gate. The reasoning behind the design is in [evidence model](../explanation/evidence-model.md).
+
+## The four trees
+
+| Tree | Contents | Committed | Scope |
+| --- | --- | --- | --- |
+| `.docs/` | artifacts — the durable spec record | yes | repo |
+| `.pipeline/` | state — one run's working evidence | no (`.gitignore`) | one worktree |
+| `.daemon/` | daemon-scoped state | no (`.gitignore`) | the main checkout |
+| `.worktrees/` | build and spec worktrees | no (`.gitignore`) | repo |
+
+`.memory/` and `.memory*.bak/` are also gitignored siblings. The `.pipeline/`, `.daemon/`, and
+`.worktrees/` patterns are unanchored, so they match nested copies such as `src/conductor/.pipeline/`.
+
+`.worktrees/` is the only worktree creation target. `.claude/worktrees/` is a legacy convention the
+engine reads (resume probe) and excludes (self-host fingerprint) but never writes.
+
+> **Known limitation.** Removing a worktree directory destroys its `.pipeline/`, including
+> `task-status.json` and the `task-evidence.json` sidecar. The branch survives, so already-committed work
+> is safe, but the loop can no longer see that the work happened and reports a false `no_task_progress`
+> stall on a finished build. Park the feature before touching its git state, and recover the evidence
+> rather than letting the build redo finished tasks — see
+> [worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md). Tracked in
+> [#497](https://github.com/jstoup111/ai-conductor/issues/497).
+
+## `.docs/` — committed artifacts
+
+Nineteen entries. Alphabetized; the four with no code reference are marked.
+
+| Entry | Naming | Written by | Read by / gate role |
+| --- | --- | --- | --- |
+| `architecture/` | `YYYY-MM-DD-<topic>.md`, plus fixed `system-context.md`, `containers.md`, `components.md`, `erd.md`, and a `sequences/` subdir | `architecture-diagram`, `architecture-review`, `bootstrap` | `architecture_diagram` completion glob; mermaid render check at land; protected-artifact seal |
+| `audit/` | free-form | manual | **no code reference** |
+| `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
+| `coherence/` | `<plan-stem>.md` | `coherence-check` skill (M and L tiers only) | `coherence_check` completion glob; the land-time coherence validator |
+| `coherence-waivers/` | `<plan-stem>.md` | operator, hand-authored | the land-time coherence waiver check. The directory appears when the first waiver is committed — see below |
+| `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
+| `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
+| `decisions/` | `adr-<topic>.md`, `adr-YYYY-MM-DD-<topic>.md`, `NNN-<topic>.md`, `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate scans every `adr-*.md` for draft status |
+| `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
+| `manual-test-results.md` | loose file | legacy | **no code reference** — superseded by `.pipeline/manual-test-results.md` |
+| `observation/` | free-form | manual | **no code reference** |
+| `phase7-daemon-validation.md` | loose file | manual | **no code reference** |
+| `plans/` | `YYYY-MM-DD-<slug>.md` — the stem is the canonical feature key | `plan` skill; the engineer loop writes `.docs/plans/<slug>.md` at land | `plan` completion glob; seeds `.pipeline/task-status.json`; the build predicate parses `### Task <id>` headings; protected-artifact seal |
+| `release-waivers/` | `<plan-stem>.md` | operator, hand-authored in the same diff | the self-host release gate. Also the only `.docs` prefix always writable during BUILD |
+| `retros/` | `YYYY-MM-DD-<feature-name>.md` | `retro` skill | `retro` completion glob, resolved by slug or by mtime at or after session start |
+| `shipped/` | `<plan-stem>.md` | `conduct-ts shipped-record` | daemon backlog dedup; the only input to `conduct-ts kpi` |
+| `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
+| `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
+| `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run |
+
+Every entry above is committed.
+
+`.docs/coherence-waivers/` is the one entry you may not find on disk. Git does not track empty
+directories, so the directory appears the first time a waiver is committed — nothing pre-creates it, and
+its absence is not a defect. The mechanism behind it is live: the land-time coherence gate calls
+`evaluateCoherenceWaiver` (`src/conductor/src/engine/engineer/coherence-waiver.ts`, invoked from
+`coherence-validator.ts`) on every run that reports gaps, and blocks unless a fresh, well-formed waiver
+covers every gap id. Write the first one as a plain file at `.docs/coherence-waivers/<plan-stem>.md`.
+
+### Naming
+
+Artifacts are keyed by the **plan stem**: the plan file's basename with only a trailing `.md` stripped.
+Interior dots survive, so `.docs/plans/phase-9.3b-intake.md` has the stem `phase-9.3b-intake`. That stem
+is the shared key across the daemon backlog, the interactive conduct path, and the land gate — and the
+filename of the matching `complexity/`, `track/`, `intake/`, `coherence/`, and `shipped/` entries.
+
+#### The undated-stem fallback
+
+Exactly two entries get a relaxed second lookup, and only in the daemon's backlog discovery:
+`complexity/` and `track/`. When `<stem>.md` is absent and the stem carries a leading `YYYY-MM-DD-`
+date, the daemon retries under the date-stripped stem — but only when exactly one plan maps to that
+undated base. Two plans sharing one undated base refuse the fallback rather than guess between features.
+
+The exact stem always wins. A marker that resolves to nothing after both attempts logs the paths it
+tried to `daemon.log`, once per slug, before the daemon applies its default — so the miss is visible in
+the log rather than hours later as gate behavior. The relaxed stem is a lookup key only; it never keys
+state, and no other artifact gets it.
+
+### Waiver grammar
+
+Both waiver kinds share one two-line idiom:
+
+```markdown
+Waives: <comma-separated names>
+
+Rationale: <non-empty prose>
+```
+
+A release waiver's names must be drawn from exactly four canonical breaking surfaces: `bin/conduct CLI`,
+`skill symlink targets`, `hook wiring`, `settings.json schema`. A coherence waiver's names must be gap
+ids the validator reported for *this* change set. Both are fail-closed on freshness: the waiver must
+appear as an added or modified file in the `base...HEAD` diff, so a waiver merged by a prior feature can
+never satisfy a later one. See [releases](../contributing/releases.md) and
+[gates](../explanation/gates.md).
+
+### Write guards
+
+Two independent mechanisms protect `.docs/` during a run.
+
+**Phase write-guard.** While a BUILD or SHIP step is dispatched, the engine stamps
+`.pipeline/phase-active` with `allow: <prefix>` lines and `docs-guard.sh` default-denies every other
+`.docs/` write. The allowlist is `.docs/release-waivers/` always, plus `.docs/retros/` and
+`.docs/stories/` during the `retro` step.
+
+**Protected-artifact seal.** `.pipeline/protected-artifact-seal.json` fingerprints every file under
+`.docs/architecture`, `.docs/plans`, `.docs/specs`, and `.docs/stories` against a baseline commit:
+
+```ts
+interface ProtectedArtifactSeal {
+  version: 1;
+  baselineCommit: string;
+  protectedArtifacts: { path: string; fingerprint: string }[];
+}
+```
+
+The seal is written once at first BUILD entry and is immutable thereafter, so it goes stale relative
+to the base branch as soon as another feature's pull request merges. Verification therefore tolerates
+two kinds of drift instead of halting on them:
+
+- **Own-feature amendment** — a changed artifact whose filename stem names the current feature
+  (a date prefix on either side is ignored). The engine logs a warning naming each amended path;
+  the mutation is not blocked, but `build_review`'s Scope rubric item judges the diff and fails
+  it unless the approved plan justifies the change.
+- **Base-branch inheritance** — a changed or newly appeared artifact whose current workspace content
+  is byte-identical to that path as committed at the base branch tip (`origin/<base>`, falling back
+  to the local `<base>`). This is the content the feature's own rebase brought in, and the base
+  branch already vouches for it.
+
+Everything else still halts BUILD/SHIP before dispatch: any content the base branch does not vouch
+for, any addition the base branch does not contain, and any deletion. Tolerance requires the base
+branch name to be resolvable — when it is not, the seal is fully protected.
+
+## Step to artifact map
+
+`STEP_ARTIFACT_GLOBS` is the single source of truth for which step produces which file. It drives the
+post-step verification gate, the artifact review prompt, and dashboard rendering. Source-ordered; all 26
+step names appear.
+
+| Step | Glob(s) |
+| --- | --- |
+| `bootstrap` | *(none)* |
+| `memory` | *(none)* |
+| `assess` | `.docs/decisions/technical-assessment-*.md` |
+| `explore` | *(none — advisory and ephemeral)* |
+| `prd` | `.docs/specs/*.md` |
+| `complexity` | *(none)* |
+| `stories` | `.docs/stories/**/*.md` |
+| `conflict_check` | `.docs/conflicts/*.md` |
+| `plan` | `.docs/plans/*.md` |
+| `coherence_check` | `.docs/coherence/*.md` |
+| `architecture_diagram` | `.docs/architecture/*.md` |
+| `architecture_review` | `.docs/decisions/architecture-review-*.md`, `.docs/decisions/adr-*.md` |
+| `worktree` | *(none)* |
+| `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares |
+| `build` | `.pipeline/task-status.json` |
+| `build_review` | `.pipeline/build-review.json` |
+| `wiring_check` | `.pipeline/wiring-evidence.json` |
+| `test_suite` | `.pipeline/test-suite-evidence.json` |
+| `manual_test` | `.pipeline/manual-test-results.md` |
+| `prd_audit` | `.pipeline/prd-audit.md` |
+| `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` |
+| `retro` | `.docs/retros/*.md` |
+| `rebase` | *(none — verdict computed from git state)* |
+| `finish` | *(none)* |
+| `remediate` | *(none — the engine reads `.pipeline/remediation.json` directly)* |
+| `attribution_verify` | *(none — computed, not a file)* |
+
+Totals: 9 steps write into `.docs/`, 7 write into `.pipeline/`, `acceptance_specs` matches project test
+sources, and 9 produce no file artifact at all.
+
+The SHIP-tail verdict artifacts (`manual_test`, `prd_audit`, `architecture_review_as_built`,
+`build_review`, `wiring_check`, `test_suite`) live in gitignored `.pipeline/` deliberately. They are
+regenerated every run; committing them caused date-stamp sprawl, rebase and merge conflicts, and
+dirty-tree HALTs at the finish-time rebase.
+
+For step order, phase, tier-skip, and enforcement, see [steps](steps.md).
+
+## `.pipeline/` — run state
+
+One `.pipeline/` per worktree, at the worktree root. Gitignored wholesale, so nothing here survives a
+worktree removal.
+
+### Core state
+
+| File | Shape | Writer | Lifecycle | If lost |
+| --- | --- | --- | --- | --- |
+| `conduct-state.json` | `ConductState` — per-step status plus `feature_desc`, `complexity_tier`, `track`, `bootstrap_mode`, `run_started_at`, `session_started_at`, `last_step`, `pr_url`, `worktree_dir`, `worktree_branch`, `feature_status`, `artifact_approvals`. 2-space JSON with a trailing newline | `state.ts` | Created on the first `saveStepStatus`; read-modify-write on every step transition. Missing ⇒ `{}`. **Empty or invalid ⇒ hard `corrupted` error**. A legacy `brainstorm` status is migrated forward onto `explore` + `prd` on every load | The feature restarts from step zero and every gate re-runs. `pr_url`, `worktree_branch`, and `session_started_at` are gone, so SHIP-tail freshness gates (which compare artifact mtimes to `session_started_at`) fail open |
+| `task-evidence.json` | `{ evidenceStamps: Record<string, EvidenceStamp>, noEvidenceAttempts, noEvidenceReasons?, migrationGrandfather, lastResolvedCount? }`; each stamp is `{ sha, form, citedShas?, verdictAnchor?, testEvidence? }` with `form` ∈ `commit`, `trailer`, `evidence:satisfied-by`, `semantic-verified` | `task-evidence.ts` | Read-modify-write per gate evaluation, written atomically via a same-directory temp file plus `rename(2)`. Missing or corrupt ⇒ empty state, logged, never throws | `lastResolvedCount` reads 0, so the progress delta degrades to "no progress" rather than crashing the tick; the no-evidence retry budget resets; completed tasks may be re-attempted |
+| `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1 | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation | Self-heals from the plan on the next evaluation |
+| `engine-state.json` | `{ activePlanPath?: string, … }` | `task-seed.ts`, `conductor.ts` (atomic) | Written when the active plan is resolved | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing |
+
+### Gate verdicts
+
+`.pipeline/gates/<step>.json`, one per step:
+
+```ts
+interface GateVerdict {
+  satisfied: boolean;
+  reason?: string;
+  checkedAt: number;                              // epoch ms
+  kickback?: { from: StepName; evidence: string };
+}
+```
+
+The loop owns objective verdicts — it recomputes them from on-disk evidence after each step rather than
+trusting an agent's self-report. The only agent-authored writes are kickback invalidations, and those
+must carry evidence.
+
+### Verdict and evidence artifacts
+
+Agent-authored, engine-validated. Alphabetized.
+
+| File | Shape | Writer |
+| --- | --- | --- |
+| `acceptance-specs-red.json` | `{ command, targetSpecs[], executed, passed, failed, skipped, errors, summary? }`. Validation hard-fails on `errors > 0`, `skipped > 0`, `executed < 1`, or `failed < 1` — a RED phase must actually fail | `acceptance-red-runner.ts` |
+| `architecture-review-as-built.md` | Markdown with a `Verdict: <value>` line | as-built review step |
+| `architecture-review-as-built-code-stamp.json` | The HEAD sha the review was formed against | engine |
+| `assessment/` | Assessment outputs | `assess` skill |
+| `attribution-memo.json` | Fast-lane attribution memo | `attribution-lane.ts` |
+| `attribution-verdict.json` | `{ schema?, anchor?: { head?, residue?[] }, results? }` | `attribution-verdict.ts` |
+| `audit-trail/` | Per-task `review.json`, `rework-N.json`, `commit.txt`, `summary.json`, plus `events.jsonl` and a `WRITE-FAILED` marker | `audit-trail.ts`, `pipeline` skill |
+| `bootstrap-detection.json`, `bootstrap-inventory.md` | Stack detection output | `bootstrap` skill |
+| `build-review.json` | `{ verdict: 'PASS'\|'FAIL', reasons?, findings?, rubric: { tautology, scope, rootCause, completeness }, codeStamp? }` | `build_review` step |
+| `build-review-regrade.json` | Per-feature-session regrade counter; bounds stale-mirage regrade to once per session | `build-review-disposition.ts` |
+| `build-stall-question.md` | Free-form stall question surfaced to the operator | `task-progress.ts` |
+| `documentation-delivery.json` | `{ version: 1, branch, prUrl, sourceRef }` with strict source-ref and PR-URL regexes and a staleness check | `documentation-delivery.ts` |
+| `fr-coverage.md` | Product-track FR-to-spec coverage table | `writing-system-tests` skill |
+| `intake-outcomes.md` | Staged intake outcomes | `engineer/outcome-staging.ts` |
+| `manual-test-results.md` | Per-story PASS/FAIL rows. The gate fails on any FAIL row in the latest attempt, and on an mtime older than session start | `manual-test` skill |
+| `manual-test-fail-evidence.json` | Failure detail for the above | engine |
+| `per-task-floor.json` | Per-task commit-floor telemetry | `step-runners.ts` |
+| `prd-audit.md` | Markdown table `\| FR \| Verdict \| Gap-class \| Evidence \| Accepted? \|`. Verdicts `ALIGNED`, `MISSING`, `PARTIAL`, `DIVERGED`; gap classes `impl-gap`, `intended-drift`, `plan-gap`, `unknown`. The verdict is read from the verdict **cell**, not from anywhere else in the row | `prd-audit` skill |
+| `prd-audit-code-stamp.json` | The HEAD sha the audit was formed against | engine |
+| `protected-artifact-seal.json` | See above | `protected-artifact-seal.ts` |
+| `rebase-residue.json` | `[{ sha, citingTaskIds[], reason }]` — citations a rebase could not translate | `rebase-translate.ts` |
+| `rebase-rewrites.json` | Pre-to-post rebase sha map, merged transitively; atomic temp plus rename | `rebase-translate.ts` |
+| `remediation.json` | Per-gap dispositions and tasks; the engine routes deterministically from it | `remediate` skill |
+| `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
+| `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
+| `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
+| `test-suite-evidence.json` | Version 3. PASS: `{ version, outcome: 'PASS', reason: 'exit_zero', fingerprint, categoryFingerprints, provenanceHeadSha, command, workingDirectory, startedAt, endedAt, durationMs, exitCode: 0, stdout, stderr }`. FAIL adds a `signal` discriminant and one of nine `reason` values. Diagnostics truncate at 16384 bytes | `full-suite-evidence.ts` |
+| `version-signal.json` | `{ verdict, level, files, classifiedAt }` — the PATCH auto-pass audit | `self-host/version-gate.ts` |
+| `wiring-evidence.json` | `{ schema, base, head, tasks: [{ id, contract, gaps: [{ kind, message }] }], layer2: { applicable, reason? }, waivers[] }`; seven gap kinds | `wiring-probe.ts` |
+
+All of these are ephemeral. Losing one re-runs its step; none of them is the durable record of anything.
+
+### Sentinel markers
+
+Existence is the signal. Alphabetized.
+
+| Marker | Written by | Effect |
+| --- | --- | --- |
+| `.memory-count-at-start` | `session-start-context.sh` | Baseline for the stop-time memory-delta reminder |
+| `.task-status.lock` | `pre-dispatch.sh` (mkdir lock) | Serializes concurrent `task-status.json` row flips |
+| `DONE` | conductor on convergence | Paired with the `loop_converged` event |
+| `HALT` | `halt-marker.ts::writeHaltMarker`, best-effort — write failures are swallowed | The daemon treats it as a full stop: it never advances, opens a PR, or merges past it. The first non-empty body line is the reason the dashboard shows |
+| `HALT.class` | the same writer, when a class is supplied | `needs-human` or `mechanical`, so the re-kick sweep can triage without parsing the body. Missing or unrecognized reads as `unclassified` and never throws |
+| `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
+| `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
+| `REKICK` | the re-kick sweep | Body is literally `rekick` |
+| `build-step-active` | build step entry | Attribution scoping. A stale marker is cleared at every step entry, fail-open |
+| `conduct-session-id` | step runners | The current session id |
+| `current-task` | `conduct-ts task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
+| `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
+| `finish-choice` | `finish` skill | SHIP-tail routing; subject to the session freshness check |
+| `halt-user-input-required` | `pipeline` skill on a user-requested exit | The build predicate returns not-done while it exists |
+| `phase-active` | `phase-marker.ts::writePhaseMarker` | Line-oriented on purpose so bash hooks can read it without a parser: `step: <name>`, `phase: <BUILD\|SHIP>`, `written: <ISO-8601>`, then zero or more `allow: <prefix>` lines. Removed idempotently on step exit |
+| `rate-limit-hit` | `rate-limit-wait.sh` | Line 1 epoch, line 2 wait seconds. See the `StopFailure` limitation in [settings and hooks](settings-and-hooks.md) |
+| `review-required-<step>` | review skills | Existence means "found issues". Observed for `prd_audit`, `architecture_review`, `conflict_check`, and `architecture-as-built` |
+| `tdd-phase` | nothing in the engine or any skill | Opt-in trigger for both TDD gates. Dormant by default |
+| `version-approval` | operator | Records the approved VERSION bump for the self-host approval gate |
+
+To clear a halt safely, use the procedure in
+[stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md) — deleting `HALT` by hand leaves
+`HALT.class` behind.
+
+### Generated assets and logs
+
+| Path | Contents | Notes |
+| --- | --- | --- |
+| `session-hooks/` | `pre-dispatch.sh`, `post-dispatch.sh`, `mutation-gate.sh`, `docs-guard.sh` | Written mode 0755 during worktree preparation; see [settings and hooks](settings-and-hooks.md) |
+| `git-hooks/` | `prepare-commit-msg`, `commit-msg` | Wired via the worktree-local `core.hooksPath` |
+| `events.jsonl` | The run event log | Append-only, no rotation — see below |
+| `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |
+| `otel.jsonl` | OTLP-JSON, one batch per line | Default file-transport target. Off unless the `otel:` config block is present. Append-only, unbounded |
+| `conduct.log` | Session narrative | Written only by the legacy bash CLI; `conduct-ts` never writes it. Read by `rate-limit-wait.sh` |
+| `progress.log` | Batch-boundary narrative | Appended by the `pipeline` skill |
+
+> **Known limitation.** No engine code reads `.pipeline/fr-coverage.md`, `.pipeline/otel.jsonl`,
+> `.pipeline/audit-trail/events.jsonl`, `.pipeline/audit-trail/WRITE-FAILED`,
+> `.pipeline/bootstrap-detection.json`, or `.pipeline/bootstrap-inventory.md`. They are written every run
+> and consumed only by skill prose, by external OTLP tooling, or by nobody. Do not treat their presence
+> as evidence that anything acted on them. Tracked in
+> [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+
+> **Known limitation.** Two constants named `HALT_MARKER` exist and point at different files —
+> `.pipeline/HALT` and `.pipeline/halt-user-input-required`. Two types named `TaskStatusFile` declare
+> incompatible shapes for `task-status.json`; the array-of-records form is the one actually written. When
+> reading code, check which module a name came from. Tracked in
+> [#1016](https://github.com/jstoup111/ai-conductor/issues/1016).
+
+## `.daemon/`
+
+Daemon-scoped state at the main checkout root. Gitignored. Thirteen paths.
+
+| Path | Contents | Notes |
+| --- | --- | --- |
+| `PAUSED` | `{ pausedAt, pausedBy? }` | Existence is authoritative; the body is informational only. **Fail-closed** — any read error other than "not found" is treated as paused |
+| `RESTART-PENDING` | `{ requestedAt, requestedBy?, blockingSlug? }` | Consumed once at the next daemon boot; a re-request refreshes rather than duplicating |
+| `RESTART_PENDING.suppression` | Suppression record for the above | Note the underscore, where the marker uses a hyphen |
+| `attribution-accuracy.jsonl` | Append-only accuracy ledger | `attribution_divergence` events are observational only — they never revoke a stamp or write a halt marker |
+| `daemon.log` | The active daemon log | Rotated at open time when it exceeds 1 MB |
+| `daemon.log.1` | The rotated log | Overwritten by each rotation |
+| `daemon.pid` | pid, uuid, engine dir | `O_EXCL` pidfile. Fleet-wide GC cross-checks every pidfile; any read error other than "not found" aborts GC with zero deletions |
+| `gated.json` | Owner-gate snapshot | — |
+| `last-base-sha` | Fast-forward tracking | — |
+| `mergeable-watch.jsonl` | Append-only mergeable sweep ledger | — |
+| `parked/<slug>` | Per-slug operator park | Resolved against the **main** repo root via `git rev-parse --git-common-dir`, so a worktree and its main checkout share one park namespace |
+| `processed/<slug>` | `{"status":"shipped","prUrl":…}` | Legacy plain-text `shipped` still parses |
+| `warned/<slug>` | Per-slug warn-once record | — |
+
+Daemon procedures live in [running the daemon](../guides/running-the-daemon.md); recovery lives in
+[daemon recovery](../runbooks/daemon-recovery.md).
+
+## Git machinery
+
+### Worktree and branch names
+
+| Actor | Worktree path | Branch |
+| --- | --- | --- |
+| Daemon build | `<projectRoot>/.worktrees/<slug>` | `feat/daemon-<slug>` |
+| Engineer loop (spec authoring) | `<canonicalPath>/.worktrees/engineer-<slug>` | `spec/<slug>`, then `-2`, `-3`… on collision |
+| Interactive `worktree` step | `<projectRoot>/.worktrees/<slug>` | `feature/<slug>`, then `-2`… on collision |
+| Autoresolve | `<repoCwd>/.worktrees/resolve-<slug>` | *(checks out the conflicting ref)* |
+| Setup triage quarantine | — | `wip/setup-quarantine-<slug>` |
+| Shipment reconciliation | — | `shipment-repair/<prNumber>/<slug>` |
+
+Five branch-name templates in total. The daemon slug is always the plan-file stem, enumerated from the
+base branch tree, never from the working tree. The engineer and interactive slugs come from slugifying
+the idea or feature description: lowercase, spaces to `-`, strip anything outside `[a-z0-9-]`, collapse
+runs of `-`, trim trailing `-`, truncate to 50 characters.
+
+`ensureWorktree` has three outcomes — `reused` (already registered, no git mutation), `attached`
+(`git worktree add <path> <branch>`), and `created` (`git worktree add -b <branch> <path> <base>`). The
+base is resolved lazily, only in the create case.
+
+On a halt or error the daemon **deliberately leaves the worktree in place** for the operator. Only the
+legacy interactive cleanup path also deletes the branch.
+
+### Commit trailers
+
+The engine's trailer parser recognizes exactly two keys: `Task:` and `Evidence:`. There is no `Owner:`
+commit trailer (`Owner:` is a line inside `.docs/intake/<slug>.md`), no `Shipped-Record:` trailer, and
+no `Co-Authored-By` handling anywhere in the engine.
+
+**`Task: <id>`** is auto-stamped by `prepare-commit-msg` from `.pipeline/current-task`, but only when no
+explicit trailer is already present. A leading `T` before a digit is folded, so `Task: T3` and `Task: 3`
+are the same id.
+
+`Task:` trailers are **partly** telemetry and **partly** load-bearing. The distinction matters:
+
+| Consumer | Gate or telemetry? |
+| --- | --- |
+| `commit-msg` presence check | **Telemetry.** A commit with no `Task:` trailer is never rejected |
+| `commit-msg` format check | **Gate.** A trailer that *is* supplied and uses the `task-N` form, or names an id absent from `task-status.json`, blocks the commit with exit 1 |
+| Per-task commit floor | **Telemetry.** Purely additive: it never feeds the build grader, never changes success, never triggers a kickback |
+| `derive-feedback` commit-evidence check | **Telemetry.** Advisory only; never writes `task-status.json` or the evidence sidecar |
+| Build-completion predicate | **Gate.** Task ids resolved from `Task:` trailers are unioned with `task-status.json` rows; any plan task id in neither set returns not-done |
+| Build stall and halt breaker | **Gate.** The resolved-task count drives the `no_task_progress` stall verdict |
+
+A task evidenced **only** by a `Task:` trailer, whose `task-status.json` row was never flipped,
+therefore satisfies the build gate. That union is deliberate — it fixed a false halt at 100% real
+completion. Final completion authority still rests with `build_review`'s completeness rubric, which
+compares the plan against the diff rather than trusting any self-report.
+
+**`Evidence: satisfied-by <sha>` / `Evidence: skipped <reason>`** is telemetry only. The values are
+extracted by `commit-msg` and never acted on. This is distinct from the `EvidenceStamp` records in
+`.pipeline/task-evidence.json`, whose `form` field can be `trailer` or `evidence:satisfied-by`.
+
+`commit-msg` skips all trailer machinery for merge commits, `--amend`, rebase replay, and any commit
+made with `CONDUCT_ENGINE_COMMIT=1`.
+
+### Shipped records
+
+A shipped record is the durable, committed fact that a feature shipped. It lives at
+`.docs/shipped/<plan-stem>.md`, committed **on the implementation branch**, so the merge that lands the
+work also lands the record.
+
+```markdown
+---
+slug: <slug>
+spec_hash: <sha256-hex>
+pr: <pr url | local>
+shipped: <YYYY-MM-DD>
+---
+```
+
+`spec_hash` is SHA-256 over the trimmed plan bytes, a `0x00` separator, and the trimmed stories bytes.
+Only trailing newline runs are trimmed; interior bytes are never modified and CRLF is deliberately not
+normalized. Changing that computation is a breaking change to persisted identity.
+
+`renderShippedRecordWithCost` appends a `## Cost` block after the closing fence
+(`input`, `output`, `cache_read`, `cache_creation`, `cost_usd`, `dispatches`, `retries`, `halts`,
+`unmetered`, and a `providers:` sub-block when non-empty). Appending is safe because the parser stops at
+the closing `---`.
+
+`conduct-ts shipped-record --slug <plan-stem> --pr <pr-url-or-local>` writes it; both flags are
+required and re-running with identical content is a no-op. Its exit code cannot be used to detect
+success — it exits 0 even when it wrote nothing. Recording a ship and verifying it landed is in
+[shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md#recovery).
+
+The daemon never writes shipped records. A daemon-side write would land on the main checkout's base
+branch, never be pushed, and wedge the fast-forward advance.
+
+Backlog dedup reads records from the **base branch tree**, not the working tree, so an uncommitted
+record is invisible by construction. Two passes run: stem match, then content-hash match against
+`spec_hash` for a renamed spec. A malformed record still dedups by stem, just not by hash.
+
+Reconciliation for a merged PR whose record is missing or wrong is in
+[shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md).
+
+## Observability outputs
+
+### `.pipeline/events.jsonl`
+
+One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-8601 `ts`. Append-only —
+no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
+`<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
+
+`ConductorEvent` defines **57 variants**. `EventPersister` subscribes to the **29** names in
+`ALL_EVENT_TYPES` and writes only those:
+
+`step_started`, `step_completed`, `step_failed`, `provider_attempt`, `provider_fallback`, `step_retry`,
+`checkpoint_reached`, `recovery_needed`, `gate_blocked`, `tier_skip`, `config_skip`, `navigation_back`,
+`rate_limit`, `session_reset`, `credentials_park`, `credentials_park_progress`, `feature_complete`,
+`dashboard_refresh`, `auto_heal`, `mode_skip`, `build_progress`, `build_no_progress`, `build_stall`,
+`renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`,
+`attribution_divergence`.
+
+Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the shipped record's `## Cost`
+block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
+No dashboard and no `kpi` path reads it.
+
+> **Known limitation.** The other 28 event types — including `gate_verdict`, `kickback`, `loop_halt`,
+> `loop_converged`, `auto_park`, `zero_work_product`, `unattributed_dispatch`, `halt_cleared`,
+> `ci_failed`, and every `rebase_*` variant — are emitted for real but never persisted, because the
+> emitter dispatches only to handlers registered for that exact type. Three read paths are structurally
+> dead as a result: `cost-rollup.halts` counts `loop_halt` and is therefore **permanently 0** — and that
+> zero is committed verbatim into every shipped record's `## Cost` block and re-read by `conduct-ts kpi`;
+> `aggregateKickbacks` and `aggregateHalts` always return `[]`, so `--report` shows no kickbacks and no
+> halts however many occurred. Read halts from `.pipeline/HALT` and the daemon log instead.
+> Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+
+### `.pipeline/audit-trail/events.jsonl`
+
+A separate ledger with a different shape. Do not confuse it with the run event log.
+
+```ts
+type AuditRecord = {
+  step: StepName; phase: Phase; event: string; reason?: string;
+  cause?: string; attempt?: number; at: number; kickback_outcome?: string;
+};
+```
+
+`at` is epoch milliseconds, not the ISO `ts` used by `events.jsonl`, and `event` is a derived string,
+not a raw event type. It subscribes to six source events (`gate_verdict`, `step_retry`, `kickback`,
+`loop_halt`, `step_completed`, `halt_cleared`) and emits six strings (`gate_pass`, `gate_fail`, `retry`,
+`kickback`, `intervention`, `halt_cleared`). A write failure drops a `WRITE-FAILED` marker beside it.
+No TypeScript reader exists; only the `retro` skill consults it, by prose.
+
+### Daemon logs
+
+Active log at `<repo>/.daemon/daemon.log`, rotated to `daemon.log.1`. Each line is
+`<ISO-8601 timestamp> <line>`; timestamps appear only in the file, not on the live tmux console.
+
+Rotation has a 1 MB cap applied **only at open time**, so a long-running daemon never rotates mid-run.
+
+The log carries every daemon `log()` line, rendered inner-loop events, `console.warn` and
+`console.error` tee'd with `[warn]`/`[error]` prefixes and ANSI stripped, and the startup dashboard
+snapshot — which deliberately omits the PROCESSED group the console version shows with `--completed`.
+
+#### Line shapes
+
+Every daemon line carries the `[daemon]` prefix. A line a feature owns carries its slug tag
+immediately after, with no space between the two:
+
+| Owner | Shape |
+| --- | --- |
+| The daemon itself — discovery, sweeps, lock, restart | `[daemon] <message>` |
+| One feature run — lifecycle records, rendered loop events, provider warnings, subprocess diagnostics | `[daemon][<slug>] <message>` |
+
+The slug is bounded to 24 display characters: a longer one is cut to 23 and closed with `…`. A
+multi-line message is split first, so every physical line gets its own prefix, tag, and timestamp
+rather than only the first.
+
+Feature-owned tagging is attribution, not routing — both shapes land in the same file and on the same
+console. Untagged lines are the ones emitted directly on the daemon-wide bus; an event forwarded from a
+feature's own bus renders once, tagged.
+
+Lifecycle transitions are deduplicated per slug across both sinks: a repeated `▶ start` or an `■ done`
+repeating the recorded outcome is dropped, and `↻ resume` always prints with `(was: <status>)`
+appended. A line counts as a transition only when the glyph opens the message, behind at most a
+bracketed tag and ANSI codes — so a line that merely quotes another feature's lifecycle text cannot
+suppress that feature's real transition.
+
+Read it with `conduct-ts daemon logs`; flags are in [cli](cli.md).
+
+> **Known limitation.** `daemon.log.1` is produced by rotation but no CLI path ever opens it — both the
+> tail and follow primitives only open the active log. Rotated history is reachable only by reading the
+> file directly. Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
+
+### `conduct-ts kpi`
+
+**Input:** `<cwd>/.docs/shipped/*.md` and nothing else. It re-parses the committed `## Cost` markdown
+block with regexes; it does not read `events.jsonl`, `.pipeline/`, or `otel.jsonl`.
+
+**Parsed fields** (`KpiCostFields`): `input`, `output`, `cacheRead`, `cacheCreation`, `costUsd`,
+`dispatches`, `retries`, `halts`, `unmeteredCount`, `unmeteredDurationMs`.
+
+**Output:** a plain-text report on stdout. No file, no JSON. Per feature it prints `input`, `output`,
+`tokens` (their sum), and `cost_usd`, suffixed `[PARTIAL — unmetered dispatches present]` when any
+dispatch went unmetered. A record with no parsable `## Cost` block prints
+`no Cost data available (skipped)`. The aggregate line prints the counted feature count, total tokens with an
+input/output breakdown, and total `cost_usd` to four decimal places; **features with any unmetered
+dispatch are excluded from the aggregate**. An empty or missing directory prints
+`No shipped features yet — .docs/shipped/ is empty or does not exist.`
+
+The command takes zero flags — anything after `kpi` is ignored — and always exits 0.
+
+> **Known limitation.** Six of the ten parsed fields (`cacheRead`, `cacheCreation`, `dispatches`,
+> `retries`, `halts`, `unmeteredDurationMs`) are never rendered or aggregated, and the `providers:`
+> per-provider cost sub-block written into every shipped record has no parser at all. Cache spend and
+> per-provider attribution are recorded but unreportable through this command; read them from the
+> shipped-record markdown directly. Tracked in
+> [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).

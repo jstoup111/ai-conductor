@@ -105,6 +105,80 @@ afterEach(async () => {
 });
 
 describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #537)', () => {
+  it('renders each invoked provider attempt beside the causally deduplicated aggregate cost totals', async () => {
+    await writeEventsLedger([
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: true,
+        tokenUsage: {
+          input: 40,
+          output: 10,
+          cacheRead: 4,
+          cacheCreation: 1,
+          costUsd: 0.02,
+        },
+      },
+      {
+        type: 'provider_fallback',
+        step: 'plan',
+        failedProvider: 'codex',
+        reason: 'model ladder exhausted',
+        nextProvider: 'claude',
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: {
+          input: 100,
+          output: 20,
+          cacheRead: 10,
+          cacheCreation: 2,
+          costUsd: 0.05,
+        },
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        status: 'done',
+        preferredProvider: 'codex',
+        actualProvider: 'claude',
+        tokenUsage: {
+          input: 100,
+          output: 20,
+          cacheRead: 10,
+          cacheCreation: 2,
+          costUsd: 0.05,
+        },
+      },
+    ]);
+
+    await runShippedRecord();
+    const body = await shippedRecordBody();
+    const costOutput = body.slice(body.indexOf('## Cost'));
+
+    expect(costOutput).toBe(
+      `## Cost\n` +
+        `input: 140\n` +
+        `output: 30\n` +
+        `cache_read: 14\n` +
+        `cache_creation: 3\n` +
+        `cost_usd: 0.07\n` +
+        `dispatches: 2\n` +
+        `retries: 0\n` +
+        `halts: 0\n` +
+        `unmetered: count: 0, duration_ms: 0\n` +
+        `providers:\n` +
+        `  codex: input: 40, output: 10, cache_read: 4, cache_creation: 1, cost_usd: 0.02, dispatches: 1\n` +
+        `  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1\n`,
+    );
+  });
+
   it('happy: metered events.jsonl -> a "## Cost" block summing tokens/cost_usd/dispatch counts lands in the committed shipped record', async () => {
     await writeEventsLedger([
       { type: 'step_completed', step: 'build', status: 'done', tokenUsage: { input: 1000, output: 200, cacheRead: 50, cacheCreation: 10, costUsd: 0.12 }, model: 'claude-sonnet-5' },
@@ -141,11 +215,10 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
     // The record still exists and is still committed...
     expect(body).toContain(`slug: ${SLUG}`);
     expect(await git(['log', '-1', '--format=%s'])).toBe(`shipped record: ${SLUG}`);
-    // ...and the Cost block (if present at all) reflects total absence as
-    // unmetered rather than a fabricated zero-cost clean rollup.
-    if (/##\s*Cost/i.test(body)) {
-      expect(body).toMatch(/unmetered/i);
-    }
+    // ...and the Cost block reflects total absence as unmetered rather than a
+    // fabricated zero-cost clean rollup.
+    expect(body).toMatch(/##\s*Cost/i);
+    expect(body).toMatch(/unmetered:\s*(?:\{\s*)?count:\s*[1-9]\d*/i);
   });
 
   it('negative: a partial/corrupt events.jsonl (unparseable line mixed with good ones) still ships — partial data folded into unmetered, never a crash', async () => {

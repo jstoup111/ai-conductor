@@ -18,6 +18,7 @@ import { decideSpecGate, type GateDecision } from './owner-gate/gate.js';
 import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
+import type { BacklogTreeSource } from './backlog-tree-source.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -43,11 +44,7 @@ const execFile = promisify(execFileCb);
  * `readFile(relPath)` → the content of a repo-relative path on the base branch,
  *   or `null` when the path is absent from that tree.
  */
-export interface BacklogTreeSource {
-  listPlanFiles(): Promise<string[]>;
-  listShippedFiles(): Promise<string[]>;
-  readFile(relPath: string): Promise<string | null>;
-}
+export type { BacklogTreeSource } from './backlog-tree-source.js';
 
 /**
  * Production tree source: reads the committed `baseBranch` tree of the repo at
@@ -111,6 +108,47 @@ export type DiscoveryLogger = {
 };
 
 /**
+ * Structured outcome of a `fastForwardRoot` call (TI-1 HP1 / TI-4). Every
+ * skip path carries a `cause` so callers can distinguish WHY a fast-forward
+ * did not happen, without parsing log lines.
+ */
+export type FastForwardOutcome = {
+  status: 'advanced' | 'current' | 'skipped';
+  cause?: 'no-origin' | 'unknown-default' | 'not-default-branch' | 'dirty' | 'diverged' | 'fetch-failed';
+  behindOrigin?: boolean;
+  originHead?: string;
+};
+
+/**
+ * Best-effort probe of how far HEAD is behind `origin/<defaultBranch>`, used
+ * to enrich `dirty`-cause skip outcomes. NEVER throws — any failure (offline,
+ * no origin ref yet, etc.) simply omits the fields rather than blocking the
+ * caller's skip return.
+ */
+async function probeBehindOrigin(
+  git: GitRunner,
+  defaultBranch: string,
+): Promise<{ behindOrigin?: boolean; originHead?: string }> {
+  try {
+    const fetched = await git(['fetch', 'origin', defaultBranch]);
+    if (fetched.exitCode !== 0) return {};
+
+    const originHeadResult = await git(['rev-parse', `origin/${defaultBranch}`]);
+    if (originHeadResult.exitCode !== 0) return {};
+    const originHead = originHeadResult.stdout.trim();
+
+    const countResult = await git(['rev-list', '--count', `HEAD..origin/${defaultBranch}`]);
+    if (countResult.exitCode !== 0) return { originHead };
+    const count = Number.parseInt(countResult.stdout.trim(), 10);
+    if (!Number.isFinite(count)) return { originHead };
+
+    return { behindOrigin: count > 0, originHead };
+  } catch {
+    return {};
+  }
+}
+
+/**
  * Fast-forward `projectRoot`'s checkout to origin so newly merged specs become
  * present in the working tree — and therefore in any worktree freshly cut from
  * the default branch. This replaces the old fetch-only discovery ref: instead of
@@ -152,17 +190,17 @@ export async function fastForwardRoot(
   gitOverride?: GitRunner,
   discoveryLogger?: DiscoveryLogger,
   leakWarnState?: LeakWarnState,
-): Promise<void> {
+): Promise<FastForwardOutcome> {
   const git = gitOverride ?? makeGitRunner(projectRoot);
 
   // No origin → nothing to fast-forward from (local-only repo).
   const remotes = await git(['remote']);
-  if (remotes.exitCode !== 0) return;
+  if (remotes.exitCode !== 0) return { status: 'skipped', cause: 'no-origin' };
   const hasOrigin = remotes.stdout
     .split('\n')
     .map((l) => l.trim())
     .includes('origin');
-  if (!hasOrigin) return;
+  if (!hasOrigin) return { status: 'skipped', cause: 'no-origin' };
 
   // Discover the default branch name (never hardcode 'main').
   // Mirror resolveBase's two-step: symbolic-ref first, remote show fallback.
@@ -174,7 +212,7 @@ export async function fastForwardRoot(
       if (m && m[1] !== '(unknown)') defaultBranch = m[1];
     }
   }
-  if (!defaultBranch) return; // can't determine the branch → do nothing
+  if (!defaultBranch) return { status: 'skipped', cause: 'unknown-default' }; // can't determine the branch → do nothing
 
   // Only fast-forward when the root is actually ON the default branch: advancing
   // some other checked-out branch is not what we want.
@@ -185,7 +223,7 @@ export async function fastForwardRoot(
       `skip fast-forward: root is on '${current || 'unknown'}', not the default branch ` +
         `'${defaultBranch}'. Daemon discovers/builds against the local branch as-is.`,
     );
-    return;
+    return { status: 'skipped', cause: 'not-default-branch' };
   }
 
   // Check for dirty working tree and attempt to heal if possible.
@@ -222,7 +260,8 @@ export async function fastForwardRoot(
                 `content changed between classification and restore; aborting heal. ` +
                 `Working tree remains dirty; skipping fast-forward.`,
             );
-            return;
+            const probe = await probeBehindOrigin(git, defaultBranch);
+            return { status: 'skipped', cause: 'dirty', ...probe };
           }
 
           // Restore modified files
@@ -289,7 +328,8 @@ export async function fastForwardRoot(
               `WARN heal: failed to heal file(s): ${failedFiles.join(', ')}; ` +
                 `tree remains dirty, skipping fast-forward.`,
             );
-            return;
+            const probe = await probeBehindOrigin(git, defaultBranch);
+            return { status: 'skipped', cause: 'dirty', ...probe };
           }
 
           // Fall through to the fetch/merge logic below
@@ -299,7 +339,8 @@ export async function fastForwardRoot(
             `heal error: ${err instanceof Error ? err.message : String(err)}; ` +
               `skipping fast-forward.`,
           );
-          return;
+          const probe = await probeBehindOrigin(git, defaultBranch);
+          return { status: 'skipped', cause: 'dirty', ...probe };
         }
       } else {
         // Tree is dirty and cannot be healed — use fingerprinting to throttle spam (Task 13)
@@ -325,7 +366,8 @@ export async function fastForwardRoot(
           // Fingerprint unchanged: emit a short throttle line instead of full WARN
           log(`dirty tree unchanged since last poll; remaining dirty; skipping fast-forward.`);
         }
-        return;
+        const probe = await probeBehindOrigin(git, defaultBranch);
+        return { status: 'skipped', cause: 'dirty', ...probe };
       }
     }
   } catch (err) {
@@ -337,10 +379,14 @@ export async function fastForwardRoot(
       `ERROR triage: ${err instanceof Error ? err.message : String(err)}; ` +
         `dirty tree (triage error) — skipping fast-forward.`,
     );
-    return;
+    const probe = await probeBehindOrigin(git, defaultBranch);
+    return { status: 'skipped', cause: 'dirty', ...probe };
   }
 
   // Best-effort fetch; offline/unreachable must NOT crash the poll loop.
+  const beforeHeadResult = await git(['rev-parse', 'HEAD']);
+  const beforeHead = beforeHeadResult.exitCode === 0 ? beforeHeadResult.stdout.trim() : null;
+
   const fetched = await git(['fetch', 'origin', defaultBranch]);
   if (fetched.exitCode !== 0) {
     // Task 17: Log fetch failure via transition-aware logger if provided
@@ -352,7 +398,7 @@ export async function fastForwardRoot(
       `fast-forward: fetch origin ${defaultBranch} failed (offline?); continuing on ` +
         `local ${defaultBranch}.`,
     );
-    return;
+    return { status: 'skipped', cause: 'fetch-failed' };
   }
 
   // Task 17: Log fetch success via transition-aware logger if provided
@@ -366,7 +412,17 @@ export async function fastForwardRoot(
       `fast-forward: local ${defaultBranch} has diverged from origin/${defaultBranch} ` +
         `(non-fast-forward); continuing on local ${defaultBranch}.`,
     );
+    const originHeadResult = await git(['rev-parse', `origin/${defaultBranch}`]);
+    const originHead = originHeadResult.exitCode === 0 ? originHeadResult.stdout.trim() : undefined;
+    return { status: 'skipped', cause: 'diverged', behindOrigin: true, originHead };
   }
+
+  const afterHeadResult = await git(['rev-parse', 'HEAD']);
+  const afterHead = afterHeadResult.exitCode === 0 ? afterHeadResult.stdout.trim() : null;
+  if (beforeHead !== null && afterHead !== null && beforeHead === afterHead) {
+    return { status: 'current' };
+  }
+  return { status: 'advanced', originHead: afterHead ?? undefined };
 }
 
 /** Options for discoverBacklog. */
@@ -501,6 +557,54 @@ export interface GatedRepoItem {
 }
 export type GatedItem = GatedSpecItem | GatedRepoItem;
 
+/**
+ * The plan stem with a leading `YYYY-MM-DD-` date prefix removed.
+ * Companion to `planStem()` — used ONLY as a relaxed second lookup key for the
+ * per-feature metadata markers, and only when it is unambiguous (see
+ * `readFeatureMarker` in `discoverBacklog`). Never used to key state.
+ */
+export function undatedStem(stem: string): string {
+  return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
+}
+
+/**
+ * Discovery deliberately performs only the shallow coherence-artifact check:
+ * a Markdown table needs a header, separator, and at least one data row. Deep
+ * coverage and claim validation belongs to `coherence-validator` at land.
+ */
+function hasCoherenceTableDataRow(content: string | null): boolean {
+  if (content === null || content.trim().length === 0) return false;
+
+  const rows = content.split(/\r?\n/).map((line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return null;
+    return trimmed
+      .slice(1, -1)
+      .split('|')
+      .map((cell) => cell.trim());
+  });
+
+  for (let index = 0; index + 2 < rows.length; index += 1) {
+    const header = rows[index];
+    const separator = rows[index + 1];
+    const data = rows[index + 2];
+    if (
+      header === null ||
+      separator === null ||
+      data === null ||
+      header.length === 0 ||
+      header.length !== separator.length ||
+      header.length !== data.length ||
+      !separator.every((cell) => /^:?-{2,}:?$/.test(cell))
+    ) {
+      continue;
+    }
+    return true;
+  }
+
+  return false;
+}
+
 export async function discoverBacklog(
   projectRoot: string,
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
@@ -576,6 +680,54 @@ export async function discoverBacklog(
   // `listShippedFiles()` call), then match each candidate by stem below.
   const shippedRecords = await listShippedRecords(tree);
 
+  // Dated-plan/undated-marker mismatch: per-feature metadata markers (`.docs/complexity/<stem>.md`,
+  // `.docs/track/<stem>.md`) are keyed by the PLAN STEM, but specs exist whose
+  // plan carries a `YYYY-MM-DD-` prefix while their markers were landed under
+  // the UNDATED stem. The slug-keyed read then missed, and the run silently
+  // fell back to the most-expensive defaults (M / product), running steps the
+  // real tier/track would have skipped. Allow one date-prefix-relaxed fallback
+  // — but only when exactly ONE candidate plan maps to that undated stem, so
+  // the relaxed lookup can never guess between two features (#407/#993).
+  const undatedPlanStemCounts = new Map<string, number>();
+  for (const f of planFiles) {
+    const base = undatedStem(planStem(f));
+    undatedPlanStemCounts.set(base, (undatedPlanStemCounts.get(base) ?? 0) + 1);
+  }
+  const readFeatureMarker = async (
+    markerDir: string,
+    slug: string,
+  ): Promise<{ content: string | null; tried: string[]; ambiguous: boolean }> => {
+    const exact = `${markerDir}/${slug}.md`;
+    const content = await tree.readFile(exact);
+    if (content !== null) return { content, tried: [exact], ambiguous: false };
+    const undated = undatedStem(slug);
+    if (undated === slug) return { content: null, tried: [exact], ambiguous: false };
+    if ((undatedPlanStemCounts.get(undated) ?? 0) > 1) {
+      return { content: null, tried: [exact], ambiguous: true };
+    }
+    const relaxed = `${markerDir}/${undated}.md`;
+    return { content: await tree.readFile(relaxed), tried: [exact, relaxed], ambiguous: false };
+  };
+  // A miss is silent downstream (daemon-cli fills in `M`/`product`), so name
+  // the paths tried in the log — logging only; no control-flow change. Scoped
+  // to slugs where a relaxed candidate was in play (a dated stem, or a refused
+  // ambiguous one): an UNDATED slug with no marker is the documented legacy
+  // case (pre-track/pre-complexity specs), and logging that on every poll for
+  // every such spec would be pure noise.
+  const warnMarkerDefault = async (
+    kind: 'tier' | 'track',
+    slug: string,
+    lookup: { tried: string[]; ambiguous: boolean },
+  ): Promise<void> => {
+    if (lookup.tried.length < 2 && !lookup.ambiguous) return;
+    await warnOnce(
+      `__${kind}-marker-default-${slug}__`,
+      `${slug}: no ${kind} marker resolved (tried ${lookup.tried.join(', ')}` +
+        `${lookup.ambiguous ? '; undated fallback refused — several plans share that stem' : ''})` +
+        ` — falling back to the daemon default; logged once.`,
+    );
+  };
+
   const items: BacklogItem[] = [];
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
@@ -596,6 +748,16 @@ export async function discoverBacklog(
 
     if (await isProcessed(slug)) continue;
 
+    // Carry the engineer-assessed complexity tier so the daemon build honors it
+    // (Small skips acceptance_specs/retro). Resolve it before vetting so those
+    // checks can use it. The marker is committed at
+    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — and
+    // `slug` plus the base-branch tree source are unchanged through the vetting
+    // block below. Absent/garbled → undefined, and the daemon falls back to 'M'
+    // (legacy behavior, no breakage).
+    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
+    const tier = parseComplexityTier(tierMarker.content);
+
     // Eligibility = APPROVED + well-formed. The daemon pre-seeds the front half
     // (stories/plan = done) and never re-runs their gates, so this is the only
     // place specs are vetted before autonomous build. Reject unapproved or
@@ -612,6 +774,39 @@ export async function discoverBacklog(
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
+      );
+      continue;
+    }
+
+    // The coherence artifact is mandatory for every non-S tier. This remains
+    // intentionally shallow: discovery has only the base-branch tree, while
+    // the semantic validator needs a change set and runs at land. Check both
+    // shipped-dedup identities first so a completed implementation is never
+    // reported as missing coherence before its existing dedup path handles it.
+    const shippedByStem = shippedRecords.some((record) => record.stem === slug);
+    const candidateDigest = specHash(
+      Buffer.from(planContent, 'utf-8'),
+      Buffer.from(storiesContent, 'utf-8'),
+    ).digest;
+    const shippedByContent =
+      !shippedByStem &&
+      shippedRecords.some(
+        (record) =>
+          !('malformed' in record.record) &&
+          record.record.specHash === candidateDigest,
+      );
+    const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
+    if (
+      tier !== 'S' &&
+      !shippedByStem &&
+      !shippedByContent &&
+      !hasCoherenceTableDataRow(coherenceContent)
+    ) {
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
+          `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
+          'Author it on the default branch; logged once.',
       );
       continue;
     }
@@ -652,10 +847,6 @@ export async function discoverBacklog(
     // digest is compared against every shipped record's `spec_hash`; a match
     // means the implementation already shipped under the OLD stem, so the
     // cache is repaired under the candidate's (NEW) slug, not the old one.
-    const candidateDigest = specHash(
-      Buffer.from(planContent, 'utf-8'),
-      Buffer.from(storiesContent, 'utf-8'),
-    ).digest;
     const hashMatch = shippedRecords.find(
       (r) => !('malformed' in r.record) && r.record.specHash === candidateDigest,
     );
@@ -706,13 +897,6 @@ export async function discoverBacklog(
       }
       continue;
     }
-
-    // Carry the engineer-assessed complexity tier so the daemon build honors it
-    // (Small skips acceptance_specs/retro). The marker is committed at
-    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — so it is
-    // resolvable here from the base-branch tree. Absent/garbled → undefined, and
-    // the daemon falls back to 'M' (legacy behavior, no breakage).
-    const tier = parseComplexityTier(await tree.readFile(`.docs/complexity/${slug}.md`));
 
     // Carry the originating issue ref (if this spec came from github-issues
     // intake) so the daemon can put `Closes owner/repo#N` on the implementation
@@ -776,7 +960,15 @@ export async function discoverBacklog(
     // Work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) from `.docs/track/<plug-stem>.md`. Absent → the
     // daemon treats the feature as `product` (back-compat: pre-track specs are
     // PRDs), so `prd`/`prd-audit` still run. Carried only when explicitly set.
-    const track = parseTrack(await tree.readFile(`.docs/track/${slug}.md`));
+    const trackMarker = await readFeatureMarker('.docs/track', slug);
+    const track = parseTrack(trackMarker.content);
+
+    // Observability for the two markers, emitted here — after every
+    // skip/gate `continue` above — so only a spec that actually dispatches
+    // reports its metadata resolution, and the owner-gate notices stay the
+    // first line logged for a slug.
+    if (!tier) await warnMarkerDefault('tier', slug, tierMarker);
+    if (!track) await warnMarkerDefault('track', slug, trackMarker);
 
     // A fresh worktree is cut from the (now fast-forwarded) default branch, so the
     // vetted stories/plan physically exist in it already — the item only needs to

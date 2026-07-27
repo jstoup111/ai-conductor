@@ -17,6 +17,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
 
@@ -31,6 +32,19 @@ const READY_STATE: ConductState = {
   architecture_diagram: 'done',
   architecture_review: 'done',
   acceptance_specs: 'done',
+  test_suite: 'done',
+} as ConductState;
+
+const BUILD_ONLY_READY_STATE: ConductState = {
+  ...READY_STATE,
+  build_review: 'done',
+  wiring_check: 'done',
+  manual_test: 'done',
+  prd_audit: 'done',
+  architecture_review_as_built: 'done',
+  retro: 'done',
+  rebase: 'done',
+  finish: 'done',
 } as ConductState;
 
 describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', () => {
@@ -41,13 +55,13 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
   let events: ConductorEventEmitter;
   let priorToken: string | undefined;
 
-  function selfHostConfig() {
+  function selfHostConfig(): Partial<HarnessConfig> {
     return {
       harness_self_host: {
         build_auth: { mode: 'daemon-token', token_path: tokenPath },
         auth_park_timeout_minutes: 1,
       },
-    } as never;
+    };
   }
 
   beforeEach(async () => {
@@ -59,7 +73,7 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     priorToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
     delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
     await mkdir(join(dir, '.pipeline'), { recursive: true });
-    await writeState(statePath, READY_STATE);
+    await writeState(statePath, BUILD_ONLY_READY_STATE);
     await writeFile(tokenPath, 'tok-injected-v1', 'utf-8');
   });
 
@@ -263,6 +277,45 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
     // In api-key mode, token should NOT be injected (undefined)
     expect(observedTokens).toHaveLength(1);
     expect(observedTokens[0]).toBeUndefined();
+  });
+
+  it('does not inject a Claude daemon token when Codex is the preferred self-host build provider', async () => {
+    const observedTokens: (string | undefined)[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: string): Promise<StepRunResult> => {
+        if (step === 'build') observedTokens.push(process.env.CLAUDE_CODE_OAUTH_TOKEN);
+        return { success: true };
+      }),
+    };
+    const mockGuardrails = {
+      resolveHarnessRoot: vi.fn().mockResolvedValue(dir),
+      resolveInstalledHarnessRoot: vi.fn().mockResolvedValue({ status: 'ok' as const, root: dir }),
+      relink: vi.fn(),
+      provisionSandbox: vi.fn(),
+      versionGate: vi.fn().mockResolvedValue({ ok: true }),
+      releaseGate: vi.fn().mockResolvedValue({ ok: true }),
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      selfHost: true,
+      maxRetries: 1,
+      selfHostGuardrails: mockGuardrails as any,
+      config: {
+        ...selfHostConfig(),
+        steps: { build: { llm_provider: 'codex' } },
+      },
+    }).run();
+
+    expect(observedTokens).toEqual([undefined]);
+    expect(mockGuardrails.relink).not.toHaveBeenCalled();
+    expect(mockGuardrails.provisionSandbox).not.toHaveBeenCalled();
   });
 
   it('token restoration occurs even when stepRunner.run() throws an error', async () => {

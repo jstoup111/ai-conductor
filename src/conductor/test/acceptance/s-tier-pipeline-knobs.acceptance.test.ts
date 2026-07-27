@@ -71,10 +71,12 @@ describe('S-tier pipeline knobs (#668)', () => {
       expect(l.effort).toBe(DEFAULT_STEP_EFFORT.explore);
     });
 
-    it('resolves build under L byte-identically to today (no build.L row is introduced)', () => {
+    it('keeps the #668 S retry profile out of L while retaining the approved L build effort', () => {
       const before = resolveStepConfig('build', 'BUILD', undefined, {});
       const afterL = resolveStepConfig('build', 'BUILD', undefined, { tier: 'L' });
-      expect(afterL).toEqual(before);
+      // #931 deliberately adds build.L = high to the provider-native policy.
+      // #668's S-only retry row must not overwrite that independent L choice.
+      expect(afterL).toEqual({ ...before, effort: 'high' });
     });
   });
 
@@ -110,7 +112,14 @@ describe('S-tier pipeline knobs (#668)', () => {
   describe('Story 6 (negative) — no evidence gate is tier-weakened for S', () => {
     // manual_test is intentionally excluded (ADR D5, #775): S-tier features
     // legitimately skip manual testing.
-    const gateSteps = ['build', 'build_review', 'wiring_check', 'rebase', 'finish'] as const;
+    const gateSteps = [
+      'build',
+      'build_review',
+      'wiring_check',
+      'test_suite',
+      'rebase',
+      'finish',
+    ] as const;
 
     it('never tier-skips any build/SHIP-tail gate for S', () => {
       for (const step of gateSteps) {
@@ -121,13 +130,15 @@ describe('S-tier pipeline knobs (#668)', () => {
     it('resolves the S build/build_review config with disabled === false (no S row sets disable)', () => {
       const build = resolveStepConfig('build', 'BUILD', undefined, { tier: 'S' });
       const buildReview = resolveStepConfig('build_review', 'BUILD', undefined, { tier: 'S' });
+      const testSuite = resolveStepConfig('test_suite', 'BUILD', undefined, { tier: 'S' });
       const manualTest = resolveStepConfig('manual_test', 'SHIP', undefined, { tier: 'S' });
       expect(build.disabled).toBe(false);
       expect(buildReview.disabled).toBe(false);
+      expect(testSuite.disabled).toBe(false);
       expect(manualTest.disabled).toBe(false);
     });
 
-    it('does not add build/build_review/wiring_check/manual_test/rebase/finish to the S skip set', () => {
+    it('does not add the native evidence gates to the S skip set', () => {
       const skippable = getSkippableSteps('S');
       for (const step of gateSteps) {
         expect(skippable).not.toContain(step);

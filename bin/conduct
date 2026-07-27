@@ -3325,7 +3325,8 @@ Co-Authored-By: conduct" 2>/dev/null || true
 
   # PR creation is handled by /finish (Option 2 delegates to /pr).
   # No separate /pr call needed here.
-  local pr_url
+  # NB: no `local` here — this block runs at top-level script scope, where bash
+  # rejects `local` outright ("can only be used in a function"). [SC2168]
   pr_url=$(gh pr view --json url -q '.url' 2>/dev/null || echo "")
   [ -n "$pr_url" ] && ok "PR: ${pr_url}"
 

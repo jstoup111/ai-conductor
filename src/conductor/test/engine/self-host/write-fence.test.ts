@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { generateFenceScript, mergeFenceIntoSettings } from '../../../src/engine/self-host/write-fence.js';
 import { execa } from 'execa';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -380,5 +380,26 @@ describe('write-fence — real-binary smoke tests (block cases)', () => {
       // Cleanup
       await rm(tempBase, { recursive: true, force: true });
     }
+  });
+
+  it('BLOCK: an ambiguous write-shaped shell command has no inferred allow path', async () => {
+    const script = generateFenceScript(worktreeRoot, harnessRoot);
+    const { exitCode } = await runScript(script, {
+      tool_name: 'Bash', tool_input: { command: 'echo unsafe >' },
+    });
+    expect(exitCode).toBe(2);
+  });
+
+  it('BLOCK: a worktree symlink resolving into the live checkout is denied', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'wf-symlink-'));
+    const harness = join(root, 'harness'); const worktree = join(root, 'worktree');
+    await Promise.all([mkdir(harness), mkdir(worktree)]);
+    await symlink(harness, join(worktree, 'escape'));
+    try {
+      const result = await runScript(generateFenceScript(worktree, harness), {
+        tool_name: 'Edit', tool_input: { file_path: join(worktree, 'escape', 'owned.ts') },
+      });
+      expect(result.exitCode).toBe(2);
+    } finally { await rm(root, { recursive: true, force: true }); }
   });
 });

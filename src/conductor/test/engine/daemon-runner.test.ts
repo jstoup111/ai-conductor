@@ -1,11 +1,24 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
+import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
+import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
+
+const execFile = promisify(execFileCb);
 
 const ITEM: BacklogItem = { slug: 'feat-x' };
 
@@ -40,6 +53,14 @@ function deps(
       maybeThrow('runConductor');
     },
     readOutcome: async () => outcome,
+    shipmentEvidence: async (_input: ShipmentEvidenceInput) => ({
+      kind: 'valid',
+      slug: outcome.finishChoice === 'pr' ? ITEM.slug : 'not-a-ship',
+      pr: outcome.prUrl ?? '',
+      recordPath: `.docs/shipped/${ITEM.slug}.md`,
+      hash: 'verified',
+      commit: 'verified',
+    }),
     teardownWorktree: async (_wt, keep) => {
       rec.teardownKeep = keep;
     },
@@ -51,17 +72,12 @@ function deps(
     // deps object type-complete.
     daemon: false,
     provider: {
-      invoke: async () => ({ success: true, output: '' }),
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
       invokeInteractive: async () => {},
     },
     project: 'test-project',
     projectRoot: '/proj',
-    runGh: {
-      async invoke() {
-        return { stdout: '', exitCode: 0 };
-      },
-      async invokeInteractive() {},
-    },
+    runGh: async () => ({ stdout: '' }),
     enrollWatch: async (projectRoot: string, entry: any) => {
       rec.enrollCalls!.push({ prUrl: entry.prUrl, slug: entry.slug });
     },
@@ -69,6 +85,234 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('routes setup, triage, and conductor execution through the feature logger', async () => {
+    const featureLog = vi.fn();
+    const setupFailure = new SetupFailureError('setup failed', 'diagnostic output');
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      log: featureLog,
+      stop: () => {},
+    });
+    featureDeps.prepareWorktree = async (_worktree, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+      throw setupFailure;
+    };
+    featureDeps.runSetupTriage = async (_error, _worktree, _item, _execution, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+      return { kind: 'pass', outputTail: '' };
+    };
+    featureDeps.runConductor = async (_worktree, _item, _execution, _events, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+    };
+    featureDeps.daemon = true;
+
+    await makeRunFeature(featureDeps)({ slug: 'feature-a' });
+
+    expect(featureLog).toHaveBeenCalledWith(
+      '[daemon-runner] triage outcome: pass, continuing to runConductor',
+    );
+  });
+
+  it('owns one feature event scope from pre-dispatch setup through error cleanup', async () => {
+    const order: string[] = [];
+    const localEvents = new ConductorEventEmitter();
+    const providerExecution: ProviderExecutionContext = {
+      configuredProviders: ['claude'],
+      runtimes: new ProviderRuntimeSet([]),
+      sessions: new ProviderSessionStore(),
+      onAttempt: (step, attempt) =>
+        localEvents.emit({ type: 'provider_attempt', step, ...attempt }),
+    };
+    const featureDeps = deps({ done: false, halted: false });
+    const worktree = { path: '/wt/feature-a', branch: 'feat/feature-a' };
+    featureDeps.createWorktree = async () => {
+      order.push('create');
+      return worktree;
+    };
+    featureDeps.prepareWorktree = async () => {
+      order.push('prepare');
+    };
+    featureDeps.teardownWorktree = async () => {
+      order.push('teardown');
+    };
+    let receivedEvents: ConductorEventEmitter | undefined;
+    let receivedProviderExecution: ProviderExecutionContext | undefined;
+    let beginArgs:
+      | { worktree: typeof worktree; item: BacklogItem }
+      | undefined;
+    featureDeps.runConductor = async (
+      _worktree,
+      _item,
+      execution,
+      events,
+    ) => {
+      order.push('dispatch');
+      receivedProviderExecution = execution;
+      receivedEvents = events;
+      await execution?.onAttempt?.('build', {
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+      });
+      throw new Error('dispatch failed');
+    };
+    const stop = vi.fn(() => {
+      order.push('stop');
+    });
+    (
+      featureDeps as FeatureRunnerDeps & {
+        beginFeatureRun?: (
+          wt: typeof worktree,
+          item: BacklogItem,
+        ) => Promise<{
+          events: ConductorEventEmitter;
+          providerExecution: ProviderExecutionContext;
+          stop: () => void;
+        }>;
+      }
+    ).beginFeatureRun = async (receivedWorktree, item) => {
+      beginArgs = { worktree: receivedWorktree, item };
+      order.push(`begin:${receivedWorktree.path}:${item.slug}`);
+      return { events: localEvents, providerExecution, stop };
+    };
+    const attempts: string[] = [];
+    localEvents.on('provider_attempt', (event) => {
+      if (event.type === 'provider_attempt') attempts.push(event.provider);
+    });
+
+    const outcome = await makeRunFeature(featureDeps)({ slug: 'feature-a' });
+
+    expect({
+      order,
+      outcome,
+      receivedEvents,
+      receivedProviderExecution,
+      beginArgs,
+      attempts,
+      stopCalls: stop.mock.calls.length,
+    }).toEqual({
+      order: [
+        'create',
+        'begin:/wt/feature-a:feature-a',
+        'prepare',
+        'dispatch',
+        'teardown',
+        'stop',
+      ],
+      outcome: {
+        slug: 'feature-a',
+        status: 'error',
+        reason: 'dispatch failed',
+      },
+      receivedEvents: localEvents,
+      receivedProviderExecution: providerExecution,
+      beginArgs: {
+        worktree,
+        item: { slug: 'feature-a' },
+      },
+      attempts: ['claude'],
+      stopCalls: 1,
+    });
+  });
+
+  it('allocates non-aliased provider caches and sessions for two feature invocations', async () => {
+    const configuredProviders = ['claude'] as const;
+    const provider = {
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+      invokeInteractive: async () => ({ success: true, output: '', exitCode: 0 }),
+    };
+    const contexts: ProviderExecutionContext[] = [];
+    const providerExecution = () => {
+      const context: ProviderExecutionContext = {
+        configuredProviders,
+        runtimes: new ProviderRuntimeSet([
+          {
+            key: 'claude',
+            provider,
+            policy: CLAUDE_MODEL_POLICY,
+            builtIn: true,
+            availability: new ModelAvailability([]),
+          },
+        ]),
+        sessions: new ProviderSessionStore(),
+      };
+      contexts.push(context);
+      return context;
+    };
+    const received: Array<ProviderExecutionContext | undefined> = [];
+    const featureDeps = deps({ done: false, halted: true, reason: 'pause' });
+    featureDeps.providerExecution = providerExecution;
+    featureDeps.runConductor = async (_worktree, _item, context) => {
+      received.push(context);
+    };
+    const run = makeRunFeature(featureDeps);
+
+    await run({ slug: 'feature-a' });
+    await run({ slug: 'feature-b' });
+
+    expect({
+      contextCount: contexts.length,
+      received,
+      contextsAreIndependent: contexts[0] !== contexts[1],
+      runtimeSetsAreIndependent: contexts[0].runtimes !== contexts[1].runtimes,
+      availabilityCachesAreIndependent:
+        contexts[0].runtimes.get('claude').availability !==
+        contexts[1].runtimes.get('claude').availability,
+      sessionStoresAreIndependent: contexts[0].sessions !== contexts[1].sessions,
+      configuredOrderIsShared:
+        contexts[0].configuredProviders === configuredProviders &&
+        contexts[1].configuredProviders === configuredProviders,
+    }).toEqual({
+      contextCount: 2,
+      received: [contexts[0], contexts[1]],
+      contextsAreIndependent: true,
+      runtimeSetsAreIndependent: true,
+      availabilityCachesAreIndependent: true,
+      sessionStoresAreIndependent: true,
+      configuredOrderIsShared: true,
+    });
+  });
+
+  it('keeps interleaved terminal messages with their feature-owned loggers', async () => {
+    const lines: string[] = [];
+    let waiting = 0;
+    let releaseOutcomes!: () => void;
+    const outcomesReady = new Promise<void>((resolve) => {
+      releaseOutcomes = resolve;
+    });
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.readOutcome = async () => {
+      waiting += 1;
+      if (waiting === 2) releaseOutcomes();
+      await outcomesReady;
+      return { done: false, halted: true, reason: 'paused' };
+    };
+    featureDeps.beginFeatureRun = async (_worktree, item) => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: [],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop: () => {},
+      log: (message: string) => lines.push(`[${item.slug}] ${message}`),
+    });
+
+    const run = makeRunFeature(featureDeps);
+    await Promise.all([run({ slug: 'feature-a' }), run({ slug: 'feature-b' })]);
+
+    expect(lines).toEqual([
+      '[feature-a] ✋ feature-a halted — worktree kept (paused)',
+      '[feature-b] ✋ feature-b halted — worktree kept (paused)',
+    ]);
+  });
+
   it('done → marks processed, removes the worktree, reports prUrl', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
@@ -111,6 +355,128 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.costTokens).toBe(50);
     expect(rec.processed).toBe(true);
     expect(rec.teardownKeep).toBe(false); // removed on success
+  });
+
+  it.each([
+    {
+      label: 'a refused record',
+      verdict: {
+        kind: 'refusal' as const,
+        code: 'shipped-record-missing' as const,
+        expected: '.docs/shipped/feat-x.md',
+        observed: null,
+      },
+    },
+    {
+      label: 'an unavailable verifier',
+      verdict: {
+        kind: 'refusal' as const,
+        code: 'shipment-evidence-git-unavailable' as const,
+        expected: 'candidate-tree/head reachability',
+        observed: 'git unavailable',
+      },
+    },
+  ])('PR-shaped done outcome with $label halts before daemon ship side effects', async ({ verdict }) => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-evidence-'));
+    try {
+      await mkdir(join(wt, '.pipeline'), { recursive: true });
+      await writeFile(join(wt, '.pipeline', 'DONE'), 'done\n', 'utf-8');
+      const rec: TestRecorder = {};
+      const run = makeRunFeature({
+        ...deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl: 'https://github.com/owner/repo/pull/916',
+          },
+          rec,
+        ),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: async () => verdict,
+      });
+
+      const out = await run(ITEM);
+
+      expect(out.status).toBe('halted');
+      expect(out.reason).toContain(verdict.code);
+      expect(rec.processedCalls).toHaveLength(0);
+      expect(rec.enrollCalls).toHaveLength(0);
+      expect(rec.teardownKeep).toBe(true);
+      await expect(readFile(join(wt, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(readFile(join(wt, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(verdict.code);
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses an unpushed candidate using the explicit implementation PR head before daemon ship side effects', async () => {
+    const wt = await mkdtemp(join(tmpdir(), 'wt-durable-pr-binding-'));
+    const prUrl = 'https://github.com/owner/repo/pull/916';
+    try {
+      await initTestRepo(wt);
+      await mkdir(join(wt, '.docs/plans'), { recursive: true });
+      await mkdir(join(wt, '.docs/shipped'), { recursive: true });
+      const plan = '# Durable daemon evidence\n';
+      await writeFile(join(wt, `.docs/plans/${ITEM.slug}.md`), plan, 'utf-8');
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', 'test: add durable daemon plan'], { cwd: wt });
+      const { stdout: remoteHeadStdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: wt });
+      const remoteHead = remoteHeadStdout.trim();
+
+      await writeFile(
+        join(wt, `.docs/shipped/${ITEM.slug}.md`),
+        renderShippedRecord({
+          slug: ITEM.slug,
+          specHash: specHash(Buffer.from(plan), null).digest,
+          pr: prUrl,
+          shipped: '2026-07-25',
+        }),
+        'utf-8',
+      );
+      await execFile('git', ['add', '.'], { cwd: wt });
+      await execFile('git', ['commit', '-m', 'test: add local durable shipment record'], { cwd: wt });
+
+      const rec: TestRecorder = {};
+      const ghCalls: string[][] = [];
+      const run = makeRunFeature({
+        ...deps(
+          {
+            done: true,
+            halted: false,
+            finishChoice: 'pr',
+            prUrl,
+          },
+          rec,
+        ),
+        createWorktree: async (slug) => ({ path: wt, branch: `feat/${slug}` }),
+        shipmentEvidence: undefined,
+        runGh: async (args) => {
+          ghCalls.push(args);
+          return { stdout: JSON.stringify({ url: prUrl, headRefOid: remoteHead }) };
+        },
+      });
+
+      const out = await run(ITEM);
+
+      expect({
+        status: out.status,
+        reason: out.reason,
+        ghCalls,
+        processedCalls: rec.processedCalls,
+        enrollCalls: rec.enrollCalls,
+        teardownKeep: rec.teardownKeep,
+      }).toEqual({
+        status: 'halted',
+        reason: 'durable shipment evidence refused ship: shipment-candidate-not-on-implementation-head',
+        ghCalls: [['pr', 'view', prUrl, '--json', 'url,headRefOid']],
+        processedCalls: [],
+        enrollCalls: [],
+        teardownKeep: true,
+      });
+    } finally {
+      await rm(wt, { recursive: true, force: true });
+    }
   });
 
   it('halted → keeps the worktree, does not mark processed', async () => {
@@ -174,7 +540,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
     interface TriageRecorder {
       triageCalls?: Array<{ error: string; daemon: boolean }>;
-      triageReturnValue?: { kind: 'quarantined-pass' | 'park'; outputTail?: string };
+      triageReturnValue?: TriageOutcome;
     }
 
     function depsWithTriageOrder(
@@ -200,7 +566,13 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         if (!rec.triageCalls) rec.triageCalls = [];
         rec.triageCalls.push({ error: error.message, daemon: opts.daemon ?? false });
         if (opts.triageThrows) throw new Error('triage dispatch failed');
-        return rec.triageReturnValue ?? { kind: 'quarantined-pass', outputTail: '' };
+        return (
+          rec.triageReturnValue ?? {
+            kind: 'quarantined-pass',
+            outputTail: '',
+            quarantineRef: 'wip/setup-quarantine-default',
+          }
+        );
       };
       return {
         ...base,
@@ -231,7 +603,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('TS-2 happy: SetupFailureError with daemon=true invokes triage → quarantined-pass continues to runConductor', async () => {
       const order: string[] = [];
       const rec: TriageRecorder & { teardownKeep?: boolean } = {
-        triageReturnValue: { kind: 'quarantined-pass', outputTail: '' },
+        triageReturnValue: {
+          kind: 'quarantined-pass',
+          outputTail: '',
+          quarantineRef: 'wip/setup-quarantine-feat-x',
+        },
       };
       const run = makeRunFeature(
         depsWithTriageOrder(order, rec, {
@@ -798,6 +1174,41 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       }
     });
 
+    it('false-ship passes its feature logger to escalation', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const featureLog = vi.fn();
+        let escalationLog: ((message: string) => void) | undefined;
+        const featureDeps = deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: undefined,
+        });
+        featureDeps.createWorktree = async (slug) => ({ path: wt, branch: `feat/${slug}` });
+        featureDeps.beginFeatureRun = () => ({
+          events: new ConductorEventEmitter(),
+          providerExecution: {
+            configuredProviders: [],
+            runtimes: new ProviderRuntimeSet([]),
+            sessions: new ProviderSessionStore(),
+          },
+          log: featureLog,
+          stop: () => {},
+        });
+        featureDeps.escalateBuildFailure = async (opts) => {
+          escalationLog = (opts as { log?: (message: string) => void }).log;
+          return {};
+        };
+
+        await makeRunFeature(featureDeps)(ITEM);
+
+        expect(escalationLog).toBe(featureLog);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
     it('false-ship continues even if escalateBuildFailure throws', async () => {
       const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
       try {
@@ -1072,17 +1483,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         }
       });
 
-      // Story 5 scope note exemption: repairProcessed is exempt from the null-prUrl guard
-      // because it drives a cache repair from a committed shipped record already merged
-      // on the base branch. Its null prUrl marks a malformed-but-proven record (ADR §2,
-      // scope note). This test documents the exception for future refactors.
-      it('repairProcessed exemption documented: scope note permits null prUrl in repair-path markers (Story 5)', () => {
-        // This is a documentation test — it clarifies that the live-path guard
-        // (markProcessed must be called with non-null prUrl) does NOT apply to
-        // repairProcessed, which is driven by committed evidence already on the branch.
-        // See ADR adr-2026-07-06-daemon-false-ship-guard §2, scope note (amended).
-        expect(true).toBe(true); // placeholder assertion
-      });
     });
 
     describe('Task 11: Park evidence — extended diagnostic HALT (TS-4)', () => {
@@ -1258,18 +1658,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
   });
 
-  // ── TS-3 (#358): the merged-PR guard's synthetic ship rides the EXISTING
-  // verified-ship path (readOutcome → isVerifiedShip → markProcessed). No
-  // production change is expected here (plan Task 10 step 3) — the guard's
-  // markers (`finish-choice` == 'pr', `DONE`, `pr_url` present) produce
-  // EXACTLY the WorktreeOutcome shape `writeSyntheticShipMarkers` (Task 2)
-  // will write, fed through the same `deps()`/`makeRunFeature` fixture the
-  // rest of this file already uses. These tests are expected to PASS today —
-  // they pin the integration contract the not-yet-written guard depends on.
-  describe('merged-PR guard synthetic ship (#358, TS-3)', () => {
+  // A normal verified PR outcome reaches the daemon-owned ship side effects
+  // only after the shared evidence verifier has returned valid.
+  describe('verified PR ship outcome', () => {
     const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 
-    it('a guard-shaped outcome (finish-choice=pr, DONE, pr_url present) rides isVerifiedShip → markProcessed called with slug + prUrl', async () => {
+    it('a valid PR outcome marks the feature processed with its PR URL', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
         deps(
@@ -1288,14 +1682,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processed).toBe(true);
       expect(rec.processedCalls).toHaveLength(1);
       expect(rec.processedCalls![0]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
-      // Removed on success, same as any other verified ship — the guard's
-      // synthetic stop introduces no second ship pathway (ADR: "No second
-      // ship pathway is introduced; side-effects stay owned by the
-      // daemon-runner").
+      // Side effects remain owned by the daemon runner's single verified path.
       expect(rec.teardownKeep).toBe(false);
     });
 
-    it('a halted (non-guard) outcome — isVerifiedShip false, no processed marker written', async () => {
+    it('a halted outcome writes no processed marker', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
         deps(
@@ -1314,7 +1705,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processedCalls).toHaveLength(0);
     });
 
-    it('idempotency: the guard-shaped outcome fed through run() twice — single ledger entry each time, stable content, no throw', async () => {
+    it('two valid outcomes create one stable ledger entry each without throwing', async () => {
       const rec: TestRecorder = {};
       const outcome: WorktreeOutcome = {
         done: true,

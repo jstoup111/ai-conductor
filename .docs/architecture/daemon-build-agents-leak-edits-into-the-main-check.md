@@ -1,5 +1,9 @@
 # Components + Sequences: Main-Checkout Leak Detection, Auto-Heal, and Write-Fence
 
+> **Historical sandbox provisioning amended by #907 on 2026-07-26:** both providers now
+> receive minimal engine-generated settings; operator settings and personal hooks are not
+> copied. The live-checkout write-fence outcome remains current.
+
 **Last updated:** 2026-07-08
 **Scope:** Where leak triage sits in the daemon's fast-forward path (`maybeFastForward` in
 `daemon-backlog.ts`), the strict byte-identity gate that authorizes auto-heal, and the

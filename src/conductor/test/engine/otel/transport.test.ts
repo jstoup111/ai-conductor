@@ -116,7 +116,7 @@ describe('buildExporters', () => {
       await new Promise<void>((resolve, reject) => {
         exporters.spanExporter.export(spans, (result) => {
           if (result.code === 0) resolve();
-          else reject(new Error(`export failed: ${result.message ?? 'unknown'}`));
+          else reject(new Error(`export failed: ${result.error?.message ?? 'unknown'}`));
         });
       });
       // Even an empty export should create the file

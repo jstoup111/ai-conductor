@@ -63,10 +63,16 @@ export const NAMESPACE_VAR = 'WORKTREE_NAMESPACE';
  *
  * @param worktreePath Absolute path to the feature worktree.
  * @param log Optional progress sink (daemon log).
+ * @param opts.verbose When true, echo `bin/setup`'s full output line-by-line
+ *   into the log. Default (false) logs a one-line summary instead — a
+ *   successful setup's output is dependency-manager chatter, and it dominated
+ *   the daemon log (55% of lines) at no diagnostic value. Failures are
+ *   unaffected: `SetupFailureError` still carries a 50-line output tail.
  */
 export async function prepareWorktree(
   worktreePath: string,
   log?: (msg: string) => void,
+  opts?: { verbose?: boolean },
 ): Promise<void> {
   const namespace = sanitizeNamespace(basename(worktreePath));
   await writeNamespaceEnv(worktreePath, namespace, log);
@@ -75,7 +81,7 @@ export async function prepareWorktree(
   await writeSessionHooks(worktreePath, log);
   await wireSessionHookSettings(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
-  await runProjectSetup(worktreePath, namespace, log);
+  await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
 }
 
 /**
@@ -412,6 +418,7 @@ async function runProjectSetup(
   worktreePath: string,
   namespace: string,
   log?: (msg: string) => void,
+  verbose = false,
 ): Promise<void> {
   const script = join(worktreePath, SETUP_SCRIPT);
 
@@ -429,8 +436,25 @@ async function runProjectSetup(
       all: true,
       env: { CI: 'true', [NAMESPACE_VAR]: namespace },
     });
+    // On success, `bin/setup`'s output is install/build chatter (npm audit
+    // notices, blank spacer lines, publish-engine's machine-readable JSON).
+    // Echoing it verbatim made setup passthrough 55% of the daemon log — and
+    // it is only ever read when setup FAILS, where the 50-line tail on
+    // SetupFailureError already carries it. Default to a one-line summary;
+    // `daemon_verbose` restores the full echo. Blank lines are always dropped.
     if (result.all && result.all.trim()) {
-      for (const line of result.all.trim().split('\n')) log?.(`setup: ${line}`);
+      const lines = result.all
+        .trim()
+        .split('\n')
+        .filter((line) => line.trim() !== '');
+      if (verbose) {
+        for (const line of lines) log?.(`setup: ${line}`);
+      } else if (lines.length > 0) {
+        log?.(
+          `setup: ${lines.length} line(s) of output suppressed ` +
+            `(set daemon_verbose: true to echo them)`,
+        );
+      }
     }
     log?.('setup: ok');
   } catch (err) {

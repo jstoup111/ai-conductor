@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
+import { retireTaskTelemetry } from '../../src/engine/task-attribution.js';
 
 // END-TO-END acceptance spec for #477 (Story 5: overlap guard clears the
 // stamp so #452's commit hooks abstain). This chains TWO independently
@@ -43,11 +44,6 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
       const e = err as { code?: number; stdout?: string; stderr?: string };
       return { stdout: (e.stdout ?? '').trim(), stderr: (e.stderr ?? '').trim(), code: e.code ?? 1 };
     }
-  }
-
-  async function lastCommitMessage(): Promise<string> {
-    const { stdout } = await git('log', '-1', '--format=%B');
-    return stdout;
   }
 
   async function seedTaskStatus(rows: Array<{ id: string; status: string }>): Promise<void> {
@@ -100,6 +96,10 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
         const code = err && typeof (err as { code?: number }).code === 'number' ? (err as { code: number }).code : 0;
         resolve({ stdout: stdout?.toString() ?? '', stderr: stderr?.toString() ?? '', code });
       });
+      // A hook may exit before its small fixture payload reaches stdin. The
+      // exec callback captures that exit; consume the resulting stream EPIPE
+      // so Vitest does not treat the test-harness race as an uncaught error.
+      child.stdin?.once('error', () => undefined);
       child.stdin?.end(payload(hookEvent, taskLine));
     });
   }
@@ -127,12 +127,6 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  async function commitFile(name: string, body: string, message: string): Promise<{ stdout: string; code: number }> {
-    await writeFile(join(dir, name), body, 'utf-8');
-    await git('add', name);
-    return git('commit', '-m', message);
-  }
-
   it('provisions the session-hook scripts executably (prerequisite for the chained flow)', async () => {
     const preStat = await stat(preHookPath);
     const postStat = await stat(postHookPath);
@@ -140,43 +134,44 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     expect(postStat.mode & 0o111).not.toBe(0);
   });
 
-  it('a single dispatch stamps current-task, and the chained commit hook picks up the Task: trailer', async () => {
+  it('records a single dispatch as task-local telemetry without creating a global stamp', async () => {
     const hook = await runHook(preHookPath, 'PreToolUse', 'Task: 7');
     expect(hook.code).toBe(0);
-    expect(await currentTaskContent()).toBe('7');
-
-    const res = await commitFile('a.txt', 'a', 'feat: add waker retry');
-    expect(res.code).toBe(0);
-    const msg = await lastCommitMessage();
-    expect(msg).toMatch(/^Task: 7$/m);
+    expect(await currentTaskContent()).toBeNull();
 
     const status = await readTaskStatus();
     expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
   });
 
-  it('an overlapping second dispatch clears the stamp, leaving both rows in_progress and no trailer at commit', async () => {
+  it('keeps sibling telemetry independent when a task is activated twice', async () => {
     const first = await runHook(preHookPath, 'PreToolUse', 'Task: 7');
     expect(first.code).toBe(0);
 
     const second = await runHook(preHookPath, 'PreToolUse', 'Task: 9');
     expect(second.code).toBe(0);
 
-    // Overlap guard: stamp is removed so the ambiguity is unattributable.
+    const repeat = await runHook(preHookPath, 'PreToolUse', 'Task: 7');
+    expect(repeat.code).toBe(0);
     expect(await currentTaskContent()).toBeNull();
 
     const status = await readTaskStatus();
     expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
     expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
-
-    // Chained to #433's prepare-commit-msg/commit-msg hooks: two in_progress
-    // rows + no stamp is exactly the existing ambiguous-abstain regime.
-    const res = await commitFile('b.txt', 'b', 'feat: overlapping dispatch');
-    expect(res.code).toBe(0);
-    const msg = await lastCommitMessage();
-    expect(msg).not.toMatch(/^Task: /m);
   });
 
-  it('the PostToolUse hook for the original task is a no-op after the overlap cleared its stamp', async () => {
+  it('preserves both task rows when independent activations race', async () => {
+    const [first, second] = await Promise.all([
+      runHook(preHookPath, 'PreToolUse', 'Task: 7'),
+      runHook(preHookPath, 'PreToolUse', 'Task: 9'),
+    ]);
+
+    expect([first.code, second.code]).toEqual([0, 0]);
+    const status = await readTaskStatus();
+    expect(status.tasks.find((task) => task.id === '7')?.status).toBe('in_progress');
+    expect(status.tasks.find((task) => task.id === '9')?.status).toBe('in_progress');
+  });
+
+  it('leaves concurrent task telemetry intact when a dispatch completes', async () => {
     await runHook(preHookPath, 'PreToolUse', 'Task: 7');
     await runHook(preHookPath, 'PreToolUse', 'Task: 9');
     expect(await currentTaskContent()).toBeNull();
@@ -184,59 +179,44 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     const post = await runHook(postHookPath, 'PostToolUse', 'Task: 7');
     expect(post.code).toBe(0);
 
-    // Absent-stamp PostToolUse is idempotent success (Story 5 negative path):
-    // never errors, never resurrects the stamp, never edits row status.
     expect(await currentTaskContent()).toBeNull();
     const status = await readTaskStatus();
     expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
     expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
   });
 
-  it('#519 cascade regression — a failed dispatch never inherits an earlier id (#519)', async () => {
-    // Story 2 (all criteria): Three-dispatch sequence ensuring bookkeeping failure
-    // abstains loudly and never cascades a stale task id to later commits.
+  it('keeps terminal telemetry retirement task-local after the post-dispatch hook abstains', async () => {
+    await runHook(preHookPath, 'PreToolUse', 'Task: 7');
+    await runHook(preHookPath, 'PreToolUse', 'Task: 9');
 
-    // (a) Healthy bookkeeping for Task: 1 → commit with trailer Task: 1
+    const post = await runHook(postHookPath, 'PostToolUse', 'Task: 7');
+    expect(post.code).toBe(0);
+
+    expect(
+      retireTaskTelemetry(
+        [
+          { taskId: '7', context: { provider: 'claude' } },
+          { taskId: '9', context: { provider: 'codex' } },
+        ],
+        { taskId: '7', terminalReason: 'completed' },
+      ),
+    ).toEqual([{ taskId: '9', context: { provider: 'codex' } }]);
+
+    const status = await readTaskStatus();
+    expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
+    expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
+  });
+
+  it('does not create a global stamp after a telemetry write failure', async () => {
     const dispatch1 = await runHook(preHookPath, 'PreToolUse', 'Task: 1');
     expect(dispatch1.code).toBe(0);
-    expect(await currentTaskContent()).toBe('1');
+    expect(await currentTaskContent()).toBeNull();
 
-    const res1 = await commitFile('file1.txt', 'content1', 'feat: task 1 work');
-    expect(res1.code).toBe(0);
-    const msg1 = await lastCommitMessage();
-    expect(msg1).toMatch(/^Task: 1$/m);
-
-    // (b) Corrupt status file (wrong-shaped JSON), dispatch Task: 2
-    //     → exit 0 + abstain diagnostic + stamp REMOVED
-    //     → commit → NO Task: trailer (specifically NOT Task: 1)
     const statusPath = join(dir, '.pipeline', 'task-status.json');
     await writeFile(statusPath, '{"tasks": {"not_array": true}}', 'utf-8');
 
     const dispatch2 = await runHook(preHookPath, 'PreToolUse', 'Task: 2');
     expect(dispatch2.code).toBe(0);
-    // Abstain diagnostic is emitted
-    expect(dispatch2.stderr).toMatch(/pre-dispatch-hook: abstain/);
-    expect(dispatch2.stderr).toMatch(/Task: 2/);
-    // Stamp is removed due to the bookkeeping failure
     expect(await currentTaskContent()).toBeNull();
-
-    const res2 = await commitFile('file2.txt', 'content2', 'feat: task 2 work (corrupted)');
-    expect(res2.code).toBe(0);
-    const msg2 = await lastCommitMessage();
-    // CRITICAL: No Task: trailer present — and specifically NOT Task: 1
-    expect(msg2).not.toMatch(/^Task: /m);
-
-    // (c) Restore healthy status file, dispatch Task: 3
-    //     → stamp contains 3, commit → trailer Task: 3
-    await seedTaskStatus(Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
-
-    const dispatch3 = await runHook(preHookPath, 'PreToolUse', 'Task: 3');
-    expect(dispatch3.code).toBe(0);
-    expect(await currentTaskContent()).toBe('3');
-
-    const res3 = await commitFile('file3.txt', 'content3', 'feat: task 3 work');
-    expect(res3.code).toBe(0);
-    const msg3 = await lastCommitMessage();
-    expect(msg3).toMatch(/^Task: 3$/m);
   });
 });

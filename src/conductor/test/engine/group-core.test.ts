@@ -8,13 +8,29 @@ import {
   runGroupBranch,
   type BranchOutcome,
   type GroupMember,
+  type GroupMemberStepEvent,
   type GroupResult,
 } from "../../src/engine/group-core.js";
 import type { StepRunResult, StepRunOptions } from "../../src/engine/conductor.js";
 import type { StepName, ConductState } from "../../src/types/index.js";
-import { mkdtemp, writeFile, mkdir, stat, utimes } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, stat, utimes, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DefaultStepRunner } from "../../src/engine/step-runners.js";
+import { ProviderRuntimeSet } from "../../src/engine/provider-runtime.js";
+import { executeProviderCandidates } from "../../src/engine/provider-execution.js";
+import { ProviderSessionStore } from "../../src/engine/provider-session.js";
+import { ModelAvailability } from "../../src/engine/model-availability.js";
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from "../../src/engine/provider-model-policy.js";
+import { SessionManager } from "../../src/execution/session.js";
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+} from "../../src/execution/llm-provider.js";
 
 describe("group-core: BranchOutcome constructors", () => {
   it("makeVerdictOutcome builds a kind:'verdict' outcome carrying pass/fail/blocked", () => {
@@ -241,6 +257,389 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
   }
 
   const fakeState = {} as ConductState;
+
+  it("transports provider retry attempt and disabled escalation without changing the branch session", async () => {
+    const providerExecutor = vi.fn(executeProviderCandidates);
+    const invokeInteractive = vi
+      .fn<LLMProvider["invokeInteractive"]>()
+      .mockResolvedValueOnce({ success: false, output: "retry", exitCode: 1 })
+      .mockResolvedValueOnce({ success: true, output: "passed", exitCode: 0 });
+    const provider: LLMProvider = {
+      invoke: vi.fn(),
+      invokeInteractive,
+    };
+    const sessions = new ProviderSessionStore({
+      createSessionId: () => "manual-codex-session",
+    });
+    const runner = new DefaultStepRunner(
+      provider,
+      "captured-session",
+      "/tmp/project",
+      {
+        mode: "interactive",
+        config: {
+          llm_provider: "codex",
+          steps: {
+            manual_test: {
+              llm_provider: "codex",
+              escalate: false,
+            },
+          },
+        },
+        sessionStore: sessions,
+        providerRuntimes: new ProviderRuntimeSet([
+          {
+            key: "codex",
+            provider,
+            policy: CODEX_MODEL_POLICY,
+            builtIn: true,
+            availability: new ModelAvailability(
+              CODEX_MODEL_POLICY.modelFallbackLadder,
+            ),
+          },
+        ]),
+        configuredProviders: ["codex"],
+        providerExecutor,
+      },
+    );
+
+    await runGroupBranch(
+      {
+        name: "manual_test",
+        skill: "manual-test",
+        outcome: makeSkippedOutcome(),
+      },
+      fakeState,
+      { stepRunner: runner },
+      2,
+    );
+
+    expect({
+      retryPolicy: providerExecutor.mock.calls.map(([input]) => ({
+        attempt: input.attempt,
+        escalate: input.escalate,
+      })),
+      sessions: invokeInteractive.mock.calls.map(([options]) => ({
+        sessionId: options.sessionId,
+        resume: options.resume,
+      })),
+    }).toEqual({
+      retryPolicy: [
+        { attempt: 1, escalate: false },
+        { attempt: 2, escalate: false },
+      ],
+      sessions: [
+        { sessionId: "manual-codex-session", resume: false },
+        { sessionId: "manual-codex-session", resume: true },
+      ],
+    });
+  });
+
+  it("routes reversed concurrent members through provider-local branch scopes without mutating serial authority", async () => {
+    const pipelineDir = await mkdtemp(join(tmpdir(), "group-provider-routing-"));
+    try {
+      const deferred = <T>() => {
+        let resolve!: (value: T) => void;
+        const promise = new Promise<T>((done) => {
+          resolve = done;
+        });
+        return { promise, resolve };
+      };
+      const manualFirst = deferred<InvokeResult>();
+      const prdFirst = deferred<InvokeResult>();
+      let manualCalls = 0;
+      const manualDispatch = vi.fn(async (): Promise<InvokeResult> => {
+        manualCalls += 1;
+        return manualCalls === 1
+          ? manualFirst.promise
+          : { success: true, output: "manual passed", exitCode: 0 };
+      });
+      const prdDispatch = vi.fn(async (): Promise<InvokeResult> => prdFirst.promise);
+      const architectureDispatch = vi.fn(async (): Promise<InvokeResult> => {
+        throw new Error("architecture provider crashed");
+      });
+      const routeDispatch = (options: InvokeOptions) => {
+        if (options.prompt === "/manual-test") return manualDispatch();
+        if (options.prompt === "/prd-audit") return prdDispatch();
+        return architectureDispatch();
+      };
+      const capturedInteractive = vi.fn(routeDispatch);
+      const codexInteractive = vi.fn((options: InvokeOptions) =>
+        options.prompt === "$manual-test"
+          ? manualDispatch()
+          : architectureDispatch(),
+      );
+      const claudeInteractive = vi.fn((_options: InvokeOptions) => prdDispatch());
+      const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: "captured print path must not run",
+        exitCode: 0,
+      }));
+      const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: "Codex print path must not run",
+        exitCode: 0,
+      }));
+      const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+        success: true,
+        output: "Claude print path must not run",
+        exitCode: 0,
+      }));
+      const provider = (
+        invoke: LLMProvider["invoke"],
+        invokeInteractive: LLMProvider["invokeInteractive"],
+      ): LLMProvider => ({
+        invoke,
+        invokeInteractive,
+      });
+      const legacySession = new SessionManager(pipelineDir);
+      const ids = [
+        "serial-claude-session",
+        "manual-codex-session",
+        "prd-claude-session",
+        "architecture-codex-session",
+      ][Symbol.iterator]();
+      const sessions = new ProviderSessionStore({
+        createSessionId: () => ids.next().value ?? "unexpected-session",
+        legacy: { providerKey: "claude", session: legacySession },
+      });
+      await sessions.beginStep("build");
+      await sessions.prepare("claude");
+      await sessions.markCreated("claude");
+      const serialBefore = {
+        session: sessions.current("claude"),
+        legacyId: await legacySession.getSessionId(),
+        legacyCreated: await legacySession.isSessionCreated(),
+      };
+      const beginBranch = vi.spyOn(sessions, "beginBranch");
+      const runner = new DefaultStepRunner(
+        provider(capturedInvoke, capturedInteractive),
+        "captured-session",
+        "/tmp/project",
+        {
+          mode: "interactive",
+          config: {
+            llm_provider: ["claude", "codex"],
+            steps: {
+              manual_test: { llm_provider: "codex" },
+              prd_audit: { llm_provider: "claude" },
+              architecture_review_as_built: { llm_provider: "codex" },
+            },
+          },
+          sessionStore: sessions,
+          providerRuntimes: new ProviderRuntimeSet([
+            {
+              key: "claude",
+              provider: provider(claudeInvoke, claudeInteractive),
+              policy: CLAUDE_MODEL_POLICY,
+              builtIn: true,
+              availability: new ModelAvailability(
+                CLAUDE_MODEL_POLICY.modelFallbackLadder,
+              ),
+            },
+            {
+              key: "codex",
+              provider: provider(codexInvoke, codexInteractive),
+              policy: CODEX_MODEL_POLICY,
+              builtIn: true,
+              availability: new ModelAvailability(
+                CODEX_MODEL_POLICY.modelFallbackLadder,
+              ),
+            },
+          ]),
+          configuredProviders: ["claude", "codex"],
+        },
+      );
+      const members = {
+        manual: {
+          name: "manual_test",
+          skill: "manual-test",
+          outcome: makeSkippedOutcome(),
+        },
+        prd: {
+          name: "prd_audit",
+          skill: "prd-audit",
+          outcome: makeSkippedOutcome(),
+        },
+        architecture: {
+          name: "architecture_review_as_built",
+          skill: "architecture-review",
+          outcome: makeSkippedOutcome(),
+        },
+      } satisfies Record<string, GroupMember>;
+      const resultEvents: Array<{
+        member: string;
+        outcome: GroupMemberStepEvent["outcome"];
+      }> = [];
+      const completionOrder: string[] = [];
+      const onMemberEvent = (event: GroupMemberStepEvent) => {
+        if (event.phase === "result") {
+          resultEvents.push({
+            member: event.member,
+            outcome: event.outcome,
+          });
+        }
+      };
+      const manualPromise = runGroupBranch(
+        members.manual,
+        fakeState,
+        { stepRunner: runner, onMemberEvent },
+        2,
+      ).then((outcome) => {
+        completionOrder.push("manual_test");
+        return outcome;
+      });
+      const prdPromise = runGroupBranch(
+        members.prd,
+        fakeState,
+        { stepRunner: runner, onMemberEvent },
+        1,
+      ).then((outcome) => {
+        completionOrder.push("prd_audit");
+        return outcome;
+      });
+      await vi.waitFor(() => {
+        expect(manualDispatch).toHaveBeenCalledOnce();
+        expect(prdDispatch).toHaveBeenCalledOnce();
+      });
+      prdFirst.resolve({ success: true, output: "prd passed", exitCode: 0 });
+      await prdPromise;
+      manualFirst.resolve({
+        success: false,
+        output: "manual retry",
+        exitCode: 1,
+      });
+      const manualOutcome = await manualPromise;
+      const prdOutcome = await prdPromise;
+      const architectureOutcome = await runGroupBranch(
+        members.architecture,
+        fakeState,
+        { stepRunner: runner, onMemberEvent },
+        1,
+      );
+
+      expect({
+        capturedCalls: capturedInteractive.mock.calls,
+        printCalls: {
+          captured: capturedInvoke.mock.calls,
+          claude: claudeInvoke.mock.calls,
+          codex: codexInvoke.mock.calls,
+        },
+        beginBranchCalls: beginBranch.mock.calls,
+        codexCalls: codexInteractive.mock.calls.map(([options]) => ({
+          prompt: options.prompt,
+          sessionId: options.sessionId,
+          resume: options.resume,
+          cwd: options.cwd,
+          interactive: options.interactive,
+          dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+          model: options.model,
+          effort: options.effort,
+        })),
+        claudeCalls: claudeInteractive.mock.calls.map(([options]) => ({
+          prompt: options.prompt,
+          sessionId: options.sessionId,
+          resume: options.resume,
+          cwd: options.cwd,
+          interactive: options.interactive,
+          dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+          model: options.model,
+          effort: options.effort,
+        })),
+        completionOrder,
+        resultEvents,
+        outcomes: {
+          manual: classifyOutcome(manualOutcome),
+          prd: classifyOutcome(prdOutcome),
+          architecture: classifyOutcome(architectureOutcome),
+        },
+        serialBefore,
+        serialAfter: {
+          session: sessions.current("claude"),
+          legacyId: await legacySession.getSessionId(),
+          legacyCreated: await legacySession.isSessionCreated(),
+        },
+      }).toEqual({
+        capturedCalls: [],
+        printCalls: { captured: [], claude: [], codex: [] },
+        beginBranchCalls: [
+          ["manual_test"],
+          ["prd_audit"],
+          ["architecture_review_as_built"],
+        ],
+        codexCalls: [
+          {
+            prompt: "$manual-test",
+            sessionId: "manual-codex-session",
+            resume: false,
+            cwd: "/tmp/project",
+            interactive: true,
+            dangerouslySkipPermissions: false,
+            model: "gpt-5.6-terra",
+            effort: "medium",
+          },
+          {
+            prompt: "$manual-test",
+            sessionId: "manual-codex-session",
+            resume: true,
+            cwd: "/tmp/project",
+            interactive: true,
+            dangerouslySkipPermissions: false,
+            model: "gpt-5.6-terra",
+            effort: "medium",
+          },
+          {
+            prompt: "$architecture-review --as-built",
+            sessionId: "architecture-codex-session",
+            resume: false,
+            cwd: "/tmp/project",
+            interactive: true,
+            dangerouslySkipPermissions: false,
+            model: "gpt-5.6-sol",
+            effort: "high",
+          },
+        ],
+        claudeCalls: [
+          {
+            prompt: "/prd-audit",
+            sessionId: "prd-claude-session",
+            resume: false,
+            cwd: "/tmp/project",
+            interactive: true,
+            dangerouslySkipPermissions: false,
+            model: "fable",
+            effort: "high",
+          },
+        ],
+        completionOrder: ["prd_audit", "manual_test"],
+        resultEvents: [
+          { member: "prd_audit", outcome: "verdict:pass" },
+          { member: "manual_test", outcome: "verdict:pass" },
+          {
+            member: "architecture_review_as_built",
+            outcome: "no-verdict",
+          },
+        ],
+        outcomes: {
+          manual: "verdict:pass",
+          prd: "verdict:pass",
+          architecture: "no-verdict",
+        },
+        serialBefore: {
+          session: { id: "serial-claude-session", created: true },
+          legacyId: "serial-claude-session",
+          legacyCreated: true,
+        },
+        serialAfter: {
+          session: { id: "serial-claude-session", created: true },
+          legacyId: "serial-claude-session",
+          legacyCreated: true,
+        },
+      });
+    } finally {
+      await rm(pipelineDir, { recursive: true, force: true });
+    }
+  });
 
   it("two members dispatch two invocations with their own step names and two distinct fresh session ids", async () => {
     const runnerA = spyRunner([{ success: true }]);
@@ -470,6 +869,38 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
 
   const fakeState = {} as ConductState;
 
+  it("a permission denial stops the branch without consuming retry budget", async () => {
+    const runner = spyRunner([{
+      success: false,
+      output: "Codex automatic permission review denied the required action.",
+      permissionDenied: true,
+      actualProvider: "codex",
+      authentication: {
+        provider: 'codex',
+        source: 'api-key',
+        state: 'ready',
+        remediation: 'sensitive provider detail',
+      },
+    }]);
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+
+    expect({ calls: runner.calls.length, outcome }).toEqual({
+      calls: 1,
+      outcome: {
+        kind: "permission-denied",
+        provider: "codex",
+        reason: "Codex automatic permission review denied the required action.",
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
+      },
+    });
+  });
+
   it("an authFailure result does NOT burn retry budget and classifies as no-verdict with reason 'authFailure'", async () => {
     // Regression pin for the group JOIN behavior (conductor.ts's
     // `noVerdictIdx !== -1` branch, adr-2026-07-04-auth-failure-park-and-poll.md):
@@ -484,7 +915,16 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     // test/acceptance/build-auth-token-check-and-classify.acceptance.test.ts,
     // since a unit test against runGroupBranch alone cannot observe the join's
     // HALT-vs-park decision (see that file's header for why).
-    const runner = spyRunner([{ success: false, authFailure: true, output: "401 unauthorized" }]);
+    const runner = spyRunner([{
+      success: false,
+      authFailure: true,
+      output: "401 unauthorized",
+      authentication: {
+        provider: 'codex',
+        source: 'api-key',
+        state: 'unusable',
+      },
+    }]);
     const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
 
     const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
@@ -497,7 +937,15 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
     // (b) distinguishable from a generic "retries exhausted" no-verdict: the
     // reason is preserved verbatim so the join can special-case it.
     expect(classifyOutcome(outcome)).toBe("no-verdict");
-    expect(outcome).toEqual({ kind: "no-verdict", reason: "authFailure" });
+    expect(outcome).toEqual({
+      kind: "no-verdict",
+      reason: "authFailure",
+      authentication: {
+        provider: 'codex',
+        source: 'api-key',
+        state: 'unusable',
+      },
+    });
     expect(outcome).not.toEqual({ kind: "no-verdict", reason: "retries exhausted" });
   });
 

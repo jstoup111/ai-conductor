@@ -356,6 +356,8 @@ function renderRetries(events: ParsedEvent[]): string {
 
 interface TokenRow {
   step: string;
+  preferredProvider?: string;
+  actualProvider?: string;
   input: number;
   output: number;
   cacheRead: number;
@@ -370,6 +372,14 @@ function renderTokenSpend(events: ParsedEvent[]): string {
       const usage = evt.tokenUsage;
       rows.push({
         step: evt.step,
+        preferredProvider:
+          typeof evt.preferredProvider === 'string'
+            ? evt.preferredProvider
+            : undefined,
+        actualProvider:
+          typeof evt.actualProvider === 'string'
+            ? evt.actualProvider
+            : undefined,
         input: usage.input,
         output: usage.output,
         cacheRead: usage.cacheRead ?? 0,
@@ -385,8 +395,24 @@ function renderTokenSpend(events: ParsedEvent[]): string {
     return lines.join('\n');
   }
 
-  lines.push(padRow(['Step', 'Input', 'Output', 'CacheRead', 'CacheCreation']));
-  lines.push(padRow(['----', '-----', '------', '---------', '-------------']));
+  lines.push(padRow([
+    'Step',
+    'Preferred Provider',
+    'Actual Provider',
+    'Input',
+    'Output',
+    'CacheRead',
+    'CacheCreation',
+  ]));
+  lines.push(padRow([
+    '----',
+    '------------------',
+    '---------------',
+    '-----',
+    '------',
+    '---------',
+    '-------------',
+  ]));
 
   // Sort by total tokens descending
   rows.sort((a, b) => (b.input + b.output) - (a.input + a.output));
@@ -394,6 +420,8 @@ function renderTokenSpend(events: ParsedEvent[]): string {
   for (const row of rows) {
     lines.push(padRow([
       row.step,
+      row.preferredProvider ?? '—',
+      row.actualProvider ?? '—',
       String(row.input),
       String(row.output),
       String(row.cacheRead),

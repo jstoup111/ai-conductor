@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
+import type { BuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 
 // ── build_review grader prompt assembly ──────────────────────────────────
 //
@@ -11,9 +12,19 @@ import { buildGraderPrompt } from '../../src/engine/build-review-prompt.js';
 // (task-status, maker summary, transcript) — input isolation is the point.
 
 describe('buildGraderPrompt', () => {
-  const inputs = {
+  // `buildGraderPrompt` only reads `diff`/`planBody`; the remaining fields
+  // exist on BuildReviewInputs for the caller's provenance bookkeeping, not
+  // for prompt assembly — filled with fallback-shaped values here since
+  // these tests don't exercise the merge-base/freshness plumbing.
+  const inputs: BuildReviewInputs = {
     diff: 'diff --git a/foo.ts b/foo.ts\n+console.log("hi")\n',
     planBody: '## Plan\n\nDo the thing.',
+    mergeBase: 'deadbeef',
+    baseRef: 'main',
+    baseKind: 'local',
+    trackingRefSha: null,
+    remoteHeadSha: null,
+    fresh: false,
   };
 
   it('includes the three rubric items verbatim', () => {
@@ -28,6 +39,14 @@ describe('buildGraderPrompt', () => {
     );
   });
 
+  it('treats approved DECIDE artifacts as plan-governed Scope changes', () => {
+    const prompt = buildGraderPrompt(inputs);
+
+    expect(prompt).toMatch(
+      /Scope:.*\.docs\/architecture\/.*\.docs\/plans\/.*\.docs\/specs\/.*\.docs\/stories\/.*already-approved DECIDE artifacts.*modification.*passes Scope only.*approved plan justifies it.*otherwise.*Scope failure/is,
+    );
+  });
+
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
@@ -39,8 +58,16 @@ describe('buildGraderPrompt', () => {
 
     expect(prompt).toContain('.pipeline/build-review.json');
     expect(prompt).toContain(
-      "{ verdict: 'PASS' | 'FAIL', reasons: string[], rubric: { tautology: string, scope: string, rootCause: string, completeness: string } }",
+      "{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean } }",
     );
+  });
+
+  it('requires every independent failed-rubric finding in a structured list', () => {
+    const prompt = buildGraderPrompt(inputs);
+
+    expect(prompt).toMatch(/every independent finding/i);
+    expect(prompt).toMatch(/findings/i);
+    expect(prompt).toMatch(/one finding per array entry/i);
   });
 
   it('instructs the grader to run the project test suite itself', () => {
@@ -62,7 +89,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toMatch(
       /(do not|must not|never).*(per-task|SHA|reachability|corroboration)/i,
     );
-    expect(prompt).toMatch(/rubric\.completeness/);
+    expect(prompt).toMatch(/findings\.completeness/);
     expect(prompt).toMatch(/PASS only if all four rubric items pass/i);
   });
 

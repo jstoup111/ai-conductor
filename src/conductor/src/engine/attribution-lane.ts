@@ -30,15 +30,32 @@
 
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import type { LLMProvider } from '../execution/llm-provider.js';
+import type {
+  InvokeOptions,
+  LLMProvider,
+  TokenUsage,
+  AuthenticationReadiness,
+} from '../execution/llm-provider.js';
 import type { HarnessConfig, EffortLevel } from '../types/config.js';
 import { ModelAvailability } from './model-availability.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from './provider-model-policy.js';
 import { resolveStepConfig, phaseForStep } from './resolved-config.js';
 import { collectCandidateCommits } from './attribution-inputs.js';
 import { assembleAttributionInputs } from './attribution-inputs.js';
 import { buildAttributionPrompt } from './attribution-prompt.js';
 import { makeGitRunner, type GitRunner } from './rebase.js';
 import { createTaskEvidence } from './task-evidence.js';
+import type {
+  ProviderAttributionMetadata,
+  ProviderExecutionResult,
+} from './provider-execution.js';
+
+type AttributionProviderDispatch = (
+  options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>,
+) => Promise<ProviderExecutionResult>;
 
 /**
  * Verifier dispatch options.
@@ -56,24 +73,34 @@ export interface VerifierDispatchOptions {
   featureWorktreePath: string;
   /** Harness config for model/effort resolution. */
   config?: HarnessConfig;
+  /** Selected provider policy for model/effort resolution. */
+  modelPolicy?: ProviderModelPolicy;
   /** Git commit range for candidate collection (defaults to origin/main..HEAD). */
   commitRange?: string;
   /** Optional GitRunner injection for testing. */
   gitRunner?: GitRunner;
   /** Optional set of bookkeeping commit SHAs to exclude from candidates. */
   bookkeepingCommits?: Set<string>;
+  /**
+   * Provider-aware dispatch seam. When present, provider candidates and each
+   * candidate's native model ladder are resolved by the shared executor.
+   */
+  providerDispatch?: AttributionProviderDispatch;
 }
 
 /**
  * Verifier dispatch result: success flag, output, and optional error details.
  */
-export interface VerifierDispatchResult {
+export interface VerifierDispatchResult extends ProviderAttributionMetadata {
   success: boolean;
   output: string;
+  model?: string;
+  tokenUsage?: TokenUsage;
   authFailure?: boolean;
   rateLimited?: boolean;
   waitSeconds?: number;
   sessionExpired?: boolean;
+  authentication?: AuthenticationReadiness;
 }
 
 /**
@@ -238,15 +265,18 @@ export async function dispatchAttributionVerifier(
     residueIds,
     featureWorktreePath,
     config,
+    modelPolicy = CLAUDE_MODEL_POLICY,
     commitRange = 'origin/main..HEAD',
     gitRunner: injectedGit,
     bookkeepingCommits,
+    providerDispatch,
   } = opts;
 
   // Resolve config for the attribution_verify dispatch (model/effort).
   const resolved = resolveStepConfig(
     'attribution_verify',
     'BUILD',
+    modelPolicy,
     config,
     {},
   );
@@ -306,42 +336,74 @@ export async function dispatchAttributionVerifier(
   // Build the verifier prompt from structurally-isolated inputs.
   const prompt = buildAttributionPrompt(inputs);
 
-  // Fresh one-shot session — never contaminate the main conductor session,
-  // and never resume a prior verifier session either.
-  const { v4: uuidv4 } = await import('uuid');
-  const sessionId = uuidv4();
-
   // Track every model attempted during the ladder walk so a full-ladder
   // exhaustion failure names every model tried.
   const attemptedModels: string[] = [];
-  const trackingProvider: LLMProvider = {
-    invoke: (invokeOpts) => {
-      attemptedModels.push(invokeOpts.model ?? '');
-      return provider.invoke(invokeOpts);
-    },
-    invokeInteractive: (invokeOpts) => provider.invokeInteractive(invokeOpts),
-  };
-
-  const modelAvailability = new ModelAvailability(config?.model_fallback_ladder, (line) =>
-    console.warn(line),
-  );
-
   // Build system prompt for the step.
   const systemPrompt = buildVerifierSystemPrompt();
-
-  const result = await modelAvailability.invokeWithLadder(trackingProvider, {
-    prompt,
-    sessionId,
-    resume: false,
-    dangerouslySkipPermissions: true,
-    model: modelAvailability.effectiveModel(resolved.model).model,
-    effort: resolved.effort,
-    cwd: featureWorktreePath,
-    systemPrompt,
-  });
+  const providerResult = providerDispatch
+    ? await providerDispatch({
+        prompt,
+        dangerouslySkipPermissions: true,
+        cwd: featureWorktreePath,
+        systemPrompt,
+      })
+    : undefined;
+  const result =
+    providerResult ??
+    (await (async () => {
+        // Legacy scalar-provider adapter: retain the verifier's internal native
+        // model ladder and fresh one-shot session contract.
+        const { v4: uuidv4 } = await import('uuid');
+        const trackingProvider: LLMProvider = {
+          invoke: (invokeOpts) => {
+            attemptedModels.push(invokeOpts.model ?? '');
+            return provider.invoke(invokeOpts);
+          },
+          invokeInteractive: (invokeOpts) =>
+            provider.invokeInteractive(invokeOpts),
+        };
+        const modelAvailability = new ModelAvailability(
+          config?.model_fallback_ladder ?? modelPolicy.modelFallbackLadder,
+          (line) => console.warn(line),
+        );
+        return modelAvailability.invokeWithLadder(trackingProvider, {
+          prompt,
+          sessionId: uuidv4(),
+          resume: false,
+          dangerouslySkipPermissions: true,
+          model: modelAvailability.effectiveModel(resolved.model).model,
+          effort: resolved.effort,
+          cwd: featureWorktreePath,
+          systemPrompt,
+        });
+      })());
+  const providerMetadata = providerResult
+    ? {
+        preferredProvider: providerResult.preferredProvider,
+        ...(providerResult.actualProvider
+          ? { actualProvider: providerResult.actualProvider }
+          : {}),
+        attempts: providerResult.attempts,
+        ...(providerResult.resolvedModel
+          ? { model: providerResult.resolvedModel }
+          : {}),
+        ...(providerResult.tokenUsage
+          ? { tokenUsage: providerResult.tokenUsage }
+          : {}),
+        ...(providerResult.authentication
+          ? { authentication: providerResult.authentication }
+          : {}),
+      }
+    : {};
 
   if (result.authFailure) {
-    return { success: false, output: result.output, authFailure: true };
+    return {
+      success: false,
+      output: result.output,
+      authFailure: true,
+      ...providerMetadata,
+    };
   }
   if (result.rateLimited) {
     return {
@@ -349,15 +411,21 @@ export async function dispatchAttributionVerifier(
       output: result.output,
       rateLimited: true,
       waitSeconds: result.waitSeconds ?? 300,
+      ...providerMetadata,
     };
   }
   if (result.sessionExpired) {
-    return { success: false, output: result.output, sessionExpired: true };
+    return {
+      success: false,
+      output: result.output,
+      sessionExpired: true,
+      ...providerMetadata,
+    };
   }
   if (result.success) {
     // Dispatch succeeded; persist result to memo for future reuse.
     await writeMemo(memoPath, memoKey, result.output);
-    return { success: true, output: result.output };
+    return { success: true, output: result.output, ...providerMetadata };
   }
 
   // Full-ladder exhaustion: every attempted model reported unavailable.
@@ -366,10 +434,11 @@ export async function dispatchAttributionVerifier(
     return {
       success: false,
       output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
+      ...providerMetadata,
     };
   }
 
-  return { success: false, output: result.output };
+  return { success: false, output: result.output, ...providerMetadata };
 }
 
 /**
@@ -383,4 +452,3 @@ You are running the semantic attribution verification step. Your job is to match
 
 Complete this step, write the verdict to .pipeline/attribution-verdict.json, then exit.`;
 }
-

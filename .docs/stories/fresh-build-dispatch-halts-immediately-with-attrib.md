@@ -1,5 +1,10 @@
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** build dispatch no longer requires a writable
+> `.pipeline/current-task` path. Known-id dispatch telemetry remains validated, but a singular
+> stamp is neither integrity machinery nor mutation authority. Historical stamp-path HALT
+> criteria below are superseded.
+
 # Stories: Seed task-status.json before the pre-dispatch attribution guard
 
 Technical track, Small tier. Source: jstoup111/ai-conductor#692.

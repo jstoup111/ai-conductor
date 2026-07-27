@@ -635,6 +635,59 @@ describe('engine/daemon-observe-cli', () => {
       expect(joined).toContain('from-a');
       expect(joined).toContain('from-b');
     });
+
+    // Regression: `--follow` printed the snapshot and returned immediately
+    // because nothing held the event loop open, so a real `conduct daemon logs
+    // --follow` exited in ~0.3s instead of tailing.
+    it('--follow holds the event loop open and streams appended lines', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const sink = await openDaemonLog(repo);
+      sink.write('[daemon] existing');
+      await sink.close();
+
+      const out: string[] = [];
+      let release!: () => void;
+      const untilStop = new Promise<void>((r) => {
+        release = r;
+      });
+      const running = runDaemonLogs(
+        { repo, follow: true, all: false },
+        { out: (l) => out.push(l), untilStop },
+      );
+
+      // Give runDaemonLogs a turn to print the tail and arm the follower.
+      await vi.waitFor(() => expect(out).toContain('[daemon] existing'));
+      // The follower must be a ref'd timer while following, or the CLI exits.
+      expect(process.getActiveResourcesInfo().filter((r) => r === 'Timeout').length)
+        .toBeGreaterThan(0);
+
+      const sink2 = await openDaemonLog(repo);
+      sink2.write('[daemon] appended');
+      await sink2.close();
+      await vi.waitFor(() => expect(out).toContain('[daemon] appended'), { timeout: 5000 });
+
+      release();
+      expect(await running).toBe(0);
+    }, 10_000);
+
+    it('--lines N limits the snapshot to the last N lines', async () => {
+      const repo = join(root, 'repo');
+      await mkdir(repo, { recursive: true });
+      const sink = await openDaemonLog(repo);
+      sink.write('[daemon] one');
+      sink.write('[daemon] two');
+      sink.write('[daemon] three');
+      await sink.close();
+
+      const out: string[] = [];
+      const code = await runDaemonLogs(
+        { repo, follow: false, all: false, lines: 2 },
+        { out: (l) => out.push(l) },
+      );
+      expect(code).toBe(0);
+      expect(out).toEqual(['[daemon] two', '[daemon] three']);
+    });
   });
 
   describe('detectDaemonObserveCommand', () => {
@@ -648,6 +701,22 @@ describe('engine/daemon-observe-cli', () => {
       expect(
         detectDaemonObserveCommand(argv('daemon', 'logs', '--repo', '/x', '--follow', '--all')),
       ).toEqual({ kind: 'logs', repo: '/x', follow: true, all: true });
+    });
+
+    it('parses --lines (and -n) so the flag is not silently ignored', () => {
+      expect(detectDaemonObserveCommand(argv('daemon', 'logs', '--lines', '20'))).toMatchObject({
+        kind: 'logs',
+        lines: 20,
+      });
+      expect(detectDaemonObserveCommand(argv('daemon', 'logs', '--lines=5'))).toMatchObject({
+        lines: 5,
+      });
+      expect(detectDaemonObserveCommand(argv('daemon', 'logs', '-n', '7'))).toMatchObject({
+        lines: 7,
+      });
+      expect(detectDaemonObserveCommand(argv('daemon', 'logs', '--lines', 'abc'))).toMatchObject({
+        lines: undefined,
+      });
     });
 
     it('supports --repo=<p> form', () => {

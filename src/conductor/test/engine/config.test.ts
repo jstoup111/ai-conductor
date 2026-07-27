@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
+import { mkdtemp, writeFile, rm, mkdir, symlink } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
@@ -205,6 +205,16 @@ complexity:
       expect(result.ok).toBe(true);
     });
 
+    it('rejects steps.test_suite.disable: true — the native BUILD gate is non-disableable', () => {
+      const result = validateConfig({
+        steps: { test_suite: { disable: true } },
+      });
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toMatch(/test_suite/);
+      expect(result.error.message).toMatch(/gating/i);
+    });
+
     it('rejects disabling a structural step', () => {
       const result = validateConfig({
         steps: { build: { disable: true } },
@@ -249,6 +259,58 @@ complexity:
       expect(result.ok).toBe(false);
       if (result.ok) return;
       expect(result.error.message).toContain('bogus_key');
+    });
+
+    it('accepts provider-native TDD RED/GREEN model overrides on the build step', () => {
+      const result = validateConfig({
+        llm_provider: 'codex',
+        steps: {
+          build: {
+            tdd: {
+              red: { model: 'gpt-5.6-luna' },
+              green: { model: 'gpt-5.6-terra' },
+            },
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.steps?.build?.tdd?.red?.model).toBe('gpt-5.6-luna');
+      expect(result.config.steps?.build?.tdd?.green?.model).toBe('gpt-5.6-terra');
+    });
+
+    it('rejects TDD models that do not belong to the selected provider', () => {
+      const result = validateConfig({
+        llm_provider: 'codex',
+        steps: { build: { tdd: { red: { model: 'haiku' } } } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('steps.build.tdd.red.model');
+      expect(result.error.message).toContain('codex');
+    });
+
+    it('rejects TDD model configuration when llm_provider is not a string', () => {
+      const result = validateConfig({
+        llm_provider: 42,
+        steps: { build: { tdd: { red: { model: 'haiku' } } } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('llm_provider');
+    });
+
+    it('rejects TDD model configuration outside the build step', () => {
+      const result = validateConfig({
+        steps: { memory: { tdd: { red: { model: 'haiku' } } } },
+      });
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.message).toContain('steps.memory.tdd');
     });
 
     it('rejects invalid phase name', () => {
@@ -316,6 +378,62 @@ complexity:
       );
 
       expect(result.ok).toBe(true);
+    });
+
+    it('accepts an exact .pipeline completion artifact for a custom step', () => {
+      const result = validateConfig({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+            completion_artifact: '.pipeline/custom-lint-pass',
+          },
+        },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
+    it('enforces the custom-step completion artifact path boundary', () => {
+      const customStepConfig = (completionArtifact: string) => ({
+        steps: {
+          lint: {
+            after: 'build',
+            skill: 'custom-lint',
+            enforcement: 'gating',
+            completion_artifact: completionArtifact,
+          },
+        },
+      });
+      const configs = [
+        customStepConfig(''),
+        customStepConfig('/'),
+        customStepConfig('.pipeline-evil/pass'),
+        customStepConfig('.pipeline/../pass'),
+        customStepConfig('.pipeline/*-pass'),
+        customStepConfig('.pipeline/'),
+        customStepConfig('.pipeline//pass'),
+        customStepConfig('.pipeline/pass'),
+        { steps: { memory: { completion_artifact: '.pipeline/memory-pass' } } },
+      ];
+
+      const outcomes = configs.map((config) => {
+        const result = validateConfig(config);
+        return result.ok ? 'accepted' : result.error.message;
+      });
+
+      expect(outcomes).toEqual([
+        'steps.lint.completion_artifact must be a non-empty string',
+        'steps.lint.completion_artifact must be repository-relative',
+        'steps.lint.completion_artifact must be under .pipeline/',
+        'steps.lint.completion_artifact must not contain traversal segments',
+        'steps.lint.completion_artifact must be an exact file path without glob syntax',
+        'steps.lint.completion_artifact must name a file under .pipeline/',
+        'steps.lint.completion_artifact must be normalized',
+        'accepted',
+        'steps.memory.completion_artifact is not valid for built-in steps',
+      ]);
     });
 
     it('rejects built-in step setting `after` (fail-fast)', () => {
@@ -514,6 +632,88 @@ complexity:
     });
   });
 
+  describe('test_suite config block', () => {
+    it('accepts an aggregate suite declaration with every supported field', () => {
+      const testSuite = {
+        command: 'npm test',
+        working_directory: 'src/conductor',
+        timeout_seconds: 1800,
+        inputs: ['test-support/**'],
+        environment: ['CI', 'DATABASE_URL'],
+      };
+
+      const result = validateConfig({ test_suite: testSuite });
+
+      expect(result.ok && result.config.test_suite).toEqual(testSuite);
+    });
+
+    it.each([
+      ['a non-object block', 'npm test', /test_suite must be an object/],
+      ['an unknown key', { command: 'npm test', retries: 2 }, /test_suite.*retries/],
+      ['a missing command', {}, /test_suite\.command/],
+      ['a blank command', { command: '   ' }, /test_suite\.command/],
+      [
+        'a non-numeric timeout',
+        { command: 'npm test', timeout_seconds: 'slow' },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a zero timeout',
+        { command: 'npm test', timeout_seconds: 0 },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a negative timeout',
+        { command: 'npm test', timeout_seconds: -1 },
+        /test_suite\.timeout_seconds/,
+      ],
+      [
+        'a non-string inputs entry',
+        { command: 'npm test', inputs: ['package.json', 42] },
+        /test_suite\.inputs/,
+      ],
+      [
+        'a non-string environment entry',
+        { command: 'npm test', environment: ['CI', false] },
+        /test_suite\.environment/,
+      ],
+      [
+        'an absolute working directory',
+        { command: 'npm test', working_directory: '/tmp/project' },
+        /test_suite\.working_directory/,
+      ],
+      [
+        'a working directory that escapes the project root',
+        { command: 'npm test', working_directory: '../outside' },
+        /test_suite\.working_directory/,
+      ],
+    ])('rejects %s with a field-specific error', (_name, testSuite, expectedMessage) => {
+      const result = validateConfig({ test_suite: testSuite }, tmpDir);
+
+      expect(result.ok ? '' : result.error.message).toMatch(expectedMessage);
+    });
+
+    it('rejects an existing working_directory symlink that escapes the project root', async () => {
+      const outside = await mkdtemp(join(tmpdir(), 'config-outside-'));
+      try {
+        await symlink(outside, join(tmpDir, 'linked-workdir'));
+
+        const result = validateConfig(
+          { test_suite: { command: 'npm test', working_directory: 'linked-workdir' } },
+          tmpDir,
+        );
+
+        expect(result.ok ? '' : result.error.message).toMatch(/test_suite\.working_directory/);
+      } finally {
+        await rm(outside, { recursive: true, force: true });
+      }
+    });
+
+    it('keeps the entire test_suite block optional at global config validation', () => {
+      expect(validateConfig({}).ok).toBe(true);
+    });
+  });
+
   describe('model_fallback_ladder validation', () => {
     it('accepts an array of non-empty model strings', () => {
       const result = validateConfig({ model_fallback_ladder: ['fable', 'opus'] });
@@ -548,6 +748,55 @@ complexity:
   });
 
   describe('mergeConfigs', () => {
+    it.each([
+      {
+        name: 'project scalar replaces a user array',
+        user: { llm_provider: ['claude', 'codex'] },
+        project: { llm_provider: 'codex' },
+        expected: 'codex',
+      },
+      {
+        name: 'project array replaces a user scalar without index merging',
+        user: { llm_provider: 'claude' },
+        project: { llm_provider: ['codex', 'claude'] },
+        expected: ['codex', 'claude'],
+      },
+    ] satisfies Array<{
+      name: string;
+      user: Parameters<typeof mergeConfigs>[0];
+      project: Parameters<typeof mergeConfigs>[1];
+      expected: 'codex' | string[];
+    }>)('$name', ({ user, project, expected }) => {
+      expect(mergeConfigs(user, project).llm_provider).toEqual(expected);
+    });
+
+    it('preserves a user step provider while project model settings override independently', () => {
+      const merged = mergeConfigs(
+        {
+          defaults: { model: 'sonnet', effort: 'low', max_retries: 2 },
+          steps: { build_review: { llm_provider: 'codex', model: 'sonnet' } },
+        },
+        {
+          defaults: { model: 'opus', effort: 'high' },
+          steps: { build_review: { model: 'opus' } },
+        },
+      );
+
+      expect({
+        stepProvider: merged.steps?.build_review?.llm_provider,
+        stepModel: merged.steps?.build_review?.model,
+        defaultModel: merged.defaults?.model,
+        defaultEffort: merged.defaults?.effort,
+        defaultRetries: merged.defaults?.max_retries,
+      }).toEqual({
+        stepProvider: 'codex',
+        stepModel: 'opus',
+        defaultModel: 'opus',
+        defaultEffort: 'high',
+        defaultRetries: 2,
+      });
+    });
+
     it('project scalars replace user scalars', () => {
       const merged = mergeConfigs(
         { defaults: { model: 'sonnet' } },

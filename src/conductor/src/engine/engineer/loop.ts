@@ -50,6 +50,7 @@ import { runHandoff } from './handoff-step.js';
 import { runCreate } from '../registry-cli.js';
 import { readMachineOwnerConfig } from '../owner-gate/machine-identity.js';
 import { resolveDaemonOwner } from '../owner-gate/identity.js';
+import type { GitRunner } from '../pr-labels.js';
 
 const execFile = promisify(execFileCb);
 
@@ -89,6 +90,8 @@ export interface EngineerDeps {
   io: EngineerIO;
   /** GitHub runner for PR operations. */
   gh?: GhRunner;
+  /** Git runner for publishing the spec branch before PR creation. */
+  git?: GitRunner;
   /** Direct registry file path override (takes priority over env). */
   registryPath?: string;
   /** Direct engineer directory path override (takes priority over env). */
@@ -567,7 +570,7 @@ async function processIdea(
     );
   }
 
-  const { branch } = await runAuthoring(target, idea, {
+  const authoring = await runAuthoring(target, idea, {
     decide,
     assessComplexity,
     recommended,
@@ -576,11 +579,19 @@ async function processIdea(
     gh: deps.gh,
   });
 
+  if (authoring.kind === 'documentation_delivery') {
+    io.print(`Documentation PR opened: ${authoring.prUrl}`);
+    summary.ideasProcessed += 1;
+    return;
+  }
+  const { branch } = authoring;
+
   // 4e-4g. Post-authoring handoff (extracted — retro A-2): PR-open-vs-local-commit,
   //        ensure-running fire-and-forget, and the authored entry. runHandoff owns
   //        the gh-present guard (A-3 — no `gh!`) and the ENSURE-NOT-MANAGE boundary.
   const entry = await runHandoff(target, branch, {
     gh: deps.gh,
+    git: deps.git,
     engineerDir: deps.engineerDir,
     launchFn,
     print: (s) => io.print(s),

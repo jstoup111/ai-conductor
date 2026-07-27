@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Documentation"
+  short_description: "Maintain repository documentation"
+  default_prompt: "Use $maintain-documentation to review and maintain this repository documentation."

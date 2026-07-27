@@ -82,7 +82,7 @@ describe('daemon-lock: acquire is the O_EXCL 1-per-repo mutex (FR-17/FR-20)', ()
     expect(String(record.uuid).length).toBeGreaterThan(0);
     expect(typeof record.startedAt).toBe('string');
     // The caller is reported as the owner/acquirer.
-    expect(result.acquired ?? result.owner === 'self' ?? true).toBeTruthy();
+    expect(result.acquired ?? result.owner === 'self').toBeTruthy();
   });
 
   it('two concurrent acquire() → exactly one succeeds; loser no-ops (acquisition count === 1)', async () => {

@@ -15,6 +15,14 @@ import {
   daysSince,
 } from '../../src/engine/project-prelude.js';
 import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeResult } from '../../src/execution/llm-provider.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -231,6 +239,170 @@ describe('runProjectPrelude (happy paths)', () => {
   });
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
+  });
+
+  it('routes bootstrap and assess by their exact configured providers with fresh scopes', async () => {
+    await writeFile(join(dir, 'app.rb'), 'puts 1\n');
+    const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'captured provider must not run',
+      exitCode: 0,
+    }));
+    const capturedInteractive = vi.fn();
+    const codexInteractive = vi.fn();
+    const claudeInteractive = vi.fn();
+    const codexInvoke = vi.fn<LLMProvider['invoke']>(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'bootstrapped',
+      exitCode: 0,
+    }));
+    const claudeInvoke = vi.fn<LLMProvider['invoke']>(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'assessed',
+      exitCode: 0,
+    }));
+    const provider = (
+      invoke: LLMProvider['invoke'],
+      invokeInteractive: LLMProvider['invokeInteractive'],
+    ): LLMProvider => ({
+      invoke,
+      invokeInteractive,
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider(claudeInvoke, claudeInteractive),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CLAUDE_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+      {
+        key: 'codex',
+        provider: provider(codexInvoke, codexInteractive),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CODEX_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+    ]);
+    const ids = [
+      'bootstrap-codex-session',
+      'assess-claude-session',
+    ][Symbol.iterator]();
+    const sessions = new ProviderSessionStore({
+      createSessionId: () => ids.next().value ?? 'unexpected-session',
+    });
+    const beginBranch = vi.spyOn(sessions, 'beginBranch');
+    const onAttempt = vi.fn();
+    const result = await runProjectPrelude(
+      dir,
+      provider(capturedInvoke, capturedInteractive),
+      'captured-session',
+      {
+        llm_provider: ['claude', 'codex'],
+        steps: {
+          bootstrap: { llm_provider: 'codex' },
+          assess: { llm_provider: 'claude' },
+        },
+      },
+      {
+        harnessVersion: '1.0.0',
+        providerExecution: {
+          configuredProviders: ['claude', 'codex'],
+          runtimes,
+          sessions,
+          onAttempt,
+        },
+      },
+    );
+
+    expect({
+      capturedCalls: {
+        invoke: capturedInvoke.mock.calls,
+        interactive: capturedInteractive.mock.calls,
+      },
+      beginBranchCalls: beginBranch.mock.calls,
+      codexCalls: codexInvoke.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+        model: options.model,
+        effort: options.effort,
+      })),
+      claudeCalls: claudeInvoke.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+        model: options.model,
+        effort: options.effort,
+      })),
+      interactiveCalls: {
+        codex: codexInteractive.mock.calls,
+        claude: claudeInteractive.mock.calls,
+      },
+      attempts: onAttempt.mock.calls.map(([step, attempt]) => ({
+        step,
+        provider: attempt.provider,
+        outcome: attempt.outcome,
+      })),
+      result,
+      bootstrapMarker: await readBootstrapMarker(dir),
+      assessMarker: await readAssessMarker(dir),
+    }).toEqual({
+      capturedCalls: { invoke: [], interactive: [] },
+      beginBranchCalls: [
+        ['bootstrap'],
+        ['assess'],
+      ],
+      codexCalls: [
+        {
+          prompt: '/bootstrap',
+          sessionId: 'bootstrap-codex-session',
+          resume: false,
+          cwd: dir,
+          dangerouslySkipPermissions: true,
+          model: 'gpt-5.6-terra',
+          effort: 'low',
+        },
+      ],
+      claudeCalls: [
+        {
+          prompt: '/assess',
+          sessionId: 'assess-claude-session',
+          resume: false,
+          cwd: dir,
+          dangerouslySkipPermissions: true,
+          model: 'sonnet',
+          effort: 'high',
+        },
+      ],
+      interactiveCalls: { codex: [], claude: [] },
+      attempts: [
+        { step: 'bootstrap', provider: 'codex', outcome: 'success' },
+        { step: 'assess', provider: 'claude', outcome: 'success' },
+      ],
+      result: {
+        bootstrapExecuted: true,
+        bootstrapReason: 'never_run',
+        bootstrapSuccess: true,
+        assessExecuted: true,
+        assessReason: 'never_run',
+        assessSuccess: true,
+      },
+      bootstrapMarker: expect.objectContaining({
+        harness_version: '1.0.0',
+      }),
+      assessMarker: expect.objectContaining({
+        assessed_at: expect.any(String),
+      }),
+    });
   });
 
   it('runs bootstrap on a fresh project (never_run)', async () => {

@@ -15,7 +15,7 @@
 // 5. pr-opened path regression: original flow works unchanged (branch recorded by openSpecPr caller if needed).
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { access, mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -92,6 +92,22 @@ async function writeRegistry(): Promise<void> {
   await writeFile(registryPath, JSON.stringify(records, null, 2), 'utf-8');
 }
 
+async function writeRemoteRegistry(): Promise<void> {
+  const records = [
+    {
+      schemaVersion: 1,
+      name: 'test-proj',
+      path: repoPath,
+      remote: 'https://github.com/acme/test-proj.git',
+      status: 'registered',
+      registeredAt: '2026-07-04T00:00:00.000Z',
+    },
+  ];
+  await writeFile(registryPath, JSON.stringify(records, null, 2), 'utf-8');
+}
+
+const noOpGit = async () => ({ stdout: '', stderr: '' });
+
 function captureOpts(extra: Partial<DispatchEngineerOpts>): {
   out: string[];
   err: string[];
@@ -131,28 +147,60 @@ afterEach(async () => {
 });
 
 describe('engineer handoff — branch evidence recording on local-commit/pr-skipped (Task 9)', () => {
-  it('TEST 1: with --source-ref + openSpecPr throws → records branch evidence, status unchanged, exit 0 local-commit', async () => {
+  it('passes the injected git runner through before creating the remote spec PR', async () => {
+    await writeRemoteRegistry();
+    const worktree = await seedWorktree();
+    const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
+    const trace: Array<{ command: string; args: string[]; cwd: string }> = [];
+    const injectedGit = async (args: string[], options?: { cwd?: string }) => {
+      trace.push({ command: 'git', args: [...args], cwd: options?.cwd ?? '' });
+      return { stdout: '', stderr: '' };
+    };
+    const gh = async (args: string[], options?: { cwd?: string }) => {
+      trace.push({ command: 'gh', args: [...args], cwd: options?.cwd ?? '' });
+      return { stdout: 'https://github.com/acme/test-proj/pull/42', stderr: '' };
+    };
+    const { opts } = captureOpts({
+      gh: gh as any,
+      ensureRunningLaunch: async () => {},
+    });
+    const optsWithGit = {
+      ...opts,
+      git: injectedGit,
+    } as DispatchEngineerOpts & { git: typeof injectedGit };
+
+    await dispatchEngineer({
+      kind: 'handoff',
+      project: 'test-proj',
+      branch,
+      worktree,
+    }, optsWithGit);
+
+    expect(trace).toEqual([
+      { command: 'git', args: ['push', '-u', 'origin', branch], cwd: worktree },
+      { command: 'gh', args: ['pr', 'create', '--head', branch, '--fill'], cwd: worktree },
+    ]);
+  });
+
+  it('TEST 1: remote PR publication failure exits 1, retains worktree, and records branch evidence', async () => {
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const sourceRef = 'o/a#243';
+    await writeRemoteRegistry();
 
-    // Seed ledger entry with status 'claimed' (no prUrl — the write-back failure scenario)
     await ledger.record({ source: 'github-issues', sourceRef });
     await ledger.transition('github-issues', sourceRef, 'claimed', {});
-    const beforeHandoff = await ledger.get('github-issues', sourceRef);
-    expect(beforeHandoff?.status).toBe('claimed');
-    expect(beforeHandoff?.branch).toBeUndefined();
 
     const worktree = await seedWorktree();
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
 
-    // gh runner throws simulating openSpecPr failure
     const gh = async () => {
-      throw new Error('Network error');
+      throw new Error('authentication failed while contacting GitHub');
     };
 
     const { out, err, opts } = captureOpts({
       gh: gh as any,
-      ensureRunningLaunch: async () => {}, // no-op daemon launch
+      git: noOpGit,
+      ensureRunningLaunch: async () => {},
     });
 
     const code = await dispatchEngineer(
@@ -166,17 +214,22 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
       opts,
     );
 
-    // Assert: exit 0
-    expect(code).toBe(0);
-
-    // Assert: stdout has kind 'local-commit'
-    const result = JSON.parse(out[0]);
-    expect(result.kind).toBe('local-commit');
-
-    // Assert: ledger entry has branch recorded, status unchanged
     const afterHandoff = await ledger.get('github-issues', sourceRef);
-    expect(afterHandoff?.status).toBe('claimed');
-    expect(afterHandoff?.branch).toBe(branch);
+    const worktreeExists = await access(worktree).then(() => true, () => false);
+
+    expect({
+      code,
+      out,
+      stderr: err.join('\n'),
+      worktreeExists,
+      ledger: { status: afterHandoff?.status, branch: afterHandoff?.branch },
+    }).toEqual({
+      code: 1,
+      out: [],
+      stderr: expect.stringMatching(/PR open failed[\s\S]*authentication failed[\s\S]*worktree kept/i),
+      worktreeExists: true,
+      ledger: { status: 'claimed', branch },
+    });
   });
 
   it('TEST 2: with --source-ref + pr-skipped outcome → records branch evidence, status unchanged', async () => {
@@ -268,11 +321,12 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     expect(after?.branch).toBeUndefined();
   });
 
-  it('TEST 4: with --source-ref + openSpecPr throws but no ledger entry → handoff continues with exit 0', async () => {
+  it('TEST 4: with --source-ref + openSpecPr throws but no ledger entry → exits 1 with diagnostics', async () => {
     // This test verifies that when openSpecPr throws and there's a sourceRef but no
-    // existing ledger entry (e.g., malformed sourceRef or stale ledger), we still
-    // exit 0 (handoff succeeds) and just skip the branch evidence recording.
+    // existing ledger entry (e.g., malformed sourceRef or stale ledger), publication
+    // still fails while the missing ledger entry remains a non-crashing diagnostic path.
     const sourceRef = 'o/d#75'; // This ref was never seeded in the ledger
+    await writeRemoteRegistry();
 
     const worktree = await seedWorktree();
     const branch = await git(['rev-parse', '--abbrev-ref', 'HEAD'], worktree);
@@ -284,6 +338,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
 
     const { out, err, opts } = captureOpts({
       gh: gh as any,
+      git: noOpGit,
       ensureRunningLaunch: async () => {},
     });
 
@@ -298,12 +353,8 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
       opts,
     );
 
-    // Assert: exit 0 (handoff still succeeds even if ledger entry doesn't exist)
-    expect(code).toBe(0);
-
-    // Assert: stdout has kind 'local-commit'
-    const result = JSON.parse(out[0]);
-    expect(result.kind).toBe('local-commit');
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
 
     // Assert: stderr shows the PR open failure
     const stderrText = err.join('\n');
@@ -314,6 +365,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const sourceRef = 'o/e#200';
     const PR_URL = 'https://github.com/o/e/pull/999';
+    await writeRemoteRegistry();
 
     // Seed ledger entry
     await ledger.record({ source: 'github-issues', sourceRef });
@@ -335,6 +387,7 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
 
     const { out, opts } = captureOpts({
       gh: gh as any,
+      git: noOpGit,
       ensureRunningLaunch: async () => {},
     });
 
@@ -407,6 +460,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
           return { source: 'github-issues', sourceRef, status: 'claimed', attempts: 0 };
         },
         async forget() {},
+        async list() { return []; },
         async reopen() {},
       };
     });
@@ -475,6 +529,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
           return { source: 'github-issues', sourceRef, status: 'claimed', attempts: 0 };
         },
         async forget() {},
+        async list() { return []; },
         async reopen() {},
       };
     });
@@ -511,6 +566,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const sourceRef = 'o/e#200';
     const PR_URL = 'https://github.com/o/e/pull/999';
+    await writeRemoteRegistry();
 
     // Seed ledger entry
     await ledger.record({ source: 'github-issues', sourceRef });
@@ -532,6 +588,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
 
     const { out, opts } = captureOpts({
       gh: gh as any,
+      git: noOpGit,
       ensureRunningLaunch: async () => {},
     });
 
@@ -565,6 +622,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
     const ledger = createLedger(join(engineerDir, 'ledger.json'));
     const sourceRef = 'o/f#250';
     const PR_URL = 'https://github.com/o/f/pull/888';
+    await writeRemoteRegistry();
 
     // Seed ledger entry
     await ledger.record({ source: 'github-issues', sourceRef });
@@ -597,6 +655,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
 
     const { out, err, opts } = captureOpts({
       gh: gh as any,
+      git: noOpGit,
       ensureRunningLaunch: async () => {},
     });
 

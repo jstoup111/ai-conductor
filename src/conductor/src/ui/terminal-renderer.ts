@@ -154,6 +154,14 @@ export class TerminalRenderer implements UIRenderer {
         break;
       }
 
+      case 'provider_fallback':
+        this.region.log(
+          chalk.bold.yellow(
+            `  ⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+          ),
+        );
+        break;
+
       case 'rate_limit': {
         const mins = Math.ceil(event.waitSeconds / 60);
         this.stopSpinner();
@@ -165,6 +173,14 @@ export class TerminalRenderer implements UIRenderer {
 
       case 'session_reset':
         this.region.log(chalk.yellow(`  ⟳  Session reset: ${event.reason}`));
+        break;
+
+      case 'credentials_park_progress':
+        this.region.log(
+          chalk.yellow(
+            `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
+          ),
+        );
         break;
 
       case 'tier_skip':
@@ -250,4 +266,3 @@ export class TerminalRenderer implements UIRenderer {
     this.region.clear();
   }
 }
-

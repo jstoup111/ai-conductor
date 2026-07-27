@@ -2,6 +2,12 @@
 
 **Status:** Accepted
 
+> **Amended 2026-07-26 by #907:** self-host dispatch no longer relinks live global
+> skills. Both Claude and Codex resolve worktree-owned harness assets from minimal throwaway
+> provider homes containing only selected authentication and engine-owned controls. The
+> historical `SkillRelinkPreflight` criteria below are superseded for self-host runs;
+> non-self-host installation behavior is unchanged.
+
 **Track:** Technical (no PRD — acceptance criteria live here, tagged `TR-N`)
 **Design:** `.docs/specs/2026-06-30-harness-self-host-guardrails.md`
 **Architecture:** `.docs/architecture/2026-06-30-harness-self-host-guardrails.md`
@@ -10,6 +16,15 @@
 > Traceability note (technical track): stories are tagged `TR-N` (technical requirement) instead
 > of `FR-N`; each maps to a component/decision in the design doc. Stories state observable
 > behavior (WHAT), not mechanism — the *how* is the plan's job.
+
+> **Provider-scope amendment (#905, approved 2026-07-25):** provider-neutral
+> self-host detection, version, release-artifact, and publication gates continue to
+> apply to every self-build. The relink, throwaway `CLAUDE_CONFIG_DIR`, Claude
+> credential preparation, and Claude hook sandbox requirements apply only when the
+> preferred build provider is Claude. A Codex-selected self-build skips those
+> Claude-specific steps and uses Codex's native readiness and bounded workspace
+> policy. Authentication failure still enters the provider-neutral bounded park; the
+> skip applies only to Claude-specific preparation, never common self-host gates.
 
 ---
 

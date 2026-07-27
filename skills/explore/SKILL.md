@@ -37,6 +37,40 @@ After the track is decided and the decision persisted, **exit the session immedi
 conductor handles the handoff (to `/prd` on the product track, or straight to architecture on the
 technical track).
 
+### Documentation-only delivery
+
+Before selecting a normal track, determine whether the request is solely a human-facing
+documentation update. A request is documentation-only only when it changes no product/runtime
+behavior, machine-consumed contract, configuration semantics, generated artifact, or testable
+functional surface. If documentation accompanies any functional change, keep it on the normal
+product or technical route; never split it into a separate story, requirement, or plan task.
+
+For an unambiguous documentation-only request with a source issue, deliver it here instead of
+authoring SDLC artifacts:
+
+1. Prefer a project-local documentation skill exposed to the host. Delegate the delivery to it
+   when available; otherwise make the documentation edit inline.
+2. Work on an isolated branch, commit and push the completed documentation change, and open a PR
+   whose body contains `Closes <owner/repo#number>` for the source issue. Do not close the issue
+   directly; merge-linked closure remains GitHub's responsibility.
+3. Verify the PR branch and closing reference, then write this transient result at
+   `.pipeline/documentation-delivery.json`:
+
+```json
+{
+  "version": 1,
+  "branch": "docs/example",
+  "prUrl": "https://github.com/owner/repo/pull/123",
+  "sourceRef": "owner/repo#123"
+}
+```
+
+4. Exit immediately. This result is consumed by the conductor and engineer paths as a successful
+   terminal delivery; do not write a track marker, PRD, stories, plan, or other DECIDE artifact.
+
+If the request is ambiguous, no source issue exists, or delegation/editing/branch/PR/verification
+does not complete, fail closed: do not emit the result and do not claim delivery.
+
 ## Practices
 
 ### 1. Explore Project Context

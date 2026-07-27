@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os';
 //
 // HERMETIC by construction — the whole point of the self-host feature is to never
 // mutate the operator's global config: HOME is redirected to a throwaway dir so
-// bin/install links into <tmp>/.claude/skills, never ~/.claude. A stub `node`
+// bin/install links into <tmp>/.claude/skills and <tmp>/.agents/skills, never
+// either operator catalog. A stub `node`
 // (reports v18) makes node_supports_conduct_ts false, so the costly conductor
 // build is skipped; the skill-symlink step runs first and is unaffected.
 
@@ -27,7 +28,7 @@ const INSTALLER = join(HARNESS_ROOT, 'bin', 'install');
 
 describe('bin/install --update — real relink smoke (TR-4)', () => {
   it(
-    'links a probe skill into a throwaway HOME (never touches global ~/.claude)',
+    'links a probe skill into both active catalogs in a throwaway HOME',
     async () => {
       // Guard: only run where the real installer is present (skip if the path
       // math is off or we're not in the repo tree).
@@ -59,11 +60,13 @@ describe('bin/install --update — real relink smoke (TR-4)', () => {
         // Assert the FS side effect (symlink), decoupled from the exit code:
         // later steps (settings/config) may need tools not present, but the
         // skill-link step runs first and is what we're smoking.
-        const link = join(home, '.claude', 'skills', probe);
-        const st = await lstat(link);
-        expect(st.isSymbolicLink()).toBe(true);
-        const target = await readlink(link);
-        expect(target).toContain(join('skills', probe));
+        for (const catalog of ['.claude', '.agents']) {
+          const link = join(home, catalog, 'skills', probe);
+          const st = await lstat(link);
+          expect(st.isSymbolicLink()).toBe(true);
+          const target = await readlink(link);
+          expect(target).toContain(join('skills', probe));
+        }
       } finally {
         await rm(home, { recursive: true, force: true });
         await rm(shim, { recursive: true, force: true });

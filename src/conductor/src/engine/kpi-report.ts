@@ -128,6 +128,9 @@ export async function renderKpi(root: string): Promise<string> {
       `- ${feature.slug}: input=${feature.cost.input} output=${feature.cost.output} ` +
         `tokens=${tokens} cost_usd=${feature.cost.costUsd}${marker}`,
     );
+    if (partial) {
+      continue;
+    }
     totalInput += feature.cost.input;
     totalOutput += feature.cost.output;
     totalCostUsd += feature.cost.costUsd;

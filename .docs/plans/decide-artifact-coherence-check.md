@@ -122,7 +122,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — new module (parser + types)
 - src/conductor/test/engine/engineer/coherence-validator.test.ts — new tests
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (parseCoherenceArtifact call, line ~1243), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** none
 
 ### Task 6: Id cross-check against real artifacts
@@ -137,7 +137,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — cross-check
 - src/conductor/test/engine/engineer/coherence-validator.test.ts — fixtures with real-shaped stories/plan
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (crossCheckIds call, line ~1253), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 5
 
 ### Task 7: Outcome-coverage layer (`outcome-<n>`)
@@ -152,7 +152,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — outcome layer
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#validateCoherence (checkOutcomeCoverage call), invoked from runCoherenceGate -> src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 6
 
 ### Task 8: FR-coverage layer (`fr-<N>`, transitive)
@@ -167,7 +167,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — FR layer
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#validateCoherence (checkFrCoverage call), invoked from runCoherenceGate -> src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 6
 
 ### Task 9: Story-coverage layer (`story-<id>`, zero-stories fail-closed)
@@ -182,7 +182,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — story layer
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#validateCoherence (checkStoryCoverage call), invoked from runCoherenceGate -> src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 6
 
 ### Task 10: Orphan-task rule (`task-<id>`)
@@ -197,7 +197,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — orphan rule
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#validateCoherence (checkOrphanTasks call), invoked from runCoherenceGate -> src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 6
 
 ### Task 11: Coverage-table consistency (`claim-<row>`)
@@ -212,7 +212,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — consistency check
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#validateCoherence (checkCoverageTableConsistency call), invoked from runCoherenceGate -> src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 6
 
 ### Task 12: Aggregated deterministic gap report
@@ -227,7 +227,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — report renderer + `validateCoherence` orchestrator
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (validateCoherence + renderGapReport calls, line ~1271/1310), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 7, 8, 9, 10, 11
 
 ### Task 13: Coherence waiver parser/evaluator
@@ -242,7 +242,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-waiver.ts — new module
 - src/conductor/test/engine/engineer/coherence-waiver.test.ts — new tests
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (evaluateCoherenceWaiver call, line ~1302), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 12
 
 ### Task 14: Duplicate-claim scan (offline, intake markers only)
@@ -258,7 +258,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 - src/conductor/src/engine/engineer/coherence-validator.ts — duplicate scan + gap emission
 - src/conductor/src/engine/overlap-scan.ts — reuse hook for advisory warn (no behavior change to existing callers)
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (scanDuplicateClaim call, line ~1283, and advisoryDuplicateClaimWarn call, line ~1306), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 13
 
 ### Task 15: Tier gating, layer degradation, no-retroactivity trigger
@@ -273,7 +273,7 @@ duplicate-claim) rung in `landSpec`. 20 tasks.
 **Files likely touched:**
 - src/conductor/src/engine/engineer/coherence-validator.ts — entry guard
 - src/conductor/test/engine/engineer/coherence-validator.test.ts
-**Wired-into:** none (inert until src/conductor/src/engine/engineer/land-spec.ts)
+**Wired-into:** src/conductor/src/engine/engineer/coherence-validator.ts#runCoherenceGate (resolveRequiredLayers call, line ~1229), invoked from src/conductor/src/engine/engineer/land-spec.ts#landSpec (Task 16)
 **Dependencies:** 12
 
 ### Task 16: landSpec wiring (single call-site block)

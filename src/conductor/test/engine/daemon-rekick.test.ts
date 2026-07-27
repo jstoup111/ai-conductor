@@ -48,6 +48,7 @@ function fakeDeps(opts: {
   isProcessed?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
+  readHaltClass?: (slug: string) => Promise<'needs-human' | 'mechanical' | 'unclassified'>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -78,6 +79,14 @@ function fakeDeps(opts: {
         }
       : {}),
     ...(opts.isOperatorParked ? { isOperatorParked: opts.isOperatorParked } : {}),
+    ...(opts.readHaltClass
+      ? {
+          readHaltClass: async (slug: string) => {
+            trace.events.push(`readHaltClass:${slug}`);
+            return opts.readHaltClass!(slug);
+          },
+        }
+      : {}),
     hasWarned: async (slug) => warned.has(slug),
     markWarned: async (slug) => {
       warned.add(slug);
@@ -143,6 +152,115 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const res = await rekickSweep(deps, SHA_C);
     expect(res.cleared).toEqual(['x']);
     expect(last.get('x')).toBe(SHA_C);
+  });
+
+  it('a needs-human-classified halt is skipped, not cleared, and never touches abort/clear/lastRekickSha', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['h'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'needs-human',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['h']);
+    expect(res.cleared).toEqual([]);
+    expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+    expect(last.has('h')).toBe(false);
+    const logLine = trace.events.find(
+      (e) => e.startsWith('log:') && e.includes('h') && e.includes('needs-human'),
+    );
+    expect(logLine).toBeDefined();
+  });
+
+  it('a needs-human-classified halt is skipped again on a second sweep at a NEW sha (not just the FR-9 guard)', async () => {
+    const last = new Map<string, string>();
+    const { deps } = fakeDeps({
+      halted: ['h'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'needs-human',
+    });
+    const res1 = await rekickSweep(deps, SHA_B);
+    expect(res1.skipped).toEqual(['h']);
+    expect(last.has('h')).toBe(false);
+
+    const res2 = await rekickSweep(deps, SHA_C);
+    expect(res2.skipped).toEqual(['h']);
+    expect(res2.cleared).toEqual([]);
+  });
+
+  it('a mechanical-classified halt clears normally and the log line names the halt class', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['m'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'mechanical',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['m']);
+    expect(trace.cleared.has('m')).toBe(true);
+    expect(last.get('m')).toBe(SHA_B);
+    const logLine = trace.events.find(
+      (e) => e.startsWith('log:') && e.includes('m') && e.includes('mechanical'),
+    );
+    expect(logLine).toBeDefined();
+  });
+
+  it('an unclassified halt (readHaltClass resolves to unclassified) still clears and the log line names it unclassified', async () => {
+    const last = new Map<string, string>();
+    const { deps, trace } = fakeDeps({
+      halted: ['u'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'unclassified',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['u']);
+    expect(last.get('u')).toBe(SHA_B);
+    const logLine = trace.events.find(
+      (e) => e.startsWith('log:') && e.includes('u') && e.includes('unclassified'),
+    );
+    expect(logLine).toBeDefined();
+  });
+
+  it('no readHaltClass dep at all still clears the slug normally (backward-compat)', async () => {
+    const last = new Map<string, string>();
+    const { deps } = fakeDeps({ halted: ['n'], lastRekickSha: last });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.cleared).toEqual(['n']);
+    expect(last.get('n')).toBe(SHA_B);
+  });
+
+  it('a mechanical-classified slug already re-kicked at SHA X is still skipped by the FR-9 per-SHA guard', async () => {
+    const last = new Map<string, string>([['m', SHA_B]]);
+    const { deps, trace } = fakeDeps({
+      halted: ['m'],
+      lastRekickSha: last,
+      readHaltClass: async () => 'mechanical',
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['m']);
+    expect(res.cleared).toEqual([]);
+    expect(trace.cleared.has('m')).toBe(false);
+  });
+
+  it('operator-parked AND needs-human: park check fires first, readHaltClass is never called', async () => {
+    const last = new Map<string, string>();
+    let classCalled = false;
+    const { deps, trace } = fakeDeps({
+      halted: ['h'],
+      lastRekickSha: last,
+      isOperatorParked: async () => true,
+      readHaltClass: async () => {
+        classCalled = true;
+        return 'needs-human';
+      },
+    });
+    const res = await rekickSweep(deps, SHA_B);
+    expect(res.skipped).toEqual(['h']);
+    expect(classCalled).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('readHaltClass:'))).toBe(false);
+    const logLine = trace.events.find((e) => e.startsWith('log:') && e.includes('operator-parked'));
+    expect(logLine).toBeDefined();
   });
 
   it('a per-worktree clear error is isolated; the sweep continues', async () => {
@@ -456,6 +574,26 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
     await mkdir(join(dir, '.pipeline'), { recursive: true });
     await expect(clearMarker(dir)).resolves.toBeUndefined();
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(true);
+  });
+
+  it('clearMarker also removes .pipeline/HALT.class when present (Task 5)', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), 'gate loop budget exceeded\n', 'utf-8');
+    await writeFile(join(p, 'HALT.class'), 'mechanical\n', 'utf-8');
+
+    await clearMarker(dir);
+
+    expect(await fileExists(join(p, 'HALT.class'))).toBe(false);
+  });
+
+  it('clearMarker is a no-op-safe when .pipeline/HALT.class is absent (Task 5)', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), 'some reason\n', 'utf-8');
+
+    await expect(clearMarker(dir)).resolves.toBeUndefined();
+    expect(await fileExists(join(p, 'HALT.class'))).toBe(false);
   });
 });
 
@@ -781,20 +919,13 @@ describe('engine/daemon-rekick — real-primitive sweep composition (FR-7/FR-8/F
   });
 });
 
-// ── TS-5 (#358): merged-PR guard on the rekick play-forward path ──────────────
+// ── Task 8: strict merged-history verification on rekick play-forward ──────
 //
-// `resumeRebaseFirst` does not yet accept `runGh`/`prUrl` opts, and the
-// `'already_shipped'` outcome does not exist (plan Tasks 11/12,
-// .docs/decisions/adr-2026-07-09-mid-run-merged-pr-guard.md, amendment
-// 2026-07-09). Passing `runGh`/`prUrl` today is inert (unused options) — the
-// happy-path assertions below are expected to FAIL because `res` stays one of
-// the pre-existing `RekickResumeResult` values ('rebased'/'halted'), never
-// `'already_shipped'`, and the real rebase/HALT still runs over the merged PR.
-// The negative-path tests assert BYTE-IDENTICAL pass-through to the existing
-// gated rebase-resolution flow this file already covers above (FR-12,
-// #300) — those are expected to PASS today (fail-open by construction), which
-// pins the "no regression on non-MERGED verdicts" contract.
-describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5)', () => {
+// `resumeRebaseFirst` accepts `runGh`/`prUrl`/`slug` and only returns
+// `'already_shipped'` after the injected strict verifier returns valid.
+// Missing or unavailable evidence writes HALT; non-merged PRs keep the normal
+// rebase-resolution flow.
+describe('engine/daemon-rekick — strict merged-history verification', () => {
   let dir: string;
   let events: ConductorEventEmitter;
   const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
@@ -875,10 +1006,11 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       localBase: 'main',
       events,
       ranManualTest: false,
-      // Not yet declared options (Task 11) — expected to be inert today.
       runGh,
       prUrl: PR_URL,
-    } as never);
+      slug: 'feature-a',
+      verifyMergedShipment: async () => ({ kind: 'verified' }),
+    });
 
     expect(res).toBe('already_shipped');
     // The advanced base must NOT have been integrated — no rebase ran.
@@ -888,12 +1020,31 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
     void baseSha;
   });
 
+  it('recordless merged history preserves work and writes a durable-evidence HALT', async () => {
+    await initAdvancingRepo();
+    await writeSentinel();
+    const { runGh } = makeGhFake({ state: 'MERGED' });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      runGh,
+      prUrl: PR_URL,
+      slug: 'feature-a',
+      verifyMergedShipment: async () => ({ kind: 'halt', reason: 'shipped-record-missing' }),
+    });
+
+    expect(await readFile(join(dir, HALT_MARKER), 'utf-8')).toContain('shipped-record-missing');
+    expect(res).toBe('halted');
+  });
+
   it.each([
     ['OPEN', { state: 'OPEN' }],
     ['CLOSED', { state: 'CLOSED' }],
     ['NOTFOUND', { state: 'NOTFOUND' }],
     ['UNKNOWN', { state: 'UNKNOWN' }],
-    ['gh throws', { throws: true }],
   ] as const)(
     'negative: %s verdict — byte-identical pass-through to the existing gated rebase-resolution flow (rebases as today)',
     async (_label, ghOpts) => {
@@ -908,7 +1059,8 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
         ranManualTest: true,
         runGh,
         prUrl: PR_URL,
-      } as never);
+        slug: 'feature-a',
+      });
 
       // Existing flow: the advanced base IS integrated (rebased), unchanged.
       expect(res).toBe('rebased');
@@ -927,6 +1079,24 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
     },
   );
+
+  it('merge-state unavailability halts without rebasing', async () => {
+    await initAdvancingRepo();
+    await writeSentinel();
+    const { runGh } = makeGhFake({ throws: true });
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: true,
+      runGh,
+      prUrl: PR_URL,
+      slug: 'feature-a',
+    });
+
+    expect(res).toBe('halted');
+  });
 
   it('negative: no pr_url recorded — zero gh calls, existing flow proceeds unchanged', async () => {
     const { baseSha } = await initAdvancingRepo();
@@ -958,8 +1128,8 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
     expect(branchContainsBase).toBe(true);
   });
 
-  it('negative: no runGh recorded (backward compatibility) — zero gh calls, existing flow proceeds unchanged', async () => {
-    const { baseSha } = await initAdvancingRepo();
+  it('missing feature identity halts rather than treating a merged PR as shipped', async () => {
+    await initAdvancingRepo();
     await writeSentinel();
 
     const res = await resumeRebaseFirst({
@@ -968,32 +1138,17 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
       events,
       ranManualTest: true,
       prUrl: PR_URL,
-      // runGh deliberately omitted — backward-compatible case with no new options wired.
-    } as never);
+      // No slug means durable evidence cannot be evaluated.
+    });
 
-    // Existing flow: the advanced base IS integrated (rebased), unchanged.
-    expect(res).toBe('rebased');
-    const branchContainsBase = await execFileAsync('git', [
-      '-C',
-      dir,
-      'merge-base',
-      '--is-ancestor',
-      baseSha,
-      'feature/foo',
-    ]).then(
-      () => true,
-      () => false,
-    );
-    expect(branchContainsBase).toBe(true);
-    expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
+    expect(res).toBe('halted');
   });
 });
 
-// ── TS-5 (#358) sweep-level: the caller that consumes resumeRebaseFirst's
-// outcome must write the processed marker, skip re-dispatch, and log the
-// out-of-band line ────────────────────────────────────────────────────────
+// ── Valid merged-history resume continues through the ordinary completion
+// boundary without manufacturing terminal markers. ─────────────────────────
 //
-// Per the ADR/plan (Task 11), `resumeRebaseFirst`'s `'already_shipped'`
+// Per the ADR/plan (Task 8), `resumeRebaseFirst`'s `'already_shipped'`
 // outcome is consumed by daemon-cli.ts's `runConductorInWorktree` closure
 // (wired through `makeFeatureRunnerDeps`, daemon-deps.ts:62/99) — NOT by
 // `rekickSweep` (that function only ever clears/aborts HALT markers; it does
@@ -1004,19 +1159,11 @@ describe('engine/daemon-rekick — resumeRebaseFirst merged-PR guard (#358, TS-5
 // site and resorts to source-assembly assertions for that reason).
 //
 // This test instead drives the REAL production seam one layer down: the
-// `runConductor` injection point of `makeRunFeature` (daemon-runner.ts), fed
-// a `runConductor` that performs the EXACT sequence the plan specifies for
-// the daemon-cli.ts wiring once Task 11 lands — call `resumeRebaseFirst`
-// with the real merged-PR guard opts, and on `'already_shipped'` write the
-// synthetic ship markers and return without invoking a real conductor run
-// (no re-dispatch). Everything downstream of that point (`readOutcome` →
-// `isVerifiedShip` → `markProcessed`) is REAL production code, unmodified —
-// exactly the same integration TS-3 pins in daemon-runner.test.ts. Because
-// `resumeRebaseFirst` does not yet implement the guard, it returns 'rebased'
-// today instead of 'already_shipped', so the synthetic markers are never
-// written, `markProcessed` is never called, and the assertions below fail —
-// RED for the right reason (the guard's absence, not a fixture bug).
-describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#358, TS-5)', () => {
+// `runConductor` injection point of `makeRunFeature` (daemon-runner.ts). It
+// mirrors daemon-cli: a verified `'already_shipped'` result continues through
+// the ordinary conductor boundary rather than creating finish-choice/DONE or
+// a processed marker itself.
+describe('engine/daemon-rekick — verified merged-history continuation', () => {
   let dir: string;
   let worktreeBase: string;
   let processedDir: string;
@@ -1086,7 +1233,7 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
     await rm(processedDir, { recursive: true, force: true });
   });
 
-  it("happy: MERGED verdict — sweep writes .daemon/processed/<slug> with prUrl, skips re-dispatch, logs 'already shipped out-of-band'", async () => {
+  it('verified merged history continues through the ordinary completion boundary without synthetic markers', async () => {
     await initAdvancingRepo();
     await writeSentinel();
     const branchBefore = await git('rev-parse', 'feature/foo');
@@ -1098,11 +1245,9 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
 
     const deps: FeatureRunnerDeps = {
       createWorktree: async () => ({ path: dir, branch: 'feature/foo' }),
-      // The exact sequence plan Task 11 specifies for daemon-cli.ts's
-      // runConductorInWorktree once wired: check the guard via
-      // resumeRebaseFirst BEFORE performRebase/conductor.run(); on
-      // 'already_shipped' write the synthetic ship markers and return —
-      // no real conductor dispatch.
+      // A valid merged record allows the normal conductor path to continue;
+      // it must not manufacture finish-choice/DONE markers or process-cache
+      // state before that ordinary completion boundary verifies the result.
       runConductor: async (wt) => {
         const res = await resumeRebaseFirst({
           worktreePath: wt.path,
@@ -1111,17 +1256,13 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
           ranManualTest: false,
           runGh,
           prUrl: PR_URL,
+          slug: SLUG,
+          verifyMergedShipment: async () => ({ kind: 'verified' }),
           log,
-        } as never);
+        });
         if (res === 'already_shipped') {
-          await mkdir(join(wt.path, '.pipeline'), { recursive: true });
-          await writeFile(join(wt.path, '.pipeline', 'finish-choice'), 'pr', 'utf-8');
-          await writeFile(join(wt.path, '.pipeline', 'DONE'), '', 'utf-8');
-          log(`already shipped out-of-band; local branch retained at ${branchBefore}`);
-          return;
+          log(`merged shipment evidence verified; continuing normal completion from ${branchBefore}`);
         }
-        // Any non-'already_shipped' outcome means the feature is re-dispatched
-        // through the normal gate loop (today's behavior).
         realConductorInvoked = true;
       },
       readOutcome: async (wt): Promise<WorktreeOutcome> => {
@@ -1147,7 +1288,7 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
         );
       },
       daemon: false,
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), invokeInteractive: async () => {} },
       project: 'test-project',
       log,
     };
@@ -1156,17 +1297,12 @@ describe('engine/daemon-rekick — sweep-level consumption of already_shipped (#
     const item: BacklogItem = { slug: SLUG };
     const outcome = await run(item);
 
-    // Sweep-level side effect 1: the feature is NOT re-dispatched.
-    expect(realConductorInvoked).toBe(false);
-    // Sweep-level side effect 2: the processed marker is written with the
-    // recorded prUrl.
-    expect(await fileExists(join(processedDir, SLUG))).toBe(true);
-    const processedContent = JSON.parse(await readFile(join(processedDir, SLUG), 'utf-8'));
-    expect(processedContent.prUrl).toBe(PR_URL);
-    // Sweep-level side effect 3: the log carries the out-of-band line.
-    expect(logs.some((l) => /already shipped out-of-band/.test(l))).toBe(true);
-    // The daemon-runner's outcome status reflects a verified ship.
-    expect(outcome.status).toBe('done');
+    expect(realConductorInvoked).toBe(true);
+    expect(await fileExists(join(processedDir, SLUG))).toBe(false);
+    expect(await fileExists(join(dir, '.pipeline', 'finish-choice'))).toBe(false);
+    expect(await fileExists(join(dir, '.pipeline', 'DONE'))).toBe(false);
+    expect(logs.some((l) => /merged shipment evidence verified/.test(l))).toBe(true);
+    expect(outcome.status).toBe('error');
   });
 });
 
@@ -1429,7 +1565,9 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
     // This should write the marker to the MAIN root, not the worktree
     const parkResult = await checkAndAutoPark(worktreeDir, SLUG, {
       daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
+      // `maxAttempts` (the no-evidence durable-counter park path) was
+      // removed (#773 Task 13); a park now only fires from an explicit
+      // `reason`, which this test still supplies.
       reason: `no completion evidence after ${MAX_ATTEMPTS} attempts`,
     });
 

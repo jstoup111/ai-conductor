@@ -6,11 +6,14 @@ import * as chokidar from 'chokidar';
 import { HALT_MARKER } from './halt-marker.js';
 import type { BacklogItem } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
+import type { ProviderExecutionContext } from './provider-execution.js';
 import type {
+  FeatureRunScope,
   FeatureRunnerDeps,
   FeatureWorktree,
   WorktreeOutcome,
 } from './daemon-runner.js';
+import type { ConductorEventEmitter } from '../ui/events.js';
 import { prepareWorktree } from './worktree-prepare.js';
 import { makeProductionGh } from './pr-labels.js';
 import { ensureWorktree } from './worktree-shared.js';
@@ -29,9 +32,20 @@ export interface RealDepsConfig {
   /** Branch the worktrees fork from (e.g. 'main'). */
   baseBranch: string;
   /** Run the gate loop in a worktree to DONE/HALT (assembled by the CLI). */
-  runConductorInWorktree: (worktree: FeatureWorktree, item: BacklogItem) => Promise<void>;
-  /** LLM provider used for the Phase 9.1 `done`-feature retro narrative. */
-  provider: LLMProvider;
+  runConductorInWorktree: (
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+    providerExecution?: ProviderExecutionContext,
+    featureEvents?: ConductorEventEmitter,
+    log?: (message: string) => void,
+  ) => Promise<void>;
+  /** Legacy narrative provider when provider-aware feature execution is absent. */
+  provider?: LLMProvider;
+  providerExecution?: () => ProviderExecutionContext;
+  beginFeatureRun?: (
+    worktree: FeatureWorktree,
+    item: BacklogItem,
+  ) => FeatureRunScope | Promise<FeatureRunScope>;
   /**
    * The resolved active memory provider for this run (adr-2026-06-29-per-project-memory-provider-selection). Computed at
    * run start by `resolveMemoryProvider` and carried on context so every
@@ -39,11 +53,18 @@ export interface RealDepsConfig {
    */
   memoryProvider?: unknown;
   log?: (msg: string) => void;
+  /**
+   * Echo `bin/setup`'s full output into the log on success (`daemon_verbose`).
+   * Default false: a one-line summary instead. Failure output is unaffected.
+   */
+  verbose?: boolean;
   /** Deterministic setup-failure triage (adr-2026-07-09-setup-failure-triage), daemon-only. */
   runSetupTriage?: (
     error: SetupFailureError,
     worktree: FeatureWorktree,
     item: BacklogItem,
+    providerExecution?: ProviderExecutionContext,
+    log?: (message: string) => void,
   ) => Promise<TriageOutcome>;
 }
 
@@ -60,6 +81,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // (Phase 9.1). Manual `/conduct` runs don't go through makeFeatureRunnerDeps.
     daemon: true,
     provider: cfg.provider,
+    providerExecution: cfg.providerExecution,
+    beginFeatureRun: cfg.beginFeatureRun,
     // Thread the resolved active memory provider onto run context (adr-2026-06-29-per-project-memory-provider-selection/FR-10).
     memoryProvider: cfg.memoryProvider,
     // Project key for the engineer store = the main checkout's basename (NOT the
@@ -91,9 +114,11 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: (wt) => prepareWorktree(wt.path, cfg.log),
+    prepareWorktree: (wt, log) =>
+      prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false }),
 
-    runConductor: (wt, item) => cfg.runConductorInWorktree(wt, item),
+    runConductor: (wt, item, providerExecution, featureEvents, log) =>
+      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log),
 
     readOutcome: (wt) => readWorktreeOutcome(wt.path),
 
@@ -135,7 +160,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       return escalateBuildFailure({
         projectRoot: opts.projectRoot,
         failureReason: opts.failureReason,
-        log: cfg.log,
+        log: opts.log ?? cfg.log,
       });
     },
 
@@ -147,8 +172,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Task 14 (TS-5): surface quarantine evidence to the resuming build agent.
     // Rooted at the feature's own worktree (not the main checkout) so
     // `rev-parse --verify wip/setup-quarantine-<slug>` sees that worktree's refs.
-    surfaceQuarantineRef: (wt, slug, outcome) =>
-      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: cfg.log ?? (() => {}) }),
+    surfaceQuarantineRef: (wt, slug, outcome, log) =>
+      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: log ?? cfg.log ?? (() => {}) }),
   };
 }
 

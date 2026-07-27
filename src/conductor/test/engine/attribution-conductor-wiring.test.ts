@@ -34,9 +34,16 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
 import { Conductor, checkAttributionMachineryIntact, seedAndCheckAttributionMachinery } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -104,6 +111,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         return {
           success: true,
           output: JSON.stringify(verdict),
+          exitCode: 0,
         };
       },
 
@@ -167,6 +175,244 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     expect(verdict.results[0].verdict).toBe('satisfied');
   });
 
+  it('routes build review and attribution judgment through their explicit provider in isolated scopes', async () => {
+    const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'captured provider must not run',
+      exitCode: 0,
+    }));
+    const capturedInteractive = vi.fn().mockResolvedValue(undefined);
+    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'non-selected Claude runtime must not run',
+      exitCode: 0,
+    }));
+    const claudeInteractive = vi.fn().mockResolvedValue(undefined);
+    const codexInvoke = vi.fn(
+      async (options: InvokeOptions): Promise<InvokeResult> => {
+        const attribution = options.systemPrompt?.includes('attribution_verify');
+        const output = attribution
+          ? JSON.stringify({
+              schema: 1,
+              anchor: {
+                head: 'abc1234567890123456789012345678901234567',
+                residue: ['7'],
+              },
+              results: [],
+            })
+          : '{"verdict":"PASS"}';
+        return {
+          success: true,
+          output,
+          exitCode: 0,
+          tokenUsage: attribution
+            ? { input: 13, output: 5 }
+            : { input: 11, output: 3 },
+        };
+      },
+    );
+    const provider = (
+      invoke: LLMProvider['invoke'],
+      invokeInteractive: LLMProvider['invokeInteractive'],
+    ): LLMProvider => ({ invoke, invokeInteractive });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider(claudeInvoke, claudeInteractive),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CLAUDE_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+      {
+        key: 'codex',
+        provider: provider(codexInvoke, vi.fn().mockResolvedValue(undefined)),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(
+          CODEX_MODEL_POLICY.modelFallbackLadder,
+        ),
+      },
+    ]);
+    const sessionIds = [
+      'build-review-codex-session',
+      'attribution-codex-session',
+    ][Symbol.iterator]();
+    const sessions = new ProviderSessionStore({
+      createSessionId: () =>
+        sessionIds.next().value ?? 'unexpected-session',
+    });
+    const beginBranch = vi.spyOn(sessions, 'beginBranch');
+    const planDir = join(projectRoot, '.docs/plans');
+    await mkdir(planDir, { recursive: true });
+    const planPath = join(planDir, 'test.md');
+    await writeFile(
+      planPath,
+      '# Plan\n\n### Task 7: Test\n**Files:** `src/test.ts`\n\nTest task.\n',
+    );
+    const gitRunner = vi.fn(async (args: string[]) => {
+      if (args[0] === 'symbolic-ref') {
+        return {
+          exitCode: 0,
+          stdout: 'refs/remotes/origin/main\n',
+          stderr: '',
+        };
+      }
+      if (args[0] === 'merge-base') {
+        return { exitCode: 0, stdout: 'abc123\n', stderr: '' };
+      }
+      if (args[0] === 'diff') {
+        return {
+          exitCode: 0,
+          stdout: 'diff --git a/src/test.ts b/src/test.ts\n',
+          stderr: '',
+        };
+      }
+      return { exitCode: 1, stdout: '', stderr: '' };
+    });
+    const runner = new DefaultStepRunner(
+      provider(capturedInvoke, capturedInteractive),
+      'captured-session',
+      projectRoot,
+      {
+        config: {
+          llm_provider: ['claude', 'codex'],
+          steps: {
+            build_review: { llm_provider: 'codex' },
+            attribution_verify: { llm_provider: 'codex' },
+          },
+        },
+        gitRunner,
+        planPath,
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+      },
+    );
+
+    const buildReview = await runner.run('build_review', {});
+    const attribution = await runner.dispatchVerifier({
+      residueIds: ['7'],
+      planPath,
+      projectRoot,
+    });
+
+    expect({
+      capturedCalls: {
+        invoke: capturedInvoke.mock.calls,
+        interactive: capturedInteractive.mock.calls,
+      },
+      claudeRuntimeCalls: {
+        invoke: claudeInvoke.mock.calls,
+        interactive: claudeInteractive.mock.calls,
+      },
+      beginBranchCalls: beginBranch.mock.calls,
+      codexCalls: codexInvoke.mock.calls.map(([options]) => ({
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        model: options.model,
+        effort: options.effort,
+      })),
+      buildReview,
+      attribution,
+    }).toEqual({
+      capturedCalls: { invoke: [], interactive: [] },
+      claudeRuntimeCalls: { invoke: [], interactive: [] },
+      beginBranchCalls: [
+        ['build_review'],
+        ['attribution_verify'],
+      ],
+      codexCalls: [
+        {
+          sessionId: 'build-review-codex-session',
+          resume: false,
+          cwd: projectRoot,
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+        {
+          sessionId: 'attribution-codex-session',
+          resume: false,
+          cwd: projectRoot,
+          model: 'gpt-5.6-sol',
+          effort: 'high',
+        },
+      ],
+      buildReview: expect.objectContaining({
+        success: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        model: 'gpt-5.6-sol',
+        tokenUsage: { input: 11, output: 3 },
+      }),
+      attribution: expect.objectContaining({
+        success: true,
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        model: 'gpt-5.6-sol',
+        tokenUsage: { input: 13, output: 5 },
+      }),
+    });
+  });
+
+  it('passes the Codex model policy through dispatchVerifier to the attribution provider invocation', async () => {
+    let dispatchConfig: Pick<InvokeOptions, 'model' | 'effort'> | undefined;
+    const provider: LLMProvider = {
+      invoke: async (opts: InvokeOptions): Promise<InvokeResult> => {
+        dispatchConfig = { model: opts.model, effort: opts.effort };
+        const verdict = {
+          schema: 1,
+          anchor: { head: 'abc1234567890123456789012345678901234567', residue: ['7'] },
+          results: [
+            {
+              taskId: '7',
+              verdict: 'satisfied',
+              citations: [{ sha: 'def456', rationale: 'implements the feature' }],
+              testEvidence: { command: 'npm test', exit: 0, summary: '1 passed' },
+            },
+          ],
+        };
+        await writeFile(
+          join(projectRoot, '.pipeline', 'attribution-verdict.json'),
+          JSON.stringify(verdict),
+          'utf-8',
+        );
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
+      },
+      invokeInteractive: async () => {
+        throw new Error('invokeInteractive not supported in fixture');
+      },
+    };
+    const runner = new DefaultStepRunner(
+      provider,
+      '00000000-0000-0000-0000-000000000006',
+      projectRoot,
+      {
+        config: {} as HarnessConfig,
+        pipelineDir: join(projectRoot, '.pipeline'),
+        mode: 'default',
+        modelPolicy: CODEX_MODEL_POLICY,
+      },
+    );
+    const planDir = join(projectRoot, '.docs/plans');
+    await mkdir(planDir, { recursive: true });
+    const planPath = join(planDir, 'test.md');
+    await writeFile(
+      planPath,
+      '# Plan\n\n### Task 7: Test\n**Files:** `src/test.ts`\n\nTest task.\n',
+    );
+
+    await runner.dispatchVerifier({
+      residueIds: ['7'],
+      planPath,
+      projectRoot,
+    });
+
+    expect(dispatchConfig).toEqual({ model: 'gpt-5.6-sol', effort: 'high' });
+  });
+
   it('provider invocation guard — demonstrates that stub dispatcher regression would fail', async () => {
     // This test demonstrates the regression detection mechanism.
     // A stub dispatcher that never calls provider.invoke() would fail at this assertion.
@@ -191,7 +437,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           ],
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
       invokeInteractive: async () => {
         throw new Error('not supported');
@@ -258,7 +504,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         };
 
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
 
       invokeInteractive: async () => {
@@ -345,7 +591,7 @@ Add comprehensive tests.
           ],
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
 
       invokeInteractive: async () => {
@@ -434,7 +680,7 @@ Add comprehensive tests.
         };
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
 
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
       invokeInteractive: async () => {
         throw new Error('not supported in test');
@@ -463,7 +709,7 @@ Implementation that requires semantic verification.
 
     // Create task-evidence.json so that evidence tracking works
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    const evidence = await createTaskEvidence(projectRoot, '.pipeline');
+    const evidence = await createTaskEvidence(projectRoot);
 
     // Call dispatchVerifier as the conductor would at line 1919
     const result = await runner.dispatchVerifier({
@@ -656,7 +902,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('build step + broken attribution machinery + enforcement configured → dispatch fails loudly naming attribution machinery / .pipeline/current-task', async () => {
+  it('build step dispatches when attribution telemetry machinery is unavailable', async () => {
     let buildWasDispatched = false;
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
@@ -677,15 +923,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
     await conductor.run();
 
-    // The build step must NOT have been dispatched at all — the guard must
-    // fire before the step runner is ever invoked for 'build'.
-    expect(buildWasDispatched).toBe(false);
-
-    // Dispatch must fail LOUDLY via a HALT marker naming the broken
-    // machinery — not a silent no-op and not a generic/unrelated halt
-    // reason.
-    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
-    expect(halt).toMatch(/\.pipeline\/current-task|attribution machinery/i);
+    expect(buildWasDispatched).toBe(true);
   });
 
   it('non-build step (plan) + broken attribution machinery → dispatch proceeds unaffected', async () => {
@@ -774,7 +1012,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     }
   });
 
-  it('build step + task-status.json present but session-hooks/ missing its expected scripts + enforcement configured → dispatch fails loudly naming session hooks', async () => {
+  it('build step dispatches when task telemetry hooks are missing', async () => {
     // task-status.json present, but session-hooks/ dir absent entirely —
     // the machinery required to attribute a dispatched build is incomplete.
     await writeFile(
@@ -803,13 +1041,10 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
     await conductor.run();
 
-    expect(buildWasDispatched).toBe(false);
-
-    const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
-    expect(halt).toMatch(/session-hooks|session hooks/i);
+    expect(buildWasDispatched).toBe(true);
   });
 
-  it('build step + task-status.json and session-hooks/ present but .pipeline/ not writable + enforcement configured → dispatch fails loudly naming the stamp path', async () => {
+  it('build step dispatches when the current-task telemetry path is unwritable', async () => {
     await writeFile(
       join(dir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
@@ -850,10 +1085,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     try {
       await conductor.run();
 
-      expect(buildWasDispatched).toBe(false);
-
-      const halt = await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8');
-      expect(halt).toMatch(/current-task|stamp path|writable/i);
+      expect(buildWasDispatched).toBe(true);
     } finally {
       // Restore writability so afterEach's rm(dir, { recursive: true }) can
       // clean up the temp directory.
@@ -1005,14 +1237,9 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
       expect(haltContent).not.toMatch(/task-status\.json is missing/i);
     }
 
-    // task-status.json must have been seeded as a side effect of running
-    // this step, proving the seam went through seedAndCheckAttributionMachinery
-    // rather than the bare check.
-    const seeded = JSON.parse(
-      await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8'),
-    ) as { tasks: Array<{ id: string; status: string }> };
-    expect(seeded.tasks).toHaveLength(1);
-    expect(seeded.tasks[0].id).toBe('1');
+    // Attribution state is advisory; BUILD no longer creates it as an
+    // authorization prerequisite.
+    expect(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8').catch(() => null)).toBeNull();
   });
 
   it('resumed build with prior completed progress → seedAndCheckAttributionMachinery preserves completed row and reports intact', async () => {
@@ -1097,7 +1324,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     expect(diagnostic).toMatch(/session-hooks|session hooks/i);
   });
 
-  it('(b) stamp path unwritable → seedAndCheckAttributionMachinery still returns the stamp-path diagnostic unchanged', async () => {
+  it('(b) stamp path unwritable remains advisory to attribution machinery', async () => {
     await writeFile(
       join(dir, '.pipeline', 'task-status.json'),
       JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
@@ -1115,8 +1342,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     try {
       const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
 
-      expect(diagnostic).not.toBeNull();
-      expect(diagnostic).toMatch(/current-task|stamp path|writable/i);
+      expect(diagnostic).toBeNull();
     } finally {
       await chmod(currentTaskPath, 0o644);
     }

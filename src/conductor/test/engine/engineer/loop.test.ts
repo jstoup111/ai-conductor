@@ -57,6 +57,9 @@ const noopProvider = {
 /** Minimal gh stub. */
 const noopGh = async (_args: string[], _opts: { cwd: string }) => ({ stdout: '' });
 
+/** Successful Git runner for remote-flow fixtures that are not testing publication. */
+const noopGit = async () => ({ stdout: '', stderr: '' });
+
 // ── temp dir scaffolding ──────────────────────────────────────────────────────
 
 let workDir: string;
@@ -752,7 +755,7 @@ describe('Task 36: spec PR opened, never merge/build (FR-7, FR-10)', () => {
     const { gh, calls } = makeTestGh(prUrl);
     const { io, text } = scriptedIo(['add csv export', 'y', 'exit']);
 
-    const summary = await runEngineerMode({ route, io, gh, registryPath, engineerDir, decide: makeTestDecide() });
+    const summary = await runEngineerMode({ route, io, gh, git: noopGit, registryPath, engineerDir, decide: makeTestDecide() });
 
     // PR URL reported in output
     expect(text()).toMatch(/pull\/42/);
@@ -852,6 +855,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
       route,
       io,
       gh,
+      git: noopGit,
       registryPath,
       engineerDir,
       ensureRunningLaunch,
@@ -940,6 +944,7 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
       route,
       io,
       gh,
+      git: noopGit,
       registryPath,
       engineerDir,
       ensureRunningLaunch,
@@ -951,6 +956,78 @@ describe('Task 37: ensure-running wired after handoff (FR-21)', () => {
     expect(launchCalls[0]).toBe(dirA);
     expect(launchCalls[1]).toBe(dirA);
     expect(summary.buildsRun ?? 0).toBe(0);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// Issue #933: a documentation-only explore delivery is terminal.  Engineer
+// verifies the PR rather than continuing through DECIDE authoring or handoff.
+// ═════════════════════════════════════════════════════════════════════════════
+
+describe('documentation delivery terminal path (issue #933)', () => {
+  it('after explore verifies a documentation PR, skips artifacts, handoff, and daemon launch', async () => {
+    const dirA = join(workDir, 'alpha');
+    await initRepo(dirA);
+    await writeRegistry([makeRecordWithRemote(dirA, 'alpha')]);
+
+    const { runEngineerMode } = await loadLoop();
+    const { provider: route } = makeTestProvider({ routeTo: 'alpha' });
+    const sourceRef = 'acme/widgets#17';
+    const prUrl = 'https://github.com/acme/widgets/pull/42';
+    const ghCalls: string[][] = [];
+    const gh = async (args: string[], _opts: { cwd: string }) => {
+      ghCalls.push([...args]);
+      if (args[0] === 'api' && args[1] === 'user') return { stdout: 'testuser\n' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            headRefName: 'docs/install-refresh',
+            body: `Documentation refresh\n\nCloses ${sourceRef}`,
+          }),
+        };
+      }
+      throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
+    };
+    const decideSteps: string[] = [];
+    const decide = async (ctx: { step: string }) => {
+      decideSteps.push(ctx.step);
+      if (ctx.step === 'explore') {
+        await mkdir(join(dirA, '.pipeline'), { recursive: true });
+        await writeFile(
+          join(dirA, '.pipeline', 'documentation-delivery.json'),
+          JSON.stringify({
+            version: 1,
+            branch: 'docs/install-refresh',
+            prUrl,
+            sourceRef,
+          }),
+        );
+        return { approved: true, artifact: '# Explore\n' };
+      }
+      throw new Error(`documentation delivery must stop after explore; got ${ctx.step}`);
+    };
+    const launchCalls: string[] = [];
+    const { io, text } = scriptedIo(['refresh installation docs', 'y', 'exit']);
+
+    const summary = await runEngineerMode({
+      route,
+      io,
+      gh,
+      registryPath,
+      engineerDir,
+      decide,
+      ensureRunningLaunch: (repoPath: string) => { launchCalls.push(repoPath); },
+    });
+
+    expect(decideSteps).toEqual(['explore']);
+    expect(summary.ideasProcessed).toBe(1);
+    expect(summary.authored).toEqual([]);
+    expect(text()).toContain(prUrl);
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'view')).toBe(true);
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'create')).toBe(false);
+    expect(launchCalls).toEqual([]);
+    const branches = (await execFile('git', ['branch', '--list', 'spec/*'], { cwd: dirA })).stdout;
+    expect(branches.trim()).toBe('');
   });
 });
 

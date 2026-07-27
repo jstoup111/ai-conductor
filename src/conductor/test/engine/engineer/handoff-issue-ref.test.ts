@@ -50,14 +50,24 @@ afterEach(async () => {
 });
 
 function target(): TargetRepo {
-  return { name: 'app', canonicalPath: tempDir };
+  return {
+    name: 'app',
+    canonicalPath: tempDir,
+    remote: 'https://github.com/acme/app.git',
+  };
 }
+
+const noOpGitRunner: NonNullable<HandoffDeps['gitRunner']> = async () => ({
+  stdout: '',
+  stderr: '',
+});
 
 describe('openSpecPr — spec PR issue linkage (FR-2)', () => {
   it('adds a non-closing Refs line when sourceRef is supplied', async () => {
     const { runner, getBody } = makeRunner();
     const result = await openSpecPr(target(), 'spec/dep-bump', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
       sourceRef: 'acme/app#49',
     });
@@ -71,6 +81,7 @@ describe('openSpecPr — spec PR issue linkage (FR-2)', () => {
     const { runner, calls } = makeRunner();
     const result = await openSpecPr(target(), 'spec/dep-bump', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
     });
     expect(result.kind).toBe('pr-opened');
@@ -81,6 +92,7 @@ describe('openSpecPr — spec PR issue linkage (FR-2)', () => {
     const { runner, getBody } = makeRunner('## Why\nstuff\n\nRefs acme/app#49');
     await openSpecPr(target(), 'spec/dep-bump', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
       sourceRef: 'acme/app#49',
     });
@@ -95,6 +107,7 @@ describe('openSpecPr — spec PR issue linkage (FR-2)', () => {
     };
     const result = await openSpecPr(target(), 'spec/dep-bump', {
       runner,
+      gitRunner: noOpGitRunner,
       ledgerOpts: { engineerDir: tempDir },
       sourceRef: 'acme/app#49',
     });

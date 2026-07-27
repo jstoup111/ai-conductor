@@ -1,6 +1,14 @@
 import { readFile, rename, mkdir } from 'fs/promises';
-import { existsSync } from 'fs';
-import { join, isAbsolute, resolve as resolvePath, dirname } from 'path';
+import { existsSync, realpathSync } from 'fs';
+import {
+  join,
+  isAbsolute,
+  normalize,
+  resolve as resolvePath,
+  dirname,
+  relative,
+  sep,
+} from 'path';
 import { load as loadYaml } from 'js-yaml';
 import type {
   HarnessConfig,
@@ -18,6 +26,7 @@ import { VALID_MERMAID_RENDERER_MODES } from './mermaid-renderer-presets.js';
 import { validateWhenSyntax } from './when-expression.js';
 import type { PluginRegistry } from './plugin-registry.js';
 import { FALLBACK_RETRIES } from './resolved-config.js';
+import { resolveProviderModelPolicy } from './provider-model-policy.js';
 
 export type ConfigError = {
   type: 'missing' | 'parse_error' | 'version_mismatch' | 'validation_error';
@@ -33,6 +42,54 @@ export type ConfigResult =
 const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP']);
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
+const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
+
+function validateTddModelConfig(
+  value: unknown,
+  path: string,
+  providerKey: string,
+): ConfigError | undefined {
+  if (!isPlainObject(value)) return { type: 'validation_error', message: `${path} must be an object` };
+  if (!BUILT_IN_MODEL_PROVIDERS.has(providerKey)) {
+    return {
+      type: 'validation_error',
+      message: `${path} requires llm_provider to be one of: claude, codex; provider "${providerKey}" has no native TDD model policy.`,
+    };
+  }
+
+  const config = value as Record<string, unknown>;
+  for (const phase of Object.keys(config)) {
+    if (phase !== 'red' && phase !== 'green') {
+      return { type: 'validation_error', message: `Unknown key in ${path}: "${phase}"` };
+    }
+  }
+
+  const nativeModels = new Set(resolveProviderModelPolicy(providerKey).modelEscalationOrder);
+  for (const phase of ['red', 'green']) {
+    const phaseValue = config[phase];
+    if (phaseValue === undefined) continue;
+    const phasePath = `${path}.${phase}`;
+    if (!isPlainObject(phaseValue)) {
+      return { type: 'validation_error', message: `${phasePath} must be an object` };
+    }
+    const phaseConfig = phaseValue as Record<string, unknown>;
+    for (const key of Object.keys(phaseConfig)) {
+      if (key !== 'model') {
+        return { type: 'validation_error', message: `Unknown key in ${phasePath}: "${key}"` };
+      }
+    }
+    if (typeof phaseConfig.model !== 'string' || phaseConfig.model.trim() === '') {
+      return { type: 'validation_error', message: `${phasePath}.model must be a non-empty string` };
+    }
+    if (!nativeModels.has(phaseConfig.model)) {
+      return {
+        type: 'validation_error',
+        message: `${phasePath}.model must be a native ${providerKey} model (${[...nativeModels].join(', ')}).`,
+      };
+    }
+  }
+  return undefined;
+}
 
 export const PROJECT_CONFIG_DIR = '.ai-conductor';
 export const PROJECT_CONFIG_FILE = 'config.yml';
@@ -164,6 +221,7 @@ export function validateConfig(
     'mermaid_renderer',
     'assess',
     'acceptance_spec_globs',
+    'test_suite',
     // Plugin selections (adr-2026-06-29-memory-provider-plugin-and-agent-queried-integration/adr-2026-06-29-per-project-memory-provider-selection)
     'llm_provider',
     'ui_renderer',
@@ -190,6 +248,8 @@ export function validateConfig(
     'model_fallback_ladder',
     // Daemon auto-restart on stale engine.
     'auto_restart_on_stale_engine',
+    // Minimum interval between engine-refresh (origin fetch) attempts.
+    'engine_refresh_min_interval_seconds',
     // Auto-resolve merge conflicts on open PRs.
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
@@ -212,6 +272,9 @@ export function validateConfig(
       return errVal(`Unknown top-level key: "${key}"`);
     }
   }
+
+  const providerSelectionErr = validateProviderSelection(obj.llm_provider, 'llm_provider');
+  if (providerSelectionErr) return { ok: false, error: providerSelectionErr };
 
   // defaults
   if (obj.defaults !== undefined) {
@@ -269,6 +332,7 @@ export function validateConfig(
       }
       const cfg = value as Record<string, unknown>;
       const knownStepKeys = new Set([
+        'llm_provider',
         'model',
         'effort',
         'max_retries',
@@ -279,8 +343,10 @@ export function validateConfig(
         'by_tier',
         'after',
         'enforcement',
+        'completion_artifact',
         'when',
         'parallel',
+        'tdd',
       ]);
       for (const k of Object.keys(cfg)) {
         if (!knownStepKeys.has(k)) {
@@ -289,6 +355,13 @@ export function validateConfig(
       }
 
       // Common validations
+      const stepProviderSelectionErr = validateProviderSelection(
+        cfg.llm_provider,
+        `steps.${name}.llm_provider`,
+      );
+      if (stepProviderSelectionErr) {
+        return { ok: false, error: stepProviderSelectionErr };
+      }
       if (cfg.effort !== undefined && !VALID_EFFORTS.has(cfg.effort as EffortLevel)) {
         return errVal(`steps.${name}.effort must be low|medium|high|xhigh|max`);
       }
@@ -310,6 +383,17 @@ export function validateConfig(
       }
       if (cfg.skill !== undefined && typeof cfg.skill !== 'string') {
         return errVal(`steps.${name}.skill must be a string path`);
+      }
+      if (cfg.tdd !== undefined) {
+        if (name !== 'build') {
+          return errVal(`steps.${name}.tdd is only valid for the build step`);
+        }
+        if (obj.llm_provider !== undefined && typeof obj.llm_provider !== 'string') {
+          return errVal('steps.build.tdd requires llm_provider to be a string');
+        }
+        const providerKey = typeof obj.llm_provider === 'string' ? obj.llm_provider : 'claude';
+        const tddErr = validateTddModelConfig(cfg.tdd, `steps.${name}.tdd`, providerKey);
+        if (tddErr) return { ok: false, error: tddErr };
       }
       if (cfg.hooks !== undefined) {
         if (!isPlainObject(cfg.hooks)) {
@@ -384,6 +468,31 @@ export function validateConfig(
       const isCustom = !builtInNames.has(name as StepName);
 
       if (isCustom) {
+        if (cfg.completion_artifact !== undefined) {
+          const field = `steps.${name}.completion_artifact`;
+          if (
+            typeof cfg.completion_artifact !== 'string' ||
+            cfg.completion_artifact.trim() === ''
+          ) {
+            return errVal(`${field} must be a non-empty string`);
+          }
+          const artifact = cfg.completion_artifact;
+          if (isAbsolute(artifact)) return errVal(`${field} must be repository-relative`);
+          if (!artifact.startsWith('.pipeline/')) {
+            return errVal(`${field} must be under .pipeline/`);
+          }
+          if (artifact.split(/[\\/]/).includes('..')) {
+            return errVal(`${field} must not contain traversal segments`);
+          }
+          if (/[*?[\]{}]/.test(artifact)) {
+            return errVal(`${field} must be an exact file path without glob syntax`);
+          }
+          if (artifact.endsWith('/')) {
+            return errVal(`${field} must name a file under .pipeline/`);
+          }
+          if (normalize(artifact) !== artifact) return errVal(`${field} must be normalized`);
+        }
+
         // Custom steps need both `after` and `skill`.
         if (typeof cfg.after !== 'string') {
           return errVal(`Custom step "${name}" requires 'after: <existing-step>'`);
@@ -422,6 +531,9 @@ export function validateConfig(
         }
         if (cfg.enforcement !== undefined) {
           return errVal(`steps.${name}.enforcement is not valid for built-in steps`);
+        }
+        if (cfg.completion_artifact !== undefined) {
+          return errVal(`steps.${name}.completion_artifact is not valid for built-in steps`);
         }
 
         // Disabling a gating/structural built-in is not allowed, unless the
@@ -500,6 +612,12 @@ export function validateConfig(
     if (!obj.acceptance_spec_globs.every((g) => typeof g === 'string')) {
       return errVal('acceptance_spec_globs must contain only strings');
     }
+  }
+
+  // test_suite — the project-owned aggregate verification operation.
+  if (obj.test_suite !== undefined) {
+    const err = validateTestSuiteBlock(obj.test_suite, projectRoot);
+    if (err) return { ok: false, error: err };
   }
 
   // spec_owner — the daemon operator identity (owner-gate, FR-1). Naming
@@ -665,6 +783,35 @@ export function validateConfig(
   } else {
     // C1: absent or null → false without warning
     obj.auto_restart_on_stale_engine = false;
+  }
+
+  // engine_refresh_min_interval_seconds — minimum interval between engine
+  // refresh (origin fetch) attempts, in seconds. Contract (total — never
+  // throws, never undefined):
+  //   C1  absent / null → 300 (default, no warning)
+  //   C2  finite positive number → that value (no warning)
+  //   C3  other value (non-numeric, non-finite, zero, or negative) → 300
+  //       + one warning
+  if (
+    obj.engine_refresh_min_interval_seconds !== undefined &&
+    obj.engine_refresh_min_interval_seconds !== null
+  ) {
+    if (
+      typeof obj.engine_refresh_min_interval_seconds === 'number' &&
+      Number.isFinite(obj.engine_refresh_min_interval_seconds) &&
+      obj.engine_refresh_min_interval_seconds > 0
+    ) {
+      // C2: valid — accept as-is
+    } else {
+      // C3: invalid value — log warning and resolve to default
+      warnings.push(
+        `engine_refresh_min_interval_seconds has invalid value ${JSON.stringify(obj.engine_refresh_min_interval_seconds)}, falling back to 300.`,
+      );
+      obj.engine_refresh_min_interval_seconds = 300;
+    }
+  } else {
+    // C1: absent or null → 300 without warning
+    obj.engine_refresh_min_interval_seconds = 300;
   }
 
   // mergeable_autoresolve — auto-resolve merge conflicts on open PRs.
@@ -983,6 +1130,110 @@ function validateAssessBlock(raw: unknown): ConfigError | null {
     }
   }
   return null;
+}
+
+function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError | null {
+  if (!isPlainObject(raw)) {
+    return { type: 'validation_error', message: 'test_suite must be an object' };
+  }
+
+  const allowed = new Set([
+    'command',
+    'working_directory',
+    'timeout_seconds',
+    'inputs',
+    'environment',
+  ]);
+  for (const key of Object.keys(raw)) {
+    if (!allowed.has(key)) {
+      return { type: 'validation_error', message: `Unknown key in test_suite: "${key}"` };
+    }
+  }
+
+  if (typeof raw.command !== 'string' || raw.command.trim() === '') {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.command must be a non-empty string',
+    };
+  }
+
+  if (raw.working_directory !== undefined) {
+    if (typeof raw.working_directory !== 'string') {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.working_directory must be a relative path within the project root',
+      };
+    }
+    const root = resolvePath(projectRoot ?? '.');
+    const resolvedDirectory = resolvePath(root, raw.working_directory);
+    const relativeDirectory = relative(root, resolvedDirectory);
+    if (
+      isAbsolute(raw.working_directory) ||
+      relativeDirectory === '..' ||
+      relativeDirectory.startsWith(`..${sep}`) ||
+      isAbsolute(relativeDirectory) ||
+      (projectRoot !== undefined &&
+        existingRealPathEscapesRoot(projectRoot, resolvedDirectory))
+    ) {
+      return {
+        type: 'validation_error',
+        message: 'test_suite.working_directory must be a relative path within the project root',
+      };
+    }
+  }
+
+  if (
+    raw.timeout_seconds !== undefined &&
+    (typeof raw.timeout_seconds !== 'number' ||
+      !Number.isFinite(raw.timeout_seconds) ||
+      raw.timeout_seconds <= 0)
+  ) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.timeout_seconds must be a finite positive number',
+    };
+  }
+
+  for (const field of ['inputs', 'environment'] as const) {
+    const value = raw[field];
+    if (
+      value !== undefined &&
+      (!Array.isArray(value) || !value.every((entry) => typeof entry === 'string'))
+    ) {
+      return {
+        type: 'validation_error',
+        message: `test_suite.${field} must be an array of strings`,
+      };
+    }
+  }
+
+  return null;
+}
+
+function existingRealPathEscapesRoot(projectRoot: string, candidate: string): boolean {
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(projectRoot);
+  } catch {
+    return true;
+  }
+
+  let realCandidate: string;
+  try {
+    realCandidate = realpathSync(candidate);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // Existence is an executor/verifier concern. Other resolution failures
+    // (permissions, loops, I/O) fail closed at config validation.
+    return code !== 'ENOENT' && code !== 'ENOTDIR';
+  }
+
+  const relativeCandidate = relative(realRoot, realCandidate);
+  return (
+    relativeCandidate === '..' ||
+    relativeCandidate.startsWith(`..${sep}`) ||
+    isAbsolute(relativeCandidate)
+  );
 }
 
 /**
@@ -1449,6 +1700,46 @@ export async function loadMergedConfig(
 
 function errVal(message: string): ConfigResult {
   return { ok: false, error: { type: 'validation_error', message } };
+}
+
+function validateProviderSelection(value: unknown, path: string): ConfigError | null {
+  if (value === undefined) return null;
+  if (typeof value === 'string') {
+    return value.trim() === ''
+      ? { type: 'validation_error', message: `${path} must be a non-empty provider name` }
+      : null;
+  }
+  if (!Array.isArray(value)) {
+    return {
+      type: 'validation_error',
+      message: `${path} must be a string or array of non-empty provider names`,
+    };
+  }
+  if (value.length === 0) {
+    return {
+      type: 'validation_error',
+      message: `${path} must be a non-empty array of provider names`,
+    };
+  }
+
+  const seen = new Set<string>();
+  for (let index = 0; index < value.length; index++) {
+    const provider = value[index];
+    if (typeof provider !== 'string' || provider.trim() === '') {
+      return {
+        type: 'validation_error',
+        message: `${path}[${index}] must be a non-empty string`,
+      };
+    }
+    if (seen.has(provider)) {
+      return {
+        type: 'validation_error',
+        message: `${path} contains duplicate provider "${provider}"`,
+      };
+    }
+    seen.add(provider);
+  }
+  return null;
 }
 
 export function satisfiesVersion(installed: string, constraint: string): boolean {

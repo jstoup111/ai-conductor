@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { LLMProvider, InvokeOptions } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import {
   dispatchAttributionVerifier,
   computeMemoKey,
@@ -81,7 +82,6 @@ Add tests for sweep.
       planPath,
       residueIds: ['1', '2'],
       featureWorktreePath: dir,
-      gitRunner: createMockedGitRunner(),
       gitRunner: createMockedGitRunner(),
     });
 
@@ -170,6 +170,127 @@ Add tests for sweep.
     const opts = invoke.mock.calls[0][0] as InvokeOptions;
     expect(opts.model).toBe('claude-opus');
     expect(opts.effort).toBe('medium');
+  });
+
+  it('dispatches with the Codex policy model and effort for attribution verification', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: true,
+      output: '{}',
+      exitCode: 0,
+    });
+    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+      modelPolicy: CODEX_MODEL_POLICY,
+    });
+
+    const opts = invoke.mock.calls[0][0] as InvokeOptions;
+    expect(opts).toMatchObject({ model: 'gpt-5.6-sol', effort: 'high' });
+  });
+
+  it('walks the Codex model fallback ladder until attribution verification succeeds', async () => {
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: false,
+        output: 'Sol unavailable',
+        modelUnavailable: true,
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        output: 'Terra unavailable',
+        modelUnavailable: true,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: '{}',
+        exitCode: 0,
+      });
+    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+      modelPolicy: CODEX_MODEL_POLICY,
+    });
+
+    expect(
+      invoke.mock.calls.map(([opts]) => (opts as InvokeOptions).model),
+    ).toEqual(['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna']);
+  });
+
+  it('prefers the configured fallback ladder over the Codex policy fallback ladder', async () => {
+    const invoke = vi
+      .fn()
+      .mockResolvedValueOnce({
+        success: false,
+        output: 'Sol unavailable',
+        modelUnavailable: true,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: '{}',
+        exitCode: 0,
+      });
+    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+    const config: HarnessConfig = {
+      model_fallback_ladder: [
+        'gpt-5.6-sol',
+        'configured-verifier-model',
+      ],
+    };
+
+    await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+      config,
+      modelPolicy: CODEX_MODEL_POLICY,
+    });
+
+    expect(
+      invoke.mock.calls.map(([opts]) => (opts as InvokeOptions).model),
+    ).toEqual(['gpt-5.6-sol', 'configured-verifier-model']);
+  });
+
+  it('honors an explicitly empty configured fallback ladder', async () => {
+    const invoke = vi.fn().mockResolvedValue({
+      success: false,
+      output: 'Sol unavailable',
+      modelUnavailable: true,
+    });
+    const provider: LLMProvider = { invoke, invokeInteractive: vi.fn() };
+
+    const result = await dispatchAttributionVerifier({
+      provider,
+      projectDir: dir,
+      planPath,
+      residueIds: ['1'],
+      featureWorktreePath: dir,
+      gitRunner: createMockedGitRunner(),
+      config: { model_fallback_ladder: [] },
+      modelPolicy: CODEX_MODEL_POLICY,
+    });
+
+    expect({
+      success: result.success,
+      models: invoke.mock.calls.map(
+        ([opts]) => (opts as InvokeOptions).model,
+      ),
+    }).toEqual({ success: false, models: ['gpt-5.6-sol'] });
   });
 
   it('includes residue tasks and candidate commits in prompt', async () => {
@@ -275,10 +396,29 @@ Add tests for sweep.
       residueIds: ['1'],
       featureWorktreePath: dir,
       gitRunner: createMockedGitRunner(),
+      providerDispatch: async () => ({
+        success: false,
+        output: 'auth failed',
+        exitCode: 1,
+        authFailure: true,
+        authentication: {
+          provider: 'codex',
+          source: 'cached-login',
+          state: 'unusable',
+        },
+        preferredProvider: 'codex',
+        actualProvider: 'codex',
+        attempts: [],
+      }),
     });
 
     expect(result.success).toBe(false);
     expect(result.authFailure).toBe(true);
+    expect(result.authentication).toEqual({
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'unusable',
+    });
   });
 
   it('returns failure on session expired', async () => {

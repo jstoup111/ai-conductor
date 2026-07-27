@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install — Installs the harness skills and conduct script for use with Claude Code.
+# install — Installs the harness skills and conduct script for Claude Code and Codex.
 #
 # Usage:
 #   ./bin/install          # Install everything
 #   ./bin/install --check  # Check installation status without changing anything
 
 HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SKILLS_DIR="${HOME}/.claude/skills"
+HARNESS_INSTRUCTIONS_SOURCE="${HARNESS_DIR}/HARNESS.md"
+CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
+CODEX_SKILLS_DIR="${HOME}/.agents/skills"
 LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
@@ -22,6 +24,11 @@ UPDATE_MODE=false
 # via the --allow-worktree-root flag, which is stripped from "$@" before the
 # mode dispatch so it composes with any mode (e.g. --update).
 ALLOW_WORKTREE_ROOT=false
+
+# PROVIDER_SELECTION records the optional, comma-separated built-in provider
+# selection supplied to install. Readiness behavior will consume it separately;
+# validate it here so an invalid selection never begins a global installation.
+PROVIDER_SELECTION=""
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -38,8 +45,9 @@ info() { echo -e "  ${CYAN}→${NC} $*"; }
 # Auto-discover every skill: any skills/<name>/ directory containing a SKILL.md.
 # Previously this was a hardcoded list that drifted out of sync — new skills
 # (engineer, prd-audit, …) were added to skills/ but forgotten here, so they were
-# never symlinked into ~/.claude/skills/. Enumerating the directory guarantees ALL
-# skills link. Glob results are alphabetically sorted by bash (deterministic order).
+# never symlinked into the user-level skill directories. Enumerating the directory
+# guarantees ALL skills link for both Claude Code and Codex. Glob results are
+# alphabetically sorted by bash (deterministic order).
 SKILLS=()
 for _skill_dir in "${HARNESS_DIR}"/skills/*/; do
   [ -f "${_skill_dir}SKILL.md" ] || continue
@@ -48,6 +56,10 @@ done
 unset _skill_dir
 if [ ${#SKILLS[@]} -eq 0 ]; then
   fail "No skills found under ${HARNESS_DIR}/skills/ — is the harness checkout intact?"
+  exit 1
+fi
+if [ ! -f "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+  fail "Harness instructions missing: ${HARNESS_INSTRUCTIONS_SOURCE}"
   exit 1
 fi
 
@@ -89,44 +101,121 @@ check_installation() {
   echo ""
 
   local all_ok=true
+  local build_auth_ok=true
 
-  # Check Claude Code
-  if command -v claude &>/dev/null; then
-    ok "Claude Code installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
-  else
-    fail "Claude Code not found on PATH"
-    all_ok=false
-  fi
+  # Check every selected built-in CLI. Unlike normal installation, --check is
+  # strict: every unavailable selected provider makes the readiness result
+  # fail, while an unselected provider does not affect it.
+  local selected="${PROVIDER_SELECTION:-claude}"
+  local provider
+  local -a providers
+  IFS=',' read -r -a providers <<< "$selected"
+  for provider in "${providers[@]}"; do
+    case "$provider" in
+      claude)
+        if command -v claude &>/dev/null; then
+          ok "Claude Code installed ($(claude --version 2>/dev/null || echo 'unknown version'))"
+        else
+          fail "Claude Code CLI not found on PATH — install it from https://docs.anthropic.com/en/docs/claude-code"
+          all_ok=false
+        fi
+        ;;
+      codex)
+        if command -v codex &>/dev/null; then
+          ok "Codex CLI installed ($(codex --version 2>/dev/null || echo 'unknown version'))"
+        else
+          fail "Codex CLI not found on PATH — install it with: npm install -g @openai/codex"
+          all_ok=false
+        fi
+        ;;
+    esac
+  done
 
-  # Check skills directory
-  if [ -d "$SKILLS_DIR" ]; then
-    ok "Skills directory exists ($SKILLS_DIR)"
-  else
-    fail "Skills directory missing ($SKILLS_DIR)"
-    all_ok=false
-  fi
-
-  # Check each skill
+  # Check user-level skill directories. Do not use project-local skill paths as
+  # the install target: both clients discover these skills from their own user
+  # configuration directories.
   local missing=0
   local stale=0
-  for skill in "${SKILLS[@]}"; do
-    if [ -L "${SKILLS_DIR}/${skill}" ]; then
-      local target
-      target=$(readlink -f "${SKILLS_DIR}/${skill}" 2>/dev/null || echo "broken")
-      if [ "$target" = "${HARNESS_DIR}/skills/${skill}" ]; then
-        ok "Skill: ${skill}"
+  local duplicates=0
+  local skills_dir client skill target harness_target location
+  for client in Claude Codex; do
+    if [ "$client" = Claude ]; then
+      skills_dir="$CLAUDE_SKILLS_DIR"
+      location="Claude"
+    else
+      skills_dir="$CODEX_SKILLS_DIR"
+      location="Codex active"
+    fi
+    if [ -d "$skills_dir" ]; then
+      ok "${client} skills directory exists (${skills_dir})"
+    else
+      fail "${client} skills directory missing (${skills_dir})"
+      all_ok=false
+    fi
+
+    for skill in "${SKILLS[@]}"; do
+      target="${skills_dir}/${skill}"
+      if [ -L "$target" ]; then
+        local resolved_target
+        resolved_target=$(readlink -f "$target" 2>/dev/null || echo "broken")
+        if [ "$resolved_target" = "broken" ] || [ ! -e "$resolved_target" ]; then
+          fail "${location} skill: ${skill} (${target}) — broken symlink"
+          stale=$((stale + 1))
+        elif [ "$resolved_target" = "${HARNESS_DIR}/skills/${skill}" ]; then
+          ok "${location} skill: ${skill}"
+        else
+          warn "${location} skill: ${skill} (${target}) — stale target ${resolved_target} (expected ${HARNESS_DIR}/skills/${skill})"
+          stale=$((stale + 1))
+        fi
+      elif [ -e "$target" ]; then
+        warn "${location} skill: ${skill} (${target}) — non-symlink entry"
+        stale=$((stale + 1))
       else
-        warn "Skill: ${skill} — points to ${target} (expected ${HARNESS_DIR}/skills/${skill})"
+        fail "${location} skill: ${skill} (${target}) — missing"
+        missing=$((missing + 1))
+      fi
+    done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      local resolved_harness
+      resolved_harness=$(readlink -f "$harness_target" 2>/dev/null || echo "broken")
+      if [ "$resolved_harness" = "broken" ] || [ ! -e "$resolved_harness" ]; then
+        fail "${location} harness instructions (${harness_target}) — broken symlink"
+        stale=$((stale + 1))
+      elif [ "$resolved_harness" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+        ok "${location} harness instructions"
+      else
+        warn "${location} harness instructions (${harness_target}) — stale target ${resolved_harness} (expected ${HARNESS_INSTRUCTIONS_SOURCE})"
         stale=$((stale + 1))
       fi
-    elif [ -d "${SKILLS_DIR}/${skill}" ]; then
-      warn "Skill: ${skill} — exists but is not a symlink (may be a copy)"
+    elif [ -e "$harness_target" ]; then
+      warn "${location} harness instructions (${harness_target}) — non-symlink entry"
       stale=$((stale + 1))
     else
-      fail "Skill: ${skill} — not installed"
+      fail "${location} harness instructions (${harness_target}) — missing"
       missing=$((missing + 1))
     fi
   done
+
+  # Codex's former discovery location must not shadow an active catalog. Do
+  # not modify it in check mode: even a foreign entry is useful diagnostic
+  # evidence, and reconciliation owns the mutation policy.
+  local legacy_dir="${HOME}/.codex/skills" legacy_target
+  for skill in "${SKILLS[@]}"; do
+    target="${CODEX_SKILLS_DIR}/${skill}"
+    legacy_target="${legacy_dir}/${skill}"
+    if { [ -e "$target" ] || [ -L "$target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
+      fail "Codex duplicate skill: ${skill} — active ${target} and legacy ${legacy_target} both exist"
+      duplicates=$((duplicates + 1))
+    fi
+  done
+  harness_target="${CODEX_SKILLS_DIR}/HARNESS.md"
+  legacy_target="${legacy_dir}/HARNESS.md"
+  if { [ -e "$harness_target" ] || [ -L "$harness_target" ]; } && { [ -e "$legacy_target" ] || [ -L "$legacy_target" ]; }; then
+    fail "Codex duplicate harness instructions — active ${harness_target} and legacy ${legacy_target} both exist"
+    duplicates=$((duplicates + 1))
+  fi
 
   # Check conduct script
   echo ""
@@ -160,7 +249,7 @@ check_installation() {
       ok "${build_auth_line}"
     else
       fail "${build_auth_line}"
-      all_ok=false
+      build_auth_ok=false
     fi
   else
     warn "build-auth check skipped — conduct-ts not on PATH"
@@ -199,12 +288,16 @@ check_installation() {
   # Summary. Return non-zero on ANY drift so `--check` is scriptable — callers
   # (e.g. the conduct-ts install-freshness guard) gate on the exit code.
   echo ""
-  if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && $all_ok; then
+  if [ "$missing" -eq 0 ] && [ "$stale" -eq 0 ] && [ "$duplicates" -eq 0 ] && $all_ok; then
+    if [ "$build_auth_ok" = false ]; then
+      return 2
+    fi
     echo -e "${GREEN}${BOLD}All checks passed.${NC}"
     return 0
   else
     [ "$missing" -gt 0 ] && echo -e "${RED}${missing} skill(s) missing.${NC}"
     [ "$stale" -gt 0 ] && echo -e "${YELLOW}${stale} skill(s) stale or misconfigured.${NC}"
+    [ "$duplicates" -gt 0 ] && echo -e "${RED}${duplicates} Codex duplicate discovery entry(s).${NC}"
     echo -e "Run ${BOLD}./bin/install${NC} to fix."
     return 1
   fi
@@ -900,12 +993,11 @@ node_supports_conduct_ts() {
   [ "$major" -gt 20 ] || { [ "$major" -eq 20 ] && [ "$minor" -ge 5 ]; }
 }
 
-# Build the conduct-ts bundle: npm install + npm run build in src/conductor/.
-# Runs in BOTH fresh-install and --update modes — the install-freshness guard
-# refuses to start a stale bundle, so an update that skipped the rebuild would
-# brick `conduct-ts`. Non-fatal: on any failure it warns and returns 1 so the
-# caller can continue (step 3b then reports the missing bundle). Idempotent —
-# npm install is a near no-op when dependencies are already satisfied.
+# Build the conduct-ts bundle: npm ci + npm run build in src/conductor/.
+# Runs on both fresh installs and updates so the bundle reflects the checked-out
+# harness version and a corrupt node_modules directory is replaced. Non-fatal:
+# on any failure it warns and returns 1 so the caller can continue (step 3b then
+# reports the missing bundle).
 build_conduct_ts() {
   local conductor_dir="${HARNESS_DIR}/src/conductor"
   echo ""
@@ -931,11 +1023,11 @@ build_conduct_ts() {
   local log
   log=$(mktemp)
 
-  info "Installing conduct-ts dependencies (npm install)..."
-  if (cd "$conductor_dir" && npm install) >"$log" 2>&1; then
+  info "Installing conduct-ts dependencies (npm ci)..."
+  if (cd "$conductor_dir" && npm ci) >"$log" 2>&1; then
     ok "conduct-ts dependencies installed"
   else
-    fail "npm install failed in src/conductor/ — conduct-ts not built"
+    fail "npm ci failed in src/conductor/ — conduct-ts not built"
     tail -n 20 "$log" | sed 's/^/      /'
     rm -f "$log"
     return 1
@@ -957,6 +1049,125 @@ build_conduct_ts() {
 
 # ─── Install ──────────────────────────────────────────────────────────────────
 
+choose_builtin_provider() {
+  [ -n "$PROVIDER_SELECTION" ] || [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
+
+  echo ""
+  info "Built-in provider — choose the CLI you plan to use:"
+  echo "    1) Claude"
+  echo "    2) Codex"
+  echo "    3) Both Claude and Codex"
+  local choice
+  read -r -p "  Choice [1]: " choice || choice=1
+
+  case "$choice" in
+    ""|1) PROVIDER_SELECTION="claude" ;;
+    2)    PROVIDER_SELECTION="codex" ;;
+    3)    PROVIDER_SELECTION="claude,codex" ;;
+    *)
+      warn "Unrecognized provider choice '${choice}' — using Claude"
+      PROVIDER_SELECTION="claude"
+      ;;
+  esac
+}
+
+# Report whether the built-in CLI choices selected for this installation are
+# ready to use. This is deliberately advisory: installing the harness must
+# still establish both provider surfaces when an external CLI is absent.
+report_selected_provider_readiness() {
+  local selected="${PROVIDER_SELECTION:-claude}"
+  local provider
+  local -a providers
+  IFS=',' read -r -a providers <<< "$selected"
+
+  echo ""
+  info "Built-in provider readiness:"
+  for provider in "${providers[@]}"; do
+    case "$provider" in
+      claude)
+        if command -v claude &>/dev/null; then
+          ok "Claude Code CLI found"
+        else
+          warn "Claude Code CLI not found — install it from https://docs.anthropic.com/en/docs/claude-code"
+        fi
+        ;;
+      codex)
+        if command -v codex &>/dev/null; then
+          ok "Codex CLI found"
+        else
+          warn "Codex CLI not found — install it with: npm install -g @openai/codex"
+        fi
+        ;;
+    esac
+  done
+}
+
+# A prior catalog is trusted only when its HARNESS.md resolves to a complete
+# harness root. This lets an update refresh links installed by an earlier
+# checkout without treating an arbitrary operator-owned symlink as ours.
+prior_harness_root() {
+  local harness_link=$1 resolved root
+  [ -L "$harness_link" ] || return 1
+  resolved=$(readlink -f "$harness_link" 2>/dev/null || echo "")
+  root=${resolved%/HARNESS.md}
+  [ "$resolved" = "${root}/HARNESS.md" ] &&
+    [ -f "${root}/HARNESS.md" ] && [ -f "${root}/VERSION" ] &&
+    [ -d "${root}/skills" ] || return 1
+  printf '%s\n' "$root"
+}
+
+# A catalog entry is mutable only when it is an exact link from this checkout,
+# or from the complete prior harness identified by this catalog's HARNESS.md.
+# Regular files, directories, broken links, and arbitrary links are operator
+# content and must stay byte-for-byte/target-for-target intact.
+owned_skill_link() {
+  local skills_dir=$1 skill=$2 target=$3 current prior_root
+  current=$(readlink -f "$target" 2>/dev/null || echo "")
+  [ "$current" = "${HARNESS_DIR}/skills/${skill}" ] && return 0
+  prior_root=$(prior_harness_root "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+  [ -n "$prior_root" ] && [ "$current" = "${prior_root}/skills/${skill}" ]
+}
+
+owned_harness_link() {
+  local target=$1 current
+  current=$(readlink -f "$target" 2>/dev/null || echo "")
+  [ "$current" = "$HARNESS_INSTRUCTIONS_SOURCE" ] && return 0
+  prior_harness_root "$target" >/dev/null 2>&1
+}
+
+# Once the active Codex catalog is established in ~/.agents/skills, remove only
+# exact harness-owned links left at Codex's former discovery location. A prior
+# complete harness catalog is ownership proof here too: a legacy installation
+# can legitimately point at an older checkout.
+reconcile_legacy_codex_links() {
+  local legacy_dir="${HOME}/.codex/skills"
+  local skill target
+
+  for skill in "${SKILLS[@]}"; do
+    target="${legacy_dir}/${skill}"
+    if [ -L "$target" ]; then
+      if owned_skill_link "$legacy_dir" "$skill" "$target"; then
+        rm -- "$target"
+      else
+        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+      fi
+    elif [ -e "$target" ]; then
+      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+    fi
+  done
+
+  target="${legacy_dir}/HARNESS.md"
+  if [ -L "$target" ]; then
+    if owned_harness_link "$target"; then
+      rm -- "$target"
+    else
+      warn "Codex legacy harness instructions — foreign symlink preserved"
+    fi
+  elif [ -e "$target" ]; then
+    warn "Codex legacy harness instructions — foreign entry preserved"
+  fi
+}
+
 install() {
   guard_worktree_root
 
@@ -964,47 +1175,112 @@ install() {
   echo -e "  Source: ${HARNESS_DIR}"
   echo ""
 
+  choose_builtin_provider
+
   # 1. Ensure directories exist
-  mkdir -p "$SKILLS_DIR" || warn "Could not create $SKILLS_DIR"
+  mkdir -p "$CLAUDE_SKILLS_DIR" || warn "Could not create $CLAUDE_SKILLS_DIR"
+  mkdir -p "$CODEX_SKILLS_DIR" || warn "Could not create $CODEX_SKILLS_DIR"
   mkdir -p "$LOCAL_BIN" || warn "Could not create $LOCAL_BIN"
   ok "Created directories"
 
-  # 2. Symlink skills
+  # 2. Symlink skills into each client's user-level discovery directory.
+  # Project-local skills remain available only as explicit project overrides.
   local installed=0
   local updated=0
-  for skill in "${SKILLS[@]}"; do
-    local source="${HARNESS_DIR}/skills/${skill}"
-    local target="${SKILLS_DIR}/${skill}"
-
-    if [ ! -d "$source" ]; then
-      warn "Skill source missing: ${source} — skipping"
-      continue
+  local skills_dir client skill source target current harness_target
+  local prior_harness prior_root candidate candidate_name supported
+  for client in Claude Codex; do
+    if [ "$client" = Claude ]; then
+      skills_dir="$CLAUDE_SKILLS_DIR"
+    else
+      skills_dir="$CODEX_SKILLS_DIR"
     fi
 
-    if [ -L "$target" ]; then
-      local current
-      current=$(readlink -f "$target" 2>/dev/null || echo "")
-      if [ "$current" = "$source" ]; then
-        continue  # Already correct
+    if [ "$client" = Codex ] && [ -L "${skills_dir}/HARNESS.md" ]; then
+      prior_harness=$(readlink -f "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+      prior_root="${prior_harness%/HARNESS.md}"
+      if [ "$prior_harness" = "${prior_root}/HARNESS.md" ] &&
+         [ -f "${prior_root}/HARNESS.md" ] && [ -f "${prior_root}/VERSION" ] &&
+         [ -d "${prior_root}/skills" ]; then
+        while IFS= read -r -d '' candidate; do
+          candidate_name="${candidate##*/}"
+          [ "$candidate_name" = "HARNESS.md" ] && continue
+          supported=false
+          for skill in "${SKILLS[@]}"; do
+            [ "$candidate_name" = "$skill" ] && supported=true && break
+          done
+          [ "$supported" = true ] && continue
+          current=$(readlink -- "$candidate" 2>/dev/null || echo "")
+          if [[ "$current" != /* ]]; then
+            current="${candidate%/*}/${current}"
+          fi
+          current=$(realpath -m -- "$current" 2>/dev/null || echo "")
+          if [ "$current" = "${prior_root}/skills/${candidate_name}" ]; then
+            rm -- "$candidate" || warn "Codex skill: ${candidate_name} — obsolete symlink removal failed"
+          fi
+        done < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -type l -print0)
       fi
-      # Update stale symlink
-      ln -sfn "$source" "$target" || { warn "Skill: ${skill} — symlink update failed"; continue; }
-      updated=$((updated + 1))
+    fi
+
+    for skill in "${SKILLS[@]}"; do
+      source="${HARNESS_DIR}/skills/${skill}"
+      target="${skills_dir}/${skill}"
+
+      if [ ! -d "$source" ]; then
+        warn "Skill source missing: ${source} — skipping"
+        continue
+      fi
+
+      if [ -L "$target" ]; then
+        if owned_skill_link "$skills_dir" "$skill" "$target"; then
+          current=$(readlink -f "$target" 2>/dev/null || echo "")
+          if [ "$current" = "$source" ]; then
+            continue  # Already correct
+          fi
+          ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink update failed"; continue; }
+          updated=$((updated + 1))
+        else
+          warn "${client} skill: ${skill} — foreign symlink preserved"
+          continue  # Already correct
+        fi
+      else
+        if [ -e "$target" ]; then
+          warn "${client} skill: ${skill} — foreign entry preserved"
+          continue
+        fi
+        ln -sfn "$source" "$target" || { warn "${client} skill: ${skill} — symlink failed"; continue; }
+        installed=$((installed + 1))
+      fi
+    done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      if owned_harness_link "$harness_target"; then
+        current=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+        if [ "$current" != "$HARNESS_INSTRUCTIONS_SOURCE" ]; then
+          ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink update failed"
+        fi
+      else
+        warn "${client} harness instructions — foreign symlink preserved"
+      fi
     else
-      if [ -e "$target" ]; then
-        warn "Skill: ${skill} — exists but is not a symlink. Backing up to ${target}.bak"
-        mv "$target" "${target}.bak" || { warn "Skill: ${skill} — backup failed, skipping"; continue; }
+      if [ -e "$harness_target" ]; then
+        warn "${client} harness instructions — foreign entry preserved"
+        continue
       fi
-      ln -sfn "$source" "$target" || { warn "Skill: ${skill} — symlink failed"; continue; }
-      installed=$((installed + 1))
+      ln -sfn "$HARNESS_INSTRUCTIONS_SOURCE" "$harness_target" || warn "${client} harness instructions — symlink failed"
     fi
   done
 
+  reconcile_legacy_codex_links
+
   if [ "$installed" -gt 0 ] || [ "$updated" -gt 0 ]; then
-    ok "Skills: ${installed} installed, ${updated} updated (${#SKILLS[@]} total)"
+    ok "Skills: ${installed} installed, ${updated} updated (${#SKILLS[@]} per client)"
   else
-    ok "Skills: all ${#SKILLS[@]} already current"
+    ok "Skills: all ${#SKILLS[@]} already current for Claude Code and Codex"
   fi
+
+  report_selected_provider_readiness
 
   # 3. Symlink conduct script
   local conduct_source="${HARNESS_DIR}/bin/conduct"
@@ -1024,10 +1300,10 @@ install() {
     ok "Installed conduct script to ${conduct_target}"
   fi
 
-  # 3a. Build conduct-ts (npm install + npm run build) so the dist bundle is
-  # fresh before we symlink it. Runs in --update mode too — the install-freshness
-  # guard refuses a stale bundle. Non-fatal: a build failure (no npm, wrong Node)
-  # just leaves the bundle missing, and step 3b reports that.
+  # 3a. Build conduct-ts (npm ci + npm run build) so the dist bundle reflects
+  # this harness version before we symlink it. This runs for installs and updates.
+  # Non-fatal: a build failure (no npm, wrong Node) just leaves the bundle
+  # missing, and step 3b reports that.
   build_conduct_ts || true
 
   # 3b. Symlink conduct-ts (TypeScript conductor) if the dist bundle exists.
@@ -1100,7 +1376,7 @@ install() {
   if command -v claude &>/dev/null; then
     ok "Claude Code found"
   else
-    warn "Claude Code not found — install from https://docs.anthropic.com/en/.docs/claude-code"
+    warn "Claude Code not found — install from https://docs.claude.com/en/docs/claude-code"
   fi
 
   echo ""
@@ -1113,7 +1389,7 @@ install() {
   echo ""
   echo -e "  ${BOLD}Or automated:${NC}"
   echo -e "    cd your-project/"
-  echo -e "    conduct \"your feature description\""
+  echo -e "    conduct-ts inline \"your feature description\""
   echo ""
   echo -e "  ${BOLD}Verify:${NC}"
   echo -e "    ./bin/install --check"
@@ -1126,19 +1402,70 @@ uninstall() {
   echo ""
 
   local removed=0
-  for skill in "${SKILLS[@]}"; do
-    local target="${SKILLS_DIR}/${skill}"
-    if [ -L "$target" ]; then
-      local points_to
-      points_to=$(readlink -f "$target" 2>/dev/null || echo "")
-      if [[ "$points_to" == "${HARNESS_DIR}"* ]]; then
-        rm "$target"
+  local skills_dir legacy_dir client skill target points_to harness_target
+  for client in Claude Codex; do
+    if [ "$client" = Claude ]; then
+      skills_dir="$CLAUDE_SKILLS_DIR"
+    else
+      skills_dir="$CODEX_SKILLS_DIR"
+    fi
+    for skill in "${SKILLS[@]}"; do
+      target="${skills_dir}/${skill}"
+      if [ -L "$target" ]; then
+        points_to=$(readlink -f "$target" 2>/dev/null || echo "")
+        if { [ "$client" = Codex ] && owned_skill_link "$skills_dir" "$skill" "$target"; } || \
+           { [ "$client" = Claude ] && [[ "$points_to" == "${HARNESS_DIR}"* ]]; }; then
+          rm -- "$target"
+          removed=$((removed + 1))
+        else
+          warn "${client} skill: ${skill} — symlink points elsewhere, skipping"
+        fi
+      elif [ -e "$target" ]; then
+        warn "${client} skill: ${skill} — foreign entry preserved"
+      fi
+    done
+
+    harness_target="${skills_dir}/HARNESS.md"
+    if [ -L "$harness_target" ]; then
+      points_to=$(readlink -f "$harness_target" 2>/dev/null || echo "")
+      if { [ "$client" = Codex ] && owned_harness_link "$harness_target"; } || \
+         { [ "$client" = Claude ] && [ "$points_to" = "$HARNESS_INSTRUCTIONS_SOURCE" ]; }; then
+        rm -- "$harness_target"
         removed=$((removed + 1))
       else
-        warn "Skill: ${skill} — symlink points elsewhere, skipping"
+        warn "${client} harness instructions — symlink points elsewhere, skipping"
       fi
+    elif [ -e "$harness_target" ]; then
+      warn "${client} harness instructions — foreign entry preserved"
     fi
   done
+
+  legacy_dir="${HOME}/.codex/skills"
+  for skill in "${SKILLS[@]}"; do
+    target="${legacy_dir}/${skill}"
+    if [ -L "$target" ]; then
+      if owned_skill_link "$legacy_dir" "$skill" "$target"; then
+        rm -- "$target"
+        removed=$((removed + 1))
+      else
+        warn "Codex legacy skill: ${skill} — foreign symlink preserved"
+      fi
+    elif [ -e "$target" ]; then
+      warn "Codex legacy skill: ${skill} — foreign entry preserved"
+    fi
+  done
+
+  harness_target="${legacy_dir}/HARNESS.md"
+  if [ -L "$harness_target" ]; then
+    if owned_harness_link "$harness_target"; then
+      rm -- "$harness_target"
+      removed=$((removed + 1))
+    else
+      warn "Codex legacy harness instructions — foreign symlink preserved"
+    fi
+  elif [ -e "$harness_target" ]; then
+    warn "Codex legacy harness instructions — foreign entry preserved"
+  fi
   ok "Removed ${removed} skill symlinks"
 
   if [ -L "${LOCAL_BIN}/conduct" ]; then
@@ -1152,18 +1479,59 @@ uninstall() {
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
 
-# Strip --allow-worktree-root from "$@" before the mode dispatch so it can be
+# Strip install-wide options from "$@" before the mode dispatch so they can be
 # combined with any mode (e.g. `--update --allow-worktree-root`).
 _filtered_args=()
-for _arg in "$@"; do
-  if [ "$_arg" = "--allow-worktree-root" ]; then
-    ALLOW_WORKTREE_ROOT=true
-  else
-    _filtered_args+=("$_arg")
-  fi
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --allow-worktree-root)
+      ALLOW_WORKTREE_ROOT=true
+      ;;
+    --providers)
+      shift
+      if [ "$#" -eq 0 ] || [ -z "$1" ]; then
+        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        exit 1
+      fi
+      PROVIDER_SELECTION="$1"
+      ;;
+    --providers=*)
+      PROVIDER_SELECTION="${1#--providers=}"
+      if [ -z "$PROVIDER_SELECTION" ]; then
+        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        exit 1
+      fi
+      ;;
+    *)
+      _filtered_args+=("$1")
+      ;;
+  esac
+  shift
 done
+
+if [ -n "$PROVIDER_SELECTION" ]; then
+  case ",${PROVIDER_SELECTION}," in
+    *,,*)
+      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex"
+      exit 1
+      ;;
+  esac
+
+  IFS=',' read -r -a _selected_providers <<< "$PROVIDER_SELECTION"
+  for _provider in "${_selected_providers[@]}"; do
+    case "$_provider" in
+      claude|codex) ;;
+      *)
+        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex"
+        exit 1
+        ;;
+    esac
+  done
+  unset _selected_providers _provider
+fi
+
 set -- ${_filtered_args[@]+"${_filtered_args[@]}"}
-unset _filtered_args _arg
+unset _filtered_args
 
 case "${1:-}" in
   --check)     check_installation; exit $? ;;

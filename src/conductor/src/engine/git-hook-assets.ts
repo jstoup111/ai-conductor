@@ -8,10 +8,10 @@
 
 /**
  * prepare-commit-msg hook
- * Stamps/reconciles Task: <id> via git interpret-trailers. The engine's
- * .pipeline/current-task id always wins over any self-stamped Task: trailer
- * already present in the message (replaces, never appends a duplicate).
- * ID comes from .pipeline/current-task, else abstains (message untouched).
+ * Stamps Task: <id> via git interpret-trailers only when the commit message
+ * has no explicit Task: trailer. An explicit trailer is task-local telemetry
+ * and is never replaced from the workspace-global .pipeline/current-task.
+ * The stamp ID comes from .pipeline/current-task, else the hook abstains.
  * Abstains on amend, rebase-in-progress, or when current-task is absent.
  */
 export const PREPARE_COMMIT_MSG_HOOK = [
@@ -47,10 +47,13 @@ export const PREPARE_COMMIT_MSG_HOOK = [
   '  TASK_ID="$(cat "$CURRENT_TASK_FILE" 2>/dev/null || true)"',
   'fi',
   '',
-  '# If we have a task id, stamp/reconcile the trailer — the engine\'s',
-  '# current-task id always wins over any self-stamped Task: trailer already',
-  '# present in the message (--if-exists replace ensures replace, not append).',
-  'if [[ -n "$TASK_ID" ]]; then',
+  '# An explicit Task: trailer belongs to the committing task. Never replace it',
+  '# with workspace-global telemetry: concurrent agents can legitimately differ.',
+  'EXPLICIT_TASK_TRAILER=$(git interpret-trailers --parse < "$COMMIT_MSG_FILE" 2>/dev/null | grep \'^Task:\' | head -1 || true)',
+  '',
+  '# Auto-stamp only messages with no explicit trailer. commit-msg validates',
+  '# both explicit and auto-stamped values against task-status.json.',
+  'if [[ -z "$EXPLICIT_TASK_TRAILER" ]] && [[ -n "$TASK_ID" ]]; then',
   '  git interpret-trailers --in-place --if-exists replace --trailer "Task: $TASK_ID" "$COMMIT_MSG_FILE" || true',
   'fi',
   '',

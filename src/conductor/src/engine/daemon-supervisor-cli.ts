@@ -169,13 +169,26 @@ export interface DaemonSupervisorDeps {
  *   start   → supervisor.start(cwd), then auto-attach read-only (see below)
  *   stop    → supervisor.stop(cwd)
  *   restart → supervisor.restart(cwd)
- *   connect → supervisor.attach(cwd, { readOnly: true })
+ *   connect → supervisor.attach(cwd, { readOnly: !cmd.write })
  *   debug   → supervisor.attach(cwd, { readOnly: false })
  *
  * `start` auto-attaches the terminal (read-only) to the freshly-started session
  * so the operator lands in the live daemon, UNLESS `-D`/`--detach` was passed or
  * there is no interactive terminal (scripts / auto-launch) — in which case it
  * starts detached and notes how to attach later.
+ *
+ * `connect --write` requests a read-write attach from the same subcommand the
+ * operator already reaches for to "just look" — instead of needing to already
+ * know to invoke `debug` for input access. `debug` is unchanged and still works,
+ * and `connect`'s default (no `--write`) stays read-only, so this is additive.
+ *
+ * `--attach-into <target>` (connect/debug/start) delivers the attach into an
+ * already-open tmux pane elsewhere on the server (send-keys) instead of taking
+ * over this process's own controlling terminal — the fix for running this from
+ * a shell that is itself already inside a tmux client (tmux's nesting guard:
+ * "sessions should be nested with care, unset $TMUX to force"). Since it never
+ * touches this process's stdio, it works with no TTY (`start`'s isInteractive
+ * gate is bypassed when `--attach-into` is given).
  *
  * Returns 0 on success; writes an actionable message to `out` and returns 1 on
  * any error (TmuxNotInstalledError or any other Error) so the caller can
@@ -292,8 +305,15 @@ export async function dispatchDaemonSupervisor(
         // Auto-attach (read-only) so `start` drops the operator into the live
         // session. Skipped when detached (-D) or there's no TTY to attach to —
         // `tmux attach` errors without a controlling terminal, which would turn
-        // a successful start into a non-zero exit for scripts.
-        if (cmd.detach) {
+        // a successful start into a non-zero exit for scripts. `--attach-into`
+        // never touches this process's own stdio (it types the attach command
+        // into an already-open pane elsewhere via send-keys), so it bypasses
+        // both the `-D` and no-TTY gates — there is nothing here for either
+        // gate to protect against.
+        if (cmd.attachInto) {
+          await supervisor.attach(cwd, { readOnly: true, into: cmd.attachInto });
+          out(`daemon started; attach command sent to tmux target "${cmd.attachInto}".`);
+        } else if (cmd.detach) {
           out("daemon started (detached). Attach with 'conduct daemon connect'.");
         } else if (!isInteractive) {
           out(
@@ -360,10 +380,12 @@ export async function dispatchDaemonSupervisor(
         break;
       }
       case 'connect':
-        await supervisor.attach(cwd, { readOnly: true });
+        // --write opts into read-write from the same subcommand; default stays
+        // read-only (unchanged behavior when --write is absent).
+        await supervisor.attach(cwd, { readOnly: !cmd.write, into: cmd.attachInto });
         break;
       case 'debug':
-        await supervisor.attach(cwd, { readOnly: false });
+        await supervisor.attach(cwd, { readOnly: false, into: cmd.attachInto });
         break;
       case 'pause':
         if (await isPaused(cwd)) {

@@ -42,15 +42,37 @@ trap 'rm -rf "$TMP_ROOT"' EXIT
 
 FAKE_HOME="${TMP_ROOT}/home"
 mkdir -p "$FAKE_HOME"
+mkdir -p "$FAKE_HOME/.claude/skills" "$FAKE_HOME/.agents/skills"
+for skill_file in "$HARNESS_DIR"/skills/*/SKILL.md; do
+  skill_dir=$(dirname "$skill_file")
+  skill_name=$(basename "$skill_dir")
+  ln -s "$skill_dir" "$FAKE_HOME/.claude/skills/$skill_name"
+  ln -s "$skill_dir" "$FAKE_HOME/.agents/skills/$skill_name"
+done
+ln -s "$HARNESS_DIR/HARNESS.md" "$FAKE_HOME/.claude/skills/HARNESS.md"
+ln -s "$HARNESS_DIR/HARNESS.md" "$FAKE_HOME/.agents/skills/HARNESS.md"
 
 STUB_BIN="${TMP_ROOT}/stubbin"
 mkdir -p "$STUB_BIN"
+cat > "${STUB_BIN}/claude" <<'EOF'
+#!/usr/bin/env bash
+echo "1.0.0 (Claude Code)"
+EOF
+cat > "${STUB_BIN}/conduct" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "${STUB_BIN}/claude" "${STUB_BIN}/conduct"
 
 run_check() {
   # $1 = path to a directory to prepend to PATH (contains the conduct-ts stub,
   #      or is empty/absent to simulate conduct-ts missing from PATH).
   local extra_path=$1
-  HOME="$FAKE_HOME" PATH="${extra_path}:${PATH}" "${HARNESS_DIR}/bin/install" --check
+  local check_path="${STUB_BIN}:/usr/bin:/bin"
+  if [ -n "$extra_path" ]; then
+    check_path="${extra_path}:${check_path}"
+  fi
+  HOME="$FAKE_HOME" PATH="$check_path" "${HARNESS_DIR}/bin/install" --check
 }
 
 # ─── Case 1: conduct-ts reports a clean state (exit 0) → ok line, overall pass ──
@@ -69,6 +91,8 @@ echo "$out" | grep -qi "build-auth" && r=0 || r=1
 assert "clean state: emits a build-auth status line" "$r"
 echo "$out" | grep -qE "✓.*build-auth" && r=0 || r=1
 assert "clean state: line is formatted as ok (✓)" "$r"
+[ "$rc" -eq 0 ] && r=0 || r=1
+assert "clean state: overall --check exits 0" "$r"
 
 # ─── Case 2: conduct-ts reports a non-clean state (exit 1) → fail line, fail counter increments ──
 
@@ -86,8 +110,18 @@ echo "$out" | grep -qE "✗.*build-auth" && r=0 || r=1
 assert "non-clean state: line is formatted as fail (✗)" "$r"
 [ "$rc" -ne 0 ] && r=0 || r=1
 assert "non-clean state: overall --check exit reflects the failure (FR-3)" "$r"
+[ "$rc" -eq 2 ] && r=0 || r=1
+assert "build-auth-only failure: exits 2 so install drift remains distinguishable" "$r"
 
-# ─── Case 3: conduct-ts absent from PATH entirely → warn, not crash ──
+# ─── Case 3: install drift takes precedence over a build-auth failure ─────────
+
+unlink "$FAKE_HOME/.agents/skills/rebase"
+out=$(run_check "$FAIL_BIN" 2>&1) && rc=0 || rc=$?
+ln -s "$HARNESS_DIR/skills/rebase" "$FAKE_HOME/.agents/skills/rebase"
+[ "$rc" -eq 1 ] && r=0 || r=1
+assert "mixed install drift + build-auth failure: exits 1 for install drift" "$r"
+
+# ─── Case 4: conduct-ts absent from PATH entirely → warn, not crash ──
 
 out=$(run_check "" 2>&1) && rc=0 || rc=$?
 echo "$out" | grep -qE "⚠.*build-auth" && r=0 || r=1

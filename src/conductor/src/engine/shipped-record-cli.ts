@@ -12,7 +12,7 @@
 // record only means dedup falls back to the local `.daemon/processed/` cache;
 // it must never fail an otherwise successful ship.
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join, isAbsolute } from 'node:path';
 import { execa } from 'execa';
 import {
@@ -23,6 +23,7 @@ import {
 } from './shipped-record.js';
 import { computeCostRollup } from './cost-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
+import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type ShippedRecordDispatch =
   | { kind: 'write'; slug: string; pr: string }
@@ -92,13 +93,24 @@ export async function dispatchShippedRecord(
     return 1;
   }
 
-  const { slug, pr } = cmd;
+  const { slug: requestedSlug, pr } = cmd;
   try {
-    const planBytes = await readFile(join(cwd, '.docs/plans', `${slug}.md`));
-    const storiesBytes = await readStoriesBytes(cwd, slug, planBytes.toString('utf-8'));
+    const planPaths = (await readdir(join(cwd, '.docs/plans')))
+      .filter((name) => name.endsWith('.md'))
+      .map((name) => join('.docs/plans', name));
+    const resolution = resolveShipmentIdentity(requestedSlug, planPaths);
+    if (resolution.kind !== 'resolved') {
+      const detail = resolution.kind === 'ambiguous'
+        ? `ambiguous plan candidates: ${resolution.candidates.join(', ')}`
+        : `plan not found: ${resolution.expected}`;
+      throw new Error(detail);
+    }
+    const { identity } = resolution;
+    const planBytes = await readFile(join(cwd, identity.planPath));
+    const storiesBytes = await readStoriesBytes(cwd, identity.slug, planBytes.toString('utf-8'));
     const { digest } = specHash(planBytes, storiesBytes);
 
-    const relPath = join('.docs', 'shipped', `${slug}.md`);
+    const relPath = identity.recordPath;
     // Cost accounting must NEVER block ship: if the rollup itself throws for
     // any reason, fall back to the plain frontmatter-only record (no Cost
     // block) rather than let the error propagate into the outer catch (which
@@ -107,16 +119,16 @@ export async function dispatchShippedRecord(
     try {
       const rollup = await computeCostRollup(cwd);
       recordBody = renderShippedRecordWithCost(
-        { slug, specHash: digest, pr, shipped: todayIso() },
+        { slug: identity.slug, specHash: digest, pr, shipped: todayIso() },
         rollup,
       );
     } catch (err) {
       console.error(
-        `cost rollup failed — shipped record written without a Cost block for ${slug}: ${
+        `cost rollup failed — shipped record written without a Cost block for ${identity.slug}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      recordBody = renderShippedRecord({ slug, specHash: digest, pr, shipped: todayIso() });
+      recordBody = renderShippedRecord({ slug: identity.slug, specHash: digest, pr, shipped: todayIso() });
     }
     await writeShippedRecord(join(cwd, relPath), recordBody);
 
@@ -128,7 +140,7 @@ export async function dispatchShippedRecord(
       reject: false,
     });
     if (staged.exitCode !== 0) {
-      await execa('git', ['commit', '-m', `shipped record: ${slug}`, '--no-verify'], {
+      await execa('git', ['commit', '-m', `shipped record: ${identity.slug}`, '--no-verify'], {
         cwd,
         env: withEngineCommitEnv(),
       });
@@ -141,7 +153,7 @@ export async function dispatchShippedRecord(
     // Story 2 negative path: one canonical warn, exit 0 — the ship must
     // proceed; dedup degrades to the local ledger cache for this slug.
     console.error(
-      `shipped-record write failed — dedup degraded to local cache for ${slug}: ${
+      `shipped-record write failed — dedup degraded to local cache for ${requestedSlug}: ${
         err instanceof Error ? err.message : String(err)
       }`,
     );

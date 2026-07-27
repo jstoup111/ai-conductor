@@ -31,6 +31,14 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { validateConfig } from '../../src/engine/config.js';
 import { resolveStepConfig, DEFAULT_STEP_RETRIES } from '../../src/engine/resolved-config.js';
 import { aggregateRetryHotspots, parseEvents } from '../../src/engine/report-renderer.js';
+import {
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+} from '../../src/engine/provider-model-policy.js';
+import { writeState } from '../../src/engine/state.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 // ── Dispatch record for the Conductor-level stories ──────────────────────────
 
@@ -137,6 +145,240 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     }
   });
 
+  it('dispatches Codex retries from Luna through Terra to Sol with escalating effort', async () => {
+    const { runner, forStep } = makeRecordingRunner({
+      plan: () => ({ success: false, output: 'plan failed' }),
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: {
+          plan: {
+            llm_provider: 'codex',
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 4,
+          },
+        },
+      } as HarnessConfig,
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(forStep('plan').map(({ model, effort }) => ({ model, effort }))).toEqual([
+      { model: 'gpt-5.6-luna', effort: 'low' },
+      { model: 'gpt-5.6-luna', effort: 'medium' },
+      { model: 'gpt-5.6-terra', effort: 'medium' },
+      { model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
+  });
+
+  it('escalates each step with its preferred provider policy before provider-native fallback', async () => {
+    const calls: Array<{
+      step: 'memory' | 'explore';
+      provider: 'claude' | 'codex';
+      model: string | undefined;
+      effort: string | undefined;
+      resume: boolean;
+    }> = [];
+    const providerCalls = new Map<string, number>();
+    const invoke = (
+      provider: 'claude' | 'codex',
+    ) => async (options: InvokeOptions): Promise<InvokeResult> => {
+      const step =
+        options.prompt === (provider === 'codex' ? '$memory' : '/memory')
+          ? 'memory'
+          : options.prompt === (provider === 'codex' ? '$explore' : '/explore')
+            ? 'explore'
+            : undefined;
+      if (!step) {
+        return {
+          success: true,
+          output: `${provider} non-target step completed`,
+          exitCode: 0,
+        };
+      }
+      const key = `${step}:${provider}`;
+      const call = (providerCalls.get(key) ?? 0) + 1;
+      providerCalls.set(key, call);
+      calls.push({
+        step,
+        provider,
+        model: options.model,
+        effort: options.effort,
+        resume: options.resume,
+      });
+      const primary =
+        (step === 'memory' && provider === 'claude') ||
+        (step === 'explore' && provider === 'codex');
+      if (primary && call < 3) {
+        return {
+          success: false,
+          output: `${provider} ordinary failure ${call}`,
+          exitCode: 1,
+        };
+      }
+      if (primary) {
+        return {
+          success: false,
+          output: `${provider} model unavailable after escalation`,
+          exitCode: 1,
+          modelUnavailable: true,
+        };
+      }
+      return {
+        success: true,
+        output: `${provider} fallback completed`,
+        exitCode: 0,
+      };
+    };
+    const provider = (key: 'claude' | 'codex'): LLMProvider => ({
+      invoke: invoke(key),
+      invokeInteractive: invoke(key),
+    });
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'claude',
+        provider: provider('claude'),
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+      {
+        key: 'codex',
+        provider: provider('codex'),
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability([]),
+      },
+    ]);
+    const sessions = new ProviderSessionStore({
+      createSessionId: (() => {
+        let id = 0;
+        return () => `retry-provider-${++id}`;
+      })(),
+    });
+    const routingConfig: HarnessConfig = {
+      llm_provider: ['claude', 'codex'],
+      steps: {
+        memory: {
+          llm_provider: 'claude',
+          model: 'haiku',
+          effort: 'low',
+          max_retries: 3,
+        },
+        explore: {
+          llm_provider: 'codex',
+          model: 'gpt-5.6-luna',
+          effort: 'low',
+          max_retries: 3,
+        },
+      },
+    };
+    const runner = new DefaultStepRunner(
+      {
+        invoke: async () => ({
+          success: true,
+          output: 'legacy special lane completed',
+          exitCode: 0,
+        }),
+        invokeInteractive: async () => ({
+          success: true,
+          output: 'legacy special lane completed',
+          exitCode: 0,
+        }),
+      },
+      'legacy-session',
+      dir,
+      {
+        config: routingConfig,
+        sessionStore: sessions,
+        providerRuntimes: runtimes,
+        configuredProviders: ['claude', 'codex'],
+        providerWarn: vi.fn(),
+      },
+    );
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'default',
+      config: routingConfig,
+      onCheckpoint: async (step) =>
+        step === 'explore' ? 'quit' : 'continue',
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(calls).toEqual([
+      {
+        step: 'memory',
+        provider: 'claude',
+        model: 'haiku',
+        effort: 'low',
+        resume: false,
+      },
+      {
+        step: 'memory',
+        provider: 'claude',
+        model: 'haiku',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'memory',
+        provider: 'claude',
+        model: 'sonnet',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'memory',
+        provider: 'codex',
+        model: 'gpt-5.6-terra',
+        effort: 'medium',
+        resume: false,
+      },
+      {
+        step: 'explore',
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        effort: 'low',
+        resume: false,
+      },
+      {
+        step: 'explore',
+        provider: 'codex',
+        model: 'gpt-5.6-luna',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'explore',
+        provider: 'codex',
+        model: 'gpt-5.6-terra',
+        effort: 'medium',
+        resume: true,
+      },
+      {
+        step: 'explore',
+        provider: 'claude',
+        model: 'fable',
+        effort: 'xhigh',
+        resume: false,
+      },
+    ]);
+  });
+
   it('S9: exhausted retries HALT correctly — ladder adds no extra attempts', async () => {
     const { runner, forStep } = makeRecordingRunner({
       plan: () => ({ success: false, output: 'plan failed' }),
@@ -228,11 +470,10 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
     return { provider, invokeCalls };
   }
 
-  it('an attempt-3 escalated target (opus) that is dead is substituted by the #186 ladder', async () => {
+  it('an unavailable attempt-3 target (opus) descends from its active ladder rung to sonnet', async () => {
     // The conductor would hand modelOverride='opus' at attempt 3 for a base
-    // sonnet step. opus is unavailable this process, so effectiveModel must
-    // substitute a live tier from the availability ladder rather than dispatch
-    // on the dead one.
+    // sonnet step. opus is unavailable this process, so the availability walk
+    // must continue downward from opus to sonnet rather than wrap to fable.
     const { provider, invokeCalls } = ladderProvider({
       opus: {
         success: false,
@@ -240,7 +481,7 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
         exitCode: 1,
         modelUnavailable: true,
       },
-      fable: { success: true, output: 'done', exitCode: 0 },
+      sonnet: { success: true, output: 'done', exitCode: 0 },
     });
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
       config: { model_fallback_ladder: ['fable', 'opus', 'sonnet'] } as HarnessConfig,
@@ -250,7 +491,7 @@ describe('#188 retry-as-escalation — S8 availability composition', () => {
 
     expect(result.success).toBe(true);
     // opus was attempted then substituted; the step ran on a LIVE model, not opus.
-    expect(invokeCalls.map((c) => c.model)).toEqual(['opus', 'fable']);
+    expect(invokeCalls.map((c) => c.model)).toEqual(['opus', 'sonnet']);
     const last = invokeCalls[invokeCalls.length - 1];
     expect(last.model).not.toBe('opus');
     // The escalated effort override still flows through unchanged.
@@ -264,7 +505,10 @@ describe('#188 retry-as-escalation — S3 budgets', () => {
   it('explore/prd/plan/build resolve to max_retries 3 by default', () => {
     for (const step of ['explore', 'prd', 'plan', 'build'] as StepName[]) {
       expect(DEFAULT_STEP_RETRIES[step]).toBe(3);
-      const resolved = resolveStepConfig(step, 'PLANNING', undefined);
+      // Phase does not affect max_retries when no config is supplied (the
+      // phase-config lookup is always undefined in that case) — any valid
+      // Phase exercises the same default-resolution path.
+      const resolved = resolveStepConfig(step, 'DECIDE', undefined);
       expect(resolved.max_retries).toBe(3);
     }
   });
@@ -329,6 +573,119 @@ describe('#188 retry-as-escalation — S4 logging', () => {
     const forAttempt = (a: number) => retryEvents.find((e) => e.attempt === a);
     expect(forAttempt(2)).toMatchObject({ escalatedModel: 'sonnet', escalatedEffort: 'high' });
     expect(forAttempt(3)).toMatchObject({ escalatedModel: 'opus', escalatedEffort: 'high' });
+  });
+
+  it('emits upcoming Codex retry rungs after ordinary runner failures', async () => {
+    const retryEvents: Array<{
+      attempt: number;
+      model?: string;
+      effort?: string;
+    }> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'plan') {
+        retryEvents.push({
+          attempt: event.attempt,
+          model: event.escalatedModel,
+          effort: event.escalatedEffort,
+        });
+      }
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> =>
+        step === 'plan' ? { success: false, output: 'plan failed' } : { success: true },
+      ),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: {
+          plan: {
+            llm_provider: 'codex',
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 4,
+          },
+        },
+      } as HarnessConfig,
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(retryEvents).toEqual([
+      { attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' },
+      { attempt: 3, model: 'gpt-5.6-terra', effort: 'medium' },
+      { attempt: 4, model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
+  });
+
+  it('emits upcoming Codex retry rungs after completion misses', async () => {
+    const retryEvents: Array<{
+      attempt: number;
+      model?: string;
+      effort?: string;
+    }> = [];
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry' && event.step === 'plan') {
+        retryEvents.push({
+          attempt: event.attempt,
+          model: event.escalatedModel,
+          effort: event.escalatedEffort,
+        });
+      }
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (): Promise<StepRunResult> => ({ success: true })),
+    };
+    await writeState(statePath, {
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      complexity_tier: 'M',
+      track: 'technical',
+      prd: 'skipped',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+    } as ConductState);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      resume: true,
+      fromStep: 'plan',
+      verifyArtifacts: true,
+      config: {
+        llm_provider: ['claude', 'codex'],
+        steps: {
+          plan: {
+            llm_provider: 'codex',
+            model: 'gpt-5.6-luna',
+            effort: 'low',
+            max_retries: 4,
+          },
+        },
+      } as HarnessConfig,
+      escalateBuildFailure: okEscalation(),
+    });
+
+    await conductor.run();
+
+    expect(retryEvents).toEqual([
+      { attempt: 2, model: 'gpt-5.6-luna', effort: 'medium' },
+      { attempt: 3, model: 'gpt-5.6-terra', effort: 'medium' },
+      { attempt: 4, model: 'gpt-5.6-sol', effort: 'medium' },
+    ]);
   });
 
   it('aggregateRetryHotspots surfaces the terminal escalation rung', () => {

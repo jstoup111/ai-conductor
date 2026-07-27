@@ -20,6 +20,14 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
+import { createProviderRuntimeSet } from './engine/provider-runtime.js';
+import { ProviderSessionStore } from './engine/provider-session.js';
+import type { ProviderExecutionContext } from './engine/provider-execution.js';
+import { createCandidateSafetyBoundary } from './engine/provider-execution.js';
+import {
+  normalizeProviderSelection,
+  validateRegisteredProviderSelections,
+} from './engine/provider-selection.js';
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
@@ -46,7 +54,6 @@ import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { renderReport, ReportError } from './engine/report-renderer.js';
-import type { LLMProvider } from "./execution/llm-provider.js";
 import type { UISubscriber } from "./ui/types.js";
 import type { VisualizerPlugin } from './types/plugin.js';
 import { detectRegistryCommand, dispatchRegistry } from './engine/registry-cli.js';
@@ -66,6 +73,10 @@ import {
   dispatchShippedRecord,
 } from './engine/shipped-record-cli.js';
 import {
+  detectShipmentEvidenceCommand,
+  dispatchShipmentEvidence,
+} from './engine/shipment-evidence-cli.js';
+import {
   detectFinishRecordCommand,
   dispatchFinishRecord,
   makeProductionFinishRecordRunners,
@@ -75,6 +86,10 @@ import {
   dispatchManualTestRecord,
   makeProductionManualTestRecordRunners,
 } from './engine/manual-test-record-cli.js';
+import {
+  detectFinalizeChangelogPrCommand,
+  dispatchFinalizeChangelogPr,
+} from './engine/changelog-pr-finalizer-cli.js';
 import {
   detectDeriveFeedbackCommand,
   dispatchDeriveFeedback,
@@ -89,6 +104,10 @@ import {
   resolveMainRepoRoot,
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
+import {
+  detectTestSuiteCommand,
+  dispatchTestSuiteCommand,
+} from './engine/test-suite-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
@@ -369,6 +388,15 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const testSuiteCmd = detectTestSuiteCommand(process.argv);
+  if (testSuiteCmd) {
+    const code = await dispatchTestSuiteCommand(testSuiteCmd, {
+      projectRoot: process.cwd(),
+    });
+    process.exitCode = code;
+    return;
+  }
+
   // Memory setup subcommand (`conduct memory setup [dir]`, adr-2026-06-29-shared-memory-store-placement-and-durability) runs
   // NON-INTERACTIVELY and exits — creates/migrates the canonical per-project
   // store + .memory symlink. Dispatched first so bin/conduct can call it
@@ -438,6 +466,14 @@ async function main(): Promise<void> {
     process.exit(code);
   }
 
+  // `shipment-evidence audit` is report-only: it persists a complete or
+  // incomplete historical-evidence report and never writes shipped records.
+  const shipmentEvidenceCmd = detectShipmentEvidenceCommand(process.argv);
+  if (shipmentEvidenceCmd) {
+    const code = await dispatchShipmentEvidence(shipmentEvidenceCmd, process.cwd());
+    process.exit(code);
+  }
+
   // Finish-record subcommand (`finish-record --choice <pr|keep> [--pr-url
   // <url>] --pipeline-dir <dir>`) runs NON-INTERACTIVELY and exits — records
   // the operator's /finish choice (pr_url into conduct-state.json + the
@@ -447,6 +483,15 @@ async function main(): Promise<void> {
   const finishRecordCmd = detectFinishRecordCommand(process.argv);
   if (finishRecordCmd) {
     const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
+    process.exit(code);
+  }
+
+  // Changelog PR finalization runs NON-INTERACTIVELY after the implementation
+  // PR exists. Malformed use is recognized as a guide command so it can never
+  // fall through and launch a feature pipeline.
+  const finalizeChangelogPrCmd = detectFinalizeChangelogPrCommand(process.argv);
+  if (finalizeChangelogPrCmd) {
+    const code = await dispatchFinalizeChangelogPr(finalizeChangelogPrCmd, process.cwd());
     process.exit(code);
   }
 
@@ -512,7 +557,16 @@ async function main(): Promise<void> {
   // evidence/task-cli dispatch pattern.
   const buildAuthStatusCmd = detectBuildAuthStatusCommand(process.argv);
   if (buildAuthStatusCmd) {
-    const code = await dispatchBuildAuthStatus(buildAuthStatusCmd);
+    // Load the REAL merged config (project .ai-conductor/config.yml deep-merged
+    // over ~/.ai-conductor/config.yml) so the reported mode matches what a real
+    // self-host dispatch will actually resolve via resolveSelfHostConfig(this.config)
+    // in conductor.ts. Without this, dispatchBuildAuthStatus's `config` dep defaults
+    // to undefined and it always reports the hardcoded default (daemon-token/valid)
+    // regardless of any harness_self_host.build_auth override on disk — a falsely
+    // reassuring status that masks the real, active mode (#971 incident).
+    const buildAuthMergedResult = await loadMergedConfig(process.cwd());
+    const buildAuthConfig = buildAuthMergedResult.ok ? buildAuthMergedResult.config : undefined;
+    const code = await dispatchBuildAuthStatus(buildAuthStatusCmd, { config: buildAuthConfig });
     process.exit(code);
   }
 
@@ -945,11 +999,30 @@ async function main(): Promise<void> {
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
   registerBuiltins(registry, events, renderEvent);
   registry.markInitialized();
+  validateRegisteredProviderSelections({
+    config: config ?? {},
+    registeredProviders: registry.list('llm_provider'),
+  });
 
-  // Retrieve provider and subscriber from registry with defaults
-  const provider = registry.get<LLMProvider>(
-    'llm_provider',
-    config?.llm_provider ?? 'claude'
+  // Compose one provider-routing context from the complete frozen registry.
+  // The ordered config survives intact; its first entry is only the
+  // compatibility adapter for legacy constructor surfaces.
+  const configuredProviders = normalizeProviderSelection(config?.llm_provider);
+  const providerExecution: ProviderExecutionContext = {
+    configuredProviders: configuredProviders,
+    runtimes: createProviderRuntimeSet(registry, console.warn),
+    sessions: new ProviderSessionStore(),
+    config: config,
+    modelOverride: opts.model,
+    // BUILD/SHIP StepRunner paths retain this resolved-candidate boundary.
+    // Conductor composes self-host authority around it when applicable.
+    withCandidateSafety: createCandidateSafetyBoundary(),
+    onAttempt: (step, attempt) =>
+      events.emit({ type: 'provider_attempt', step, ...attempt }),
+    warn: (_message, transition) => events.emit(transition),
+  };
+  const compatibilityRuntime = providerExecution.runtimes.get(
+    providerExecution.configuredProviders[0],
   );
 
   // Select UI subscriber based on config (default: 'terminal')
@@ -990,13 +1063,14 @@ async function main(): Promise<void> {
   }
   buildVisualizers(visualizerList, events);
 
-  const stepRunner = new DefaultStepRunner(provider, sessionId, projectRoot, {
+  const stepRunner = new DefaultStepRunner(compatibilityRuntime.provider, sessionId, projectRoot, {
     featureDesc: opts.featureDesc,
     pipelineDir,
     stepCooldown: opts.cooldown,
     config,
-    modelOverride: opts.model,
+    modelPolicy: compatibilityRuntime.policy,
     mode,
+    providerExecution,
   });
 
   // Project-level prelude: bootstrap (if never run or migration pending) and
@@ -1016,10 +1090,14 @@ async function main(): Promise<void> {
     };
   const prelude = await runProjectPrelude(
     projectRoot,
-    provider,
+    compatibilityRuntime.provider,
     sessionId,
     config ?? {},
-    { harnessVersion, onAssessStalePrompt: interactivePrompt },
+    {
+      harnessVersion,
+      onAssessStalePrompt: interactivePrompt,
+      providerExecution,
+    },
   );
   if (prelude.bootstrapExecuted) {
     console.log(
@@ -1051,6 +1129,8 @@ async function main(): Promise<void> {
     fromStep: opts.from as StepName | undefined,
     mode,
     config,
+    modelPolicy: compatibilityRuntime.policy,
+    providerExecution,
     projectRoot,
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,

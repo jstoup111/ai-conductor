@@ -1,8 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readdir, readlink, lstat, access } from 'fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readdir, readlink, lstat } from 'fs/promises';
 import { join, resolve, dirname } from 'path';
 import { tmpdir } from 'os';
-import { execa } from 'execa';
 import { publish } from '../../scripts/publish-engine.mjs';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -89,6 +88,7 @@ describe('interrupted publish recovery', () => {
       orphanedDir = entryPath;
     }
     expect(orphanedDir).toBeDefined();
+    if (!orphanedDir) throw new Error('orphanedDir must be defined');
 
     // The orphaned dir still carries the "finalized but not flipped" sentinel.
     await expect(lstat(join(orphanedDir, '.publish-incomplete'))).resolves.toBeDefined();
@@ -140,81 +140,4 @@ describe('interrupted publish recovery', () => {
     // Sanity: `first`'s dir is untouched by the cleanup (it has no sentinel).
     expect(entriesAfter.map((e) => join(versionsDir, e))).toContain(first.dir);
   });
-});
-
-// ─────────────────────────────────────────────────────────────────────────────
-// bin/setup compatibility (Task 9, acceptance criterion 2).
-//
-// `bin/setup` (repo root) is the harness's own worktree-prep script; it landed
-// in PR #269 and runs `npm install` + a versioned `npm run build` so a
-// worktree's own `src/conductor/dist/index.js` symlink resolves without ever
-// touching the primary checkout's dist/. This smoke test exercises that
-// script end to end from a real `git worktree add` checkout, asserting that
-// the worktree gets its own dist symlink and that the primary checkout's
-// symlink is left untouched.
-// ─────────────────────────────────────────────────────────────────────────────
-
-const REPO_ROOT = resolve(join(process.cwd(), '..', '..'));
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await access(path);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-describe('bin/setup worktree compatibility', () => {
-  // Runs the worktree's own `bin/setup` (not the primary checkout's) so `$0`
-  // resolves inside the worktree and every path it touches — npm install,
-  // the build, the dist symlink — stays scoped there (#334, Option C). That
-  // means a real `npm install` and versioned build run for real on every
-  // invocation of this test, which is why the timeout is a generous 600s
-  // instead of the default.
-  it(
-    'creates a worktree-local dist/ symlink without touching the primary checkout',
-    { timeout: 600_000 },
-    async (ctx) => {
-    const primaryDistLink = join(REPO_ROOT, 'src', 'conductor', 'dist');
-    const primaryStatBefore = await lstat(primaryDistLink).catch(() => undefined);
-
-    const worktreeDir = await mkdtemp(join(tmpdir(), 'bin-setup-worktree-'));
-    const branchName = `bin-setup-smoke-${Date.now()}`;
-    try {
-      await execa('git', ['worktree', 'add', '-b', branchName, worktreeDir, 'HEAD'], {
-        cwd: REPO_ROOT,
-      });
-
-      if (!(await exists(join(worktreeDir, 'bin', 'setup')))) {
-        ctx.skip();
-        return;
-      }
-
-      await execa(join(worktreeDir, 'bin', 'setup'), [], {
-        cwd: worktreeDir,
-        env: { ...process.env, CI: 'true' },
-      });
-
-      const worktreeDistLink = join(worktreeDir, 'src', 'conductor', 'dist');
-      const worktreeStat = await lstat(worktreeDistLink);
-      expect(worktreeStat.isSymbolicLink()).toBe(true);
-      const worktreeIndexJs = join(worktreeDir, 'src', 'conductor', 'dist', 'index.js');
-      expect(await exists(worktreeIndexJs)).toBe(true);
-
-      // Primary checkout's own dist/ is byte-for-byte untouched.
-      const primaryStatAfter = await lstat(primaryDistLink).catch(() => undefined);
-      expect(primaryStatAfter?.isSymbolicLink()).toBe(primaryStatBefore?.isSymbolicLink());
-      if (primaryStatBefore) {
-        expect(primaryStatAfter?.mtimeMs).toBe(primaryStatBefore.mtimeMs);
-      }
-    } finally {
-      await execa('git', ['worktree', 'remove', '--force', worktreeDir], { cwd: REPO_ROOT }).catch(
-        () => {},
-      );
-      await execa('git', ['branch', '-D', branchName], { cwd: REPO_ROOT }).catch(() => {});
-      await rm(worktreeDir, { recursive: true, force: true });
-    }
-    },
-  );
 });

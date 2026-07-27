@@ -4,6 +4,10 @@
 **Epic:** EP-001 Conductor Core Engine
 **Skill:** tdd/SKILL.md
 
+> **Amended 2026-07-25 by issue #940:** GREEN and COMMIT run the
+> affected/scoped test set. The aggregate full suite is owned by the explicit
+> pre-SHIP `test_suite` gate, not by every TDD commit.
+
 As a developer, I want the TDD skill to enforce a strict RED -> DOMAIN -> GREEN -> DOMAIN ->
 COMMIT cycle so that every implementation change is test-driven and domain-reviewed.
 
@@ -32,8 +36,9 @@ COMMIT cycle so that every implementation change is test-driven and domain-revie
   it vetoes, then the cycle returns to RED — GREEN does not proceed
 - Given the domain review after GREEN finds domain violations, when it vetoes, then the
   cycle returns to GREEN — COMMIT does not proceed
-- Given the GREEN phase implementation breaks other tests, when the full suite runs, then
-  the breakage must be fixed before COMMIT — no partial commits
+- Given the GREEN phase implementation breaks an affected/scoped test, when the
+  scoped set runs, then the breakage must be fixed before COMMIT — no known
+  partial failure is committed
 - Given the test was written but already passes (test doesn't actually test new behavior),
   when detected, then the RED phase fails — tests must genuinely fail before GREEN
 - Given a production file has no corresponding spec, when the spec coverage check runs, then
@@ -43,7 +48,7 @@ COMMIT cycle so that every implementation change is test-driven and domain-revie
 - [ ] Five-phase cycle enforced: RED -> DOMAIN -> GREEN -> DOMAIN -> COMMIT
 - [ ] Domain reviewer has veto authority at both review points
 - [ ] Veto sends back to the prior phase (not to the beginning)
-- [ ] Full test suite passes before COMMIT
+- [ ] Affected/scoped test set passes before COMMIT
 - [ ] Failing tests that already pass are rejected (RED must be red)
 - [ ] Each cycle produces exactly one commit
 - [ ] Every production file has a corresponding spec (coverage gate)

@@ -17,6 +17,7 @@ import {
   type BacklogItem,
   type DaemonDeps,
 } from '../../src/engine/daemon.js';
+import { createDaemonModeLogger } from '../../src/engine/daemon-log.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -317,5 +318,45 @@ describe('Task 16: Transition-only status logging (RED tests)', () => {
     // Resume line should contain: "resume f0 (was: halted)"
     const resumeLine = resumeLines[0];
     expect(resumeLine).toMatch(/resume f0.*\(was:/);
+  });
+});
+
+describe('daemon-mode contextual transition suppression regression', () => {
+  it('suppresses repeated tagged transitions through the production daemon logger without leaking context to global output', () => {
+    const live: string[] = [];
+    const persisted: string[] = [];
+    const log = createDaemonModeLogger({
+      writeLive: (line) => live.push(line),
+      writePersisted: (line) => persisted.push(line),
+    });
+
+    log('[feature-a] ▶ start feature-a', true);
+    log('[feature-a] ▶ start feature-a', true);
+    log('repository sweep complete');
+    log('[feature-a] ■ done feature-a: done', true);
+    log('[feature-a] ■ done feature-a: done', true);
+
+    expect(live).toEqual([
+      '[daemon][feature-a] ▶ start feature-a',
+      '[daemon] repository sweep complete',
+      '[daemon][feature-a] ■ done feature-a: done',
+    ]);
+    expect(persisted).toEqual(live);
+  });
+
+  it('adds resume context once and retains the prior status through the production daemon logger', () => {
+    const lines: string[] = [];
+    const log = createDaemonModeLogger({
+      writeLive: (line) => lines.push(line),
+      writePersisted: () => {},
+    });
+
+    log('[feature-a] ■ done feature-a: halted', true);
+    log('[feature-a] ↻ resume feature-a', true);
+
+    expect(lines).toEqual([
+      '[daemon][feature-a] ■ done feature-a: halted',
+      '[daemon][feature-a] ↻ resume feature-a (was: halted)',
+    ]);
   });
 });

@@ -120,10 +120,10 @@ resolve_path() {
   # Use cd + pwd to resolve the canonical path
   # We avoid subshells by using a temp approach
   local resolved
-  if resolved=\$(cd "\$path" 2>/dev/null && pwd); then
+  if resolved=\$(cd "\$path" 2>/dev/null && pwd -P); then
     # The path itself is a directory and exists
     printf '%s' "\$resolved"
-  elif resolved=\$(cd "\$(dirname "\$path")" 2>/dev/null && pwd) && [[ -d "\$resolved" ]]; then
+  elif resolved=\$(cd "\$(dirname "\$path")" 2>/dev/null && pwd -P) && [[ -d "\$resolved" ]]; then
     # The parent directory exists; append the filename
     printf '%s/%s' "\$resolved" "\$(basename "\$path")"
   else
@@ -231,9 +231,16 @@ main() {
     target=\$(extract_bash_target_path "\$target")
   fi
 
-  # If no target path was found, allow
+  # A mutation-bearing tool without a determinable target is unsafe: never
+  # infer an allow path from malformed shell syntax or indirection.
   if [[ -z "\$target" ]]; then
-    exit 0
+    if [[ "\$tool_name" == "Bash" ]]; then
+      if ! printf '%s' "\$json" | grep -q '>'; then
+        exit 0
+      fi
+    fi
+    printf 'FENCE BLOCK: write target could not be determined\n' >&2
+    exit 2
   fi
 
   # Resolve the target path against the current working directory

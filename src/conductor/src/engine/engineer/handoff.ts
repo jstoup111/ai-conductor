@@ -28,6 +28,7 @@ import type { AuthoredLedgerOpts } from './authored-ledger.js';
 import { recordAuthoredKey } from './authored-ledger.js';
 import { extractPrUrl } from '../state.js';
 import { injectIssueRef } from './issue-ref.js';
+import type { GitRunner } from '../pr-labels.js';
 
 // ─── Public types ──────────────────────────────────────────────────────────────
 
@@ -61,6 +62,8 @@ export type CommandRunner = (args: string[], opts?: RunnerOpts) => Promise<Runne
 export interface HandoffDeps {
   /** Injectable gh/CLI runner. Tests supply a fake; production wraps execFile. */
   runner: CommandRunner;
+  /** Injectable git runner used to publish the spec branch before opening its PR. */
+  gitRunner?: GitRunner;
   /**
    * The per-idea worktree path — cwd for `gh pr create` (and the issue-ref link).
    * The worktree is checked out on `spec/<slug>`, so gh pushes THAT branch and opens
@@ -156,10 +159,23 @@ export async function openSpecPr(
   branch: string,
   deps: HandoffDeps,
 ): Promise<OpenSpecPrResult> {
-  const { runner, ledgerOpts } = deps;
+  const { runner, gitRunner, ledgerOpts } = deps;
   // cwd = the per-idea worktree (checked out on `spec/<slug>`) so gh pushes and opens
   // the PR from that branch. Falls back to the canonical path for legacy callers.
   const cwd = deps.worktreePath ?? target.canonicalPath;
+
+  if (target.remote === undefined) {
+    await recordAuthoredKey(target.name, branch, ledgerOpts ?? {});
+    return { kind: 'pr-skipped', reason: 'no remote configured' };
+  }
+
+  if (!gitRunner) {
+    throw new Error(
+      `openSpecPr: gitRunner is required to push branch "${branch}" for remote target "${target.name}"`,
+    );
+  }
+
+  await gitRunner(['push', '-u', 'origin', branch], { cwd });
 
   // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
   //    The `--head` flag names the branch to open a PR for; `--fill` uses the

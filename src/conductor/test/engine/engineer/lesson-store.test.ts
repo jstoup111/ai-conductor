@@ -563,7 +563,9 @@ describe('selectLessons — FR-8 flywheel read', () => {
     const weirdStore: LessonStore = {
       async record(_lesson: LessonRecord): Promise<void> { /* no-op */ },
       async retrieve(_query: LessonQuery): Promise<RetrievedLesson[]> {
-        // eslint-disable-next-line @typescript-eslint/no-throw-literal
+        // Deliberately a raw string rather than an Error — that is the case under
+        // test. (No disable directive needed: this config does not enable a
+        // throw-literal rule, and naming an unknown rule is itself an ESLint error.)
         throw 'string error from store';
       },
     };

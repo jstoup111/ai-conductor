@@ -87,13 +87,21 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     extra: { daemon?: boolean; provider?: LLMProvider; log?: (m: string) => void; wtPath?: string } = {},
   ): FeatureRunnerDeps {
     const wt = extra.wtPath ?? worktreePath;
-    const base: FeatureRunnerDeps = {
+    const base: Omit<FeatureRunnerDeps, 'daemon' | 'project'> = {
       createWorktree: async () => {
         await seedEvents(wt);
         return { path: wt, branch: `feat/${ITEM.slug}` } as FeatureWorktree;
       },
       runConductor: async () => {},
       readOutcome: async () => outcome,
+      shipmentEvidence: async (input) => ({
+        kind: 'valid',
+        slug: input.slug,
+        pr: input.implementationPr,
+        recordPath: `.docs/shipped/${input.slug}.md`,
+        hash: 'fixture-hash',
+        commit: input.candidateCommit,
+      }),
       teardownWorktree: async () => {},
       markProcessed: async () => {},
       log: extra.log,
@@ -308,5 +316,28 @@ describe('integration/engineer-emission — makeRunFeature emits on daemon compl
     // …and the failure was LOGGED + swallowed. This sentinel only the emission
     // path can satisfy, so the test fails RED until best-effort emission exists.
     expect(logs.some((m) => /engineer|signal|emit/i.test(m))).toBe(true);
+  });
+
+  it('routes the engineer-signal persistence failure diagnostic through the feature-scoped logger', async () => {
+    const blocker = join(worktreePath, 'feature-logger-blocker');
+    await mkdir(worktreePath, { recursive: true });
+    await writeFile(blocker, 'x', 'utf-8');
+    process.env.AI_CONDUCTOR_ENGINEER_DIR = join(blocker, 'engineer');
+
+    const featureLogs: string[] = [];
+    const featureDeps = deps(
+      { done: true, halted: false, finishChoice: 'pr', prUrl: 'http://pr/1' },
+      { daemon: true },
+    );
+    featureDeps.beginFeatureRun = () => ({
+      events: undefined as never,
+      providerExecution: undefined as never,
+      log: (message) => featureLogs.push(message),
+      stop: () => {},
+    });
+
+    await makeRunFeature(featureDeps)(ITEM);
+
+    expect(featureLogs).toContainEqual(expect.stringMatching(/engineer: signal emission failed/));
   });
 });

@@ -13,6 +13,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileP = promisify(execFileCb);
+const GH_STDOUT_MAX_BUFFER = 32 * 1024 * 1024;
 
 /**
  * Injectable runner for `gh` CLI commands.
@@ -43,7 +44,10 @@ export function assertRealExecAllowed(bin: string): void {
 export function makeProductionGh(): GhRunner {
   return async (args: string[], opts: { cwd: string }) => {
     assertRealExecAllowed('gh');
-    const result = await execFileP('gh', args, { cwd: opts.cwd });
+    const result = await execFileP('gh', args, {
+      cwd: opts.cwd,
+      maxBuffer: GH_STDOUT_MAX_BUFFER,
+    });
     return { stdout: String(result.stdout) };
   };
 }

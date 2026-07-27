@@ -80,6 +80,30 @@ describe('ensureInstallFresh — staleness policy', () => {
     expect(calls).toEqual([['--check']]);
   });
 
+  it('build-auth readiness failure does not masquerade as stale skills', async () => {
+    const { runner } = makeRunner({ check: 2 });
+
+    await expect(
+      ensureInstallFresh({ harnessRoot: HARNESS, runner, interactive: false, log: () => {} }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('drift diagnostic names both active catalogs and native `$rebase` syntax', async () => {
+    const { runner } = makeRunner({ check: 1 });
+    const logs: string[] = [];
+    const error = await ensureInstallFresh({
+      harnessRoot: HARNESS,
+      runner,
+      interactive: false,
+      log: (message) => logs.push(message),
+    }).catch((cause) => cause as Error);
+    if (!(error instanceof Error)) throw new Error('expected ensureInstallFresh to reject');
+
+    expect(`${logs.join('\n')}\n${error.message}`).toMatch(
+      /^(?![\s\S]*\/rebase)[\s\S]*~\/\.claude\/skills[\s\S]*~\/\.agents\/skills[\s\S]*\$rebase/,
+    );
+  });
+
   it('drift + "yes" but --update fails: throws', async () => {
     const { runner } = makeRunner({ check: 1, update: 1 });
     await expect(

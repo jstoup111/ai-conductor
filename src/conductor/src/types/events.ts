@@ -1,8 +1,17 @@
 import type { StepName, StepStatus, ComplexityTier } from './steps.js';
 import type { BootstrapMode } from './state.js';
-import type { TokenUsage } from '../execution/llm-provider.js';
+import type {
+  AuthenticationReadinessState,
+  AuthenticationSource,
+  TokenUsage,
+} from '../execution/llm-provider.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
+
+/** Closed, non-diagnostic context for credential-park progress telemetry. */
+export type CredentialParkProgressDegradation =
+  | 'credential-failure'
+  | 'unrelated-diagnostic-degradation';
 
 /**
  * Extra state threaded into onRecovery so the UI can adapt its menu
@@ -23,8 +32,43 @@ export interface RecoveryContext {
 
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
-  | { type: 'step_completed'; step: StepName; status: StepStatus; tail?: string[]; tokenUsage?: TokenUsage; model?: string; unmetered?: boolean }
+  | {
+      type: 'step_completed';
+      step: StepName;
+      status: StepStatus;
+      tail?: string[];
+      tokenUsage?: TokenUsage;
+      model?: string;
+      unmetered?: boolean;
+      /** Preferred provider resolved for this step, when provider routing is active. */
+      preferredProvider?: string;
+      /** Provider that produced the successful result. */
+      actualProvider?: string;
+    }
   | { type: 'step_failed'; step: StepName; error: string; retryCount: number }
+  | {
+      /** One provider candidate's result within a step attempt. */
+      type: 'provider_attempt';
+      step: StepName;
+      provider: string;
+      /** Sanitized Codex authentication source; omitted for other providers. */
+      authenticationSource?: 'api-key' | 'cached-login';
+      outcome: 'success' | 'failure' | 'unavailable';
+      /** False when a cached run-wide unavailability avoided process dispatch. */
+      invoked: boolean;
+      model?: string;
+      tokenUsage?: TokenUsage;
+      reason?: string;
+      fallbackReason?: string;
+    }
+  | {
+      /** A visible transition from an unavailable provider to the next candidate. */
+      type: 'provider_fallback';
+      step: StepName;
+      failedProvider: string;
+      reason: string;
+      nextProvider: string;
+    }
   | {
       type: 'step_retry';
       step: StepName;
@@ -63,6 +107,16 @@ export type ConductorEvent =
   | { type: 'rate_limit'; waitSeconds: number }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
+  | {
+      /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
+      type: 'credentials_park_progress';
+      provider: 'codex';
+      source: AuthenticationSource;
+      readiness: AuthenticationReadinessState;
+      elapsedSeconds: number;
+      nextProbeDelaySeconds: number;
+      degradation: CredentialParkProgressDegradation;
+    }
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
@@ -81,6 +135,36 @@ export type ConductorEvent =
       floorSource: 'attempt' | 'session';
       mtimeMs?: number;
       floorMs?: number;
+    }
+  | {
+      /**
+       * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):
+       * base-freshness telemetry emitted once per build_review grading,
+       * right after `assembleBuildReviewInputs` resolves — regardless of
+       * how the grading itself turns out. Lets operators see whether the
+       * diff was graded against a freshly-fetched remote head (`fresh:
+       * true`) or a stale tracking ref / no-remote local fallback
+       * (`fresh: false`). Pure telemetry: never affects step outcome.
+       */
+      type: 'build_review_base';
+      mergeBase: string;
+      trackingRefSha: string | null;
+      remoteHeadSha: string | null;
+      fresh: boolean;
+    }
+  | {
+      /**
+       * Task 7 (build-review-grades-plan-vs-diff-against-a-stale-o): emitted
+       * when a build_review FAIL is classified `stale-mirage` — the graded
+       * base was stale, and the flagged content is absent under a fresh
+       * recompute. The stale verdict is discarded and build_review re-runs
+       * against fresh inputs instead of kicking back to build; `regradeCount`
+       * is the per-feature-session counter value AFTER this regrade
+       * (Task 8 reads the same counter to enforce the once-per-session bound).
+       */
+      type: 'build_review_stale_mirage_regrade';
+      mergeBase: string;
+      regradeCount: number;
     }
   | { type: 'mode_skip'; step: StepName; mode: BootstrapMode; reason: string }
   | {
@@ -188,6 +272,14 @@ export type ConductorEvent =
       reason?: string;
       /** Timestamp (ms epoch) the gate's verdict was computed, for audit non-divergence checks. */
       checkedAt?: number;
+    }
+  | {
+      /** Freshness telemetry for the full test-suite verification evidence. */
+      type: 'test_suite_verification';
+      freshness: {
+        status: 'CURRENT' | 'STALE';
+        reason?: string;
+      };
     }
   | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
@@ -344,6 +436,23 @@ export type ConductorEvent =
       type: 'unattributed_dispatch';
       step: StepName;
       unattributedCount: number;
+    }
+  // ── Commit-movement liveness floor (adr-2026-07-23-commit-movement-liveness-floor) ──
+  | {
+      /**
+       * Emitted when the build stall breaker's resolved-task count is
+       * pinned across an attempt (the old `no_task_progress` trigger
+       * condition) but HEAD nonetheless moved this attempt — real,
+       * committed work landed without a `Task:` trailer attributing it to
+       * a plan task id. This is telemetry only; it does NOT classify the
+       * attempt as stalled.
+       */
+      type: 'unattributed_progress';
+      step: StepName;
+      attempt: number;
+      resolvedCount: number;
+      headBefore: string | null;
+      headAfter: string | null;
     }
   // ── Audit-trail write-completeness: halt lifecycle closure ──
   | {

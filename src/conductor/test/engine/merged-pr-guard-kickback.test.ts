@@ -5,29 +5,24 @@
  * Drives a real daemon-mode Conductor.run() through each of the five
  * gate-failure kickback routes (manual_test, build_review, prd_audit,
  * generic remediation, finish/as-built remediation) with a fake GhRunner and
- * asserts the guard's observable side effects: no build re-dispatch,
- * synthetic ship markers, unchanged pr_url, and a log/event line naming the
- * out-of-band merge.
+ * asserts the guard's observable side effects: no build re-dispatch and no
+ * synthetic ship markers when a merged PR lacks verifiable durable evidence.
  *
- * `src/engine/merged-pr-guard.ts` does not exist yet (ADR
- * adr-2026-07-09-mid-run-merged-pr-guard.md, plan
- * .docs/plans/2026-07-09-daemon-merged-pr-guard-on-retry.md, Tasks 4-7, 13).
- * These tests are expected to FAIL: the MERGED verdict currently has zero
- * effect on conductor.ts, so the "no re-dispatch" / marker assertions fail
- * because today's behavior re-dispatches build exactly as it always has.
+ * A MERGED state alone is insufficient: strict durable shipment verification
+ * must succeed before convergence may continue.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
 const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
@@ -60,18 +55,6 @@ async function markerExists(dir: string, rel: string): Promise<boolean> {
     () => true,
     () => false,
   );
-}
-
-/** Snapshot every emitted event (any type) so we can grep the future guard's
- * log line without depending on a specific ConductorEvent variant name. */
-function captureEvents(events: ConductorEventEmitter): { all: unknown[] } {
-  const all: unknown[] = [];
-  const spy = vi.spyOn(events, 'emit');
-  spy.mockImplementation(async (e: unknown) => {
-    all.push(e);
-    return undefined;
-  });
-  return { all };
 }
 
 describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
@@ -157,11 +140,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       return { runner, calls };
     }
 
-    it('happy: MERGED verdict — no build re-dispatch, synthetic markers, pr_url unchanged, log names the out-of-band merge', async () => {
+    it('negative: MERGED without durable evidence — no build re-dispatch or synthetic success', async () => {
       await seedShipTail();
       const { runner, calls } = remediateToBuildRunner();
       const { runGh, calls: ghCalls } = makeGhFake({ state: 'MERGED' });
-      const { all: emitted } = captureEvents(events);
 
       const conductor = new Conductor({
         stateFilePath: statePath,
@@ -187,21 +169,14 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       // No further build dispatch after the guard observes MERGED.
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
 
-      // Synthetic verified-ship markers.
-      expect(await markerExists(dir, '.pipeline/finish-choice')).toBe(true);
-      expect((await readFile(join(dir, '.pipeline/finish-choice'), 'utf-8')).trim()).toBe('pr');
-      expect(await markerExists(dir, '.pipeline/DONE')).toBe(true);
+      expect(await markerExists(dir, '.pipeline/finish-choice')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
 
       // pr_url is untouched.
       const result = await readState(statePath);
       expect(result.ok && result.value.pr_url).toBe(PR_URL);
 
-      // A log/event line names the out-of-band merge with the retained SHA.
-      const found = emitted.find((e) => {
-        const s = JSON.stringify(e);
-        return /already shipped out-of-band/.test(s) && /[0-9a-f]{40}/.test(s);
-      });
-      expect(found).toBeTruthy();
     });
 
     it.each([
@@ -209,7 +184,6 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       ['CLOSED', { state: 'CLOSED' }],
       ['NOTFOUND', { state: 'NOTFOUND' }],
       ['UNKNOWN', { state: 'UNKNOWN' }],
-      ['gh throws', { throws: true }],
     ] as const)('negative: %s verdict — rewind proceeds, no synthetic markers written', async (_label, ghOpts) => {
       await seedShipTail();
       const { runner, calls } = remediateToBuildRunner();
@@ -235,6 +209,33 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       expect(calls.filter((s) => s === 'build').length).toBeGreaterThan(0);
       // The guard must never write the synthetic markers on a non-MERGED verdict.
       expect(await markerExists(dir, '.pipeline/finish-choice')).toBe(false);
+    });
+
+    it('negative: gh throws — unavailable evidence HALTs without re-dispatch or synthetic markers', async () => {
+      await seedShipTail();
+      const { runner, calls } = remediateToBuildRunner();
+      const { runGh } = makeGhFake({ throws: true });
+
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        fromStep: 'finish',
+        maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+        runGh,
+      } as never);
+
+      await conductor.run();
+
+      expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      expect(await markerExists(dir, '.pipeline/finish-choice')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
 
     it('negative: no pr_url recorded — zero gh invocations, rewind proceeds', async () => {
@@ -332,7 +333,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       return { runner, calls };
     }
 
-    it('manual_test route (~1786): MERGED → no build re-dispatch', async () => {
+    it('manual_test route (~1786): MERGED without durable evidence HALTs without synthetic success', async () => {
       await seedToManualTest();
       const { runner, calls } = failingManualTestRunner();
       const { runGh } = makeGhFake({ state: 'MERGED' });
@@ -348,12 +349,18 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
-      expect(await markerExists(dir, '.pipeline/DONE')).toBe(true);
+      expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/finish-choice')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
 
     it('manual_test route (~1786): OPEN → build IS re-dispatched (pass-through proof)', async () => {
@@ -372,6 +379,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       await conductor.run();
@@ -389,6 +400,12 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
       state.build_review = 'skipped';
+      // This route isolates a PRD-audit failure. The as-built member is
+      // legitimately skipped because its upstream DECIDE review was skipped;
+      // otherwise #922's parallel validation group would also dispatch it,
+      // and its intentionally absent report would obscure the PRD route.
+      state.architecture_review = 'skipped';
+      state.architecture_review_as_built = 'skipped';
       state.pr_url = PR_URL;
       await writeState(statePath, state as unknown as ConductState);
       await mkdir(join(dir, '.pipeline'), { recursive: true });
@@ -425,7 +442,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       return { runner, calls };
     }
 
-    it('prd_audit route (~1975): MERGED → no build re-dispatch', async () => {
+    it('prd_audit route (~1975): unproven MERGED evidence HALTs without re-dispatch', async () => {
       await seedToPrdAudit();
       const { runner, calls } = perpetualImplGapRunner();
       const { runGh } = makeGhFake({ state: 'MERGED' });
@@ -445,6 +462,8 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
 
     it('prd_audit route (~1975): OPEN → build IS re-dispatched (pass-through proof)', async () => {
@@ -515,7 +534,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       return { runner, calls };
     }
 
-    it('generic remediation route (~1917): MERGED → no build re-dispatch', async () => {
+    it('generic remediation route (~1917): unproven MERGED evidence HALTs without re-dispatch', async () => {
       await seedToPrdAudit();
       const { runner, calls } = remediateGenericRunner();
       const { runGh } = makeGhFake({ state: 'MERGED' });
@@ -535,6 +554,8 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
 
     it('generic remediation route (~1917): OPEN → build IS re-dispatched (pass-through proof)', async () => {
@@ -608,7 +629,7 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       return { runner, calls };
     }
 
-    it('build_review route (~1856): MERGED → no build re-dispatch', async () => {
+    it('build_review route (~1856): unproven MERGED evidence HALTs without re-dispatch', async () => {
       await seedToBuildReview();
       const { runner, calls } = failingBuildReviewRunner();
       const { runGh } = makeGhFake({ state: 'MERGED' });
@@ -629,6 +650,8 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
       await conductor.run();
 
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      expect(await markerExists(dir, '.pipeline/DONE')).toBe(false);
+      expect(await markerExists(dir, '.pipeline/HALT')).toBe(true);
     });
 
     it('build_review route (~1856): OPEN → build IS re-dispatched (pass-through proof)', async () => {
@@ -717,6 +740,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       await conductor.run();
@@ -792,6 +819,10 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         maxRetries: 1,
         fromStep: 'manual_test',
         runGh,
+        fullSuiteVerifier: {
+          ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
       } as never);
 
       // After this run, manual_test should pass on retry, and we should have
@@ -808,6 +839,11 @@ describe('engine/merged-pr-guard — kickback re-entry (#358, TS-1)', () => {
         (rebaseState as Record<string, unknown>)[s.name] =
           s.name === 'retro' ? 'skipped' : 'done';
       }
+      // Phase 2 measures only the rebase-entry guard. Give the following
+      // finish fence its established valid skips so it cannot start unrelated
+      // validation work after the second guard query.
+      rebaseState.complexity_tier = 'S';
+      rebaseState.track = 'technical';
       rebaseState.pr_url = PR_URL;
       await writeState(statePath, rebaseState as unknown as ConductState);
 

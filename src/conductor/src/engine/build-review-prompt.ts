@@ -25,7 +25,7 @@ is prd_audit's mandate).
 Score the diff against exactly these four rubric items:
 
 1. Tautology: every new/changed test would fail without the diff.
-2. Scope: diff scoped to the plan, no unrelated files.
+2. Scope: diff scoped to the plan, no unrelated files. \`.docs/architecture/\`, \`.docs/plans/\`, \`.docs/specs/\`, and \`.docs/stories/\` are already-approved DECIDE artifacts; modification of one passes Scope only when the approved plan justifies it, otherwise it is a Scope failure.
 3. Root cause: the change addresses the stated defect, not a symptom.
 4. Completeness: every planned task's work is present in the diff.
 
@@ -48,13 +48,16 @@ CI and at finish, not here.
 When you are done, write your verdict to \`.pipeline/build-review.json\` using
 exactly this JSON schema:
 
-{ verdict: 'PASS' | 'FAIL', reasons: string[], rubric: { tautology: string, scope: string, rootCause: string, completeness: string } }
+{ verdict: 'PASS' | 'FAIL', reasons: string[], findings?: { tautology?: string[], scope?: string[], rootCause?: string[], completeness?: string[] }, rubric: { tautology: boolean, scope: boolean, rootCause: boolean, completeness: boolean } }
 
-Each rubric field is a one-line reason for that item's pass/fail judgement,
-including \`rubric.completeness\`, the one-line reason for the completeness
-item's holistic pass/fail judgement.
-\`reasons\` lists the one-line reasons for any failing item(s); it may be
-empty when the verdict is PASS.
+Each \`rubric\` boolean marks whether that item failed. \`reasons\` remains a
+backward-compatible one-line summary for each failing rubric item; it may be
+empty when the verdict is PASS. When \`rubric.completeness\` fails, populate
+\`findings.completeness\`; use the matching \`findings.<rubric>\` key for the
+other rubric items. Each findings list contains **every independent finding**
+you observed for that item. Use one finding per array entry — do not compress multiple actionable
+gaps into one summary. The list must be exhaustive for the diff and plan you
+were given. For a PASS verdict, omit \`findings\` or leave it empty.
 
 ## Diff to review
 

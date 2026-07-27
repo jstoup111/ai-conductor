@@ -74,6 +74,11 @@ function target() {
 async function seedValidWorktree(idea = 'dep bump'): Promise<string> {
   const wt = await createEngineerWorktree(repoPath, idea);
   const dir = wt.worktreePath;
+  // These land-spec tests predate the coherence gate (FR-14) and are not about
+  // it — strip the production-stamped `.docs/coherence/` signal so they keep
+  // exercising the no-retroactivity legacy disengage rather than being forced
+  // to also author a coherence artifact unrelated to what they're testing.
+  await rm(join(dir, '.docs', 'coherence'), { recursive: true, force: true });
   await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
   await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
   await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
@@ -431,6 +436,7 @@ describe('landSpec fails closed on unresolved identity (Slice B Story 2, D3)', (
     // guard (line ~197) must reject before writeIntakeMarker() ever runs.
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
@@ -476,6 +482,7 @@ describe('resolveIdeaFiles (Task 1: idea-scoped artifact attribution)', () => {
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     // One artifact committed on the idea's spec/<slug> branch.
@@ -510,6 +517,7 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'track'), { recursive: true });
@@ -548,6 +556,7 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
@@ -584,6 +593,7 @@ describe('Task 2: idea-scoped track+spec pickers (#488)', () => {
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     // No idea-authored track marker at all — only stories + plan, no spec.
@@ -621,6 +631,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
@@ -654,6 +665,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
@@ -697,6 +709,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
@@ -738,6 +751,7 @@ describe('Task 3: idea-scoped stories/plan/complexity/conflicts/architecture/dec
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
@@ -788,6 +802,7 @@ describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', (
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
@@ -819,6 +834,7 @@ describe('Task 4: idea-scoped spec requirement on the product track (#488)', () 
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'stories'), { recursive: true });
@@ -849,6 +865,7 @@ describe('Task 4: idea-scoped spec requirement on the product track (#488)', () 
 
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
@@ -877,6 +894,7 @@ describe('Task 7: idea-scoped resolution preserves content validation and the di
   it('rejects the idea\'s own DRAFT-status stories (stories-not-approved), even though attribution/pickers resolve them cleanly', async () => {
     const idea = 'dep bump';
     const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
     const dir = worktree.worktreePath;
 
     await mkdir(join(dir, '.docs', 'specs'), { recursive: true });

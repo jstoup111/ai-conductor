@@ -38,7 +38,7 @@
 // internal Date.now() read through it) makes pass.
 // ─────────────────────────────────────────────────────────────────────────────
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi, type MockInstance } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,7 +50,7 @@ import type { ConductorEvent } from '../../src/types/index.js';
 describe('BuildProgressWatcher clock-seam determinism (Story 1 + Story 2)', () => {
   let dir: string;
   let emitter: ConductorEventEmitter;
-  let emitSpy: ReturnType<typeof vi.spyOn>;
+  let emitSpy: MockInstance<ConductorEventEmitter['emit']>;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-progress-watcher-clock-seam-'));
@@ -97,8 +97,6 @@ describe('BuildProgressWatcher clock-seam determinism (Story 1 + Story 2)', () =
       step: 'build',
       featureSlug: 'clock-seam-heartbeat',
       config: { build_progress: { heartbeat_minutes: 5 } },
-      // @ts-expect-error — `now` does not exist on BuildProgressWatcherOptions
-      // yet (Story 1, Task 1). This is the seam under test.
       now: () => clock,
     });
 
@@ -130,7 +128,6 @@ describe('BuildProgressWatcher clock-seam determinism (Story 1 + Story 2)', () =
       step: 'build',
       featureSlug: 'clock-seam-quiet',
       config: { build_progress: { quiet_minutes: 15 } },
-      // @ts-expect-error — same seam as above (Story 1).
       now: () => clock,
     });
 

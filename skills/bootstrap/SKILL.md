@@ -147,17 +147,15 @@ Generate `.claude/settings.json` in two parts: permissions (3d-i) and a pre-PR l
 
 #### 3d-i. Permissions
 
-Copy `templates/claude-settings.json.template` to `.claude/settings.json`. Replace
-`{{PROJECT_ROOT}}` with the absolute path of the project root (the bootstrap working
-directory, with leading slash stripped — the template already supplies the `//` prefix
-required by Claude Code's permission path syntax). Create the `.claude/` directory if it
-doesn't exist.
+Copy `templates/claude-settings.json.template` to `.claude/settings.json`. Its `Read(**)`,
+`Edit(**)`, and `Write(**)` patterns are relative to the project, so the generated file
+remains valid when the repository is moved or checked out as a worktree. Create the
+`.claude/` directory if it doesn't exist.
 
 The generated file scopes Read/Edit/Write permission to the entire project tree (including
 dotfiles under `.claude/`, `.pipeline/`, `.docs/`, `.memory/`, `.github/`, etc.) so that
 downstream skills don't block on permission prompts when they touch harness artifacts.
-Absolute paths mean the permissions travel with the project even when invoked from a
-different CWD (e.g., inside a worktree).
+Relative patterns keep the permissions portable across machines and worktrees.
 
 If `.claude/settings.json` already exists, do NOT overwrite it — skip to 3d-ii and merge
 the hook block only if the hook is missing.
@@ -274,8 +272,8 @@ background jobs, key architecture-shaping libraries.
 
 ### 5. Set Up Project Directories
 
-**`.memory/` is set up by the harness, not by this skill.** `bin/conduct` calls
-`conduct-ts memory setup <dir>` before any bootstrap sub-step runs. This creates a canonical
+**`.memory/` is set up by the harness, not by this skill.** `conduct-ts memory setup <dir>`
+runs before any bootstrap sub-step. This creates a canonical
 per-project store at `~/.ai-conductor/memory/<key>/harness/` and makes `.memory/` a symlink to
 it (adr-2026-06-29-shared-memory-store-placement-and-durability). If `.memory/` already exists as a real directory (legacy), it is migrated via
 copy-verify-swap before the symlink is created (adr-2026-06-29-safe-reversible-memory-migration). **Do NOT create or mkdir `.memory/`
@@ -293,11 +291,28 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
 - `.env.local` — worktree-specific environment overrides
 
-### 6. Generate or Update CLAUDE.md
+### 6. Generate or Update Agent Instructions
 
-- **Fresh/no CLAUDE.md:** Generate from `templates/CLAUDE.md.template` (includes HARNESS.md reference)
-- **Existing CLAUDE.md:** Verify it references `HARNESS.md`. If missing, append the reference block.
-  Never overwrite user content. Behavioral rules live in HARNESS.md, not in the project CLAUDE.md.
+- **Fresh/no CLAUDE.md:** Generate from `templates/CLAUDE.md.template` (includes repository-harness reference)
+- **Existing CLAUDE.md:** Verify it references the repository harness documentation. If missing, append the reference block.
+  Never overwrite user content. Behavioral rules live in the harness documentation, not in the project CLAUDE.md.
+- **Fresh/no AGENTS.md:** Generate from `templates/AGENTS.md.template`. This gives Codex the
+  harness entry point while keeping the skills themselves user-scoped at `~/.agents/skills/`.
+- **Existing AGENTS.md:** Verify it references the repository harness documentation; append the Codex harness reference
+  block if needed. Preserve all operator content and append the AGENTS.md reference exactly once: repeated initialization is
+  idempotent. Update AGENTS.md atomically; if the update cannot be completed safely, leave the original content
+  intact and report an actionable AGENTS.md error rather than creating a partial file. Never overwrite user content.
+
+When both host files are present, preserve and update `CLAUDE.md` and `AGENTS.md` independently:
+add only the missing harness reference and never normalize away operator-authored content. Validate
+that each host keeps its own invocation syntax (Claude `/skill-name`, Codex `$skill-name`) while
+both point to the same shared harness contract and lifecycle gates. If either file
+contradicts that contract, report the host and the conflicting instruction before completing
+initialization.
+
+For Codex, `~/.agents/skills/` is the active current catalog; treat the former
+`~/.codex/skills/` location as legacy migration material only. Never describe it as the active
+discovery location or ask an operator to recreate it.
 
 ### 7. Bootstrap Memory (Existing Projects Only)
 
@@ -311,7 +326,8 @@ Update `.memory/index.md`. Report: "Bootstrapped memory with N decisions, M patt
 
 ### 7b. Generate Architecture Diagrams
 
-Run `/architecture-diagram` to generate initial C4 diagrams from the codebase scan.
+Run the `architecture-diagram` workflow to generate initial C4 diagrams from the codebase scan
+(Claude `/architecture-diagram`; Codex `$architecture-diagram`).
 Use the inventory from Step 4 — don't re-scan.
 
 Output: `.docs/architecture/` with system-context.md, containers.md, components.md, erd.md,
@@ -397,7 +413,7 @@ seed commit captures a scaffold that actually boots.
 
 **Branch-policy note:** this seed commit on `main` is the one sanctioned
 direct-to-`main` commit — a brand-new repo has no branch to PR into. From here on,
-all harness work happens on feature branches/worktrees and merges via PR (HARNESS.md
+all harness work happens on feature branches/worktrees and merges via PR (the repository harness
 branch policy). The pre-PR lint hook (Step 3d-ii) and a remote are now both in place,
 so the very first feature can open a PR end-to-end.
 
@@ -416,6 +432,14 @@ conduct register .
 Honor `$AI_CONDUCTOR_REGISTRY` if set (tests and alternate installs point it elsewhere). A
 non-zero exit means the registry write failed — surface it; do not silently continue. Re-running
 bootstrap is safe: the same canonical path resolves to one record.
+
+**Worktree exception:** `conduct register` refuses (non-zero exit, no write) when `.` is a
+LINKED git worktree (e.g. a daemon feature worktree under a project's `.worktrees/`) rather than
+a repo's primary checkout — that path is a subdirectory of an already-registered project, not an
+independent one, and registering it would leave a permanent ghost entry once the worktree is
+cleaned up post-ship. This specific refusal is expected and NOT a failure to surface: skip step
+10b silently when it occurs. Any other non-zero exit (unwritable registry, corrupt file) is still
+a real failure and must be surfaced.
 
 ### 11. Recommend Next Steps
 

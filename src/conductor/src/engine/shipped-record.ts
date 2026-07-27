@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import type { BacklogTreeSource } from './daemon-backlog.js';
+import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 
 /**
@@ -149,6 +149,10 @@ export function renderShippedRecordWithCost(
 ): string {
   const frontmatter = renderShippedRecord(fields);
   const costUsd = Math.round(rollup.costUsd * 10000) / 10000;
+  const providerLines = Object.entries(rollup.providers ?? {}).map(
+    ([provider, providerRollup]) =>
+      `  ${provider}: input: ${providerRollup.tokens.input}, output: ${providerRollup.tokens.output}, cache_read: ${providerRollup.tokens.cacheRead}, cache_creation: ${providerRollup.tokens.cacheCreation}, cost_usd: ${Math.round(providerRollup.costUsd * 10000) / 10000}, dispatches: ${providerRollup.dispatches}\n`
+  );
 
   return (
     frontmatter +
@@ -162,7 +166,8 @@ export function renderShippedRecordWithCost(
     `dispatches: ${rollup.dispatches}\n` +
     `retries: ${rollup.retries}\n` +
     `halts: ${rollup.halts}\n` +
-    `unmetered: count: ${rollup.unmetered.count}, duration_ms: ${rollup.unmetered.durationMs}\n`
+    `unmetered: count: ${rollup.unmetered.count}, duration_ms: ${rollup.unmetered.durationMs}\n` +
+    (providerLines.length > 0 ? `providers:\n${providerLines.join('')}` : '')
   );
 }
 

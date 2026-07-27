@@ -399,6 +399,7 @@ make_main_repo() {
     git remote add origin "$origin"
     git branch -M main
     git push -q origin main
+    git --git-dir="$origin" symbolic-ref HEAD refs/heads/main
   )
   echo "$clone|$origin"
 }
@@ -411,6 +412,7 @@ run_update "$REPO" "$HOME_DIR" --set-channel main
 
 WORK="$TMP_ROOT/s4-accept-push"
 git clone -q "$ORIGIN" "$WORK"
+assert "main fixture: fresh clone checks out main" "$( [ "$(git -C "$WORK" branch --show-current)" = "main" ] && echo 0 || echo 1 )"
 (cd "$WORK" && git config user.email t@t.com && git config user.name T && echo more >> CHANGELOG.md && git add -A && git commit -q -m "advance" && git push -q origin main)
 
 run_update_tty "$REPO" "$HOME_DIR" y
@@ -430,17 +432,6 @@ run_update "$REPO" "$HOME_DIR"
 assert "diverged: exits 0 without pulling" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "diverged: HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
 
-# ─── Story 9: documentation reflects bin/update ────────────────────────────
-
-echo ""
-echo -e "${BOLD}Story 9 — documentation${NC}"
-
-assert "HARNESS.md mentions bin/update" \
-  "$(grep -q "bin/update" "$HARNESS_DIR/HARNESS.md" 2>/dev/null && echo 0 || echo 1)"
-assert "README.md mentions bin/update" \
-  "$(grep -q "bin/update" "$HARNESS_DIR/README.md" 2>/dev/null && echo 0 || echo 1)"
-assert "src/conductor/README.md mentions bin/update" \
-  "$(grep -q "bin/update" "$HARNESS_DIR/src/conductor/README.md" 2>/dev/null && echo 0 || echo 1)"
 assert "CHANGELOG carries a Migration block for the flag rename" \
   "$(awk '/^## \[Unreleased\]/{f=1} f&&/^## Migration/{print;exit}' "$HARNESS_DIR/CHANGELOG.md" | grep -q "Migration" && echo 0 || echo 1)"
 

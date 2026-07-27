@@ -201,9 +201,10 @@ describe('resolveMainRepoRoot (Task 1)', () => {
 
     // Create a counting runner that tracks invocation count
     let callCount = 0;
-    const countingRunner = async (args: string[], cwd: string) => {
+    const countingRunner = async (args: string[], cwd: string): Promise<string> => {
       callCount++;
-      return execFile('git', args, { cwd });
+      const { stdout } = await execFile('git', args, { cwd });
+      return stdout;
     };
 
     // First call to worktreeDir — should invoke git runner once

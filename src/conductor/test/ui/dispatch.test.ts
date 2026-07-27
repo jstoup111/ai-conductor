@@ -3,8 +3,8 @@ import { dispatchRenderers } from '../../src/ui/dispatch.js';
 import { RecordingRenderer } from './recording-renderer.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
-const stepStarted: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 2 };
-const stepCompleted: ConductorEvent = { type: 'step_completed', step: 'brainstorm', status: 'done' };
+const stepStarted: ConductorEvent = { type: 'step_started', step: 'explore', index: 2 };
+const stepCompleted: ConductorEvent = { type: 'step_completed', step: 'explore', status: 'done' };
 
 // T3 — no renderers
 describe('dispatchRenderers — no renderers', () => {

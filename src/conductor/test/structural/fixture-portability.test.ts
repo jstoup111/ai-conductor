@@ -366,14 +366,13 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
     for (const { fixture, shouldViolate } of testCases) {
       const pattern = extractGitInitPattern(fixture);
       if (shouldViolate) {
-        expect(pattern).toBeTruthy(`${fixture} should be detected`);
+        expect(pattern, `${fixture} should be detected`).toBeTruthy();
         expect(pattern?.hasFlag).toBe(false);
         expect(pattern?.markerPresent).toBe(false);
       } else {
         if (pattern) {
-          expect(pattern.hasFlag || pattern.markerPresent).toBe(
+          expect(pattern.hasFlag || pattern.markerPresent, `${fixture} should not violate`).toBe(
             true,
-            `${fixture} should not violate`
           );
         }
       }
@@ -435,16 +434,15 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
   // still fails the test.
   const KNOWN_BARE_REMOTE_OFFENDERS: ReadonlyArray<{ file: string; line: number }> = [
     { file: 'acceptance/daemon-build-agents-leak-edits-into-the-main-check.acceptance.test.ts', line: 58 },
-    { file: 'engine/autoheal.test.ts', line: 1260 },
-    { file: 'engine/autoheal.test.ts', line: 1300 },
-    { file: 'engine/autoheal.test.ts', line: 1334 },
-    { file: 'engine/autoheal.test.ts', line: 1371 },
-    { file: 'engine/autoheal.test.ts', line: 1410 },
-    { file: 'engine/autoheal.test.ts', line: 1443 },
-    { file: 'engine/autoheal.test.ts', line: 1535 },
-    { file: 'engine/autoheal.test.ts', line: 1571 },
-    { file: 'engine/autoheal.test.ts', line: 1815 },
-    { file: 'engine/daemon-poll-refresh.test.ts', line: 216 },
+    { file: 'engine/autoheal.test.ts', line: 1259 },
+    { file: 'engine/autoheal.test.ts', line: 1299 },
+    { file: 'engine/autoheal.test.ts', line: 1333 },
+    { file: 'engine/autoheal.test.ts', line: 1370 },
+    { file: 'engine/autoheal.test.ts', line: 1409 },
+    { file: 'engine/autoheal.test.ts', line: 1442 },
+    { file: 'engine/autoheal.test.ts', line: 1534 },
+    { file: 'engine/autoheal.test.ts', line: 1570 },
+    { file: 'engine/autoheal.test.ts', line: 1814 },
     { file: 'engine/push-evidence.test.ts', line: 281 },
     { file: 'engine/task-progress.test.ts', line: 88 },
   ];
@@ -484,10 +482,10 @@ describe('Structural guard: fixture portability (git-init pattern)', () => {
       );
     });
 
-    expect(unknownViolations).toHaveLength(
-      0,
+    expect(
+      unknownViolations,
       'New fixture-portability violations found outside the known/tracked offender list (see list above)',
-    );
+    ).toHaveLength(0);
 
     // Guards against the known-offender list silently going stale (entries fixed
     // elsewhere without being removed here, or the guard regressing to find fewer).
@@ -530,10 +528,10 @@ describe('Structural guard: unref matcher (src/engine/**)', () => {
       }
     }
 
-    expect(allViolations).toHaveLength(
-      0,
-      'unref() calls must be commented out or carry a // portability-ok: marker'
-    );
+    expect(
+      allViolations,
+      'unref() calls must be commented out or carry a // portability-ok: marker',
+    ).toHaveLength(0);
   });
 });
 
@@ -572,10 +570,10 @@ describe('Structural guard: tmp-outside-target-dir matcher (src/engine/**)', () 
       }
     }
 
-    expect(allViolations).toHaveLength(
-      0,
-      'Hardcoded /tmp paths must use os.tmpdir() or carry a // portability-ok: marker'
-    );
+    expect(
+      allViolations,
+      'Hardcoded /tmp paths must use os.tmpdir() or carry a // portability-ok: marker',
+    ).toHaveLength(0);
   });
 });
 

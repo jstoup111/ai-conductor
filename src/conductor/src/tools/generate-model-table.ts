@@ -10,10 +10,10 @@ import { dirname, resolve as resolvePath } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { StepName, ComplexityTier } from '../types/index.js';
 import {
-  DEFAULT_STEP_MODELS,
-  DEFAULT_STEP_EFFORT,
-  DEFAULT_STEP_TIER_OVERRIDES,
-} from '../engine/resolved-config.js';
+  CLAUDE_MODEL_POLICY,
+  CODEX_MODEL_POLICY,
+  type ProviderModelPolicy,
+} from '../engine/provider-model-policy.js';
 import {
   STEP_RATIONALE,
   EXTRA_MODEL_TABLE_ROWS,
@@ -204,19 +204,18 @@ export function assertNoDuplicateRowNames(
 // ────────────────────────────────────────────────────────────────────────────
 // renderModelTable
 //
-// Pure renderer: builds the full "| Skill/Agent | Model | Effort | Why |"
-// markdown table from the engine's typed defaults (DEFAULT_STEP_MODELS /
-// DEFAULT_STEP_EFFORT / DEFAULT_STEP_TIER_OVERRIDES, resolved-config.ts) plus
-// the STEP_RATIONALE / EXTRA_MODEL_TABLE_ROWS metadata. No filesystem access.
+// Pure renderer: builds the provider-aware seven-column markdown table from
+// the engine's typed provider policies plus STEP_RATIONALE /
+// EXTRA_MODEL_TABLE_ROWS metadata. No filesystem access.
 //
 // Story TS-2 happy path 2 (.docs/stories/generated-model-table.md):
-//   - header row `| Skill/Agent | Model | Effort | Why |`
+//   - provider-labelled seven-column header
 //   - a step whose model/effort varies by complexity tier renders each
 //     distinct value once, suffixed with the tiers that share it, e.g.
 //     `sonnet (S/M), fable (L)`; a step whose value is tier-invariant renders
 //     plain (no suffix)
 //   - engine-derived rows are emitted first (STEP_RATIONALE key order, which
-//     covers all 21 StepName values), extra rows (EXTRA_MODEL_TABLE_ROWS)
+//     covers all 24 StepName values), extra rows (EXTRA_MODEL_TABLE_ROWS)
 //     after
 // ────────────────────────────────────────────────────────────────────────────
 
@@ -240,10 +239,23 @@ export function stepDisplayName(step: StepName): string {
   return DISPLAY_NAME_OVERRIDES[step] ?? step.replace(/_/g, '-');
 }
 
-function tierValue(step: StepName, tier: ComplexityTier, field: 'model' | 'effort'): string {
-  const override = DEFAULT_STEP_TIER_OVERRIDES[step]?.[tier]?.[field];
-  if (override !== undefined) return override;
-  return field === 'model' ? DEFAULT_STEP_MODELS[step] : DEFAULT_STEP_EFFORT[step];
+function policyValue(
+  policy: ProviderModelPolicy,
+  provider: string,
+  step: StepName,
+  tier: ComplexityTier,
+  field: 'model' | 'effort',
+): string {
+  const base = field === 'model' ? policy.stepModels[step] : policy.stepEfforts[step];
+  if (typeof base !== 'string' || base.trim() === '') {
+    throw new Error(`Missing ${provider} ${field} for step ${step}`);
+  }
+
+  const value = policy.stepTierOverrides[step]?.[tier]?.[field] ?? base;
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new Error(`Missing ${provider} ${field} for step ${step}`);
+  }
+  return value;
 }
 
 /**
@@ -253,11 +265,16 @@ function tierValue(step: StepName, tier: ComplexityTier, field: 'model' | 'effor
  * determines the group's position). A step whose value is identical across
  * all three tiers renders as the bare value with no tier suffix.
  */
-export function renderTieredField(step: StepName, field: 'model' | 'effort'): string {
+export function renderTieredField(
+  policy: ProviderModelPolicy,
+  provider: string,
+  step: StepName,
+  field: 'model' | 'effort',
+): string {
   const groups: { value: string; tiers: ComplexityTier[] }[] = [];
 
   for (const tier of TIERS) {
-    const value = tierValue(step, tier, field);
+    const value = policyValue(policy, provider, step, tier, field);
     const existing = groups.find((g) => g.value === value);
     if (existing) {
       existing.tiers.push(tier);
@@ -274,17 +291,26 @@ export function renderTieredField(step: StepName, field: 'model' | 'effort'): st
 }
 
 export interface ModelTableRow extends NamedRow {
-  model: string;
-  effort: string;
+  executionPath: string;
+  claudeModel: string;
+  claudeEffort: string;
+  codexModel: string;
+  codexEffort: string;
   why: string;
 }
 
-/** All 21 engine-derived rows, in STEP_RATIONALE key order (bootstrap..remediate). */
-export function buildEngineRows(): ModelTableRow[] {
+/** All 24 engine-derived rows, in STEP_RATIONALE key order. */
+export function buildEngineRows(
+  claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
+  codexPolicy: ProviderModelPolicy = CODEX_MODEL_POLICY,
+): ModelTableRow[] {
   return (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => ({
     name: stepDisplayName(step),
-    model: renderTieredField(step, 'model'),
-    effort: renderTieredField(step, 'effort'),
+    executionPath: 'autonomous engine',
+    claudeModel: renderTieredField(claudePolicy, 'Claude', step, 'model'),
+    claudeEffort: renderTieredField(claudePolicy, 'Claude', step, 'effort'),
+    codexModel: renderTieredField(codexPolicy, 'Codex', step, 'model'),
+    codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
     why: STEP_RATIONALE[step],
   }));
 }
@@ -293,17 +319,21 @@ export function buildEngineRows(): ModelTableRow[] {
 export function buildExtraRows(): ModelTableRow[] {
   return EXTRA_MODEL_TABLE_ROWS.map((row) => ({
     name: row.name,
-    model: row.model,
-    effort: '',
-    why: row.rationale,
+    executionPath: row.executionPath,
+    claudeModel: row.claudeModel,
+    claudeEffort: row.claudeEffort,
+    codexModel: row.codexModel,
+    codexEffort: row.codexEffort,
+    why: row.why,
   }));
 }
 
-const TABLE_HEADER = '| Skill/Agent | Model | Effort | Why |';
-const TABLE_SEPARATOR = '|---|---|---|---|';
+const TABLE_HEADER =
+  '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |';
+const TABLE_SEPARATOR = '|---|---|---|---|---|---|---|';
 
 function renderRow(row: ModelTableRow): string {
-  return `| ${row.name} | ${row.model} | ${row.effort} | ${row.why} |`;
+  return `| ${row.name} | ${row.executionPath} | ${row.claudeModel} | ${row.claudeEffort} | ${row.codexModel} | ${row.codexEffort} | ${row.why} |`;
 }
 
 /**
@@ -336,18 +366,22 @@ export function renderModelTable(): string {
 //
 // Pure builder for `--pins` mode's JSON output (TS-4 happy path 1). Every
 // skill in SKILL_STEP_MAP gets an `{ "expected": "<model>" }` entry, where
-// "<model>" is the *untiered* engine default (DEFAULT_STEP_MODELS[step] — the
-// tier-override base value, not a tier-suffixed rendering). Every skill in
-// PIN_EXEMPT_SKILLS gets an `{ "exempt": true }` entry. No filesystem access.
+// "<model>" is the Claude *untiered* default (the tier-override base value,
+// not a tier-suffixed rendering). Interactive skill pins are Claude-scoped;
+// Codex policy values never participate in this comparison.
+// Every skill in PIN_EXEMPT_SKILLS gets an `{ "exempt": true }` entry. No
+// filesystem access.
 // ────────────────────────────────────────────────────────────────────────────
 
 export type PinsJson = Record<string, { expected: string } | { exempt: true }>;
 
-export function buildPinsJson(): PinsJson {
+export function buildPinsJson(
+  claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
+): PinsJson {
   const result: PinsJson = {};
 
   for (const [skill, step] of Object.entries(SKILL_STEP_MAP)) {
-    result[skill] = { expected: DEFAULT_STEP_MODELS[step] };
+    result[skill] = { expected: claudePolicy.stepModels[step] };
   }
 
   for (const skill of PIN_EXEMPT_SKILLS) {

@@ -503,7 +503,10 @@ export async function runDaemonLogs(
     } catch {
       startOffset = 0; // log not created yet — follow from the top
     }
-    const handle = followDaemonLog(target, (l) => out(l), { startOffset });
+    // unref: false — the poll timer is the only thing holding the event loop
+    // open while following; a SIGINT listener does not keep node alive, so an
+    // unref'd follower would exit immediately after the snapshot.
+    const handle = followDaemonLog(target, (l) => out(l), { startOffset, unref: false });
     const stop = deps.untilStop ?? waitForSigint();
     await stop;
     handle.stop();
@@ -525,7 +528,7 @@ function waitForSigint(): Promise<void> {
 
 export type DaemonDispatch =
   | { kind: 'status' }
-  | { kind: 'logs'; repo?: string; follow: boolean; all: boolean };
+  | { kind: 'logs'; repo?: string; follow: boolean; all: boolean; lines?: number };
 
 /**
  * Detect a `conduct daemon <status|logs …>` observability sub-subcommand. Returns
@@ -544,6 +547,13 @@ export function detectDaemonObserveCommand(argv: string[]): DaemonDispatch | nul
     let repo: string | undefined;
     let follow = false;
     let all = false;
+    let lines: number | undefined;
+    // A non-numeric or non-positive count is ignored (undefined → whole file)
+    // rather than silently truncating the snapshot to nothing.
+    const parseLines = (raw: string | undefined): number | undefined => {
+      const n = Number(raw);
+      return Number.isInteger(n) && n > 0 ? n : undefined;
+    };
     for (let i = 0; i < rest.length; i++) {
       const a = rest[i];
       if (a === '--follow' || a === '-f') follow = true;
@@ -553,9 +563,14 @@ export function detectDaemonObserveCommand(argv: string[]): DaemonDispatch | nul
         i++;
       } else if (a.startsWith('--repo=')) {
         repo = a.slice('--repo='.length);
+      } else if (a === '--lines' || a === '-n') {
+        lines = parseLines(rest[i + 1]);
+        i++;
+      } else if (a.startsWith('--lines=')) {
+        lines = parseLines(a.slice('--lines='.length));
       }
     }
-    return { kind: 'logs', repo, follow, all };
+    return { kind: 'logs', repo, follow, all, lines };
   }
   return null;
 }
@@ -565,5 +580,5 @@ export async function dispatchDaemonObserve(d: DaemonDispatch): Promise<number> 
     const { code } = await runDaemonStatus();
     return code;
   }
-  return runDaemonLogs({ repo: d.repo, follow: d.follow, all: d.all });
+  return runDaemonLogs({ repo: d.repo, follow: d.follow, all: d.all, lines: d.lines });
 }

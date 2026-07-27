@@ -49,6 +49,7 @@ afterEach(async () => { await rm(repo, { recursive: true, force: true }); });
 // worktree, not the primary checkout); returns the worktree path for landSpec.
 async function seedWorktree(opts: { spec?: boolean; track?: string }): Promise<string> {
   const wt = await createEngineerWorktree(repo, 'idea t');
+  await rm(join(wt.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
   const dir = wt.worktreePath;
   await mkdir(join(dir, '.docs/stories'), { recursive: true });
   await mkdir(join(dir, '.docs/plans'), { recursive: true });
@@ -125,6 +126,7 @@ describe('runAuthoring — commits a track marker', () => {
   }
   it('writes .docs/track/<slug>.md defaulting to product', async () => {
     const r = await runAuthoring({ name: 'a', canonicalPath: repo }, 'idea t', { decide: approvedDecide() });
+    if (r.kind !== 'spec') throw new Error('Expected a spec authoring result');
     await git(['checkout', defaultBranch]);
     await git(['merge', '--no-ff', '-m', 'm', r.branch]);
     expect(parseTrack(await show(defaultBranch, '.docs/track/idea-t.md'))).toBe('product');

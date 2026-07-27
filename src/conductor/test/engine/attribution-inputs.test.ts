@@ -115,7 +115,10 @@ describe('collectCandidateCommits', () => {
     // Create an engine bookkeeping commit using the engine commit env var
     const git = makeGitRunner(gitDir);
     await writeFile(join(gitDir, 'file2.txt'), 'content2');
-    await execa('git', ['add', 'file2.txt'], { cwd: gitDir }, { env: { ...process.env, CONDUCT_ENGINE_COMMIT: '1' } });
+    // execa only accepts (file, args, options) — a 4th argument here is
+    // silently ignored at runtime, so this add's env override was already
+    // inert; the actual env-setting happens via the git runner call below.
+    await execa('git', ['add', 'file2.txt'], { cwd: gitDir });
     // Actually use the git runner which will set the env var
     const bookkeepingResult = await git(['commit', '-m', 'chore: engine bookkeeping']);
     expect(bookkeepingResult.exitCode).toBe(0);

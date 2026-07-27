@@ -20,31 +20,31 @@ describe('TerminalSubscriber', () => {
     vi.useRealTimers();
   });
 
-  it('subscribes to events on start()', () => {
+  it('subscribes to events on start()', async () => {
     subscriber.start();
 
-    const event: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 2 };
-    emitter.emit(event);
+    const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 2 };
+    await emitter.emit(event);
 
     expect(renderCallback).toHaveBeenCalledOnce();
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
 
-  it('unsubscribes on stop()', () => {
+  it('unsubscribes on stop()', async () => {
     subscriber.start();
     subscriber.stop();
 
-    emitter.emit({ type: 'step_started', step: 'brainstorm', index: 2 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 2 });
 
     expect(renderCallback).not.toHaveBeenCalled();
   });
 
-  it('triggers dashboard render on step events', () => {
+  it('triggers dashboard render on step events', async () => {
     subscriber.start();
 
-    emitter.emit({ type: 'step_started', step: 'worktree', index: 0 });
-    emitter.emit({ type: 'step_completed', step: 'worktree', status: 'done' });
-    emitter.emit({ type: 'step_failed', step: 'build', error: 'test fail', retryCount: 1 });
+    await emitter.emit({ type: 'step_started', step: 'worktree', index: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'worktree', status: 'done' });
+    await emitter.emit({ type: 'step_failed', step: 'build', error: 'test fail', retryCount: 1 });
 
     expect(renderCallback).toHaveBeenCalledTimes(3);
   });
@@ -61,9 +61,9 @@ describe('TerminalSubscriber', () => {
     expect(refreshCalls.length).toBe(0);
   });
 
-  it('still forwards an explicit dashboard_refresh event to the renderer', () => {
+  it('still forwards an explicit dashboard_refresh event to the renderer', async () => {
     subscriber.start();
-    emitter.emit({ type: 'dashboard_refresh' });
+    await emitter.emit({ type: 'dashboard_refresh' });
     expect(renderCallback).toHaveBeenCalledWith({ type: 'dashboard_refresh' });
   });
 });
