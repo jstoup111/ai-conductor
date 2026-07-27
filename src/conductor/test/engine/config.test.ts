@@ -1649,6 +1649,19 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('keeps enabled:false when an invalid cooldownMinutes is omitted with a warning', () => {
+      const result = validateConfig({
+        ci_watch: { enabled: false, cooldownMinutes: 'thirty' },
+      });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: false },
+        warnings: [expect.stringMatching(/ci_watch\.cooldownMinutes/)],
+      });
+    });
+
     it('resolves enabled:true to enabled, no warning', () => {
       const result = validateConfig({ ci_watch: { enabled: true } });
       expect(result.ok).toBe(true);
@@ -1677,6 +1690,35 @@ complexity:
         ci_watch: { enabled: true, cooldownMinutes: 0 },
         warnings: [],
       });
+    });
+
+    it('omits a negative cooldownMinutes and warns', () => {
+      const result = validateConfig({ ci_watch: { enabled: true, cooldownMinutes: -5 } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true },
+        warnings: [expect.stringMatching(/ci_watch\.cooldownMinutes/)],
+      });
+    });
+
+    it('defaults an invalid enabled value and warns', () => {
+      const result = validateConfig({ ci_watch: { enabled: 'banana' } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true },
+        warnings: [expect.stringMatching(/ci_watch\.enabled/)],
+      });
+    });
+
+    it('preserves an exact cooldownMinutes value for ci-fix', () => {
+      const result = validateConfig({ ci_watch: { cooldownMinutes: 15 } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.cooldownMinutes).toBe(15);
     });
 
     it('keeps cooldownMinutes when an unknown sibling is ignored', () => {
