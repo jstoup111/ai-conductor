@@ -399,9 +399,16 @@ export class CodexProvider implements LLMProvider {
       if (hasDocumentedShape && hasLegacyShape) return undefined;
 
       if (hasDocumentedShape) {
+        // `codex doctor` reports three envelope statuses: ok / warning / fail.
+        // Only `auth.credentials` is authoritative for readiness — the envelope
+        // aggregates unrelated checks (e.g. `updates.status` warns when the
+        // version probe is rate-limited with HTTP 403, which the daemon's own
+        // 30s readiness polling reliably provokes). Rejecting `warning` here
+        // discarded a healthy credentials check as `unverifiable`, which parked
+        // and then halted every Codex build for the full auth-park timeout.
         const { overallStatus, checks } = record;
         if (
-          (overallStatus !== 'ok' && overallStatus !== 'fail') ||
+          (overallStatus !== 'ok' && overallStatus !== 'warning' && overallStatus !== 'fail') ||
           !checks ||
           typeof checks !== 'object' ||
           Array.isArray(checks)
@@ -416,7 +423,7 @@ export class CodexProvider implements LLMProvider {
           return {
             kind: 'documented',
             state: 'ready',
-            unrelatedHealth: overallStatus === 'fail' ? 'degraded' : undefined,
+            unrelatedHealth: overallStatus === 'ok' ? undefined : 'degraded',
           };
         }
         if (status !== 'fail') return undefined;

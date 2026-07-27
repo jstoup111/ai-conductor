@@ -558,6 +558,16 @@ describe('CodexProvider', () => {
         unrelatedHealth: 'degraded',
       },
     ],
+    [
+      'unrelated warning doctor health',
+      'warning',
+      {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'ready',
+        unrelatedHealth: 'degraded',
+      },
+    ],
   ] as const)(
     'classifies supported ready auth evidence with %s without leaking doctor diagnostics',
     async (_name, overallStatus, expected) => {
@@ -580,6 +590,37 @@ describe('CodexProvider', () => {
       expect(readiness).toEqual(expected);
     },
   );
+
+  it('stays ready when only a rate-limited update probe degrades the envelope', async () => {
+    // Regression: a live daemon parked and then halted every Codex build for
+    // the full 60-minute auth-park timeout because `codex doctor` returned
+    // `overallStatus: "warning"` (its `updates.status` version probe was
+    // HTTP 403 rate-limited) while `auth.credentials` was perfectly healthy.
+    const readiness = await new CodexProvider(
+      vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus: 'warning',
+          checks: {
+            'auth.credentials': { status: 'ok', summary: 'auth is configured' },
+            'updates.status': {
+              status: 'warning',
+              summary: 'update configuration is locally consistent',
+              details: { 'latest version probe': 'curl: (22) The requested URL returned error: 403' },
+            },
+          },
+        }),
+        exitCode: 0,
+      }),
+    ).readiness();
+
+    expect(readiness).toEqual({
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'ready',
+      unrelatedHealth: 'degraded',
+    });
+  });
 
   it('keeps adversarial doctor diagnostics below the readiness boundary', async () => {
     const rawFragments = [
