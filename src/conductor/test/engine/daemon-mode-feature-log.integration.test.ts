@@ -12,6 +12,9 @@ const daemonLogSpy = vi.hoisted(() => ({
 const ciFixProbeSpy = vi.hoisted(() => ({
   defaultCiFixProbe: vi.fn(async () => ({ exitCode: 0, stdout: 'claude 1.0.0', stderr: '' })),
 }));
+const buildAuthSpy = vi.hoisted(() => ({
+  readDaemonBuildToken: vi.fn(async () => ({ state: 'ok' as const, token: 'test-daemon-token' })),
+}));
 
 vi.mock('../../src/engine/daemon-log.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/daemon-log.js')>();
@@ -22,6 +25,13 @@ vi.mock('../../src/engine/ci-fix.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/ci-fix.js')>();
   return { ...actual, defaultCiFixProbe: ciFixProbeSpy.defaultCiFixProbe };
 });
+
+// The daemon loop checks its build credential before dispatch. This test owns
+// feature-log wiring, so it supplies a deterministic credential boundary
+// rather than depending on a developer or CI host token.
+vi.mock('../../src/engine/self-host/daemon-build-token.js', () => ({
+  readDaemonBuildToken: buildAuthSpy.readDaemonBuildToken,
+}));
 
 // Keep the daemon entry point real while replacing only the external feature
 // executor. Its controlled output exercises beginFeatureRun's actual scoped
@@ -68,6 +78,7 @@ beforeEach(() => {
   dirs = [];
   daemonLogSpy.formatDaemonActivityLine.mockClear();
   ciFixProbeSpy.defaultCiFixProbe.mockClear();
+  buildAuthSpy.readDaemonBuildToken.mockClear();
 });
 
 afterEach(async () => {
@@ -126,6 +137,7 @@ describe('daemon-mode feature log integration', () => {
       '[feature-a] ▶ start feature-a',
       true,
     );
+    expect(buildAuthSpy.readDaemonBuildToken).toHaveBeenCalledTimes(1);
     expect(persisted).not.toMatch(/\[daemon\]\[feature-a\]\[feature-a\]/);
 
     // step_started is one of the 19 TerminalSubscriber-rendered event types.
