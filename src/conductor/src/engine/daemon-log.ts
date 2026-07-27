@@ -74,14 +74,23 @@ function writeDaemonMessage(
   formatActivityLine: (message: string, featureOwned: boolean) => string,
   sinks: Pick<Parameters<typeof createDaemonModeLogger>[0], 'writeLive' | 'writePersisted'>,
 ): void {
-    const startMatch = msg.match(/▶.*start\s+(\S+)/);
+    // Lifecycle transition suppression (start/resume/done) tracks repository-global
+    // status per feature slug. A genuine lifecycle line always opens with the glyph
+    // (optionally behind a bracketed tag and/or ANSI color codes) — real emitters
+    // (daemon.ts dispatch/collect) never embed the glyph mid-sentence. Anchoring the
+    // match to the message's leading content means feature-owned prose that merely
+    // quotes another feature's lifecycle text elsewhere in the line (e.g. "note: ▶
+    // start feature-b was logged") cannot be mistaken for a real transition and
+    // wrongly suppress that feature's later genuine line.
+    const LEADING_NOISE = /^(?:\[[^\]]*\]\s*)*(?:\x1b\[[0-9;]*m)*/;
+    const startMatch = msg.match(new RegExp(LEADING_NOISE.source + '▶.*start\\s+(\\S+)'));
     if (startMatch) {
       const slug = startMatch[1];
       if (lastStatus.get(slug) === 'start') return;
       lastStatus.set(slug, 'start');
     }
 
-    const resumeMatch = msg.match(/↻.*resume\s+(\S+)/);
+    const resumeMatch = msg.match(new RegExp(LEADING_NOISE.source + '↻.*resume\\s+(\\S+)'));
     if (resumeMatch) {
       const slug = resumeMatch[1];
       const oldStatus = lastStatus.get(slug);
@@ -93,7 +102,7 @@ function writeDaemonMessage(
       return;
     }
 
-    const doneMatch = msg.match(/■.*done\s+(\S+):\s+(\S+)/);
+    const doneMatch = msg.match(new RegExp(LEADING_NOISE.source + '■.*done\\s+(\\S+):\\s+(\\S+)'));
     if (doneMatch) {
       const [, slug, outcomeStatus] = doneMatch;
       if (lastStatus.get(slug) === outcomeStatus) return;
