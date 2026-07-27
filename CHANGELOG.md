@@ -204,6 +204,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   outright, while `mechanical` halts (gate-loop-budget-exceeded, build-stall/remediation-
   budget-exhausted) and legacy `unclassified` sites keep today's auto-clear-and-retry
   behavior. See `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+- The post-install success banner now prints a command that actually works:
+  `conduct-ts inline "your feature description"` instead of the bare `conduct "your feature
+  description"`, which the CLI rejected (`inline` is mandatory, and `conduct` is the deprecated
+  bash CLI, not `conduct-ts`) ([implementation PR #1037](https://github.com/jstoup111/ai-conductor/pull/1037)).
 
 ## Migration
 

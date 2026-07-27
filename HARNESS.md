@@ -98,7 +98,7 @@ unsupported-capability rejection.
 
 **Start here:** Two ways to run the flow:
 - **Interactive:** Run `/conduct` inside Claude Code to be guided step-by-step
-- **Automated:** Run `bin/conduct "feature description"` from your terminal for minimal intervention
+- **Automated:** Run `conduct-ts inline "feature description"` from your terminal for minimal intervention
 
 ## Agent Personas
 
