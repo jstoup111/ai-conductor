@@ -1649,6 +1649,19 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('drops unknown build_review keys while preserving an explicit opt-out', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, perTaskFlooor: true },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/perTaskFlooor/)],
+      });
+    });
+
     it('resolves enabled:true to enabled, identical to the default', () => {
       const result = validateConfig({ build_review: { enabled: true } });
       expect(result.ok).toBe(true);
