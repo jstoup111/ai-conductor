@@ -1376,7 +1376,7 @@ install() {
   if command -v claude &>/dev/null; then
     ok "Claude Code found"
   else
-    warn "Claude Code not found — install from https://docs.anthropic.com/en/.docs/claude-code"
+    warn "Claude Code not found — install from https://docs.claude.com/en/docs/claude-code"
   fi
 
   echo ""
@@ -1389,7 +1389,7 @@ install() {
   echo ""
   echo -e "  ${BOLD}Or automated:${NC}"
   echo -e "    cd your-project/"
-  echo -e "    conduct \"your feature description\""
+  echo -e "    conduct-ts inline \"your feature description\""
   echo ""
   echo -e "  ${BOLD}Verify:${NC}"
   echo -e "    ./bin/install --check"
