@@ -47,7 +47,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 
 | Prefix | Representative files |
 | --- | --- |
-| `daemon-*`, `daemon.ts` | `daemon.ts`, `daemon-runner.ts`, `daemon-backlog.ts`, `daemon-lock.ts`, `daemon-tmux.ts`, `daemon-command.ts`, `daemon-fleet.ts`, `daemon-auto-park.ts` |
+| `daemon-*`, `daemon.ts` | `daemon.ts`, `daemon-runner.ts`, `daemon-backlog.ts`, `daemon-lock.ts`, `daemon-log.ts`, `daemon-tmux.ts`, `daemon-command.ts`, `daemon-fleet.ts`, `daemon-auto-park.ts` |
 | step/pipeline core | `steps.ts`, `step-runners.ts`, `conductor.ts`, `selector.ts`, `state.ts`, `artifacts.ts`, `skill-invocation.ts`, `skill-resolver.ts`, `complete-verifier.ts` |
 | `gate*` | `gates.ts`, `gate-verdicts.ts`, `gate-code-validity.ts`, `gate-invalidation.ts`, `gate-writeback.ts`, `gated-snapshot.ts` |
 | `build-review-*` | `build-review-prompt.ts`, `build-review-inputs.ts`, `build-review-disposition.ts` |
@@ -68,7 +68,7 @@ Two lookups that are easy to get wrong:
   `engine/build-review-disposition.ts`, and verdict parsing plus the `completeness` rubric in
   `engine/artifacts.ts:1080-1177`.
 - The daemon's ship-eligibility guard has no module of its own. It is inline in
-  `engine/daemon-runner.ts` — `isVerifiedShip` at `:213` and `failureReasonForFalseShip` at `:222`.
+  `engine/daemon-runner.ts` — `isVerifiedShip` at `:219` and `failureReasonForFalseShip` at `:228`.
 - Backlog priority resolution is `createPriorityResolver` in `engine/backlog-priority.ts:123`.
 - The daemon pidfile lock is `engine/daemon-lock.ts`, not under `engine/engineer/`.
 

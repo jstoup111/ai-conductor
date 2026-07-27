@@ -106,19 +106,49 @@ finish.
 
 ## The configured flow on this repo
 
-This repo's `.ai-conductor/config.yml` makes two changes to the default step sequence. Neither is the
-default flow — see [steps reference](../reference/steps.md) for that.
+This repo's `.ai-conductor/config.yml` makes two changes to the default step sequence and one to
+provider routing. None of them is the default — see [steps reference](../reference/steps.md) and
+[models reference](../reference/models.md) for that.
 
 ```yaml
+llm_provider: [codex, claude]
+
 steps:
+  explore:
+    llm_provider: claude
+  prd:
+    llm_provider: claude
+  architecture_review:
+    llm_provider: claude
+  conflict_check:
+    llm_provider: claude
+  coherence_check:
+    llm_provider: claude
+  acceptance_specs:
+    llm_provider: claude
+  build_review:
+    llm_provider: claude
+  prd_audit:
+    llm_provider: claude
+  architecture_review_as_built:
+    llm_provider: claude
+  rebase:
+    llm_provider: claude
   manual_test:
     disable: true
   maintain-documentation:
+    llm_provider: claude
     after: rebase
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
 ```
+
+**Execution runs on Codex; judgement runs on Claude.** The run-level ladder puts `codex` first, so
+`build` and the mechanical steps dispatch there with `claude` behind them. Eleven steps pin
+`llm_provider: claude` for themselves — the design, review, and audit steps, plus `rebase` and this
+repo's own documentation step — and each still falls back to `codex`, because a step-level selection
+is prepended to the run-level list rather than replacing it. See [multiprovider](multiprovider.md).
 
 **`manual_test` is disabled.** The harness's own features are engine and CLI changes covered by the
 vitest suite and the integrity script, so a dispatched manual-test session costs tokens without
@@ -165,15 +195,18 @@ Before a self-host build runs, the engine fingerprints two surfaces with a per-f
 (symlinks hashed via `readlink`), and re-verifies them when the candidate tears down:
 
 1. **The live checkout** — the harness checkout the daemon itself is running out of.
-2. **Unrelated provider state** — `~/.claude` or `~/.codex`, with the selected auth file
-   (`.credentials.json` or `auth.json`) excluded.
+2. **Unrelated provider state** — `~/.claude` or `~/.codex`, whichever the selected provider owns.
 
 A mismatch is fail-closed: the engine writes `.pipeline/HALT` with kind `mechanical` and throws. A
 verification that itself fails is coerced to a mismatch (`Live boundary could not be verified.`).
 There is no config key — this is unconditional for self-host provider preparation.
 
-Five paths under the live checkout are excluded, filtered **during** the walk so an excluded subtree
-is never descended into:
+Each surface carries its own exclusion list, filtered **during** the walk so an excluded subtree is
+never descended into.
+
+### Live-checkout exclusions
+
+Five paths, all of them state the harness writes itself while a build runs:
 
 | Excluded path | Why |
 | --- | --- |
@@ -186,8 +219,27 @@ is never descended into:
 None of these is harness source, so everything the guard exists to protect stays fingerprinted:
 adding, modifying, or deleting a tracked source file under the live checkout still trips it.
 
-The practical consequence: **do not edit the harness checkout while a self-host build is running.**
-Edit inside the feature worktree, or park the feature first.
+### Provider-state exclusions
+
+This surface is a leak detector, not self-bookkeeping. The sandboxed build gets a throwaway provider
+home, so the live one should never change at all — every exclusion here trades away real detection
+power. The list is explicit and provider-specific, selected by the provider the build resolved to:
+
+| Provider | Excluded | Also excluded |
+| --- | --- | --- |
+| `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache` | the selected auth file, `.credentials.json` |
+| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and the `goals_1`, `logs_2`, `memories_1`, `state_5` sqlite files with their `-shm`/`-wal` companions | the selected auth file, `auth.json` |
+
+Every entry is usage, log, or cache telemetry that any concurrent provider process writes whether or
+not a build is running. Config surfaces are deliberately **not** excluded: `settings.json` on Claude,
+`config.toml` and `hooks.json` on Codex, plus `rules/`, `skills/`, and `CLAUDE.md`. A leak reaching
+back into operator config is exactly what this surface exists to catch, and no diff distinguishes that
+from an unrelated interactive session editing the same file. The accepted cost is that an interactive
+session changing `settings.json` — or `config.toml`/`hooks.json` on Codex — during a build HALTs that
+build even though the build did nothing wrong.
+
+The practical consequence: **do not edit the harness checkout or your provider config while a
+self-host build is running.** Edit inside the feature worktree, or park the feature first.
 
 ## The engine republish loop
 
@@ -261,8 +313,9 @@ or the build worktree is missing its `skills/` or `hooks/` directory. The sandbo
 than launching a dangling-link environment; a self-build cannot run without it.
 
 **A build halted the instant the daemon wrote a log line.** That is the live-boundary guard tripping
-on something outside the five volatile exclusions. Check what changed in the live checkout during the
-run — an editor save, a `git` operation outside `.git`, a generated file.
+on a path outside its exclusion lists. Check what changed during the run — an editor save or a
+generated file in the live checkout, a `git` operation outside `.git`, or a provider config file such
+as `~/.claude/settings.json` touched by another session.
 
 **`daemon start` refuses with an install-drift message.** Run `bin/install --update` and retry. A
 stale install leaves newly added skills unregistered, and daemon-dispatched skills then fail

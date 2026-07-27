@@ -75,11 +75,13 @@ These have full step definitions and are dispatchable, but hold no slot in the s
 | --- | --- | --- | --- | --- | --- |
 | `bootstrap` | UNDERSTAND | advisory | — | `/bootstrap` | Prelude, before the loop |
 | `assess` | UNDERSTAND | advisory | — | `/assess` | Prelude; short-circuited when `bootstrap_mode` is `new` |
-| `remediate` | SHIP | advisory | `prd_audit` | `/remediate` | Only when a SHIP gate blocks, or on a build stall |
+| `remediate` | SHIP | advisory | `prd_audit` | `/remediate` | When a SHIP gate blocks, when `build_review` FAILs on completeness, or on a build stall |
 | `attribution_verify` | SHIP | advisory | — | engine-native | Out-of-band commit-attribution audit |
 
 They exist as definitions because `getStepDefinition` throws `Unknown step: <name>` without one, and
-the daemon turns that throw into a `.pipeline/HALT`.
+the daemon turns that throw into a `.pipeline/HALT`. Config-declared custom steps resolve from a third
+table that `buildStepRegistry` populates, consulted after these two — see
+[configuration](configuration.md#custom-step-registry-contract).
 
 ## The validation group
 
@@ -123,16 +125,17 @@ reconciled with one another — the path in play decides which fallback you get.
 
 | Path | Where the tier is read | When no tier is found |
 | --- | --- | --- |
-| Daemon dispatch | `.docs/complexity/<slug>.md` on the base-branch tree, via the `Tier: <S\|M\|L>` line | `M` — the daemon's own fallback for an absent or garbled marker |
+| Daemon dispatch | `.docs/complexity/<slug>.md` on the base-branch tree, via the `Tier: <S\|M\|L>` line; a dated slug falls back once to the date-stripped stem when that stem is unambiguous | `M` — the daemon's own fallback for an absent or garbled marker, logged once per slug with the paths tried |
 | `conduct-ts inline --auto` | The tier already persisted in the run state. No marker read, no prompt, no host dispatch | `L` |
 | `conduct-ts inline --interactive`, and the default run mode | The persisted tier, else the `complexity` step's assessment, confirmed by the operator | `L`, when the assessment fails and there is no prompt to fall back on |
 | `complexity.default_tier` in `.ai-conductor/config.yml` | Nowhere — the key validates but no engine code reads it | Not applicable; the key never contributes a tier |
 
 The marker file is the only durable carrier. A tier chosen in an interactive run reaches a later
-daemon build only if the `complexity` step committed `.docs/complexity/<slug>.md` with the same
-plan stem, because that is the only thing the daemon looks at. To pin a tier for a daemon build,
-commit the marker — `complexity.default_tier` will not do it. See
-[configuration](configuration.md#complexity) for that key's known limitation, and
+daemon build only if the `complexity` step committed `.docs/complexity/<slug>.md` under the plan stem —
+or under its date-stripped form, the one relaxation the daemon allows
+([undated-stem fallback](artifacts.md#the-undated-stem-fallback)) — because that file is the only thing
+the daemon looks at. To pin a tier for a daemon build, commit the marker — `complexity.default_tier`
+will not do it. See [configuration](configuration.md#complexity) for that key's known limitation, and
 [artifacts](artifacts.md) for the marker's format.
 
 ## Track skips
@@ -146,8 +149,9 @@ The track split touches exactly two steps plus one land-gate layer.
 | Land-time coherence `fr` layer | Required | Not required; the layer degrades away |
 
 Everything else is identical on both tracks. The track is decided in `explore` and recorded in
-`.docs/track/<slug>.md`. A missing track resolves to `product`, so nothing is track-skipped when the
-track is unknown.
+`.docs/track/<slug>.md`, which the daemon reads with the same
+[undated-stem fallback](artifacts.md#the-undated-stem-fallback) as the tier marker. A missing track
+resolves to `product`, so nothing is track-skipped when the track is unknown.
 
 ## Other skip mechanisms
 
@@ -180,7 +184,7 @@ detail.
 | `coherence_check` | `.docs/coherence/*.md` | yes | At least one matching file, named with the plan's filename stem |
 | `acceptance_specs` | spec files in the project's test dirs, plus `.pipeline/acceptance-specs-red.json` | specs yes, evidence no | At least one spec file **and** RED evidence proving the feature's own specs ran and failed. A spec that was skipped, deselected, or hit a collection error does not establish RED |
 | `build` | `.pipeline/task-status.json` | no | No `.pipeline/halt-user-input-required` marker **and** every task completed or skipped. Task status is re-seeded and re-derived on each evaluation, so forged rows fail |
-| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid `PASS` verdict. Missing, prior-session, malformed, or `FAIL` all block, and a `FAIL` surfaces the grader's reasons into the kickback |
+| `build_review` | `.pipeline/build-review.json` | no | A fresh, valid `PASS` verdict. Missing, prior-session, malformed, or `FAIL` all block, and a `FAIL` surfaces the grader's reasons into the kickback. The kickback target is derived from the failing rubric item, not fixed at `build` — see [gates](../explanation/gates.md#where-a-build_review-fail-goes) |
 | `wiring_check` | `.pipeline/wiring-evidence.json` | no | Validated evidence with non-empty symbols per task. Missing evidence is computed live; evidence recorded at a prior HEAD is re-derived in process rather than rejected |
 | `test_suite` | `.pipeline/test-suite-evidence.json` | no | A live re-inspection returning `CURRENT`. File presence alone can never satisfy this gate |
 | `manual_test` | `.pipeline/manual-test-results.md` | no | The latest attempt section has no FAIL rows and is fresh. After a recorded FAIL, HEAD must have moved before an all-PASS attempt is accepted |

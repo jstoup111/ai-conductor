@@ -108,6 +108,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   on readiness — extending the same unrelated-health tolerance already added for
   `fail` envelopes.
 
+- Copying `templates/ai-conductor-config.yml.template` now produces a config that actually
+  validates. Its commented `steps:` example named `bootstrap` — an out-of-band step, which
+  the validator classifies as a custom step and rejects for missing `after:` — and its
+  `harness_version: ">=1.0.0"` was unsatisfiable by the repo's pre-1.0 `VERSION`. The example
+  now uses `explore` (a real `ALL_STEPS` entry) and the constraint is `">=0.99.0"`
+  ([implementation PR #1036](https://github.com/jstoup111/ai-conductor/pull/1036)).
 - A config-declared custom step no longer kills the run it was correctly scheduled
   into. `.ai-conductor/config.yml` custom steps are assembled and dispatched from the
   resolved registry (`buildStepRegistry`), but several lookups on the dispatch path
@@ -212,6 +218,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   outright, while `mechanical` halts (gate-loop-budget-exceeded, build-stall/remediation-
   budget-exhausted) and legacy `unclassified` sites keep today's auto-clear-and-retry
   behavior. See `docs/daemon-operations.md` and `src/conductor/README.md` for details.
+- The post-install success banner now prints a command that actually works:
+  `conduct-ts inline "your feature description"` instead of the bare `conduct "your feature
+  description"`, which the CLI rejected (`inline` is mandatory, and `conduct` is the deprecated
+  bash CLI, not `conduct-ts`) ([implementation PR #1037](https://github.com/jstoup111/ai-conductor/pull/1037)).
 
 ## Migration
 

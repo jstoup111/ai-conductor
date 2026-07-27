@@ -57,12 +57,6 @@ writes a host into any config. It is also absent from `./bin/install --help`.
 
 You should see `Installation complete.` followed by a quick-start banner.
 
-> **Known limitation.** The success banner prints `conduct "your feature description"` under
-> "Or automated", and `/conduct` under "Quick start". Neither works: the current CLI rejects a bare
-> feature invocation and requires `conduct-ts inline "<feature>"`. Ignore the banner and use the
-> commands on this page.
-> Tracked in [#1003](https://github.com/jstoup111/ai-conductor/issues/1003).
-
 ## Put `~/.local/bin` on PATH
 
 The installer symlinks `conduct-ts` into `~/.local/bin` but **never edits your shell profile**. If

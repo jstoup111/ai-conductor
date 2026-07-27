@@ -131,10 +131,9 @@ components.
 > written to perform never happens. Tracked in
 > [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
-> **Known limitation.** `templates/ai-conductor-config.yml.template:8` ships
-> `harness_version: ">=1.0.0"` while `VERSION` is `0.99.20`. Copy the template verbatim and, if a
-> `harnessVersion` is supplied, the config fails its own version check. Delete or lower the line after
-> copying. Tracked in [#1010](https://github.com/jstoup111/ai-conductor/issues/1010).
+`templates/ai-conductor-config.yml.template:8` ships `harness_version: ">=0.99.0"`, satisfiable by the
+repo's current pre-1.0 `VERSION`. (Formerly shipped an unsatisfiable `">=1.0.0"`; fixed in
+[#1010](https://github.com/jstoup111/ai-conductor/issues/1010).)
 
 ## defaults
 
@@ -195,9 +194,10 @@ other key declares a custom step. `steps` must be an object, and each value must
 > missing the custom-step fields. `steps: { bootstrap: { model: haiku } }` fails the load with
 > `Custom step "bootstrap" requires 'after: <existing-step>'`, and the same happens for `assess`,
 > `remediate`, and `attribution_verify`. Their model, effort, and retry values can only be changed
-> through `defaults` or `phases`. `templates/ai-conductor-config.yml.template` ships exactly this
-> `steps: bootstrap: { model: haiku }` example, commented out — uncommenting it breaks the config.
-> Tracked in [#1010](https://github.com/jstoup111/ai-conductor/issues/1010).
+> through `defaults` or `phases`. (`templates/ai-conductor-config.yml.template` formerly shipped exactly
+> this `steps: bootstrap: { model: haiku }` example, commented out, which broke the config if
+> uncommented; the template now illustrates the `steps:` block with `explore`, a real `ALL_STEPS` entry.
+> Fixed in [#1010](https://github.com/jstoup111/ai-conductor/issues/1010).)
 
 ### Per-step keys
 
@@ -212,14 +212,14 @@ other key declares a custom step. `steps` must be an object, and each value must
 | `max_retries` | number | Must be a number (`config.ts:372-374`) | `DEFAULT_STEP_RETRIES[step]` | `resolved-config.ts:356` |
 | `disable` | boolean | Must be a boolean (`config.ts:375-377`); see [Disabling a step](#disabling-a-step) | `false` | `resolved-config.ts:386` |
 | `escalate` | boolean | Must be a boolean (`config.ts:378-380`) | `true` | `resolved-config.ts:371` |
-| `skill` | string | Must be a string path (`config.ts:384-386`); for custom steps the file must exist on disk (`config.ts:516-525`) | the built-in skill | `resolved-config.ts:381`, `src/conductor/src/engine/steps.ts:572` |
+| `skill` | string | Must be a string path (`config.ts:384-386`); for custom steps the file must exist on disk (`config.ts:516-525`) | the built-in skill | `resolved-config.ts:381`, `src/conductor/src/engine/steps.ts:603` |
 | `hooks` | object | Object with optional string `before` / `after` paths (`config.ts:398-408`) | none | `resolved-config.ts:382-385` |
 | `by_tier` | object | See [by_tier](#by_tier) | none | `resolved-config.ts:236, 348` |
 | `when` | string | Grammar-checked at load time; see [when](#when) | none | `src/conductor/src/engine/when-expression.ts:97-136` |
 | `parallel` | array | See [parallel](#parallel) | none | `config.ts:422-466` |
 | `tdd` | object | Only valid on `steps.build`; see [steps.build.tdd](#stepsbuildtdd) | none | build agent |
-| `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:530` |
-| `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:568` |
+| `after` | string | **Custom steps only** — a built-in step with `after` is a hard error (`config.ts:529-531`) | required for custom steps | `steps.ts:561` |
+| `enforcement` | string | **Custom steps only** (`config.ts:532-534`); `structural`\|`advisory`\|`gating` | `advisory` | `steps.ts:599` |
 | `completion_artifact` | string | **Custom steps only** (`config.ts:535-537`); 7 constraints below | none | `src/conductor/src/engine/artifacts.ts:3086-3135` |
 
 `steps.<name>.hooks` takes two sub-keys, `before` and `after`, each a project-relative script path.
@@ -343,9 +343,9 @@ conductor step is created (`src/conductor/src/types/config.ts:59-75`).
 ### Custom step registry contract
 
 Any `steps.<name>` key that is not a built-in step name declares a custom step
-(`src/conductor/src/engine/steps.ts:507, 518`). `buildStepRegistry` splices it into the sequence at
+(`src/conductor/src/engine/steps.ts:538, 549`). `buildStepRegistry` splices it into the sequence at
 `indexOf(after) + 1` using an iterative fixed-point loop, so chains of custom steps resolve
-(`steps.ts:547-585`). Siblings sharing an `after` target keep config-file order.
+(`steps.ts:578-620`). Siblings sharing an `after` target keep config-file order.
 
 Six fields are available to a custom step:
 
@@ -353,15 +353,28 @@ Six fields are available to a custom step:
 | --- | --- | --- |
 | `after` | Yes | Insertion point. Must resolve to a built-in step name or a sibling custom step declared in the same file; self-reference does not count. Otherwise: `Custom step "<n>" references unknown after target: "<t>"` (`config.ts:496-510`) |
 | `skill` | Yes | Path to the `SKILL.md` to dispatch. Missing: `Custom step "<n>" requires 'skill: <path-to-SKILL.md>'`. The file must exist relative to the project root, else `Custom step "<n>" skill file not found: <path>` (`config.ts:511-525`) |
-| `enforcement` | No | `structural`, `advisory`, or `gating`. Defaults to `advisory` (`steps.ts:532`) |
+| `enforcement` | No | `structural`, `advisory`, or `gating`. Defaults to `advisory` (`steps.ts:563`) |
 | `completion_artifact` | No | Path the step must write to be considered done; see below |
 | `disable` | No | Boolean; custom steps bypass the `configDisableAllowed` check entirely |
 | `when` / `parallel` / `model` / `effort` / `max_retries` / `escalate` / `hooks` / `by_tier` / `llm_provider` | No | Same semantics as for built-in steps |
 
-The derived `StepDefinition` (`steps.ts:564-578`) sets `label = name`, inherits `phase` from the `after`
+The derived `StepDefinition` (`steps.ts:595-609`) sets `label = name`, inherits `phase` from the `after`
 target, sets `prerequisites = [after]`, `skippableForTiers = []`, `isCheckpoint = false`, and takes
 `loopGate` from the target step. A custom step inserted after a loop-gate step therefore joins the
 gate-driven tail loop.
+
+`buildStepRegistry` also records each definition it inserts so the step resolves by name alone. Several
+points on the dispatch path — the phase lookup, the gating check, skill resolution, the audit trail —
+resolve a step by name with no registry in scope, and `getStepDefinition` consults the built-in table
+first, then out-of-band steps, then recorded customs. A custom step can therefore never shadow a step
+the engine defines itself, and a name no assembled config declared still throws
+`Unknown step: <name>`, which the daemon turns into a `.pipeline/HALT`. A custom whose `after` target
+never resolved is not recorded either, so a broken chain stays unresolvable rather than becoming
+silently dispatchable.
+
+Custom steps hold no slot in the static step index. Every ordering decision — remediation routing, the
+earliest-target search, the dispatch loop — is relative to the resolved registry, so a custom step's
+position derives entirely from its `after` target. See [steps](steps.md) for the built-in order.
 
 `completion_artifact` carries seven constraints, each a hard error (`config.ts:471-494`):
 
@@ -381,10 +394,11 @@ its `mtimeMs` must be at or above the attempt or session freshness floor; a stal
 
 > **Known limitation.** `steps.<custom>.gate` and `steps.<custom>.kickback_target` are declared with full
 > semantics in `src/conductor/src/types/config.ts:134-146` and read by `buildStepRegistry`
-> (`steps.ts:576-577`), but neither is in `knownStepKeys`. Setting either fails the load with
-> `Unknown key in steps.<n>: "gate"` / `"kickback_target"`. The legacy adapter `customStepEntries()`
-> (`config.ts:1780-1800`) also drops both fields. A custom step's loop-gate membership can only be
-> inherited from its `after` target, and it can never be a kickback target. Tracked in
+> (`steps.ts:607-608`), but neither is in `knownStepKeys` (`config.ts:334-350`). Setting either fails
+> the load with `Unknown key in steps.<n>: "gate"` / `"kickback_target"`. The legacy adapter
+> `customStepEntries()` (`config.ts:1780-1800`) also drops both fields. A custom step's loop-gate
+> membership can only be inherited from its `after` target, and it can never be a kickback target.
+> Tracked in
 > [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
 
 This repo's own custom step is documented in [self-hosting](../guides/self-hosting.md).
@@ -717,7 +731,7 @@ array of non-empty strings, and an **empty array is legal** (`config.ts:737-746`
 
 Absent means the provider policy's own ladder is used:
 `this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder`
-(`src/conductor/src/engine/step-runners.ts:380`; also `attribution-lane.ts:367`). Policy defaults are
+(`src/conductor/src/engine/step-runners.ts:384`; also `attribution-lane.ts:367`). Policy defaults are
 `['fable','opus','sonnet']` for Claude and `['gpt-5.6-sol','gpt-5.6-terra','gpt-5.6-luna']` for Codex.
 See [models](models.md).
 
