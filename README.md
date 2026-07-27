@@ -1,4 +1,4 @@
-# James Stoup Agents
+# AI Conductor
 
 A custom development harness for Claude Code and Codex. Markdown skills and agent personas that enforce a
 disciplined SDLC — design docs, user stories with mandatory negative paths, conflict detection, TDD with
