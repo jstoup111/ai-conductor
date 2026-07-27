@@ -57,7 +57,7 @@ const STALE_TABLE =
 const NEW_TABLE =
   '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |\n' +
   '|---|---|---|---|---|---|---|\n' +
-  '| plan | autonomous engine | sonnet (S/M), fable (L) | medium (S) | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium (S) | because |';
+  '| plan | autonomous engine | opus (S/M), fable (L) | medium (S) | gpt-5.6-terra (S/M), gpt-5.6-sol (L) | medium (S) | because |';
 
 function fixture(table: string): string {
   return (
@@ -513,8 +513,8 @@ describe('buildPinsJson', () => {
 
   it('a known mapped skill (rebase) resolves to its DEFAULT_STEP_MODELS value', () => {
     const pins = buildPinsJson();
-    expect(pins['rebase']).toEqual({ expected: 'fable' });
-    expect(DEFAULT_STEP_MODELS.rebase).toBe('fable');
+    expect(pins['rebase']).toEqual({ expected: 'opus' });
+    expect(DEFAULT_STEP_MODELS.rebase).toBe('opus');
   });
 
   it('a known exempt skill (code-review) is marked exempt, not expected', () => {
@@ -619,9 +619,9 @@ describe('runGenerateModelTable --check mode — drift detection (TS-3)', () => 
     expect(after).toBe(before);
   });
 
-  it('in-region hand-edit (sonnet -> opus) -> exit 1, unified diff + remediation command printed, file untouched', async () => {
+  it('in-region hand-edit (opus -> sonnet) -> exit 1, unified diff + remediation command printed, file untouched', async () => {
     const clean = fixture(renderModelTable());
-    const handEdited = clean.replace('sonnet', 'opus');
+    const handEdited = clean.replace('opus', 'sonnet');
     // Sanity: the edit actually landed inside the generated region.
     expect(handEdited).not.toBe(clean);
     await writeFile(harnessPath, handEdited, 'utf8');

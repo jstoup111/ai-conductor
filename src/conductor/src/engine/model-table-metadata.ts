@@ -17,25 +17,25 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   assess:
     'The assess skill dispatches 9 specialists and drives structure verification with Claude Sonnet; the final cross-referencing of all 9 reports is the cto-orchestrator agent on Claude Opus. The orchestrator also sets the env var that cascades effort to subagents.',
   explore:
-    'Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects its own deepest model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is capped, so this already-deepest default remains at its current model. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work.',
+    'Divergent discovery: approach trade-offs + product/technical track classification. At M/L or without a recorded tier, each built-in provider policy selects a high-capability reasoning model and HIGH effort for this high-branching, front-of-funnel step; attempt 2 therefore raises reasoning to XHIGH. S tier alone uses LOW effort for a fast scoping pass on small, well-understood work.',
   prd:
     'Front-of-funnel requirements and FR authoring has high downstream cascade cost. Each built-in provider policy selects its own deepest model and HIGH effort at every complexity tier; attempt 2 raises reasoning to XHIGH. Later model escalation uses that provider\'s native order but is a capped no-op for this already-deepest default.',
   complexity:
     'Assigns S/M/L, which gates every downstream model/effort decision — a wrong tier cascades, but the classification itself is low-effort pattern matching.',
   stories: 'Pattern-following from design doc, structured output.',
   conflict_check:
-    'Pairwise comparison is manageable at each provider policy\'s standard tier with <=15 stories; Large tier selects that provider\'s deepest model for subtle contradiction detection.',
+    'Pairwise story comparison benefits from a stronger Claude reasoning model at every tier; Large tier selects each provider policy\'s deepest model for subtle contradiction detection at scale.',
   plan:
-    'Structured task breakdown from stories; Large tier selects each provider policy\'s deepest model for task sequencing and dependency reasoning at scale.',
+    'Task breakdown and dependency sequencing use a stronger Claude reasoning model at S/M; Large tier selects each provider policy\'s deepest model and XHIGH effort for planning at scale.',
   coherence_check:
     'Cross-references outcomes/FRs/stories/tasks into a per-row traceability verdict — structured comparison across committed artifacts, comparable in depth to conflict_check. M/L tier only (S is skippable).',
   architecture_diagram: 'Structured output generation from codebase scan — pattern-following.',
   architecture_review:
     'Pre-implementation design feasibility and alignment requires the selected provider policy\'s deepest capability tier.',
   worktree: 'Git operations — mechanical branch/worktree management.',
-  acceptance_specs: 'Generating specs from acceptance criteria — templated work.',
+  acceptance_specs: 'Translating acceptance criteria into executable boundary-level specs requires strong reasoning to preserve behavioral intent and negative paths, using MEDIUM effort for S/M and HIGH effort for Large work.',
   build:
-    'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model for reliable code authoring while genuinely mechanical steps use its lightweight model. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
+    'Launches the implementation session that authors code through the TDD RED/DOMAIN/GREEN cycle — the actual coding lane, not a thin dispatcher. Each provider policy uses its standard model with MEDIUM effort for reliable code authoring, rising to HIGH effort for Large work. S tier keeps the fixed three-attempt retry floor, so small features can still recover from a bad first pass.',
   build_review:
     'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
   wiring_check:
@@ -45,13 +45,13 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   manual_test: 'Structured validation against stories — pattern-following.',
   prd_audit: 'Cross-references PRD intent vs shipped implementation across two domains (spec + code) — deep reasoning, FR-by-FR.',
   architecture_review_as_built:
-    'The SHIP --as-built compliance mode is lighter than the pre-implementation review (code vs APPROVED ADRs) — pattern-match code vs approved design.',
+    'The SHIP --as-built compliance review compares shipped code with approved architecture and wiring contracts; missed drift can invalidate the release, so it uses each provider policy\'s deepest model and HIGH effort.',
   retro: 'Structured analysis from concrete data; Part C (context efficiency) is checklist-based.',
   rebase:
-    'The selected provider policy\'s deepest capability tier guards semantic merges; a wrong merge silently reverts merged work. Conflict resolution dispatch reasons over both sides of a hunk.',
-  finish: 'Mechanical checks — run tests, check git status, verify coverage.',
+    'Semantic conflict resolution reasons over both sides of a hunk; a wrong merge can silently revert completed work, so rebase uses a capable provider-native model with HIGH effort.',
+  finish: 'Coordinates final test, status, and coverage evidence with MEDIUM effort so completion claims remain grounded.',
   remediate:
-    'The selected provider policy\'s deepest capability tier guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. Gap reasoning plus concrete task planning requires deep judgment.',
+    'The selected provider policy\'s deepest capability tier guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. MEDIUM effort balances concrete gap routing with the strength of the selected model.',
   attribution_verify: 'Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages.',
 };
 

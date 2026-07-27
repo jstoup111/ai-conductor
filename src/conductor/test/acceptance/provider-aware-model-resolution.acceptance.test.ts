@@ -46,26 +46,26 @@ const CLAUDE_MODELS: Record<StepName, string> = {
   bootstrap: 'sonnet',
   memory: 'haiku',
   assess: 'sonnet',
-  explore: 'fable',
+  explore: 'opus',
   prd: 'fable',
   complexity: 'sonnet',
   stories: 'sonnet',
-  conflict_check: 'sonnet',
-  plan: 'sonnet',
+  conflict_check: 'opus',
+  plan: 'opus',
   architecture_diagram: 'sonnet',
   architecture_review: 'fable',
   worktree: 'haiku',
-  acceptance_specs: 'sonnet',
+  acceptance_specs: 'opus',
   build: 'sonnet',
-  build_review: 'opus',
+  build_review: 'fable',
   coherence_check: 'sonnet',
   wiring_check: 'sonnet',
   test_suite: 'sonnet',
   manual_test: 'sonnet',
-  prd_audit: 'opus',
-  architecture_review_as_built: 'sonnet',
+  prd_audit: 'fable',
+  architecture_review_as_built: 'fable',
   retro: 'sonnet',
-  rebase: 'fable',
+  rebase: 'opus',
   finish: 'haiku',
   remediate: 'fable',
   attribution_verify: 'opus',
@@ -84,7 +84,7 @@ const CODEX_MODELS: Record<StepName, string> = {
   architecture_diagram: 'gpt-5.6-terra',
   architecture_review: 'gpt-5.6-sol',
   worktree: 'gpt-5.6-luna',
-  acceptance_specs: 'gpt-5.6-terra',
+  acceptance_specs: 'gpt-5.6-sol',
   build: 'gpt-5.6-terra',
   build_review: 'gpt-5.6-sol',
   coherence_check: 'gpt-5.6-terra',
@@ -92,9 +92,9 @@ const CODEX_MODELS: Record<StepName, string> = {
   test_suite: 'gpt-5.6-terra',
   manual_test: 'gpt-5.6-terra',
   prd_audit: 'gpt-5.6-sol',
-  architecture_review_as_built: 'gpt-5.6-terra',
+  architecture_review_as_built: 'gpt-5.6-sol',
   retro: 'gpt-5.6-terra',
-  rebase: 'gpt-5.6-sol',
+  rebase: 'gpt-5.6-terra',
   finish: 'gpt-5.6-luna',
   remediate: 'gpt-5.6-sol',
   attribution_verify: 'gpt-5.6-sol',
@@ -114,18 +114,18 @@ const STEP_EFFORTS: Record<StepName, EffortLevel> = {
   architecture_review: 'high',
   worktree: 'low',
   acceptance_specs: 'medium',
-  build: 'low',
+  build: 'medium',
   build_review: 'high',
   coherence_check: 'medium',
   wiring_check: 'low',
   test_suite: 'low',
   manual_test: 'medium',
   prd_audit: 'high',
-  architecture_review_as_built: 'medium',
+  architecture_review_as_built: 'high',
   retro: 'medium',
-  rebase: 'max',
-  finish: 'low',
-  remediate: 'high',
+  rebase: 'high',
+  finish: 'medium',
+  remediate: 'medium',
   attribution_verify: 'high',
 };
 
@@ -137,12 +137,16 @@ const COMMON_TIER_OVERRIDES: AcceptancePolicy['stepTierOverrides'] = {
   explore: {
     S: { effort: 'low' },
   },
+  acceptance_specs: {
+    L: { effort: 'high' },
+  },
   plan: {
     S: { effort: 'medium', max_retries: 3 },
     L: { effort: 'xhigh' },
   },
   build: {
     S: { max_retries: 3 },
+    L: { effort: 'high' },
   },
 };
 
@@ -248,6 +252,10 @@ describe('#902 built-in provider policy matrix', () => {
       expect(resolveWithPolicy(policy, 'explore', 'S').effort).toBe('low');
       expect(resolveWithPolicy(policy, 'explore', 'M').effort).toBe('high');
       expect(resolveWithPolicy(policy, 'explore', 'L').effort).toBe('high');
+
+      expect(resolveWithPolicy(policy, 'acceptance_specs', 'S').effort).toBe('medium');
+      expect(resolveWithPolicy(policy, 'acceptance_specs', 'M').effort).toBe('medium');
+      expect(resolveWithPolicy(policy, 'acceptance_specs', 'L').effort).toBe('high');
 
       expect(resolveWithPolicy(policy, 'plan', 'S').effort).toBe('medium');
       expect(resolveWithPolicy(policy, 'plan', 'M').effort).toBe('high');
@@ -509,13 +517,13 @@ describe('#902 generated provider documentation', () => {
       /\| memory \| autonomous engine \| haiku \| low \| gpt-5\.6-luna \| low \|/,
     );
     expect(table).toMatch(
-      /\| plan \| autonomous engine \| sonnet \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-terra \(S\/M\), gpt-5\.6-sol \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \|/,
+      /\| plan \| autonomous engine \| opus \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-terra \(S\/M\), gpt-5\.6-sol \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );
     expect(table).toContain('| code-review | Claude interactive |');
     expect(table.match(/\| autonomous engine \|/g)).toHaveLength(Object.keys(CLAUDE_MODELS).length);
 
     const pins = buildPinsJson();
-    expect(pins.rebase).toEqual({ expected: 'fable' });
+    expect(pins.rebase).toEqual({ expected: 'opus' });
     expect(JSON.stringify(pins)).not.toContain('gpt-5.6-sol');
   });
 });
