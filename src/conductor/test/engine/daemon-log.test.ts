@@ -10,6 +10,7 @@ import {
   daemonLogPath,
   formatDaemonLogLine,
   formatDaemonActivityLine,
+  createDaemonModeLogger,
   createFeatureDaemonLogger,
 } from '../../src/engine/daemon-log.js';
 import { renderDaemonEvent, stripAnsi } from '../../src/daemon-cli.js';
@@ -271,6 +272,25 @@ describe('engine/daemon-log', () => {
         'global scan complete',
         '[feature-a] [feature-a] retrying build',
       ]);
+    });
+  });
+
+  describe('feature-owned multiline diagnostics', () => {
+    it('prefixes and persists every diagnostic line independently', () => {
+      const live: string[] = [];
+      const persisted: string[] = [];
+      const logger = createDaemonModeLogger({
+        writeLive: (line) => live.push(line),
+        writePersisted: (line) => persisted.push(line),
+      });
+
+      createFeatureDaemonLogger('feature-a', logger)('stdout first line\nstderr continuation');
+
+      expect(live).toEqual([
+        '[daemon][feature-a] stdout first line',
+        '[daemon][feature-a] stderr continuation',
+      ]);
+      expect(persisted).toEqual(live);
     });
   });
 

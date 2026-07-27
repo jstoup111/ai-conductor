@@ -22,7 +22,7 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
   makeRunFeature: (deps: {
     beginFeatureRun: (worktree: { path: string; branch: string }, item: { slug: string }) => Promise<{
       log?: (message: string) => void;
-      events: { emit: (event: { type: 'step_started'; step: 'build' }) => Promise<void> };
+      events: { emit: (event: unknown) => Promise<void> };
       stop: () => void;
     }>;
   }) => async (item: { slug: string }) => {
@@ -32,6 +32,17 @@ vi.mock('../../src/engine/daemon-runner.js', () => ({
     );
     scope.log?.('setup complete');
     await scope.events.emit({ type: 'step_started', step: 'build' });
+    // These all have established daemon render cases. They must remain wired
+    // through the feature-owned event scope, not only the former global bus.
+    await scope.events.emit({ type: 'gate_verdict', step: 'build', satisfied: false, reason: 'blocked' });
+    await scope.events.emit({ type: 'kickback', from: 'build', to: 'plan', count: 1 });
+    await scope.events.emit({ type: 'navigation_back', from: 'manual_test', to: 'build' });
+    await scope.events.emit({ type: 'loop_halt', reason: 'cap' });
+    await scope.events.emit({ type: 'loop_converged' });
+    await scope.events.emit({ type: 'ci_failed', prUrl: 'https://example.test/pr/1', slug: item.slug, checks: ['test'], attempts: 1, phase: 'detected' });
+    await scope.events.emit({ type: 'build_review_base', mergeBase: 'abc1234567890', trackingRefSha: 'abc1234567890', remoteHeadSha: 'abc1234567890', fresh: true });
+    await scope.events.emit({ type: 'build_review_stale_mirage_regrade', mergeBase: 'abc1234567890', regradeCount: 1 });
+    await scope.events.emit({ type: 'auto_park_contradiction', slug: item.slug, verdict: 'empty/missing plan', evidence: { summaryTasksCompleted: 1, evidenceStamps: 1, resolvedTasks: 0 } });
     scope.log?.('WARNING: provider unavailable');
     scope.log?.('retrying build (2/3)');
     scope.log?.('subprocess diagnostic: exit 1');
@@ -82,6 +93,15 @@ describe('daemon-mode feature log integration', () => {
       '▶ start feature-a',
       'setup complete',
       '· ▶ build',
+      '· gate build: unsatisfied — blocked',
+      '↩ KICKBACK: build re-opened plan (×1)',
+      '↰ BACK: manual_test → build (operator)',
+      '· ✋ loop halted: cap',
+      '· ✓ gate loop converged',
+      '· ✋ ci_failed[feature-a]: phase=detected attempts=1 checks=[test]',
+      '· build_review base',
+      '· build_review stale-mirage regrade',
+      '· ✋ auto_park_contradiction[feature-a]',
       'WARNING: provider unavailable',
       'retrying build (2/3)',
       'subprocess diagnostic: exit 1',

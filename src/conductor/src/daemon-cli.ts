@@ -807,6 +807,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
       'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
       'build_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
+      'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
+      'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
+      'auto_park_contradiction',
     ];
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
     return {

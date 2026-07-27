@@ -220,6 +220,21 @@ describe('CodexProvider', () => {
     }
   });
 
+  it('forwards one-shot and automatic-stream subprocess diagnostics through the supplied feature logger', async () => {
+    const featureLog = vi.fn();
+    mockExeca
+      .mockResolvedValueOnce({ stdout: jsonlMessage('one-shot output'), stderr: 'one-shot stderr', exitCode: 0 } as any)
+      .mockResolvedValueOnce({ stdout: 'automatic output', stderr: 'automatic stderr', exitCode: 0 } as any);
+
+    await provider.invoke({ ...baseOptions, diagnosticLog: featureLog });
+    await provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog });
+
+    expect(featureLog).toHaveBeenCalledWith(jsonlMessage('one-shot output'));
+    expect(featureLog).toHaveBeenCalledWith('one-shot stderr');
+    expect(featureLog).toHaveBeenCalledWith('automatic output');
+    expect(featureLog).toHaveBeenCalledWith('automatic stderr');
+  });
+
   it('keeps a >128 KiB prompt out of argv', async () => {
     mockExeca.mockResolvedValue({ stdout: jsonlMessage('Done.'), exitCode: 0 } as any);
     const prompt = 'x'.repeat(200_000);

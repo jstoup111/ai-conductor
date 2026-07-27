@@ -56,6 +56,24 @@ export function createDaemonModeLogger(sinks: {
   const formatActivityLine = sinks.formatActivityLine ?? formatDaemonActivityLine;
 
   return (msg: string, featureOwned = false) => {
+    // Subprocess output is commonly a single captured string containing many
+    // lines. Attribute and persist each physical line independently: otherwise
+    // only the first one receives the daemon/feature prefix and timestamp.
+    const lines = msg.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    for (const lineMessage of lines) {
+      writeDaemonMessage(lineMessage, featureOwned, lastStatus, formatActivityLine, sinks);
+    }
+  };
+}
+
+function writeDaemonMessage(
+  msg: string,
+  featureOwned: boolean,
+  lastStatus: Map<string, string>,
+  formatActivityLine: (message: string, featureOwned: boolean) => string,
+  sinks: Pick<Parameters<typeof createDaemonModeLogger>[0], 'writeLive' | 'writePersisted'>,
+): void {
     const startMatch = msg.match(/▶.*start\s+(\S+)/);
     if (startMatch) {
       const slug = startMatch[1];
@@ -85,7 +103,6 @@ export function createDaemonModeLogger(sinks: {
     const line = formatActivityLine(msg, featureOwned);
     sinks.writeLive(line);
     sinks.writePersisted(line);
-  };
 }
 
 /**
@@ -97,7 +114,11 @@ export function createFeatureDaemonLogger(
   baseLog: (message: string, featureOwned?: boolean) => void,
   featureTag = formatDaemonFeatureTag(featureSlug),
 ): (message: string) => void {
-  return (message) => baseLog(`${featureTag} ${message}`, true);
+  return (message) => {
+    const lines = message.split(/\r?\n/);
+    if (lines.at(-1) === '') lines.pop();
+    for (const line of lines) baseLog(`${featureTag} ${line}`, true);
+  };
 }
 
 /** Absolute path to a repo's daemon activity log. */
