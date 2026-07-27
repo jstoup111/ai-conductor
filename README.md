@@ -1,17 +1,20 @@
 # James Stoup Agents
 
-A custom development harness for Claude Code and Codex. Pure Markdown skills and agent personas that enforce
-a disciplined SDLC: design docs, user stories with mandatory negative paths, conflict detection,
-TDD with domain review, evaluator-gated code review, and dual retrospectives.
+A custom development harness for Claude Code and Codex. Markdown skills and agent personas that enforce a
+disciplined SDLC — design docs, user stories with mandatory negative paths, conflict detection, TDD with
+domain review, evaluator-gated code review, and dual retrospectives — plus an autonomous build daemon that
+takes a merged spec to an open pull request without supervision.
 
-No custom skill runtime. Claude Code powers the conductor automation, and Codex can use the
-same Markdown skills directly.
+There is no custom skill runtime. Claude Code powers the conductor automation, and Codex uses the same
+Markdown skills directly.
 
 ## Requirements
 
-- [Claude Code](https://docs.anthropic.com/en/.docs/claude-code) v2.0+ and/or Codex
-- Git
-- A project to work on (Rails+PostgreSQL has full tech-context support; other stacks work with generic skills)
+- [Claude Code](https://docs.claude.com/en/docs/claude-code) v2.0+ and/or [Codex](https://github.com/openai/codex)
+- Git, and [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
+- Node 20.19.2 (the engine pins this via `asdf`), npm, tmux, and `python3` with PyYAML
+- A project to work on — Rails + PostgreSQL has full tech-context support; other stacks work with the
+  generic skills
 
 ## Install
 
@@ -19,171 +22,127 @@ same Markdown skills directly.
 git clone git@github.com:jstoup111/ai-conductor.git
 cd ai-conductor
 ./bin/install
+export PATH="$HOME/.local/bin:$PATH"   # the installer warns; it never edits your profile
+./bin/install --check                  # 0 clean · 1 drift · 2 build-auth
 ```
 
-This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and
-`~/.codex/skills/` directories and installs the conductor CLI(s) to `~/.local/bin/`. The installer never puts
-the harness skills in a project directory; project-local skills are optional explicit overrides.
-See [Getting Started](docs/getting-started.md) for the full install
-walkthrough (Mermaid renderer setup, verify/update/uninstall, worktree-root guard) and
-[Choosing a Conductor](docs/choosing-a-conductor.md) for the `conduct` vs `conduct-ts`
-comparison — both binaries coexist, `conduct` is the default, `conduct-ts` is opt-in.
+This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/`
+directories and installs the conductor CLI to `~/.local/bin/`. The installer never places harness skills in
+a project directory; project-local skills are optional explicit overrides.
 
-## How the Pieces Fit Together
+Full walkthrough, prerequisites, and first-run blockers: **[Quickstart](docs/quickstart.md)**.
 
-Three cooperating roles drive every feature from idea to merged PR — the **engineer**
-(spec authoring), the **daemon** (autonomous build), and the **operator** (judgment +
-merges). GitHub issues/PRs are the coordination medium; the daemon never merges.
+## Quick start
 
-```mermaid
-flowchart TB
-  OP(["Operator<br/>(you)"])
-
-  subgraph GH["GitHub — coordination medium"]
-    ISSUES["Issues<br/>(intake: symptom capture,<br/>priority / size / links)"]
-    SPECPR["Spec PR<br/>(Refs #N)"]
-    BUILDPR["Implementation PR<br/>(Closes #N)"]
-  end
-
-  subgraph ENG["Engineer — spec authoring (supervisor, /engineer)"]
-    CLAIM["claim intake<br/>(stages .pipeline/intake-outcomes.md)"] --> DECIDE["DECIDE flow:<br/>explore · complexity · stories ·<br/>plan · architecture + ADRs ·<br/>/coherence-check (M/L tiers)"]
-    DECIDE --> LAND["land: spec artifacts under .docs/<br/>(intake · stories · plan · Owner: stamped) ·<br/>coherence gate (fail-closed, waivable)"]
-  end
-
-  subgraph DAEMON["Daemon — autonomous build (conduct-ts daemon)"]
-    SCAN["backlog scan<br/>(specs on main · owner gate ·<br/>shipped-record dedup · priority order)"]
-    WT["dispatch → git worktree<br/>+ per-worktree engine build"]
-    BUILD["SDLC build: TDD tasks<br/>Task: N trailers → telemetry only<br/>(completion gated by build_review completeness)"]
-    HEAL["self-heal:<br/>retry escalation (effort→model) ·<br/>stall remediation · ci-fix on red PRs ·<br/>halt / park for the operator"]
-    VAL["SHIP validators:<br/>manual_test · prd_audit ·<br/>architecture review (as built)"]
-    FIN["finish: rebase → push →<br/>PR + committed shipped-record"]
-    SCAN --> WT --> BUILD --> VAL --> FIN
-    BUILD <--> HEAL
-  end
-
-  OP -->|"file / approve intake"| ISSUES
-  ISSUES --> CLAIM
-  LAND --> SPECPR
-  SPECPR -->|"operator merges"| MAIN[("main")]
-  MAIN --> SCAN
-  FIN --> BUILDPR
-  BUILDPR -->|"operator merges<br/>(daemon never merges)"| MAIN
-  HEAL -.->|"halts / parks needing judgment"| OP
-  OP -->|"unpark · approve VERSION bumps"| DAEMON
-```
-
-- **Engineer**: turns a captured issue into a buildable spec (plan, stories, ADRs) and
-  lands it as a spec PR. Investigation lives here — intake stays a plain symptom capture.
-  When an idea is claimed from intake, its Desired-outcome bullets are staged to
-  `.pipeline/intake-outcomes.md` so they travel with the worktree. For Medium/Large tier
-  specs, `/coherence-check` (run at the end of DECIDE) authors a committed traceability
-  record — `.docs/coherence/<plan-stem>.md` — mapping outcomes → FRs → stories → tasks
-  with per-row verdicts and quoted evidence. At land time a deterministic **coherence
-  gate** re-derives and cross-checks that record against the real stories/plan/PRD/staged
-  outcomes (fabricated-citation reject, per-layer coverage gaps, plan coverage-table
-  consistency, and a duplicate-intake-claim scan), and blocks the land on any unresolved
-  gap. S-tier specs are exempt, and specs that predate this gate (no `.docs/coherence/`
-  signal in the diff) are never retroactively blocked. A genuine, reasoned exception is
-  waivable with a committed `.docs/coherence-waivers/<plan-stem>.md` carrying a `Waives:
-  <gap-id>[, <gap-id>...]` / `Rationale: <prose>` pair — partial coverage still blocks,
-  naming the unwaived remainder. See [`src/conductor/README.md`](src/conductor/README.md)
-  → "Coherence gate" for the full breakdown.
-- **Daemon**: drains merged specs in priority order, builds each in an isolated worktree
-  through the full SDLC, gated on completion by `build_review`'s LLM-judged completeness
-  rubric (plan-vs-diff, fail-closed, self-heals via kickback), self-heals stalls and red CI,
-  and opens the implementation PR with a committed shipped-record so the work is never
-  re-dispatched. Gate-writeback's other-owner skip notices (no PR, terminal PR state, no
-  `Source-Ref`) are suppressed from the daemon log by default and re-surfaced by setting
-  `daemon_verbose: true` in `.ai-conductor/config.yml` (see [Conductor CLI
-  Reference](src/conductor/README.md#gate-write-back-owner-gated-prissue-announcement-tasks-17-21)).
-- **Operator**: the only merger. Approves intake priorities, resolves halts the machinery
-  escalates, and signs off version bumps.
-
-## Quick Start
-
-See [`examples/README.md`](examples/README.md) for runnable, end-to-end walkthroughs
-(inline/interactive/daemon/engineer/intake-loop scenarios at S/M/L tiers).
+Register a project, bootstrap it, then drive a feature:
 
 ```bash
-cd your-project/
-claude
+cd your-project/            # must already be a git repository
+conduct-ts register
+claude                      # then run /bootstrap in the session
 ```
 
-Then in the Claude Code session:
+Run the pipeline interactively, watching every step in a live Claude REPL:
 
-```
-/conduct
-```
-
-Or open the project with Codex. Codex discovers the same user-scoped skills, and a bootstrapped
-project's `AGENTS.md` supplies the harness instructions for Codex.
-
-The conductor checks artifact state, tells you what to run next, and blocks when gates
-aren't met — walking you from `/bootstrap` through `/finish`. For the full install
-walkthrough, the automated `conduct`/`conduct-ts` CLIs, and daemon mode, see
-[Getting Started](docs/getting-started.md).
-
-### Aggregate test-suite gate
-
-Projects using the native automated flow declare one authoritative aggregate operation in
-their project-level `.ai-conductor/config.yml`:
-
-```yaml
-test_suite:
-  command: npm test
-  working_directory: .
-  timeout_seconds: 1800
+```bash
+conduct-ts inline --interactive "add a CSV export"
 ```
 
-The command is project-owned: if unit, acceptance, or integration tests use separate commands,
-compose them in one package/script target and reference that target here. Missing or invalid
-configuration blocks the pre-SHIP gate. See [Configuration](docs/configuration.md#aggregate-test-suite-gate)
-for additional inputs, environment names, and failure behavior. Harness integrity is a separate
-self-host check and should not be folded into this declaration.
+`inline` is required — the bare form `conduct-ts "<feature>"` is rejected.
 
-### Per-step provider routing (#927)
+Or let the daemon drain merged specs on its own, each in an isolated worktree, opening a pull request per
+feature:
 
-Existing projects can keep the scalar `llm_provider: claude` form. To configure
-fallback choices, use an ordered array such as `llm_provider: [claude, codex]`;
-the first provider is the inherited default for every step. A step can override
-that choice with `steps.<step>.llm_provider`, using either the same scalar form
-or an ordered array. Selected providers run first, followed by the remaining
-run-level providers in stable configuration order.
+```bash
+conduct-ts daemon start
+```
 
-Cross-provider fallback is deliberately narrow and visible: the conductor warns
-when explicit provider unavailability or provider-native model exhaustion moves
-a step to its next configured built-in provider. Authentication, rate-limit,
-session-expiry, timeout, rejected, and ordinary failures stay with existing
-recovery behavior instead of silently crossing providers. Each step/provider
-execution starts a fresh session; retries may resume only within the same
-step-execution scope and provider. Re-entering a one-shot phase/step execution,
-a later step, or another provider starts fresh.
-See [HARNESS.md](HARNESS.md#per-step-provider-routing-927) for configuration and
-failure details.
+The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
+array such as `[claude, codex]` acts as a fallback ladder. See
+[Multiprovider](docs/guides/multiprovider.md).
+
+Runnable end-to-end walkthroughs live in [`examples/README.md`](examples/README.md).
+
+## Why this exists
+
+Agents drift over a long build. Prompt discipline decays, self-reports drift from reality, and a "done"
+claim is worth exactly nothing without an artifact behind it. This harness is built on the opposite
+assumption: progress is proven by files on disk, gates are deterministic where machinery can enforce them,
+and an LLM is dispatched only where judgment is genuinely required. The daemon never merges — a human still
+owns that call.
 
 ## Documentation
 
-- [Choosing a Conductor](docs/choosing-a-conductor.md) — `conduct` vs `conduct-ts`, which one to use and when
-- [Getting Started](docs/getting-started.md) — full install walkthrough, verify/update/uninstall, worktree-root guard
-- [Configuration](docs/configuration.md) — settings.json, tech-context, and harness customization
-- [Daemon Operations](docs/daemon-operations.md) — running, parking, and recovering the autonomous build daemon
-- [Observability](docs/observability.md) — logs, metrics, and monitoring the daemon and skills
-  (includes `conduct kpi` — per-feature token/cost accounting rollup over `.docs/shipped/*.md`
-  Cost blocks; see [Conductor CLI Reference](src/conductor/README.md) for the full format)
-- [Intake](docs/intake.md) — filing issues that seed the DECIDE phase
-- [Architecture](docs/architecture.md) — how engineer, daemon, and operator roles fit together
-- [Runbooks](docs/runbooks/emergency-stop-a-running-feature.md) — step-by-step procedures for operational incidents
-- [Conductor CLI Reference](src/conductor/README.md) — `conduct-ts` internals and CLI flags
+**Start here**
 
-## Key Design Principles
+- [Quickstart](docs/quickstart.md) — prerequisites, install, and your first working run
 
-1. **One skill, one responsibility** — Skills have singular focus
-2. **Artifacts are the interface** — Skills communicate via files in `.docs/`, not internal orchestration
-3. **Negative paths are mandatory** — Every story must have concrete failure scenarios
-4. **Evaluator sees fresh context** — No shared state with the generator prevents confirmation bias
-5. **Dry business logic, not dry code** — Extract shared behavior, not shared shape
-6. **Anything approved twice should be automated** — Pre-approve routine operations
-7. **Refactoring happens at batch boundaries** — GREEN phase stays minimal
-8. **Every file gets a spec** — Unit specs + request specs, both required
-9. **Memory persists across sessions** — Decisions, patterns, gotchas don't get re-discovered
-10. **Self-improving** — Retro findings feed back into harness improvements
+**Guides** — task-oriented procedures
+
+- [Your first feature](docs/guides/first-feature.md) — idea → spec PR → build → implementation PR
+- [The engineer loop](docs/guides/engineer-loop.md) — the interactive idea→spec flow
+- [Running the daemon](docs/guides/running-the-daemon.md) — start, park, observe, recover
+- [Intake](docs/guides/intake.md) — filing issues that seed the DECIDE phase
+- [Multiprovider](docs/guides/multiprovider.md) — Claude Code and Codex, and the fallback ladder
+- [Self-hosting](docs/guides/self-hosting.md) — running the harness on this repository
+
+**Reference** — exact interfaces
+
+- [CLI](docs/reference/cli.md) — every `conduct-ts` command, subcommand, and flag
+- [Configuration](docs/reference/configuration.md) — every `.ai-conductor/config.yml` key
+- [Settings and hooks](docs/reference/settings-and-hooks.md) — `settings.json` and host event hooks
+- [Environment variables](docs/reference/environment.md)
+- [Steps](docs/reference/steps.md) — the step vocabulary `--from` accepts
+- [Skills](docs/reference/skills.md) — the full skill catalog
+- [Artifacts](docs/reference/artifacts.md) — the `.docs/` and `.pipeline/` trees
+- [Models](docs/reference/models.md) — model and effort resolution
+
+**Explanation** — how and why the system is shaped this way
+
+- [Architecture](docs/explanation/architecture.md) — engine, daemon, engineer loop, operator
+- [SDLC phases](docs/explanation/sdlc-phases.md) — the five phases, tiers, and tracks
+- [Gates](docs/explanation/gates.md) — enforcement levels, fail-closed rules, waivers
+- [Evidence model](docs/explanation/evidence-model.md) — why progress is proven, not asserted
+
+**Runbooks** — when something breaks
+
+- [Emergency-stop a running feature](docs/runbooks/emergency-stop-a-running-feature.md)
+- [Stalled or stuck feature](docs/runbooks/stalled-or-stuck-feature.md)
+- [Worktree and evidence recovery](docs/runbooks/worktree-and-evidence-recovery.md)
+- [Daemon recovery](docs/runbooks/daemon-recovery.md)
+- [Shipped-record reconciliation](docs/runbooks/shipped-record-reconciliation.md)
+
+**Contributing** — modifying the harness itself
+
+- [Code organization](docs/contributing/code-organization.md)
+- [Testing](docs/contributing/testing.md)
+- [Validation](docs/contributing/validation.md)
+- [Releases](docs/contributing/releases.md)
+- [Extending](docs/contributing/extending.md)
+
+Behavioral rules for projects using this harness live in [HARNESS.md](HARNESS.md).
+
+## Key design principles
+
+1. **One skill, one responsibility** — skills have singular focus
+2. **Artifacts are the interface** — skills communicate via files in `.docs/`, not internal orchestration
+3. **Deterministic where possible, LLM only where necessary** — if machinery can enforce it, machinery does
+4. **Negative paths are mandatory** — every story carries concrete failure scenarios
+5. **Evaluator sees fresh context** — no shared state with the generator prevents confirmation bias
+6. **Dry business logic, not dry code** — extract shared behavior, not shared shape
+7. **Refactoring happens at batch boundaries** — the GREEN phase stays minimal
+8. **Memory persists across sessions** — decisions, patterns, and gotchas are not re-discovered
+9. **Self-improving** — retro findings feed back into harness improvements
+
+## Contributing and support
+
+Start with [Contributing](docs/contributing/code-organization.md), and run the validation suite before every
+commit:
+
+```bash
+bash test/test_harness_integrity.sh
+```
+
+All work happens on a feature branch; never commit directly to `main`. File bugs, ideas, and observations as
+[GitHub issues](https://github.com/jstoup111/ai-conductor/issues) — see [Intake](docs/guides/intake.md) for
+the structure that turns an issue into buildable work.
