@@ -3790,10 +3790,17 @@ export class Conductor {
               });
               if (!sealVerdict.ok) {
                 protectedArtifactIssue = sealVerdict.reason;
-              } else if (step.phase === 'BUILD' && baselineCommit) {
-                // Persist only after the workspace matches committed DECIDE
-                // content. createProtectedArtifactSeal is immutable once present.
-                await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+              } else {
+                if (sealVerdict.selfAmendments.length > 0) {
+                  console.warn(
+                    `Protected artifact self-amendments detected: ${sealVerdict.selfAmendments.map(({ path }) => path).join(', ')}. Each amendment must be justified by the approved plan and will be judged by build_review.`,
+                  );
+                }
+                if (step.phase === 'BUILD' && baselineCommit) {
+                  // Persist only after the workspace matches committed DECIDE
+                  // content. createProtectedArtifactSeal is immutable once present.
+                  await createProtectedArtifactSeal({ projectRoot: this.projectRoot, baselineCommit });
+                }
               }
             }
           }
