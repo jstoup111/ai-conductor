@@ -23,9 +23,67 @@ import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { firstNonEmptyLine, writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
 import { classifyVersionSignal, type VersionSignal } from './version-signal.js';
+import { resolveFreshBase, type GitRunner } from '../rebase.js';
 
 /** Where the operator records the approved VERSION bump for a self-build. */
 export const VERSION_APPROVAL_MARKER = '.pipeline/version-approval';
+
+/** Reserved `version_freeze` literal that tracks the resolved base branch's VERSION. */
+const FREEZE_LATEST = 'latest';
+
+/** Reserved `version_freeze` prefix that tracks an explicit branch's VERSION. */
+const FREEZE_BRANCH_PREFIX = 'branch:';
+
+/**
+ * Resolve a declared `harness_self_host.version_freeze` value to the concrete
+ * version string `evaluateVersionApproval` compares against `VERSION`.
+ *
+ * A plain pinned value (e.g. `"0.99.20"`) passes through unchanged — no git
+ * calls, identical to the pre-existing behavior.
+ *
+ * `"latest"` tracks the repo's resolved base branch (`resolveFreshBase` —
+ * the same discover-default-branch/fetch/fail-soft machinery the rebase gate
+ * and build-review use, never a hardcoded `main`): the frozen value becomes
+ * that branch's current `VERSION` file contents.
+ *
+ * `"branch:<name>"` tracks an explicit branch instead of the auto-discovered
+ * default: fetches `origin/<name>` and reads its `VERSION`.
+ *
+ * Fail-closed: any git/network failure (no origin, branch not found, fetch
+ * failure, missing VERSION at that ref) resolves to `null` — the gate then
+ * falls through to signal classification / HALT exactly as "no freeze
+ * declared" would, never silently freezing on a stale or guessed value.
+ */
+export async function resolveVersionFreeze(
+  raw: string | null | undefined,
+  git: GitRunner,
+): Promise<string | null> {
+  const value = firstNonEmptyLine(raw);
+  if (value === null) return null;
+
+  if (value === FREEZE_LATEST) {
+    const base = await resolveFreshBase(git);
+    if (base.kind !== 'remote') return null;
+    return readVersionAtRef(git, `${base.ref}:VERSION`);
+  }
+
+  if (value.startsWith(FREEZE_BRANCH_PREFIX)) {
+    const branch = value.slice(FREEZE_BRANCH_PREFIX.length).trim();
+    if (!branch) return null;
+    const fetched = await git(['fetch', 'origin', branch]);
+    if (fetched.exitCode !== 0) return null;
+    return readVersionAtRef(git, `origin/${branch}:VERSION`);
+  }
+
+  // Pinned semver string — pre-existing behavior, no I/O.
+  return value;
+}
+
+async function readVersionAtRef(git: GitRunner, ref: string): Promise<string | null> {
+  const show = await git(['show', ref]);
+  if (show.exitCode !== 0) return null;
+  return firstNonEmptyLine(show.stdout);
+}
 
 export interface VersionApprovalInput {
   /** Contents of the approval marker, or null when absent. */

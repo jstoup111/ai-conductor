@@ -6,9 +6,33 @@ import { tmpdir } from 'node:os';
 import {
   evaluateVersionApproval,
   runVersionApprovalGate,
+  resolveVersionFreeze,
   VERSION_APPROVAL_MARKER,
 } from '../../../src/engine/self-host/version-gate.js';
 import type { VersionSignal } from '../../../src/engine/self-host/version-signal.js';
+import type { GitRunner, GitResult } from '../../../src/engine/rebase.js';
+
+// A scripted GitRunner: matches argv prefixes to canned results (mirrors
+// rebase.test.ts's fakeGit — resolveVersionFreeze reuses resolveFreshBase).
+function fakeGit(
+  script: Array<{ match: string[]; result: Partial<GitResult> }>,
+): { git: GitRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  const git: GitRunner = async (args) => {
+    calls.push(args);
+    for (const entry of script) {
+      if (entry.match.every((tok, i) => args[i] === tok)) {
+        return {
+          exitCode: entry.result.exitCode ?? 0,
+          stdout: entry.result.stdout ?? '',
+          stderr: entry.result.stderr ?? '',
+        };
+      }
+    }
+    return { exitCode: 0, stdout: '', stderr: '' };
+  };
+  return { git, calls };
+}
 
 // Phase 4 (TR-7): a self-build HALTs for the operator's semver-bump approval
 // before opening a PR — CLAUDE.md's "present the VERSION bump for approval" rule
@@ -97,6 +121,83 @@ describe('evaluateVersionApproval — version freeze (#261)', () => {
     expect(v.ok).toBe(false);
     if (v.ok) return;
     expect(v.reason).toMatch(/approval required/i);
+  });
+});
+
+describe('resolveVersionFreeze — moving-target freeze (adr-2026-06-30 follow-up)', () => {
+  it('a plain pinned string passes through unchanged, no git calls', async () => {
+    const { git, calls } = fakeGit([]);
+    const resolved = await resolveVersionFreeze('0.99.20', git);
+    expect(resolved).toBe('0.99.20');
+    expect(calls).toEqual([]);
+  });
+
+  it('null/undefined stays null, no git calls', async () => {
+    const { git, calls } = fakeGit([]);
+    expect(await resolveVersionFreeze(null, git)).toBeNull();
+    expect(await resolveVersionFreeze(undefined, git)).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('"latest" resolves to the discovered default branch\'s current VERSION', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: `${'a'.repeat(40)}\n` } },
+      {
+        match: ['ls-remote', 'origin', 'main'],
+        result: { stdout: `${'a'.repeat(40)}\trefs/heads/main\n` },
+      },
+      { match: ['show', 'origin/main:VERSION'], result: { stdout: '1.2.3\n' } },
+    ]);
+    expect(await resolveVersionFreeze('latest', git)).toBe('1.2.3');
+  });
+
+  it('"branch:<name>" fetches that branch and reads its VERSION', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['fetch', 'origin', 'release'], result: { exitCode: 0 } },
+      { match: ['show', 'origin/release:VERSION'], result: { stdout: '2.0.0\n' } },
+    ]);
+    expect(await resolveVersionFreeze('branch:release', git)).toBe('2.0.0');
+    expect(calls).toContainEqual(['fetch', 'origin', 'release']);
+  });
+
+  it('"latest" fails closed (null) when there is no origin remote', async () => {
+    const { git } = fakeGit([{ match: ['remote'], result: { stdout: '' } }]);
+    expect(await resolveVersionFreeze('latest', git)).toBeNull();
+  });
+
+  it('"branch:<name>" fails closed (null) when the fetch fails', async () => {
+    const { git } = fakeGit([
+      { match: ['fetch', 'origin', 'gone'], result: { exitCode: 1, stderr: 'not found' } },
+    ]);
+    expect(await resolveVersionFreeze('branch:gone', git)).toBeNull();
+  });
+
+  it('"branch:" with no name fails closed (null), no git calls', async () => {
+    const { git, calls } = fakeGit([]);
+    expect(await resolveVersionFreeze('branch:', git)).toBeNull();
+    expect(calls).toEqual([]);
+  });
+
+  it('fails closed (null) when VERSION is missing at the resolved ref', async () => {
+    const { git } = fakeGit([
+      { match: ['remote'], result: { stdout: 'origin\n' } },
+      {
+        match: ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+        result: { stdout: 'refs/remotes/origin/main\n' },
+      },
+      { match: ['rev-parse', 'refs/remotes/origin/main'], result: { stdout: `${'a'.repeat(40)}\n` } },
+      {
+        match: ['ls-remote', 'origin', 'main'],
+        result: { stdout: `${'a'.repeat(40)}\trefs/heads/main\n` },
+      },
+      { match: ['show', 'origin/main:VERSION'], result: { exitCode: 1, stderr: 'no such path' } },
+    ]);
+    expect(await resolveVersionFreeze('latest', git)).toBeNull();
   });
 });
 

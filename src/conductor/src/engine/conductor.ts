@@ -192,6 +192,7 @@ import {
 } from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
+import { resolveVersionFreeze } from './self-host/version-gate.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
@@ -2459,11 +2460,15 @@ export class Conductor {
     const sh = resolveSelfHostConfig(this.config);
 
     if (sh.versionApprovalGate) {
+      const versionFreeze = await resolveVersionFreeze(
+        sh.versionFreeze,
+        makeGitRunner(this.projectRoot),
+      );
       const verdict = await this.guardrails.versionGate({
         projectRoot: this.projectRoot,
         harnessRoot: this.projectRoot,
         readText: (p) => this.readTextOrNull(p),
-        versionFreeze: sh.versionFreeze,
+        versionFreeze,
         changedFiles: () => this.selfBuildChangedFiles(),
       });
       if (!verdict.ok) return verdict;
