@@ -366,6 +366,14 @@ export interface InvokeProviderCandidateInput {
   sessions: Pick<ProviderSessionScope, 'prepare' | 'markCreated'>;
   resolved: ResolvedProviderNativeStepConfig;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
+  /**
+   * Suppress resume for this invocation even when this provider's session was
+   * already created earlier in the step. Set when the invocation runs against a
+   * freshly provisioned isolated provider home: that throwaway home carries no
+   * session/rollout state forward, so resuming into it can only fail (Codex
+   * reports `no rollout found for thread id <id>`).
+   */
+  forceFreshSession?: boolean;
 }
 
 /** Invoke one candidate while preserving its provider-scoped session state. */
@@ -375,6 +383,7 @@ export async function invokeProviderCandidate({
   sessions,
   resolved,
   options,
+  forceFreshSession,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
@@ -385,7 +394,7 @@ export async function invokeProviderCandidate({
     invocation = await invokeRuntimeResolved(runtime, {
       ...options,
       sessionId: session.id,
-      resume: session.resume,
+      resume: forceFreshSession ? false : session.resume,
       model: resolved.model,
       effort: resolved.effort,
     });
@@ -531,6 +540,10 @@ export async function executeProviderCandidates({
           sessions,
           resolved,
           options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
+          // A self-host invocation runs against a home provisioned just above
+          // and torn down in the `finally` below, so no prior session survives
+          // into it. Resuming would target state the home cannot contain.
+          forceFreshSession: selfHost !== undefined,
         });
         return invocation.result;
       } finally {

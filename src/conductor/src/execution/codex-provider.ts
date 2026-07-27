@@ -22,7 +22,7 @@ export const CODEX_RATE_LIMIT_RE =
 export const CODEX_MODEL_UNAVAILABLE_RE =
   /(?:requested |selected )?model .{0,80}(?:not found|unavailable|not available|unsupported|not supported)|unknown model|model not found|do not have access to (?:the )?model/i;
 export const CODEX_SESSION_EXPIRED_RE =
-  /(?:session|thread|conversation) (?:not found|does not exist|expired|invalid)|no conversation found|failed to resume|cannot resume/i;
+  /(?:session|thread|conversation) (?:not found|does not exist|expired|invalid)|no conversation found|no rollout found|thread\/resume failed|failed to resume|cannot resume/i;
 export const CODEX_PERMISSION_DECISION_RE =
   /(?:permission|approval|review).{0,80}(?:denied|unavailable|rejected|cancel(?:led|ed)|timed out|timeout|unknown result|failed to (?:produce|return) (?:an? )?decision|indeterminate|no decision)/i;
 

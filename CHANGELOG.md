@@ -94,6 +94,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Self-host provider dispatch no longer resumes a session into a freshly provisioned
+  isolated provider home. Each self-host invocation provisions its own throwaway home
+  (`/tmp/self-host-<provider>-<random>`) and tears it down afterwards, so no session or
+  rollout state survives into the next one — but the provider session scope still flipped
+  to `resume` after the first invocation of a step. Every subsequent self-host dispatch
+  then ran `codex exec resume <harness-uuid>` against an empty home and failed with
+  `thread/resume failed: no rollout found for thread id <id>`, which the Codex classifier
+  did not recognize as an expired session, so daemon `build` steps burned all their retries
+  and halted. Self-host invocations now always start a fresh session, and
+  `no rollout found` / `thread/resume failed` are classified as `sessionExpired` so the
+  existing session-reset heal path applies as a safety net. Non-self-host dispatch keeps
+  resuming within a step as before.
+
 - Codex readiness no longer reports `unverifiable` when `codex doctor` returns
   `overallStatus: "warning"`. `parseDoctorEvidence` accepted only `ok` and `fail`
   envelopes, so a `warning` envelope was discarded as unparseable and a perfectly
