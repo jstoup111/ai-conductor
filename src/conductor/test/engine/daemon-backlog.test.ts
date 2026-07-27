@@ -475,6 +475,81 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(backlog).toHaveLength(1);
     expect(backlog[0].tier).toBeUndefined();
   });
+
+  // Dated-plan/undated-marker mismatch: the plan stem carries a `YYYY-MM-DD-` prefix but the complexity/track
+  // markers were landed under the UNDATED stem, so the slug-keyed reads missed
+  // and the feature silently built as M/product — running steps its real tier
+  // and track would have skipped.
+  describe('date-prefix-relaxed metadata lookup', () => {
+    async function seedEligible(slug: string) {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+    }
+    async function seedTier(stem: string, tier: string) {
+      await mkdir(join(dir, '.docs/complexity'), { recursive: true });
+      await writeFile(join(dir, `.docs/complexity/${stem}.md`), `# Complexity\n\nTier: ${tier}\n`);
+    }
+    async function seedTrack(stem: string, value: string) {
+      await mkdir(join(dir, '.docs/track'), { recursive: true });
+      await writeFile(join(dir, `.docs/track/${stem}.md`), `# Track\n\nTrack: ${value}\n`);
+    }
+
+    it('resolves the live case: dated slug, undated markers → S / technical', async () => {
+      const slug = '2026-07-26-daemon-log-feature-tags-254';
+      await seedEligible(slug);
+      await seedTier('daemon-log-feature-tags-254', 'S');
+      await seedTrack('daemon-log-feature-tags-254', 'technical');
+
+      const [item] = await discover();
+      expect(item.tier).toBe('S');
+      expect(item.track).toBe('technical');
+    });
+
+    it('exact-slug markers still win over an undated same-base marker', async () => {
+      const slug = '2026-07-26-exact-wins';
+      await seedEligible(slug);
+      await seedTier(slug, 'L');
+      await seedTrack(slug, 'product');
+      await seedTier('exact-wins', 'S');
+      await seedTrack('exact-wins', 'technical');
+
+      const [item] = await discover();
+      expect(item.tier).toBe('L');
+      expect(item.track).toBe('product');
+    });
+
+    it('a genuine absence still yields undefined (daemon defaults downstream)', async () => {
+      await seedEligible('2026-07-26-no-markers');
+      const [item] = await discover();
+      expect(item.tier).toBeUndefined();
+      expect(item.track).toBeUndefined();
+    });
+
+    it('never guesses when two plans share one undated base (#407/#993)', async () => {
+      await seedEligible('2026-07-01-shared-base');
+      await seedEligible('2026-07-26-shared-base');
+      await seedTier('shared-base', 'S');
+      await seedTrack('shared-base', 'technical');
+
+      const items = await discover();
+      expect(items).toHaveLength(2);
+      for (const item of items) {
+        expect(item.tier).toBeUndefined();
+        expect(item.track).toBeUndefined();
+      }
+    });
+
+    it('logs the paths tried when tier/track fall back to a default', async () => {
+      await seedEligible('2026-07-26-observable-miss');
+      const logs: string[] = [];
+      await discover(undefined, (m) => logs.push(m));
+      const joined = logs.join('\n');
+      expect(joined).toMatch(/\.docs\/complexity\/2026-07-26-observable-miss\.md/);
+      expect(joined).toMatch(/\.docs\/complexity\/observable-miss\.md/);
+      expect(joined).toMatch(/\.docs\/track\/2026-07-26-observable-miss\.md/);
+      expect(joined).toMatch(/\.docs\/track\/observable-miss\.md/);
+    });
+  });
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
