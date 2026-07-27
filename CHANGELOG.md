@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
+  of reading only the project file, so daemon-only operators no longer lose user-level settings that
+  every other entry point already applied ([implementation PR #1031](https://github.com/jstoup111/ai-conductor/pull/1031)).
 - A resumed feature no longer parks forever with `loop exited without a terminal verdict` without ever
   dispatching a session. The resume clamp decides which step to re-enter from the on-disk gate verdicts,
   but the loop admits a step by reading `conduct-state.json` — so when a step's verdict said satisfied

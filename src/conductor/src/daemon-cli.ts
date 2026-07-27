@@ -37,7 +37,7 @@ import { Conductor } from './engine/conductor.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
-import { loadConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
+import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
 import { readLastResolvedCount } from './engine/task-evidence.js';
 import { countResolvedTasks } from './engine/task-progress.js';
@@ -494,7 +494,7 @@ export function buildProgressReKickDeps(
  */
 export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   const { projectRoot, showCompleted } = opts;
-  const configResult = await loadConfig(projectRoot);
+  const configResult = await loadMergedConfig(projectRoot);
   if (!configResult.ok && configResult.error.type !== 'missing') {
     throw new Error(`Config error: ${configResult.error.message}`);
   }
