@@ -1437,6 +1437,32 @@ complexity:
       expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
     });
 
+    it('drops an invalid enabled value while retaining perTaskFloor', () => {
+      const result = validateConfig({
+        build_review: { enabled: 'banana', perTaskFloor: false },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: true, perTaskFloor: false },
+        warnings: [expect.stringMatching(/build_review\.enabled/)],
+      });
+    });
+
+    it('drops an invalid perTaskFloor value while retaining enabled', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, perTaskFloor: 'sometimes' },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/build_review\.perTaskFloor/)],
+      });
+    });
+
     it('never throws — always returns ok: true', () => {
       const testCases = [
         { build_review: { enabled: true } },
