@@ -38,7 +38,7 @@ Nineteen entries. Alphabetized; the four with no code reference are marked.
 | `audits/` | free-form JSON | a one-off backfill | `shipment-audit.ts` — one hardcoded path, nothing else |
 | `coherence/` | `<plan-stem>.md` | `coherence-check` skill (M and L tiers only) | `coherence_check` completion glob; the land-time coherence validator |
 | `coherence-waivers/` | `<plan-stem>.md` | operator, hand-authored | the land-time coherence waiver check. The directory appears when the first waiver is committed — see below |
-| `complexity/` | `<slug>.md` | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
+| `complexity/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `complexity` step, engineer loop | `parseComplexityTier` reads a `Tier: <S\|M\|L>` line. Missing ⇒ the daemon defaults to `M`; other paths differ — see [where the tier comes from](steps.md#where-the-tier-comes-from). The land gate enforces tier agreement |
 | `conflicts/` | `YYYY-MM-DD-<slug>.md` | `conflict-check` skill | `conflict_check` completion glob |
 | `decisions/` | `adr-<topic>.md`, `adr-YYYY-MM-DD-<topic>.md`, `NNN-<topic>.md`, `architecture-review-*.md`, `technical-assessment-*.md` | `architecture-review`, `assess`, `bootstrap`, `prd`, `simplify`, `debugging`, `finish` | `architecture_review` and `assess` completion globs; the land gate scans every `adr-*.md` for draft status |
 | `intake/` | `<plan-stem>.md` | `intake` skill | `parseIntakeSourceRef` reads `Source-Ref: owner/repo#N`; `Owner: <id>` drives the daemon owner gate |
@@ -51,7 +51,7 @@ Nineteen entries. Alphabetized; the four with no code reference are marked.
 | `shipped/` | `<plan-stem>.md` | `conduct-ts shipped-record` | daemon backlog dedup; the only input to `conduct-ts kpi` |
 | `specs/` | `YYYY-MM-DD-<slug>.md` | `prd` skill (product track only) | `prd` completion glob; protected-artifact seal |
 | `stories/` | `YYYY-MM-DD-<slug>.md`, plus `epics/` and `features/<name>/` subdirs | `stories` skill | `stories` completion glob; plan-coverage check; coherence rows; protected-artifact seal |
-| `track/` | `<slug>.md` | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run |
+| `track/` | `<slug>.md`, with an [undated-stem fallback](#the-undated-stem-fallback) | `explore` skill | `parseTrack` reads a `Track: product\|technical` line. Missing ⇒ defaults to `product`. Decides whether `prd` and `prd_audit` run |
 
 Every entry above is committed.
 
@@ -68,6 +68,18 @@ Artifacts are keyed by the **plan stem**: the plan file's basename with only a t
 Interior dots survive, so `.docs/plans/phase-9.3b-intake.md` has the stem `phase-9.3b-intake`. That stem
 is the shared key across the daemon backlog, the interactive conduct path, and the land gate — and the
 filename of the matching `complexity/`, `track/`, `intake/`, `coherence/`, and `shipped/` entries.
+
+#### The undated-stem fallback
+
+Exactly two entries get a relaxed second lookup, and only in the daemon's backlog discovery:
+`complexity/` and `track/`. When `<stem>.md` is absent and the stem carries a leading `YYYY-MM-DD-`
+date, the daemon retries under the date-stripped stem — but only when exactly one plan maps to that
+undated base. Two plans sharing one undated base refuse the fallback rather than guess between features.
+
+The exact stem always wins. A marker that resolves to nothing after both attempts logs the paths it
+tried to `daemon.log`, once per slug, before the daemon applies its default — so the miss is visible in
+the log rather than hours later as gate behavior. The relaxed stem is a lookup key only; it never keys
+state, and no other artifact gets it.
 
 ### Waiver grammar
 
@@ -454,6 +466,30 @@ Rotation has a 1 MB cap applied **only at open time**, so a long-running daemon 
 The log carries every daemon `log()` line, rendered inner-loop events, `console.warn` and
 `console.error` tee'd with `[warn]`/`[error]` prefixes and ANSI stripped, and the startup dashboard
 snapshot — which deliberately omits the PROCESSED group the console version shows with `--completed`.
+
+#### Line shapes
+
+Every daemon line carries the `[daemon]` prefix. A line a feature owns carries its slug tag
+immediately after, with no space between the two:
+
+| Owner | Shape |
+| --- | --- |
+| The daemon itself — discovery, sweeps, lock, restart | `[daemon] <message>` |
+| One feature run — lifecycle records, rendered loop events, provider warnings, subprocess diagnostics | `[daemon][<slug>] <message>` |
+
+The slug is bounded to 24 display characters: a longer one is cut to 23 and closed with `…`. A
+multi-line message is split first, so every physical line gets its own prefix, tag, and timestamp
+rather than only the first.
+
+Feature-owned tagging is attribution, not routing — both shapes land in the same file and on the same
+console. Untagged lines are the ones emitted directly on the daemon-wide bus; an event forwarded from a
+feature's own bus renders once, tagged.
+
+Lifecycle transitions are deduplicated per slug across both sinks: a repeated `▶ start` or an `■ done`
+repeating the recorded outcome is dropped, and `↻ resume` always prints with `(was: <status>)`
+appended. A line counts as a transition only when the glyph opens the message, behind at most a
+bracketed tag and ANSI codes — so a line that merely quotes another feature's lifecycle text cannot
+suppress that feature's real transition.
 
 Read it with `conduct-ts daemon logs`; flags are in [cli](cli.md).
 

@@ -86,7 +86,7 @@ Pick the branch that matches where the implementation is. Every one of them ends
 > to local cache for <slug>: <reason>` — and **exits 0**. A clean exit does not mean a record was
 > written, and dedup silently falls back to the local `.daemon/processed/` cache, which a later
 > daemon on another checkout does not see. Always verify with `git cat-file -e` (see
-> [Verification](#verification)). Not yet filed.
+> [Verification](#verification)). Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023).
 
 ### The implementation branch has not merged yet
 
@@ -121,7 +121,8 @@ Use `--pr local` instead of a URL for a merge-local finish. Never run it for a `
 > The zero is written verbatim into every committed shipped record and re-read by `conduct-ts
 > kpi` — a halt count of 0 in a shipped record proves nothing about whether the feature halted.
 > Read `.pipeline/HALT` and the daemon log instead. The per-provider breakdown is written but
-> never surfaced: `conduct-ts kpi` has no parser for the `providers:` lines. Not yet filed.
+> never surfaced: `conduct-ts kpi` has no parser for the `providers:` lines.
+> Tracked in [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 
 Then push, and merge the PR. The record rides in with the code, so the merge lands the
 implementation and the shipped fact atomically:

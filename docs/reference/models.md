@@ -47,35 +47,35 @@ not a tuning knob.
 
 26 steps appear in every policy record. Effort is **shared** between the two providers: both
 `CLAUDE_MODEL_POLICY` and `CODEX_MODEL_POLICY` point at the same `STEP_EFFORTS` object
-(`src/conductor/src/engine/provider-model-policy.ts:90-117, 136, 152`).
+(`src/conductor/src/engine/provider-model-policy.ts:90-117, 141, 157`).
 
 | Step | Claude model | Codex model | Effort | Retries | Review |
 | --- | --- | --- | --- | --- | --- |
 | `bootstrap` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `memory` | haiku | gpt-5.6-luna | low | 1 | auto |
 | `assess` | sonnet | gpt-5.6-terra | high | 3 | manual |
-| `explore` | fable | gpt-5.6-sol | high | 3 | manual |
+| `explore` | opus | gpt-5.6-sol | high | 3 | manual |
 | `prd` | fable | gpt-5.6-sol | high | 3 | manual |
 | `complexity` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `stories` | sonnet | gpt-5.6-terra | medium | 3 | manual |
-| `conflict_check` | sonnet | gpt-5.6-terra | medium | 3 | conditional |
-| `plan` | sonnet | gpt-5.6-terra | high | 3 | manual |
+| `conflict_check` | opus | gpt-5.6-terra | medium | 3 | conditional |
+| `plan` | opus | gpt-5.6-terra | high | 3 | manual |
 | `coherence_check` | sonnet | gpt-5.6-terra | medium | 3 | conditional |
 | `architecture_diagram` | sonnet | gpt-5.6-terra | medium | 3 | auto |
 | `architecture_review` | fable | gpt-5.6-sol | high | 5 | conditional |
 | `worktree` | haiku | gpt-5.6-luna | low | 1 | auto |
-| `acceptance_specs` | sonnet | gpt-5.6-terra | medium | 3 | auto |
-| `build` | sonnet | gpt-5.6-terra | low | 3 | auto |
-| `build_review` | opus | gpt-5.6-sol | high | 3 | conditional |
+| `acceptance_specs` | opus | gpt-5.6-sol | medium | 3 | auto |
+| `build` | sonnet | gpt-5.6-terra | medium | 3 | auto |
+| `build_review` | fable | gpt-5.6-sol | high | 3 | conditional |
 | `wiring_check` | sonnet | gpt-5.6-terra | low | 3 | auto |
 | `test_suite` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `manual_test` | sonnet | gpt-5.6-terra | medium | 3 | auto |
-| `prd_audit` | opus | gpt-5.6-sol | high | 3 | conditional |
-| `architecture_review_as_built` | sonnet | gpt-5.6-terra | medium | 3 | conditional |
+| `prd_audit` | fable | gpt-5.6-sol | high | 3 | conditional |
+| `architecture_review_as_built` | fable | gpt-5.6-sol | high | 3 | conditional |
 | `retro` | sonnet | gpt-5.6-terra | medium | 3 | manual |
-| `rebase` | fable | gpt-5.6-sol | max | 1 | auto |
-| `finish` | haiku | gpt-5.6-luna | low | 1 | auto |
-| `remediate` | fable | gpt-5.6-sol | high | 3 | auto |
+| `rebase` | opus | gpt-5.6-terra | high | 1 | auto |
+| `finish` | haiku | gpt-5.6-luna | medium | 1 | auto |
+| `remediate` | fable | gpt-5.6-sol | medium | 3 | auto |
 | `attribution_verify` | opus | gpt-5.6-sol | high | 3 | auto |
 
 Sources: `provider-model-policy.ts:32-59` (Claude models), `:61-88` (Codex models), `:90-117` (efforts),
@@ -102,16 +102,17 @@ generative verdict to review. See [artifacts](artifacts.md).
 
 ## Tier overrides
 
-Five steps carry policy-level tier overrides. `COMMON_TIER_OVERRIDES`
-(`provider-model-policy.ts:119-133`) supplies four; each provider policy then adds its own `plan: L` and
-`conflict_check: L` entries (`:138-145` for Claude, `:154-161` for Codex).
+Six steps carry policy-level tier overrides. `COMMON_TIER_OVERRIDES`
+(`provider-model-policy.ts:119-137`) supplies five; each provider policy then adds its own `plan: L` and
+`conflict_check: L` entries (`:142-149` for Claude, `:158-165` for Codex).
 
 | Step | S | M | L (Claude) | L (Codex) |
 | --- | --- | --- | --- | --- |
 | `stories` | effort `low` | — | effort `high` | effort `high` |
 | `explore` | effort `low` | — | — | — |
 | `plan` | effort `medium`, `max_retries` 3 | — | effort `xhigh`, model `fable` | effort `xhigh`, model `gpt-5.6-sol` |
-| `build` | `max_retries` 3 | — | — | — |
+| `acceptance_specs` | — | — | effort `high` | effort `high` |
+| `build` | `max_retries` 3 | — | effort `high` | effort `high` |
 | `conflict_check` | — | — | model `fable` | model `gpt-5.6-sol` |
 
 Every other step resolves identically across all three tiers. Which steps a tier *skips* is a separate
@@ -126,10 +127,10 @@ concern — see [steps](steps.md).
 | `modelFallbackLadder` | `fable`, `opus`, `sonnet` | `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna` |
 
 Both policies are deep-frozen (`provider-model-policy.ts:22-30`) and registered in
-`BUILT_IN_PROVIDER_MODEL_POLICIES` (`:167-172`). `resolveProviderModelPolicy(key, warn?)` returns the
+`BUILT_IN_PROVIDER_MODEL_POLICIES` (`:171-176`). `resolveProviderModelPolicy(key, warn?)` returns the
 Claude policy for any other key and emits
 `Unknown provider "<key>": Claude-compatible model defaults are being used; add a provider model policy
-for "<key>".` (`:178-190`). No cross-provider alias translation happens: a model name is only ever
+for "<key>".` (`:182-194`). No cross-provider alias translation happens: a model name is only ever
 interpreted inside its own provider's family.
 
 Selecting a provider is covered in [multiprovider](../guides/multiprovider.md); the `llm_provider` key
@@ -137,7 +138,7 @@ itself is in [configuration](configuration.md).
 
 `model_fallback_ladder` in config replaces the policy ladder wholesale:
 `this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder`
-(`src/conductor/src/engine/step-runners.ts:380`).
+(`src/conductor/src/engine/step-runners.ts:384`).
 
 ## Escalation on retry
 
@@ -175,14 +176,14 @@ model and effort values are dropped, because they were authored for the inherite
 
 `--model <name>` overrides the model for **every** step and beats every other source. Registered at
 `src/conductor/src/cli.ts:63`, plumbed through `cli.ts:353` → `src/conductor/src/index.ts:1007` →
-`step-runners.ts:414` → `resolved-config.ts:244`. It is also passed down to the provider CLIs
-(`src/conductor/src/execution/claude-provider.ts:651`,
-`src/conductor/src/execution/codex-provider.ts:479`). Flag semantics live in [cli](cli.md).
+`step-runners.ts:418` → `resolved-config.ts:244`. It is also passed down to the provider CLIs
+(`src/conductor/src/execution/claude-provider.ts:668`,
+`src/conductor/src/execution/codex-provider.ts:493`). Flag semantics live in [cli](cli.md).
 
 There is no `--tier` flag; the tier comes from conductor state.
 
 > **Known limitation.** `ResolveOptions.effortCliOverride` (`resolved-config.ts:132-133`) and
-> `StepRunner.effortOverride` (`step-runners.ts:265-266`) are both documented as the CLI `--effort`
+> `StepRunner.effortOverride` (`step-runners.ts:267-268`) are both documented as the CLI `--effort`
 > override, and both sit at the top of the effort precedence chain — but `src/conductor/src/cli.ts`
 > registers no `--effort` option. The seam is reachable only from in-process callers. To change effort,
 > set `defaults.effort` or a per-step `effort` in config. Tracked in
@@ -191,7 +192,7 @@ There is no `--tier` flag; the tier comes from conductor state.
 ## How effort reaches the model
 
 Resolved effort is passed to the child process as the `CLAUDE_CODE_EFFORT_LEVEL` environment variable
-(`src/conductor/src/execution/claude-provider.ts:671`). It is never read from the ambient environment.
+(`src/conductor/src/execution/claude-provider.ts:688`). It is never read from the ambient environment.
 That mechanism is used deliberately: it overrides both `settings.json` and skill frontmatter, and it
 cascades to subagents. When neither an effort nor a self-host env overlay is present, `buildEnv` returns
 `undefined` and the child inherits the parent environment unchanged. See
