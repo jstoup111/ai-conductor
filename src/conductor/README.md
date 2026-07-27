@@ -20,6 +20,14 @@ Documentation for this package lives in the repository's `docs/` tree, not here.
 
 Runnable end-to-end scenarios exercising this engine: [`examples/README.md`](../../examples/README.md).
 
+## Build liveness and completion
+
+During a build retry loop, the attributed-task count is advisory routing and telemetry: it can
+under-count work that landed without a `Task:` trailer. Commit movement during the same attempt is
+the liveness authority, so a pinned count alone cannot classify a build as stalled. When a retry
+budget exhausts after real work landed, `build_review` is the completion authority: it grades the
+actual diff against the plan and can either pass the build forward or fail it back for remediation.
+
 ## Build and test
 
 ```bash
