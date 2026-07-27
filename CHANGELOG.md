@@ -14,7 +14,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 - `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
   of reading only the project file, so daemon-only operators no longer lose user-level settings that
-  every other entry point already applied ({{IMPLEMENTATION_PR}}).
+  every other entry point already applied ([implementation PR #1031](https://github.com/jstoup111/ai-conductor/pull/1031)).
 - A feature no longer halts BUILD/SHIP because it rebased onto a base branch that changed or added
   someone else's protected DECIDE artifact. The protected-artifact seal is immutable from first BUILD
   entry, so it went stale the moment any other feature's pull request merged, and an operator had to
