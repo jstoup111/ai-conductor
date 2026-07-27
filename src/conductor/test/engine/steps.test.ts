@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type { StepName, ComplexityTier } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import {
@@ -13,7 +13,11 @@ import {
   isCheckpointStep,
   getPrerequisites,
   buildStepRegistry,
+  tryGetStepIndex,
+  __resetCustomStepRegistrations,
 } from '../../src/engine/steps.js';
+import { phaseForStep } from '../../src/engine/resolved-config.js';
+import { isGatingStep } from '../../src/engine/gates.js';
 
 describe('engine/steps', () => {
   // --- ALL_STEPS exact order ---
@@ -639,5 +643,121 @@ describe('shouldSkipForBootstrapMode', () => {
     for (const step of nonAssessSteps) {
       expect(shouldSkipForBootstrapMode(step, 'new')).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Custom (config-declared) step resolution — regression for the hard crash
+// `Error: Unknown step: maintain-documentation`, which halted a run AFTER the
+// step had been correctly scheduled and dispatched from `buildStepRegistry`.
+// The registry knew the step; the by-name lookups (`getStepDefinition` and its
+// dependents `phaseForStep` / `isGatingStep`) consulted only the static table.
+// ---------------------------------------------------------------------------
+
+describe('custom step definition resolution', () => {
+  const MAINTAIN_DOCS = 'maintain-documentation' as StepName;
+
+  // Mirrors .ai-conductor/config.yml's live declaration.
+  const config: HarnessConfig = {
+    steps: {
+      'maintain-documentation': {
+        after: 'rebase',
+        skill: '.agents/skills/maintain-documentation/SKILL.md',
+        enforcement: 'gating',
+      },
+    },
+  };
+
+  beforeEach(() => {
+    __resetCustomStepRegistrations();
+  });
+
+  afterEach(() => {
+    __resetCustomStepRegistrations();
+  });
+
+  it('is unresolvable by name until its config has been assembled', () => {
+    // Nothing has declared it yet: a bare name is indistinguishable from a typo.
+    expect(() => getStepDefinition(MAINTAIN_DOCS)).toThrow(
+      'Unknown step: maintain-documentation',
+    );
+  });
+
+  it('resolves by name once buildStepRegistry has assembled its config', () => {
+    buildStepRegistry(config);
+
+    const def = getStepDefinition(MAINTAIN_DOCS);
+    expect(def.name).toBe(MAINTAIN_DOCS);
+    expect(def.skillName).toBe('.agents/skills/maintain-documentation/SKILL.md');
+    expect(def.enforcement).toBe('gating');
+    expect(def.prerequisites).toEqual(['rebase']);
+    // Phase is inherited from the `after:` target (rebase is SHIP).
+    expect(def.phase).toBe('SHIP');
+  });
+
+  it('unblocks the by-name lookups that actually threw during dispatch', () => {
+    buildStepRegistry(config);
+
+    // conductor.ts dispatch guard (`phaseForStep(step.name)`) — the first
+    // unguarded name-based resolution after `step_started` is emitted.
+    expect(phaseForStep(MAINTAIN_DOCS)).toBe('SHIP');
+    // gates.ts enforcement lookup.
+    expect(isGatingStep(MAINTAIN_DOCS)).toBe(true);
+  });
+
+  it('still throws for a step name that no config declared (typo guard)', () => {
+    buildStepRegistry(config);
+
+    expect(() => getStepDefinition('maintain-documentaton' as StepName)).toThrow(
+      'Unknown step: maintain-documentaton',
+    );
+    expect(() => getStepDefinition('nonexistent' as StepName)).toThrow(
+      'Unknown step: nonexistent',
+    );
+    expect(() => phaseForStep('nonexistent' as StepName)).toThrow(
+      'Unknown step: nonexistent',
+    );
+  });
+
+  it('orders the custom step immediately after its `after:` target', () => {
+    const registry = buildStepRegistry(config);
+    const names = registry.map((s) => s.name);
+
+    expect(names.indexOf(MAINTAIN_DOCS)).toBe(names.indexOf('rebase') + 1);
+    // Ordering is registry-relative; the custom step is inserted, not appended.
+    expect(names.indexOf('finish')).toBe(names.indexOf(MAINTAIN_DOCS) + 1);
+    expect(registry).toHaveLength(ALL_STEPS.length + 1);
+  });
+
+  it('claims no slot in the static linear index space', () => {
+    buildStepRegistry(config);
+
+    // A custom step has no position in ALL_STEPS, exactly like an out-of-band
+    // step. Fabricating one here would silently corrupt any static-index
+    // comparison; every ordering decision is registry-relative instead.
+    expect(tryGetStepIndex(MAINTAIN_DOCS)).toBeNull();
+    // Built-in index space is untouched by the registration.
+    expect(getStepIndex('worktree')).toBe(0);
+    expect(getStepIndex('rebase')).toBe(ALL_STEPS.length - 2);
+    expect(getStepIndex('finish')).toBe(ALL_STEPS.length - 1);
+  });
+
+  it('leaves built-in and out-of-band resolution unchanged', () => {
+    buildStepRegistry(config);
+
+    expect(getStepDefinition('build').name).toBe('build');
+    expect(getStepDefinition('build').isCheckpoint).toBe(true);
+    expect(getStepDefinition('rebase').phase).toBe('SHIP');
+    // Out-of-band steps still resolve through OUT_OF_BAND_STEPS.
+    expect(getStepDefinition('remediate' as StepName).label).toBe('Remediate');
+    expect(phaseForStep('build')).toBe('BUILD');
+    expect(isGatingStep('build')).toBe(false); // built-in build is 'structural'
+  });
+
+  it('does not let a built-in override be mistaken for a custom step', () => {
+    // `steps.build` is a per-step override, not an addition — it must not be
+    // registered as a custom definition and must not shadow the built-in.
+    buildStepRegistry({ steps: { build: { enforcement: 'advisory' } } });
+    expect(getStepDefinition('build').enforcement).toBe('structural');
   });
 });
