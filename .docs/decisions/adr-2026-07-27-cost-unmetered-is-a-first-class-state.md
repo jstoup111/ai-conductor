@@ -2,7 +2,7 @@
 
 Status: APPROVED
 Date: 2026-07-27
-Feature: 2026-07-27-codex-usage-metering-and-cost-attribution-906 (#906, absorbs #1008)
+Feature: 2026-07-27-codex-usage-metering-and-cost-attribution-906 (#906, absorbs one #1008 facet)
 
 ## Context
 

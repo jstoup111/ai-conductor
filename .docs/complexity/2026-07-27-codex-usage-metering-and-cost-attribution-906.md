@@ -1,4 +1,4 @@
-# Complexity: Codex usage metering and cost attribution (#906, absorbs #1008)
+# Complexity: Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
 Tier: L
 

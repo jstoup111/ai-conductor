@@ -1,4 +1,4 @@
-# Implementation Plan: Codex usage metering and cost attribution (#906, absorbs #1008)
+# Implementation Plan: Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
 **Date:** 2026-07-27
 **Design:** Technical track; tier L — full architecture review
@@ -7,7 +7,7 @@
 **Architecture:** `.docs/architecture/2026-07-27-codex-usage-metering-and-cost-attribution-906.md`
 **ADRs:** `adr-2026-07-27-cost-unmetered-is-a-first-class-state.md`,
 `adr-2026-07-27-additive-cost-block-evolution-and-split-aggregates.md`
-**Source:** jstoup111/ai-conductor#906 (absorbs jstoup111/ai-conductor#1008)
+**Source:** jstoup111/ai-conductor#906 (absorbs the KPI-rendering facet of jstoup111/ai-conductor#1008; do NOT add `Closes #1008`)
 
 ## Summary
 
@@ -213,7 +213,7 @@ Test seams are the exported pure helpers (`parseCodexJsonl`, the classifier, `pa
 
 ---
 
-### Task 8: Render per-provider attribution and the six hidden fields (#1008)
+### Task 8: Render per-provider attribution and the six hidden fields (one #1008 facet)
 **Story:** 6 — `conduct kpi` renders per-provider and previously-hidden fields — HP-1, HP-2, NP-1
 **Type:** happy-path
 
@@ -264,7 +264,9 @@ Test seams are the exported pure helpers (`parseCodexJsonl`, the classifier, `pa
 
 **Steps:**
 1. Document `cost_unmetered` (top-level and per-provider) in `docs/reference/artifacts.md` and
-   **remove** the #1008 "Known limitation" note at lines 534-540, which Task 8 makes untrue.
+   **remove** the "Known limitation" note at lines 534-540, which Task 8 makes untrue. Remove
+   ONLY that note — the other three #1008 notes (lines 299, 457, 515) remain true. Do **not** put
+   `Closes #1008` in the PR body; #1008 is an umbrella issue that stays open.
 2. Update the `conduct-ts kpi` entry in `docs/reference/cli.md` for the new output.
 3. Add a `CHANGELOG.md` `[Unreleased]` entry — this is a notable reader-visible implementation
    change. **Do not touch `VERSION`** (repo is version-locked pre-v1).

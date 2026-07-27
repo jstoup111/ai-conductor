@@ -2,7 +2,7 @@
 
 Status: APPROVED
 Date: 2026-07-27
-Feature: 2026-07-27-codex-usage-metering-and-cost-attribution-906 (#906, absorbs #1008)
+Feature: 2026-07-27-codex-usage-metering-and-cost-attribution-906 (#906, absorbs one #1008 facet)
 
 ## Context
 
@@ -23,10 +23,11 @@ Two further facts constrain the design:
    Once Codex is correctly flagged, every mixed-provider feature becomes partial — and this
    repo builds on Codex — so a naive change would empty the KPI aggregate entirely.
 
-2. **#1008 already documents the reporting half of this gap.** `docs/reference/artifacts.md:534-540`
-   records that six parsed fields are never rendered and that the `providers:` sub-block "has no
-   parser at all". #906 absorbs that scope, so the writer and reader are being changed together
-   anyway — the right moment to fix the contract once rather than twice.
+2. **One facet of the #1008 umbrella already documents the reporting half of this gap.**
+   `docs/reference/artifacts.md:534-540` records that six parsed fields are never rendered and
+   that the `providers:` sub-block "has no parser at all". #906 absorbs **that facet only**, since
+   the writer and reader are being changed together anyway — the right moment to fix the contract
+   once rather than twice. #1008's other three documented facets are untouched.
 
 ## Decision
 
@@ -61,12 +62,24 @@ Feature lines render the distinction explicitly rather than with one undifferent
 `[PARTIAL]` marker, so an operator can tell "we failed to measure this" from "this provider
 has no per-run price".
 
-### 3. #1008's rendering gap is closed in the same change
+### 3. #1008's *rendering* facet is fixed in the same change; the issue itself stays open
 
 `conduct kpi` gains a parser and renderer for the `providers:` sub-block and surfaces the six
 recorded-but-unrendered fields (`cacheRead`, `cacheCreation`, `dispatches`, `retries`, `halts`,
 `unmeteredDurationMs`). The "Known limitation" note at `docs/reference/artifacts.md:534-540` is
-removed in the same PR, and #1008 closes as covered.
+removed in the same PR.
+
+**#1008 is an umbrella issue and does NOT close here.** Its title concerns unregistered event
+types, and `docs/reference/artifacts.md` points **four** separate limitation notes at it
+(lines 299, 457, 515, 540). This feature resolves exactly one — the KPI rendering note at 540.
+The other three remain open, in particular the halt-count facet at 457: `cost-rollup.halts`
+counts a `loop_halt` event type that is never registered, so it is **permanently 0** and that
+zero is committed into the very `## Cost` block this feature touches. That is adjacent work on
+the same lines, deliberately not absorbed, because fixing it means correcting event-type
+registration rather than cost accounting.
+
+Consequence for implementation: **do not add a `Closes #1008` to this PR** — reference it, and
+remove only the one note this feature makes untrue.
 
 This is a deliberate scope merge: leaving it out would ship a per-provider cost-metering state
 that no reporting surface can display, which is not a completed outcome.

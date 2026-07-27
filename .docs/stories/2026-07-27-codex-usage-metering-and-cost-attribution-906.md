@@ -1,6 +1,6 @@
-# Stories — Codex usage metering and cost attribution (#906, absorbs #1008)
+# Stories — Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
-Track: technical. Tier: L. Source: jstoup111/ai-conductor#906 (absorbs jstoup111/ai-conductor#1008).
+Track: technical. Tier: L. Source: jstoup111/ai-conductor#906 (absorbs the KPI-rendering facet of jstoup111/ai-conductor#1008; that umbrella issue stays open).
 Acceptance criteria are the Given/When/Then scenarios below (no PRD on the technical track).
 
 > Note: #906's "Observed" section is stale — `parseCodexJsonl` already parses
@@ -140,7 +140,7 @@ As an operator, I keep a meaningful KPI aggregate even though this repo builds o
 
 ---
 
-## Story 6 — `conduct kpi` renders per-provider and previously-hidden fields (#1008)
+## Story 6 — `conduct kpi` renders per-provider and previously-hidden fields (one #1008 facet)
 
 As an operator, I can see per-provider attribution and cache spend from the KPI command instead of
 reading the markdown by hand.
@@ -193,8 +193,9 @@ As a reader, the documented cost contract matches what the code writes.
 **Happy path**
 - **Given** the `## Cost` block gains a field and `conduct kpi` gains output,
 - **When** the PR lands,
-- **Then** `docs/reference/artifacts.md` documents `cost_unmetered` and drops the #1008 limitation
-  note, and `docs/reference/cli.md`'s `conduct-ts kpi` entry reflects the new output,
+- **Then** `docs/reference/artifacts.md` documents `cost_unmetered` and drops **only** the KPI
+  limitation note at lines 534-540 (the other three #1008 notes stay, and the PR does not close
+  #1008), and `docs/reference/cli.md`'s `conduct-ts kpi` entry reflects the new output,
 - **And** per this repo's documentation rule, the change ships in the same PR.
 
 ---

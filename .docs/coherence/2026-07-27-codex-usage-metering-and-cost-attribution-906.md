@@ -1,4 +1,4 @@
-# Coherence Mapping: Codex usage metering and cost attribution (#906, absorbs #1008)
+# Coherence Mapping: Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
 **Date:** 2026-07-27 · Tier L · technical track · intake jstoup111/ai-conductor#906
 **Stories:** `.docs/stories/2026-07-27-codex-usage-metering-and-cost-attribution-906.md`
@@ -53,13 +53,19 @@ unchanged; story 4 NP-1 pins that a `## Cost` block committed before this change
 story 5 keeps mixed-provider features contributing to token aggregates rather than dropping out
 of the KPI entirely.
 
-## Absorbed scope (#1008)
+## Absorbed scope (one facet of #1008)
 
-Story 6 and task 8 implement #1008 — `conduct kpi` rendering the `providers:` sub-block and the
-six recorded-but-unrendered fields documented at `docs/reference/artifacts.md:534-540`. This is
-**not** an outcome row: #1008 is a separate issue absorbed by operator decision, not a desired
-outcome of #906. It is traced here so the extra story and task are not orphans, and task 10
-removes the limitation note so the docs stop describing a gap that no longer exists.
+Story 6 and task 8 implement **one facet** of #1008 — `conduct kpi` rendering the `providers:`
+sub-block and the six recorded-but-unrendered fields documented at
+`docs/reference/artifacts.md:534-540`. This is **not** an outcome row: it is a separate issue's
+scope absorbed by operator decision, not a desired outcome of #906. It is traced here so the
+extra story and task are not orphans, and task 10 removes that one limitation note.
+
+**#1008 does not close with this feature.** It is an umbrella issue whose title concerns
+unregistered event types, and `docs/reference/artifacts.md` points four separate limitation
+notes at it (lines 299, 457, 515, 540). Only 540 is resolved here. The PR must reference #1008,
+not close it — see conflict C4 for the residual overlap with the halt-count facet at line 457,
+which writes into the same `## Cost` block.
 
 ## Drift and duplication checks
 
@@ -67,7 +73,8 @@ removes the limitation note so the docs stop describing a gap that no longer exi
   waiver step is compliance with an existing repo gate, not new behavior.
 - **Duplicate spec** — partial overlap found and resolved: `parseCodexJsonl` already exists, so
   outcome-1 is not greenfield. Recorded in architecture review F1 and in the outcome-1 note.
-- **Scope collision** — #1008 owned part of this; absorbed deliberately, closed by story 6.
+- **Scope collision** — one #1008 facet overlapped; absorbed deliberately by story 6. #1008
+  itself stays open (three other facets); this PR references it rather than closing it.
 - **Coverage-table contradiction** — none; every story maps to at least one task, and every task
   cites exactly one story.
 - **Negative-path presence** — every story carries at least one negative path; stories 3 and 4

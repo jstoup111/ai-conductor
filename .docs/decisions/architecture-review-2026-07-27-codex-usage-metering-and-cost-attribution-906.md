@@ -1,4 +1,4 @@
-# Architecture Review — Codex usage metering and cost attribution (#906, absorbs #1008)
+# Architecture Review — Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
 Status: APPROVED
 Date: 2026-07-27

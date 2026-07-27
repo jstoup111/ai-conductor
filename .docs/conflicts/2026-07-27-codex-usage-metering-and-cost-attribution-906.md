@@ -1,4 +1,4 @@
-# Conflict Check — Codex usage metering and cost attribution (#906, absorbs #1008)
+# Conflict Check — Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
 Status: Accepted
 Date: 2026-07-27
@@ -54,13 +54,22 @@ and the frontmatter byte-stable, because `parseShippedRecord` feeds discovery de
 `parseShippedRecord` never reads (documented at `shipped-record.ts:140-145`). S4's fourth
 negative path pins that dedup parsing is unaffected.
 
-### C4 — Scope overlap with #1008 (resolved by absorption)
-#1008 owns "`conduct kpi` cannot render the `providers:` sub-block or six recorded fields"
-(`docs/reference/artifacts.md:534-540`). S6 implements exactly that.
+### C4 — Partial scope overlap with the #1008 umbrella (one facet absorbed, three left open)
+`docs/reference/artifacts.md` points **four** separate "Known limitation" notes at #1008
+(lines 299, 457, 515, 540), and the issue's own title is about unregistered event types. Only
+the note at 540 — "`conduct kpi` cannot render the `providers:` sub-block or six recorded
+fields" — is what S6 implements.
 
-**Managed by:** the operator explicitly chose to absorb #1008 rather than fence it out. S6
-requires removing the limitation note; #1008 closes as covered by this PR. Without absorption
-this feature would ship a per-provider metering state no surface could display.
+**Managed by:** the operator chose to absorb that one facet rather than fence it out, because
+this feature is already changing the same writer/reader pair. S6 removes **only** the 540 note.
+**#1008 stays open** and this PR must not carry `Closes #1008`.
+
+**Residual risk — the halt-count facet touches the same block.** The note at line 457 records
+that `cost-rollup.halts` counts a `loop_halt` type that is never registered, so `halts:` is
+permanently `0` in every committed `## Cost` block — the same block S4/S5 modify. Not absorbed:
+fixing it means correcting event-type registration, not cost accounting. But whoever takes that
+work will edit adjacent lines, so it must land after this feature or rebase onto it. S6 renders
+`halts` faithfully — it must render the recorded value, not paper over the known-zero.
 
 ### C5 — Overlap with the #904/#905/#907 codex family (no contention)
 Those features repeatedly fenced usage accounting **out** and into #906

@@ -1,4 +1,4 @@
-# Architecture: Codex usage metering and cost attribution (#906, absorbs #1008)
+# Architecture: Codex usage metering and cost attribution (#906, absorbs one #1008 facet)
 
 ## Context
 
