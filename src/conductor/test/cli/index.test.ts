@@ -100,6 +100,31 @@ describe('CLI', () => {
     expect(opts.featureDesc).toBeUndefined();
   });
 
+  // #1027: --effort seam (effortCliOverride/effortOverride) existed but no
+  // CLI flag registered it. Mirrors --model's parsing/validation shape.
+  describe('--effort', () => {
+    it('parses a valid --effort value', () => {
+      const opts = parseArgs(['node', 'conduct', 'feature', '--effort', 'high']);
+      expect(opts.effort).toBe('high');
+    });
+
+    it('is undefined when not provided', () => {
+      const opts = parseArgs(['node', 'conduct', 'feature']);
+      expect(opts.effort).toBeUndefined();
+    });
+
+    it('rejects an invalid --effort value', () => {
+      expect(() =>
+        parseArgs(['node', 'conduct', 'feature', '--effort', 'bogus']),
+      ).toThrow(/Invalid --effort/);
+    });
+
+    it('--help documents --effort', () => {
+      const help = createProgram().helpInformation();
+      expect(help).toContain('--effort');
+    });
+  });
+
   it('parses --interactive flag as true', () => {
     const opts = parseArgs(['node', 'conduct', 'feature', '--interactive']);
     expect(opts.interactive).toBe(true);
