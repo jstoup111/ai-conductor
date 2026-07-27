@@ -126,6 +126,8 @@ steps:
     llm_provider: claude
   rebase:
     llm_provider: claude
+  finish:
+    llm_provider: claude
   manual_test:
     disable: true
   maintain-documentation:
