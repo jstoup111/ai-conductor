@@ -15,6 +15,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - `conduct-ts daemon` now honors `~/.ai-conductor/config.yml` merged under the project config, instead
   of reading only the project file, so daemon-only operators no longer lose user-level settings that
   every other entry point already applied ([implementation PR #1031](https://github.com/jstoup111/ai-conductor/pull/1031)).
+- A resumed feature no longer parks forever with `loop exited without a terminal verdict` without ever
+  dispatching a session. The resume clamp decides which step to re-enter from the on-disk gate verdicts,
+  but the loop admits a step by reading `conduct-state.json` — so when a step's verdict said satisfied
+  while its state said `failed` (a build that failed after an earlier passing review, with nothing
+  rewriting its verdict), the clamp entered past it on a downstream gate whose prerequisite check could
+  never pass. The loop exited immediately through its markerless blocked-gate return and the safety-net
+  backstop parked the run, identically on every resume. Resume entry now walks the prerequisite chain
+  back to a step the loop will actually accept, using the same predicate the gate check uses
+  ([#1052](https://github.com/jstoup111/ai-conductor/issues/1052)).
+
 - A feature no longer halts BUILD/SHIP because it rebased onto a base branch that changed or added
   someone else's protected DECIDE artifact. The protected-artifact seal is immutable from first BUILD
   entry, so it went stale the moment any other feature's pull request merged, and an operator had to
@@ -24,6 +34,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   itself. Content the base branch does not vouch for, additions it does not contain, and deletions all
   still halt before dispatch, and no tolerance applies when the base branch cannot be resolved
   ([#976](https://github.com/jstoup111/ai-conductor/issues/976)).
+- `finish` no longer ships a PR whose CHANGELOG entry still carries the literal
+  `{{IMPLEMENTATION_PR}}` placeholder token. The `skills/finish/SKILL.md` execution steps for
+  "Push & PR" never actually instructed running `conduct-ts finalize-changelog-pr` — that
+  instruction existed only in a separate auto-mode narrative block the dispatched agent didn't
+  follow — so the token could reach `main` unsubstituted (as happened for
+  [#967](https://github.com/jstoup111/ai-conductor/issues/967)). The skill's Option 2 execution
+  steps now run `finalize-changelog-pr` unconditionally right after the PR/push STOP gate, for
+  every outcome that produces a PR URL, and the `finish` completion gate itself now fails closed
+  (deterministically, independent of the prompt) when `choice="pr"` and `CHANGELOG.md` still
+  contains an unsubstituted token.
 
 ### Added
 

@@ -730,6 +730,54 @@ describe('engine/artifacts', () => {
       expect(result.reason).toMatch(/push|push evidence|refs\/remotes/i);
     });
 
+    it('fails when finish-choice="pr" and CHANGELOG.md still has an unsubstituted {{IMPLEMENTATION_PR}} token', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile(
+        'CHANGELOG.md',
+        '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result.done).toBe(false);
+      expect(result.reason).toMatch(/IMPLEMENTATION_PR/);
+      expect(result.reason).toMatch(/finalize-changelog-pr/);
+    });
+
+    it('passes when finish-choice="pr" and CHANGELOG.md has no unsubstituted token', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile(
+        'CHANGELOG.md',
+        `## [Unreleased]\n\n- Fixed the thing (${prUrl}).\n`,
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
+    it('does not block finish-choice="merge-local" on a stale {{IMPLEMENTATION_PR}} token (no PR URL to substitute)', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'merge-local');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      await createFile(
+        'CHANGELOG.md',
+        '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
+      );
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+      });
+      expect(result).toEqual({ done: true });
+    });
+
     it('two-phase ordering: does not invoke the presentation (gh) check when push evidence fails', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile(

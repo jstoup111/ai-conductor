@@ -412,4 +412,72 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(log.find((e) => e.startsWith('run:'))).toBe('run:finish');
     });
   });
+
+  // ── Story 4 (#1052): a stale verdict must not clamp PAST a failed step ────
+  // Live-daemon fixture: `.pipeline/gates/build.json` said satisfied:true while
+  // conduct-state.json said build:"failed" (a build attempt failed after an
+  // earlier passing review, and nothing rewrote the verdict). The clamp's
+  // verdict-authoritative predicate skipped `build` and landed on
+  // `build_review`, whose STATE-only `checkGate` can never pass while its
+  // `build` prerequisite is failed — so the loop took the markerless
+  // `gate_blocked` return and the finally-backstop parked the run with
+  // "loop exited without a terminal verdict", identically on every resume,
+  // without ever dispatching a session.
+  describe('Story 4: a satisfied verdict over a failed state does not strand the loop (#1052)', () => {
+    async function seed1052Fixture(): Promise<void> {
+      const seed = seedDoneThrough('build');
+      seed.build = 'failed';
+      seed.build_review = 'stale';
+      seed.wiring_check = 'stale';
+      seed.test_suite = 'stale';
+      seed.manual_test = 'stale';
+      seed.architecture_review_as_built = 'stale';
+      seed.rebase = 'done';
+      seed.finish = 'failed';
+      seed.last_step = 'rebase';
+      await writeState(statePath, seed as ConductState);
+      // The divergence: verdict satisfied, state failed.
+      await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+      await writeVerdict(dir, 'wiring_check', { satisfied: false, checkedAt: 1, kickback });
+      await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });
+    }
+
+    it('resumes at build rather than a build_review the gate check will reject', async () => {
+      await seed1052Fixture();
+      const { runner, log } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+      });
+
+      await conductor.run();
+
+      expect(log.find((e) => e.startsWith('run:'))).toBe('run:build');
+    });
+
+    it('daemon resume dispatches build instead of exiting with zero dispatches', async () => {
+      await seed1052Fixture();
+      const { runner } = trackingRunner(dir);
+      const started: StepName[] = [];
+      const blocked: StepName[] = [];
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') started.push(e.step);
+      });
+      events.on('gate_blocked', (e) => {
+        if (e.type === 'gate_blocked') blocked.push(e.step);
+      });
+
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        resume: true, daemon: true,
+      });
+      await conductor.run();
+
+      // The bug's exact signature: the run ended having dispatched NOTHING,
+      // because entry landed on a `build_review` whose gate check rejected it.
+      expect(started.length).toBeGreaterThan(0);
+      expect(started[0]).toBe('build');
+      expect(blocked).not.toContain('build_review');
+    });
+  });
 });
