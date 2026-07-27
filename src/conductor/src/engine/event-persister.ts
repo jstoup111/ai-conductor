@@ -107,6 +107,15 @@ export class EventPersister {
   }
 }
 
+/**
+ * Marker property stamped on every event forwarded from a feature-scoped bus
+ * onto the daemon-wide bus. The feature-scoped bus already renders the event
+ * (tagged) via its own listeners before forwarding; without this marker the
+ * daemon-wide TerminalSubscriber would render the same event a second time,
+ * untagged (see beginFeatureRun in daemon-cli.ts).
+ */
+export const FORWARDED_FROM_FEATURE = Symbol('forwardedFromFeature');
+
 class ForwardingEventEmitter extends ConductorEventEmitter {
   constructor(private readonly globalEvents: ConductorEventEmitter) {
     super();
@@ -114,7 +123,9 @@ class ForwardingEventEmitter extends ConductorEventEmitter {
 
   override async emit(event: ConductorEvent): Promise<void> {
     await super.emit(event);
-    await this.globalEvents.emit(event);
+    const forwarded = { ...event } as ConductorEvent & { [FORWARDED_FROM_FEATURE]?: true };
+    forwarded[FORWARDED_FROM_FEATURE] = true;
+    await this.globalEvents.emit(forwarded);
   }
 }
 

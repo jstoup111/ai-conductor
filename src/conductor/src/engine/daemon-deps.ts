@@ -37,6 +37,7 @@ export interface RealDepsConfig {
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
     featureEvents?: ConductorEventEmitter,
+    log?: (message: string) => void,
   ) => Promise<void>;
   /** Legacy narrative provider when provider-aware feature execution is absent. */
   provider?: LLMProvider;
@@ -63,6 +64,7 @@ export interface RealDepsConfig {
     worktree: FeatureWorktree,
     item: BacklogItem,
     providerExecution?: ProviderExecutionContext,
+    log?: (message: string) => void,
   ) => Promise<TriageOutcome>;
 }
 
@@ -112,10 +114,11 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Write WORKTREE_NAMESPACE into the worktree .env and run the project's
     // bin/setup (no-op if absent). Keeps the daemon stack-agnostic while letting
     // each project translate the namespace into its own shared/namespaced infra.
-    prepareWorktree: (wt) => prepareWorktree(wt.path, cfg.log, { verbose: cfg.verbose ?? false }),
+    prepareWorktree: (wt, log) =>
+      prepareWorktree(wt.path, log ?? cfg.log, { verbose: cfg.verbose ?? false }),
 
-    runConductor: (wt, item, providerExecution, featureEvents) =>
-      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents),
+    runConductor: (wt, item, providerExecution, featureEvents, log) =>
+      cfg.runConductorInWorktree(wt, item, providerExecution, featureEvents, log),
 
     readOutcome: (wt) => readWorktreeOutcome(wt.path),
 
@@ -157,7 +160,7 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
       return escalateBuildFailure({
         projectRoot: opts.projectRoot,
         failureReason: opts.failureReason,
-        log: cfg.log,
+        log: opts.log ?? cfg.log,
       });
     },
 
@@ -169,8 +172,8 @@ export function makeFeatureRunnerDeps(cfg: RealDepsConfig): FeatureRunnerDeps {
     // Task 14 (TS-5): surface quarantine evidence to the resuming build agent.
     // Rooted at the feature's own worktree (not the main checkout) so
     // `rev-parse --verify wip/setup-quarantine-<slug>` sees that worktree's refs.
-    surfaceQuarantineRef: (wt, slug, outcome) =>
-      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: cfg.log ?? (() => {}) }),
+    surfaceQuarantineRef: (wt, slug, outcome, log) =>
+      surfaceQuarantine(makeGitRunner(wt.path), wt.path, slug, outcome, { log: log ?? cfg.log ?? (() => {}) }),
   };
 }
 

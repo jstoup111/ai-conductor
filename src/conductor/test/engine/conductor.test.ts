@@ -2678,6 +2678,44 @@ describe('engine/conductor', () => {
       );
     }
 
+    it('routes a throwing build-stall remediation through the supplied feature logger', async () => {
+      await seedToBuildStep();
+      const featureLogs: string[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'build') {
+            await writeFile(join(dir, '.pipeline/halt-user-input-required'), STALL_QUESTION);
+            await writeFile(
+              join(dir, '.pipeline/task-status.json'),
+              JSON.stringify({ tasks: [{ id: 1, status: 'pending' }] }),
+            );
+            await writeFile(
+              join(dir, '.pipeline/task-evidence.json'),
+              JSON.stringify({ evidenceStamps: {}, noEvidenceAttempts: 0, migrationGrandfather: [] }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        log: (message) => featureLogs.push(message),
+        verifyArtifacts: true,
+      });
+      (conductor as any).planRemediation = async () => {
+        throw new Error('remediation sentinel');
+      };
+
+      await conductor.run();
+
+      expect(featureLogs).toContain('build-stall remediation dispatch threw: Error: remediation sentinel');
+    });
+
     it('daemon mode: dispatches /remediate on build stall with stall question in context', async () => {
       await seedToBuildStep();
       // The validation group now converges cleanly past its own members

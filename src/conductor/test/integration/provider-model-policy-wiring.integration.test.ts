@@ -212,6 +212,54 @@ it('composes isolated provider execution state for every daemon feature after on
     readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8'),
     readFile(new URL('../../src/engine/daemon-runner.ts', import.meta.url), 'utf8'),
   ]);
+  const daemonFile = ts.createSourceFile(
+    'daemon-cli.ts',
+    daemonSource,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS,
+  );
+  const declarations: ts.VariableDeclaration[] = [];
+  const visit = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node)) declarations.push(node);
+    ts.forEachChild(node, visit);
+  };
+  visit(daemonFile);
+  const binding = (name: string) =>
+    declarations.find(
+      (declaration) =>
+        ts.isIdentifier(declaration.name) && declaration.name.text === name,
+    );
+  const factory = binding('createProviderExecution')?.initializer;
+  const factoryFunction =
+    factory && ts.isArrowFunction(factory) ? factory : undefined;
+  const factoryState =
+    factoryFunction?.body && ts.isParenthesizedExpression(factoryFunction.body)
+      ? factoryFunction.body.expression
+      : undefined;
+  const factoryProperties =
+    factoryState && ts.isObjectLiteralExpression(factoryState)
+      ? factoryState.properties
+      : [];
+  const factoryProperty = (name: string) =>
+    factoryProperties.find(
+      (property) => property.name?.getText(daemonFile) === name,
+    );
+  const runtimeProperty = factoryProperty('runtimes');
+  const sessionsProperty = factoryProperty('sessions');
+  const featureRun = binding('beginFeatureRun')?.initializer;
+  const featureRunFunction =
+    featureRun && ts.isArrowFunction(featureRun) ? featureRun : undefined;
+  const featureReturn = featureRunFunction?.body && ts.isBlock(featureRunFunction.body)
+    ? featureRunFunction.body.statements.find(ts.isReturnStatement)?.expression
+    : undefined;
+  const featureProperties =
+    featureReturn && ts.isObjectLiteralExpression(featureReturn)
+      ? featureReturn.properties
+      : [];
+  const featureExecution = featureProperties.find(
+    (property) => property.name?.getText(daemonFile) === 'providerExecution',
+  );
   const compact = daemonSource.replace(/\s+/g, ' ');
   const featureBody = runnerSource.slice(
     runnerSource.indexOf('return async (item: BacklogItem)'),
@@ -246,12 +294,29 @@ it('composes isolated provider execution state for every daemon feature after on
     validatesFrozenRegistryBeforeFactory:
       daemonSource.indexOf('registry.markInitialized()') <
         daemonSource.indexOf('validateRegisteredProviderSelections({') &&
-      daemonSource.indexOf('validateRegisteredProviderSelections({') <
+        daemonSource.indexOf('validateRegisteredProviderSelections({') <
         daemonSource.indexOf('const createProviderExecution'),
-    factoryOwnsFreshRuntimeAndSessions:
-      /const createProviderExecution = \([\s\S]*?eventTarget = events,[\s\S]*?\): ProviderExecutionContext => \(\{[\s\S]*?configuredProviders,[\s\S]*?runtimes: createProviderRuntimeSet\(registry, log\),[\s\S]*?sessions: new ProviderSessionStore\(\),[\s\S]*?config,[\s\S]*?\}\);/.test(
-        daemonSource,
-      ),
+    factoryDefaultsToGlobalRuntimeLogger:
+      factoryFunction?.parameters[1]?.initializer?.getText(daemonFile) === 'log' &&
+      ts.isPropertyAssignment(runtimeProperty) &&
+      ts.isCallExpression(runtimeProperty.initializer) &&
+      runtimeProperty.initializer.expression.getText(daemonFile) ===
+        'createProviderRuntimeSet' &&
+      runtimeProperty.initializer.arguments[0]?.getText(daemonFile) ===
+        'registry' &&
+      runtimeProperty.initializer.arguments[1]?.getText(daemonFile) ===
+        factoryFunction.parameters[1]?.name.getText(daemonFile) &&
+      ts.isPropertyAssignment(sessionsProperty) &&
+      ts.isNewExpression(sessionsProperty.initializer) &&
+      sessionsProperty.initializer.expression.getText(daemonFile) ===
+        'ProviderSessionStore',
+    featureInjectsScopedRuntimeLogger:
+      ts.isPropertyAssignment(featureExecution) &&
+      ts.isCallExpression(featureExecution.initializer) &&
+      featureExecution.initializer.expression.getText(daemonFile) ===
+        'createProviderExecution' &&
+      featureExecution.initializer.arguments[1]?.getText(daemonFile) ===
+        'featureLog',
     factoryInjectedAtFeatureBoundary:
       /providerExecution:\s*createProviderExecution/.test(daemonSource) &&
       (featureBody.match(/deps\.providerExecution\?\.\(\)/g)?.length ?? 0) === 1,
@@ -269,14 +334,14 @@ it('composes isolated provider execution state for every daemon feature after on
       ),
     rebaseRecoveryContext:
       (rebaseBody.match(
-        /const providerExecution = createProviderExecution\(\);/g,
+        /const providerExecution = createSlugScopedProviderExecution\(entry\.slug\);/g,
       )?.length ?? 0) === 1 &&
       /featureDesc:\s*`rebase-resolution-\$\{entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
         rebaseBody,
       ),
     ciRecoveryContext:
       (ciBody.match(
-        /const providerExecution = createProviderExecution\(\);/g,
+        /const providerExecution = createSlugScopedProviderExecution\(ctx\.entry\.slug\);/g,
       )?.length ?? 0) === 1 &&
       /featureDesc:\s*`ci-fix-resolution-\$\{ctx\.entry\.slug\}`,[\s\S]*?providerExecution,[\s\S]*?\}\s*,?\s*\);/.test(
         ciBody,
@@ -286,7 +351,8 @@ it('composes isolated provider execution state for every daemon feature after on
     globalProviderPolicyLookups: 0,
     configuredOrder: true,
     validatesFrozenRegistryBeforeFactory: true,
-    factoryOwnsFreshRuntimeAndSessions: true,
+    factoryDefaultsToGlobalRuntimeLogger: true,
+    featureInjectsScopedRuntimeLogger: true,
     factoryInjectedAtFeatureBoundary: true,
     mainRunnerContext: true,
     conductorContext: true,

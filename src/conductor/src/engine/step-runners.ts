@@ -248,6 +248,8 @@ export function parseRebaseResolutionOutput(output: string): ResolutionAttempt {
 }
 
 export interface StepRunnerOptions {
+  /** Feature-owned warning sink for daemon-dispatched runners. */
+  log?: (message: string) => void;
   featureDesc?: string;
   totalSteps?: number;
   pipelineDir?: string;
@@ -354,6 +356,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerExecutionContext?: ProviderExecutionContext;
   private withCandidateSafety?: WithCandidateSafety;
   private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
+  private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   callCount = 0;
 
@@ -376,9 +379,10 @@ export class DefaultStepRunner implements StepRunner {
     this.effortOverride =
       options?.effortOverride ?? options?.providerExecution?.effortOverride;
     this.mode = options?.mode ?? 'default';
+    this.log = options?.log ?? ((message) => console.warn(message));
     this.modelAvailability = new ModelAvailability(
       this.config?.model_fallback_ladder ?? this.modelPolicy.modelFallbackLadder,
-      (line) => console.warn(line),
+      this.log,
     );
     this.gitRunner = options?.gitRunner ?? makeGitRunner(this.projectDir);
     this.planPathOverride = options?.planPath;
@@ -404,7 +408,7 @@ export class DefaultStepRunner implements StepRunner {
     this.providerWarn =
       options?.providerWarn ??
       options?.providerExecution?.warn ??
-      ((message) => console.warn(message));
+      this.log;
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -657,7 +661,7 @@ export class DefaultStepRunner implements StepRunner {
     const runtimes = streaming
       ? this.streamingProviderRuntimes(this.providerRuntimes)
       : this.providerRuntimes;
-    const invocationOptions: ExecuteProviderCandidatesInput['options'] = {
+    const invocationOptions = this.withFeatureDiagnosticLog({
       prompt,
       systemPrompt,
       cwd: this.projectDir,
@@ -665,7 +669,7 @@ export class DefaultStepRunner implements StepRunner {
         ? this.mode === 'auto'
         : true,
       ...(streaming ? { interactive } : {}),
-    };
+    });
     const safety = this.candidateSafetyFor(step);
     try {
       const result = await this.providerExecutor({
@@ -750,6 +754,7 @@ export class DefaultStepRunner implements StepRunner {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
     const safety = this.candidateSafetyFor(request.step);
+    const invocationOptions = this.withFeatureDiagnosticLog(request.options);
     const result = await this.providerExecutor({
       step: request.step,
       configuredProviders: this.configuredProviders,
@@ -768,11 +773,11 @@ export class DefaultStepRunner implements StepRunner {
         this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
-      options: request.options,
+      options: invocationOptions,
       ...(request.kind === 'skill'
         ? {
             optionsForCandidate: (candidateKey: string) => ({
-              ...request.options,
+              ...invocationOptions,
               prompt: renderSkillInvocation(
                 STEP_SKILL_INVOCATIONS[request.step],
                 candidateKey,
@@ -782,6 +787,13 @@ export class DefaultStepRunner implements StepRunner {
         : {}),
     });
     return safety?.verify(result) ?? result;
+  }
+
+  private withFeatureDiagnosticLog(
+    options: ExecuteProviderCandidatesInput['options'],
+  ): ExecuteProviderCandidatesInput['options'] {
+    const diagnosticLog = this.providerExecutionContext?.diagnosticLog;
+    return diagnosticLog ? { ...options, diagnosticLog } : options;
   }
 
   /**
@@ -1545,7 +1557,7 @@ export class DefaultStepRunner implements StepRunner {
         if (floorReport.gaps.length > 0) {
           floorAdvisoryLines = renderPerTaskFloorReport(floorReport);
           for (const line of floorAdvisoryLines) {
-            console.warn(`WARNING: ${line}`);
+            this.log(`WARNING: ${line}`);
           }
         }
       } catch {
@@ -1742,7 +1754,7 @@ export class DefaultStepRunner implements StepRunner {
     // then this is a mid-run wipe. Warn with greppable text.
     // If wasSessionMarkerFoundOnInit is false, we're in first-provision (no prior session).
     if (!dirExists && this.wasSessionMarkerFoundOnInit) {
-      console.warn(
+      this.log(
         'WARNING: .pipeline root was missing mid-run and had to be recreated ' +
         '(the directory was likely deleted by concurrent cleanup or an unscoped deleter)',
       );

@@ -90,6 +90,40 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('routes setup, triage, and conductor execution through the feature logger', async () => {
+    const featureLog = vi.fn();
+    const setupFailure = new SetupFailureError('setup failed', 'diagnostic output');
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      log: featureLog,
+      stop: () => {},
+    });
+    featureDeps.prepareWorktree = async (_worktree, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+      throw setupFailure;
+    };
+    featureDeps.runSetupTriage = async (_error, _worktree, _item, _execution, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+      return { kind: 'pass' };
+    };
+    featureDeps.runConductor = async (_worktree, _item, _execution, _events, receivedLog) => {
+      expect(receivedLog).toBe(featureLog);
+    };
+    featureDeps.daemon = true;
+
+    await makeRunFeature(featureDeps)({ slug: 'feature-a' });
+
+    expect(featureLog).toHaveBeenCalledWith(
+      '[daemon-runner] triage outcome: pass, continuing to runConductor',
+    );
+  });
+
   it('owns one feature event scope from pre-dispatch setup through error cleanup', async () => {
     const order: string[] = [];
     const localEvents = new ConductorEventEmitter();
@@ -246,6 +280,40 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       sessionStoresAreIndependent: true,
       configuredOrderIsShared: true,
     });
+  });
+
+  it('keeps interleaved terminal messages with their feature-owned loggers', async () => {
+    const lines: string[] = [];
+    let waiting = 0;
+    let releaseOutcomes!: () => void;
+    const outcomesReady = new Promise<void>((resolve) => {
+      releaseOutcomes = resolve;
+    });
+    const featureDeps = deps({ done: false, halted: true, reason: 'paused' });
+    featureDeps.readOutcome = async () => {
+      waiting += 1;
+      if (waiting === 2) releaseOutcomes();
+      await outcomesReady;
+      return { done: false, halted: true, reason: 'paused' };
+    };
+    featureDeps.beginFeatureRun = async (_worktree, item) => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: [],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop: () => {},
+      log: (message: string) => lines.push(`[${item.slug}] ${message}`),
+    });
+
+    const run = makeRunFeature(featureDeps);
+    await Promise.all([run({ slug: 'feature-a' }), run({ slug: 'feature-b' })]);
+
+    expect(lines).toEqual([
+      '[feature-a] ✋ feature-a halted — worktree kept (paused)',
+      '[feature-b] ✋ feature-b halted — worktree kept (paused)',
+    ]);
   });
 
   it('done → marks processed, removes the worktree, reports prUrl', async () => {
@@ -1094,6 +1162,41 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         expect(escalateCalls).toHaveLength(1);
         expect(escalateCalls[0].projectRoot).toBe(wt);
         expect(escalateCalls[0].failureReason).toMatch(/prUrl is null/);
+      } finally {
+        await rm(wt, { recursive: true, force: true });
+      }
+    });
+
+    it('false-ship passes its feature logger to escalation', async () => {
+      const wt = await mkdtemp(join(tmpdir(), 'wt-false-ship-'));
+      try {
+        const featureLog = vi.fn();
+        let escalationLog: ((message: string) => void) | undefined;
+        const featureDeps = deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr',
+          prUrl: undefined,
+        });
+        featureDeps.createWorktree = async (slug) => ({ path: wt, branch: `feat/${slug}` });
+        featureDeps.beginFeatureRun = () => ({
+          events: new ConductorEventEmitter(),
+          providerExecution: {
+            configuredProviders: [],
+            runtimes: new ProviderRuntimeSet([]),
+            sessions: new ProviderSessionStore(),
+          },
+          log: featureLog,
+          stop: () => {},
+        });
+        featureDeps.escalateBuildFailure = async (opts) => {
+          escalationLog = (opts as { log?: (message: string) => void }).log;
+          return {};
+        };
+
+        await makeRunFeature(featureDeps)(ITEM);
+
+        expect(escalationLog).toBe(featureLog);
       } finally {
         await rm(wt, { recursive: true, force: true });
       }

@@ -90,6 +90,76 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('forwards the daemon feature diagnostic logger to a streaming provider invocation', async () => {
+    const featureLog = vi.fn();
+    const providerExecutor = vi.fn(async () => ({
+      success: true,
+      output: 'done',
+      exitCode: 0,
+      preferredProvider: 'claude',
+      actualProvider: 'claude',
+      attempts: [],
+    }));
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+        diagnosticLog: featureLog,
+      },
+    });
+
+    await runner.run('build', emptyState);
+
+    expect(providerExecutor.mock.calls[0]?.[0].options.diagnosticLog).toBe(featureLog);
+  });
+
+  it('forwards the daemon feature diagnostic logger to a one-shot skill provider invocation', async () => {
+    const featureLog = vi.fn();
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      // Stand in for the provider subprocess diagnostics that claude-provider
+      // and codex-provider route to `options.diagnosticLog`.
+      options.diagnosticLog?.('claude: subprocess diagnostic');
+      return { success: true, output: 'remediated', exitCode: 0 };
+    });
+    const policy = CLAUDE_POLICY;
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        // The real executeProviderCandidates runs here on purpose: the
+        // scoped-options -> candidate-options precedence is the behavior
+        // under test, so it must not be stubbed out by an injected executor.
+        runtimes: new ProviderRuntimeSet([
+          {
+            key: 'claude',
+            provider: { invoke, invokeInteractive: vi.fn(async () => undefined) },
+            policy,
+            builtIn: true,
+            availability: new ModelAvailability(policy.modelFallbackLadder),
+          },
+        ]),
+        sessions: new ProviderSessionStore(),
+        diagnosticLog: featureLog,
+      },
+    });
+
+    await runner.run('remediate', emptyState);
+
+    const candidatePrompt = invoke.mock.calls[0]?.[0].prompt;
+    expect({
+      // Proves the candidate-specific (skill-rendered) options were the ones
+      // delivered, and that the feature-scoped logger survived into them.
+      renderedSkillInvocation: candidatePrompt?.startsWith('/remediate') ?? false,
+      diagnosticLogForwarded: invoke.mock.calls[0]?.[0].diagnosticLog === featureLog,
+      scopedLogLines: featureLog.mock.calls.map(([line]) => line),
+    }).toEqual({
+      renderedSkillInvocation: true,
+      diagnosticLogForwarded: true,
+      scopedLogLines: ['claude: subprocess diagnostic'],
+    });
+  });
+
   it('reads self-host candidate hooks from the live context after construction', async () => {
     const executor = vi.fn(async (input: any) => {
       const candidate = { step: 'build', providerKey: 'codex', model: 'gpt', effort: 'medium' };

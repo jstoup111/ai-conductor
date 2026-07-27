@@ -629,6 +629,8 @@ export interface ConductorOptions {
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
   projectRoot: string;
+  /** Feature-scoped daemon logger; defaults to console warnings outside a feature run. */
+  log?: (message: string) => void;
   /** Injectable native aggregate-suite verifier; production uses FullSuiteVerifier. */
   fullSuiteVerifier?: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   /** Feature description — used by the engine-run worktree step to name the
@@ -957,6 +959,7 @@ export class Conductor {
   private readonly providerExecution?: ProviderExecutionContext;
   private validationConcurrency: number;
   private projectRoot: string;
+  private log?: (message: string) => void;
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   private featureDesc?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -1078,7 +1081,7 @@ export class Conductor {
       const cwd = this.projectRoot;
       const branch = state.worktree_branch;
       const featureDesc = state.feature_desc;
-      const repairLog = (msg: string) => console.warn(msg);
+      const repairLog = this.log ?? console.warn;
 
       // Best-effort test-evidence line for the body floor: derived from
       // .pipeline/task-status.json. Left undefined on any error — the floor
@@ -1110,7 +1113,7 @@ export class Conductor {
         });
       } catch (err) {
         // Warn-only: repair is best-effort, failures don't block further steps
-        console.warn(`[conductor-repair] rehabilitateHaltPr failed: ${err}`);
+        repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${err}`);
       }
 
       // Step 2: Retitle floor (fix stale needs-remediation: title)
@@ -1118,7 +1121,7 @@ export class Conductor {
         await retitleFloor(gh, cwd, prUrl, { featureDesc, branch }, repairLog);
       } catch (err) {
         // Warn-only
-        console.warn(`[conductor-repair] retitleFloor failed: ${err}`);
+        repairLog(`[conductor-repair] retitleFloor failed: ${err}`);
       }
 
       // Step 3: Body floor (fix stale halt-boilerplate body)
@@ -1126,7 +1129,7 @@ export class Conductor {
         await bodyFloor(gh, cwd, prUrl, { featureDesc, sourceRef, testEvidenceLine }, repairLog);
       } catch (err) {
         // Warn-only
-        console.warn(`[conductor-repair] bodyFloor failed: ${err}`);
+        repairLog(`[conductor-repair] bodyFloor failed: ${err}`);
       }
 
       // Step 4: Ensure PR is ready (draft→ready flip)
@@ -1134,7 +1137,7 @@ export class Conductor {
         await ensureShipReady(gh, cwd, prUrl, repairLog);
       } catch (err) {
         // Warn-only
-        console.warn(`[conductor-repair] ensureShipReady failed: ${err}`);
+        repairLog(`[conductor-repair] ensureShipReady failed: ${err}`);
       }
     };
 
@@ -1239,6 +1242,7 @@ export class Conductor {
     this.providerExecution = opts.providerExecution;
     if (!opts.projectRoot) throw new Error('Conductor requires an explicit projectRoot — refusing to default to process.cwd()');
     this.projectRoot = opts.projectRoot;
+    this.log = opts.log;
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.featureDesc = opts.featureDesc;
@@ -4531,7 +4535,11 @@ export class Conductor {
                       // Task 8: Degraded remediation exit (throw). Write HALT with question.
                       // The /remediate dispatch itself crashed; log it and use the question
                       // to halt the run so a human can investigate.
-                      console.error('build-stall remediation dispatch threw:', err);
+                      if (this.log) {
+                        this.log(`build-stall remediation dispatch threw: ${String(err)}`);
+                      } else {
+                        console.error('build-stall remediation dispatch threw:', err);
+                      }
                       // #569: a zero-work stall never terminal-HALTs from
                       // this block — it falls through to the existing
                       // retry/auto-park path.
