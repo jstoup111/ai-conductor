@@ -411,9 +411,9 @@ describe('Story 6 — scoped intermediate verification (FR-5)', () => {
 describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, FR-15, FR-17)', () => {
   it('has finish invoke the shared CLI and reuse a current PASS without launching the project suite', async () => {
     const finishSkill = await readFile(join(REPO_ROOT, 'skills/finish/SKILL.md'), 'utf8');
-    const gate = await invokeRealSuite();
+    const gate = invokeRealSuite();
     const launchesBeforeFinish = await readCount();
-    const finishVerification = await invokeRealSuite();
+    const finishVerification = invokeRealSuite();
     const launchesAfterFinish = await readCount();
 
     expect({
@@ -434,10 +434,10 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
   });
 
   it('executes exactly once for each standalone missing or stale finish proof', async () => {
-    const missingProof = await invokeRealSuite();
+    const missingProof = invokeRealSuite();
     const launchesAfterMissing = await readCount();
     await writeProjectFile('src/app.ts', 'export const value = 2;\n');
-    const staleProof = await invokeRealSuite();
+    const staleProof = invokeRealSuite();
     const launchesAfterStale = await readCount();
 
     expect({
@@ -463,7 +463,7 @@ describe('Stories 7–9 — finish, PR/CI, and repair boundaries (FR-13, FR-14, 
       finishSkill.indexOf('### 1. Fresh Verification'),
       finishSkill.indexOf('### 1b.'),
     );
-    const failure = await invokeRealSuite({ SUITE_MODE: 'fail:finish-block' });
+    const failure = invokeRealSuite({ SUITE_MODE: 'fail:finish-block' });
     const finishChoiceExists = await readFile(join(repo, '.pipeline/finish-choice'), 'utf8')
       .then(() => true)
       .catch(() => false);

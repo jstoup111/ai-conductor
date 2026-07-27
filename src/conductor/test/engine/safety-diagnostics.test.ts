@@ -43,7 +43,7 @@ describe('createSafetyFailureDiagnostic', () => {
     [{ provider: '', protection: { name: 'isolated-home', state: 'missing' } }],
     [{ provider: 'claude', protection: { name: '', state: 'missing' } }],
     [{ provider: 'claude', protection: { name: 'isolated-home', state: 'passing' } }],
-  ])('does not guess missing or contradictory metadata', (input) => {
+  ] as const)('does not guess missing or contradictory metadata', (input) => {
     expect(createSafetyFailureDiagnostic(input)).toEqual({
       provider: null,
       protection: null,

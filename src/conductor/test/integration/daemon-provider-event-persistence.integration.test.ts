@@ -66,7 +66,9 @@ describe('daemon feature provider-event persistence', () => {
       'provider_fallback',
       'step_completed',
     ] as const) {
-      globalEvents.on(type, (event) => globallyObserved.push(event));
+      globalEvents.on(type, (event) => {
+        globallyObserved.push(event);
+      });
     }
 
     const withFeatureEventPersistence = (

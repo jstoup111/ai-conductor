@@ -14,7 +14,8 @@ function frontDone(): ConductState {
   return {
     worktree: 'done',
     memory: 'done',
-    brainstorm: 'done',
+    explore: 'done',
+    prd: 'done',
     complexity: 'done',
     stories: 'done',
     conflict_check: 'done',
@@ -285,7 +286,7 @@ describe('engine/selector — gateSatisfied', () => {
 
 describe('engine/selector — earliestUnsatisfiedGateIndex', () => {
   it('returns the index of the earliest unsatisfied gate in the region', () => {
-    const state = { ...frontDone(), build: 'pending' };
+    const state: ConductState = { ...frontDone(), build: 'pending' };
     const verdicts: Partial<Record<StepName, GateVerdict>> = {};
     const idx = earliestUnsatisfiedGateIndex(input(state, verdicts));
     // build is the first step after regionStart ('stories'), and it's pending/unsatisfied

@@ -625,6 +625,7 @@ describe('daemon startup handshake (Task 9)', () => {
     const enginePath = await createMockEngineFile(projectRoot, engineContent);
     const engineIdentity = await captureEngineIdentity(enginePath);
     expect(engineIdentity).not.toBeNull();
+    if (engineIdentity === null) throw new Error('unreachable: asserted above');
 
     // Set up: marker present + non-convergence scenario (fresh ≠ target)
     const targetIdentity = 'engine-target-old-xyz';
@@ -690,6 +691,7 @@ describe('daemon startup handshake (Task 9)', () => {
     const enginePath = await createMockEngineFile(projectRoot, engineContent);
     const engineIdentity = await captureEngineIdentity(enginePath);
     expect(engineIdentity).not.toBeNull();
+    if (engineIdentity === null) throw new Error('unreachable: asserted above');
 
     // Convergence scenario: target == fresh identity
     const marker: RestartMarker = {
@@ -748,6 +750,7 @@ describe('daemon startup handshake (Task 9)', () => {
     const enginePath = await createMockEngineFile(projectRoot, engineContent);
     const engineIdentity = await captureEngineIdentity(enginePath);
     expect(engineIdentity).not.toBeNull();
+    if (engineIdentity === null) throw new Error('unreachable: asserted above');
 
     // Simulate daemon-cli scenario:
     // - config.auto_restart_on_stale_engine = true

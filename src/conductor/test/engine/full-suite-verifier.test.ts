@@ -296,7 +296,10 @@ describe('FullSuiteVerifier', () => {
         executionCalls.push(options);
         return {
           ok: true,
-          command: expectedEvidence.command,
+          // Fixture-constructed above with a literal string; FullSuitePassEvidence
+          // widens `command` to `string | null` to cover the general artifact
+          // shape, but this test's evidence is never actually null.
+          command: expectedEvidence.command!,
           cwd: resolve(projectRoot, 'packages/app'),
           startedAt: expectedEvidence.startedAt,
           endedAt: expectedEvidence.endedAt,
@@ -416,7 +419,9 @@ describe('FullSuiteVerifier', () => {
         executionCount += 1;
         return {
           ok: true,
-          command: expectedEvidence.command,
+          // See the other execute() stub above: fixture-constructed with a
+          // literal string, never actually null at runtime.
+          command: expectedEvidence.command!,
           cwd: workingDirectory,
           startedAt: expectedEvidence.startedAt,
           endedAt: expectedEvidence.endedAt,

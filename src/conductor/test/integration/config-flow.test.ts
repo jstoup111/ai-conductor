@@ -121,7 +121,12 @@ describe('Integration: config flow', () => {
 
     const registry = buildStepRegistry(config);
     const buildIdx = registry.findIndex((s) => s.name === 'build');
-    const customIdx = registry.findIndex((s) => s.name === 'security_scan');
+    // 'security_scan' is a config-declared custom step name, not a member of
+    // the built-in StepName union — StepDefinition.name is typed StepName
+    // even though buildStepRegistry legitimately inserts custom names into it
+    // at runtime. Widen to `string` for this one comparison rather than
+    // narrowing/hiding the check.
+    const customIdx = registry.findIndex((s) => (s.name as string) === 'security_scan');
     const manualTestIdx = registry.findIndex((s) => s.name === 'manual_test');
 
     expect(customIdx).toBe(buildIdx + 1);
@@ -150,7 +155,8 @@ describe('Integration: config flow', () => {
     const registry = buildStepRegistry(config);
     const archIdx = registry.findIndex((s) => s.name === 'architecture_review');
     const planIdx = registry.findIndex((s) => s.name === 'plan');
-    const customIdx = registry.findIndex((s) => s.name === 'tech_review');
+    // 'tech_review' is a config-declared custom step name (see the note above).
+    const customIdx = registry.findIndex((s) => (s.name as string) === 'tech_review');
     const specsIdx = registry.findIndex((s) => s.name === 'acceptance_specs');
 
     expect(archIdx).toBeLessThan(planIdx); // architecture precedes plan (reorder)

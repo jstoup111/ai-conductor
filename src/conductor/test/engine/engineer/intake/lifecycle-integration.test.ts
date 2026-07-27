@@ -16,6 +16,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { runEngineerMode } from '../../../../src/engine/engineer/loop.js';
+import type { DecideStep } from '../../../../src/engine/engineer/authoring.js';
 import { createGithubIssuesAdapter } from '../../../../src/engine/engineer/intake/github-issues.js';
 import { createFileQueue } from '../../../../src/engine/engineer/intake/queue.js';
 import { createLedger } from '../../../../src/engine/engineer/intake/ledger.js';
@@ -106,11 +107,14 @@ function routeTo(name: string) {
 }
 
 function decideStub() {
-  return async (ctx: { step: 'brainstorm' | 'stories' | 'plan'; idea: string }) => {
-    if (ctx.step === 'brainstorm') return { approved: true, artifact: `# PRD: ${ctx.idea}\nOk.\n` };
+  return async (ctx: { step: DecideStep; idea: string }) => {
+    if (ctx.step === 'explore') return { approved: true, artifact: `# Explore: ${ctx.idea}\nOk.\n` };
+    if (ctx.step === 'prd') return { approved: true, artifact: `# PRD: ${ctx.idea}\nOk.\n` };
     if (ctx.step === 'stories')
       return { approved: true, artifact: `# Stories\n\n**Status:** Accepted\n\n## S\n### AC\n- Given a, when b, then c.\n` };
-    return { approved: true, artifact: `# Plan\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n` };
+    if (ctx.step === 'plan')
+      return { approved: true, artifact: `# Plan\n\n### Task 1\n**Dependencies:** none\n\n## Task Dependency Graph\n\`\`\`\n1\n\`\`\`\n` };
+    return { approved: true, artifact: '' };
   };
 }
 

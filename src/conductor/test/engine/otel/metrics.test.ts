@@ -90,24 +90,24 @@ describe('T15: step duration histogram and retries counter', () => {
 
     await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
     await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
     const durationMetric = findMetric(metricExporter, 'conductor.step.duration')!;
     const stepNames = durationMetric.dataPoints.map((d) => d.attributes['step']);
     expect(stepNames).toContain('bootstrap');
-    expect(stepNames).toContain('brainstorm');
+    expect(stepNames).toContain('explore');
   });
 
   it('conductor.step.retries counter is incremented by N for N retries', async () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 2, maxAttempts: 3, reason: 'flaky' });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'flaky' });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
@@ -115,12 +115,12 @@ describe('T15: step duration histogram and retries counter', () => {
     expect(names).toContain('conductor.step.retries');
 
     const retriesMetric = findMetric(metricExporter, 'conductor.step.retries')!;
-    const brainstormRetries = retriesMetric.dataPoints.find(
-      (d) => d.attributes['step'] === 'brainstorm',
+    const exploreRetries = retriesMetric.dataPoints.find(
+      (d) => d.attributes['step'] === 'explore',
     );
-    expect(brainstormRetries).toBeDefined();
+    expect(exploreRetries).toBeDefined();
     // 1 retry → counter incremented by 1
-    expect((brainstormRetries as any).value).toBe(1);
+    expect(exploreRetries?.value).toBe(1);
   });
 
   it('retries counter has NO data point for steps with zero retries', async () => {
@@ -147,18 +147,18 @@ describe('T15: step duration histogram and retries counter', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 2, maxAttempts: 3, reason: 'flaky' });
-    await emitter.emit({ type: 'step_retry', step: 'brainstorm', attempt: 3, maxAttempts: 3, reason: 'timeout' });
-    await emitter.emit({ type: 'step_completed', step: 'brainstorm', status: 'done' });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 2, maxAttempts: 3, reason: 'flaky' });
+    await emitter.emit({ type: 'step_retry', step: 'explore', attempt: 3, maxAttempts: 3, reason: 'timeout' });
+    await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
     await emitter.emit({ type: 'feature_complete' });
     await vis.stop();
 
     const retriesMetric = findMetric(metricExporter, 'conductor.step.retries')!;
-    const brainstormRetries = retriesMetric.dataPoints.find(
-      (d) => d.attributes['step'] === 'brainstorm',
+    const exploreRetries = retriesMetric.dataPoints.find(
+      (d) => d.attributes['step'] === 'explore',
     );
-    expect((brainstormRetries as any).value).toBe(2);
+    expect(exploreRetries?.value).toBe(2);
   });
 });
 
@@ -169,10 +169,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({
       type: 'step_completed',
-      step: 'brainstorm',
+      step: 'explore',
       status: 'done',
       tokenUsage: { input: 100, output: 50 },
     });
@@ -187,10 +187,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({
       type: 'step_completed',
-      step: 'brainstorm',
+      step: 'explore',
       status: 'done',
       tokenUsage: { input: 100, output: 50 },
     });
@@ -199,7 +199,7 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
     const steps = tokenMetric.dataPoints.map((d) => d.attributes['step']);
-    expect(steps).toContain('brainstorm');
+    expect(steps).toContain('explore');
   });
 
   it('tokenUsage absent → zero token data points for that step (no NaN / zero-fill)', async () => {
@@ -224,10 +224,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({
       type: 'step_completed',
-      step: 'brainstorm',
+      step: 'explore',
       status: 'done',
       tokenUsage: { input: 100, output: 50 }, // no cacheRead or cacheCreation
     });
@@ -235,10 +235,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     await vis.stop();
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
-    const brainstormPoints = tokenMetric.dataPoints.filter(
-      (d) => d.attributes['step'] === 'brainstorm',
+    const explorePoints = tokenMetric.dataPoints.filter(
+      (d) => d.attributes['step'] === 'explore',
     );
-    const kinds = brainstormPoints.map((d) => d.attributes['kind']);
+    const kinds = explorePoints.map((d) => d.attributes['kind']);
     // Only 'input' and 'output' present — NOT 'cacheRead' or 'cacheCreation'
     expect(kinds).toContain('input');
     expect(kinds).toContain('output');
@@ -250,10 +250,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({
       type: 'step_completed',
-      step: 'brainstorm',
+      step: 'explore',
       status: 'done',
       tokenUsage: { input: 100, output: 50, cacheRead: 20, cacheCreation: 5 },
     });
@@ -261,10 +261,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     await vis.stop();
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
-    const brainstormPoints = tokenMetric.dataPoints.filter(
-      (d) => d.attributes['step'] === 'brainstorm',
+    const explorePoints = tokenMetric.dataPoints.filter(
+      (d) => d.attributes['step'] === 'explore',
     );
-    const kinds = brainstormPoints.map((d) => d.attributes['kind']);
+    const kinds = explorePoints.map((d) => d.attributes['kind']);
     expect(kinds).toContain('input');
     expect(kinds).toContain('output');
     expect(kinds).toContain('cacheRead');
@@ -275,10 +275,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({
       type: 'step_completed',
-      step: 'brainstorm',
+      step: 'explore',
       status: 'done',
       tokenUsage: { input: 100, output: 50 },
     });
@@ -290,7 +290,7 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
     const steps = tokenMetric.dataPoints.map((d) => d.attributes['step']);
-    expect(steps).toContain('brainstorm');
+    expect(steps).toContain('explore');
     expect(steps).not.toContain('plan'); // no tokenUsage → no data point
   });
 
@@ -298,10 +298,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
     const vis = makeVisualizer(spanExporter, metricExporter, pipelineDir);
     vis.start(emitter);
 
-    await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+    await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
     await emitter.emit({
       type: 'step_completed',
-      step: 'brainstorm',
+      step: 'explore',
       status: 'done',
       tokenUsage: { input: 123, output: 456 },
     });
@@ -310,10 +310,10 @@ describe('T16: token metrics — skip-absent, partial kinds', () => {
 
     const tokenMetric = findMetric(metricExporter, 'conductor.step.tokens')!;
     const inputPoint = tokenMetric.dataPoints.find(
-      (d) => d.attributes['step'] === 'brainstorm' && d.attributes['kind'] === 'input',
+      (d) => d.attributes['step'] === 'explore' && d.attributes['kind'] === 'input',
     ) as any;
     const outputPoint = tokenMetric.dataPoints.find(
-      (d) => d.attributes['step'] === 'brainstorm' && d.attributes['kind'] === 'output',
+      (d) => d.attributes['step'] === 'explore' && d.attributes['kind'] === 'output',
     ) as any;
     expect(inputPoint?.value).toBe(123);
     expect(outputPoint?.value).toBe(456);

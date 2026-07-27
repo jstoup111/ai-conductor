@@ -85,7 +85,6 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
       git,
       branch: 'feat/widget',
       prUrl: PR_URL,
-      entry: baseEntry,
       gh: { runGh: gh, cwd: '/repo' },
     });
 
@@ -135,7 +134,6 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
       git,
       branch: 'feat/widget',
       prUrl: PR_URL,
-      entry: baseEntry,
       gh: { runGh: gh, cwd: '/repo' },
       earlierFailure: {
         stage: 'suite-gate',
@@ -182,7 +180,6 @@ describe('engine/autoresolve — publishResolution negative paths', () => {
       git,
       branch: 'feat/widget',
       prUrl: PR_URL,
-      entry: baseEntry,
       gh: { runGh: gh, cwd: '/repo', log: logger },
     });
 

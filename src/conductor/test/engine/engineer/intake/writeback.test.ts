@@ -14,6 +14,7 @@ function fakePort(): { port: IntakePort; calls: Array<{ sourceRef: string; statu
   const port: IntakePort = {
     async report(sourceRef, status, meta) {
       calls.push({ sourceRef, status, meta });
+      return { ok: true };
     },
   };
   return { port, calls };
@@ -29,6 +30,7 @@ function fakeLedger(): { ledger: Ledger; transitions: Array<{ status: LedgerStat
     },
     get: async () => undefined,
     forget: async () => {},
+    list: async () => [],
     reopen: async () => {},
   };
   return { ledger, transitions };
@@ -60,6 +62,7 @@ describe('reportRouted', () => {
       transition: vi.fn().mockRejectedValue(new Error('no entry')),
       get: async () => undefined,
       forget: async () => {},
+      list: async () => [],
       reopen: async () => {},
     };
     await expect(
@@ -78,14 +81,18 @@ describe('reportDone', () => {
     const { ledger, transitions } = fakeLedger();
     await reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9', 'spec/foo');
     expect(calls).toEqual([{ sourceRef: 'o/a#1', status: 'done', meta: { prUrl: 'https://x/pull/9' } }]);
-    expect(transitions).toEqual([{ status: 'done', meta: { prUrl: 'https://x/pull/9', branch: 'spec/foo' } }]);
+    expect(transitions).toEqual([
+      { status: 'done', meta: { prUrl: 'https://x/pull/9', branch: 'spec/foo', writebackPending: false } },
+    ]);
   });
 
   it('omits branch from the transition meta when not provided', async () => {
     const { port } = fakePort();
     const { ledger, transitions } = fakeLedger();
     await reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9');
-    expect(transitions).toEqual([{ status: 'done', meta: { prUrl: 'https://x/pull/9' } }]);
+    expect(transitions).toEqual([
+      { status: 'done', meta: { prUrl: 'https://x/pull/9', writebackPending: false } },
+    ]);
   });
 
   it('is advisory: a throwing port never reverts a delivered PR, and marks writebackPending', async () => {
@@ -140,6 +147,7 @@ describe('reportDone', () => {
       transition: vi.fn().mockRejectedValue(new Error('no entry')),
       get: async () => undefined,
       forget: async () => {},
+      list: async () => [],
       reopen: async () => {},
     };
     await expect(

@@ -321,7 +321,8 @@ describe('Task 22: Process-level SIGTERM handler in daemon-cli', () => {
     // Verify construction
     expect(src).toContain('const rateLimitEpisode = createRateLimitEpisode();');
     // Verify wiring to Conductor
-    expect(src).toContain('rateLimitEpisode,') && expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
+    expect(src).toContain('rateLimitEpisode,');
+    expect(src).toMatch(/new Conductor\({[\s\S]*?rateLimitEpisode,/);
     // Verify wiring to runDaemon deps (should appear in the deps object)
     expect(src).toMatch(/await runDaemon\(\s*\{[\s\S]*?rateLimitEpisode,/);
   });

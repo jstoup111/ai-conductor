@@ -111,6 +111,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         return {
           success: true,
           output: JSON.stringify(verdict),
+          exitCode: 0,
         };
       },
 
@@ -378,7 +379,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           JSON.stringify(verdict),
           'utf-8',
         );
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
       invokeInteractive: async () => {
         throw new Error('invokeInteractive not supported in fixture');
@@ -436,7 +437,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
           ],
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
       invokeInteractive: async () => {
         throw new Error('not supported');
@@ -503,7 +504,7 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
         };
 
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
 
       invokeInteractive: async () => {
@@ -590,7 +591,7 @@ Add comprehensive tests.
           ],
         };
         await writeFile(verdictPath, JSON.stringify(verdict), 'utf-8');
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
 
       invokeInteractive: async () => {
@@ -679,7 +680,7 @@ Add comprehensive tests.
         };
         await writeFile(verdictPath, JSON.stringify(verdict, null, 2), 'utf-8');
 
-        return { success: true, output: JSON.stringify(verdict) };
+        return { success: true, output: JSON.stringify(verdict), exitCode: 0 };
       },
       invokeInteractive: async () => {
         throw new Error('not supported in test');
@@ -708,7 +709,7 @@ Implementation that requires semantic verification.
 
     // Create task-evidence.json so that evidence tracking works
     await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
-    const evidence = await createTaskEvidence(projectRoot, '.pipeline');
+    const evidence = await createTaskEvidence(projectRoot);
 
     // Call dispatchVerifier as the conductor would at line 1919
     const result = await runner.dispatchVerifier({

@@ -326,13 +326,19 @@ describe('engine/resolved-config', () => {
 
   describe('resolveStepConfig — precedence', () => {
     it('defaults block overrides the Claude policy step value', () => {
+      // `review` is deliberately NOT a member of DefaultsConfig: resolveStepConfig
+      // fixes it per step from DEFAULT_STEP_REVIEW, because it is a property of the
+      // step's skill contract rather than a tuning knob. This block used to pass
+      // `review: 'auto'` here and assert it took effect, which only looked correct
+      // because bootstrap's step-fixed review is already 'auto'. The assertion is
+      // kept, but as what it genuinely proves: defaults cannot move `review`.
       const config: HarnessConfig = {
-        defaults: { effort: 'max', max_retries: 10, review: 'auto' },
+        defaults: { effort: 'max', max_retries: 10 },
       };
       const r = resolveStepConfig('bootstrap', 'UNDERSTAND', CLAUDE_MODEL_POLICY, config);
       expect(r.effort).toBe('max');
       expect(r.max_retries).toBe(10);
-      expect(r.review).toBe('auto');
+      expect(r.review).toBe('auto'); // step-fixed, unaffected by the defaults block
     });
 
     it('phase overrides defaults', () => {

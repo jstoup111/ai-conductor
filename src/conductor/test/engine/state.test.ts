@@ -100,7 +100,7 @@ describe('engine/state', () => {
     });
 
     it('output is readable by standard JSON parsers (backward compat)', async () => {
-      const state: ConductState = { worktree: 'done', brainstorm: 'skipped' };
+      const state: ConductState = { worktree: 'done', explore: 'skipped' };
       await writeState(statePath, state);
       const raw = await readFile(statePath, 'utf-8');
       // Should be valid JSON parseable by any standard parser
@@ -151,7 +151,7 @@ describe('engine/state', () => {
 
     it('returns pending for unknown/missing steps', () => {
       const state: ConductState = {};
-      expect(getStepStatus(state, 'brainstorm')).toBe('pending');
+      expect(getStepStatus(state, 'stories')).toBe('pending');
     });
   });
 
@@ -246,7 +246,7 @@ describe('engine/state', () => {
     const allSteps: ConductState = {
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'done',
+      explore: 'done',
       complexity: 'done',
       stories: 'done',
       conflict_check: 'done',
@@ -261,7 +261,7 @@ describe('engine/state', () => {
     };
 
     const stepNames = [
-      'worktree', 'memory', 'brainstorm', 'complexity', 'stories',
+      'worktree', 'memory', 'explore', 'complexity', 'stories',
       'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
       'acceptance_specs', 'build', 'manual_test', 'retro', 'finish',
     ] as const;
@@ -289,13 +289,13 @@ describe('engine/state', () => {
       const state: ConductState = {
         worktree: 'done',
         memory: 'done',
-        brainstorm: 'done',
+        explore: 'done',
         complexity: 'pending',
         stories: 'failed',
         conflict_check: 'skipped',
         plan: 'done',
       };
-      const result = markDownstreamStale(state, 'brainstorm', [...stepNames]);
+      const result = markDownstreamStale(state, 'explore', [...stepNames]);
       expect(result.complexity).toBe('pending');
       expect(result.stories).toBe('failed');
       expect(result.conflict_check).toBe('skipped');
@@ -310,7 +310,7 @@ describe('engine/state', () => {
       );
       expect(result.worktree).toBe('done');
       expect(result.memory).toBe('done');
-      expect(result.brainstorm).toBe('done');
+      expect(result.explore).toBe('done');
       expect(result.complexity).toBe('done');
       expect(result.stories).toBe('done');
     });

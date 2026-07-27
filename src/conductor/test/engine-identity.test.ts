@@ -4,6 +4,18 @@ import { writeFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+/**
+ * Narrows a captureEngineIdentity() result to `string`, failing the test
+ * loudly if capture unexpectedly returned null (file missing/unreadable) —
+ * these tests always write the file first, so null here is a real bug, not
+ * an expected outcome.
+ */
+function assertCaptured(hash: string | null): asserts hash is string {
+  if (hash === null) {
+    throw new Error('captureEngineIdentity unexpectedly returned null');
+  }
+}
+
 describe('captureEngineIdentity — sha256 hash capture', () => {
   let tempDir: string;
 
@@ -190,7 +202,7 @@ describe('createStaleEngineChecker — disabled checker on capture failure', () 
   describe('valid capture enables checker', () => {
     it('accepts a valid sha256 hash', () => {
       const validHash = 'a'.repeat(64); // Valid sha256 format
-      const checker = createStaleEngineChecker(validHash);
+      const checker = createStaleEngineChecker(validHash, join(tmpdir(), 'unused-entry-path.bin'));
 
       expect(checker).toBeDefined();
       expect(typeof checker.check).toBe('function');
@@ -200,7 +212,7 @@ describe('createStaleEngineChecker — disabled checker on capture failure', () 
       const warn = vi.fn();
       const validHash = 'b'.repeat(64);
 
-      createStaleEngineChecker(validHash, warn);
+      createStaleEngineChecker(validHash, join(tmpdir(), 'unused-entry-path.bin'), warn);
 
       expect(warn).not.toHaveBeenCalled();
     });
@@ -233,6 +245,7 @@ describe('createStaleEngineChecker — stale vs current verdicts', () => {
       const otherPath = join(tempDir, 'other.bin');
       await writeFile(otherPath, 'other content');
       const differentHash = await captureEngineIdentity(otherPath);
+      assertCaptured(differentHash);
 
       const checker = createStaleEngineChecker(differentHash, filePath);
       const result = checker.check();
@@ -246,6 +259,7 @@ describe('createStaleEngineChecker — stale vs current verdicts', () => {
       await writeFile(filePath, content);
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
       const checker = createStaleEngineChecker(capturedHash, filePath);
       const result = checker.check();
 
@@ -259,6 +273,7 @@ describe('createStaleEngineChecker — stale vs current verdicts', () => {
 
       // Capture original
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
 
       // Simulate rebuild: remove and recreate with identical content
       await rm(filePath);
@@ -277,6 +292,7 @@ describe('createStaleEngineChecker — stale vs current verdicts', () => {
 
       await writeFile(filePath, originalContent);
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
 
       // Modify the file
       await writeFile(filePath, modifiedContent);
@@ -295,6 +311,7 @@ describe('createStaleEngineChecker — stale vs current verdicts', () => {
       const validHash = await captureEngineIdentity(filePath);
       expect(validHash).toBeTruthy();
       expect(validHash).toHaveLength(64);
+      assertCaptured(validHash);
 
       const checker = createStaleEngineChecker(validHash, filePath);
       expect(checker.check()).toBe('current');
@@ -324,6 +341,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
       expect(capturedHash).toBeTruthy();
 
       // Remove the file after capture
@@ -340,6 +358,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
 
       // Remove file to cause read error
       await rm(filePath);
@@ -357,6 +376,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
 
       // Use a path that doesn't exist to simulate read failure
       const nonexistentPath = join(tempDir, 'nonexistent.bin');
@@ -374,6 +394,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
       const warn = vi.fn();
 
       // Remove file to cause read error
@@ -396,6 +417,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
       const warn = vi.fn();
 
       // Remove file to cause read error
@@ -417,6 +439,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
 
       // Remove file
       await rm(filePath);
@@ -433,6 +456,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
       const warn = vi.fn();
 
       // Remove file
@@ -455,6 +479,7 @@ describe('createStaleEngineChecker — indeterminate verdict and warn-once', () 
       await writeFile(filePath, 'original content');
 
       const capturedHash = await captureEngineIdentity(filePath);
+      assertCaptured(capturedHash);
       const warn = vi.fn();
 
       // Remove file

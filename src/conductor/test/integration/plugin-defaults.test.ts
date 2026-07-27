@@ -39,7 +39,7 @@ describe('Integration: plugin defaults', () => {
 
     // Discover and register external plugins, then built-ins
     await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-    registerBuiltins(registry, events, () => null);
+    registerBuiltins(registry, events, () => {});
     registry.markInitialized();
 
     // Should not throw PluginNotFoundError when retrieving 'claude' provider
@@ -60,7 +60,7 @@ describe('Integration: plugin defaults', () => {
       join(dir, '.ai-conductor', 'plugins', 'project'),
       registry,
     );
-    registerBuiltins(registry, events, () => null);
+    registerBuiltins(registry, events, () => {});
     registry.markInitialized();
 
     const provider = registry.get<LLMProvider>('llm_provider', 'codex');
@@ -87,7 +87,7 @@ describe('Integration: plugin defaults', () => {
 
   it('selects each provider and its exact built-in or compatibility policy from the same key', async () => {
     const registry = new PluginRegistry();
-    registerBuiltins(registry, events, () => null);
+    registerBuiltins(registry, events, () => {});
     const pluginKey = 'nebula-plugin';
     const pluginProvider: LLMProvider = {
       async invoke() {

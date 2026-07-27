@@ -30,7 +30,7 @@ describe('createRenderer', () => {
       complexity_tier: 'M',
       worktree: 'done',
       memory: 'done',
-      brainstorm: 'in_progress',
+      explore: 'in_progress',
       // Mark plan 'done' so artifact-status tests exercise the non-pending path.
       plan: 'done',
     };

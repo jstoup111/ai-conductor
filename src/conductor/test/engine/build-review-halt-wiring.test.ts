@@ -20,11 +20,11 @@ import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
 import { Conductor } from '../../src/engine/conductor.js';
-import type { StepRunner, StepName, StepRunResult } from '../../src/engine/conductor.js';
+import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';

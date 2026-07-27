@@ -1016,7 +1016,7 @@ describe('documentation delivery terminal path (issue #933)', () => {
       registryPath,
       engineerDir,
       decide,
-      ensureRunningLaunch: (repoPath) => launchCalls.push(repoPath),
+      ensureRunningLaunch: (repoPath: string) => { launchCalls.push(repoPath); },
     });
 
     expect(decideSteps).toEqual(['explore']);

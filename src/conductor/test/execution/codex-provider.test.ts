@@ -7,12 +7,24 @@ import {
   parseCodexJsonl,
 } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 // This is a fake Codex CLI boundary: no test invokes a locally installed Codex.
-vi.mock('execa', () => ({ execa: vi.fn() }));
-import { execa } from 'execa';
-
-const mockExeca = vi.mocked(execa);
+//
+// execa's real export type is a union of call-signature overloads (template
+// tag / `(file, options)` / `(file, args, options)`), and `vi.mocked(execa)`
+// collapses that to a single overload, losing the 3-argument `(file, args,
+// options)` shape the provider actually calls. Build the mock with its real
+// call signature directly (via `vi.hoisted` so it exists before the hoisted
+// `vi.mock` factory runs) instead of deriving it from `execa`'s type.
+const { mockExeca } = vi.hoisted(() => {
+  return {
+    mockExeca: vi.fn<
+      (file: string, args: readonly string[], options: ExecaOptions) => Promise<ExecaResult>
+    >(),
+  };
+});
+vi.mock('execa', () => ({ execa: mockExeca }));
 
 const baseOptions: InvokeOptions = {
   prompt: 'Make the no-op change',
@@ -98,7 +110,7 @@ describe('CodexProvider', () => {
           teardown: async () => {},
         },
       });
-      const [command, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      const [command, args, options] = mockExeca.mock.calls[0];
       expect(command).toBe('/resolved/codex');
       expect(args).toEqual(expect.arrayContaining(['--config', 'project_doc_max_bytes=0']));
       expect(options.env).toEqual({ CODEX_HOME: isolatedHome });
@@ -124,7 +136,7 @@ describe('CodexProvider', () => {
       dangerouslySkipPermissions: true,
     });
 
-    const [command, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+    const [command, args, options] = mockExeca.mock.calls[0];
     expect(command).toBe('codex');
     expect(args).toEqual(expect.arrayContaining(['exec', '--json', '--model', 'gpt-5.4', '--cd', '/workspace/project', '-']));
     expect(args).toEqual(expect.arrayContaining(['--config', 'model_reasoning_effort="high"']));
@@ -147,7 +159,7 @@ describe('CodexProvider', () => {
 
     await provider.invoke({ ...baseOptions, resume: true });
 
-    const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+    const [, args, options] = mockExeca.mock.calls[0];
     expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-123']);
     expect(args).not.toContain('--cd');
     expect(args).toEqual(expect.arrayContaining([
@@ -179,7 +191,7 @@ describe('CodexProvider', () => {
         dangerouslySkipPermissions: true,
       });
 
-      const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      const [, args, options] = mockExeca.mock.calls[0];
       expect(args).toEqual(expect.arrayContaining([
         'sandbox_mode="workspace-write"',
         'approval_policy="on-request"',
@@ -241,7 +253,7 @@ describe('CodexProvider', () => {
 
     await provider.invoke({ ...baseOptions, prompt });
 
-    const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+    const [, args, options] = mockExeca.mock.calls[0];
     expect(options.input).toContain(prompt);
     for (const arg of args) expect(arg.length).toBeLessThan(1024);
   });
@@ -332,7 +344,7 @@ describe('CodexProvider', () => {
 
       try {
         const result = await selectedProvider.invoke(baseOptions);
-        const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+        const [, , options] = mockExeca.mock.calls[0];
 
         expect({
           authentication: result.authentication,
@@ -416,7 +428,7 @@ describe('CodexProvider', () => {
         state: 'ready',
       });
 
-      const [command, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+      const [command, args, options] = mockExeca.mock.calls[0];
       expect(command).toBe('codex');
       expect(args).toEqual(['doctor', '--json', '--summary']);
       expect(options).toMatchObject({
@@ -1081,7 +1093,7 @@ describe('CodexProvider', () => {
 
     await provider.invokeInteractive({ ...baseOptions, interactive: false });
 
-    const [, args, options] = mockExeca.mock.calls[0] as [string, string[], any];
+    const [, args, options] = mockExeca.mock.calls[0];
     expect(args).toEqual(expect.arrayContaining(['exec', '-']));
     expect(args).not.toContain('--json');
     expect(options).toMatchObject({
@@ -1096,7 +1108,7 @@ describe('CodexProvider', () => {
 
     await provider.invokeInteractive({ ...baseOptions, interactive: true });
 
-    const [, , options] = mockExeca.mock.calls[0] as [string, string[], any];
+    const [, , options] = mockExeca.mock.calls[0];
     expect({ stdout: options.stdout, stderr: options.stderr }).toEqual({
       stdout: ['pipe', 'inherit'],
       stderr: ['pipe', 'inherit'],
@@ -1182,11 +1194,9 @@ describe('CodexProvider', () => {
     for (const fixture of cases) {
       mockExeca.mockResolvedValue(fixture.response as any);
       const result = await provider.invokeInteractive(baseOptions);
-      const [, , execaOptions] = mockExeca.mock.calls.at(-1) as [
-        string,
-        string[],
-        any,
-      ];
+      const lastCall = mockExeca.mock.calls.at(-1);
+      if (!lastCall) throw new Error('expected execa to have been called');
+      const [, , execaOptions] = lastCall;
       observed.push({
         name: fixture.name,
         result:

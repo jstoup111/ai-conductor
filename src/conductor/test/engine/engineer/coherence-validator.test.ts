@@ -562,6 +562,7 @@ describe('checkStoryCoverage', () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.reason).toBe('story-gap');
+    if (result.reason !== 'story-gap') return;
     expect(result.gaps).toHaveLength(1);
     expect(result.gaps[0].gapId).toBe('story-2');
     expect(result.gaps[0].title).toBe('Widget returns');

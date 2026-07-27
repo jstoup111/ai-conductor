@@ -196,7 +196,6 @@ describe('park-marker main-root resolution acceptance (#486): worktree-written m
     await incrementNoEvidenceAttempts(worktreeDir);
 
     const parkResult = await checkAndAutoPark(worktreeDir, 'interactive-feat', {
-      maxAttempts: 3,
       daemon: false,
     });
     expect(parkResult.parked).toBe(false);

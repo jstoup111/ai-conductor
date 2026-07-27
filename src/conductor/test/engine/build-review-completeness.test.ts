@@ -90,9 +90,8 @@ describe('engine/conductor — build_review fails closed when the grader dispatc
   });
 
   async function seedToBuildReview(): Promise<void> {
-    const seed = (await readState(statePath)).ok
-      ? (await readState(statePath)).value
-      : ({} as ConductState);
+    const seedResult = await readState(statePath);
+    const seed = seedResult.ok ? seedResult.value : ({} as ConductState);
     (seed as Record<string, unknown>).complexity_tier = 'M';
     for (const s of ALL_STEPS) {
       if (s.name === 'build_review') break;
@@ -148,9 +147,8 @@ describe('engine/conductor — build_review fails closed when the grader dispatc
     expect(halt).toMatch(/build_review/);
 
     // The step was never marked done in state.
-    const finalState = (await readState(statePath)).ok
-      ? (await readState(statePath)).value
-      : ({} as ConductState);
+    const finalResult = await readState(statePath);
+    const finalState = finalResult.ok ? finalResult.value : ({} as ConductState);
     expect((finalState as Record<string, unknown>).build_review).not.toBe('done');
   });
 
@@ -205,9 +203,8 @@ describe('engine/conductor — build_review fails closed when the grader dispatc
     const r = await checkGateCompletion(dir, 'build_review');
     expect(r.done).toBe(false);
 
-    const finalState = (await readState(statePath)).ok
-      ? (await readState(statePath)).value
-      : ({} as ConductState);
+    const finalResult = await readState(statePath);
+    const finalState = finalResult.ok ? finalResult.value : ({} as ConductState);
     expect((finalState as Record<string, unknown>).build_review).not.toBe('done');
   });
 });

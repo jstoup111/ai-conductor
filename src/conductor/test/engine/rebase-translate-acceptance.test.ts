@@ -200,7 +200,7 @@ async function shaForSubject(
   subject: string,
 ): Promise<string> {
   const { stdout } = await g(['log', branch, '--format=%H %s']);
-  const line = stdout.split('\n').find((l) => l.endsWith(subject));
+  const line = stdout.toString().split('\n').find((l: string) => l.endsWith(subject));
   if (!line) throw new Error(`commit with subject "${subject}" not found on ${branch} after rebase`);
   return line.split(' ')[0];
 }

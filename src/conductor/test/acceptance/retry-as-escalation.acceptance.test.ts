@@ -505,7 +505,10 @@ describe('#188 retry-as-escalation — S3 budgets', () => {
   it('explore/prd/plan/build resolve to max_retries 3 by default', () => {
     for (const step of ['explore', 'prd', 'plan', 'build'] as StepName[]) {
       expect(DEFAULT_STEP_RETRIES[step]).toBe(3);
-      const resolved = resolveStepConfig(step, 'PLANNING', undefined);
+      // Phase does not affect max_retries when no config is supplied (the
+      // phase-config lookup is always undefined in that case) — any valid
+      // Phase exercises the same default-resolution path.
+      const resolved = resolveStepConfig(step, 'DECIDE', undefined);
       expect(resolved.max_retries).toBe(3);
     }
   });

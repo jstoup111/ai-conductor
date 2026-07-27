@@ -369,7 +369,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           ? manualDispatch()
           : architectureDispatch(),
       );
-      const claudeInteractive = vi.fn(() => prdDispatch());
+      const claudeInteractive = vi.fn((_options: InvokeOptions) => prdDispatch());
       const capturedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
         success: true,
         output: "captured print path must not run",

@@ -697,7 +697,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
 
     // Create a StepRunner with an LLM provider mock
     const mockProvider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, output: 'mocked' })),
+      invoke: vi.fn(async () => ({ success: true, output: 'mocked', exitCode: 0 })),
       invokeInteractive: vi.fn(async () => undefined),
     };
 
@@ -785,7 +785,7 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
     };
 
     const mockProvider: LLMProvider = {
-      invoke: vi.fn(async () => ({ success: true, output: 'mocked' })),
+      invoke: vi.fn(async () => ({ success: true, output: 'mocked', exitCode: 0 })),
       invokeInteractive: vi.fn(async () => undefined),
     };
 

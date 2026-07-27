@@ -88,6 +88,7 @@ describe('interrupted publish recovery', () => {
       orphanedDir = entryPath;
     }
     expect(orphanedDir).toBeDefined();
+    if (!orphanedDir) throw new Error('orphanedDir must be defined');
 
     // The orphaned dir still carries the "finalized but not flipped" sentinel.
     await expect(lstat(join(orphanedDir, '.publish-incomplete'))).resolves.toBeDefined();

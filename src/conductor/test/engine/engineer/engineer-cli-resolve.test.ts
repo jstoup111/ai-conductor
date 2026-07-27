@@ -73,13 +73,13 @@ describe('detectEngineerCommand: resolve grammar and validation', () => {
     it('valid https:// URL', () => {
       const result = detectEngineerCommand(argv('resolve', 'o/a#1', '--pr-url', 'https://github.com/o/a/pull/123'));
       expect(result?.kind).toBe('resolve');
-      expect(result?.prUrl).toBe('https://github.com/o/a/pull/123');
+      expect(result?.kind === 'resolve' ? result.prUrl : undefined).toBe('https://github.com/o/a/pull/123');
     });
 
     it('valid http:// URL', () => {
       const result = detectEngineerCommand(argv('resolve', 'o/a#1', '--pr-url', 'http://github.com/o/a/pull/123'));
       expect(result?.kind).toBe('resolve');
-      expect(result?.prUrl).toBe('http://github.com/o/a/pull/123');
+      expect(result?.kind === 'resolve' ? result.prUrl : undefined).toBe('http://github.com/o/a/pull/123');
     });
 
     it('invalid URL (not http(s)://) → guide (validation on dispatch side)', () => {
@@ -89,7 +89,7 @@ describe('detectEngineerCommand: resolve grammar and validation', () => {
       const result = detectEngineerCommand(argv('resolve', 'o/a#1', '--pr-url', 'not-a-url'));
       // Parsing accepts it (structure valid), but dispatch will reject it
       expect(result?.kind).toBe('resolve');
-      expect(result?.prUrl).toBe('not-a-url');
+      expect(result?.kind === 'resolve' ? result.prUrl : undefined).toBe('not-a-url');
     });
   });
 
@@ -102,7 +102,7 @@ describe('engineer resolve dispatch and validation (integration with dispatchEng
   function captureOut() {
     const out: string[] = [];
     const err: string[] = [];
-    const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]>): Parameters<typeof dispatchEngineer>[1] => ({
+    const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]> = {}): Parameters<typeof dispatchEngineer>[1] => ({
       print: (s) => out.push(s),
       printErr: (s) => err.push(s),
       ...extra,
@@ -169,6 +169,8 @@ describe('engineer resolve dispatch and validation (integration with dispatchEng
   it('malformed resolve (missing --pr-url) triggers guide output with usage text', async () => {
     const { out, err, opts } = captureOut();
     const result = detectEngineerCommand(argv('resolve', 'o/a#1'));
+    expect(result).not.toBeNull();
+    if (!result) throw new Error('unreachable: asserted above');
     expect(result.kind).toBe('guide');
     // Dispatch the guide kind to see the usage text
     const code = await dispatchEngineer(result, opts());
@@ -191,7 +193,7 @@ describe('engineer resolve: happy path (Task 12)', () => {
   function captureOut() {
     const out: string[] = [];
     const err: string[] = [];
-    const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]>): Parameters<typeof dispatchEngineer>[1] => ({
+    const opts = (extra: Partial<Parameters<typeof dispatchEngineer>[1]> = {}): Parameters<typeof dispatchEngineer>[1] => ({
       print: (s) => out.push(s),
       printErr: (s) => err.push(s),
       ...extra,

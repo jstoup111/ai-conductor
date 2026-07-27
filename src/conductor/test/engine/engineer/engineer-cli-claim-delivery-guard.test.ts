@@ -41,6 +41,7 @@ function makeEnvelope(overrides: Partial<Envelope> = {}): Envelope {
     source: SOURCE,
     sourceRef: SOURCE_REF,
     text: 'duplicate re-capture of #243',
+    status: 'pending',
     receivedAt: '2026-07-04T00:00:00.000Z',
     ...overrides,
   };

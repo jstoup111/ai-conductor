@@ -391,7 +391,7 @@ describe('executeProviderCandidates', () => {
       config: { llm_provider: [first, second] }, options: { prompt: 'Ship it.', cwd: '/workspace/feature' },
       prepareCandidateSelfHost: async (candidate) => {
         transcript.push(`prepare:${candidate.providerKey}`);
-        return { executable: candidate.providerKey, env: {}, args: [], teardown: async () => transcript.push(`verify-and-teardown:${candidate.providerKey}`) };
+        return { executable: candidate.providerKey, env: {}, args: [], teardown: async () => { transcript.push(`verify-and-teardown:${candidate.providerKey}`); } };
       },
     });
     expect(transcript).toEqual([
@@ -612,7 +612,7 @@ describe('executeProviderCandidates', () => {
       await module.executeProviderCandidates({
         step: 'build', configuredProviders: ['codex'], preferredProvider: 'codex', runtimes, sessions,
         options: { prompt, cwd: '/workspace/feature' },
-        onAttempt: (_step, attempt) => captured.push(attempt),
+        onAttempt: (_step, attempt) => { captured.push(attempt); },
       });
     }
 
@@ -899,7 +899,7 @@ describe('executeProviderCandidates', () => {
           runtime(second, provider(second)),
         ]),
         sessions: new ProviderSessionScope(
-          vi.fn((candidate) => `${fixture.name}-${candidate}-session`),
+          vi.fn(() => `${fixture.name}-session`),
         ),
         config: {
           llm_provider: fixture.candidates,
@@ -1051,7 +1051,7 @@ describe('executeProviderCandidates', () => {
       attempt: 3,
       escalate: true,
       modelOverride: 'gpt-cli-primary',
-      effortOverride: 'max',
+      effortOverride: 'max' as const,
       warn,
       options: {
         prompt: 'Build the feature.',

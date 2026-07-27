@@ -141,7 +141,9 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await seed532Fixture();
       const { runner } = trackingRunner(dir);
       const started: StepName[] = [];
-      events.on('step_started', (e: { step: StepName }) => started.push(e.step));
+      events.on('step_started', (e) => {
+        if (e.type === 'step_started') started.push(e.step);
+      });
 
       const conductor = new Conductor({
         projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
@@ -184,7 +186,9 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       await seed532Fixture();
       const { runner, log } = trackingRunner(dir);
       const kickbacks: Array<{ from: StepName; to: StepName }> = [];
-      events.on('kickback', (event: { from: StepName; to: StepName }) => kickbacks.push(event));
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push({ from: event.from, to: event.to });
+      });
       // The #922 publication fence is an artifact-verifying boundary: with
       // `verifyArtifacts:false` (the mocked-dispatch unit mode) runner success
       // is the only authority and `nonGreenFinishValidators` is inert by

@@ -47,7 +47,10 @@ type MethodCall = { method: string; args: unknown[] };
 
 function makeFakeSupervisor(throwOn?: { method: string; error: Error }): {
   calls: MethodCall[];
-  supervisor: Record<string, (...args: any[]) => Promise<void | string | boolean>>;
+  supervisor: Record<
+    string,
+    (...args: unknown[]) => Promise<void | string | boolean | { degraded: boolean; message: string }>
+  >;
 } {
   const calls: MethodCall[] = [];
   const makeMethod = (method: string) =>

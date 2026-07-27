@@ -38,7 +38,7 @@ describe('finish documentation finalization contract', () => {
     };
 
     expect(positions).toSatisfy(
-      (positions) =>
+      (positions: Record<string, number>) =>
         Object.values(positions).every((position) => position >= 0) &&
         Object.values(positions).every(
           (position, index, ordered) => index === 0 || ordered[index - 1] < position,

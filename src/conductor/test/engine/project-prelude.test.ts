@@ -251,12 +251,12 @@ describe('runProjectPrelude (happy paths)', () => {
     const capturedInteractive = vi.fn();
     const codexInteractive = vi.fn();
     const claudeInteractive = vi.fn();
-    const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+    const codexInvoke = vi.fn<LLMProvider['invoke']>(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'bootstrapped',
       exitCode: 0,
     }));
-    const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+    const claudeInvoke = vi.fn<LLMProvider['invoke']>(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'assessed',
       exitCode: 0,

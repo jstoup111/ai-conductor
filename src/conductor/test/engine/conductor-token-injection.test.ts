@@ -17,6 +17,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
 
@@ -54,13 +55,13 @@ describe('conductor token injection: daemon token set/restore (Task 9, TR-2)', (
   let events: ConductorEventEmitter;
   let priorToken: string | undefined;
 
-  function selfHostConfig() {
+  function selfHostConfig(): Partial<HarnessConfig> {
     return {
       harness_self_host: {
         build_auth: { mode: 'daemon-token', token_path: tokenPath },
         auth_park_timeout_minutes: 1,
       },
-    } as never;
+    };
   }
 
   beforeEach(async () => {

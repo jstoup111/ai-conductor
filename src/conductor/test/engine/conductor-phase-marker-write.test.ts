@@ -75,17 +75,24 @@ describe('conductor writes phase-active marker on BUILD/SHIP step entry (Task 4,
       'utf8',
     );
 
+    // Custom step names configured via `config.steps` are not part of the
+    // built-in StepName literal union but flow through the engine as valid
+    // runtime step identifiers — this fixture proves the marker write is
+    // keyed off step.phase, not an enumerated name list, so the cast below
+    // mirrors the (already-cast) `fromStep` below it.
+    const novelStep = 'totally_novel_ship_step' as StepName;
+
     let sawMarkerDuringRun = false;
     let markerContents = '';
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
-        if (step === 'totally_novel_ship_step') {
+        if (step === novelStep) {
           sawMarkerDuringRun = existsSync(phaseMarkerPath(dir));
           if (sawMarkerDuringRun) {
             markerContents = readFileSync(phaseMarkerPath(dir), 'utf8');
           }
         }
-        if (step === 'totally_novel_ship_step') throw new Error('stop after marker observation');
+        if (step === novelStep) throw new Error('stop after marker observation');
         return { success: true };
       },
     };

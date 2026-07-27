@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { Mock } from 'vitest';
 import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
 
@@ -7,8 +8,25 @@ vi.mock('execa', () => ({
   execa: vi.fn(),
 }));
 
-import { execa } from 'execa';
-const mockExeca = vi.mocked(execa);
+import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 'execa';
+
+/**
+ * `execa`'s exported type is an intersection of several call-signature
+ * overloads (template-tag, options-bind, `(file, args, options)`,
+ * `(file, options)`). `Parameters<>`/`ReturnType<>` on such an intersection
+ * collapse to the LAST overload, and the real `ResultPromise` return type
+ * carries subprocess-only members (`.pipe`, etc.) that a plain mock never
+ * implements. This codebase only ever calls execa in the 3-arg
+ * `(file, args, options)` form and only ever awaits the plain result, so the
+ * mock is re-typed to that actual call shape via `unknown` to bridge past
+ * execa's overload-collapsing type limitation.
+ */
+type ExecaInvocation = (
+  file: string,
+  args: string[],
+  options?: ExecaOptions,
+) => Promise<ExecaResult>;
+const mockExeca = vi.mocked(execa) as unknown as Mock<ExecaInvocation>;
 
 describe('ClaudeProvider', () => {
   let provider: ClaudeProvider;
@@ -119,7 +137,15 @@ describe('ClaudeProvider', () => {
     it('closes stdin (stdin: ignore) when there is no prompt', async () => {
       mockExeca.mockResolvedValue({ stdout: 'ok', exitCode: 0, failed: false } as any);
 
-      await provider.invoke({ ...baseOptions, prompt: undefined, dangerouslySkipPermissions: true });
+      // InvokeOptions declares `prompt` required, but the CLI treats an
+      // absent prompt as a real, supported runtime state (stdin closed
+      // rather than fed). Deliberately construct that out-of-type value to
+      // exercise the no-prompt path.
+      await provider.invoke({
+        ...baseOptions,
+        prompt: undefined as unknown as string,
+        dangerouslySkipPermissions: true,
+      });
 
       const [, args, opts] = mockExeca.mock.calls[0] as [string, string[], any];
       expect(opts).toMatchObject({ stdin: 'ignore' });

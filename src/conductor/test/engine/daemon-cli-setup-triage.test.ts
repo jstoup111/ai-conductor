@@ -15,7 +15,7 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { v4 as uuidv4 } from 'uuid';
-import type { GitRunner } from '../../src/engine/setup-triage.js';
+import type { GitRunner, TriageOutcome } from '../../src/engine/setup-triage.js';
 import { fixSession } from '../../src/engine/setup-triage.js';
 
 let workDirs: string[] = [];
@@ -149,8 +149,11 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
     };
 
     const worktree = { path: '/fake/path', branch: 'feat/test' };
-    // Simulate a triage-pass outcome (clean tree after quarantine)
-    const triageOutcome = { kind: 'quarantined-pass' as const };
+    // Simulate a triage-pass outcome (clean tree after quarantine). Widen
+    // `kind` to the real TriageOutcome union so the `!== 'park'` narrowing
+    // check below type-checks against a genuine sibling — this fixture only
+    // needs the `kind` discriminant, not the full per-variant payload.
+    const triageOutcome: { kind: TriageOutcome['kind'] } = { kind: 'quarantined-pass' };
 
     if (triageOutcome.kind !== 'park') {
       // On non-park outcomes, prepare is retried/called
@@ -213,10 +216,13 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
       let dispatchFixSessionCalled = false;
       let fixSessionCalled = false;
 
-      // Mock git runner (minimal interface)
-      const mockGit: GitRunner = {
-        run: async (args: string[]) => ({ exitCode: 0, stdout: '', stderr: '' }),
-      } as GitRunner;
+      // Mock git runner — GitRunner is directly callable (args) => Promise<GitResult>,
+      // not an object with a `.run` method.
+      const mockGit: GitRunner = async (args: string[]) => ({
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      });
 
       // Reconstruct the runSetupTriage closure with mocked dependencies
       // This mirrors the pattern in daemon-cli.ts lines 827-894
@@ -238,12 +244,20 @@ describe('Task 15 — Production wiring in daemon-cli', () => {
           // Mock implementation
         };
 
-        // Stage 1: triage — stub to return quarantined-pass
-        const triageOutcome = {
-          kind: 'quarantined-pass' as const,
+        // Stage 1: triage — stub to return quarantined-pass. This closure mirrors
+        // daemon-cli.ts's real triage branches (park / quarantined-pass /
+        // fixed-pass...) below, which ARE all reachable when triageOutcome comes
+        // from the real triage stage. A `const x: TriageOutcome = {...}` literal
+        // would let TS narrow `triageOutcome` down to just its initializer's
+        // variant for control-flow purposes, making those later branches look
+        // like dead code — route through an identity function typed to return
+        // the full union so the widened type sticks.
+        const asTriageOutcome = (outcome: TriageOutcome): TriageOutcome => outcome;
+        const triageOutcome = asTriageOutcome({
+          kind: 'quarantined-pass',
           quarantineRef: 'wip/setup-quarantine-x',
           outputTail: '',
-        };
+        });
 
         // Early return for park with no quarantineRef (line 853-855)
         if (triageOutcome.kind === 'park' && !triageOutcome.quarantineRef) {

@@ -14,17 +14,20 @@ vi.mock('execa', () => ({ execa: vi.fn(async () => ({ stdout: '' })) }));
 // a real git remote in this fixture's throwaway repo. Resolves
 // 'kicked-to-build' by default — the classic genuine-FAIL routing this
 // suite pins must stay unchanged.
-const runScopeFailDispositionMock = vi.fn(async () => ({ kind: 'kicked-to-build' as const }));
+const runScopeFailDispositionMock = vi.fn(
+  async (_opts: import('../../src/engine/build-review-disposition.js').RunScopeFailDispositionOpts) =>
+    ({ kind: 'kicked-to-build' as const }),
+);
 vi.mock('../../src/engine/build-review-disposition.js', async (importOriginal) => {
   const actual =
     await importOriginal<typeof import('../../src/engine/build-review-disposition.js')>();
   return {
     ...actual,
     runScopeFailDisposition: (...args: unknown[]) =>
-      runScopeFailDispositionMock(...(args as [])),
+      runScopeFailDispositionMock(...(args as [import('../../src/engine/build-review-disposition.js').RunScopeFailDispositionOpts])),
   };
 });
-import type { ConductState } from '../../src/types/index.js';
+import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState, readState } from '../../src/engine/state.js';
@@ -342,7 +345,7 @@ describe('integration/gate-loop', () => {
       projectRoot: dir,
       mode: 'auto',
       config,
-      fromStep: 'lint',
+      fromStep: 'lint' as StepName,
     });
     await conductor.run();
 
@@ -1953,7 +1956,19 @@ describe('integration/gate-loop', () => {
       await git('commit', '-q', '-m', 'docs: approve task plan');
       const planText = '### Task t1\n**Story:** 1-1 (happy path)\n';
       const { execa } = await import('execa');
-      const mockExeca = vi.mocked(execa);
+      // execa's exported type is an intersection of overloads (template-tag,
+      // options-bind, `(file, args, options)`, `(file, options)`);
+      // Parameters<>/ReturnType<> on that intersection collapse to the LAST
+      // overload and its ResultPromise return type, which carries
+      // subprocess-only members no plain mock implements. Re-type to the
+      // actual `(file, args, options)` call/await shape used in production
+      // via `unknown`, bridging execa's overload-collapsing type limitation.
+      type ExecaInvocation = (
+        file: string,
+        args: readonly string[],
+        options?: import('execa').Options,
+      ) => Promise<import('execa').Result>;
+      const mockExeca = vi.mocked(execa) as unknown as import('vitest').Mock<ExecaInvocation>;
       mockExeca.mockImplementation(async (_command: string, args: readonly string[] = []) => {
         if (args[0] === 'ls-tree') return { stdout: '.docs/plans/p.md\0' } as never;
         if (args[0] === 'show') return { stdout: planText } as never;

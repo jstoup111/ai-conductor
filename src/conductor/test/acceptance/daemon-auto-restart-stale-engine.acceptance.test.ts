@@ -42,7 +42,18 @@ import { join } from 'node:path';
 
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
 import { holdLock } from '../../src/engine/daemon-lock.js';
-import { PUBLISH_WRAPPER_ENV_VAR } from '../../scripts/publish-guard.mjs';
+
+// scripts/publish-guard.mjs is a plain JS module with no declaration file
+// and scripts/ is outside tsconfig.test.json's `include`, so both a static
+// `import` and a literal-specifier dynamic `import()` of it fail typecheck
+// (TS7016) under this project's `moduleResolution: "bundler"` settings (no
+// `allowJs`). Routing the specifier through a variable makes it a
+// non-literal dynamic import, which TS cannot statically resolve to the
+// unetyped file and so types as `any` instead of erroring — the constant
+// itself is a plain string (see scripts/publish-guard.mjs).
+const publishGuardModulePath = '../../scripts/publish-guard.mjs';
+const { PUBLISH_WRAPPER_ENV_VAR }: { PUBLISH_WRAPPER_ENV_VAR: string } =
+  await import(publishGuardModulePath);
 
 const IDENTITY_MOD = '../../src/engine/engine-identity.js';
 const RESTART_MOD = '../../src/engine/restart-intent.js';
@@ -496,7 +507,7 @@ describe('acceptance: idle-boundary stale detection + restart request over the R
         staleEngineChecker: {
           // Fresh for the first dispatch (so `busy` builds), stale thereafter so
           // the restart is requested only once the daemon is quiescent again.
-          check: () => (checks++ === 0 ? 'current' : 'stale') as const,
+          check: (): 'stale' | 'current' | 'indeterminate' => (checks++ === 0 ? 'current' : 'stale'),
           capturedIdentity: () => 'captured-hash',
           targetIdentity: () => 'target-hash',
         },

@@ -37,17 +37,17 @@ async function emitRepresentativeRun(emitter: ConductorEventEmitter): Promise<vo
   await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
   await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
 
-  await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+  await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
   await emitter.emit({
     type: 'step_retry',
-    step: 'brainstorm',
+    step: 'explore',
     attempt: 2,
     maxAttempts: 3,
     reason: 'flaky',
   });
   await emitter.emit({
     type: 'step_completed',
-    step: 'brainstorm',
+    step: 'explore',
     status: 'done',
     tokenUsage: { input: 100, output: 50 }, // partial kinds (no cache) — FR-5
   });
@@ -114,7 +114,7 @@ describe('OTel Observability — Phase 1 acceptance', () => {
 
       const stepSpans = spans.filter((s) => s.parentSpanId);
       expect(stepSpans.map((s) => s.name).sort()).toEqual(
-        ['bootstrap', 'brainstorm', 'plan'].sort(),
+        ['bootstrap', 'explore', 'plan'].sort(),
       );
       // all step spans share the root's trace id (one trace per run)
       for (const s of stepSpans) {
@@ -140,8 +140,8 @@ describe('OTel Observability — Phase 1 acceptance', () => {
       await emitRepresentativeRun(emitter);
       await vis.stop();
 
-      const brainstorm = allSpans(spanExporter).find((s) => s.name === 'brainstorm')!;
-      expect(brainstorm.attributes['conductor.step']).toBe('brainstorm');
+      const brainstorm = allSpans(spanExporter).find((s) => s.name === 'explore')!;
+      expect(brainstorm.attributes['conductor.step']).toBe('explore');
       expect(brainstorm.attributes['conductor.step.index']).toBe(1);
       expect(brainstorm.attributes['conductor.step.status']).toBe('done');
       // the step_retry for brainstorm becomes a span event on its open span
@@ -172,7 +172,7 @@ describe('OTel Observability — Phase 1 acceptance', () => {
         .flatMap((rm) => rm.scopeMetrics.flatMap((sm) => sm.metrics))
         .find((m) => m.descriptor.name === 'conductor.step.tokens')!;
       const steps = tokenMetric.dataPoints.map((d) => d.attributes['step']);
-      expect(steps).toContain('brainstorm');
+      expect(steps).toContain('explore');
       expect(steps).not.toContain('plan');
     });
   });
@@ -246,12 +246,12 @@ describe('OTel Observability — Phase 1 acceptance', () => {
       const vis = startVisualizer();
       await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
       await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
-      // interrupted mid-step: 'brainstorm' starts but never completes
-      await emitter.emit({ type: 'step_started', step: 'brainstorm', index: 1 });
+      // interrupted mid-step: 'explore' starts but never completes
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
       // no feature_complete — simulate process teardown via stop()/flush
       await vis.stop();
 
-      const brainstorm = allSpans(spanExporter).find((s) => s.name === 'brainstorm')!;
+      const brainstorm = allSpans(spanExporter).find((s) => s.name === 'explore')!;
       expect(brainstorm).toBeDefined(); // not dropped
       expect(brainstorm.status.code).toBe(2 /* ERROR */);
       expect(brainstorm.attributes['conductor.incomplete']).toBe(true);

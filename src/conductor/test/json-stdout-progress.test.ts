@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import type { MockInstance } from 'vitest';
 
 import type { ConductorEvent } from '../src/types/index.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { TerminalSubscriber } from '../src/ui/subscriber.js';
 import { dispatchRenderers } from '../src/ui/dispatch.js';
-import { JsonStdoutSubscriber } from '../../plugins/json-stdout-subscriber/index.ts';
+import { JsonStdoutSubscriber } from '../../../plugins/json-stdout-subscriber/index.js';
 import type { UIRenderer } from '../src/ui/types.js';
 
 /**
@@ -30,7 +31,7 @@ function asRenderer(subscriber: JsonStdoutSubscriber, name = 'json-stdout'): UIR
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('TerminalSubscriber subscription list', () => {
-  it('subscribes to build_progress, build_no_progress, and build_stall', () => {
+  it('subscribes to build_progress, build_no_progress, and build_stall', async () => {
     const emitter = new ConductorEventEmitter();
     const onRender = vi.fn();
     const subscriber = new TerminalSubscriber(emitter, onRender);
@@ -46,9 +47,9 @@ describe('TerminalSubscriber subscription list', () => {
     };
     const stall: ConductorEvent = { type: 'build_stall' } as ConductorEvent;
 
-    emitter.emit(progress);
-    emitter.emit(noProgress);
-    emitter.emit(stall);
+    await emitter.emit(progress);
+    await emitter.emit(noProgress);
+    await emitter.emit(stall);
 
     expect(onRender).toHaveBeenCalledTimes(3);
     expect(onRender).toHaveBeenNthCalledWith(1, progress);
@@ -61,7 +62,7 @@ describe('TerminalSubscriber subscription list', () => {
 
 describe('json-stdout renderer fan-out for progress/stall events', () => {
   let subscriber: JsonStdoutSubscriber;
-  let stdoutWriteSpy: ReturnType<typeof vi.spyOn>;
+  let stdoutWriteSpy: MockInstance<typeof process.stdout.write>;
 
   beforeEach(() => {
     subscriber = new JsonStdoutSubscriber();

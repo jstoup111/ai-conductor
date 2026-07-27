@@ -171,8 +171,12 @@ async function buildDeps(
     hasWarned: async () => false,
     markWarned: async () => {},
     fastForwardRoot: async () => {},
-    discoverBacklog: (root, isProcessed, l, discOpts: DiscoverBacklogOpts) =>
-      discoverBacklog(root, isProcessed, l, { ...discOpts, treeSource: fsTreeSource(root) }),
+    discoverBacklog: (
+      root: string,
+      isProcessed: (slug: string) => Promise<boolean>,
+      l: (m: string) => void,
+      discOpts: DiscoverBacklogOpts,
+    ) => discoverBacklog(root, isProcessed, l, { ...discOpts, treeSource: fsTreeSource(root) }),
     ...(resolver ? { priorityResolver: resolver } : {}),
   } as unknown as LocalWorkSourceDeps;
 }

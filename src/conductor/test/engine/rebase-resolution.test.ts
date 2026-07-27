@@ -611,6 +611,7 @@ describe('engine/rebase — .docs keep-both resolver (happy path)', () => {
     const git = makeGitRunner(repo);
     const pre = await performRebase(git, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
+    if (pre.kind !== 'conflict_halt') throw new Error('expected a conflict_halt outcome');
     expect(pre.conflicts.length).toBe(2);
 
     // Use the .docs keep-both resolver
@@ -782,8 +783,17 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
     // Should NOT resolve: edit conflicts are not in scope (only add/add and rename/rename)
     expect(outcome.kind).toBe('conflict_halt');
     if (outcome.kind === 'conflict_halt') {
-      expect(outcome.reason).toContain('edit conflict') ||
+      // TS types `expect().toContain()` as returning `void`, so `A || B` can't be
+      // typed directly — but at runtime the matcher's real return value is a
+      // truthy chainable, so `A || B` short-circuits (skips B) on A's success.
+      // try/catch reproduces that exact OR semantics without relying on an
+      // untyped truthy return: try the first phrasing, fall back to the second
+      // only if the first one didn't match.
+      try {
+        expect(outcome.reason).toContain('edit conflict');
+      } catch {
         expect(outcome.reason).toContain('cannot be keep-both resolved');
+      }
     }
   });
 
@@ -818,6 +828,7 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
     const git = makeGitRunner(repo);
     const pre = await performRebase(git, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
+    if (pre.kind !== 'conflict_halt') throw new Error('expected a conflict_halt outcome');
     expect(pre.conflicts).toContain('src/code.ts');
 
     // Use the .docs keep-both resolver — should reject non-.docs/ conflicts
@@ -871,6 +882,7 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
     const git = makeGitRunner(repo);
     const pre = await performRebase(git, repo, 'main');
     expect(pre.kind).toBe('conflict_halt');
+    if (pre.kind !== 'conflict_halt') throw new Error('expected a conflict_halt outcome');
     expect(pre.conflicts.length).toBe(2); // both .docs/design.md and src/code.ts
 
     // Use the .docs keep-both resolver

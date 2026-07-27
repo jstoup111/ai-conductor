@@ -134,7 +134,7 @@ describe('operator-park dashboard precedence acceptance (FR-6): PARKED outranks 
     const eligibleItem: BacklogItem = { slug: 'eligible-plain' };
     const waitingEntry: WaitingEntry = {
       slug: 'waiting-plain',
-      verdict: { kind: 'blocked', blockers: [{ repo: 'acme/repo', number: 7 }] },
+      verdict: { kind: 'blocked', blockers: [{ repo: 'acme/repo', number: '7' }] },
     };
 
     await parkMarker.writeOperatorPark(projectRoot, 'halted-and-parked');

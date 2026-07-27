@@ -3,51 +3,51 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent, RecoveryOption } from '../../src/types/index.js';
 
 describe('ConductorEventEmitter', () => {
-  it('emit step_started triggers registered listener with correct payload', () => {
+  it('emit step_started triggers registered listener with correct payload', async () => {
     const emitter = new ConductorEventEmitter();
     const handler = vi.fn();
     emitter.on('step_started', handler);
 
-    const event: ConductorEvent = { type: 'step_started', step: 'brainstorm', index: 2 };
-    emitter.emit(event);
+    const event: ConductorEvent = { type: 'step_started', step: 'explore', index: 2 };
+    await emitter.emit(event);
 
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(event);
   });
 
-  it('emit checkpoint_reached triggers listener', () => {
+  it('emit checkpoint_reached triggers listener', async () => {
     const emitter = new ConductorEventEmitter();
     const handler = vi.fn();
     emitter.on('checkpoint_reached', handler);
 
     const event: ConductorEvent = { type: 'checkpoint_reached', step: 'stories' };
-    emitter.emit(event);
+    await emitter.emit(event);
 
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(event);
   });
 
-  it('emit recovery_needed triggers listener with options array', () => {
+  it('emit recovery_needed triggers listener with options array', async () => {
     const emitter = new ConductorEventEmitter();
     const handler = vi.fn();
     emitter.on('recovery_needed', handler);
 
     const options: RecoveryOption[] = ['retry', 'interactive', 'back', 'skip', 'quit'];
     const event: ConductorEvent = { type: 'recovery_needed', step: 'build', options };
-    emitter.emit(event);
+    await emitter.emit(event);
 
     expect(handler).toHaveBeenCalledOnce();
     expect(handler).toHaveBeenCalledWith(event);
     expect((handler.mock.calls[0][0] as Extract<ConductorEvent, { type: 'recovery_needed' }>).options).toEqual(options);
   });
 
-  it('off() removes listener so subsequent emit does not trigger it', () => {
+  it('off() removes listener so subsequent emit does not trigger it', async () => {
     const emitter = new ConductorEventEmitter();
     const handler = vi.fn();
     emitter.on('step_started', handler);
     emitter.off('step_started', handler);
 
-    emitter.emit({ type: 'step_started', step: 'worktree', index: 0 });
+    await emitter.emit({ type: 'step_started', step: 'worktree', index: 0 });
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -57,13 +57,13 @@ describe('ConductorEventEmitter', () => {
 
     const promise = emitter.waitFor('feature_complete');
     const event: ConductorEvent = { type: 'feature_complete', prUrl: 'https://github.com/pr/1' };
-    emitter.emit(event);
+    await emitter.emit(event);
 
     const result = await promise;
     expect(result).toEqual(event);
   });
 
-  it('continues operating when listener throws', () => {
+  it('continues operating when listener throws', async () => {
     const emitter = new ConductorEventEmitter();
 
     // Register a listener that throws
@@ -71,20 +71,23 @@ describe('ConductorEventEmitter', () => {
       throw new Error('subscriber kaboom');
     });
 
-    // Emit should not throw despite the broken listener
-    expect(() => {
-      emitter.emit({ type: 'step_started', step: 'brainstorm', index: 0 });
-    }).not.toThrow();
+    // Emit must not blow up despite the broken listener. `emit` is async, so the
+    // assertion is that it RESOLVES — the previous synchronous
+    // `expect(() => ...).not.toThrow()` wrapped a call that returns a promise, so
+    // it would have passed even if that promise rejected.
+    await expect(
+      emitter.emit({ type: 'step_started', step: 'explore', index: 0 }),
+    ).resolves.toBeUndefined();
 
     // Emitter must still work after the error
     const handler2 = vi.fn();
     emitter.on('dashboard_refresh', handler2);
-    emitter.emit({ type: 'dashboard_refresh' });
+    await emitter.emit({ type: 'dashboard_refresh' });
 
     expect(handler2).toHaveBeenCalledOnce();
   });
 
-  it('multiple listeners on same event type all fire', () => {
+  it('multiple listeners on same event type all fire', async () => {
     const emitter = new ConductorEventEmitter();
     const handler1 = vi.fn();
     const handler2 = vi.fn();
@@ -95,7 +98,7 @@ describe('ConductorEventEmitter', () => {
     emitter.on('dashboard_refresh', handler3);
 
     const event: ConductorEvent = { type: 'dashboard_refresh' };
-    emitter.emit(event);
+    await emitter.emit(event);
 
     expect(handler1).toHaveBeenCalledOnce();
     expect(handler2).toHaveBeenCalledOnce();

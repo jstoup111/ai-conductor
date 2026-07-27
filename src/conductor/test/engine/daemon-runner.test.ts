@@ -72,17 +72,12 @@ function deps(
     // deps object type-complete.
     daemon: false,
     provider: {
-      invoke: async () => ({ success: true, output: '' }),
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
       invokeInteractive: async () => {},
     },
     project: 'test-project',
     projectRoot: '/proj',
-    runGh: {
-      async invoke() {
-        return { stdout: '', exitCode: 0 };
-      },
-      async invokeInteractive() {},
-    },
+    runGh: async () => ({ stdout: '' }),
     enrollWatch: async (projectRoot: string, entry: any) => {
       rec.enrollCalls!.push({ prUrl: entry.prUrl, slug: entry.slug });
     },
@@ -110,7 +105,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     };
     featureDeps.runSetupTriage = async (_error, _worktree, _item, _execution, receivedLog) => {
       expect(receivedLog).toBe(featureLog);
-      return { kind: 'pass' };
+      return { kind: 'pass', outputTail: '' };
     };
     featureDeps.runConductor = async (_worktree, _item, _execution, _events, receivedLog) => {
       expect(receivedLog).toBe(featureLog);
@@ -173,7 +168,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     (
       featureDeps as FeatureRunnerDeps & {
         beginFeatureRun?: (
-          worktree: typeof worktree,
+          wt: typeof worktree,
           item: BacklogItem,
         ) => Promise<{
           events: ConductorEventEmitter;
@@ -187,7 +182,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       return { events: localEvents, providerExecution, stop };
     };
     const attempts: string[] = [];
-    localEvents.on('provider_attempt', (event) => attempts.push(event.provider));
+    localEvents.on('provider_attempt', (event) => {
+      if (event.type === 'provider_attempt') attempts.push(event.provider);
+    });
 
     const outcome = await makeRunFeature(featureDeps)({ slug: 'feature-a' });
 
@@ -543,7 +540,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
     interface TriageRecorder {
       triageCalls?: Array<{ error: string; daemon: boolean }>;
-      triageReturnValue?: { kind: 'quarantined-pass' | 'park'; outputTail?: string };
+      triageReturnValue?: TriageOutcome;
     }
 
     function depsWithTriageOrder(
@@ -569,7 +566,13 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         if (!rec.triageCalls) rec.triageCalls = [];
         rec.triageCalls.push({ error: error.message, daemon: opts.daemon ?? false });
         if (opts.triageThrows) throw new Error('triage dispatch failed');
-        return rec.triageReturnValue ?? { kind: 'quarantined-pass', outputTail: '' };
+        return (
+          rec.triageReturnValue ?? {
+            kind: 'quarantined-pass',
+            outputTail: '',
+            quarantineRef: 'wip/setup-quarantine-default',
+          }
+        );
       };
       return {
         ...base,
@@ -600,7 +603,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     it('TS-2 happy: SetupFailureError with daemon=true invokes triage → quarantined-pass continues to runConductor', async () => {
       const order: string[] = [];
       const rec: TriageRecorder & { teardownKeep?: boolean } = {
-        triageReturnValue: { kind: 'quarantined-pass', outputTail: '' },
+        triageReturnValue: {
+          kind: 'quarantined-pass',
+          outputTail: '',
+          quarantineRef: 'wip/setup-quarantine-feat-x',
+        },
       };
       const run = makeRunFeature(
         depsWithTriageOrder(order, rec, {

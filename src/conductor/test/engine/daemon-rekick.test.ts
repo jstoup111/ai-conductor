@@ -1288,7 +1288,7 @@ describe('engine/daemon-rekick — verified merged-history continuation', () => 
         );
       },
       daemon: false,
-      provider: { invoke: async () => ({ success: true, output: '' }), invokeInteractive: async () => {} },
+      provider: { invoke: async () => ({ success: true, output: '', exitCode: 0 }), invokeInteractive: async () => {} },
       project: 'test-project',
       log,
     };
@@ -1565,7 +1565,9 @@ describe('engine/daemon-rekick — Task 7 regression (#486)', () => {
     // This should write the marker to the MAIN root, not the worktree
     const parkResult = await checkAndAutoPark(worktreeDir, SLUG, {
       daemon: true,
-      maxAttempts: MAX_ATTEMPTS,
+      // `maxAttempts` (the no-evidence durable-counter park path) was
+      // removed (#773 Task 13); a park now only fires from an explicit
+      // `reason`, which this test still supplies.
       reason: `no completion evidence after ${MAX_ATTEMPTS} attempts`,
     });
 

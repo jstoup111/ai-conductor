@@ -215,7 +215,7 @@ describe('ProviderSessionStore', () => {
 
       const calls: Array<{ sessionId: string; resume: boolean }> = [];
       const provider: LLMProvider = {
-        invoke: async () => ({ success: true, output: '' }),
+        invoke: async () => ({ success: true, output: '', exitCode: 0 }),
         invokeInteractive: async (options) => {
           calls.push({
             sessionId: options.sessionId,
