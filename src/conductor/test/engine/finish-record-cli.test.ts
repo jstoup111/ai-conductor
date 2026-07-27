@@ -777,6 +777,139 @@ describe('engine/finish-record-cli', () => {
     });
   });
 
+  describe('dispatchFinishRecord — CONDUCT_DAEMON_AUTO_FINISH keep gate', () => {
+    let scratchParent: string;
+    let existingAbsDir: string;
+    let previousEnv: string | undefined;
+
+    beforeEach(async () => {
+      scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-auto-finish-'));
+      existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({ feature_desc: 'feature' }),
+      );
+      previousEnv = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+    });
+
+    afterEach(async () => {
+      if (previousEnv === undefined) delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      else process.env.CONDUCT_DAEMON_AUTO_FINISH = previousEnv;
+      vi.restoreAllMocks();
+      await rm(scratchParent, { recursive: true, force: true });
+    });
+
+    it('refuses choice=keep when a git remote is configured and the daemon-auto-finish marker is set', async () => {
+      process.env.CONDUCT_DAEMON_AUTO_FINISH = '1';
+      const runGit = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
+      const runGh = vi.fn(async () => {
+        throw new Error('runGh must not be called when refusing keep');
+      });
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: existingAbsDir },
+        scratchParent,
+        { runGit, runGh },
+      );
+
+      expect(code).toBe(1);
+      expect(runGit).toHaveBeenCalledWith(['remote'], { cwd: dirname(existingAbsDir) });
+      expect(runGh).not.toHaveBeenCalled();
+      const after = await readdir(existingAbsDir);
+      expect(after).not.toContain('finish-choice');
+      expect(after).not.toContain('DONE');
+    });
+
+    it('allows choice=keep when the daemon-auto-finish marker is set but no git remote is configured', async () => {
+      process.env.CONDUCT_DAEMON_AUTO_FINISH = '1';
+      const runGit = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: '' };
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
+      const runGh = vi.fn(async () => {
+        throw new Error('runGh must not be called for choice=keep');
+      });
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: existingAbsDir },
+        scratchParent,
+        { runGit, runGh },
+      );
+
+      expect(code).toBe(0);
+      const marker = await readFile(join(existingAbsDir, 'finish-choice'), 'utf-8');
+      expect(marker.trim()).toBe('keep');
+    });
+
+    it('allows choice=keep with a remote configured when the daemon-auto-finish marker is absent (interactive/default mode unaffected)', async () => {
+      delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      const runGit = vi.fn(async () => {
+        throw new Error('runGit must not be called for choice=keep outside auto-finish mode');
+      });
+      const runGh = vi.fn(async () => {
+        throw new Error('runGh must not be called for choice=keep');
+      });
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: existingAbsDir },
+        scratchParent,
+        { runGit, runGh },
+      );
+
+      expect(code).toBe(0);
+      expect(runGit).not.toHaveBeenCalled();
+      const marker = await readFile(join(existingAbsDir, 'finish-choice'), 'utf-8');
+      expect(marker.trim()).toBe('keep');
+    });
+
+    it('fails closed (refuses keep) when the remote check itself throws', async () => {
+      process.env.CONDUCT_DAEMON_AUTO_FINISH = '1';
+      const runGit = vi.fn(async () => {
+        throw new Error('git not found');
+      });
+      const runGh = vi.fn(async () => {
+        throw new Error('runGh must not be called when refusing keep');
+      });
+      const code = await dispatchFinishRecord(
+        { kind: 'record', choice: 'keep', pipelineDir: existingAbsDir },
+        scratchParent,
+        { runGit, runGh },
+      );
+
+      expect(code).toBe(1);
+      const after = await readdir(existingAbsDir);
+      expect(after).not.toContain('finish-choice');
+    });
+
+    it('does not gate choice=pr (the gate only applies to choice=keep)', async () => {
+      process.env.CONDUCT_DAEMON_AUTO_FINISH = '1';
+      const runGit = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        if (args[0] === 'rev-parse' && args.includes('@{u}')) return { stdout: 'refs/remotes/origin/feat\n' };
+        if (args[0] === 'merge-base') return { stdout: '' };
+        if (args[0] === 'rev-parse' && args.includes('HEAD')) return { stdout: 'candidate\n' };
+        throw new Error(`unexpected git args: ${args.join(' ')}`);
+      });
+      const runGh = vi.fn(async () => ({
+        stdout: JSON.stringify({ url: 'https://github.com/org/repo/pull/1', headRefOid: 'candidate' }),
+      }));
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { runGit, runGh, evaluateEvidence: async () => validEvidence },
+      );
+
+      expect(code).toBe(0);
+      const marker = await readFile(join(existingAbsDir, 'finish-choice'), 'utf-8');
+      expect(marker.trim()).toBe('pr');
+    });
+  });
+
   describe('dispatchFinishRecord — commit-point and corrupt-state refusals', () => {
     let scratchParent: string;
     let existingAbsDir: string;

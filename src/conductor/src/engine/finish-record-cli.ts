@@ -145,6 +145,48 @@ export async function dispatchFinishRecord(
     return 1;
   }
 
+  // Deterministic daemon-safety gate (Daemon Operations Safety rule 4: "a
+  // manual PR is NOT a harness finish"): step-runners.ts sets
+  // CONDUCT_DAEMON_AUTO_FINISH=1 in the environment for the WHOLE finish-step
+  // process tree whenever the conductor is running the finish step in
+  // unattended (auto/daemon) mode — before any agent prompt or shell command
+  // runs. That makes this a machinery check, not prompt discipline: an agent
+  // cannot avoid it by omitting a flag or misjudging remote/gh state, because
+  // this process inherited the marker regardless of what command line it types.
+  //
+  // When that marker is present AND `choice=keep` AND the repo has at least
+  // one configured git remote, refuse — daemon finishes with a remote MUST
+  // resolve to an opened PR (`choice=pr`), never silently fall back to keep.
+  // No remote configured is a legitimately different case (can't open a PR
+  // with nothing to push to) and is left unaffected, as is any invocation
+  // where the marker is absent (interactive/default-mode finishes, where a
+  // human explicitly choosing Keep is a valid choice).
+  if (cmd.choice === 'keep' && process.env.CONDUCT_DAEMON_AUTO_FINISH === '1') {
+    const repoDir = dirname(cmd.pipelineDir);
+    let remoteOutput: string;
+    try {
+      remoteOutput = (await deps.runGit(['remote'], { cwd: repoDir })).stdout;
+    } catch (err) {
+      console.error(
+        `finish-record: unable to check configured git remotes (${err instanceof Error ? err.message : String(err)}) ` +
+          '— refusing to record "keep" in unattended (auto/daemon) mode; a remote check must succeed before ' +
+          'falling back to keep',
+      );
+      return 1;
+    }
+    if (remoteOutput.trim().length > 0) {
+      console.error(
+        'finish-record: refusing to record choice "keep" — a git remote is configured and this run is in ' +
+          'unattended (auto/daemon) mode. Per Daemon Operations Safety rule 4 ("a manual PR is NOT a harness ' +
+          'finish"), an unattended finish with a remote configured MUST resolve to an opened PR. Push the ' +
+          'branch, open the PR with `gh pr create` (or reuse an existing one), and re-run with ' +
+          '`--choice pr --pr-url <url>`. If PR creation itself fails, HALT for human review — do not fall ' +
+          'back to keep.',
+      );
+      return 1;
+    }
+  }
+
   // choice='pr' verification: the PR named by --pr-url must actually exist on
   // GitHub before anything is written. Fail-closed on ANY error — empty
   // stdout, a thrown gh error (missing binary → ENOENT, non-zero exit, etc.)
