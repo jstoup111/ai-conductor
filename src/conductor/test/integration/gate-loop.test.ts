@@ -1243,6 +1243,7 @@ describe('integration/gate-loop', () => {
         findings?: Partial<{ tautology: string[]; scope: string[]; rootCause: string[]; completeness: string[] }>;
         rubric?: { tautology: boolean; scope: boolean; rootCause: boolean; completeness: boolean };
       }>,
+      remediationDispositions?: unknown[],
     ): Promise<{
       buildRuns: number;
       retryReasons: string[];
@@ -1262,6 +1263,38 @@ describe('integration/gate-loop', () => {
             buildRuns++;
             if (opts?.retryReason) retryReasons.push(opts.retryReason);
             return satisfy('build');
+          }
+          if (step === 'remediate') {
+            if (remediationDispositions) {
+              await mkdir(join(dir, '.pipeline'), { recursive: true });
+              await writeFile(
+                join(dir, '.pipeline/remediation.json'),
+                JSON.stringify({ dispositions: remediationDispositions }),
+              );
+            }
+            return { success: true };
+          }
+          if (step === 'acceptance_specs') {
+            if (opts?.retryReason) retryReasons.push(opts.retryReason);
+            await mkdir(join(dir, 'test/acceptance'), { recursive: true });
+            await writeFile(
+              join(dir, 'test/acceptance/foo.test.ts'),
+              "it('fails until implemented', () => { expect(true).toBe(false); });\n",
+            );
+            await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await writeFile(
+              join(dir, '.pipeline/acceptance-specs-red.json'),
+              JSON.stringify({
+                command: 'vitest run test/acceptance',
+                targetSpecs: ['test/acceptance/foo.test.ts'],
+                executed: 1,
+                passed: 0,
+                failed: 1,
+                skipped: 0,
+                errors: 0,
+              }),
+            );
+            return { success: true };
           }
           if (step === 'build_review') {
             const v = verdicts[Math.min(reviewRuns, verdicts.length - 1)];
@@ -1364,47 +1397,99 @@ describe('integration/gate-loop', () => {
       );
     });
 
-    // Task 6 (#773): a FAIL driven SOLELY by rubric.completeness (all other
-    // rubric items PASS) must flow through this same kickback mechanism —
-    // no new routing code, per Task 5's finding that the predicate treats a
-    // completeness-only FAIL identically to any other rubric-item FAIL.
-    it('FAIL-completeness (rubric.completeness only) kicks back to build with the grader evidence, then PASS converges', async () => {
-      const result = await runWithGraderVerdicts([
-        {
-          verdict: 'FAIL',
-          reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
-        },
-        {
-          verdict: 'PASS',
-          reasons: [],
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
-        },
-      ]);
-
-      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
-      expect(result.buildRuns).toBe(2); // initial + one kickback rebuild
-      expect(result.retryReasons.join('\n')).toContain(
-        'implementation addresses only part of the declared scope',
+    // #989: a FAIL driven by rubric.completeness is no longer assumed to be a
+    // local diff defect — the plan itself may be under-decomposed, a judgement
+    // only remediation can make. The FAIL path now resolves a structured
+    // routing decision (BUILD vs REMEDIATE) and the kickback honors it.
+    it('FAIL-completeness dispatches remediate and kicks back to the remediation target, not unconditionally to build', async () => {
+      const result = await runWithGraderVerdicts(
+        [
+          {
+            verdict: 'FAIL',
+            reasons: ['implementation addresses only part of the declared scope — missing negative-path handling'],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+          },
+          {
+            verdict: 'PASS',
+            reasons: [],
+            rubric: { tautology: false, scope: false, rootCause: false, completeness: false },
+          },
+        ],
+        [
+          {
+            id: 'build_review:completeness-1',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'declared scope is not covered by the specs',
+            tasks: [{ id: 'rem-1', title: 'cover the negative path' }],
+          },
+        ],
       );
+
+      expect(result.ran).toContain('remediate');
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'acceptance_specs' });
+      expect(result.kicks).not.toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.retryReasons.join('\n')).toContain('cover the negative path');
       expect(result.completed).toBe(true);
     });
 
-    it('passes every independent structured finding to the build retry hint', async () => {
+    it('FAIL-tautology never dispatches remediate (BUILD decision keeps today’s direct kickback)', async () => {
+      const result = await runWithGraderVerdicts(
+        [
+          { verdict: 'FAIL', reasons: ['tautological test padding'] },
+          { verdict: 'PASS', reasons: [] },
+        ],
+        [
+          {
+            id: 'never-read',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'should not be consulted',
+            tasks: [],
+          },
+        ],
+      );
+
+      expect(result.ran).not.toContain('remediate');
+      expect(result.kicks).toContainEqual({ from: 'build_review', to: 'build' });
+      expect(result.buildRuns).toBe(2);
+    });
+
+    it('a PASS verdict routes nowhere — no kickback and no remediate dispatch', async () => {
+      const result = await runWithGraderVerdicts(
+        [{ verdict: 'PASS', reasons: [] }],
+        [
+          {
+            id: 'never-read',
+            disposition: 'acceptance_specs',
+            category: null,
+            rationale: 'should not be consulted',
+            tasks: [],
+          },
+        ],
+      );
+
+      expect(result.ran).not.toContain('remediate');
+      expect(result.kicks.filter((k) => k.from === 'build_review')).toEqual([]);
+      expect(result.buildRuns).toBe(1);
+      expect(result.completed).toBe(true);
+    });
+
+    it('passes every independent structured finding to the rework retry hint', async () => {
       const result = await runWithGraderVerdicts([
         {
           verdict: 'FAIL',
           reasons: [],
           findings: {
-            completeness: ['missing retry transition output', 'missing teardown transition output'],
+            rootCause: ['patched the symptom, not the cause', 'second symptom-only patch'],
           },
-          rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+          rubric: { tautology: false, scope: false, rootCause: true, completeness: false },
         },
         { verdict: 'PASS', reasons: [] },
       ]);
 
-      expect(result.retryReasons.join('\n')).toContain('[completeness] missing retry transition output');
-      expect(result.retryReasons.join('\n')).toContain('[completeness] missing teardown transition output');
+      expect(result.retryReasons.join('\n')).toContain('[rootCause] patched the symptom, not the cause');
+      expect(result.retryReasons.join('\n')).toContain('[rootCause] second symptom-only patch');
       expect(result.completed).toBe(true);
     });
   });

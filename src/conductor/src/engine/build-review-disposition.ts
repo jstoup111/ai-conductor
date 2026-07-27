@@ -239,3 +239,41 @@ export async function runScopeFailDisposition(
   const regradeResult = await regrade();
   return { kind: 'invalidated', freshBaseSha, regradeResult };
 }
+
+// ── build_review FAIL routing decision (#989) ─────────────────────────────────
+
+/**
+ * Where a `build_review` verdict should send the loop next.
+ *
+ * `'build'`  — a local diff defect the builder can fix in place (today's path).
+ * `'remediate'` — the failure implicates the PLAN, not just the diff; dispatch
+ *                 the remediation planner and let it choose the target step.
+ * `'none'`   — nothing to route (a PASS verdict).
+ */
+export type BuildReviewFailRoute = 'build' | 'remediate' | 'none';
+
+/**
+ * Derive the routing decision deterministically from the grader verdict that
+ * is already on disk — no extra LLM-judged field, no prompt change.
+ *
+ * Rule: a **completeness** failure means the diff does not cover everything the
+ * plan describes. Repeatedly kicking that back to `build` is what produces the
+ * "different legitimate finding every lap" signature of an under-decomposed
+ * plan task, so it goes to `remediate`, which can route per-gap (build /
+ * acceptance_specs / plan / …) or HALT for a human. The other three rubric
+ * items (tautology, scope, rootCause) are local diff defects — they keep
+ * kicking straight back to `build`.
+ *
+ * A FAIL with no completeness signal at all fails open to `'build'`, preserving
+ * today's behavior. Kickback counting semantics are untouched (see #984).
+ */
+export function buildReviewFailRoute(verdict: {
+  verdict: string;
+  rubric?: { tautology?: boolean; scope?: boolean; rootCause?: boolean; completeness?: boolean };
+  findings?: { completeness?: string[] };
+}): BuildReviewFailRoute {
+  if (verdict.verdict !== 'FAIL') return 'none';
+  const completenessFailed =
+    verdict.rubric?.completeness === true || (verdict.findings?.completeness?.length ?? 0) > 0;
+  return completenessFailed ? 'remediate' : 'build';
+}
