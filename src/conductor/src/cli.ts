@@ -12,9 +12,7 @@ export interface CLIOptions {
   status: boolean;
   from?: string;
   cleanup: boolean;
-  step?: string;
   reset: boolean;
-  output: boolean;
   cooldown: number;
   /**
    * Claude model override applied to every step. Overrides config and defaults.
@@ -64,9 +62,7 @@ function applyPipelineOptions(cmd: Command): Command {
     .option('--status', 'Show dashboard only')
     .option('--from <step>', 'Start from specific step')
     .option('--cleanup', 'Clean up worktrees')
-    .option('--step <step>', 'Run single step')
     .option('--reset', 'Clear state')
-    .option('--output', 'Raw output mode')
     .option('--cooldown <seconds>', 'Cooldown between steps in seconds', '10')
     .option('--model <name>', 'Override Claude model for every step (e.g. haiku, sonnet, opus, or full model ID)')
     .option('--effort <level>', 'Override effort for every step: low | medium | high | xhigh | max')
@@ -365,9 +361,7 @@ export function parseArgs(argv: string[]): CLIOptions {
     status: opts.status ?? false,
     from: opts.from,
     cleanup: opts.cleanup ?? false,
-    step: opts.step,
     reset: opts.reset ?? false,
-    output: opts.output ?? false,
     cooldown: parseInt(opts.cooldown ?? '10', 10),
     model: opts.model,
     effort: opts.effort as EffortLevel | undefined,
@@ -385,7 +379,6 @@ export function parseArgs(argv: string[]): CLIOptions {
     result.reset ||
     result.diagnose ||
     result.report ||
-    !!result.step ||
     !!result.from;
   if (!result.featureDesc && !hasStateFlag) {
     throw new Error('Feature description is required when no state flags are provided');

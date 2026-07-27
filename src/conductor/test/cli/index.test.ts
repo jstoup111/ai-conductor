@@ -38,19 +38,39 @@ describe('CLI', () => {
     expect(opts.cleanup).toBe(true);
   });
 
-  it('parses --step <step> flag', () => {
-    const opts = parseArgs(['node', 'conduct', '--step', 'brainstorm']);
-    expect(opts.step).toBe('brainstorm');
-  });
-
   it('parses --reset flag', () => {
     const opts = parseArgs(['node', 'conduct', '--reset']);
     expect(opts.reset).toBe(true);
   });
 
-  it('parses --output flag', () => {
-    const opts = parseArgs(['node', 'conduct', 'feature', '--output']);
-    expect(opts.output).toBe(true);
+  // #1013: --step and --output were parsed but never consumed anywhere in the
+  // entry point (dead CLI surface). Both were removed rather than implemented.
+  it('rejects --step as an unknown option', () => {
+    expect(() => parseArgs(['node', 'conduct', '--step', 'brainstorm'])).toThrow();
+  });
+
+  it('rejects --output as an unknown option', () => {
+    expect(() => parseArgs(['node', 'conduct', 'feature', '--output'])).toThrow();
+  });
+
+  it('no longer exposes step/output on CLIOptions', () => {
+    const opts = parseArgs(['node', 'conduct', 'feature']);
+    expect(opts).not.toHaveProperty('step');
+    expect(opts).not.toHaveProperty('output');
+  });
+
+  it('--help no longer advertises --step or --output', () => {
+    const help = createProgram().helpInformation();
+    expect(help).not.toContain('--step');
+    expect(help).not.toContain('--output');
+  });
+
+  // --from is the real, documented way to start at a specific step and must
+  // be unaffected by the --step/--output removal.
+  it('--from still works and still satisfies the state-flag check', () => {
+    const opts = parseArgs(['node', 'conduct', '--from', 'plan']);
+    expect(opts.from).toBe('plan');
+    expect(opts.featureDesc).toBeUndefined();
   });
 
   it('requires feature description when no state exists', () => {

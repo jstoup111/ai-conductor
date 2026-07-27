@@ -52,7 +52,7 @@ for an unknown command.
 | `[feature]` | 0..1 | conditional | Feature description. Drives slug and worktree naming and auto-resume matching. |
 
 A feature description is required unless at least one state flag is present. The state flags are
-`--resume`, `--status`, `--cleanup`, `--reset`, `--diagnose`, `--report`, `--from`, and `--step`.
+`--resume`, `--status`, `--cleanup`, `--reset`, `--diagnose`, `--report`, and `--from`.
 Without one, parsing throws `Feature description is required when no state flags are provided` and the
 run exits 1.
 
@@ -81,7 +81,7 @@ flag's help string mentions it.
 
 ### Auto-resume
 
-When a feature description is given and none of `--resume`, `--fresh`, `--from`, or `--step` is
+When a feature description is given and none of `--resume`, `--fresh`, or `--from` is
 present, the engine looks for an existing worktree for that slug.
 
 | Detection | Behavior | Exit |
@@ -537,13 +537,3 @@ These are dispatched by skills, hooks, and the daemon rather than typed by an op
 | `manual-test-record` | `conduct-ts manual-test-record --skip --reason <r> --pipeline-dir <dir>` · `conduct-ts manual-test-record --results <path\|-> --pipeline-dir <dir>` | Appends a `## Attempt N` section to `<pipelineDir>/manual-test-results.md`, atomically. `--results -` reads stdin. `--skip` and `--results` are mutually exclusive and one is required. `--pipeline-dir` must be absolute. | 0; 1 on a usage error, an empty results payload, or any read/write error |
 | `derive-feedback` | `conduct-ts derive-feedback --sha <sha> [--plan <path>]` | Read-only advisory check for whether commit `<sha>` carries `Task: <id>` evidence, or touches files declared under a task in the given plan. Prints one JSON line. Never writes task status or the evidence sidecar. | **0 evidenced, 1 not evidenced, 2 usage.** Informational only — the calling hook must not propagate them |
 | `build-auth-status` | `conduct-ts build-auth-status` | Reports the self-host build auth mode and token state as `build-auth-status: mode=<mode> state=<state>[ path=<path>][ (<detail>)]`. Probes the real dispatch auth path when a token is present. | 0 when the mode is not `daemon-token` (`state=api-key`) or the token is `valid`; 1 for `missing`, `unreadable`, `invalid`, or `unverifiable`, each with a remediation message |
-
-## Accepted but non-functional
-
-These flags parse without error and appear in `--help`, but nothing consumes them. They are listed here
-so a reader who finds them in help output is not misled.
-
-| Flag | Help text | Actual effect |
-| --- | --- | --- |
-| `--output` | `Raw output mode` | None. The parsed value has no readers anywhere in the entry point. |
-| `--step <step>` | `Run single step` | Does not run a single step. It is never passed to the engine's conductor object. Its only observable effect is that it counts as a state flag — it satisfies the "feature description required" check and suppresses auto-resume. Use `--from <step>` to control where a run starts. |

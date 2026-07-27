@@ -10,6 +10,31 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Removed
+
+- `conduct-ts`'s `--output` and `--step <step>` CLI flags are gone. Neither did what its `--help`
+  text claimed: `--output` ("Raw output mode") had no reader anywhere in the entry point, and
+  `--step <step>` ("Run single step") was never passed to the engine's conductor object — its only
+  effect was to count as a state flag that suppressed auto-resume. `--from <step>` remains the
+  correct, functional way to start a run at a specific step; it is unchanged. `docs/reference/cli.md`
+  and `docs/reference/steps.md` already documented both flags as non-functional — that documentation
+  is now removed along with the flags ([#1013](https://github.com/jstoup111/ai-conductor/issues/1013)).
+
+## Migration
+
+`--output` and `--step <step>` are no longer accepted by `conduct-ts` — passing either now fails
+argument parsing with `error: unknown option`. Neither flag ever changed run behavior (see Removed,
+above), so no config or state migration is needed; the only action is removing them from any script,
+alias, or cron entry that still passes them. Audit your own invocations:
+
+```bash migration
+# Find shell scripts/aliases/CI configs in the current directory tree that still pass the
+# removed --output or --step flags to conduct-ts, so they can be edited by hand (nothing here
+# is auto-rewritten — these are external, not tracked in this repo).
+grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
+  --include='*.sh' --include='*.yml' --include='*.yaml' . 2>/dev/null \
+  || echo "No conduct-ts invocations with --output/--step found."
+```
 ### Added
 
 - `conduct-ts` accepts `--effort <level>` (`low | medium | high | xhigh | max`) to override the
