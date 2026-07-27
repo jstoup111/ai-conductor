@@ -270,6 +270,33 @@ describe('conduct register — invalid targets do not corrupt the registry (FR-5
     const after = await readFile(registry, 'utf-8');
     expect(after).toBe(before);
   });
+
+  it('a LINKED git worktree of an existing repo → non-zero exit, registry byte-identical, never written as its own project', async () => {
+    const parent = join(sandbox, 'parent-repo');
+    await mkdir(parent);
+    await initRealRepo(parent);
+    const worktreePath = join(sandbox, 'parent-repo-worktree');
+    await execFileAsync('git', [
+      '-C',
+      parent,
+      'worktree',
+      'add',
+      worktreePath,
+      '-b',
+      'feature-branch',
+    ]);
+    const before = await readFile(registry, 'utf-8');
+
+    const res = await runCli(['register', worktreePath], { cwd: sandbox, registry });
+    expect(res.timedOut).toBe(false);
+    expect(res.code).not.toBe(0);
+
+    // Registry is untouched — the worktree must NEVER appear as its own record.
+    const after = await readFile(registry, 'utf-8');
+    expect(after).toBe(before);
+    const records = await readRegistryFile(registry);
+    expect(records.some((r) => r.path === worktreePath)).toBe(false);
+  });
 });
 
 describe('conduct create — scaffold + register (FR-6)', () => {

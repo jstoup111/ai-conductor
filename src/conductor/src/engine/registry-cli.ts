@@ -39,6 +39,30 @@ async function isGitRepo(dir: string): Promise<boolean> {
   return r.exitCode === 0 && String(r.stdout).trim() === 'true';
 }
 
+// True when `dir` is a LINKED git worktree (e.g. a daemon feature worktree
+// under some project's `.worktrees/`) rather than a repo's own primary
+// checkout. A linked worktree's `--git-dir` (its own per-worktree metadata
+// dir) differs from `--git-common-dir` (the shared object store it borrows
+// from its parent repo); a primary checkout resolves both to the same path.
+// A worktree is a subdirectory of an already-registered repo, not an
+// independent project — it must never be auto-registered as its own
+// top-level entry (that entry becomes a permanent `path-missing` ghost the
+// moment the worktree is cleaned up post-ship).
+async function isLinkedWorktree(dir: string): Promise<boolean> {
+  const [gitDir, commonDir] = await Promise.all([
+    execa('git', ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-dir'], {
+      reject: false,
+    }),
+    execa(
+      'git',
+      ['-C', dir, 'rev-parse', '--path-format=absolute', '--git-common-dir'],
+      { reject: false },
+    ),
+  ]);
+  if (gitDir.exitCode !== 0 || commonDir.exitCode !== 0) return false;
+  return String(gitDir.stdout).trim() !== String(commonDir.stdout).trim();
+}
+
 // Discover and redact the origin remote, or undefined when there is none.
 async function discoverRemote(dir: string): Promise<string | undefined> {
   const r = await execa(
@@ -63,6 +87,14 @@ export async function runRegister(pathArg?: string): Promise<number> {
   }
   if (!(await isGitRepo(abs))) {
     console.error(`conduct register: not a git repository: ${abs}`);
+    return 1;
+  }
+  if (await isLinkedWorktree(abs)) {
+    console.error(
+      `conduct register: refusing to register a linked git worktree as its own project: ${abs}\n` +
+        'This path is a worktree checkout of another repository, not an independent project. ' +
+        'Register the PARENT repository instead (its primary checkout).',
+    );
     return 1;
   }
 
