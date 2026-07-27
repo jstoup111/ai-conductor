@@ -17,6 +17,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   scripts (also wired as integrity check 1b), a `lychee` documentation link check that is the one CI job
   a docs-only pull request cannot skip, and `npm run typecheck:test`, which type-checks `test/` for the
   first time ([implementation PR #1040](https://github.com/jstoup111/ai-conductor/pull/1040)).
+- `conduct daemon connect` accepts `--write` to request a read-write attach from the same
+  subcommand used to "just look", instead of requiring the operator to already know to invoke
+  `debug` for input access. `debug` is unchanged. `conduct daemon start`/`connect`/`debug` also
+  accept `--attach-into <target>` (a tmux session, `session:window`, or `session:window.pane`)
+  to deliver the attach into an already-open pane elsewhere on the tmux server via
+  `send-keys`/`env -u TMUX`, instead of taking over the invoking process's own controlling
+  terminal — fixing the tmux nesting-guard failure (`sessions should be nested with care, unset
+  $TMUX to force`) hit when running these commands from a shell already inside a tmux client.
 - Add an opt-in repository-local documentation gate that verifies fresh review evidence and
   finalizes the implementation PR link in notable changelog entries ([implementation PR #956](https://github.com/jstoup111/ai-conductor/pull/956)).
 - Add the native `test_suite` project declaration and documentation for the
