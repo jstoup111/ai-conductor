@@ -5,7 +5,7 @@
 # key both files define. The `conductor:` block is user-level only — it
 # holds per-user global state (update channel, last check timestamp).
 
-harness_version: ">=1.0.0"
+harness_version: ">=0.99.0"
 
 # Required in project config for the native pre-SHIP aggregate gate. Declare
 # one project-owned command that composes every authoritative suite. For
@@ -50,7 +50,7 @@ markdown_viewer:
 #   UNDERSTAND:
 #     effort: low
 # steps:
-#   bootstrap:
+#   explore:
 #     model: haiku
 # complexity:
 #   default_tier: M
