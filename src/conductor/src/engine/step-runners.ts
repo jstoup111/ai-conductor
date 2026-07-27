@@ -754,6 +754,7 @@ export class DefaultStepRunner implements StepRunner {
     if (!this.providerRuntimes || !this.sessionStore) return undefined;
 
     const safety = this.candidateSafetyFor(request.step);
+    const invocationOptions = this.withFeatureDiagnosticLog(request.options);
     const result = await this.providerExecutor({
       step: request.step,
       configuredProviders: this.configuredProviders,
@@ -772,11 +773,11 @@ export class DefaultStepRunner implements StepRunner {
         this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
       onAttempt: this.providerAttempt,
       warn: this.providerWarn,
-      options: this.withFeatureDiagnosticLog(request.options),
+      options: invocationOptions,
       ...(request.kind === 'skill'
         ? {
             optionsForCandidate: (candidateKey: string) => ({
-              ...request.options,
+              ...invocationOptions,
               prompt: renderSkillInvocation(
                 STEP_SKILL_INVOCATIONS[request.step],
                 candidateKey,
