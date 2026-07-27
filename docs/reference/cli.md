@@ -63,13 +63,14 @@ run exits 1.
 | `--auto` | boolean | `false` | mutually exclusive with `--interactive` | Run mode `auto`: skips checkpoint prompts, never opens a REPL, sets `dangerouslySkipPermissions` on dispatch, takes the existing tier or defaults to `L` without prompting (one of four tier paths — see [where the tier comes from](steps.md#where-the-tier-comes-from)), auto-skips advisory step failures, and skips the assess-staleness prompt. |
 | `--interactive` | boolean | `false` | mutually exclusive with `--auto` | Run mode `interactive`: opens a Claude REPL for every conversational step except `complexity`, `conflict_check`, `architecture_diagram`, `retro`, and `rebase`. `dangerouslySkipPermissions` stays off, so a human approves each action. |
 | `--status` | boolean | `false` | — | Prints `## Conductor State` and the state file as pretty JSON, then returns. No provider session. |
-| `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. |
+| `--from <step>` | string | — | must be a step name | Sets the start index to that step. Also suppresses auto-resume. An unrecognized step name exits 1, printing the invalid value and every valid step name (built-ins plus any config-declared custom steps). |
 | `--cleanup` | boolean | `false` | — | Scans resumable features, reads `pr_url` from each `conduct-state.json`, checks whether the PR merged, and prompts `Remove merged worktree "<name>"? [y/n]` per merged feature. Prints a count. |
 | `--reset` | boolean | `false` | — | Writes an empty state object, prints `State cleared.`, and returns. |
 | `--diagnose` | boolean | `false` | — | Non-mutating. Resolves the worktree, then verifies state completeness. State OK prints `State OK…` and exits 0; gaps print a gap report plus remediation text to stderr and exit 1; an orphaned state exits 1. |
 | `--report` | boolean | `false` | — | Read-only. Renders `.pipeline/events.jsonl` as step durations, retry hotspots, and token spend, then exits 0. A report error exits 1. No provider session. |
 | `--cooldown <seconds>` | integer | `10` | no range check | Seconds to pause between steps. A non-numeric value parses to `NaN`. |
 | `--model <name>` | string | — | alias or full model ID | Overrides the model for every step. Beats every configured source. See [models](models.md). |
+| `--effort <level>` | string | — | one of `low`, `medium`, `high`, `xhigh`, `max` | Overrides the effort for every step. Beats every configured source. An invalid level exits 1, printing the invalid value and the valid levels. |
 | `--view <mode>` | enum | `full` | `full`, `focus`, `log` | Dashboard layout. Anything other than exactly `focus` or `log` silently coerces to `full`. |
 | `--tail-lines <n>` | integer | `20` | `0` disables the pane | Maximum lines of post-step stdout shown in the tail pane. |
 | `-h`, `--help` | boolean | — | — | Prints help and exits 0. |

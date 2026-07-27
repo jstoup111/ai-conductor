@@ -35,9 +35,21 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
   --include='*.sh' --include='*.yml' --include='*.yaml' . 2>/dev/null \
   || echo "No conduct-ts invocations with --output/--step found."
 ```
+### Added
+
+- `conduct-ts` accepts `--effort <level>` (`low | medium | high | xhigh | max`) to override the
+  effort of every step, mirroring `--model`. The `effortCliOverride`/`effortOverride` resolution
+  seam already existed and was referenced by `resolveProviderNativeStepConfig` and the provider
+  execution context, but no CLI flag ever set it — `--effort` was silently unavailable
+  ([#1027](https://github.com/jstoup111/ai-conductor/issues/1027)).
 
 ### Fixed
 
+- `--from <step>` now validates the step name against the resolved step registry (built-ins plus
+  any config-declared custom steps) and exits non-zero naming the invalid value and listing every
+  valid step, instead of silently resolving an unrecognized name to index `-1` (via
+  `Array.prototype.findIndex`'s not-found sentinel) and starting the run "before the first step"
+  ([#1027](https://github.com/jstoup111/ai-conductor/issues/1027)).
 - `finish-record` now deterministically refuses `--choice keep` in unattended (auto/daemon) mode
   whenever the repo has a configured git remote, instead of trusting the finish skill's prompt-level
   "decide deterministically" instruction. `step-runners.ts` sets a `CONDUCT_DAEMON_AUTO_FINISH=1`

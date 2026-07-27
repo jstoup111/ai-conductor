@@ -622,3 +622,21 @@ export function buildStepRegistry(config: HarnessConfig): StepDefinition[] {
 
   return result;
 }
+
+/**
+ * Validate a `--from <step>` CLI value against the resolved step registry
+ * (built-ins + any config-declared custom steps). Left unvalidated, an
+ * unrecognized step name silently resolves to `Array.prototype.findIndex`'s
+ * not-found sentinel (-1) and the run proceeds from "before the first step"
+ * instead of reporting the typo (#1027).
+ *
+ * Returns `null` when `from` is absent or names a real step; otherwise
+ * returns a human-readable error message naming the bad value and listing
+ * every valid step name.
+ */
+export function validateFromStep(from: string | undefined, config: HarnessConfig): string | null {
+  if (!from) return null;
+  const validStepNames = buildStepRegistry(config).map((s) => s.name);
+  if (validStepNames.includes(from as StepName)) return null;
+  return `Invalid --from step "${from}".\nValid steps: ${validStepNames.join(', ')}`;
+}
