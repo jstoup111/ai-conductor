@@ -8,7 +8,7 @@
 // `runAuthoring` (Tasks 32/33, FR-6, C2, ADR-008):
 //   Runs the FULL DECIDE phase via an AGENT-HOSTED seam (no subprocess), in
 //   canonical conduct order: explore → complexity → prd → architecture_diagram →
-//   architecture_review → stories → conflict_check → plan. The complexity tier
+//   architecture_review → stories → conflict_check → plan → coherence_check. The complexity tier
 //   gates architecture + conflict-check (Small skips them); the track gates the
 //   PRD (technical skips it).
 //   - deps.decide is INJECTABLE — called once per markdown step.
@@ -259,7 +259,8 @@ export type DecideStep =
   | 'conflict_check'
   | 'architecture_diagram'
   | 'architecture_review'
-  | 'plan';
+  | 'plan'
+  | 'coherence_check';
 
 /**
  * Result of the complexity-assessment seam. Unlike `decide` (which returns a
@@ -356,7 +357,8 @@ export type RunAuthoringResult = SpecAuthoringResult | DocumentationAuthoringRes
  *  2. Runs the full DECIDE phase IN CANONICAL ORDER: decide('explore') →
  *     assessComplexity() → decide('stories') → (when tier !== 'S')
  *     decide('conflict_check') → decide('architecture_diagram') →
- *     decide('architecture_review') → decide('plan'). If ANY gate returns
+ *     decide('architecture_review') → decide('plan') → decide('coherence_check').
+ *     If ANY gate returns
  *     { approved: false } (or a DRAFT ADR is detected) → throws; nothing is written.
  *  3. On all-approved: creates spec/<slug> branch, writes artifacts via AuthoringGuard
  *     (always specs/stories/plans + `.docs/complexity/<slug>.md`; non-Small also
@@ -491,6 +493,7 @@ export async function runAuthoring(
   }
 
   const planResult = await gate('plan');
+  const coherenceResult = tier !== 'S' ? await gate('coherence_check') : null;
 
   // All gates approved. Now write artifacts.
 
@@ -513,7 +516,7 @@ export async function runAuthoring(
     const date = new Date().toISOString().slice(0, 10);
 
     // Paths under target repo. Always: specs/stories/plans + the complexity
-    // marker. Tier-conditional (non-Small): conflicts/architecture/decisions.
+    // marker. Tier-conditional (non-Small): conflicts/architecture/decisions/coherence.
     const storiesDir = join(repoPath, '.docs', 'stories');
     const plansDir = join(repoPath, '.docs', 'plans');
     const specsDir = join(repoPath, '.docs', 'specs');
@@ -565,24 +568,30 @@ export async function runAuthoring(
       const conflictsDir = join(repoPath, '.docs', 'conflicts');
       const architectureDir = join(repoPath, '.docs', 'architecture');
       const decisionsDir = join(repoPath, '.docs', 'decisions');
+      const coherenceDir = join(repoPath, '.docs', 'coherence');
       const conflictsFile = join(conflictsDir, `${date}-${fileSlug}.md`);
       const architectureFile = join(architectureDir, `${fileSlug}.md`);
       const reviewFile = join(decisionsDir, `architecture-review-${date}-${fileSlug}.md`);
+      const coherenceFile = join(coherenceDir, `${fileSlug}.md`);
 
       guard.assertWriteAllowed(conflictsDir);
       guard.assertWriteAllowed(architectureDir);
       guard.assertWriteAllowed(decisionsDir);
+      guard.assertWriteAllowed(coherenceDir);
       guard.assertWriteAllowed(conflictsFile);
       guard.assertWriteAllowed(architectureFile);
       guard.assertWriteAllowed(reviewFile);
+      guard.assertWriteAllowed(coherenceFile);
 
       await mkdir(conflictsDir, { recursive: true });
       await mkdir(architectureDir, { recursive: true });
       await mkdir(decisionsDir, { recursive: true });
+      await mkdir(coherenceDir, { recursive: true });
 
       await writeFile(conflictsFile, conflictResult!.artifact, 'utf8');
       await writeFile(architectureFile, architectureDiagramResult!.artifact, 'utf8');
       await writeFile(reviewFile, architectureReviewResult!.artifact, 'utf8');
+      await writeFile(coherenceFile, coherenceResult!.artifact, 'utf8');
     }
 
     // Resolve the authoring owner via the identity chain (configured → gh →

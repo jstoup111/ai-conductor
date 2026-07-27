@@ -463,6 +463,12 @@ const APPROVED_ADR = [
   'Decision rationale.',
   '',
 ].join('\n');
+const MINIMAL_COHERENCE_TABLE = [
+  '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |',
+  '|---|---|---|---|---|',
+  '| story | S1 | Task 1 | covered | CSV export writer |',
+  '',
+].join('\n');
 
 /** A decide seam that approves every DECIDE step with realistic artifacts. */
 function fullDecide(reviewArtifact: string = APPROVED_ADR) {
@@ -482,6 +488,8 @@ function fullDecide(reviewArtifact: string = APPROVED_ADR) {
         return { approved: true, artifact: reviewArtifact };
       case 'plan':
         return { approved: true, artifact: PLAN_WITH_DEPS_FULL };
+      case 'coherence_check':
+        return { approved: true, artifact: MINIMAL_COHERENCE_TABLE };
       default:
         return { approved: true, artifact: '' };
     }
@@ -503,7 +511,7 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
     await rm(repoPath, { recursive: true, force: true });
   });
 
-  it('Medium tier runs all seven DECIDE steps in canonical order', async () => {
+  it('Medium tier runs all eight DECIDE steps in canonical order', async () => {
     const target = { name: 'alpha', canonicalPath: repoPath };
     const steps: string[] = [];
     const trackingDecide = async (step: string) => {
@@ -522,7 +530,37 @@ describe('runAuthoring — full DECIDE phase (tier-aware)', () => {
       'stories',
       'conflict_check',
       'plan',
+      'coherence_check',
     ]);
+  });
+
+  it.each(['M', 'L'] as const)('%s tier runs coherence_check after plan and commits its minimal traceability table', async (tier) => {
+    const target = { name: 'alpha', canonicalPath: repoPath };
+    const steps: string[] = [];
+    const trackingDecide = async (step: string) => {
+      steps.push(step);
+      return await fullDecide()(step);
+    };
+
+    const result = await runAuthoring(target, 'CSV export', {
+      decide: trackingDecide,
+      assessComplexity: approveTier(tier),
+    });
+    const coherence = await showOnBranch(result.branch, '.docs/coherence/csv-export.md', repoPath);
+
+    expect({ steps, coherence }).toEqual({
+      steps: [
+        'explore',
+        'prd',
+        'architecture_diagram',
+        'architecture_review',
+        'stories',
+        'conflict_check',
+        'plan',
+        'coherence_check',
+      ],
+      coherence: MINIMAL_COHERENCE_TABLE.trim(),
+    });
   });
 
   it('Medium tier commits the full artifact set + a Tier: M marker', async () => {
