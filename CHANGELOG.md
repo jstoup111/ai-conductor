@@ -83,6 +83,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The `wiring_check` completion predicate rejected evidence recorded at a prior HEAD as
+  stale and forced a costly LLM re-dispatch even when the wiring was still intact. It now
+  re-derives that evidence in-process via `CompletionContext.wiringProbe` instead of
+  discarding it; malformed evidence or a failing probe still fail closed, and fresh
+  evidence still short-circuits without probing (#897,
+  [implementation PR #924](https://github.com/jstoup111/ai-conductor/pull/924)).
 - Needs-human halts are no longer wiped by the main-advance re-kick sweep. Halts now carry
   a machine-readable class (`needs-human` | `mechanical`) written alongside
   `.pipeline/HALT`, and the sweep checks it before clearing a marker: `needs-human` halts
