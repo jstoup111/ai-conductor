@@ -113,6 +113,80 @@ describe('executeProviderCandidates', () => {
     expect(teardown).toHaveBeenCalledOnce();
   });
 
+  it('never resumes into a freshly provisioned self-host home, even after the session was created earlier in the step', async () => {
+    // Each self-host dispatch provisions its own throwaway provider home and
+    // tears it down afterwards, so no rollout/session state survives into the
+    // next one. Resuming there fails with Codex's `no rollout found for thread
+    // id <id>`, which previously burned every build retry.
+    const seen: Array<{ home?: string; resume?: boolean }> = [];
+    const codex = {
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        seen.push({ home: options.selfHost?.env.CODEX_HOME, resume: options.resume });
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
+      invokeInteractive: vi.fn(async () => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([runtime('codex', codex)]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('harness-minted-uuid'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    let homes = 0;
+    const dispatch = async (): Promise<void> => {
+      await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes,
+        sessions,
+        options: { prompt: 'build', cwd: '/workspace' },
+        prepareCandidateSelfHost: async () => {
+          homes += 1;
+          return {
+            executable: '/resolved/codex',
+            env: { CODEX_HOME: `/tmp/self-host-codex-${homes}` },
+            args: [],
+            teardown: async () => {},
+          };
+        },
+      });
+    };
+
+    await dispatch();
+    await dispatch();
+
+    // Second dispatch runs against a different, empty home — so it must start a
+    // new thread rather than resume the first one.
+    expect(seen).toEqual([
+      { home: '/tmp/self-host-codex-1', resume: false },
+      { home: '/tmp/self-host-codex-2', resume: false },
+    ]);
+  });
+
+  it('still resumes within a step when no isolated self-host home is provisioned', async () => {
+    const seen: boolean[] = [];
+    const codex = {
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        seen.push(options.resume === true);
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
+      invokeInteractive: vi.fn(async () => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([runtime('codex', codex)]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    for (let i = 0; i < 2; i += 1) {
+      await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes,
+        sessions,
+        options: { prompt: 'build', cwd: '/workspace' },
+      });
+    }
+
+    expect(seen).toEqual([false, true]);
+  });
+
   it('tears down a failed candidate home before provisioning its fallback', async () => {
     const events: string[] = [];
     const codex = { invoke: vi.fn(async (): Promise<InvokeResult> => ({ success: false, output: 'missing', exitCode: 127, providerUnavailable: true, providerUnavailableScope: 'run' })), invokeInteractive: vi.fn(async () => {}) };
