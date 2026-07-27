@@ -3748,6 +3748,11 @@ export class Conductor {
                 projectRoot: this.projectRoot,
                 baselineCommit: baselineCommit ?? undefined,
                 featureDesc: state.feature_desc,
+                // #976: lets the seal tolerate protected-artifact drift that is
+                // byte-identical to the base branch tip — i.e. another feature's
+                // already-merged PR, picked up by this feature's rebase — while
+                // still halting on any in-worktree mutation.
+                baseBranch: this.baseBranch,
               });
               if (!sealVerdict.ok) {
                 protectedArtifactIssue = sealVerdict.reason;

@@ -50,6 +50,14 @@ export interface VerifyProtectedArtifactSealOptions {
    * prior behavior). See that function's inline comment for the rationale.
    */
   featureDesc?: string;
+  /**
+   * The feature's base branch NAME (no `origin/` prefix), e.g. `main`. Enables
+   * the base-inheritance tolerance in `inspectSeal`: drift that is byte-identical
+   * to the base branch tip arrived through the front door (a merged PR the feature
+   * rebased onto), not from an in-worktree mutation. Absent means no tolerance
+   * (fully protected, prior behavior).
+   */
+  baseBranch?: string;
 }
 
 export type ProtectedArtifactSealVerdict =
@@ -260,11 +268,77 @@ function namesOwnFeature(path: string, featureDesc: string): boolean {
   return pathStem === featureDesc || undatedStem(pathStem) === undatedStem(featureDesc);
 }
 
+/**
+ * Resolves the ref naming the tip of the feature's base branch, preferring the
+ * remote-tracking `origin/<base>` (what `resolveBaseCore` in `rebase.ts` picks as
+ * the rebase target when an origin exists) and degrading to the local `<base>`.
+ * Returns `undefined` when neither ref exists — the caller then applies no
+ * tolerance and the seal stays fully protected.
+ *
+ * Deliberately does NOT call `resolveBaseCore`: that helper performs a network
+ * `git fetch`, and this runs before EVERY BUILD/SHIP step. Read-only ref
+ * resolution is all this predicate needs — it only ever asks whether content
+ * already present locally is explained by the base branch.
+ */
+async function resolveBaseTipRef(
+  projectRoot: string,
+  baseBranch: string,
+): Promise<string | undefined> {
+  for (const ref of [`origin/${baseBranch}`, baseBranch]) {
+    const verified = await execa('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    if (verified.exitCode === 0) return ref;
+  }
+  return undefined;
+}
+
+/**
+ * True when `path`'s CURRENT on-disk content is byte-identical to that path as
+ * committed at `baseRef`. This is the "arrived through the front door" test: a
+ * protected artifact owned by SOME OTHER feature legitimately changes under a
+ * feature's feet when that feature rebases onto a base branch which has since
+ * merged the owner's PR. In that case the workspace copy is exactly the base
+ * tip's copy, and the base branch — an independent source of truth the build
+ * agent cannot write to — already vouches for the content.
+ *
+ * Any other content (an in-worktree edit, a partially applied change, a revert)
+ * fails this test and still halts, so real tamper detection is unweakened.
+ */
+async function matchesBaseTip(
+  projectRoot: string,
+  baseRef: string,
+  path: string,
+): Promise<boolean> {
+  const committed = await execa('git', ['show', `${baseRef}:${path}`], {
+    cwd: projectRoot,
+    stripFinalNewline: false,
+    reject: false,
+  });
+  if (committed.exitCode !== 0) return false;
+  const workspace = await readContainedProtectedArtifact(projectRoot, path);
+  return workspace !== undefined && workspace === committed.stdout;
+}
+
 async function inspectSeal(
   projectRoot: string,
   seal: ProtectedArtifactSeal,
   featureDesc?: string,
+  baseBranch?: string,
 ): Promise<ProtectedArtifactSealVerdict> {
+  // Resolved at most once per verification, and only lazily — a fully clean
+  // workspace never shells out to git here at all.
+  let baseTipRef: string | undefined | null = null;
+  const baseRef = async (): Promise<string | undefined> => {
+    if (baseTipRef === null) baseTipRef = baseBranch ? await resolveBaseTipRef(projectRoot, baseBranch) : undefined;
+    return baseTipRef;
+  };
+  const inheritedFromBase = async (path: string): Promise<boolean> => {
+    const ref = await baseRef();
+    return ref !== undefined && (await matchesBaseTip(projectRoot, ref, path));
+  };
+
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
   const discoveredPaths = (await Promise.all(
     PROTECTED_ARTIFACT_DIRECTORIES.map((directory) => workspaceProtectedPaths(projectRoot, directory)),
@@ -285,6 +359,12 @@ async function inspectSeal(
 
   for (const path of actualPaths) {
     if (!expected.has(path)) {
+      // Same base-inheritance tolerance as the change branch below: an entirely
+      // NEW protected artifact appears under a feature's feet when it rebases
+      // onto a base branch that merged another feature's DECIDE artifacts after
+      // this seal's baseline was taken. Tolerated only when the workspace copy
+      // is byte-identical to the base tip's committed copy.
+      if (await inheritedFromBase(path)) continue;
       return { ok: false, reason: `Protected artifact added: ${path}` };
     }
     const content = await readContainedProtectedArtifact(projectRoot, path);
@@ -300,6 +380,13 @@ async function inspectSeal(
       // the former; still halt on the latter (any other artifact) and on any
       // addition/deletion (handled above/below, unaffected by this branch).
       if (!featureDesc || !namesOwnFeature(path, featureDesc)) {
+        // BASE-INHERITANCE TOLERANCE (#976). The mismatch is not this feature's
+        // own amendment, so the loosening above does not apply — but it is still
+        // routinely legitimate: the seal's baseline goes stale relative to the
+        // base branch the moment ANOTHER feature's PR merges and this feature
+        // rebases. Tolerate exactly the drift the base branch itself vouches for;
+        // anything else is an in-worktree mutation and still halts.
+        if (await inheritedFromBase(path)) continue;
         return { ok: false, reason: `Protected artifact changed: ${path}` };
       }
     }
@@ -323,7 +410,9 @@ export async function verifyProtectedArtifactSeal(
   options: VerifyProtectedArtifactSealOptions,
 ): Promise<ProtectedArtifactSealVerdict> {
   const existing = await readExistingSeal(join(options.projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
-  if (existing) return inspectSeal(options.projectRoot, existing, options.featureDesc);
+  if (existing) {
+    return inspectSeal(options.projectRoot, existing, options.featureDesc, options.baseBranch);
+  }
   if (!options.baselineCommit) {
     return { ok: false, reason: 'Protected artifact seal is missing' };
   }
@@ -331,6 +420,7 @@ export async function verifyProtectedArtifactSeal(
     options.projectRoot,
     await createSeal({ projectRoot: options.projectRoot, baselineCommit: options.baselineCommit }),
     options.featureDesc,
+    options.baseBranch,
   );
 }
 

@@ -118,6 +118,21 @@ interface ProtectedArtifactSeal {
 }
 ```
 
+The seal is written once at first BUILD entry and is immutable thereafter, so it goes stale relative
+to the base branch as soon as another feature's pull request merges. Verification therefore tolerates
+two kinds of drift instead of halting on them:
+
+- **Own-feature amendment** — a changed artifact whose filename stem names the current feature
+  (a date prefix on either side is ignored).
+- **Base-branch inheritance** — a changed or newly appeared artifact whose current workspace content
+  is byte-identical to that path as committed at the base branch tip (`origin/<base>`, falling back
+  to the local `<base>`). This is the content the feature's own rebase brought in, and the base
+  branch already vouches for it.
+
+Everything else still halts BUILD/SHIP before dispatch: any content the base branch does not vouch
+for, any addition the base branch does not contain, and any deletion. Tolerance requires the base
+branch name to be resolvable — when it is not, the seal is fully protected.
+
 ## Step to artifact map
 
 `STEP_ARTIFACT_GLOBS` is the single source of truth for which step produces which file. It drives the
