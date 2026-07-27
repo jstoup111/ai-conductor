@@ -38,6 +38,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { StepName, ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
+import { PRESEEDED_DONE } from '../../src/daemon-cli.js';
 
 async function loadWriter(): Promise<Record<string, any>> {
   return import('../../src/engine/audit-trail.js');
@@ -56,13 +57,9 @@ async function readRecords(root: string): Promise<Array<Record<string, unknown>>
   }
 }
 
-// The daemon pre-stamps every front-half (DECIDE) step done before the
-// conductor ever resumes (daemon-cli.ts PRESEEDED_DONE) — a fresh
-// daemon-dispatched feature always starts at `acceptance_specs`/`build`.
-const DAEMON_PRESEEDED_DONE: StepName[] = [
-  'worktree', 'memory', 'explore', 'prd', 'complexity', 'stories',
-  'conflict_check', 'plan', 'architecture_diagram', 'architecture_review',
-];
+// The daemon pre-stamps its production-derived front half before the conductor
+// resumes. Every DECIDE step is therefore daemon-owned input, never authored
+// by a daemon-dispatched run, which starts at `acceptance_specs`/`build`.
 
 describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry points', () => {
   let dir: string;
@@ -81,7 +78,7 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
 
   it('a daemon-shaped run (daemon:true, resume:true, mode:auto) with induced BUILD friction produces records in THIS worktree\'s events.jsonl', async () => {
     const preseed: Partial<ConductState> = { complexity_tier: 'M', track: 'technical' };
-    for (const step of DAEMON_PRESEEDED_DONE) (preseed as Record<string, unknown>)[step] = 'done';
+    for (const step of PRESEEDED_DONE) (preseed as Record<string, unknown>)[step] = 'done';
     await writeState(statePath, preseed as ConductState);
 
     const mod = await loadWriter();
@@ -116,10 +113,8 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
 
     await conductor.run();
 
-    // coherence_check (DECIDE, post-plan) is not in the daemon's
-    // PRESEEDED_DONE list, so it's the first step a fresh daemon-dispatched
-    // run actually executes — acceptance_specs follows it.
-    expect(stepsRun[0]).toBe('coherence_check');
+    expect(stepsRun).not.toContain('coherence_check');
+    expect(stepsRun[0]).toBe('acceptance_specs');
     expect(stepsRun).not.toContain('explore'); // front-half never re-executed
 
     const records = await readRecords(dir);
@@ -131,7 +126,7 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
 
   it('front-half steps pre-stamped done (never executed in daemon mode) leave no records — completeness stays scoped to executed steps', async () => {
     const preseed: Partial<ConductState> = { complexity_tier: 'M', track: 'technical' };
-    for (const step of DAEMON_PRESEEDED_DONE) (preseed as Record<string, unknown>)[step] = 'done';
+    for (const step of PRESEEDED_DONE) (preseed as Record<string, unknown>)[step] = 'done';
     await writeState(statePath, preseed as ConductState);
 
     const mod = await loadWriter();
@@ -159,7 +154,7 @@ describe('Acceptance: audit-trail dual-mode wiring — inline and daemon entry p
 
     const records = await readRecords(dir);
     const recordedSteps = new Set(records.map((r) => r.step));
-    for (const step of DAEMON_PRESEEDED_DONE) {
+    for (const step of PRESEEDED_DONE) {
       expect(recordedSteps.has(step), `pre-stamped "${step}" must not fabricate a record`).toBe(false);
     }
   });
