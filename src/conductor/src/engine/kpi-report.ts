@@ -177,6 +177,7 @@ export async function renderKpi(root: string): Promise<string> {
   let totalOutput = 0;
   let totalCostUsd = 0;
   let counted = 0;
+  let costCounted = 0;
 
   for (const feature of features) {
     if (!feature.cost) {
@@ -186,27 +187,39 @@ export async function renderKpi(root: string): Promise<string> {
       continue;
     }
     const tokens = feature.cost.input + feature.cost.output;
-    const partial = feature.cost.unmeteredCount > 0;
-    const marker = partial ? ' [PARTIAL — unmetered dispatches present]' : '';
+    const unmetered = feature.cost.unmeteredCount > 0;
+    const costUnmetered = feature.cost.costUnmetered > 0;
+    const marker = unmetered
+      ? ' [PARTIAL — unmetered dispatches present]'
+      : costUnmetered
+        ? ' [COST-PARTIAL — cost-unmetered dispatches present]'
+        : '';
+    const cost = costUnmetered ? 'unavailable' : feature.cost.costUsd;
     lines.push(
       `- ${feature.slug}: engine=${feature.engineVersion} ` +
         `input=${feature.cost.input} output=${feature.cost.output} ` +
-        `tokens=${tokens} cost_usd=${feature.cost.costUsd}${marker}`,
+        `tokens=${tokens} cost_usd=${cost}${marker}`,
     );
-    if (partial) {
+    if (unmetered) {
       continue;
     }
     totalInput += feature.cost.input;
     totalOutput += feature.cost.output;
-    totalCostUsd += feature.cost.costUsd;
     counted += 1;
+    if (!costUnmetered) {
+      totalCostUsd += feature.cost.costUsd;
+      costCounted += 1;
+    }
   }
 
   const totalTokens = totalInput + totalOutput;
   lines.push('');
+  const aggregateCost = costCounted > 0
+    ? Math.round(totalCostUsd * 10000) / 10000
+    : 'unavailable';
   lines.push(
     `Aggregate / trend across ${counted} feature(s): total tokens=${totalTokens} ` +
-      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${Math.round(totalCostUsd * 10000) / 10000}`,
+      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`,
   );
 
   return lines.join('\n') + '\n';
