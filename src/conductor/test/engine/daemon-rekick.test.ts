@@ -1777,3 +1777,163 @@ date: 2026-07-10
     ).toBe(true);
   });
 });
+
+// ── Post-rebase build pre-verify on the re-kick path ──────────────────────────
+//
+// Regression cover for the 2026-07-28 incident on
+// `codex-fresh-session-per-step-contract`: a daemon re-kick rebased an
+// evidence-complete branch (all 10 `Task:` trailers present) onto latest main
+// and unconditionally re-opened the `build` gate, which dispatched a full
+// build agent that redid already-committed work. `task-status.json` rows are
+// never flipped to `completed` by anything in the engine, so the durable
+// authority is the `Task:` trailer union on the branch — the build predicate
+// already unions them (adr-2026-07-23), but the re-kick path never asked it.
+//
+// Real local git (rebase semantics are the subject); no third-party calls.
+describe('engine/daemon-rekick — post-rebase build pre-verify (adr-2026-07-08)', () => {
+  let dir: string;
+  let events: ConductorEventEmitter;
+
+  async function git(...args: string[]): Promise<string> {
+    const { stdout } = await execFileAsync('git', ['-C', dir, ...args]);
+    return stdout.trim();
+  }
+
+  /**
+   * Feature branch whose plan declares `taskIds`, with a `Task:` trailer commit
+   * for each id in `trailered`. `.pipeline/task-status.json` is written all
+   * `pending` — exactly the live shape, since no engine writer sets `completed`.
+   */
+  async function initFeatureRepo(taskIds: string[], trailered: string[]): Promise<void> {
+    await initTestRepo(dir);
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const foo = 1;\n');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/plans/foo.md'),
+      '# Implementation Plan: foo\n\n## Tasks\n\n' +
+        taskIds.map((id) => `### Task ${id} — Do thing ${id}\n\nBody.\n`).join('\n'),
+    );
+    await git('add', '.');
+    await git('commit', '-m', 'init');
+    await git('checkout', '-b', 'feature/foo');
+    for (const id of trailered) {
+      await writeFile(join(dir, `src/task-${id}.ts`), `export const t${id} = ${id};\n`);
+      await git('add', '.');
+      await git('commit', '-m', `feat: task ${id}\n\nTask: ${id}`);
+    }
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/conduct-state.json'),
+      JSON.stringify({ feature_desc: 'foo' }, null, 2),
+    );
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify(
+        {
+          plan_ref: '.docs/plans/foo.md',
+          tasks: taskIds.map((id) => ({ id, name: `Do thing ${id}`, status: 'pending' })),
+        },
+        null,
+        2,
+      ) + '\n',
+    );
+    await writeFile(join(dir, REKICK_SENTINEL), 'rekick\n', 'utf-8');
+  }
+
+  /** Advance `main` with a runtime-code change so the rebase outcome is `changed`. */
+  async function advanceBaseWithCode(): Promise<void> {
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'src/sibling.ts'), 'export const sibling = 3;\n');
+    // Add ONLY the sibling file: `git add .` here would sweep the untracked
+    // `.pipeline/` fixture (sentinel included) into the base commit, and the
+    // checkout back to the feature branch would then delete it.
+    await git('add', 'src/sibling.ts');
+    await git('commit', '-m', 'sibling merged');
+    await git('checkout', 'feature/foo');
+  }
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'rekick-preverify-'));
+    events = new ConductorEventEmitter();
+  });
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('keeps the build gate satisfied when every plan task carries a Task: trailer, despite all-pending rows', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+    });
+
+    expect(res).toBe('rebased');
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(true);
+    expect(build?.kickback).toBeUndefined();
+
+    // Rows stayed pending — the trailer union, not the file, carried the day.
+    const rows = JSON.parse(await readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+    expect(rows.tasks.every((t: { status: string }) => t.status === 'pending')).toBe(true);
+  });
+
+  it('still invalidates the non-tree-attesting downstream gates on the same rebase', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+
+    await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+    });
+
+    for (const step of ['build_review', 'wiring_check'] as const) {
+      const verdict = await readVerdict(dir, step);
+      expect(verdict?.satisfied).toBe(false);
+      expect(verdict?.kickback?.from).toBe('rebase');
+    }
+  });
+
+  it('kicks the build gate back when a plan task has no Task: trailer (fail-closed)', async () => {
+    await initFeatureRepo(['1', '2'], ['1']);
+    await advanceBaseWithCode();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+    });
+
+    expect(res).toBe('rebased');
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.kickback?.from).toBe('rebase');
+  });
+
+  it('kicks the build gate back when the pre-verify throws (fail-closed)', async () => {
+    await initFeatureRepo(['1', '2'], ['1', '2']);
+    await advanceBaseWithCode();
+
+    await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      preVerify: async () => {
+        throw new Error('pre-verify exploded');
+      },
+    });
+
+    const build = await readVerdict(dir, 'build');
+    expect(build?.satisfied).toBe(false);
+    expect(build?.kickback?.from).toBe('rebase');
+  });
+});
