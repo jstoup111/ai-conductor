@@ -225,18 +225,21 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     runner: StepRunner,
     daemon = true,
     onFullSuiteEnsure?: () => void,
+    config: Record<string, unknown> = {},
+    eventEmitter: ConductorEventEmitter = events,
+    fromStep: StepName = 'build',
   ): Conductor {
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
-      events,
+      events: eventEmitter,
       projectRoot: dir,
       verifyArtifacts: true,
       mode: 'auto',
-      fromStep: 'build',
+      fromStep,
       maxRetries: 1,
       daemon,
-      config: { build_review: { enabled: true } },
+      config: { build_review: { enabled: true }, ...config },
       git: fakeGit,
       shipmentEvidence: async (input) => ({
         kind: 'valid',
@@ -386,6 +389,124 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     expect(kicks.filter((k) => k.from === 'wiring_check' && k.to === 'build').length).toBeGreaterThan(0);
     expect(halted).toBe(true);
     await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+  });
+
+  it('keeps the wiring_check D2 check before its budget consumption and captures its baseline before navigateBack', async () => {
+    const source = await readFile(join(process.cwd(), 'src/engine/conductor.ts'), 'utf8');
+    const wiringBlock = source.slice(
+      source.indexOf("if (step.name === 'wiring_check')"),
+      source.indexOf('// Task 8: Stall remediation'),
+    );
+
+    const checkIndex = wiringBlock.indexOf("checkKickbackToBuildEscalation('wiring_check')");
+    const budgetIndex = wiringBlock.indexOf("consumeKickbackBudget('wiring_check'");
+    const captureIndex = wiringBlock.indexOf("captureKickbackToBuildContext('wiring_check')");
+    const navigateIndex = wiringBlock.indexOf("navigateBack(state, 'build', steps)");
+
+    expect({
+      checkBeforeBudget: checkIndex >= 0 && checkIndex < budgetIndex,
+      captureBeforeNavigate: captureIndex >= 0 && captureIndex < navigateIndex,
+    }).toEqual({ checkBeforeBudget: true, captureBeforeNavigate: true });
+  });
+
+  it('replays the identical wiring gap across dispatches and D2 HALTs before a second D1 budget consumption', async () => {
+    await writeState(statePath, { ...frontDone(), track: 'technical', run_started_at: 1 });
+    const gapEvidence = JSON.stringify({
+      schema: 1,
+      base: 'base',
+      head: 'head',
+      layer2: { applicable: false },
+      waivers: [],
+      tasks: [{
+        id: 't1',
+        contract: 'src/x.ts#foo',
+        gaps: [{ kind: 'orphan-export', message: 'foo remains unreachable' }],
+      }],
+    });
+    let firstDispatchGap = true;
+    const first = makeConductor({
+      run: async (step) => {
+        if (step === 'wiring_check' && firstDispatchGap) {
+          firstDispatchGap = false;
+          await writeFile(join(dir, '.pipeline/wiring-evidence.json'), gapEvidence);
+          return { success: true };
+        }
+        return satisfy(step);
+      },
+    });
+
+    await first.run();
+
+    const secondEvents = new ConductorEventEmitter();
+    const secondKickbackCounts: number[] = [];
+    secondEvents.on('kickback', (event) => {
+      if (event.type === 'kickback' && event.from === 'wiring_check') {
+        secondKickbackCounts.push(event.count);
+      }
+    });
+    const second = makeConductor({
+      run: async (step) => {
+        if (step === 'wiring_check') {
+          await writeFile(join(dir, '.pipeline/wiring-evidence.json'), gapEvidence);
+          return { success: true };
+        }
+        return satisfy(step);
+      },
+    }, true, undefined, {}, secondEvents, 'wiring_check');
+
+    await second.run();
+
+    expect({
+      secondKickbackCounts,
+      halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
+    }).toEqual({
+      secondKickbackCounts: [],
+      halt: expect.stringMatching(/wiring_check kickback-to-build no-op/i),
+    });
+  });
+
+  it('leaves D1 active when D2 is disabled, so the identical-gap replay terminates at the persisted cap', async () => {
+    await writeState(statePath, { ...frontDone(), track: 'technical', run_started_at: 1 });
+    const gapEvidence = JSON.stringify({
+      schema: 1, base: 'base', head: 'head', layer2: { applicable: false }, waivers: [],
+      tasks: [{ id: 't1', contract: 'src/x.ts#foo', gaps: [{ kind: 'orphan-export', message: 'foo remains unreachable' }] }],
+    });
+    let firstDispatchGap = true;
+    await makeConductor({
+      run: async (step) => {
+        if (step === 'wiring_check' && firstDispatchGap) {
+          firstDispatchGap = false;
+          await writeFile(join(dir, '.pipeline/wiring-evidence.json'), gapEvidence);
+          return { success: true };
+        }
+        return satisfy(step);
+      },
+    }, true, undefined, { kickback_escalation: { enabled: false } }).run();
+
+    const secondEvents = new ConductorEventEmitter();
+    const secondKickbackCounts: number[] = [];
+    secondEvents.on('kickback', (event) => {
+      if (event.type === 'kickback' && event.from === 'wiring_check') secondKickbackCounts.push(event.count);
+    });
+    const second = makeConductor({
+      run: async (step) => {
+        if (step === 'wiring_check') {
+          await writeFile(join(dir, '.pipeline/wiring-evidence.json'), gapEvidence);
+          return { success: true };
+        }
+        return satisfy(step);
+      },
+    }, true, undefined, { kickback_escalation: { enabled: false } }, secondEvents, 'wiring_check');
+
+    await second.run();
+
+    expect({
+      secondKickbackCounts,
+      halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
+    }).toEqual({
+      secondKickbackCounts: [2],
+      halt: expect.stringMatching(/wiring_check.*cap 2/i),
+    });
   });
 });
 
