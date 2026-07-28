@@ -324,7 +324,6 @@ export async function preparePipelineForDaemonDispatch(
   pipelineDir: string,
 ): Promise<void> {
   await rm(join(pipelineDir, 'session-created'), { force: true });
-  await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
 }
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
@@ -909,12 +908,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // Sweep stale session markers before constructing the runner. A KEPT
     // worktree (reused on a later daemon cycle after a prior halt/error —
     // createWorktree is idempotent) still carries the previous run's
-    // `session-created` / `conduct-session-id`. Without this sweep the new
+    // `session-created` marker. Without this sweep the new
     // runner inherits `sessionStarted = true` (lazy-init reads the marker) and
     // its FIRST step would `--resume` a brand-new session id that was never
     // created → "No conversation found" → "session unavailable (expired or in
-    // use)" → the feature errors out. The conductor also resets per step
-    // before every step, but sweeping here guarantees a clean start.
+    // use)" → the feature errors out. The durable `conduct-session-id` is the
+    // feature run identity and survives restart/re-dispatch. The conductor
+    // also resets per step before every step, but sweeping here guarantees a
+    // clean provider start.
     await preparePipelineForDaemonDispatch(pipelineDir);
 
     // Pre-seed: specs are authored, so DECIDE is stamped done and the loop

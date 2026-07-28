@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
+import { commitAll, initTestRepo } from '../fixtures/git-repo.js';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -22,25 +24,28 @@ describe('ST-1071-5 — cold retry reconstructs context from durable artifacts',
   it('completes from committed partial work and RETRY context without prior conversation', async () => {
     const projectDir = await mkdtemp(join(tmpdir(), 'cold-retry-artifacts-'));
     tempDirs.push(projectDir);
+    await initTestRepo(projectDir);
     const pipelineDir = join(projectDir, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
     await writeFile(join(pipelineDir, 'conduct-session-id'), 'stable-feature-run', 'utf-8');
     const artifactPath = join(projectDir, 'partial-work.txt');
     const firstFailure = 'private first-attempt conversation output';
     const invocations: InvokeOptions[] = [];
-    let committed = false;
 
     const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
       invocations.push(options);
       if (invocations.length === 1) {
         await writeFile(artifactPath, 'durable partial implementation', 'utf-8');
-        committed = true;
+        await commitAll(projectDir, 'feat: persist partial implementation');
         return { success: false, output: firstFailure, exitCode: 1 };
       }
 
-      const artifact = await readFile(artifactPath, 'utf-8');
+      const artifact = execFileSync(
+        'git',
+        ['show', 'HEAD:partial-work.txt'],
+        { cwd: projectDir, encoding: 'utf-8' },
+      );
       const retryHasEnoughContext =
-        committed &&
         artifact === 'durable partial implementation' &&
         options.systemPrompt?.includes('RETRY: tests failed after partial implementation') === true &&
         !options.systemPrompt.includes(firstFailure);
