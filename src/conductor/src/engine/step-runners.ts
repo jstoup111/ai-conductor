@@ -1299,12 +1299,14 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     const resolved = this.resolvedConfigFor('complexity');
+    const { v4: uuidv4 } = await import('uuid');
+    this.sessionId = uuidv4();
     // Walk the fallback ladder so a dead/out-of-credits configured model
     // (e.g. fable) degrades to the next available one instead of failing.
     const result = await this.modelAvailability.invokeWithLadder(this.provider, {
       prompt: '/conduct complexity',
       sessionId: this.sessionId,
-      resume: this.sessionStarted,
+      resume: false,
       dangerouslySkipPermissions: true,
       systemPrompt,
       model: this.modelAvailability.effectiveModel(resolved.model).model,

@@ -2317,6 +2317,34 @@ STORIES: 10`;
   });
 
   describe('assessComplexity deterministic scoring', () => {
+    it('cold-starts legacy complexity assessment despite an inherited session marker', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'complexity-cold-start-'));
+      const pipelineDir = join(dir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'session-created'), '1', 'utf-8');
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        output: 'MODELS: 2\nINTEGRATIONS: 0\nAUTH: 0\nTIER: S',
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(provider, 'legacy-session', dir, {
+        pipelineDir,
+      });
+
+      try {
+        await runner.assessComplexity();
+        const options = (provider.invoke as ReturnType<typeof vi.fn>).mock
+          .calls[0][0] as InvokeOptions;
+        expect({
+          resume: options.resume,
+          freshSessionId: options.sessionId !== 'legacy-session',
+        }).toEqual({ resume: false, freshSessionId: true });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
     it('prefers count-based scoring over Claude letter (L despite TIER: S)', async () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
