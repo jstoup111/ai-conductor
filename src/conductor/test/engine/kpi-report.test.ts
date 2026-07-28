@@ -107,6 +107,70 @@ describe('parseCostBlock', () => {
 });
 
 describe('renderKpi', () => {
+  it('keeps cost-unmetered feature tokens while excluding their cost', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/feat-codex.md'),
+      record('feat-codex', [
+        'input: 1000', 'output: 200', 'cost_usd: 0.25',
+        'cost_unmetered: count: 1', 'unmetered: count: 0, duration_ms: 0', '',
+      ].join('\n')),
+    );
+    await writeFile(
+      join(root, '.docs/shipped/fully-metered.md'),
+      record('fully-metered', [
+        'input: 500', 'output: 100', 'cost_usd: 0.75',
+        'cost_unmetered: count: 0', 'unmetered: count: 0, duration_ms: 0', '',
+      ].join('\n')),
+    );
+
+    const report = await renderKpi(root);
+    const partialLine = report.split('\n').find((line) => line.includes('feat-codex')) ?? '';
+
+    expect(report).toMatch(/total tokens=1800/);
+    expect(report).toMatch(/total cost_usd=0\.75/);
+    expect(partialLine).toMatch(/cost[- _]?(?:partial|unmetered|unavailable)/i);
+  });
+
+  it('excludes a truly unmetered feature from both aggregates', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/unmetered.md'),
+      record('unmetered', [
+        'input: 9000', 'output: 900', 'cost_usd: 3.5',
+        'cost_unmetered: count: 0', 'unmetered: count: 1, duration_ms: 1200', '',
+      ].join('\n')),
+    );
+    await writeFile(
+      join(root, '.docs/shipped/fully-metered.md'),
+      record('fully-metered', [
+        'input: 500', 'output: 100', 'cost_usd: 0.75',
+        'cost_unmetered: count: 0', 'unmetered: count: 0, duration_ms: 0', '',
+      ].join('\n')),
+    );
+
+    const report = await renderKpi(root);
+
+    expect(report).toMatch(/total tokens=600/);
+    expect(report).toMatch(/total cost_usd=0\.75/);
+  });
+
+  it('reports unavailable aggregate cost when every feature is cost-unmetered', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/codex.md'),
+      record('codex', [
+        'input: 1000', 'output: 200', 'cost_usd: 0',
+        'cost_unmetered: count: 1', 'unmetered: count: 0, duration_ms: 0', '',
+      ].join('\n')),
+    );
+
+    const report = await renderKpi(root);
+
+    expect(report).toMatch(/total tokens=1200/);
+    expect(report).toMatch(/total cost_usd=(?:unavailable|n\/a)/i);
+  });
+
   it('aggregates token totals across multiple features', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(
