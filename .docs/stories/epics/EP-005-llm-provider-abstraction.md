@@ -17,16 +17,14 @@ without rewriting the conductor.
 
 ## Child Stories
 
-- ST-080 LLM provider interface (invoke and session management; the retained
-  resume capability is fail-closed and neither built-in provider enables it)
+- ST-080 LLM provider interface (invoke, resume, session management)
 - ST-081 Claude CLI provider (default implementation)
 
 ## Acceptance Criteria (Epic Level)
 
 ### Happy Path
 - Given the Claude CLI provider is configured (default), when the conductor invokes a skill,
-  then it calls the Claude CLI with fresh-session flags and the appropriate system prompt;
-  it never supplies `--resume`
+  then it calls the Claude CLI with the appropriate flags (session resume, system prompt, etc.)
 
 ### Negative Paths
 - Given the configured LLM provider binary is not found on PATH, when the conductor starts,

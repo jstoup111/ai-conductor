@@ -257,12 +257,12 @@ step.
 
 #### Negative Paths
 - Given a branch retries after a transient failure, when the retry dispatches, then it
-  mints a new branch-local session id with `resume: false`, receives the full retry
-  prompt, and never reuses its prior id or a sibling's.
+  resumes that branch's OWN session id (step-retry-resumes-session semantics preserved
+  per branch), never a sibling's.
 - Given two branches run concurrently, when either writes session markers
-  (`.pipeline/session-created`), then the shared `this.sessionId` and durable
-  `.pipeline/conduct-session-id` run identity are not mutated by branch execution
-  (assert both are unchanged after the group completes).
+  (`.pipeline/session-created`, `conduct-session-id`), then the shared `this.sessionId`
+  of the serial runner is not mutated by branch execution (assert it is unchanged after
+  the group completes).
 
 ### Done When
 - [ ] Runner-spy test: invocation list shows per-member step names and distinct
