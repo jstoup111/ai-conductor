@@ -528,21 +528,21 @@ Read it with `conduct-ts daemon logs`; flags are in [cli](cli.md).
 block with regexes; it does not read `events.jsonl`, `.pipeline/`, or `otel.jsonl`.
 
 **Parsed fields** (`KpiCostFields`): `input`, `output`, `cacheRead`, `cacheCreation`, `costUsd`,
-`dispatches`, `retries`, `halts`, `unmeteredCount`, `unmeteredDurationMs`.
+`dispatches`, `retries`, `halts`, `unmeteredCount`, `unmeteredDurationMs`, and
+`costUnmetered` (from the top-level `cost_unmetered` field). Each `providers:` entry is also
+parsed with its input, output, cache, cost, dispatch, and `cost_unmetered` fields.
 
 **Output:** a plain-text report on stdout. No file, no JSON. Per feature it prints `input`, `output`,
-`tokens` (their sum), and `cost_usd`, suffixed `[PARTIAL — unmetered dispatches present]` when any
-dispatch went unmetered. A record with no parsable `## Cost` block prints
-`no Cost data available (skipped)`. The aggregate line prints the counted feature count, total tokens with an
-input/output breakdown, and total `cost_usd` to four decimal places; **features with any unmetered
-dispatch are excluded from the aggregate**. An empty or missing directory prints
-`No shipped features yet — .docs/shipped/ is empty or does not exist.`
+`tokens` (their sum), cache fields, dispatch fields, `duration_ms`, and `cost_usd`, suffixed
+`[PARTIAL — unmetered dispatches present]` when any dispatch went unmetered or
+`[COST-PARTIAL — cost-unmetered dispatches present]` when tokens are metered but cost is unknown.
+Each provider prints its input, output, tokens, cost, `cost_unmetered`, and dispatch count; a
+provider with cost-unmetered dispatches prints `cost_usd=unavailable`. A record with no parsable
+`## Cost` block prints `no Cost data available (skipped)`. The aggregate line prints the counted
+feature count, total tokens with an input/output breakdown, and total `cost_usd` to four decimal
+places; **features with any unmetered dispatch are excluded from the aggregate**, while
+cost-unmetered features still contribute tokens but not cost. If no feature has metered cost, the
+aggregate cost is `unavailable`. An empty or missing directory prints `No shipped features yet —
+.docs/shipped/ is empty or does not exist.`
 
 The command takes zero flags — anything after `kpi` is ignored — and always exits 0.
-
-> **Known limitation.** Six of the ten parsed fields (`cacheRead`, `cacheCreation`, `dispatches`,
-> `retries`, `halts`, `unmeteredDurationMs`) are never rendered or aggregated, and the `providers:`
-> per-provider cost sub-block written into every shipped record has no parser at all. Cache spend and
-> per-provider attribution are recorded but unreportable through this command; read them from the
-> shipped-record markdown directly. Tracked in
-> [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).

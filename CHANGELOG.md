@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Add cost-unmetered metering and per-provider attribution to committed Cost records and `conduct-ts kpi` output.
 - Whole-feature usage total at `finish`: when a feature's `finish` step completes, the build logs
   one aggregate line — `finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered` —
   summed from that feature's own `.pipeline/events.jsonl`, so it spans the entire build rather than
