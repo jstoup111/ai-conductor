@@ -10,6 +10,19 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { FeatureUsageTotals } from '../execution/provider-diagnostics.js';
+import type { TokenUsage } from '../execution/llm-provider.js';
+
+export type MeteringClassification = 'fully-metered' | 'cost-unmetered' | 'unmetered';
+
+/** Classify a dispatch's provider-reported usage without inventing a cost. */
+export function classifyMetering(
+  tokenUsage: TokenUsage | undefined,
+): MeteringClassification {
+  if (!tokenUsage) return 'unmetered';
+  return typeof tokenUsage.costUsd === 'number' && Number.isFinite(tokenUsage.costUsd)
+    ? 'fully-metered'
+    : 'cost-unmetered';
+}
 
 export interface CostRollup {
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number };
@@ -18,6 +31,7 @@ export interface CostRollup {
   retries: number;
   halts: number;
   unmetered: { count: number; durationMs: number };
+  costUnmetered?: { count: number };
   providers?: Record<string, ProviderCostRollup>;
 }
 
@@ -26,6 +40,7 @@ export interface ProviderCostRollup {
   costUsd: number;
   dispatches: number;
   unmetered: { count: number; durationMs: number };
+  costUnmetered?: { count: number };
 }
 
 function zeroUsageRollup(): ProviderCostRollup {
@@ -34,6 +49,7 @@ function zeroUsageRollup(): ProviderCostRollup {
     costUsd: 0,
     dispatches: 0,
     unmetered: { count: 0, durationMs: 0 },
+    costUnmetered: { count: 0 },
   };
 }
 
@@ -46,15 +62,19 @@ function addDispatch(
   event: Record<string, unknown>,
 ): void {
   target.dispatches += 1;
-  const tokenUsage = event.tokenUsage as Record<string, unknown> | undefined;
+  const tokenUsage = event.tokenUsage as TokenUsage | undefined;
+  const metering = classifyMetering(tokenUsage);
   if (tokenUsage) {
     target.tokens.input += Number(tokenUsage.input) || 0;
     target.tokens.output += Number(tokenUsage.output) || 0;
     target.tokens.cacheRead += Number(tokenUsage.cacheRead) || 0;
     target.tokens.cacheCreation += Number(tokenUsage.cacheCreation) || 0;
-    target.costUsd += Number(tokenUsage.costUsd) || 0;
+    if (metering === 'fully-metered') target.costUsd += tokenUsage.costUsd!;
   }
-  if (event.unmetered === true || !tokenUsage) {
+  if (metering === 'cost-unmetered') {
+    (target.costUnmetered ??= { count: 0 }).count += 1;
+  }
+  if (event.unmetered === true || metering === 'unmetered') {
     target.unmetered.count += 1;
     target.unmetered.durationMs += Number(tokenUsage?.durationMs) || 0;
   }
