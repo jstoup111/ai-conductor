@@ -43,8 +43,6 @@ async function paneCwdSticky(): Promise<boolean> {
     await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir());
     const cwd = sessionPaneCwd(name);
     return isTmpdirRooted(cwd);
-  } catch {
-    return false; // tmux binary present but its server is unavailable — skip
   } finally {
     if (prevFlag === undefined) {
       delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
@@ -375,7 +373,6 @@ describe('sweepStaleDaemonSessions — permanent-baseline-blindspot fix', () => 
       // before or after creating it — that's the point of the pre-run sweep).
       await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir());
       expect(await hasSession(name)).toBe(true);
-      if (!isTmpdirRooted(sessionPaneCwd(name))) return;
 
       const { killed } = sweepStaleDaemonSessions();
 
@@ -518,7 +515,6 @@ describe('tmux-leak-guard (#377)', () => {
     try {
       await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir());
       expect(await hasSession(name)).toBe(true);
-      if (!isTmpdirRooted(sessionPaneCwd(name))) return;
 
       const { killed, indeterminate } = reapLeakedDaemonSessions(before);
 
