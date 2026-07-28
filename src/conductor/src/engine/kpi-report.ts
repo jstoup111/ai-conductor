@@ -24,6 +24,18 @@ export interface KpiCostFields {
   halts: number;
   unmeteredCount: number;
   unmeteredDurationMs: number;
+  costUnmetered: number;
+  providers: Record<string, KpiProviderCostFields>;
+}
+
+export interface KpiProviderCostFields {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  costUsd: number;
+  dispatches: number;
+  costUnmetered: number;
 }
 
 /**
@@ -48,9 +60,11 @@ export function parseCostBlock(content: string): KpiCostFields | null {
   const output = num('output');
   if (input === undefined || output === undefined) return null;
 
-  const unmeteredMatch = /unmetered:\s*\{?\s*count:\s*([\-0-9.]+)\s*,\s*duration_ms:\s*([\-0-9.]+)\s*\}?/.exec(
+  const unmeteredMatch = /^unmetered:\s*\{?\s*count:\s*([\-0-9.]+)\s*,\s*duration_ms:\s*([\-0-9.]+)\s*\}?/m.exec(
     body,
   );
+  const costUnmeteredMatch = /^cost_unmetered:\s*(?:\{?\s*count:\s*)?([\-0-9.]+)/m.exec(body);
+  const providers = parseProviderCostFields(body);
 
   return {
     input,
@@ -63,7 +77,47 @@ export function parseCostBlock(content: string): KpiCostFields | null {
     halts: num('halts') ?? 0,
     unmeteredCount: unmeteredMatch ? Number(unmeteredMatch[1]) : 0,
     unmeteredDurationMs: unmeteredMatch ? Number(unmeteredMatch[2]) : 0,
+    costUnmetered: costUnmeteredMatch ? Number(costUnmeteredMatch[1]) : 0,
+    providers,
   };
+}
+
+function parseProviderCostFields(body: string): Record<string, KpiProviderCostFields> {
+  const providers: Record<string, KpiProviderCostFields> = Object.create(null);
+  let inProviders = false;
+
+  for (const line of body.split('\n')) {
+    if (/^providers:\s*$/.test(line)) {
+      inProviders = true;
+      continue;
+    }
+    if (!inProviders) continue;
+
+    const providerMatch = /^  ([^:]+):\s*(.*)$/.exec(line);
+    if (!providerMatch) {
+      if (line.trim()) inProviders = false;
+      continue;
+    }
+
+    const fields = providerMatch[2];
+    const num = (name: string): number => {
+      const match = new RegExp(`(?:^|,\\s*)${name}:\\s*([\\-0-9.]+)(?:,|$)`).exec(fields);
+      return match ? Number(match[1]) : 0;
+    };
+    const costUnmeteredMatch = /(?:^|,\s*)cost_unmetered:\s*(?:count:\s*)?([\-0-9.]+)(?:,|$)/.exec(fields);
+
+    providers[providerMatch[1].trim()] = {
+      input: num('input'),
+      output: num('output'),
+      cacheRead: num('cache_read'),
+      cacheCreation: num('cache_creation'),
+      costUsd: num('cost_usd'),
+      dispatches: num('dispatches'),
+      costUnmetered: costUnmeteredMatch ? Number(costUnmeteredMatch[1]) : 0,
+    };
+  }
+
+  return providers;
 }
 
 interface FeatureKpi {
