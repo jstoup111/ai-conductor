@@ -1231,8 +1231,15 @@ export class DefaultStepRunner implements StepRunner {
     }
   }
 
-  async runInteractive(step: StepName): Promise<void> {
-    const prompt = `Fix issues from the failed ${step} step, then exit when done.`;
+  async runInteractive(
+    step: StepName,
+    failureContext: { reason?: string },
+  ): Promise<void> {
+    await this.resetSession(step);
+    const reason = failureContext.reason?.trim() || 'no reason captured';
+    const prompt =
+      `Fix issues from the failed ${step} step. ` +
+      `Failure reason: ${reason}. Then exit when done.`;
     if (this.providerRuntimes && this.sessionStore) {
       await this.runProviderAwareNormal(
         step,
@@ -1250,7 +1257,7 @@ export class DefaultStepRunner implements StepRunner {
     await this.provider.invokeInteractive({
       prompt,
       sessionId: this.sessionId,
-      resume: true,
+      resume: false,
       interactive: true,
       dangerouslySkipPermissions: false,
       model: resolved.model,
