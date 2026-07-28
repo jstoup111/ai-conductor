@@ -198,8 +198,20 @@ export async function renderKpi(root: string): Promise<string> {
     lines.push(
       `- ${feature.slug}: engine=${feature.engineVersion} ` +
         `input=${feature.cost.input} output=${feature.cost.output} ` +
-        `tokens=${tokens} cost_usd=${cost}${marker}`,
+        `tokens=${tokens} cache_read=${feature.cost.cacheRead} ` +
+        `cache_creation=${feature.cost.cacheCreation} dispatches=${feature.cost.dispatches} ` +
+        `retries=${feature.cost.retries} halts=${feature.cost.halts} ` +
+        `duration_ms=${feature.cost.unmeteredDurationMs} cost_usd=${cost}${marker}`,
     );
+    for (const [provider, providerCost] of Object.entries(feature.cost.providers)) {
+      const providerTokens = providerCost.input + providerCost.output;
+      const providerUsd = providerCost.costUnmetered > 0 ? 'unavailable' : providerCost.costUsd;
+      lines.push(
+        `  - ${provider}: input=${providerCost.input} output=${providerCost.output} ` +
+          `tokens=${providerTokens} cost_usd=${providerUsd} ` +
+          `cost_unmetered=${providerCost.costUnmetered} dispatches=${providerCost.dispatches}`,
+      );
+    }
     if (unmetered) {
       continue;
     }
