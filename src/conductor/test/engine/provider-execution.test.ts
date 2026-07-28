@@ -161,23 +161,24 @@ describe('executeProviderCandidates', () => {
     ]);
   });
 
-  it('still resumes within a step when no isolated self-host home is provisioned', async () => {
+  it('resumes a resume-capable provider within a step when no isolated self-host home is provisioned', async () => {
     const seen: boolean[] = [];
-    const codex = {
+    const claude = {
+      supportsSessionResume: true,
       invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
         seen.push(options.resume === true);
         return { success: true, output: 'ok', exitCode: 0 };
       }),
       invokeInteractive: vi.fn(async () => {}),
     };
-    const runtimes = new ProviderRuntimeSet([runtime('codex', codex)]);
+    const runtimes = new ProviderRuntimeSet([runtime('claude', claude)]);
     const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('session'));
     const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
 
     for (let i = 0; i < 2; i += 1) {
       await executeProviderCandidates({
         step: 'build',
-        configuredProviders: ['codex'],
+        configuredProviders: ['claude'],
         runtimes,
         sessions,
         options: { prompt: 'build', cwd: '/workspace' },
