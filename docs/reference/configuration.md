@@ -862,11 +862,11 @@ Escalation when a kickback to `build` produces no change.
 | --- | --- | --- |
 | `kickback_escalation.enabled` | boolean | `true` |
 
-Contract (`config.ts:911-935`): absent or `null` yields `{ enabled: true }`; a boolean is taken as given;
+Contract (`src/conductor/src/engine/config.ts:934-957`): absent or `null` yields `{ enabled: true }`; a boolean is taken as given;
 anything malformed — non-object, unknown inner key, or non-boolean `enabled` — is replaced with
 `{ enabled: true }` with **no warning**. The resolved block is written back.
 
-Consumed at `src/conductor/src/engine/conductor.ts:2363` (`?? true`). When enabled, the no-op
+Consumed at `src/conductor/src/engine/conductor.ts:2438` (`?? true`). When enabled, the no-op
 escalation guard compares the pre- and post-build tree hashes (and resolved-task counts) for the
 kickback; an empty commit therefore does not count as progress. Setting `enabled: false` disables
 that tree-hash witness and reverts to re-kicking until the cap. It does not disable the durable
