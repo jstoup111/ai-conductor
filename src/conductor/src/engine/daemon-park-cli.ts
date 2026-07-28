@@ -103,7 +103,10 @@ export interface DaemonParkDeps {
     log: (line: string) => void;
     runGit?: GitRunner;
     runGh?: GhRunner;
+    requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   }) => Promise<ReconcileMergedParkOutcome>;
+  /** ST-916 record-only repair hand-off; defaults to the production adapter. */
+  requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   runGit?: GitRunner;
   runGh?: GhRunner;
 }
@@ -150,7 +153,21 @@ export async function dispatchDaemonPark(
       const reconcile =
         deps.reconcileMergedPark ??
         (await import('./park-reconciliation.js')).reconcileMergedPark;
-      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh });
+      // Same ST-916 hand-off the daemon sweep uses (adr-2026-07-27 Decision 4),
+      // so the operator verb reaches the repair flow too. Resolved lazily on
+      // first use to keep the pre-boot dispatch path free of heavy imports.
+      const requestRecordRepair =
+        deps.requestRecordRepair ??
+        (async (request: { slug: string; prUrl: string }) => {
+          const { makeRecordRepairRequester } = await import('./shipment-evidence-cli.js');
+          await makeRecordRepairRequester({
+            cwd: resolvedRoot,
+            runGit: deps.runGit,
+            runGh: deps.runGh,
+            log: out,
+          })(request);
+        });
+      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh, requestRecordRepair });
       if (outcome.refusal) {
         out(`Could not reconcile '${slug}': ${outcome.refusal}`);
         return 1;

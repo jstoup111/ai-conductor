@@ -135,7 +135,15 @@ describe('engine/daemon-park-cli', () => {
 
       expect({ code, calls: reconcileMergedPark.mock.calls, out }).toEqual({
         code: 0,
-        calls: [[{ projectRoot: root, slug: 'merged', log: expect.any(Function) }]],
+        // rem-adr-003: the verb always supplies the ST-916 record-repair
+        // hand-off, so the operator path reaches the same repair flow as the
+        // daemon sweep instead of deferring a record-missing park forever.
+        calls: [[{
+          projectRoot: root,
+          slug: 'merged',
+          log: expect.any(Function),
+          requestRecordRepair: expect.any(Function),
+        }]],
         out: ["Reconciled 'merged': worktree-removed, branch-deleted, unparked"],
       });
     });
