@@ -5,7 +5,7 @@ import { join } from 'node:path';
 
 import { reconcileMergedPark, reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
-import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
+import { isOperatorParked, removeOperatorPark, writeOperatorPark } from '../../src/engine/park-marker.js';
 
 describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it.each(['*', 'a/b', 'a,b', ''])(
@@ -351,6 +351,37 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ entries: result.entries, destructive: runGit.mock.calls.filter(([args]) => args[0] === 'worktree' || args[0] === 'branch') }).toEqual({
         entries: [{ slug, classification }],
         destructive: [],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('suppresses repeated outcomes and summaries, then prunes a no-longer-parked slug', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'cached-merged';
+    const cache = new Map<string, 'merged' | 'orphan' | 'normal' | 'unclassified'>();
+    const runGit = vi.fn<GitRunner>().mockResolvedValue({ stdout: '' });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+      await reconcileParkedFeatures({ projectRoot, runGit, cache, log });
+      const firstPass = [...log.mock.calls];
+
+      log.mockClear();
+      await reconcileParkedFeatures({ projectRoot, runGit, cache, log });
+      const secondPass = [...log.mock.calls];
+
+      await removeOperatorPark(projectRoot, slug);
+      await reconcileParkedFeatures({ projectRoot, runGit, cache, log });
+
+      expect({ firstPass, secondPass, cache: [...cache.entries()] }).toEqual({
+        firstPass: [
+          [`[parked-reconciliation] ${slug} merged`],
+          ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 skipped=0'],
+        ],
+        secondPass: [],
+        cache: [],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

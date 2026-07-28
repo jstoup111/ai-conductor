@@ -54,9 +54,11 @@ export interface ReconcileParkedFeaturesOptions {
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   log?: (message: string) => void;
   autoCleanup?: boolean;
+  cache?: Map<string, ParkClassification>;
 }
 
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+const sweepSummarySignatures = new WeakMap<Map<string, ParkClassification>, string>();
 
 /**
  * Report the current reconciliation classification for each parked feature.
@@ -68,8 +70,9 @@ export async function reconcileParkedFeatures(
   const entries: ParkedSweepEntry[] = [];
   const counts = { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, skipped: 0 };
   const runGit = opts.runGit ?? makeProductionGit();
+  const parkedSlugs = await listOperatorParkedSlugs(opts.projectRoot);
 
-  for (const slug of await listOperatorParkedSlugs(opts.projectRoot)) {
+  for (const slug of parkedSlugs) {
     let classification: ParkClassification;
     try {
       await runGit(['merge-base', '--is-ancestor', `feature/${slug}`, 'origin/main'], {
@@ -104,6 +107,20 @@ export async function reconcileParkedFeatures(
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
     else counts.parked++;
+    if (opts.cache && opts.cache.get(slug) !== classification) {
+      opts.log?.(`[parked-reconciliation] ${slug} ${classification}`);
+    }
+    opts.cache?.set(slug, classification);
+  }
+
+  if (opts.cache) {
+    const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.skipped}`;
+    if (sweepSummarySignatures.get(opts.cache) !== signature) {
+      opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} skipped=${counts.skipped}`);
+      sweepSummarySignatures.set(opts.cache, signature);
+    }
+    const live = new Set(parkedSlugs);
+    for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 
   return { entries, counts };
