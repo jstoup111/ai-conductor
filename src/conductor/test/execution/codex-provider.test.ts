@@ -151,7 +151,7 @@ describe('CodexProvider', () => {
     expect(options.input).toBe('You are the conductor.\n\nMake the no-op change');
     expect(options.cwd).toBe('/workspace/project');
     expect(result).toMatchObject({ success: true, output: 'No-op complete.', exitCode: 0 });
-    expect(result.tokenUsage).toEqual({ input: 12, cacheRead: 4, output: 7 });
+    expect(result.tokenUsage).toEqual({ input: 12, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
   it('resumes the requested Codex session and continues using stdin', async () => {
@@ -1260,6 +1260,16 @@ describe('CodexProvider', () => {
 });
 
 describe('parseCodexJsonl', () => {
+  it('sums usage across every completed turn in a dispatch', () => {
+    const stream = [
+      { type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 10 } },
+      { type: 'turn.completed', usage: { input_tokens: 200, output_tokens: 20 } },
+      { type: 'turn.completed', usage: { input_tokens: 300, output_tokens: 30 } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({ input: 600, output: 60, numTurns: 3 });
+  });
+
   it('parses the captured Codex exec --json usage values', async () => {
     const fixture = await readFile(
       join(process.cwd(), 'test', 'fixtures', 'codex-exec-json-turn-completed.jsonl'),
@@ -1270,7 +1280,18 @@ describe('parseCodexJsonl', () => {
       input: 18057,
       cacheRead: 0,
       output: 5,
+      numTurns: 1,
     });
+  });
+
+  it('ignores a malformed completed turn without producing NaN totals', () => {
+    const stream = [
+      { type: 'turn.completed', usage: { input_tokens: 100, output_tokens: 10 } },
+      { type: 'turn.completed', usage: { input_tokens: 'not-a-number', output_tokens: 20 } },
+      { type: 'turn.completed', usage: { input_tokens: 300, output_tokens: 30 } },
+    ].map((event) => JSON.stringify(event)).join('\n');
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({ input: 400, output: 40, numTurns: 2 });
   });
 
   it('uses the final agent message instead of returning raw event JSON', () => {
