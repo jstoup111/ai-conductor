@@ -4,6 +4,7 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -186,6 +187,30 @@ describe('executeProviderCandidates', () => {
     }
 
     expect(seen).toEqual([false, true]);
+  });
+
+  it('does not resume the second Claude attempt', async () => {
+    const seen: Array<boolean | undefined> = [];
+    const claude = new ClaudeProvider();
+    vi.spyOn(claude, 'invoke').mockImplementation(async (options) => {
+      seen.push(options.resume);
+      return { success: true, output: 'ok', exitCode: 0 };
+    });
+    const runtimes = new ProviderRuntimeSet([runtime('claude', claude)]);
+    const sessions = new ProviderSessionScope(() => 'claude-session');
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['claude'],
+        runtimes,
+        sessions,
+        options: { prompt: 'build', cwd: '/workspace' },
+      });
+    }
+
+    expect(seen).toEqual([false, false]);
   });
 
   it('tears down a failed candidate home before provisioning its fallback', async () => {
