@@ -55,6 +55,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   still gets `mergeable` and `ci-failed`, which are informational only. Because this repo opens feature
   PRs as drafts while the build is still running, resolution dispatch against a draft raced the build
   that owned the branch; skipped drafts also no longer burn an attempt counter.
+- A build halted by the protected-artifact seal no longer spins the daemon. The seal check
+  short-circuits the `build` step before any dispatch, so it never reached any of the exit paths that
+  stamp `lastResolvedCount` into `.pipeline/task-evidence.json`. The stamp therefore stayed at its
+  stale value (0 on a worktree whose evidence sidecar had been reset) while the live resolved count
+  still counted the `Task:`-trailered commits already on the branch — making the daemon's
+  progress-gated re-kick predicate (`liveResolvedCount > lastResolvedCount`) permanently true. The
+  daemon re-dispatched the halted feature every ~15s, re-failed the identical seal check, and halted
+  again, bounded only by an in-memory per-run dispatch ceiling that resets on every daemon restart.
+  The protected-artifact halt now records the resolved count like every other build-step exit, so a
+  dispatch that ended without forward progress earns no re-kick and the feature stays parked for a
+  human, as intended. Detection of the artifact change itself is unchanged.
 - The test suite no longer fails a handful of real-binary tests on a cold checkout. Thirteen test
   files spawn `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is missing or dangling;
   `dist` is gitignored and there is no `pretest` hook, so nothing built it before the run and it

@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -7,6 +7,8 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
 import * as protectedArtifactSeal from '../../src/engine/protected-artifact-seal.js';
+import { readLastResolvedCount } from '../../src/engine/task-evidence.js';
+import { countResolvedTasks } from '../../src/engine/task-progress.js';
 
 describe('conductor protected-artifact self-amendment advisory', () => {
   const temporaryDirectories: string[] = [];
@@ -165,5 +167,57 @@ describe('conductor protected-artifact self-amendment advisory', () => {
       dispatches: [],
       halt: expect.stringContaining('Protected artifact changed: .docs/plans/feature.md'),
     });
+  });
+
+  it('stamps lastResolvedCount on the protected-artifact halt so the halted build earns no progress re-kick', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'conductor-protected-artifact-advisory-'));
+    temporaryDirectories.push(projectRoot);
+    const statePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(statePath, JSON.stringify({ plan: 'done' }), 'utf8');
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    // Two of three plan tasks already resolved — the live resolved count the
+    // daemon's `isProgressReKickEligible` compares the sidecar stamp against.
+    await writeFile(
+      join(projectRoot, '.pipeline', 'task-status.json'),
+      JSON.stringify({
+        plan_ref: '.docs/plans/feature.md',
+        tasks: [
+          { id: '1', name: 'one', status: 'completed' },
+          { id: '2', name: 'two', status: 'completed' },
+          { id: '3', name: 'three', status: 'pending' },
+        ],
+      }),
+      'utf8',
+    );
+
+    vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
+    vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/stories/other-feature.md',
+    });
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const runner: StepRunner = {
+      run: vi.fn(async () => {
+        throw new Error('unexpected dispatch after protected-artifact seal failure');
+      }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      config: {} as never,
+      fromStep: 'build',
+      mode: 'default',
+      maxRetries: 2,
+    });
+
+    await conductor.run();
+
+    expect({
+      lastResolvedCount: await readLastResolvedCount(projectRoot),
+      liveResolvedCount: await countResolvedTasks(projectRoot),
+    }).toEqual({ lastResolvedCount: 2, liveResolvedCount: 2 });
   });
 });
