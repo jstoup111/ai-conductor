@@ -33,7 +33,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile, readFile, chmod, stat, access } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, writeFile, readFile, chmod, stat, access, unlink, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -348,6 +348,23 @@ describe('acceptance: session hooks self-heal at the build preflight (#896)', ()
     // A partial repair is never treated as a pass: the two siblings restoring
     // successfully must not turn the verdict green.
     expect(await exists(join(hooksDir(), 'pre-dispatch.sh'))).toBe(true);
+  });
+
+  it('TI-3 negative: executable mutation-gate.sh symlink → build does not dispatch and the marker is NEVER armed', async () => {
+    await provisionHooks(Object.keys(REPAIR_SET));
+    const gatePath = join(hooksDir(), 'mutation-gate.sh');
+    const targetPath = join(hooksDir(), 'mutation-gate-target.sh');
+    await writeFile(targetPath, MUTATION_GATE_HOOK, 'utf-8');
+    await chmod(targetPath, 0o755);
+    await unlink(gatePath);
+    await symlink(targetPath, gatePath);
+
+    const { observation, stepFailures } = await runBuildPreflight();
+
+    expect(observation.dispatched).toBe(false);
+    expect(observation.markerArmed).toBe(false);
+    expect(await exists(join(dir, '.pipeline', 'build-step-active'))).toBe(false);
+    expect(stepFailures.find((f) => f.step === 'build')?.error).toContain('mutation-gate.sh');
   });
 
   it('TI-3 negative: whenever the guard returns a diagnostic, .pipeline/build-step-active does not exist afterwards', async () => {

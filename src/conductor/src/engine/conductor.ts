@@ -5,6 +5,7 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
+  lstat,
   stat,
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
@@ -933,7 +934,7 @@ export async function checkAttributionMachineryIntact(
 
   const missingHooks: string[] = [];
   for (const hook of expectedHooks) {
-    const ok = await stat(join(hooksDir, hook))
+    const ok = await lstat(join(hooksDir, hook))
       .then((entry) => entry.isFile() && (entry.mode & 0o111) !== 0)
       .catch(() => false);
     if (!ok) missingHooks.push(hook);
