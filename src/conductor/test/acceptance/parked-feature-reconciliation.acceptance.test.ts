@@ -841,8 +841,8 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
     ).toBe(false);
   });
 
-  it('S5 negative: a bare `daemon reconcile-parked` with no slug is not actionable — nothing is dispatched', async () => {
-    const { detect } = await loadReconcileVerb();
+  it('S5 negative: a bare `daemon reconcile-parked` dispatches usage without executing reconciliation', async () => {
+    const { detect, dispatch } = await loadReconcileVerb();
 
     // Positive control FIRST: without it this spec passes vacuously today,
     // because a detector that recognises nothing also returns null here.
@@ -850,7 +850,21 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
     expect(withSlug).not.toBeNull();
     expect(withSlug?.slug).toBe('some-slug');
 
-    expect(detect(['node', 'conduct', 'daemon', 'reconcile-parked'])).toBeNull();
+    const invalid = detect(['node', 'conduct', 'daemon', 'reconcile-parked']);
+    expect(invalid).toMatchObject({ kind: 'reconcile-parked', invalidArgs: true });
+    if (!invalid) throw new Error('expected usage dispatch');
+
+    const out: string[] = [];
+    const gitSpy = vi.fn(realGit);
+    const code = await dispatch(invalid, {
+      cwd: projectRoot,
+      out: (line: string) => out.push(line),
+      runGit: gitSpy,
+    });
+    expect(code).toBe(1);
+    expect(out).toEqual(['Usage: conduct daemon reconcile-parked <slug>']);
+    expect(gitSpy).not.toHaveBeenCalled();
+
     expect(detect(['node', 'conduct', 'daemon'])).toBeNull();
   });
 

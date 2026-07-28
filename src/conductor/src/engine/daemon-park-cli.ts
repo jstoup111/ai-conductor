@@ -64,7 +64,9 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
   if (args[0] !== 'daemon') return null;
   const sub = args[1];
   if (sub === 'reconcile-parked') {
-    return args.length === 3 && args[2] ? { kind: 'reconcile-parked', slug: args[2] } : null;
+    return args.length === 3 && args[2]
+      ? { kind: 'reconcile-parked', slug: args[2] }
+      : { kind: 'reconcile-parked', invalidArgs: true };
   }
   if (sub !== 'park' && sub !== 'unpark') return null;
   const slug = args[2];
