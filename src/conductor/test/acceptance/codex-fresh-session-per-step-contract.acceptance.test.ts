@@ -465,6 +465,15 @@ describe('S2/S4 — a multi-attempt Codex step cold-starts end to end', () => {
       }
       return undefined;
     });
+    const rolloutResponses: string[] = [];
+    const invoke = fake.provider.invoke.bind(fake.provider);
+    fake.provider.invoke = async (options) => {
+      const result = await invoke(options);
+      if (result.output?.includes('no rollout found')) {
+        rolloutResponses.push(result.output);
+      }
+      return result;
+    };
 
     const runtimes = runtimesFor([['codex', fake.provider]]);
     const sessions = new ProviderSessionStore({
@@ -514,7 +523,7 @@ describe('S2/S4 — a multi-attempt Codex step cold-starts end to end', () => {
     expect({
       attempts: memoryAttempts.length,
       resumeFlags: memoryAttempts.map((call) => call.resume),
-      rolloutMisses: fake.calls.filter((call) => call.resume === true).length,
+      rolloutResponses,
       sessionResetEvents: sessionResets.length,
       beginStepCalls: beginStep.mock.calls.filter(([step]) => step === 'memory')
         .length,
@@ -531,7 +540,7 @@ describe('S2/S4 — a multi-attempt Codex step cold-starts end to end', () => {
     }).toEqual({
       attempts: 2,
       resumeFlags: [false, false],
-      rolloutMisses: 0,
+      rolloutResponses: [],
       sessionResetEvents: 0,
       beginStepCalls: 1,
       staleRecoveryResets: 0,
