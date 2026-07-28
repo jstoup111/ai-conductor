@@ -170,7 +170,7 @@ this section. CI enforces both content drift (the table matches the source) and 
 | architecture-review --as-built | autonomous engine | fable | high | gpt-5.6-sol | high | The SHIP --as-built compliance review compares shipped code with approved architecture and wiring contracts; missed drift can invalidate the release, so it uses each provider policy's deepest model and HIGH effort. |
 | retro | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Structured analysis from concrete data; Part C (context efficiency) is checklist-based. |
 | rebase | autonomous engine | opus | high | gpt-5.6-terra | high | Semantic conflict resolution reasons over both sides of a hunk; a wrong merge can silently revert completed work, so rebase uses a capable provider-native model with HIGH effort. |
-| finish | autonomous engine | haiku | medium | gpt-5.6-luna | medium | Coordinates final test, status, and coverage evidence with MEDIUM effort so completion claims remain grounded. |
+| finish | autonomous engine | sonnet | medium | gpt-5.6-terra | medium | Coordinates final test, status, and coverage evidence with MEDIUM effort so completion claims remain grounded. |
 | remediate | autonomous engine | fable | medium | gpt-5.6-sol | medium | The selected provider policy's deepest capability tier guards failure disposition; a false HALT wastes context and wrong routing misroutes rework. MEDIUM effort balances concrete gap routing with the strength of the selected model. |
 | attribution-verify | autonomous engine | opus | high | gpt-5.6-sol | high | Semantic attribution verification of commits against task metadata — validating work ownership, evidence marshalling, and provenance consistency demands deep reasoning about task-to-commit linkages. |
 | verify-claims | Claude interactive | inherits caller |  |  |  | Cross-cutting correctness protocol applied within the invoking skill's context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller's model. |
@@ -393,8 +393,12 @@ Skills with Memory Checkpoint sections define when writes are expected — check
 
 **Never push to a remote until confident the work is complete and passing.**
 Run whatever verification the project requires (tests, lint, type-check, etc.) locally
-before pushing. The `/finish` skill presents the user with completion options and delegates
-to `/pr` when the user chooses Push & PR. The `/pr` skill enforces the pre-push gate.
+before pushing. The `/finish` skill presents the user with completion options and, when the
+outcome is Push & PR, performs the push and PR creation **inline** — it does not delegate to
+`/pr`, because a delegated skill invocation ends the finish turn before
+`conduct-ts finish-record` writes `.pipeline/finish-choice`. `/pr` remains available as a
+standalone skill for operator-driven PR authoring and owns the pre-push gate there; `/finish`
+inlines the same title/body contract and pre-push checks.
 
 ## Rebase Policy
 

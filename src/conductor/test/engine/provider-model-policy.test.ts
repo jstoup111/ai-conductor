@@ -72,7 +72,7 @@ const EXPECTED_POLICIES = {
       architecture_review_as_built: 'fable',
       retro: 'sonnet',
       rebase: 'opus',
-      finish: 'haiku',
+      finish: 'sonnet',
       remediate: 'fable',
       attribution_verify: 'opus',
     } satisfies Record<StepName, string>,
@@ -129,7 +129,7 @@ const EXPECTED_POLICIES = {
       architecture_review_as_built: 'gpt-5.6-sol',
       retro: 'gpt-5.6-terra',
       rebase: 'gpt-5.6-terra',
-      finish: 'gpt-5.6-luna',
+      finish: 'gpt-5.6-terra',
       remediate: 'gpt-5.6-sol',
       attribution_verify: 'gpt-5.6-sol',
     } satisfies Record<StepName, string>,
@@ -284,5 +284,38 @@ it('looks up built-in policies and warns with an actionable Claude-compatible fa
         directsPolicyAddition: true,
       },
     ],
+  });
+});
+
+it('runs finish one tier above the weakest model on both built-in providers', () => {
+  // finish drives the most procedurally intricate step in the pipeline: a
+  // multi-branch STOP contract, inline push/PR sequencing, and a mandatory
+  // terminal `conduct-ts finish-record` call. The weakest tier lost the turn
+  // often enough to leave features complete-but-unshipped, so both provider
+  // policies pin finish one step up their own escalation ladder.
+  const claudeLadder = CLAUDE_MODEL_POLICY.modelEscalationOrder;
+  const codexLadder = CODEX_MODEL_POLICY.modelEscalationOrder;
+
+  expect({
+    claudeFinish: CLAUDE_MODEL_POLICY.stepModels.finish,
+    claudeRungAboveWeakest: claudeLadder[1],
+    claudeIsNotWeakest:
+      CLAUDE_MODEL_POLICY.stepModels.finish !== claudeLadder[0],
+    codexFinish: CODEX_MODEL_POLICY.stepModels.finish,
+    codexRungAboveWeakest: codexLadder[1],
+    codexIsNotWeakest: CODEX_MODEL_POLICY.stepModels.finish !== codexLadder[0],
+    // STEP_EFFORTS is a single shared const across both policies; the bump is
+    // model-only, so effort must stay put for each.
+    claudeEffort: CLAUDE_MODEL_POLICY.stepEfforts.finish,
+    codexEffort: CODEX_MODEL_POLICY.stepEfforts.finish,
+  }).toEqual({
+    claudeFinish: 'sonnet',
+    claudeRungAboveWeakest: 'sonnet',
+    claudeIsNotWeakest: true,
+    codexFinish: 'gpt-5.6-terra',
+    codexRungAboveWeakest: 'gpt-5.6-terra',
+    codexIsNotWeakest: true,
+    claudeEffort: 'medium',
+    codexEffort: 'medium',
   });
 });
