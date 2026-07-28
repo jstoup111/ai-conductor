@@ -1279,7 +1279,9 @@ describe('parseCodexJsonl', () => {
     expect(parseCodexJsonl(fixture).tokenUsage).toEqual({
       input: 18057,
       cacheRead: 0,
+      cacheCreation: 0,
       output: 5,
+      reasoningOutput: 0,
       numTurns: 1,
     });
   });
@@ -1292,6 +1294,35 @@ describe('parseCodexJsonl', () => {
     ].map((event) => JSON.stringify(event)).join('\n');
 
     expect(parseCodexJsonl(stream).tokenUsage).toEqual({ input: 400, output: 40, numTurns: 2 });
+  });
+
+  it('leaves unreported cache-creation and reasoning totals absent', () => {
+    const stream = JSON.stringify({
+      type: 'turn.completed',
+      usage: { input_tokens: 12, output_tokens: 7 },
+    });
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({ input: 12, output: 7, numTurns: 1 });
+  });
+
+  it('records numeric cache-creation and reasoning totals', () => {
+    const stream = JSON.stringify({
+      type: 'turn.completed',
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 40,
+        cache_write_input_tokens: 77,
+        reasoning_output_tokens: 15,
+      },
+    });
+
+    expect(parseCodexJsonl(stream).tokenUsage).toEqual({
+      input: 1000,
+      output: 40,
+      cacheCreation: 77,
+      reasoningOutput: 15,
+      numTurns: 1,
+    });
   });
 
   it('uses the final agent message instead of returning raw event JSON', () => {

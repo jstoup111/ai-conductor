@@ -104,6 +104,14 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
           if (typeof cached === 'number' && Number.isFinite(cached)) {
             tokenUsage.cacheRead = (tokenUsage.cacheRead ?? 0) + cached;
           }
+          const cacheCreation = event.usage.cache_write_input_tokens;
+          if (typeof cacheCreation === 'number' && Number.isFinite(cacheCreation)) {
+            tokenUsage.cacheCreation = (tokenUsage.cacheCreation ?? 0) + cacheCreation;
+          }
+          const reasoningOutput = event.usage.reasoning_output_tokens;
+          if (typeof reasoningOutput === 'number' && Number.isFinite(reasoningOutput)) {
+            tokenUsage.reasoningOutput = (tokenUsage.reasoningOutput ?? 0) + reasoningOutput;
+          }
         }
       }
     } catch {
