@@ -247,20 +247,26 @@ A missing or malformed slug never reaches Git: no slug prints `Usage: conduct da
 reconcile-parked <slug>` and exits 1; a slug that fails `^[a-z0-9][a-z0-9-]*$` prints `Could not
 reconcile '<slug>': invalid-slug` and exits 1.
 
-For a valid slug, the command checks whether `feature/<slug>` is merged into `origin/main`. If it
-is not yet merged, or the check fails, it prints `Could not reconcile '<slug>': <reason>` and exits
-1, where `<reason>` is one of `not-ancestor`, `branch-missing`, or `ancestry-check-failed`. If it is
+For a valid slug, the command checks whether the slug's work reached `origin/main` — either a
+`.docs/shipped/<stem>.md` record committed there (matched allowing for the `YYYY-MM-DD-` plan-date
+prefix), or a local branch ending in `/<slug>` under any prefix that `git merge-base --is-ancestor`
+proves is contained in `origin/main`. If neither holds, or the check fails, it prints `Could not
+reconcile '<slug>': <reason>` and exits 1, where `<reason>` is one of `not-ancestor`,
+`branch-missing`, or `ancestry-check-failed`. `not-ancestor` also covers the case where the record
+proves the ship but a branch for the slug still carries commits outside `origin/main` — ancestry is
+the only authority for deleting a branch, so nothing is deleted there. If the slug is
 merged but `.docs/shipped/<slug>.md` does not exist on `origin/main`, it requests an ST-916
 record-repair PR when a merged PR can be found, prints `Could not reconcile '<slug>':
 record-missing`, and exits 1 — the same deferral the daemon sweep applies until the shipped record
 lands. If a resume is in progress for the slug, it prints `Could not reconcile '<slug>':
 in-progress` and exits 1.
 
-Once merged, recorded, and not in progress, it removes `.worktrees/<slug>`, deletes
-`feature/<slug>`, and unparks the slug — the same three steps
+Once merged, recorded, and not in progress, it removes `.worktrees/<slug>`, deletes every local
+branch for the slug, and unparks the slug — the same three steps
 [park before you touch a feature's git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state)
 describes doing by hand. It prints `Reconciled '<slug>': worktree-removed, branch-deleted,
-unparked` and exits 0. A failure partway through prints `Could not reconcile '<slug>':
+unparked` and exits 0. When the branch was already deleted at merge — the normal end state for
+shipped work — the middle step reads `branch-absent` instead. A failure partway through prints `Could not reconcile '<slug>':
 worktree-remove-failed`, `branch-delete-failed`, or `unpark-failed` and exits 1, leaving whatever
 steps completed in place.
 

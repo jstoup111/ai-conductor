@@ -67,6 +67,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The parked-feature reconciliation sweep no longer classifies every parked feature `unclassified`.
+  It probed a hardcoded `feature/<slug>` ref, but this repository's branches carry `feat/`, `spec/`,
+  `fix/`, `chore/` and other prefixes, so that ref usually did not exist; git exited 128 ("Not a
+  valid object name") and the catch clause — which only recognized exit 1, "not an ancestor" —
+  treated the missing ref as an unavailable check. Its first production run over 41 parked features
+  reported `reconciled=0 deferred=0 orphaned=0 parked=0 skipped=41`. Merged-ness is now derived from
+  two durable signals: a `.docs/shipped/<stem>.md` record committed on `origin/main` (matched
+  allowing for the `YYYY-MM-DD-` plan-date prefix, since park markers are keyed by the undated slug),
+  and ancestry of any local branch ending in `/<slug>` under any prefix. The record signal still
+  answers after the branch is deleted at merge — the normal end state for shipped work, and a state
+  no branch-based check can ever resolve. A missing ref, an unreadable `origin/main`, or any other
+  git failure stays fail-closed as `unclassified`; it is never read as "not merged". Branch ancestry
+  remains the sole authority for deleting a branch, so a record-backed slug whose branch still
+  carries commits outside `origin/main` is classified `merged` but refused for cleanup
+  (`not-ancestor`) rather than having those commits deleted. The sweep also now reads the base-branch
+  record tree and the local ref listing once per pass instead of once per parked slug.
 - A daemon re-kick no longer re-opens a finished `build` gate and dispatches a build agent that
   redoes already-committed work. When the re-kick's play-forward rebase changed code paths, that path
   wrote an unconditional `invalidated by file-changing rebase` kickback for `build`, skipping the
