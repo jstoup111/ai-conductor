@@ -1,7 +1,5 @@
 import { describe, expect, it } from 'vitest';
 
-import { ALL_EVENT_TYPES } from '../../src/engine/event-persister.js';
-import { SUBSCRIBED_EVENT_TYPES } from '../../src/engine/audit-trail.js';
 import {
   EVENT_SINKS,
   auditedEventTypes,
@@ -102,14 +100,6 @@ const deliberatelyNotPersisted = {
 void deliberatelyNotPersisted;
 
 describe('event sink subscriptions', () => {
-  it('pins the 32 pre-refactor event types subscribed by EventPersister', () => {
-    expect(ALL_EVENT_TYPES).toEqual(PRE_REFACTOR_PERSISTED_EVENT_TYPES);
-  });
-
-  it('pins the 6 pre-refactor event types subscribed by AuditTrailWriter', () => {
-    expect(SUBSCRIBED_EVENT_TYPES).toEqual(PRE_REFACTOR_AUDITED_EVENT_TYPES);
-  });
-
   it('is total over all 60 ConductorEvent types', () => {
     expect(Object.keys(EVENT_SINKS)).toHaveLength(60);
   });
@@ -123,10 +113,13 @@ describe('event sink subscriptions', () => {
   });
 
   it('derives the persisted set without changing prior routing', () => {
-    expect(persistedEventTypes()).toEqual([
+    const persisted = persistedEventTypes();
+
+    expect(persisted).toEqual([
       ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
       'verdict_freshness',
     ]);
+    expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
   });
 
   it('derives the audited set without changing prior routing', () => {

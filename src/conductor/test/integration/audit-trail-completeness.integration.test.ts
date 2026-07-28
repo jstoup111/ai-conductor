@@ -32,10 +32,10 @@ import { writeState } from '../../src/engine/state.js';
  * Compile-time drift guard (writing-system-tests §3 / plan Task 18(b)):
  * a `Record` keyed by every literal of `ConductorEvent['type']` — TypeScript
  * fails to compile this file if the union in `src/types/events.ts` grows a
- * new member without a classification being added here. Values must mirror
- * `SUBSCRIBED_EVENT_TYPES` in `src/engine/audit-trail.ts` (kept in sync by
- * code review, not import, because that array is intentionally unexported —
- * this test's whole job is to independently notice when it goes stale).
+ * new member without a classification being added here. The event-sinks
+ * registry is the subscription authority; this independent total
+ * classification remains useful because the test notices when the writer's
+ * observed behavior disagrees with the intended audit disposition.
  *
  * 'friction-mapped'      — ADR 2026-07-07 lists this as a friction event the
  *                           writer allowlists; the fixture below MUST produce
@@ -75,7 +75,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   feature_complete: 'not-audited-by-design',
   dashboard_refresh: 'not-audited-by-design',
   auto_heal: 'not-audited-by-design',
-  verdict_freshness: 'not-audited-by-design',
+  verdict_freshness: 'friction-mapped',
   build_review_base: 'not-audited-by-design',
   build_review_stale_mirage_regrade: 'not-audited-by-design',
   mode_skip: 'not-audited-by-design', // skipped steps must have zero records

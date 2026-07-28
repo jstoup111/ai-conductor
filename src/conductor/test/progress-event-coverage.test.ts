@@ -46,7 +46,7 @@ describe('progress event coverage guard', () => {
   });
 
   const lists: Array<{ name: string; file: string }> = [
-    { name: 'EventPersister.ALL_EVENT_TYPES', file: join(SRC_ROOT, 'engine', 'event-persister.ts') },
+    { name: 'engine/event-sinks.ts persistence registry', file: join(SRC_ROOT, 'engine', 'event-sinks.ts') },
     { name: 'ui/subscriber.ts eventTypes', file: join(SRC_ROOT, 'ui', 'subscriber.ts') },
     { name: 'daemon-cli.ts renderer switch', file: join(SRC_ROOT, 'daemon-cli.ts') },
     { name: 'ui/create-renderer.ts TTY renderer switch', file: join(SRC_ROOT, 'ui', 'create-renderer.ts') },

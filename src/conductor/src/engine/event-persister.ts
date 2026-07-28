@@ -2,6 +2,7 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
+import { persistedEventTypes } from './event-sinks.js';
 
 /**
  * Thrown when EventPersister cannot append to the event log file.
@@ -17,44 +18,6 @@ export class EventPersistError extends Error {
     this.name = 'EventPersistError';
   }
 }
-
-/**
- * All ConductorEvent types — used to subscribe to every event kind.
- */
-export const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
-  'step_started',
-  'step_completed',
-  'step_failed',
-  'provider_attempt',
-  'feature_usage_total',
-  'provider_fallback',
-  'session_policy',
-  'step_retry',
-  'checkpoint_reached',
-  'recovery_needed',
-  'gate_blocked',
-  'tier_skip',
-  'config_skip',
-  'navigation_back',
-  'rate_limit',
-  'session_reset',
-  'credentials_park',
-  'credentials_park_progress',
-  'feature_complete',
-  'dashboard_refresh',
-  'auto_heal',
-  'mode_skip',
-  'build_progress',
-  'unattributed_progress',
-  'build_no_progress',
-  'build_stall',
-  'renderer_error',
-  'when_skip',
-  'parallel_started',
-  'parallel_completed',
-  'parallel_failure',
-  'attribution_divergence',
-];
 
 /**
  * EventPersister subscribes to every ConductorEvent and appends each event
@@ -82,7 +45,7 @@ export class EventPersister {
    * Subscribe to all ConductorEvent types.
    */
   start(): void {
-    for (const type of ALL_EVENT_TYPES) {
+    for (const type of persistedEventTypes()) {
       this.emitter.on(type, this.handler);
     }
   }
@@ -91,7 +54,7 @@ export class EventPersister {
    * Unsubscribe from all ConductorEvent types.
    */
   stop(): void {
-    for (const type of ALL_EVENT_TYPES) {
+    for (const type of persistedEventTypes()) {
       this.emitter.off(type, this.handler);
     }
   }

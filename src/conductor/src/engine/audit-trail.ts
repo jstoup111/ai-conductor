@@ -1,23 +1,15 @@
 import { appendFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
-import type { StepName, Phase, ConductorEvent } from '../types/index.js';
+import type {
+  StepName,
+  Phase,
+  ConductorEvent,
+  VerdictFreshnessOutcome,
+} from '../types/index.js';
+import { auditedEventTypes } from './event-sinks.js';
 import { phaseForStep } from './resolved-config.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
-
-/**
- * Event types the audit trail cares about. Anything else emitted on the bus
- * is deliberately ignored — no handler is registered for it, so it neither
- * appends nor errors.
- */
-export const SUBSCRIBED_EVENT_TYPES: Array<ConductorEvent['type']> = [
-  'gate_verdict',
-  'step_retry',
-  'kickback',
-  'loop_halt',
-  'step_completed',
-  'halt_cleared',
-];
 
 /**
  * A single audit-trail event. `phase` and `at` are derived by the writer —
@@ -30,6 +22,8 @@ export type AuditRecord = {
   reason?: string;
   cause?: string;
   attempt?: number;
+  artifact?: string;
+  outcome?: VerdictFreshnessOutcome;
   at: number;
   /**
    * #647 D3: for `event: 'kickback'` records, distinguishes a kickback that
@@ -113,7 +107,7 @@ export class AuditTrailWriter {
    * how each event type is translated into an AuditRecordInput.
    */
   subscribe(events: ConductorEventEmitter): void {
-    for (const type of SUBSCRIBED_EVENT_TYPES) {
+    for (const type of auditedEventTypes()) {
       events.on(type, (event: ConductorEvent) => {
         const input = this.toRecordInput(event);
         if (input) this.record(input);
@@ -155,6 +149,13 @@ export class AuditTrailWriter {
           step: event.step ?? 'build',
           event: 'halt_cleared',
           cause: event.cause,
+        };
+      case 'verdict_freshness':
+        return {
+          step: event.step,
+          event: 'verdict_freshness',
+          artifact: event.artifact,
+          outcome: event.outcome,
         };
       case 'step_completed':
         // Positive evidence for steps that never produce a gate_verdict

@@ -519,19 +519,32 @@ describe('Story 5: verdict_freshness reaches the audit trail with its outcome', 
     // SUBSCRIBED_EVENT_TYPES, and toRecordInput has no case for it.
     const written = records();
     expect(written).toHaveLength(1);
-    expect(written[0].step).toBe('prd_audit');
-    expect(JSON.stringify(written[0])).toContain('preserved_surface_miss');
-    expect(JSON.stringify(written[0])).toContain('prd-audit.md');
+    expect(written[0] as AuditRecord & { artifact: string; outcome: string }).toMatchObject({
+      step: 'prd_audit',
+      event: 'verdict_freshness',
+      artifact: join(dir, '.pipeline/prd-audit.md'),
+      outcome: 'preserved_surface_miss',
+    });
   });
 
   it('records an invalidated verdict distinguishably from a preserved one', async () => {
     new AuditTrailWriter(dir).subscribe(events);
 
-    await events.emit(verdictFreshnessEvent('stale_invalidated', { step: 'build_review' }));
+    await events.emit(
+      verdictFreshnessEvent('stale_invalidated', {
+        step: 'build_review',
+        artifact: join(dir, '.pipeline/build-review.json'),
+      }),
+    );
 
     const written = records();
     expect(written).toHaveLength(1);
-    expect(JSON.stringify(written[0])).toContain('stale_invalidated');
+    expect(written[0] as AuditRecord & { artifact: string; outcome: string }).toMatchObject({
+      step: 'build_review',
+      event: 'verdict_freshness',
+      artifact: join(dir, '.pipeline/build-review.json'),
+      outcome: 'stale_invalidated',
+    });
     expect(JSON.stringify(written[0])).not.toContain('preserved_surface_miss');
   });
 
