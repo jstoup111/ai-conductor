@@ -72,6 +72,7 @@ export async function readKickbackLedger(projectRoot: string): Promise<KickbackL
     if (isKickbackLedger(parsed)) return parsed;
 
     if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
+      console.warn(`[kickback-ledger] unsupported ledger version at ${ledgerPath}; using empty ledger`);
       return emptyLedger();
     }
 

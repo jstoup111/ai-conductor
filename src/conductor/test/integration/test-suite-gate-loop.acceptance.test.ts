@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -280,6 +280,7 @@ describe('test_suite native gate loop', () => {
 
       const persisted = await readState(stateFilePath);
       const finalState = persisted.ok ? persisted.value : {};
+      const haltMarker = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8');
       const routedEvidence =
         `full-suite verification failed (${reason}): ${message}\n` +
         'Evidence: .pipeline/test-suite-evidence.json';
@@ -292,6 +293,7 @@ describe('test_suite native gate loop', () => {
         kickbacks,
         buildRetryReasons,
         haltReason,
+        haltMarker,
         finalGateState: finalState.test_suite,
         restagedDownstreamState: finalState.retro,
       }).toEqual({
@@ -308,6 +310,8 @@ describe('test_suite native gate loop', () => {
         ],
         haltReason:
           `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,
+        haltMarker:
+          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}\n`,
         finalGateState: 'failed',
         restagedDownstreamState: 'stale',
       });

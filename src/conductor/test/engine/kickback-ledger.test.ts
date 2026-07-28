@@ -41,8 +41,16 @@ describe('kickback-ledger', () => {
       join(dir, '.pipeline/kickback-ledger.json'),
       JSON.stringify({ version: 2, gates: { wiring_check: { count: 2 } } }),
     );
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+    try {
+      await expect(readKickbackLedger(dir)).resolves.toEqual({ version: 1, gates: {} });
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('unsupported ledger version'),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it('round-trips populated gate entries', async () => {
