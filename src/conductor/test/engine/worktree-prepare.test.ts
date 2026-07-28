@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {
   prepareWorktree,
+  ensureSessionHooks,
   sanitizeNamespace,
   SETUP_SCRIPT,
   NAMESPACE_VAR,
@@ -42,6 +43,86 @@ describe('engine/worktree-prepare', () => {
     it('reduces a worktree dir name to a DB-safe token', () => {
       expect(sanitizeNamespace('2026-06-27-add-foo')).toBe('2026_06_27_add_foo');
       expect(sanitizeNamespace('plain_slug')).toBe('plain_slug');
+    });
+  });
+
+  describe('ensureSessionHooks', () => {
+    const hookAssets = [
+      ['pre-dispatch.sh', PRE_DISPATCH_HOOK],
+      ['post-dispatch.sh', POST_DISPATCH_HOOK],
+      ['mutation-gate.sh', MUTATION_GATE_HOOK],
+      ['docs-guard.sh', DOCS_GUARD_HOOK],
+    ] as const;
+
+    it('creates all session-hook scripts executable with their canonical contents', async () => {
+      const outcome = await ensureSessionHooks(dir);
+
+      expect(outcome.failed).toEqual([]);
+      for (const [name, content] of hookAssets) {
+        const path = join(dir, '.pipeline', 'session-hooks', name);
+        expect(await readFile(path, 'utf-8')).toBe(content);
+        expect((await stat(path)).mode & 0o777).toBe(0o755);
+      }
+    });
+
+    it('reports exactly a deleted hook as repaired', async () => {
+      await ensureSessionHooks(dir);
+      await rm(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'));
+
+      const outcome = await ensureSessionHooks(dir);
+
+      expect(outcome.repaired).toEqual(['mutation-gate.sh']);
+      expect(outcome.failed).toEqual([]);
+      expect(await readFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), 'utf-8'))
+        .toBe(MUTATION_GATE_HOOK);
+    });
+
+    it('is idempotent when scripts and settings are already current', async () => {
+      await ensureSessionHooks(dir);
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      const before = await Promise.all(
+        hookAssets.map(async ([name]) => readFile(join(hooksDir, name), 'utf-8')),
+      );
+
+      const outcome = await ensureSessionHooks(dir);
+
+      expect(outcome.repaired).toEqual([]);
+      expect(outcome.failed).toEqual([]);
+      await expect(Promise.all(hookAssets.map(async ([name]) => readFile(join(hooksDir, name), 'utf-8'))))
+        .resolves.toEqual(before);
+    });
+
+    it('does not throw and reports each hook when its directory is unwritable', async () => {
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+
+      try {
+        const outcome = await ensureSessionHooks(dir);
+        expect(outcome.repaired).toEqual([]);
+        expect(outcome.failed.map(({ file }) => file)).toEqual(hookAssets.map(([name]) => name));
+        expect(outcome.failed.every(({ error }) => error.length > 0)).toBe(true);
+      } finally {
+        await chmod(hooksDir, 0o700);
+      }
+    });
+
+    it('reports script and settings failures as distinct files', async () => {
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+      await writeFile(join(dir, '.claude'), 'not a directory', 'utf-8');
+
+      try {
+        const outcome = await ensureSessionHooks(dir);
+
+        expect(outcome.failed.map(({ file }) => file)).toEqual([
+          ...hookAssets.map(([name]) => name),
+          '.claude/settings.local.json',
+        ]);
+      } finally {
+        await chmod(hooksDir, 0o700);
+      }
     });
   });
 
@@ -86,6 +167,20 @@ describe('engine/worktree-prepare', () => {
     expect(saw).toContain('CI=true');
     expect(saw).toContain(`${NAMESPACE_VAR}=${sanitizeNamespace(dir.split('/').pop()!)}`);
     await readFile(join(dir, 'ran.marker'), 'utf-8'); // ran in the worktree cwd
+  });
+
+  it('continues to bin/setup when session-hook provisioning cannot write', async () => {
+    await writeSetup('#!/usr/bin/env bash\ntouch setup-ran-despite-hooks.marker\n');
+    const hooksDir = join(dir, '.pipeline', 'session-hooks');
+    await mkdir(hooksDir, { recursive: true });
+    await chmod(hooksDir, 0o500);
+
+    try {
+      await expect(prepareWorktree(dir)).resolves.toBeUndefined();
+      await access(join(dir, 'setup-ran-despite-hooks.marker'));
+    } finally {
+      await chmod(hooksDir, 0o700);
+    }
   });
 
   describe('setup output logging (daemon log noise)', () => {

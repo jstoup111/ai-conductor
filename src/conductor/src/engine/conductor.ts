@@ -5,6 +5,7 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
+  lstat,
   stat,
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
@@ -77,6 +78,7 @@ import {
   resolveAttributionAuditSamplePct,
 } from './attribution-enforcement.js';
 import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './phase-marker.js';
+import { ensureSessionHooks } from './worktree-prepare.js';
 import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
@@ -709,6 +711,11 @@ export interface ConductorOptions {
    * from `contract.cwd`.
    */
   acceptanceRedExec?: (command: string, cwd: string) => Promise<unknown>;
+  /**
+   * Test seam for session-hook repair. Production uses ensureSessionHooks;
+   * tests can prove a reported repair never bypasses the filesystem recheck.
+   */
+  ensureSessionHooks?: typeof ensureSessionHooks;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
@@ -856,6 +863,7 @@ function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean 
 export async function seedAndCheckAttributionMachinery(
   projectRoot: string,
   featureDesc: string,
+  ensureHooks: typeof ensureSessionHooks = ensureSessionHooks,
 ): Promise<string | null> {
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
   const planResolvable = typeof planPath === 'string' && planPath.length > 0;
@@ -870,12 +878,12 @@ export async function seedAndCheckAttributionMachinery(
       );
     }
   }
-  return checkAttributionMachineryIntact(projectRoot, { planResolvable });
+  return checkAttributionMachineryIntact(projectRoot, { planResolvable, ensureHooks });
 }
 
 export async function checkAttributionMachineryIntact(
   projectRoot: string,
-  opts?: { planResolvable?: boolean },
+  opts?: { planResolvable?: boolean; ensureHooks?: typeof ensureSessionHooks },
 ): Promise<string | null> {
   const pipelineDir = join(projectRoot, '.pipeline');
 
@@ -919,14 +927,21 @@ export async function checkAttributionMachineryIntact(
   // `.pipeline/current-task` and record dispatch attribution can never fire.
   const hooksDir = join(pipelineDir, 'session-hooks');
   const expectedHooks = ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'];
+  const repair = await (opts?.ensureHooks ?? ensureSessionHooks)(projectRoot);
+  for (const hook of repair.repaired) {
+    console.warn(`[session-hooks] restored ${hook} in ${projectRoot}`);
+  }
+
   const missingHooks: string[] = [];
   for (const hook of expectedHooks) {
-    const ok = await accessFile(join(hooksDir, hook)).then(() => true).catch(() => false);
+    const ok = await lstat(join(hooksDir, hook))
+      .then((entry) => entry.isFile() && (entry.mode & 0o111) !== 0)
+      .catch(() => false);
     if (!ok) missingHooks.push(hook);
   }
   if (missingHooks.length > 0) {
     return (
-      `Attribution machinery broken: .pipeline/session-hooks/ is missing ` +
+      `Attribution machinery broken: could not restore .pipeline/session-hooks/ ` +
       `expected script(s): ${missingHooks.join(', ')}.\n` +
       `Build dispatch requires session hooks to be installed so a build ` +
       `session can be attributed to a task.`
@@ -1043,6 +1058,8 @@ export class Conductor {
    * (Task 9). See `ConductorOptions.acceptanceRedExec`.
    */
   private acceptanceRedExec: (command: string, cwd: string) => Promise<unknown>;
+  /** Injectable only to prove repair reports cannot arm a missing hook gate. */
+  private ensureSessionHooks: typeof ensureSessionHooks;
 
   /**
    * Epoch ms captured immediately before the current dispatch's generic
@@ -1348,6 +1365,7 @@ export class Conductor {
         const { stdout } = await execFileAsync(command, { cwd, shell: true } as any);
         return stdout;
       });
+    this.ensureSessionHooks = opts.ensureSessionHooks ?? ensureSessionHooks;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -3942,6 +3960,18 @@ export class Conductor {
             stepModelPolicy,
           );
 
+          // Repair/recheck attribution machinery before any build marker arms.
+          // The recheck is filesystem-authoritative: a repair outcome alone
+          // can never authorize a build session to start.
+          const machineryIssue =
+            step.name === 'build' && isEnforcementConfigured(this.config)
+              ? await seedAndCheckAttributionMachinery(
+                  this.projectRoot,
+                  state.feature_desc ?? this.featureDesc ?? '',
+                  this.ensureSessionHooks,
+                )
+              : null;
+
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
           // started immediately before the build step's await and stopped in a
           // `finally` so it can never outlive the attempt, regardless of which
@@ -4010,7 +4040,7 @@ export class Conductor {
             }
           }
           const markerActive =
-            !protectedArtifactIssue && step.name === 'build' && isEnforcementConfigured(this.config);
+            !protectedArtifactIssue && !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
           if (markerActive) {
             writeBuildStepMarker(this.projectRoot);
           }
@@ -4030,9 +4060,10 @@ export class Conductor {
           }
 
           let result: StepRunResult;
-          if (protectedArtifactIssue) {
+          if (protectedArtifactIssue || machineryIssue) {
             buildWatcher?.stop();
-            result = { success: false, output: protectedArtifactIssue };
+            const dispatchIssue = protectedArtifactIssue ?? machineryIssue!;
+            result = { success: false, output: dispatchIssue };
             // Write the HALT marker directly rather than relying solely on
             // the generic "retries exhausted" flow below — that flow only
             // fires in `mode === 'auto'` (daemon), but a broken attribution
@@ -4049,7 +4080,7 @@ export class Conductor {
             // here. Retryable per existing step-retry semantics, not a
             // bypass of them.
             if (attempt >= 2) {
-              await writeHaltMarker(this.projectRoot, protectedArtifactIssue);
+              await writeHaltMarker(this.projectRoot, dispatchIssue);
             }
             // T7 invariant: EVERY build-step exit path records
             // `lastResolvedCount`. This exit short-circuits before any build

@@ -21,6 +21,8 @@ One or more of:
 - A build reports `no_task_progress` or "N/M tasks pending/not completed" for tasks whose
   commits are visibly on the branch.
 - `conduct-ts inline` refuses with `Orphaned conductor state in <path>.`
+- The daemon repeatedly logs `[session-hooks] restored <script> in <worktree>` for one feature, or
+  reports that it could not restore an enforcement script.
 
 ### Why losing the directory costs you
 
@@ -85,6 +87,20 @@ conduct-ts inline --diagnose "<feature description>"
 When the recorded state says the feature is past the `worktree` step but no worktree exists at
 any conventional location, this exits 1 with `Orphaned conductor state in <path>.` and lists the
 locations it searched. That message is the confirmation that state and disk disagree.
+
+### 5. Classify session-hook repair messages
+
+```bash
+conduct-ts daemon logs --lines 200 | grep '\[session-hooks\]'
+```
+
+One `restored` line is a successful build-preflight repair; leave the feature running. Do not park
+it or recreate `.pipeline/session-hooks/` by hand. Repeated repairs for the same feature indicate
+that `.pipeline` is being removed or replaced; investigate that state-loss path, including the
+related [#549](https://github.com/jstoup111/ai-conductor/issues/549) and
+[PR #770](https://github.com/jstoup111/ai-conductor/pull/770), rather than treating the hook as
+the defect. A `could not restore` result still blocks the build: park before changing the
+worktree, correct the filesystem cause, then let the next build preflight provision the scripts.
 
 ## Recovery
 

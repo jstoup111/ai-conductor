@@ -510,15 +510,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 ### Fixed
 
-- Spec (DECIDE only): missing `.pipeline/session-hooks/*.sh` scripts no longer need to
-  terminally HALT a build. The build preflight will re-provision the scripts (and re-merge
-  their `.claude/settings.local.json` wiring) in place, log the repair under a
-  `[session-hooks]` prefix, re-stat the filesystem, and proceed — halting only when the
-  repair itself cannot write. The gate is repaired rather than removed: `pre-dispatch.sh`'s
-  `.pipeline/current-task` stamp still feeds two live gating consumers (the #505 Surface B
-  mutation gate, and the `Task:` trailer → `resolveTaskIds` → `countResolvedTasks` →
-  `no_task_progress` stall breaker), so the removal proposed in #896 would have silently
-  disarmed enforcement. Artifacts only; no engine change in this PR (#896).
+- Keep build dispatches running by restoring and wiring missing session hooks at preflight, while requiring every restored hook to be an executable regular file that is not a symlink before attribution enforcement is armed ([#896](https://github.com/jstoup111/ai-conductor/issues/896); {{IMPLEMENTATION_PR}}).
 
 - Self-host `provider-home` provisioning no longer symlinks the throwaway
   `CODEX_HOME`/`CLAUDE_CONFIG_DIR`'s `skills` (and Codex's `.agents/skills`) directly to

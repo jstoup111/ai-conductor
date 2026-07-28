@@ -28,6 +28,14 @@ the liveness authority, so a pinned count alone cannot classify a build as stall
 budget exhausts after real work landed, `build_review` is the completion authority: it grades the
 actual diff against the plan and can either pass the build forward or fail it back for remediation.
 
+## Session-hook provisioning
+
+[`ensureSessionHooks`](src/engine/worktree-prepare.ts) is the single provisioning and repair entry
+point for worktree session-hook scripts and their `.claude/settings.local.json` wiring.
+`prepareWorktree` calls it for new worktrees, and the enforcement-configured build preflight calls
+it before re-statting the attribution scripts; a reported repair never bypasses that filesystem
+check.
+
 ## Build and test
 
 ```bash

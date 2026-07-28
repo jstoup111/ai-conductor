@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile, chmod } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile, chmod, stat } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -44,6 +44,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ensureSessionHooks } from '../../src/engine/worktree-prepare.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -902,7 +903,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('build step dispatches when attribution telemetry machinery is unavailable', async () => {
+  it('build step does not dispatch when attribution enforcement machinery is unavailable', async () => {
     let buildWasDispatched = false;
     const runner: StepRunner = {
       run: async (step: StepName): Promise<StepRunResult> => {
@@ -923,7 +924,8 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
     await conductor.run();
 
-    expect(buildWasDispatched).toBe(true);
+    expect(buildWasDispatched).toBe(false);
+    expect(await readFile(join(dir, '.pipeline', 'build-step-active'), 'utf-8').catch(() => null)).toBeNull();
   });
 
   it('non-build step (plan) + broken attribution machinery → dispatch proceeds unaffected', async () => {
@@ -1237,9 +1239,8 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
       expect(haltContent).not.toMatch(/task-status\.json is missing/i);
     }
 
-    // Attribution state is advisory; BUILD no longer creates it as an
-    // authorization prerequisite.
-    expect(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8').catch(() => null)).toBeNull();
+    // The preflight seam seeds the resolvable plan before dispatch.
+    expect(await readFile(join(dir, '.pipeline', 'task-status.json'), 'utf-8')).toContain('"id": "1"');
   });
 
   it('resumed build with prior completed progress → seedAndCheckAttributionMachinery preserves completed row and reports intact', async () => {
@@ -1309,7 +1310,308 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
    * enforcement-off scoping was untouched by that change.
    */
 
-  it('(a) session-hooks missing → seedAndCheckAttributionMachinery still returns the session-hooks diagnostic unchanged', async () => {
+  describe('session-hook preflight repair (#896)', () => {
+    async function writeTaskStatus(): Promise<void> {
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+        'utf-8',
+      );
+    }
+
+    it('repairs missing enforcement hooks and returns intact', async () => {
+      await writeTaskStatus();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        const diagnostic = await checkAttributionMachineryIntact(dir);
+
+        expect(diagnostic).toBeNull();
+        await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+        await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+        await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), 'utf-8')).resolves.toBeTruthy();
+        expect(warn.mock.calls.map(([message]) => message)).toEqual([
+          `[session-hooks] restored pre-dispatch.sh in ${dir}`,
+          `[session-hooks] restored post-dispatch.sh in ${dir}`,
+          `[session-hooks] restored mutation-gate.sh in ${dir}`,
+          `[session-hooks] restored docs-guard.sh in ${dir}`,
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('repairs only a missing post-dispatch hook', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(join(hooksDir, 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+      await writeFile(join(hooksDir, 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+      await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
+      await expect(readFile(join(hooksDir, 'post-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+    });
+
+    it('is silent and does not rewrite healthy hook files', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await ensureSessionHooks(dir);
+      const before = await Promise.all(
+        ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh'].map(
+          (hook) => stat(join(hooksDir, hook)).then((metadata) => metadata.mtimeMs),
+        ),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
+        expect(warn).not.toHaveBeenCalled();
+        await expect(Promise.all(
+          ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh'].map(
+            (hook) => stat(join(hooksDir, hook)).then((metadata) => metadata.mtimeMs),
+          ),
+        )).resolves.toEqual(before);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('reports a distinct repair failure when missing hooks remain unwritable', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+
+      try {
+        const diagnostic = await checkAttributionMachineryIntact(dir);
+        expect(diagnostic).toMatch(/could not restore/i);
+        expect(diagnostic).toContain('pre-dispatch.sh');
+        expect(diagnostic).not.toContain('missing expected script(s)');
+      } finally {
+        await chmod(hooksDir, 0o700);
+      }
+    });
+
+    it('repairs docs-guard without treating its absence as an enforcement failure', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
+        await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
+      }
+
+      await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
+      await expect(readFile(join(hooksDir, 'docs-guard.sh'), 'utf-8')).resolves.toBeTruthy();
+    });
+
+    it('restores stripped settings entries while preserving operator settings', async () => {
+      await writeTaskStatus();
+      await ensureSessionHooks(dir);
+      const settingsPath = join(dir, '.claude', 'settings.local.json');
+      await writeFile(settingsPath, JSON.stringify({ permissions: { allow: ['Bash(git status)'] } }), 'utf-8');
+      let repairs = 0;
+
+      await expect(checkAttributionMachineryIntact(dir, {
+        ensureHooks: async (...args) => {
+          repairs++;
+          return ensureSessionHooks(...args);
+        },
+      })).resolves.toBeNull();
+
+      const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      expect(repairs).toBe(1);
+      expect(settings.permissions).toEqual({ allow: ['Bash(git status)'] });
+      expect(settings.hooks.PreToolUse).toHaveLength(4);
+      expect(settings.hooks.PostToolUse).toHaveLength(1);
+    });
+
+    it('does not halt when the settings merge fails but scripts remain intact', async () => {
+      await writeTaskStatus();
+      await ensureSessionHooks(dir);
+      const claudeDir = join(dir, '.claude');
+      await chmod(claudeDir, 0o500);
+      let repairs = 0;
+
+      try {
+        await expect(checkAttributionMachineryIntact(dir, {
+          ensureHooks: async (...args) => {
+            repairs++;
+            return ensureSessionHooks(...args);
+          },
+        })).resolves.toBeNull();
+        expect(repairs).toBe(1);
+      } finally {
+        await chmod(claudeDir, 0o700);
+      }
+    });
+
+    it('leaves complete settings wiring unchanged after preflight repair', async () => {
+      await writeTaskStatus();
+      await ensureSessionHooks(dir);
+      const settingsPath = join(dir, '.claude', 'settings.local.json');
+      const before = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      let repairs = 0;
+
+      await expect(checkAttributionMachineryIntact(dir, {
+        ensureHooks: async (...args) => {
+          repairs++;
+          return ensureSessionHooks(...args);
+        },
+      })).resolves.toBeNull();
+
+      expect(repairs).toBe(1);
+      expect(JSON.parse(await readFile(settingsPath, 'utf-8'))).toEqual(before);
+    });
+
+  });
+
+  describe('build-step marker arming invariant (#896)', () => {
+    async function writeTaskStatus(): Promise<void> {
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+        'utf-8',
+      );
+    }
+
+    async function seedBuildState(): Promise<void> {
+      const state: Record<string, unknown> = {};
+      for (const step of ALL_STEPS) {
+        if (step.name === 'build') break;
+        state[step.name] = 'done';
+      }
+      state.complexity_tier = 'M';
+      state.feature_desc = 'marker-arming-fixture';
+      state.track = 'technical';
+      await writeState(statePath, state as ConductState);
+    }
+
+    it('does not arm the marker when a lying repair reports success but leaves mutation-gate absent', async () => {
+      await writeTaskStatus();
+      await seedBuildState();
+      let buildCalls = 0;
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async () => { buildCalls++; return { success: true }; } },
+        events,
+        projectRoot: dir,
+        config: PAST_CUTOVER,
+        fromStep: 'build',
+        maxRetries: 1,
+        ensureSessionHooks: async () => ({ repaired: ['mutation-gate.sh'], failed: [] }),
+      });
+
+      await conductor.run();
+
+      expect(buildCalls).toBe(0);
+      expect(await readFile(join(dir, '.pipeline', 'build-step-active'), 'utf-8').catch(() => null)).toBeNull();
+    });
+
+    it('does not arm the marker after a partial repair leaves mutation-gate absent', async () => {
+      await writeTaskStatus();
+      await seedBuildState();
+      let buildCalls = 0;
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async () => { buildCalls++; return { success: true }; } },
+        events,
+        projectRoot: dir,
+        config: PAST_CUTOVER,
+        fromStep: 'build',
+        maxRetries: 1,
+        ensureSessionHooks: async () => {
+          const hooksDir = join(dir, '.pipeline', 'session-hooks');
+          await mkdir(hooksDir, { recursive: true });
+          await writeFile(join(hooksDir, 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+          return { repaired: ['pre-dispatch.sh'], failed: [{ file: 'mutation-gate.sh', error: 'EACCES' }] };
+        },
+      });
+
+      await conductor.run();
+
+      expect(buildCalls).toBe(0);
+      expect(await readFile(join(dir, '.pipeline', 'build-step-active'), 'utf-8').catch(() => null)).toBeNull();
+    });
+
+    it('does not arm the marker when a reported repair leaves every enforcement hook non-executable', async () => {
+      await writeTaskStatus();
+      await seedBuildState();
+      let buildCalls = 0;
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async () => { buildCalls++; return { success: true }; } },
+        events,
+        projectRoot: dir,
+        config: PAST_CUTOVER,
+        fromStep: 'build',
+        maxRetries: 1,
+        ensureSessionHooks: async () => {
+          const hooksDir = join(dir, '.pipeline', 'session-hooks');
+          await mkdir(hooksDir, { recursive: true });
+          for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
+            await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
+          }
+          return { repaired: ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'], failed: [] };
+        },
+      });
+
+      await conductor.run();
+
+      expect(buildCalls).toBe(0);
+    });
+
+    it('arms the marker only after a genuine repair restores mutation-gate and its settings path', async () => {
+      await writeTaskStatus();
+      await seedBuildState();
+      let markerObserved = false;
+      const mutationGatePath = join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: {
+          run: async (step) => {
+            if (step === 'build') {
+              markerObserved = (await readFile(join(dir, '.pipeline', 'build-step-active'), 'utf-8').catch(() => null)) !== null;
+              const settings = JSON.parse(await readFile(join(dir, '.claude', 'settings.local.json'), 'utf-8'));
+              const commands = (settings.hooks.PreToolUse as Array<{ hooks: Array<{ command: string }> }>)
+                .flatMap((entry) => entry.hooks.map((hook) => hook.command));
+              expect(commands).toContain(`${mutationGatePath} write`);
+              await expect(readFile(mutationGatePath, 'utf-8')).resolves.toBeTruthy();
+            }
+            return { success: true };
+          },
+        },
+        events,
+        projectRoot: dir,
+        config: PAST_CUTOVER,
+        fromStep: 'build',
+        ensureSessionHooks: async () => {
+          const hooksDir = join(dir, '.pipeline', 'session-hooks');
+          await mkdir(hooksDir, { recursive: true });
+          for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
+            const hookPath = join(hooksDir, hook);
+            await writeFile(hookPath, '#!/bin/sh\n', 'utf-8');
+            await chmod(hookPath, 0o755);
+          }
+          await mkdir(join(dir, '.claude'), { recursive: true });
+          await writeFile(
+            join(dir, '.claude', 'settings.local.json'),
+            JSON.stringify({ hooks: { PreToolUse: [{ hooks: [{ command: `${mutationGatePath} write` }] }] } }),
+            'utf-8',
+          );
+          return { repaired: ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'], failed: [] };
+        },
+      });
+
+      await conductor.run();
+
+      expect(markerObserved).toBe(true);
+    });
+  });
+
+  it('(a) session-hooks missing → seedAndCheckAttributionMachinery repairs them and reports intact', async () => {
+    // #896 + adr-2026-07-23-session-hook-repair-before-halt intentionally
+    // supersede the former terminal-HALT assertion: pure hook assets are
+    // restored at preflight, then re-statted before build dispatch proceeds.
     // task-status.json present (so the seed path is a no-op / not the thing
     // under test) but session-hooks/ absent entirely.
     await writeFile(
@@ -1320,8 +1622,20 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
     const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
 
-    expect(diagnostic).not.toBeNull();
-    expect(diagnostic).toMatch(/session-hooks|session hooks/i);
+    expect(diagnostic).toBeNull();
+    await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+    await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+    await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), 'utf-8')).resolves.toBeTruthy();
+  });
+
+  it('plan-unresolvable worktree takes precedence when session hooks are also missing', async () => {
+    // No plan artifact makes the seed path report the established plan
+    // diagnostic before hook repair is considered; #896 does not alter this
+    // branch ordering.
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, 'missing-plan-fixture');
+
+    expect(diagnostic).toMatch(/plan could not be resolved/i);
+    expect(diagnostic).not.toMatch(/session-hooks|session hooks/i);
   });
 
   it('(b) stamp path unwritable remains advisory to attribution machinery', async () => {
