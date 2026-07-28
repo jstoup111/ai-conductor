@@ -15,6 +15,7 @@ import {
   type GitRunner,
 } from './rebase.js';
 import { translateAfterRebase as defaultTranslateAfterRebase } from './rebase-translate.js';
+import { checkStepCompletion, resolveFeaturePlanPath } from './artifacts.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { GhRunner } from './pr-labels.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
@@ -328,6 +329,51 @@ export async function clearMarker(worktreePath: string): Promise<void> {
 export type RekickResumeResult = 'skipped' | 'rebased' | 'halted' | 'already_shipped';
 
 /**
+ * Build the re-kick path's post-rebase pre-verify capability
+ * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Scoped to
+ * `build` exactly — every other gate answers `{ done: false }` and is
+ * therefore invalidated unconditionally, as the ADR requires.
+ *
+ * The feature's plan is resolved the same way the conductor's `completionCtx`
+ * resolves it: engine-recorded path first, then the plan whose stem matches
+ * `feature_desc` from `.pipeline/conduct-state.json` (falling back to the
+ * daemon slug), then a lone plan. An unresolvable plan fails closed — the
+ * gate is invalidated rather than confirmed on a guess.
+ */
+export function makeRekickBuildPreVerify(
+  worktreePath: string,
+  slug?: string,
+): (step: string) => Promise<{ done: boolean; reason?: string }> {
+  return async (step) => {
+    if (step !== 'build') {
+      return { done: false, reason: 'post-rebase pre-verify is scoped to the build gate' };
+    }
+    let featureDesc = slug;
+    try {
+      const raw = await readFile(join(worktreePath, '.pipeline', 'conduct-state.json'), 'utf-8');
+      const parsed = JSON.parse(raw) as { feature_desc?: unknown };
+      if (typeof parsed.feature_desc === 'string' && parsed.feature_desc.trim()) {
+        featureDesc = parsed.feature_desc;
+      }
+    } catch {
+      // No/unreadable state — fall back to the daemon slug (may be undefined).
+    }
+    const planPath = await resolveFeaturePlanPath(worktreePath, featureDesc);
+    if (!planPath) {
+      return {
+        done: false,
+        reason: 'no feature plan resolvable — evidence derivation not engaged; fail-closed',
+      };
+    }
+    return checkStepCompletion(worktreePath, 'build', {
+      projectRoot: worktreePath,
+      planPath,
+      featureDesc,
+    });
+  };
+}
+
+/**
  * Honor the `.pipeline/REKICK` sentinel a sweep dropped. When present, run
  * 9.0's rebase-onto-latest in the worktree BEFORE the conductor resumes the
  * pending gate, so an advanced base is integrated and the gate (e.g. prd-audit)
@@ -387,6 +433,14 @@ export async function resumeRebaseFirst(opts: {
   slug?: string;
   /** Test seam; production uses the strict merged-history verifier. */
   verifyMergedShipment?: () => Promise<VerifiedMergedPrResult>;
+  /**
+   * Post-rebase mechanical pre-verify capability for the `build` gate
+   * (adr-2026-07-08-post-rebase-gate-first-mechanical-reverify). Optional
+   * purely for DI/test override — absent defaults to
+   * {@link makeRekickBuildPreVerify} bound to this worktree, so real re-kicks
+   * always re-verify before invalidating.
+   */
+  preVerify?: (step: string) => Promise<{ done: boolean; reason?: string }>;
   log?: (msg: string) => void;
 }): Promise<RekickResumeResult> {
   const sentinel = join(opts.worktreePath, REKICK_SENTINEL);
@@ -458,13 +512,40 @@ export async function resumeRebaseFirst(opts: {
       ),
   });
 
-  // FR-5: Deliberate fail-closed: the rekick path NEVER receives preVerify
-  // capability. When a play-forward rebase touches code paths, the full
-  // downstream set (build, build_review, manual_test) gets unconditional
-  // invalidation kickback verdicts. This preserves fail-closed semantics —
-  // the daemon must re-verify from scratch, not trust stale evidence. Omitting
-  // preVerify here is intentional, per ADR.
-  await applyRebaseVerdicts(opts.worktreePath, outcome, opts.ranManualTest);
+  // FR-5 + adr-2026-07-08-post-rebase-gate-first-mechanical-reverify: when a
+  // play-forward rebase touches code paths the downstream judged gates
+  // (build_review, wiring_check, prd_audit, architecture_review_as_built,
+  // manual_test) are still invalidated unconditionally — their predicates are
+  // not tree-attesting. `build` is the one gate whose predicate mechanically
+  // re-derives from the freshly-rebased history (`Task:` trailer union +
+  // task-status rows), so it gets the SAME pre-verify the conductor's in-loop
+  // `runRebaseStep` already injects (conductor.ts). Without this the re-kick
+  // path re-opened an evidence-complete build and dispatched a full build
+  // agent that redid already-committed work (live incident 2026-07-28,
+  // `codex-fresh-session-per-step-contract`: all 10 `Task:` trailers present,
+  // build re-dispatched anyway; cf. #497).
+  //
+  // Fail-closed is preserved: the pre-verify IS a fresh mechanical evaluation
+  // against the rebased tree, and any failure/throw falls back to the
+  // unconditional kickback (`applyRebaseVerdicts` catches).
+  const preVerify = opts.preVerify ?? makeRekickBuildPreVerify(opts.worktreePath, opts.slug);
+  const rebaseVerdict = await applyRebaseVerdicts(
+    opts.worktreePath,
+    outcome,
+    opts.ranManualTest,
+    preVerify,
+  );
+  for (const step of rebaseVerdict.reverified) {
+    await opts.events.emit({
+      type: 'rebase_gate_reverified',
+      step,
+      skippedDispatch: true,
+      reason: 're-verified mechanically after file-changing rebase — evidence remains intact',
+    });
+    opts.log?.(
+      `re-kick ${basename(opts.worktreePath)}: ${step} gate re-verified mechanically after rebase — dispatch skipped`,
+    );
+  }
   // #436: stamp state.rebase = 'done' for clean/noop/changelog-resolved
   // outcomes via the shared helper (no-ops on conflict_halt) — same call
   // the in-loop runRebaseStep makes, so the pre-loop re-kick path leaves

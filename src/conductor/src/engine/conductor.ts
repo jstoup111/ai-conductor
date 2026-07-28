@@ -179,6 +179,7 @@ import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
+  recordSkipVerdict,
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
 import {
@@ -1288,6 +1289,33 @@ export class Conductor {
     }
 
     return nonGreen;
+  }
+
+  /**
+   * Resolve a step by SKIP, honestly.
+   *
+   * Persists `skipped` AND — for a verdict-bearing step (`loopGate` or
+   * `kickbackTarget`, i.e. exactly `deriveGateTopology`'s `verdictSteps`) —
+   * writes the skip down as a gate verdict. Without this, a skipped gate ends
+   * the run with no `.pipeline/gates/<step>.json` at all and `gateSatisfied`
+   * falls back to the step-state flag, so `retro` (loopGate, skipped for tier S
+   * and on every daemon run) reached a resolved state with no verdict anywhere
+   * in the durable record.
+   *
+   * Satisfaction is unchanged — the selector already treats a skipped gate as
+   * satisfied — so this only closes the hole in the record, never opens or
+   * closes a gate.
+   */
+  private async recordStepSkip(
+    state: ConductState,
+    step: StepDefinition,
+    cause: string,
+  ): Promise<void> {
+    await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+    (state as Record<string, unknown>)[step.name] = 'skipped';
+    if (step.loopGate === true || step.kickbackTarget === true) {
+      await recordSkipVerdict(this.projectRoot, step.name, cause);
+    }
   }
 
   constructor(opts: ConductorOptions) {
@@ -2705,8 +2733,7 @@ export class Conductor {
 
         // Check if step should be skipped for this complexity tier
         if (step.skippableForTiers.includes(tier)) {
-          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-          state[step.name] = 'skipped';
+          await this.recordStepSkip(state, step, `complexity tier ${tier}`);
           await emitTracked({ type: 'tier_skip', step: step.name, tier });
           continue;
         }
@@ -2719,8 +2746,7 @@ export class Conductor {
         if (step.skippableForTracks && step.skippableForTracks.length > 0) {
           const track = await this.resolveTrack(state);
           if (step.skippableForTracks.includes(track)) {
-            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-            state[step.name] = 'skipped';
+            await this.recordStepSkip(state, step, `${track} track`);
             await emitTracked({ type: 'config_skip', step: step.name });
             continue;
           }
@@ -2732,8 +2758,11 @@ export class Conductor {
         // repo here would be redundant clutter. Manual runs (daemon=false) are
         // unaffected and keep writing repo retros.
         if (this.daemon && step.name === 'retro') {
-          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-          state[step.name] = 'skipped';
+          await this.recordStepSkip(
+            state,
+            step,
+            'daemon mode — narrative emitted to the engineer store, not .docs/retros/',
+          );
           await emitTracked({ type: 'config_skip', step: step.name });
           continue;
         }
@@ -2744,8 +2773,11 @@ export class Conductor {
         // step is still recorded in state but the skill never runs and the
         // completion gate never fires against a missing artifact.
         if (shouldSkipForBootstrapMode(step.name, state.bootstrap_mode)) {
-          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-          state[step.name] = 'skipped';
+          await this.recordStepSkip(
+            state,
+            step,
+            `bootstrap mode '${state.bootstrap_mode}'`,
+          );
           await emitTracked({
             type: 'mode_skip',
             step: step.name,
@@ -2762,8 +2794,11 @@ export class Conductor {
         // that never existed and produced a non-clean verdict the loop could
         // neither pass cleanly nor halt on.
         if (shouldSkipForUpstreamSkip(step, state)) {
-          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-          state[step.name] = 'skipped';
+          await this.recordStepSkip(
+            state,
+            step,
+            `upstream step ${step.skipWhenSkipped ?? 'dependency'} was skipped`,
+          );
           await emitTracked({ type: 'config_skip', step: step.name });
           continue;
         }
@@ -2786,8 +2821,7 @@ export class Conductor {
 
         // Check if step is disabled via config
         if (resolved.disabled) {
-          await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-          state[step.name] = 'skipped';
+          await this.recordStepSkip(state, step, 'disabled in config');
           await emitTracked({ type: 'config_skip', step: step.name });
           continue;
         }
@@ -2797,8 +2831,7 @@ export class Conductor {
         if (stepCfg?.when) {
           const whenResult = evaluateWhen(stepCfg.when, state);
           if (!whenResult.result) {
-            await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-            state[step.name] = 'skipped';
+            await this.recordStepSkip(state, step, `when: ${stepCfg.when} evaluated false`);
             await emitTracked({
               type: 'when_skip',
               step: step.name,
@@ -5127,8 +5160,17 @@ export class Conductor {
           // inspect. This must come before the interactive recovery menu below.
           if (this.mode === 'auto') {
             if (step.enforcement === 'advisory') {
-              await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-              state[step.name] = 'skipped';
+              // Advisory means "does not block the pipeline" — it must NOT mean
+              // "reports success having produced nothing". Record the skip AND,
+              // for a verdict-bearing advisory step (`retro`), the failure that
+              // caused it, so the durable gate record names the missing
+              // artifact instead of leaving a hole a reader can only read as
+              // "it passed".
+              await this.recordStepSkip(
+                state,
+                step,
+                `advisory step failed after ${attempt} attempt(s): ${lastError ?? 'no reason recorded'}`,
+              );
               continue;
             }
 
@@ -6687,6 +6729,18 @@ export class Conductor {
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
         markedSkip = true;
+        // Same honesty rule as the linear body's skips: a verdict-bearing gate
+        // the selector jumps over must still leave a verdict behind, or it ends
+        // the run resolved with nothing on disk to read.
+        if (s.loopGate === true || s.kickbackTarget === true) {
+          await recordSkipVerdict(
+            this.projectRoot,
+            s.name,
+            s.name === 'build_review' && !buildReviewEnabled
+              ? 'build_review disabled in config'
+              : 'selector skip (tier / track / bootstrap mode / upstream skip)',
+          );
+        }
         if (s.name === 'build_review' && !buildReviewEnabled) {
           await this.events.emit({ type: 'config_skip', step: s.name });
         }

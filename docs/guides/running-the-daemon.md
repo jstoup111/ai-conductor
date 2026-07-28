@@ -256,16 +256,34 @@ succeeds — a failed reset deliberately leaves the marker in place for retry. Y
 
 ### Parked-feature reconciliation
 
-On startup and on every idle poll tick, the daemon classifies each parked slug: `merged` (its
-branch is an ancestor of `origin/main`), `orphan` (its source issue is closed but the branch never
-merged), `normal`, or `unclassified` (the check was unavailable). `conduct-ts daemon status`
-annotates the parked list accordingly — `— orphan — needs manual review` or `— merged — ready to
-reconcile`.
+On startup and on every idle poll tick, the daemon classifies each parked slug: `merged`, `orphan`
+(its source issue is closed but the work never merged), `normal`, or `unclassified` (the check was
+unavailable). `conduct-ts daemon status` annotates the parked list accordingly — `— orphan — needs
+manual review` or `— merged — ready to reconcile`.
+
+A slug counts as `merged` on either of two signals:
+
+- **A shipped record on the base branch.** `.docs/shipped/<stem>.md` committed on `origin/main` is
+  this harness's definition of "the work shipped", and it is what the daemon backlog dedups on. It
+  is matched allowing for the `YYYY-MM-DD-` plan-date prefix, because park markers are keyed by the
+  undated slug while records are keyed by the dated plan stem. This signal is durable: it still
+  answers after the branch is deleted at merge, and after a squash or rebase merge leaves the branch
+  tip outside `origin/main`.
+- **Branch ancestry.** Any local branch whose final path segment is the slug — `feat/`, `spec/`,
+  `fix/`, `chore/`, whatever prefix the author used — that `git merge-base --is-ancestor` proves is
+  contained in `origin/main`.
+
+A missing branch, an unreadable `origin/main`, or a git failure yields `unclassified` and no action.
+It never reads as "not merged".
 
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
 is unset or `true`), a `merged` slug with a `.docs/shipped/<slug>.md` record on `origin/main` is
-reconciled automatically: its worktree is removed, its branch is deleted, and it is unparked — with
-no in-progress resume for that slug. A merged slug with no shipped record yet is left parked and,
+reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked
+— with no in-progress resume for that slug. Branch ancestry remains the sole authority for the
+deletion itself: if a branch for the slug exists and is *not* contained in `origin/main` (a stale
+local branch, or work that landed on it after the merge), cleanup is refused with `not-ancestor` and
+nothing is deleted, even though the slug still classifies `merged`. A merged slug with no shipped
+record yet is left parked and,
 when a merged PR can be found, gets an ST-916 record-repair PR requested on its behalf; it
 reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cleanup: false` to
 disable the automatic cleanup step and only classify/annotate, then reconcile explicitly per slug:
@@ -398,6 +416,26 @@ per feature:
 The sweep never dispatches directly; the cleared feature is re-dispatched on the next poll. That is
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
+
+### Post-rebase gate invalidation on resume
+
+Honouring the `REKICK` sentinel rebases the feature onto the advanced base before any gate resumes.
+When that rebase changes code or test paths, the downstream judged gates — `build_review`,
+`wiring_check`, and (when they ran) `manual_test`, `prd_audit`,
+`architecture_review_as_built` — are re-opened, because their verdicts graded the pre-rebase diff.
+
+`build` is the exception. Its predicate re-derives mechanically from the rebased history — the union
+of `Task:` commit trailers with the `.pipeline/task-status.json` rows — so the daemon re-evaluates it
+against the new tree *before* deciding. If every plan task is still evidenced, the gate keeps a fresh
+`satisfied: true` verdict, a `rebase_gate_reverified` event records that dispatch was skipped, and no
+build agent re-runs finished work. Anything less — a plan task with no trailer, an unresolvable plan,
+or an error during the check — falls back to the ordinary kickback and the build step re-runs.
+This is fail-closed: the confirmation is itself a fresh evaluation of the rebased tree, never a
+carried-over verdict.
+
+`.pipeline/task-status.json` is not the authority here. Nothing in the engine flips its rows to
+`completed`; the durable record of finished work is the `Task:` trailer on each commit, which is why
+losing or re-seeding that file does not by itself re-open a finished build.
 
 ### Kickback-cap halt
 

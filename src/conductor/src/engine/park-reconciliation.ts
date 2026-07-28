@@ -7,7 +7,7 @@ import {
 import { detectAutoResume } from './auto-resume.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
 import { access, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
 
@@ -67,6 +67,181 @@ const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 const sweepSummarySignatures = new WeakMap<Map<string, ParkClassification>, string>();
 
 /**
+ * The stem with a leading `YYYY-MM-DD-` date prefix removed. Mirrors
+ * `undatedStem` in `daemon-backlog.ts` (and the copy in
+ * `protected-artifact-seal.ts`); duplicated rather than imported so the park
+ * sweep does not pull the whole discovery module in for one regex. Keep the
+ * three in sync if the date-prefix convention ever changes.
+ *
+ * Needed here because park markers are keyed by the UNDATED slug
+ * (`.daemon/parked/first-class-codex-harness-parity-904`) while the shipped
+ * record that proves the same feature merged is keyed by the DATED plan stem
+ * (`.docs/shipped/2026-07-25-first-class-codex-harness-parity-904.md`).
+ */
+function undatedStem(stem: string): string {
+  return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
+}
+
+/**
+ * Everything the reconciler knows about whether one parked slug's work is
+ * already contained in the base branch.
+ *
+ * Two independent signals, because neither alone is sufficient in a real
+ * repository:
+ *
+ * - `shippedRecordOnMain` — `.docs/shipped/<stem>.md` committed on
+ *   `origin/main`. Per CLAUDE.md rule 4 this IS the harness's definition of
+ *   "the work shipped", and it is what `daemon-backlog.ts` dedups on. It is
+ *   durable: it survives the post-merge branch deletion that makes any
+ *   branch-derived check permanently unanswerable, and it survives a
+ *   squash/rebase merge that leaves the local branch tip outside `origin/main`.
+ * - `mergedBranches` — local branches for the slug that `merge-base
+ *   --is-ancestor` proves are contained in `origin/main`. This remains the
+ *   ONLY authority for deleting a branch (see `reconcileMergedPark`), because
+ *   deleting a branch that is not an ancestor would drop commits.
+ *
+ * `branches` carries every local branch whose final path segment is the slug,
+ * whatever its prefix. Branch prefixes are not uniform (`feat/`, `spec/`,
+ * `fix/`, `feature/`, `chore/`, `docs/`, `hotfix/`, …), so a hardcoded
+ * `feature/<slug>` ref names a branch that usually does not exist — `git
+ * merge-base` then exits 128 ("Not a valid object name"), which is a MISSING
+ * REF, not "not an ancestor", and must never be read as either.
+ */
+export interface MergeEvidence {
+  /** A shipped record for this slug is committed on `origin/main`. */
+  shippedRecordOnMain: boolean;
+  /** Local branches whose last path segment matches the slug, any prefix. */
+  branches: string[];
+  /** Subset of `branches` proven contained in `origin/main`. */
+  mergedBranches: string[];
+}
+
+/** True when either durable signal proves the slug's work reached the base branch. */
+function isMerged(evidence: MergeEvidence): boolean {
+  return evidence.shippedRecordOnMain || evidence.mergedBranches.length > 0;
+}
+
+/**
+ * Shipped-record stems committed on `origin/main`, or `null` when the base
+ * branch itself could not be read.
+ *
+ * A failing `ls-tree` is ambiguous: the repository may simply have no
+ * `.docs/shipped` tree yet (an empty record set — a definite answer), or
+ * `origin/main` may be unavailable (no answer at all). Reading the second case
+ * as "nothing shipped" would silently authorize reconciliation on no evidence,
+ * so the ambiguity is resolved with an explicit `rev-parse` and unavailability
+ * fails closed.
+ */
+async function listShippedStemsOnMain(
+  runGit: GitRunner,
+  projectRoot: string,
+): Promise<string[] | null> {
+  try {
+    const { stdout } = await runGit(['ls-tree', '--name-only', 'origin/main:.docs/shipped'], {
+      cwd: projectRoot,
+    });
+    return stdout
+      .split('\n')
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.endsWith('.md'))
+      .map((entry) => basename(entry, '.md'));
+  } catch {
+    try {
+      await runGit(['rev-parse', '--verify', 'origin/main^{commit}'], { cwd: projectRoot });
+      return []; // base branch exists, it just carries no `.docs/shipped` tree
+    } catch {
+      return null; // base branch unreadable — no answer, not an empty answer
+    }
+  }
+}
+
+/**
+ * Local branches indexed by their final path segment (undated), so a slug
+ * resolves to its branch whatever prefix the author used. `null` when the ref
+ * listing itself failed.
+ */
+async function listBranchesBySlug(
+  runGit: GitRunner,
+  projectRoot: string,
+): Promise<Map<string, string[]> | null> {
+  try {
+    const { stdout } = await runGit(['for-each-ref', '--format=%(refname:short)', 'refs/heads'], {
+      cwd: projectRoot,
+    });
+    const bySlug = new Map<string, string[]>();
+    for (const line of stdout.split('\n')) {
+      const ref = line.trim();
+      if (!ref) continue;
+      const key = undatedStem(ref.slice(ref.lastIndexOf('/') + 1));
+      const existing = bySlug.get(key);
+      if (existing) existing.push(ref);
+      else bySlug.set(key, [ref]);
+    }
+    return bySlug;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `true` contained in `origin/main`, `false` definitely not, `null` when git
+ * could not answer (exit 128: missing ref, unreadable repo, …). Exit 1 — and
+ * ONLY exit 1 — means "not an ancestor".
+ */
+async function isContainedInMain(
+  runGit: GitRunner,
+  projectRoot: string,
+  ref: string,
+): Promise<boolean | null> {
+  try {
+    await runGit(['merge-base', '--is-ancestor', ref, 'origin/main'], { cwd: projectRoot });
+    return true;
+  } catch (error) {
+    return (error as { code?: unknown }).code === 1 ? false : null;
+  }
+}
+
+/**
+ * Collect both merge signals for one slug. Returns `null` when the evidence is
+ * indeterminate, which callers must treat as inaction (`unclassified`), never
+ * as "not merged".
+ *
+ * `prefetched` lets a sweep read the record listing and the ref listing ONCE
+ * for the whole pass instead of once per parked slug.
+ */
+async function gatherMergeEvidence(
+  runGit: GitRunner,
+  projectRoot: string,
+  slug: string,
+  prefetched?: { shippedStems: string[] | null; branchesBySlug: Map<string, string[]> | null },
+): Promise<MergeEvidence | null> {
+  const shippedStems =
+    prefetched?.shippedStems ?? (await listShippedStemsOnMain(runGit, projectRoot));
+  if (shippedStems === null) return null;
+  const branchesBySlug =
+    prefetched?.branchesBySlug ?? (await listBranchesBySlug(runGit, projectRoot));
+  if (branchesBySlug === null) return null;
+
+  const key = undatedStem(slug);
+  const shippedRecordOnMain = shippedStems.some((stem) => undatedStem(stem) === key);
+  const branches = branchesBySlug.get(key) ?? [];
+
+  const mergedBranches: string[] = [];
+  let ancestryUnavailable = false;
+  for (const ref of branches) {
+    const contained = await isContainedInMain(runGit, projectRoot, ref);
+    if (contained === null) ancestryUnavailable = true;
+    else if (contained) mergedBranches.push(ref);
+  }
+
+  // A broken ancestry probe only defeats the answer when nothing else settled
+  // it; a record on main already proves the ship on its own.
+  if (!shippedRecordOnMain && mergedBranches.length === 0 && ancestryUnavailable) return null;
+
+  return { shippedRecordOnMain, branches, mergedBranches };
+}
+
+/**
  * Report the current reconciliation classification for each parked feature.
  * Cleanup is deliberately not initiated here until the later auto-cleanup task.
  */
@@ -78,33 +253,36 @@ export async function reconcileParkedFeatures(
   const runGit = opts.runGit ?? makeProductionGit();
   const parkedSlugs = await listOperatorParkedSlugs(opts.projectRoot);
 
+  // Read the base-branch record listing and the local ref listing ONCE for the
+  // whole pass; both are pass-invariant and the sweep runs on every idle tick.
+  const prefetched = {
+    shippedStems: await listShippedStemsOnMain(runGit, opts.projectRoot),
+    branchesBySlug: await listBranchesBySlug(runGit, opts.projectRoot),
+  };
+
   for (const slug of parkedSlugs) {
     let classification: ParkClassification;
-    try {
-      await runGit(['merge-base', '--is-ancestor', `feature/${slug}`, 'origin/main'], {
-        cwd: opts.projectRoot,
-      });
+    const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, slug, prefetched);
+    if (evidence === null) {
+      classification = 'unclassified';
+      opts.log?.(`[parked-reconciliation] ${slug} origin/main merge evidence unavailable; skipped`);
+    } else if (isMerged(evidence)) {
       classification = 'merged';
-    } catch (error) {
-      if ((error as { code?: unknown }).code !== 1) {
+    } else {
+      const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
+        .then((content) => content)
+        .catch(() => null);
+      const sourceRef = parseIntakeSourceRef(intake);
+      if (!sourceRef || !opts.getIssueState) {
         classification = 'unclassified';
-        opts.log?.(`[parked-reconciliation] ${slug} origin/main ancestry check unavailable; skipped`);
       } else {
-        const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
-          .then((content) => content)
-          .catch(() => null);
-        const sourceRef = parseIntakeSourceRef(intake);
-        if (!sourceRef || !opts.getIssueState) {
+        try {
+          classification = (await opts.getIssueState(sourceRef, opts.projectRoot)).toUpperCase() === 'CLOSED'
+            ? 'orphan'
+            : 'normal';
+        } catch {
           classification = 'unclassified';
-        } else {
-          try {
-            classification = (await opts.getIssueState(sourceRef, opts.projectRoot)).toUpperCase() === 'CLOSED'
-              ? 'orphan'
-              : 'normal';
-          } catch {
-            classification = 'unclassified';
-            opts.log?.(`[parked-reconciliation] ${slug} issue lookup unavailable; skipped`);
-          }
+          opts.log?.(`[parked-reconciliation] ${slug} issue lookup unavailable; skipped`);
         }
       }
     }
@@ -171,59 +349,50 @@ export async function reconcileMergedPark(
   }
 
   const runGit = opts.runGit ?? makeProductionGit();
-  try {
-    await runGit(
-      ['merge-base', '--is-ancestor', `feature/${opts.slug}`, 'origin/main'],
-      { cwd: opts.projectRoot },
-    );
-  } catch (error) {
-    const failure = error as { code?: unknown; stderr?: unknown };
-    const stderr = typeof failure.stderr === 'string' ? failure.stderr : '';
-    if (failure.code === 1) {
-      return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
-    }
-    if (/not a valid object name|unknown revision|ambiguous argument|bad object/i.test(stderr)) {
-      return { slug: opts.slug, steps: [], refusal: 'branch-missing' };
-    }
+
+  // Re-derive the evidence here rather than trusting any caller's or sweep's
+  // cached classification (ADR: the helper re-verifies immediately before any
+  // destructive step).
+  const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, opts.slug);
+  if (evidence === null) {
     return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
   }
-
-  let shippedRecords: string[];
-  try {
-    const { stdout } = await runGit(['ls-tree', '--name-only', 'origin/main:.docs/shipped'], {
-      cwd: opts.projectRoot,
-    });
-    shippedRecords = stdout
-      .split('\n')
-      .map((entry) => entry.trim())
-      .filter(Boolean);
-  } catch {
-    shippedRecords = [];
+  if (!isMerged(evidence)) {
+    return {
+      slug: opts.slug,
+      steps: [],
+      refusal: evidence.branches.length === 0 ? 'branch-missing' : 'not-ancestor',
+    };
   }
 
-  if (!shippedRecords.includes(`${opts.slug}.md`)) {
+  // Deletion gate, unchanged in strength by the record signal: EVERY local
+  // branch carrying this slug must be ancestry-proven before anything is
+  // deleted. A shipped record proves the work shipped, but it says nothing
+  // about commits that landed on the branch afterwards — including work that
+  // raced this very sweep. Ancestry stays the sole deletion authority, so a
+  // record-backed park whose branch is not contained in origin/main is
+  // classified `merged` (it is) and refused for cleanup (it must be).
+  if (evidence.mergedBranches.length !== evidence.branches.length) {
+    return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
+  }
+
+  if (!evidence.shippedRecordOnMain) {
     let prUrl: string | undefined;
-    try {
-      const { stdout } = await (opts.runGh ?? makeProductionGh())(
-        [
-          'pr',
-          'list',
-          '--state',
-          'merged',
-          '--head',
-          `feature/${opts.slug}`,
-          '--json',
-          'url',
-          '--limit',
-          '1',
-        ],
-        { cwd: opts.projectRoot },
-      );
-      const prs = JSON.parse(stdout) as Array<{ url?: unknown }>;
-      const url = prs[0]?.url;
-      prUrl = typeof url === 'string' ? url : undefined;
-    } catch {
-      // An unavailable PR lookup cannot authorize cleanup or record creation.
+    for (const head of evidence.branches) {
+      try {
+        const { stdout } = await (opts.runGh ?? makeProductionGh())(
+          ['pr', 'list', '--state', 'merged', '--head', head, '--json', 'url', '--limit', '1'],
+          { cwd: opts.projectRoot },
+        );
+        const prs = JSON.parse(stdout) as Array<{ url?: unknown }>;
+        const url = prs[0]?.url;
+        if (typeof url === 'string') {
+          prUrl = url;
+          break;
+        }
+      } catch {
+        // An unavailable PR lookup cannot authorize cleanup or record creation.
+      }
     }
 
     if (prUrl) await opts.requestRecordRepair?.({ slug: opts.slug, prUrl });
@@ -252,12 +421,23 @@ export async function reconcileMergedPark(
   }
   steps.push('worktree-removed');
 
-  try {
-    await runGit(['branch', '-d', `feature/${opts.slug}`], { cwd: opts.projectRoot });
-  } catch {
-    return { slug: opts.slug, steps, refusal: 'branch-delete-failed' };
+  // The gate above proved every branch for this slug is contained in
+  // origin/main, so deleting them cannot drop a commit. The no-branch case is
+  // the normal end state for shipped work whose branch was deleted at merge:
+  // there is nothing to delete, and the shipped record — not a ref that no
+  // longer exists — is what proved the ship.
+  if (evidence.branches.length === 0) {
+    steps.push('branch-absent');
+  } else {
+    for (const ref of evidence.branches) {
+      try {
+        await runGit(['branch', '-d', ref], { cwd: opts.projectRoot });
+      } catch {
+        return { slug: opts.slug, steps, refusal: 'branch-delete-failed' };
+      }
+    }
+    steps.push('branch-deleted');
   }
-  steps.push('branch-deleted');
 
   try {
     const exitCode = await dispatchDaemonPark(

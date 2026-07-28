@@ -176,9 +176,12 @@ Ordering rules are in
 
 If the implementation PR is already merged (the case this section is under), landing the record
 is usually enough on its own: the daemon's [parked-feature reconciliation
-sweep](../guides/running-the-daemon.md#parked-feature-reconciliation) detects the merged branch
-plus the newly-committed record on its next idle tick and removes the worktree, deletes the
-branch, and unparks the slug automatically — `daemon unpark` is then unnecessary. Run
+sweep](../guides/running-the-daemon.md#parked-feature-reconciliation) detects the newly-committed
+record on `origin/main` on its next idle tick and removes the worktree, deletes the branch, and
+unparks the slug automatically — `daemon unpark` is then unnecessary. The record alone is enough;
+the sweep no longer needs the branch to still exist. If the branch does still exist and carries
+commits that are not in `origin/main`, the sweep refuses the cleanup (`not-ancestor`) rather than
+delete them — delete or merge that branch, and the next tick reconciles the slug. Run
 `conduct-ts daemon reconcile-parked <slug>` to do the same thing immediately instead of waiting
 for the next tick, or if `reconcile_parked_auto_cleanup` is set to `false`.
 

@@ -208,7 +208,7 @@ describe('engine/resolved-config', () => {
         { step: 'architecture_review_as_built', model: 'fable', effort: 'high' },
         { step: 'retro', model: 'sonnet', effort: 'medium' },
         { step: 'rebase', model: 'opus', effort: 'high' },
-        { step: 'finish', model: 'haiku', effort: 'medium' },
+        { step: 'finish', model: 'sonnet', effort: 'medium' },
         { step: 'remediate', model: 'fable', effort: 'medium' },
         { step: 'attribution_verify', model: 'opus', effort: 'high' },
       ]);
@@ -721,12 +721,14 @@ describe('engine/resolved-config', () => {
   });
 
   describe('resolveStepConfig — collateral-drift guard on untouched steps', () => {
-    it('finish stays haiku/medium; build runs on sonnet at medium effort', () => {
+    it('finish stays sonnet/medium; build runs on sonnet at medium effort', () => {
       // Regression guard: verify that changes to recovery/failure-response steps
       // (rebase, remediate) do not inadvertently affect unrelated steps.
-      // finish stays on its haiku/medium baseline.
+      // finish sits on its sonnet/medium baseline (bumped haiku→sonnet: the finish
+      // SKILL.md is a long procedural contract with multi-branch STOP gates, inline
+      // push/PR sequencing, and a mandatory conduct-ts finish-record call).
       const rFinish = resolveStepConfig('finish', 'SHIP', CLAUDE_MODEL_POLICY);
-      expect(rFinish.model).toBe('haiku');
+      expect(rFinish.model).toBe('sonnet');
       expect(rFinish.effort).toBe('medium');
 
       // build was intentionally bumped haiku→sonnet: it launches the code-

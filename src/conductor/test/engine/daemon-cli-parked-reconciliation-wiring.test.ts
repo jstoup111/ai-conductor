@@ -47,7 +47,12 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
       const tracker = createGithubTrackerClient((async () => ({
         stdout: JSON.stringify({ state: 'closed' }),
       })) as GhRunner);
-      const runGit = (async () => {
+      // Faithful base-branch reads: origin/main is readable and carries no
+      // shipped record for this slug, the slug's branch exists, and its
+      // ancestry probe exits 1 — the exact shape of a real non-ancestor park.
+      const runGit = (async (args: string[]) => {
+        if (args[0] === 'ls-tree') return { stdout: '\n' };
+        if (args[0] === 'for-each-ref') return { stdout: 'feat/orphan-park\n' };
         throw Object.assign(new Error('not an ancestor'), { code: 1 });
       }) as GitRunner;
 

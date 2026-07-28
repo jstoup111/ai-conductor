@@ -61,7 +61,7 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `retro` | advisory | ship | — | `retro` (19) | Advisory |
 | `rebase` | advisory | ship | — | `rebase` (20) — on conflict only | Blocking via the structural step |
 | `finish` | gating | ship | — | `finish` (21) | Blocking |
-| `pr` | advisory | ship | — | none — called from `/finish` | Neither |
+| `pr` | advisory | ship | — | none — operator-invoked; `/finish` inlines it rather than calling it | Neither |
 | `maintain-documentation` | (none) | (none) | — | custom step after `rebase` | Blocking, this repository only |
 | `write-tests` | (none) | (none) | — | none — unwired | Neither |
 
@@ -531,7 +531,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   finish record is not written — the absent marker *is* the refusal signal the engine watches for,
   and must never be hand-written. A failed staleness proof or a failed `--force-with-lease` must never
   be retried with `--force`.
-- **Dispatches** — `agents/worktree-manager.md` for merge and cleanup.
+- **Dispatches** — `agents/worktree-manager.md` for merge and cleanup, after the finish record is
+  written. This is the only delegation `finish` performs: on the Push & PR path it authors and
+  publishes the PR **inline** (§5a of the skill) rather than invoking `/pr`, because a delegated
+  skill invocation ends the finish turn before `conduct-ts finish-record` runs — leaving
+  `.pipeline/finish-choice` unwritten and the step failing as "missing".
 
 ### pr
 
@@ -539,7 +543,9 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
-- **Engine step** — none. Invoked from within `finish`, or manually.
+- **Engine step** — none. Operator-invoked. `finish` does **not** call it: the Push & PR path
+  inlines the same title/body contract and pre-push checks so the finish turn survives to write
+  its completion record.
 - **Inputs** — the branch log and diff against the base; `.docs/specs/` and `.docs/stories/`;
   `.pipeline/conduct-state.json`; the project's PR-title conventions.
 - **Outputs** — the GitHub PR title and body, a pushed branch, and the PR URL. No repository file
