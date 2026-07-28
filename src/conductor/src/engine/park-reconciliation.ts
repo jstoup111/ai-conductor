@@ -104,6 +104,11 @@ export async function reconcileParkedFeatures(
     }
 
     entries.push({ slug, classification });
+    if (classification === 'merged' && opts.autoCleanup) {
+      const outcome = await reconcileMergedPark({ ...opts, slug });
+      if (outcome.refusal === undefined) counts.reconciled++;
+      else if (outcome.deferred) counts.deferred++;
+    }
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
     else counts.parked++;

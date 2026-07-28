@@ -108,7 +108,7 @@ import {
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
-import { reconcileParkedFeatures } from './engine/park-reconciliation.js';
+import { reconcileParkedFeatures, type ParkClassification } from './engine/park-reconciliation.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
@@ -549,6 +549,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // instead of re-logging every tick. A fresh daemon run always starts with a
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
+  const parkedSweepCache = new Map<string, ParkClassification>();
+  const reconcileParkedAutoCleanup = config?.reconcile_parked_auto_cleanup ?? true;
 
   const log = createDaemonModeLogger({
     formatActivityLine: formatDaemonActivityLine,
@@ -1606,6 +1608,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
         await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
+      },
+      reconcileParkedFeatures: async () => {
+        await reconcileParkedFeatures({
+          projectRoot,
+          log,
+          cache: parkedSweepCache,
+          autoCleanup: reconcileParkedAutoCleanup,
+        });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
