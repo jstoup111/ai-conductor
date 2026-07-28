@@ -234,6 +234,13 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
     ).run();
 
     const persistedAfterFirst = await readKickbackLedger(dir);
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      build: 'done',
+      build_review: 'skipped',
+    });
     const secondEvents = new ConductorEventEmitter();
     const secondKickbacks: number[] = [];
     const secondHalts: string[] = [];
@@ -256,14 +263,47 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       secondEvents,
     ).run();
 
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      build: 'done',
+      build_review: 'skipped',
+    });
+    const thirdEvents = new ConductorEventEmitter();
+    const thirdKickbacks: number[] = [];
+    const thirdHalts: string[] = [];
+    thirdEvents.on('kickback', (event) => {
+      if (event.type === 'kickback' && event.from === 'wiring_check') thirdKickbacks.push(event.count);
+    });
+    thirdEvents.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') thirdHalts.push(event.reason);
+    });
+    await makeConductor(
+      {
+        run: async (step) => {
+          if (step === 'wiring_check') {
+            await writeFile(join(dir, '.pipeline/wiring-evidence.json'), evidence(true));
+            return { success: true };
+          }
+          return satisfy(step);
+        },
+      },
+      thirdEvents,
+    ).run();
+
     expect({
       persistedCount: persistedAfterFirst.gates.wiring_check?.count,
       secondKickbacks,
       secondHalt: secondHalts[0],
+      thirdKickbacks,
+      thirdHalt: thirdHalts[0],
     }).toEqual({
       persistedCount: 1,
       secondKickbacks: [2],
-      secondHalt: expect.stringMatching(/wiring_check.*cap 2/i),
+      secondHalt: undefined,
+      thirdKickbacks: [],
+      thirdHalt: expect.stringMatching(/wiring_check.*cap 2/i),
     });
   });
 
@@ -336,6 +376,14 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         new ConductorEventEmitter(),
       ).run();
 
+      await writeState(statePath, {
+        run_started_at: 1,
+        complexity_tier: 'S',
+        track: 'technical',
+        build: 'done',
+        build_review: 'skipped',
+      });
+
       const secondReason = 'rephrased diagnosis: no reachable caller for foo';
       const secondEvents = new ConductorEventEmitter();
       const secondKickbacks: Array<{ count: number; evidence: string }> = [];
@@ -361,9 +409,35 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
         secondEvents,
       ).run();
 
-      expect({ secondKickbacks, secondHalt: secondHalts[0] }).toEqual({
+      await writeState(statePath, {
+        run_started_at: 1,
+        complexity_tier: 'S',
+        track: 'technical',
+        build: 'done',
+        build_review: 'skipped',
+      });
+      const thirdEvents = new ConductorEventEmitter();
+      const thirdHalts: string[] = [];
+      thirdEvents.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') thirdHalts.push(event.reason);
+      });
+      await makeConductor(
+        {
+          run: async (step) => {
+            if (step === 'wiring_check') {
+              await writeFile(join(dir, '.pipeline/wiring-evidence.json'), evidence(secondReason));
+              return { success: true };
+            }
+            return satisfy(step);
+          },
+        },
+        thirdEvents,
+      ).run();
+
+      expect({ secondKickbacks, secondHalt: secondHalts[0], thirdHalt: thirdHalts[0] }).toEqual({
         secondKickbacks: [{ count: 2, evidence: secondReason }],
-        secondHalt: expect.stringMatching(/wiring_check.*cap 2.*no reachable caller/i),
+        secondHalt: undefined,
+        thirdHalt: expect.stringMatching(/wiring_check.*cap 2.*no reachable caller/i),
       });
     });
   });
@@ -397,7 +471,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       await expect(runCapHalt('build_review', '')).resolves.toEqual({
         body: expect.stringMatching(/build_review[\s\S]*cap 2[\s\S]*(no .*reason|without reasons)/i),
         haltClass: 'needs-human',
-        recordedReason: '',
+        recordedReason: 'grader returned FAIL without reasons',
       });
     });
   });

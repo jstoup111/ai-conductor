@@ -483,14 +483,29 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       },
     }, true, undefined, { kickback_escalation: { enabled: false } }).run();
 
+    // The first fixture run reaches finish after proving the first durable
+    // kickback. Recreate the active gate state for the next daemon dispatch
+    // without carrying its terminal shipment record into this loop test.
+    await writeState(statePath, {
+      ...frontDone(),
+      track: 'technical',
+      run_started_at: 1,
+      build: 'done',
+      build_review: 'done',
+    });
+
     const secondEvents = new ConductorEventEmitter();
     const secondKickbackCounts: number[] = [];
+    let secondBuildDispatches = 0;
+    let secondWiringAttempts = 0;
     secondEvents.on('kickback', (event) => {
       if (event.type === 'kickback' && event.from === 'wiring_check') secondKickbackCounts.push(event.count);
     });
     const second = makeConductor({
       run: async (step) => {
+        if (step === 'build') secondBuildDispatches++;
         if (step === 'wiring_check') {
+          secondWiringAttempts++;
           await writeFile(join(dir, '.pipeline/wiring-evidence.json'), gapEvidence);
           return { success: true };
         }
@@ -502,9 +517,15 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
 
     expect({
       secondKickbackCounts,
+      secondBuildDispatches,
+      secondWiringAttempts,
       halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
     }).toEqual({
       secondKickbackCounts: [2],
+      // D1 permits the second actual kickback; the following unresolved
+      // failure is what exhausts the cap and produces the classified HALT.
+      secondBuildDispatches: 1,
+      secondWiringAttempts: 2,
       halt: expect.stringMatching(/wiring_check.*cap 2/i),
     });
   });
