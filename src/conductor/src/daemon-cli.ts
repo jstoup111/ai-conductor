@@ -1523,6 +1523,9 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         const reconciliation = await reconcileParkedFeatures({
           projectRoot,
           getIssueState: createGithubTrackerClient(ownerGh).getIssueState,
+          // Rendering is observational. The daemon sweep below owns cleanup
+          // and is the sole consumer of the startup-resolved toggle.
+          autoCleanup: false,
         });
         const annotations = new Map(
           reconciliation.entries.map(({ slug, classification }) => [

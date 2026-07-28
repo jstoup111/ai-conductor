@@ -11,10 +11,10 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(source).toMatch(/reconcileParkedFeatures: async \(\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
   });
 
-  it('keeps dashboard classification annotate-only rather than enabling cleanup there', () => {
+  it('forces dashboard classification to autoCleanup: false, so a configured false toggle cannot delete during render', () => {
     const dashboardCall = source.match(/const reconciliation = await reconcileParkedFeatures\(\{([\s\S]*?)\}\);/);
     expect(dashboardCall?.[1]).toBeDefined();
-    expect(dashboardCall?.[1]).not.toContain('autoCleanup');
+    expect(dashboardCall?.[1]).toContain('autoCleanup: false');
     expect(source).toContain("classification === 'merged'\n                ? 'merged-ready'");
   });
 });
