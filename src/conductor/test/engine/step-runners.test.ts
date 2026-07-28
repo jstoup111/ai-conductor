@@ -1919,7 +1919,8 @@ describe('DefaultStepRunner', () => {
       expect(opts.resume).toBe(false);
     });
 
-    it('persists session ID to conduct-session-id file', async () => {
+    it('does not replace the feature run id with a provider invocation id', async () => {
+      await writeFile(join(pipeDir, 'conduct-session-id'), 'feature-run-id', 'utf-8');
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'my-session-id', '/tmp/project', {
         pipelineDir: pipeDir,
@@ -1930,7 +1931,13 @@ describe('DefaultStepRunner', () => {
       const sessionIdPath = join(pipeDir, 'conduct-session-id');
       const content = await readFile(sessionIdPath, 'utf-8');
       const invoked = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-      expect(content.trim()).toBe(invoked.sessionId);
+      expect({
+        runId: content.trim(),
+        providerIdIsSeparate: invoked.sessionId !== content.trim(),
+      }).toEqual({
+        runId: 'feature-run-id',
+        providerIdIsSeparate: true,
+      });
     });
 
     it('does not write marker when step fails', async () => {
@@ -2521,7 +2528,7 @@ TIER: M`,
       await rm(pipeDir, { recursive: true, force: true });
     });
 
-    it('deletes session-created marker and writes a fresh session ID', async () => {
+    it('deletes the marker and preserves the feature run id while the provider cold-starts', async () => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
@@ -2538,10 +2545,17 @@ TIER: M`,
         .then(() => true, () => false);
       expect(stillExists).toBe(false);
 
-      // Fresh session ID persisted
-      const newId = (await readFile(join(pipeDir, 'conduct-session-id'), 'utf-8')).trim();
-      expect(newId).not.toBe('session-1');
-      expect(newId).toMatch(/^[0-9a-f-]{36}$/);
+      await runner.run('worktree', emptyState);
+      const invocation = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect({
+        runId: (await readFile(join(pipeDir, 'conduct-session-id'), 'utf-8')).trim(),
+        providerSessionChanged: invocation.sessionId !== 'session-1',
+        resume: invocation.resume,
+      }).toEqual({
+        runId: 'session-1',
+        providerSessionChanged: true,
+        resume: false,
+      });
     });
 
     it('tolerates resetSession when the marker never existed', async () => {

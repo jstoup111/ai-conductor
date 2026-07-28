@@ -675,7 +675,6 @@ export class DefaultStepRunner implements StepRunner {
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
           await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
           // After successful first marker write, we know a session has been established.
           // Mark that for future mid-run detection.
           this.wasSessionMarkerFoundOnInit = true;
@@ -1014,11 +1013,6 @@ export class DefaultStepRunner implements StepRunner {
     if (this.pipelineDir) {
       await this.ensurePipelineDir();
       await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-      await writeFile(
-        join(this.pipelineDir, 'conduct-session-id'),
-        this.sessionId,
-        'utf-8',
-      );
       this.wasSessionMarkerFoundOnInit = true;
     }
   }
@@ -1161,7 +1155,6 @@ export class DefaultStepRunner implements StepRunner {
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
           await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
           // After successful first marker write, we know a session has been established.
           // Mark that for future mid-run detection.
           this.wasSessionMarkerFoundOnInit = true;
@@ -1227,7 +1220,6 @@ export class DefaultStepRunner implements StepRunner {
       await unlink(join(this.pipelineDir, 'session-created')).catch(() => {
         // Marker didn't exist — nothing to clear.
       });
-      await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
     }
   }
 

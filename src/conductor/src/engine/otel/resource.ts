@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { v4 as uuidv4 } from 'uuid';
 import { Resource } from '@opentelemetry/resources';
@@ -25,7 +25,7 @@ export interface ResourceContext {
  * `conductor.run.id` resolution order:
  *   1. `ctx.runId` if supplied (test/injection override)
  *   2. Content of `.pipeline/conduct-session-id` (sync read; file may not exist)
- *   3. Freshly generated UUID (guarantees non-empty; two calls produce distinct ids)
+ *   3. Freshly generated and persisted UUID (reused after process restart)
  *
  * This function is synchronous and NEVER throws — missing session-id file results
  * in a generated id.
@@ -49,7 +49,14 @@ function resolveRunId(pipelineDir: string): string {
     const trimmed = content.trim();
     if (trimmed.length > 0) return trimmed;
   } catch {
-    // File absent or unreadable — fall through to generated id.
+    // File absent or unreadable — create the feature-run identity below.
   }
-  return uuidv4();
+  const runId = uuidv4();
+  try {
+    mkdirSync(pipelineDir, { recursive: true });
+    writeFileSync(join(pipelineDir, 'conduct-session-id'), runId, 'utf-8');
+  } catch {
+    // Telemetry setup must remain best-effort; the in-process ID is still valid.
+  }
+  return runId;
 }

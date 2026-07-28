@@ -803,6 +803,11 @@ describe('ST-1071-5 — diagnostics and telemetry survive universal cold start',
     const dir = await mkdtemp(join(tmpdir(), 'cold-start-runid-'));
     const pipelineDir = join(dir, '.pipeline');
     await mkdir(pipelineDir, { recursive: true });
+    await writeFile(
+      join(pipelineDir, 'conduct-session-id'),
+      'feature-run-identity',
+      'utf-8',
+    );
     try {
       const provider = scriptedProvider(() => ok('attempt completed'));
       (
