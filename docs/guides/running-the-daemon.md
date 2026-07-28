@@ -369,6 +369,17 @@ The sweep never dispatches directly; the cleared feature is re-dispatched on the
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
 
+### Kickback-cap halt
+
+The kickback budget is durable for each gate: it survives daemon re-dispatch while the feature's
+tree hash and resolved-task count are unchanged. After the cap is exhausted, the daemon writes a
+`needs-human` HALT that names the gate, lap count, and most recent gate reason; the re-kick sweep
+does not clear that class of halt.
+
+Read the marker and fix the reported gate failure before resuming. Use the recovery procedure in
+[stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md#clear-a-halt-and-let-the-feature-resume);
+do not clear the marker merely to retry the same unchanged loop.
+
 ## Troubleshooting
 
 **`status` shows `⚠ session-up/process-dead`.** The tmux session outlived the daemon process. Run

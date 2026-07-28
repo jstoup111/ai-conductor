@@ -866,9 +866,12 @@ Contract (`config.ts:911-935`): absent or `null` yields `{ enabled: true }`; a b
 anything malformed — non-object, unknown inner key, or non-boolean `enabled` — is replaced with
 `{ enabled: true }` with **no warning**. The resolved block is written back.
 
-Consumed at `src/conductor/src/engine/conductor.ts:2363` (`?? true`). Setting `enabled: false` reverts to
-re-kicking until the cap; the `planRemediation` guard is not gated by this flag
-(`src/conductor/src/types/config.ts:302-308`).
+Consumed at `src/conductor/src/engine/conductor.ts:2363` (`?? true`). When enabled, the no-op
+escalation guard compares the pre- and post-build tree hashes (and resolved-task counts) for the
+kickback; an empty commit therefore does not count as progress. Setting `enabled: false` disables
+that tree-hash witness and reverts to re-kicking until the cap. It does not disable the durable
+per-gate cap, which still bounds unchanged cross-dispatch loops; the `planRemediation` guard is
+also not gated by this flag (`src/conductor/src/types/config.ts:302-308`).
 
 ## daemon_verbose
 
