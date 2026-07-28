@@ -1206,6 +1206,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
   // ADR-1 naming: `daemonOwner`, never a bare `owner`.
   const ownerGh: GhRunner = makeProductionGh();
+  const tracker = createGithubTrackerClient(ownerGh);
   const ownerGit = makeGitRunner(projectRoot);
 
   // Task 13: Construct ONE priority resolver per daemon run (process-local state,
@@ -1523,7 +1524,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         }
         const reconciliation = await reconcileParkedFeatures({
           projectRoot,
-          getIssueState: createGithubTrackerClient(ownerGh).getIssueState,
+          getIssueState: tracker.getIssueState,
           // Rendering is observational. The daemon sweep below owns cleanup
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
@@ -1626,6 +1627,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           log,
           cache: parkedSweepCache,
           autoCleanup: reconcileParkedAutoCleanup,
+          getIssueState: tracker.getIssueState,
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,
         });

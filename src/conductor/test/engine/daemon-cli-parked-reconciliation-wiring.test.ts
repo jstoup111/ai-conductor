@@ -25,6 +25,13 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(source).toContain("import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';");
   });
 
+  it('passes the existing tracker issue-state lookup to the idle sweep, so only non-ancestor closed parks can be labeled orphan', () => {
+    const sweepBinding = source.match(
+      /reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{([\s\S]*?)\n {6}\},/,
+    );
+    expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState,');
+  });
+
   it('forces dashboard classification to autoCleanup: false, so a configured false toggle cannot delete during render', () => {
     const dashboardCall = source.match(/const reconciliation = await reconcileParkedFeatures\(\{([\s\S]*?)\}\);/);
     expect(dashboardCall?.[1]).toBeDefined();
