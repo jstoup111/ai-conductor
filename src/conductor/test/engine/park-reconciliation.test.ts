@@ -356,4 +356,64 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       await rm(projectRoot, { recursive: true, force: true });
     }
   });
+
+  it('skips an unavailable origin/main with one log line and does not query issue state', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'missing-origin';
+    const runGit = vi.fn<GitRunner>().mockRejectedValue(
+      Object.assign(new Error('origin/main is not a valid object name'), { code: 128 }),
+    );
+    const getIssueState = vi.fn(async () => 'CLOSED');
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit, getIssueState, log });
+
+      expect({ entries: result.entries, issueCalls: getIssueState.mock.calls, logs: log.mock.calls }).toEqual({
+        entries: [{ slug, classification: 'unclassified' }],
+        issueCalls: [],
+        logs: [['[parked-reconciliation] missing-origin ancestry check unavailable; skipped']],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('contains an orphan issue lookup failure and still classifies a merged sibling', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const failingSlug = 'issue-down';
+    const mergedSlug = 'merged-sibling';
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args.includes(`feature/${failingSlug}`)) {
+        throw Object.assign(new Error('not an ancestor'), { code: 1 });
+      }
+      return { stdout: '' };
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, failingSlug);
+      await writeOperatorPark(projectRoot, mergedSlug);
+      const intakeDir = join(projectRoot, '.docs', 'intake');
+      await mkdir(intakeDir, { recursive: true });
+      await writeFile(join(intakeDir, `${failingSlug}.md`), 'Source-Ref: acme/app#42\n');
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit,
+        getIssueState: async () => { throw new Error('gh unavailable'); },
+        log,
+      });
+
+      expect({ entries: result.entries.sort((a, b) => a.slug.localeCompare(b.slug)), logs: log.mock.calls }).toEqual({
+        entries: [
+          { slug: failingSlug, classification: 'unclassified' },
+          { slug: mergedSlug, classification: 'merged' },
+        ],
+        logs: [['[parked-reconciliation] issue-down issue lookup unavailable; skipped']],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
 });

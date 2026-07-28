@@ -79,6 +79,7 @@ export async function reconcileParkedFeatures(
     } catch (error) {
       if ((error as { code?: unknown }).code !== 1) {
         classification = 'unclassified';
+        opts.log?.(`[parked-reconciliation] ${slug} ancestry check unavailable; skipped`);
       } else {
         const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
           .then((content) => content)
@@ -93,6 +94,7 @@ export async function reconcileParkedFeatures(
               : 'normal';
           } catch {
             classification = 'unclassified';
+            opts.log?.(`[parked-reconciliation] ${slug} issue lookup unavailable; skipped`);
           }
         }
       }
