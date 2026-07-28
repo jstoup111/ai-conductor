@@ -753,10 +753,11 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(ran).not.toContain('explore');
       expect(ran).not.toContain('architecture_review');
       // The guard halted immediately after `build` satisfied its gate, so the
-      // earliest unsatisfied gate on resume is the next tail gate — never a
-      // re-dispatch of `build` and never a walk back into DECIDE.
+      // earliest unsatisfied gate under the current ALL_STEPS order is the
+      // next tail gate, `build_review` — never a re-dispatch of `build` or a
+      // walk back into DECIDE.
       expect(ran.length).toBeGreaterThan(0);
-      expect(ran[0]).toBe('manual_test');
+      expect(ran[0]).toBe('build_review');
     });
   });
 });
