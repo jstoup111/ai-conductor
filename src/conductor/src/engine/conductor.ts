@@ -5425,28 +5425,6 @@ export class Conductor {
                 }
                 const kickback = await consumeKickbackBudget('wiring_check', evidenceText);
                 const count = kickback.entry.count;
-                // The durable budget records the failing occurrence that just
-                // happened. Once it reaches the cap, surface that final
-                // kickback for observability but do not open another BUILD lap.
-                if (!kickback.exhausted && count >= MAX_KICKBACKS_PER_GATE) {
-                  await emitTracked({
-                    type: 'kickback',
-                    from: 'wiring_check',
-                    to: 'build',
-                    evidence: evidenceText,
-                    count,
-                  });
-                  const reason =
-                    `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
-                    `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
-                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
-                  const prUrl = await this.surfaceRemediationPr(reason);
-                  await emitTracked({ type: 'loop_halt', reason, prUrl });
-                  process.off('SIGINT', sigintHandler);
-                  process.off('SIGTERM', sigterm);
-                  return;
-                }
                 if (!kickback.exhausted) {
                   await emitTracked({
                     type: 'kickback',
@@ -5478,7 +5456,7 @@ export class Conductor {
                   continue;
                 }
                 const reason =
-                  `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
+                  `wiring_check gap unresolved after ${count} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
