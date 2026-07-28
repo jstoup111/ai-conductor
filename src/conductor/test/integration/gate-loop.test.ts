@@ -720,7 +720,7 @@ describe('integration/gate-loop', () => {
       expect(completed).toBe(true);
     });
 
-    it('shares the per-gate kickback counter between a front-half detection and a later tail re-open', async () => {
+    it('resets the durable per-gate kickback budget when the resolved-task count advances', async () => {
       await seedStoriesAndPlan();
       await seedApprovedAdr();
       await seedAcceptanceSpecsRed();
@@ -775,14 +775,17 @@ describe('integration/gate-loop', () => {
 
       expect(kicks).toEqual([
         { from: 'conflict_check', to: 'architecture_review', count: 1 },
-        { from: 'build', to: 'architecture_review', count: 2 }, // shared counter, not a fresh 1
+        // The intervening build resolves plan tasks, which is genuine
+        // progress under the durable ledger's secondary witness.
+        { from: 'build', to: 'architecture_review', count: 1 },
       ]);
       expect(completed).toBe(true);
     });
 
-    it('HALTs via the tail scan\'s exact sequence when a front-half re-open pushes a shared gate count past the cap', async () => {
+    it('HALTs when repeated front-half re-opens exhaust a durable progress epoch', async () => {
       await seedStoriesAndPlan();
       await seedApprovedAdr();
+      await seedAcceptanceSpecsRed();
       await writeState(statePath, { ...FRONT_TO_CONFLICT });
 
       let conflictRuns = 0;
@@ -841,7 +844,10 @@ describe('integration/gate-loop', () => {
 
       await conductorFromConflictCheck(runner).run();
 
-      expect(kicks.map((k) => k.count)).toEqual([1, 2, 3]);
+      // The build's first re-open follows task resolution and therefore
+      // starts a new budget epoch. Its two later re-opens consume that epoch;
+      // the terminal observation is emitted at the capped count.
+      expect(kicks.map((k) => k.count)).toEqual([1, 1, 2, 2]);
       expect(halted).toBe(true);
       expect(completed).toBe(false);
       expect(haltReason).toContain('architecture_review');
@@ -1103,7 +1109,7 @@ describe('integration/gate-loop', () => {
       // step_failed for manual_test.
       expect(halted).toBe(true);
       expect(completed).toBe(false);
-      expect(haltReason).toMatch(/whitewash|no new commits|no head or resolved-count movement/i);
+      expect(haltReason).toMatch(/whitewash|no new commits|no tree or resolved-count movement/i);
       // The FAIL evidence survives for the human who inspects the HALT.
       await expect(
         access(join(dir, '.pipeline/manual-test-fail-evidence.json')),
@@ -1812,19 +1818,8 @@ describe('integration/gate-loop', () => {
     });
 
     it('a simulated conductor restart mid-cycle does not unbound the loop (Task 17)', async () => {
-      // kickbackCounts (line ~998) and stuckGate are local Maps created fresh
-      // inside Conductor#run — there is no persistence layer for them. A real
-      // process restart (new Conductor instance from the same on-disk state)
-      // therefore starts both counters back at zero. This test pins that
-      // behavior: it drives one Conductor instance ("session A") to its
-      // MAX_KICKBACKS_PER_GATE HALT, then simulates an operator restart by
-      // clearing the HALT marker and constructing a brand-new Conductor
-      // ("session B") against the same state/dir with a runner that keeps
-      // failing build_review forever. Because the backstop is re-armed per
-      // session (not cumulative across restarts), session B independently
-      // HALTs again after exactly MAX_KICKBACKS_PER_GATE more kickbacks — the
-      // combined run across both sessions never exceeds a small, bounded
-      // number of dispatches, i.e. no unbounded loop survives a restart.
+      // The durable ledger survives a new Conductor instance. Clearing only
+      // the HALT marker must not grant a second kickback budget.
       await writeState(statePath, { ...FRONT_DONE });
       let buildRuns = 0;
       const alwaysFailReviewRunner: StepRunner = {
@@ -1876,10 +1871,8 @@ describe('integration/gate-loop', () => {
       expect(haltedA).toBe(true);
       await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
 
-      // Simulate the restart: clear the HALT marker (an operator re-queuing
-      // the feature would do this) and stand up a *new* Conductor instance —
-      // a fresh process would allocate fresh kickbackCounts/stuckGate Maps,
-      // which this new instance mirrors exactly.
+      // Simulate an unsafe operator retry by clearing only HALT and standing
+      // up a new Conductor instance against the same feature directory.
       await rm(join(dir, '.pipeline/HALT'), { force: true });
 
       const kicksB: Array<{ from: string; to: string }> = [];
@@ -1905,11 +1898,9 @@ describe('integration/gate-loop', () => {
       });
       await conductorB.run();
 
-      // Session B's counters started over at zero (no persistence survived
-      // the restart) yet still HALT after its own MAX_KICKBACKS_PER_GATE cap
-      // — proving the backstop, not accumulated history, is what terminates
-      // the loop, so no restart can produce an unbounded kickback loop.
-      expect(kicksB.filter((k) => k.from === 'build_review')).toHaveLength(2);
+      // Session B sees the exhausted durable budget and halts before another
+      // build_review→build kickback can be emitted.
+      expect(kicksB.filter((k) => k.from === 'build_review')).toHaveLength(0);
       expect(haltedB).toBe(true);
       await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
     });

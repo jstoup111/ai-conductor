@@ -82,6 +82,11 @@ async function commitPlainWork(dir: string, seq: number): Promise<void> {
   await execa('git', ['commit', '-m', `chore: unattributed work ${seq}`], { cwd: dir });
 }
 
+/** Advance HEAD without changing its tree, the no-op-commit livelock shape. */
+async function commitEmptyWork(dir: string, seq: number): Promise<void> {
+  await execa('git', ['commit', '--allow-empty', '-m', `chore: empty work ${seq}`], { cwd: dir });
+}
+
 // Fast-forwards every pre-build step's completion check by seeding the
 // artifacts each already requires — ported verbatim from
 // test/engine/conductor.test.ts's stall-breaker fixture (`
@@ -790,9 +795,9 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
       run: vi.fn().mockImplementation(async (step: StepName) => {
         if (step === 'build') {
           seq++;
-          // No-op-commit gaming shape: a trivial, content-varying commit
-          // every attempt — real HEAD movement, never a resolved task.
-          await commitPlainWork(dir, seq);
+          // No-op-commit gaming shape: HEAD moves but the tree does not, and
+          // no plan task is ever resolved.
+          await commitEmptyWork(dir, seq);
         } else if (step === 'build_review') {
           const { stdout: headSha } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
           await writeFile(
@@ -828,6 +833,9 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
       daemon: true,
       verifyArtifacts: true,
       maxRetries: 2,
+      // Isolate the durable D1 budget: otherwise D2 correctly catches this
+      // no-tree-movement cycle on its first repeat before the cap is spent.
+      config: { kickback_escalation: { enabled: false } },
     });
 
     await conductor.run();

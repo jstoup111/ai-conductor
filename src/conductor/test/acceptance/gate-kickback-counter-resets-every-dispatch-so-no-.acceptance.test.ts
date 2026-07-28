@@ -96,6 +96,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { readHaltClass } from '../../src/engine/halt-marker.js';
+import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 
@@ -296,7 +297,7 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
         kickback_escalation: { enabled: opts.escalationEnabled ?? true },
       },
       git: fakeGit,
-      shipmentEvidence: async (input) => ({
+      shipmentEvidence: async (input: ShipmentEvidenceInput) => ({
         kind: 'valid',
         slug: input.slug,
         pr: input.implementationPr,
@@ -372,14 +373,6 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
       await restageForRedispatch();
       kicks = [];
       halts = [];
-      events.removeAllListeners('kickback');
-      events.removeAllListeners('loop_halt');
-      events.on('kickback', (e) => {
-        if (e.type === 'kickback') kicks.push({ from: e.from, to: e.to });
-      });
-      events.on('loop_halt', (e) => {
-        if (e.type === 'loop_halt') halts.push(e.reason);
-      });
 
       const alwaysGapping: StepRunner = {
         run: async (step) => {
@@ -436,9 +429,15 @@ describe('acceptance: cross-dispatch kickback livelock bound (#984)', () => {
 
   it(
     'Story 1 negative: a corrupt ledger is treated as absent — the dispatch survives it, ' +
-      'warns, and proceeds on a fresh budget',
+    'warns, and proceeds on a fresh budget',
     async () => {
-      await writeState(statePath, { ...frontDone(), track: 'technical' });
+      await writeState(statePath, {
+        ...frontDone(),
+        track: 'technical',
+        // An unset value means a fresh session and deliberately clears the
+        // ledger before its tolerant reader can observe corruption.
+        run_started_at: 1,
+      });
       await writeFile(join(dir, KICKBACK_LEDGER), '{ not json at all');
       const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

@@ -5252,7 +5252,10 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                const evidence = failureDetails.join('\n');
+                const evidence =
+                  failureDetails.length > 0
+                    ? failureDetails.join('\n')
+                    : 'grader returned FAIL without reasons';
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
                 if (!kickback.exhausted) {
