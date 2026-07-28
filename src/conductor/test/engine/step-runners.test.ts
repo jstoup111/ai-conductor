@@ -1811,7 +1811,28 @@ describe('DefaultStepRunner', () => {
       await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(true);
     });
 
-    it('reads existing session-created marker on init', async () => {
+    it('cold-starts a legacy scalar retry with a fresh session id', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      await runner.run('worktree', emptyState);
+      await runner.run('worktree', emptyState);
+
+      const attempts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([options]) => options as InvokeOptions,
+      );
+      expect({
+        resumes: attempts.map(({ resume }) => resume),
+        sessionIdChanged: attempts[0].sessionId !== attempts[1].sessionId,
+      }).toEqual({
+        resumes: [false, false],
+        sessionIdChanged: true,
+      });
+    });
+
+    it('does not resume from an inherited session-created marker', async () => {
       // Pre-create the marker file
       await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
 
@@ -1820,11 +1841,10 @@ describe('DefaultStepRunner', () => {
         pipelineDir: pipeDir,
       });
 
-      // First run should use resume=true because marker exists
       await runner.run('explore', emptyState);
 
       const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-      expect(opts.resume).toBe(true);
+      expect(opts.resume).toBe(false);
     });
 
     it('resetSession() overrides an inherited stale marker so the next step CREATES (no --resume)', async () => {
