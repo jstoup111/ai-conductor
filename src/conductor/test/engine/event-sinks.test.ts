@@ -53,22 +53,13 @@ const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'halt_cleared',
 ] satisfies Array<ConductorEvent['type']>;
 
-const PRE_REFACTOR_RENDERED_EVENT_TYPES = [
+const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'step_started',
   'step_completed',
   'step_failed',
   'step_retry',
-  'checkpoint_reached',
-  'recovery_needed',
-  'dashboard_refresh',
-  'tier_skip',
-  'config_skip',
-  'gate_blocked',
   'rate_limit',
   'session_reset',
-  'feature_complete',
-  'auto_heal',
-  'mode_skip',
   'build_progress',
   'unattributed_progress',
   'build_no_progress',
@@ -86,6 +77,7 @@ const PRE_REFACTOR_RENDERED_EVENT_TYPES = [
   'build_review_base',
   'build_review_stale_mirage_regrade',
   'auto_park_contradiction',
+  'verdict_freshness',
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
@@ -129,10 +121,7 @@ describe('event sink subscriptions', () => {
     ]);
   });
 
-  it('derives the daemon-rendered set without changing prior routing', () => {
-    expect(renderedEventTypes()).toEqual([
-      ...PRE_REFACTOR_RENDERED_EVENT_TYPES,
-      'verdict_freshness',
-    ]);
+  it('derives the daemon-rendered set from the switch-handled event types', () => {
+    expect(renderedEventTypes()).toEqual(DAEMON_SWITCH_HANDLED_EVENT_TYPES);
   });
 });

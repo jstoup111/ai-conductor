@@ -594,6 +594,21 @@ describe('Stories 1 & 2: the daemon log distinguishes the two staleness classes'
     return out;
   }
 
+  it('renders a rewritten verdict as a current non-failure line naming the step and artifact', () => {
+    const out = lines(
+      verdictFreshnessEvent('rewritten', {
+        step: 'prd_audit',
+        artifact: '/repo/.pipeline/prd-audit.md',
+      }),
+    );
+
+    expect(out).toEqual([
+      expect.stringMatching(
+        /^(?!.*✗)(?!.*preserv)(?!.*invalidat)(?=.*prd_audit)(?=.*prd-audit\.md)(?=.*(?:rewritten|fresh|current)).+$/i,
+      ),
+    ]);
+  });
+
   it('renders a preserved verdict as a non-failure line naming the step and artifact', () => {
     const out = lines(
       verdictFreshnessEvent('preserved_surface_miss', {
@@ -627,6 +642,7 @@ describe('Stories 1 & 2: the daemon log distinguishes the two staleness classes'
 
     expect(invalidated).toHaveLength(1);
     expect(invalidated[0]).toContain('build_review');
+    expect(invalidated[0]).toContain(basename('/repo/.pipeline/build-review.json'));
     expect(invalidated[0].toLowerCase()).toContain('invalidated');
     // The whole point of the feature: an operator can tell them apart.
     expect(invalidated[0]).not.toEqual(preserved[0]);
@@ -647,17 +663,19 @@ describe('Stories 1 & 2: the daemon log distinguishes the two staleness classes'
    * still be unmet with every other spec in this file green.
    *
    * Asserted at the source level because the list is a function-local const
-   * with no runtime seam. Once the plan's `EVENT_SINKS` registry lands, the
-   * honest implementation is to derive this subscription from
-   * `renderedEventTypes()`; either spelling satisfies this spec.
+   * with no runtime seam. The `EVENT_SINKS` registry is the subscription
+   * authority, so `beginFeatureRun` must derive this list from
+   * `renderedEventTypes()`.
    */
   it('the daemon subscribes verdict_freshness for per-feature rendering', () => {
     const here = dirname(fileURLToPath(import.meta.url));
     const source = readFileSync(join(here, '../../src/daemon-cli.ts'), 'utf8');
+    const beginFeatureRunStart = source.indexOf('const beginFeatureRun =');
+    const beginFeatureRunEnd = source.indexOf('\n  // Resolve the active memory provider', beginFeatureRunStart);
+    const beginFeatureRunSource = source.slice(beginFeatureRunStart, beginFeatureRunEnd);
 
-    const subscribesByLiteral = /renderableEvents[\s\S]{0,1200}?verdict_freshness/.test(source);
-    const subscribesByRegistry = /renderableEvents[^\n]*=[^\n]*renderedEventTypes\(\)/.test(source);
-
-    expect(subscribesByLiteral || subscribesByRegistry).toBe(true);
+    expect(beginFeatureRunSource).toMatch(
+      /renderableEvents(?:\s*:\s*ConductorEvent\['type'\]\[\])?\s*=\s*renderedEventTypes\(\)/,
+    );
   });
 });

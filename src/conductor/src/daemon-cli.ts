@@ -1,6 +1,6 @@
 import chalk from 'chalk';
 import { v4 as uuidv4 } from 'uuid';
-import { join, dirname, isAbsolute } from 'node:path';
+import { basename, join, dirname, isAbsolute } from 'node:path';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
@@ -41,6 +41,7 @@ import { Conductor } from './engine/conductor.js';
 import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
+import { renderedEventTypes } from './engine/event-sinks.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
 import type { HarnessConfig } from './types/config.js';
@@ -853,16 +854,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const featureEvents = persistence.events;
     const featureLog = featureLogFor(item.slug);
     const renderEvent = (event: ConductorEvent) => renderDaemonEvent(event, featureLog);
-    const renderableEvents: ConductorEvent['type'][] = [
-      'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
-      'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
-      'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
-      'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall',
-      'provider_attempt', 'feature_usage_total', 'provider_fallback', 'session_policy',
-      'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
-      'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
-      'auto_park_contradiction',
-    ];
+    const renderableEvents = renderedEventTypes();
     for (const type of renderableEvents) featureEvents.on(type, renderEvent);
     return {
       ...persistence,
@@ -2066,6 +2058,23 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
       break;
+    case 'verdict_freshness': {
+      const artifact = basename(event.artifact);
+      if (event.outcome === 'stale_invalidated') {
+        log(
+          `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} verdict ${artifact} invalidated — stale verdict rejected`)}`,
+        );
+      } else if (event.outcome === 'preserved_surface_miss') {
+        log(
+          `${dot} ${chalk.dim(`${event.step} verdict ${artifact} preserved — surface miss`)}`,
+        );
+      } else {
+        log(
+          `${dot} ${chalk.dim(`${event.step} verdict ${artifact} rewritten — current`)}`,
+        );
+      }
+      break;
+    }
     case 'build_review_base': {
       // Task 4: dim one-liner summarizing base-freshness evidence for this
       // grading — routine telemetry, not a warning, so it stays dim
