@@ -1260,6 +1260,19 @@ describe('CodexProvider', () => {
 });
 
 describe('parseCodexJsonl', () => {
+  it('parses the captured Codex exec --json usage values', async () => {
+    const fixture = await readFile(
+      join(process.cwd(), 'test', 'fixtures', 'codex-exec-json-turn-completed.jsonl'),
+      'utf8',
+    );
+
+    expect(parseCodexJsonl(fixture).tokenUsage).toEqual({
+      input: 18057,
+      cacheRead: 0,
+      output: 5,
+    });
+  });
+
   it('uses the final agent message instead of returning raw event JSON', () => {
     expect(parseCodexJsonl(jsonlMessage('Final answer.')).output).toBe('Final answer.');
   });
