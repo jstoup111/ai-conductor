@@ -58,6 +58,31 @@ describe('ClaudeProvider', () => {
       expect(featureLog).toHaveBeenCalledWith('subprocess stderr diagnostic');
     });
 
+    it('logs a readable summary instead of the raw --output-format json envelope', async () => {
+      const featureLog = vi.fn();
+      mockExeca.mockResolvedValue({
+        stdout: JSON.stringify({
+          is_error: false,
+          duration_ms: 486_825,
+          num_turns: 54,
+          session_id: '82306471-0000-0000-0000-000000000000',
+          total_cost_usd: 4.956137999999998,
+          usage: { input_tokens: 12_345, output_tokens: 4_100 },
+          result: 'RED acceptance specs written, executed, and committed.',
+        }),
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      await provider.invoke({ ...baseOptions, diagnosticLog: featureLog });
+
+      const logged = featureLog.mock.calls.map(([line]) => line as string).join('\n');
+      expect(logged).toContain('claude: done — 54 turns, 8m7s, $4.96');
+      expect(logged).toContain('RED acceptance specs written, executed, and committed.');
+      expect(logged).not.toContain('session_id');
+    });
+
     it('remains independent of Codex-only isolated-home state', async () => {
       const priorHome = process.env.CODEX_HOME;
       process.env.CODEX_HOME = '/missing/codex-home';

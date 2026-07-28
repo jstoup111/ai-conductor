@@ -1,5 +1,6 @@
 import { execa, type Options as ExecaOptions } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
+import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
@@ -473,7 +474,12 @@ export class ClaudeProvider implements LLMProvider {
     });
     if (diagnosticLog) {
       for (const output of [result.stdout, result.stderr]) {
-        if (typeof output === 'string' && output.length > 0) diagnosticLog(output);
+        // `--print --output-format json` stdout is one enormous machine
+        // envelope. Summarize it for the operator-facing daemon log; anything
+        // unrecognized (prose, stderr, crash traces) passes through verbatim.
+        if (typeof output === 'string' && output.length > 0) {
+          diagnosticLog(summarizeProviderDiagnostic('claude', output));
+        }
       }
     }
     return result;
