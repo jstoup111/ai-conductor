@@ -54,6 +54,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   step_completed: 'friction-mapped', // positive evidence (gate_pass) when no verdict already recorded
   step_failed: 'not-audited-by-design', // superseded by step_retry / gate_verdict on the same step
   provider_attempt: 'not-audited-by-design',
+  // Whole-feature cost telemetry: durable in events.jsonl, but it describes no
+  // friction — it is a summation of dispatches already mapped elsewhere.
+  feature_usage_total: 'not-audited-by-design',
   provider_fallback: 'not-audited-by-design',
   step_retry: 'friction-mapped',
   retry_decision: 'not-audited-by-design',
@@ -124,6 +127,15 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     provider: 'claude',
     outcome: 'success',
     invoked: true,
+  },
+  feature_usage_total: {
+    type: 'feature_usage_total',
+    dispatches: 1,
+    meteredDispatches: 1,
+    unmeteredDispatches: 0,
+    costUsd: 1.5,
+    inputTokens: 100,
+    outputTokens: 20,
   },
   provider_fallback: {
     type: 'provider_fallback',

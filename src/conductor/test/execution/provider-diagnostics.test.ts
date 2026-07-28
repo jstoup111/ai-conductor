@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   summarizeProviderDiagnostic,
   formatDiagnosticDuration,
+  formatFeatureUsageTotal,
 } from '../../src/execution/provider-diagnostics.js';
 
 // The daemon tees a provider subprocess's captured stdout/stderr into
@@ -128,5 +129,67 @@ describe('summarizeProviderDiagnostic: unrecognized output passes through verbat
 
   it('returns empty output unchanged', () => {
     expect(summarizeProviderDiagnostic('claude', '')).toBe('');
+  });
+});
+
+// A build's per-step provider lines answer "what did this step cost?". The
+// whole-feature line answers "what did this feature cost?" — the figure an
+// operator would otherwise reconstruct by summing a hundred log lines. It must
+// read as a sibling of the per-step lines, and must never turn "never
+// measured" into "measured as free".
+describe('formatFeatureUsageTotal', () => {
+  it('renders dispatch count, cost, and token split for a fully metered build', () => {
+    expect(
+      formatFeatureUsageTotal({
+        dispatches: 23,
+        meteredDispatches: 23,
+        unmeteredDispatches: 0,
+        costUsd: 12.3449,
+        inputTokens: 1_200_000,
+        outputTokens: 48_000,
+      }),
+    ).toBe('finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok');
+  });
+
+  it('names the unmetered dispatches alongside the metered totals in a mixed build', () => {
+    expect(
+      formatFeatureUsageTotal({
+        dispatches: 10,
+        meteredDispatches: 8,
+        unmeteredDispatches: 2,
+        costUsd: 3.5,
+        inputTokens: 900,
+        outputTokens: 120,
+      }),
+    ).toBe('finish: total usage — 10 dispatches, $3.50, 900→120 tok, 2 unmetered');
+  });
+
+  it('omits cost and tokens entirely when no dispatch was ever metered', () => {
+    // The no-fabricated-zeros rule: a build whose provider reports no usage
+    // must not print `$0.00, 0→0 tok`, which reads as a free build.
+    const line = formatFeatureUsageTotal({
+      dispatches: 6,
+      meteredDispatches: 0,
+      unmeteredDispatches: 6,
+      costUsd: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+    });
+    expect(line).toBe('finish: total usage — 6 dispatches, 6 unmetered');
+    expect(line).not.toContain('$');
+    expect(line).not.toContain('tok');
+  });
+
+  it('singularizes a one-dispatch build', () => {
+    expect(
+      formatFeatureUsageTotal({
+        dispatches: 1,
+        meteredDispatches: 1,
+        unmeteredDispatches: 0,
+        costUsd: 0.004,
+        inputTokens: 12,
+        outputTokens: 3,
+      }),
+    ).toBe('finish: total usage — 1 dispatch, $0.00, 12→3 tok');
   });
 });

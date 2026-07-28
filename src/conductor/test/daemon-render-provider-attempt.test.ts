@@ -89,3 +89,24 @@ describe('renderDaemonEvent: provider_attempt', () => {
     ).toEqual([]);
   });
 });
+
+describe('renderDaemonEvent: feature_usage_total', () => {
+  beforeEach(() => {
+    chalk.level = 0;
+  });
+
+  it('logs the whole-feature totals as a sibling of the per-step provider lines', () => {
+    const [line] = lines({
+      type: 'feature_usage_total',
+      dispatches: 23,
+      meteredDispatches: 21,
+      unmeteredDispatches: 2,
+      costUsd: 12.3449,
+      inputTokens: 1_200_000,
+      outputTokens: 48_000,
+    });
+    expect(line).toBe(
+      '·   finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered',
+    );
+  });
+});

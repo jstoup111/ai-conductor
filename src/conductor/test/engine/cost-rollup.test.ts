@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { computeCostRollup } from '../../src/engine/cost-rollup.js';
+import { computeCostRollup, toFeatureUsageTotals } from '../../src/engine/cost-rollup.js';
+import { formatFeatureUsageTotal } from '../../src/execution/provider-diagnostics.js';
 
 describe('engine/cost-rollup', () => {
   let dir: string;
@@ -313,5 +314,71 @@ describe('engine/cost-rollup', () => {
     expect(rollup.unmetered.count).toBe(2);
     expect(rollup.tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
     expect(rollup.costUsd).toBe(0);
+  });
+
+  // The whole-feature usage line logged when `finish` completes reads the same
+  // event log the shipped record's Cost block does. These pin the projection
+  // from that rollup onto the line, so the two can never disagree about what a
+  // build cost.
+  describe('toFeatureUsageTotals', () => {
+    it('sums a mixed-provider build into the line an operator reads at finish', async () => {
+      await writeEvents([
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build',
+          provider: 'claude',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: { input: 1200, output: 400, costUsd: 2.5 },
+        }),
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'build_review',
+          provider: 'claude',
+          outcome: 'success',
+          invoked: true,
+          tokenUsage: { input: 800, output: 100, costUsd: 1.25 },
+        }),
+        // A provider that reported no usage at all — counted as a dispatch,
+        // but never folded into the money figure.
+        JSON.stringify({
+          type: 'provider_attempt',
+          step: 'plan',
+          provider: 'codex',
+          outcome: 'success',
+          invoked: true,
+        }),
+      ]);
+
+      const totals = toFeatureUsageTotals(await computeCostRollup(dir));
+
+      expect(totals).toEqual({
+        dispatches: 3,
+        meteredDispatches: 2,
+        unmeteredDispatches: 1,
+        costUsd: 3.75,
+        inputTokens: 2000,
+        outputTokens: 500,
+      });
+      expect(formatFeatureUsageTotal(totals)).toBe(
+        'finish: total usage — 3 dispatches, $3.75, 2k→500 tok, 1 unmetered',
+      );
+    });
+
+    it('never reports negative metered dispatches when unreadable records outnumber them', async () => {
+      // A corrupt line increments the unmetered count without contributing a
+      // dispatch, so the naive subtraction would go negative and print a build
+      // as having *fewer than zero* measured dispatches.
+      await writeEvents(['{not valid json', '{also not valid']);
+
+      const totals = toFeatureUsageTotals(await computeCostRollup(dir));
+
+      expect(totals.dispatches).toBe(0);
+      expect(totals.meteredDispatches).toBe(0);
+      expect(totals.unmeteredDispatches).toBe(2);
+      expect(formatFeatureUsageTotal(totals)).toBe(
+        'finish: total usage — 0 dispatches, 2 unmetered',
+      );
+    });
   });
 });

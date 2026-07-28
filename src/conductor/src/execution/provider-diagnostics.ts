@@ -54,10 +54,52 @@ export function formatDiagnosticDuration(ms: number): string {
 }
 
 /** Compact token count: `1.2k`, `486k`, `12`. */
-function formatTokens(count: number): string {
+export function formatTokens(count: number): string {
   if (count < 1000) return `${count}`;
   if (count < 1_000_000) return `${(count / 1000).toFixed(1).replace(/\.0$/, '')}k`;
   return `${(count / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+}
+
+/**
+ * Whole-feature provider usage, summed across every dispatch a feature build
+ * recorded. Mirrors the per-dispatch telemetry an `EnvelopeSummary` carries so
+ * the aggregate line reads as a sibling of the per-step provider lines.
+ */
+export interface FeatureUsageTotals {
+  /** Every provider dispatch attributed to the feature, metered or not. */
+  dispatches: number;
+  /** Dispatches that reported token usage — the denominator of the money figure. */
+  meteredDispatches: number;
+  /** Dispatches that reported no usage (e.g. an unmetered provider, or a lost record). */
+  unmeteredDispatches: number;
+  costUsd: number;
+  inputTokens: number;
+  outputTokens: number;
+}
+
+/**
+ * Compose the whole-feature usage line logged when `finish` completes:
+ *
+ *   finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered
+ *
+ * Cost and token figures are emitted ONLY when at least one dispatch was
+ * actually metered. A build whose provider reports no usage prints its
+ * dispatch count and an explicit unmetered count rather than a fabricated
+ * `$0.00` / `0→0 tok`, which would read as "this build was free" instead of
+ * "this build was never measured".
+ */
+export function formatFeatureUsageTotal(totals: FeatureUsageTotals): string {
+  const parts: string[] = [
+    `${totals.dispatches} dispatch${totals.dispatches === 1 ? '' : 'es'}`,
+  ];
+  if (totals.meteredDispatches > 0) {
+    parts.push(`$${totals.costUsd.toFixed(2)}`);
+    parts.push(
+      `${formatTokens(totals.inputTokens)}→${formatTokens(totals.outputTokens)} tok`,
+    );
+  }
+  if (totals.unmeteredDispatches > 0) parts.push(`${totals.unmeteredDispatches} unmetered`);
+  return `finish: total usage — ${parts.join(', ')}`;
 }
 
 /**

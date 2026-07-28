@@ -41,6 +41,7 @@ export class TerminalSubscriber implements UISubscriber {
       'build_no_progress',
       'build_stall',
       'provider_fallback',
+      'feature_usage_total',
     ];
 
     for (const type of eventTypes) {

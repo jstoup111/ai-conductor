@@ -62,6 +62,25 @@ export type ConductorEvent =
       fallbackReason?: string;
     }
   | {
+      /**
+       * Whole-feature provider usage, emitted once when `finish` completes.
+       *
+       * Summed from the feature's own `.pipeline/events.jsonl` — the only
+       * record that spans every dispatch of a build, since a build is split
+       * across many fresh provider sessions and (under the daemon) many
+       * re-dispatches of the same feature. Carries no new persistence of its
+       * own; it is a read of what `provider_attempt` / `step_completed`
+       * already recorded.
+       */
+      type: 'feature_usage_total';
+      dispatches: number;
+      meteredDispatches: number;
+      unmeteredDispatches: number;
+      costUsd: number;
+      inputTokens: number;
+      outputTokens: number;
+    }
+  | {
       /** A visible transition from an unavailable provider to the next candidate. */
       type: 'provider_fallback';
       step: StepName;
