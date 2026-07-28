@@ -455,7 +455,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 would-be session resume. Both built-in providers declare the capability false, so this is diagnostic
 evidence of a prevented resume rather than a path to a later resumed invocation. It is emitted by the
 same session-capability contract described in
-[Per-step session capability contract](architecture.md#per-step-session-capability-contract).
+[Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).
 
 Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the shipped record's `## Cost`
 block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
