@@ -91,7 +91,7 @@ function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRe
 }
 
 /**
- * Seed task-status.json and plan-ref.md from the plan at build entry.
+ * Seed task-status.json from the plan at build entry.
  *
  * Acceptance criteria:
  * 1. Fresh build → creates one `pending` row per plan task
@@ -104,7 +104,6 @@ function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRe
  * 8. (Retired H8) First seed no longer grandfathers existing terminal rows;
  *    completion is derived solely from evidence stamps (see Task 9)
  * 9. (Task 14) Uses engine-recorded plan path; detects ambiguity when multiple plans exist
- * 10. Recreates the pipeline active-plan pointer when a rebase wipes engine state
  *
  * @param projectRoot - Project root directory
  * @param planPath - Path to the plan file (relative to projectRoot or absolute)
@@ -300,7 +299,6 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       const serialized = JSON.stringify(output, null, 2) + '\n';
       await fsPromises.writeFile(tempFile, serialized);
       await fsPromises.writeFile(statusPath, serialized);
-      await fsPromises.writeFile(join(pipelineDir, 'plan-ref.md'), `${output.plan_ref}\n`);
     } finally {
       await fsPromises.rm(tempDir, { recursive: true, force: true });
     }

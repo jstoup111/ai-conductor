@@ -19,24 +19,6 @@ describe('task-seed', () => {
   });
 
   describe('fresh seed', () => {
-    it('recreates the active pipeline plan pointer alongside pending task rows', async () => {
-      const planPath = join(dir, '.docs/plans/test.md');
-      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
-      await fsPromises.writeFile(
-        planPath,
-        `# Plan
-
-## Task 1: First Task
-Content
-`,
-      );
-
-      await seedTaskStatus(dir, planPath);
-
-      await expect(fsPromises.readFile(join(dir, '.pipeline/plan-ref.md'), 'utf-8'))
-        .resolves.toBe('.docs/plans/test.md\n');
-    });
-
     it('creates one pending row per plan task', async () => {
       const planPath = join(dir, '.docs/plans/test.md');
       await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
