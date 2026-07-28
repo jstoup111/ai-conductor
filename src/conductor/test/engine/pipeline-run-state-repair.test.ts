@@ -53,6 +53,7 @@ const IRREPLACEABLE = [
 
 describe('.pipeline run-state repair', () => {
   let dir: string;
+  let origin: string;
   let planPath: string;
 
   async function git(...args: string[]): Promise<void> {
@@ -78,10 +79,21 @@ describe('.pipeline run-state repair', () => {
     await fsPromises.writeFile(planPath, PLAN);
     await git('add', '-A');
     await git('commit', '-m', 'plan');
+
+    // A real (local, bare) origin, so the branch range the repair scans is
+    // resolved the same way it is in production: merge-base(origin/HEAD, HEAD).
+    // Without an origin there is no such thing as "commits on this branch",
+    // and the repair deliberately restores nothing (asserted below).
+    origin = await fsPromises.mkdtemp(join(tmpdir(), 'pipeline-repair-origin-'));
+    await execa('git', ['init', '--bare', '--initial-branch=main', origin]);
+    await git('remote', 'add', 'origin', origin);
+    await git('push', '-u', 'origin', 'main');
+    await git('checkout', '-b', 'feature/repair');
   });
 
   afterEach(async () => {
     await fsPromises.rm(dir, { recursive: true, force: true });
+    await fsPromises.rm(origin, { recursive: true, force: true });
   });
 
   describe('reconstruction from an empty .pipeline/', () => {
@@ -175,6 +187,54 @@ describe('.pipeline run-state repair', () => {
       } finally {
         await fsPromises.rm(bare, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('trailer scope — restoring a completion is the direction that loses work', () => {
+    it('ignores a Task: trailer that is on the default branch rather than this branch', async () => {
+      // Task ids are per-plan and collide freely across features. This commit
+      // belongs to some OTHER feature that already merged; it happens to carry
+      // `Task: 3`, which is also an id in this plan.
+      await git('checkout', 'main');
+      await commitForTask('3', 'feat(other-feature): unrelated work that also had a task 3');
+      await git('push', 'origin', 'main');
+      await git('checkout', 'feature/repair');
+      await git('rebase', 'origin/main');
+      const sha1 = await commitForTask('1', 'feat: extract the repair primitive');
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(
+        await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'),
+      );
+      const byId = new Map(status.tasks.map((t: Record<string, unknown>) => [t.id, t]));
+
+      // This branch's own task 1 is restored...
+      expect(byId.get('1')).toMatchObject({ status: 'completed', commit: sha1 });
+      // ...but the mainline's `Task: 3` must NOT satisfy this plan's task 3.
+      // Restoring it would make the build skip work that was never done.
+      expect(byId.get('3')).toMatchObject({ status: 'pending' });
+      expect(byId.get('3')).not.toHaveProperty('restored_from');
+    });
+
+    it('restores nothing when no origin ref resolves, rather than widening the scan', async () => {
+      await commitForTask('1', 'feat: one');
+      await commitForTask('2', 'feat: two');
+      // No origin => no provable branch range. The unscoped fallback would
+      // scan the default branch's history too, so the repair must fail CLOSED:
+      // every task stays pending and gets rebuilt.
+      await git('remote', 'remove', 'origin');
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(
+        await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'),
+      );
+      expect(status.tasks).toHaveLength(3);
+      expect(status.tasks.every((t: { status: string }) => t.status === 'pending')).toBe(true);
+      expect(status.tasks.some((t: object) => 'restored_from' in t)).toBe(false);
     });
   });
 

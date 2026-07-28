@@ -1,7 +1,14 @@
 import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { parsePlanTasks, canonicalTaskId, PlanTask, listCommitsWithTrailers } from './autoheal.js';
+import { execa } from 'execa';
+import {
+  parsePlanTasks,
+  canonicalTaskId,
+  PlanTask,
+  listCommitsWithTrailers,
+  resolveOriginRef,
+} from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 import { removeBuildStepMarker } from './attribution-enforcement.js';
 
@@ -103,13 +110,41 @@ function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRe
  * Fail-soft by construction: any git error (non-repo directory, no commits,
  * detached worktree) degrades to an empty map, so a reconstruction in a
  * repo-less fixture still produces plain `pending` rows rather than throwing.
+ *
+ * SCOPE IS LOAD-BEARING, so this resolves the branch range itself instead of
+ * letting `listCommitsWithTrailers` pick one. Called with no anchor, that
+ * helper falls back to `git log -n 100 HEAD` when the origin ref or merge-base
+ * cannot be resolved — a range that includes the DEFAULT BRANCH's history.
+ * Task ids are per-plan and collide freely across features, so an unrelated
+ * feature's `Task: 3` on the mainline would restore THIS plan's task 3 as
+ * completed and the build would silently skip real work. Restoring a
+ * completion is the one direction that can lose work, so this fails CLOSED:
+ * no provable branch range, no restored completions, everything stays pending
+ * and gets rebuilt. Redoing a task is cheap; skipping one is not.
  */
 async function trailerProvenCompletions(projectRoot: string): Promise<Map<string, string>> {
   const proven = new Map<string, string>();
   try {
-    // `listCommitsWithTrailers` returns newest-first (`git log` order), so the
-    // FIRST sha seen for an id is the newest commit carrying it.
-    for (const commit of await listCommitsWithTrailers(projectRoot)) {
+    const originRef = await resolveOriginRef(projectRoot);
+    if (!originRef) return proven;
+
+    const mergeBase = await execa('git', ['merge-base', originRef, 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    const base =
+      mergeBase.exitCode === 0 && typeof mergeBase.stdout === 'string'
+        ? mergeBase.stdout.trim()
+        : '';
+    if (!base) return proven;
+
+    // Passing the merge-base as the anchor keeps `listCommitsWithTrailers` on
+    // its fail-closed path (`getEvidenceRange`), which yields zero commits
+    // rather than widening the range when the anchor is unreachable.
+    //
+    // Returns newest-first (`git log` order), so the FIRST sha seen for an id
+    // is the newest commit carrying it.
+    for (const commit of await listCommitsWithTrailers(projectRoot, base)) {
       for (const value of commit.trailers['Task'] ?? []) {
         const canonical = canonicalTaskId(String(value).trim());
         if (!canonical) continue;
