@@ -852,7 +852,12 @@ describe('integration/gate-loop', () => {
       expect(completed).toBe(false);
       expect(haltReason).toContain('architecture_review');
       expect(haltReason).toContain('3');
-      await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toContain(
+        'architecture drift found',
+      );
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe(
+        'needs-human',
+      );
     });
   });
 

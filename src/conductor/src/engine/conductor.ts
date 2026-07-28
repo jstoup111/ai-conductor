@@ -5124,7 +5124,7 @@ export class Conductor {
                 continue;
               }
               const reason =
-                `test_suite failure unresolved after ${count - 1} build kickback(s) ` +
+                `test_suite failure unresolved after ${count} build kickback(s) ` +
                 `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
               await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
               await writeState(this.stateFilePath, state);
@@ -5333,7 +5333,7 @@ export class Conductor {
                   continue;
                 }
                 const reason =
-                  `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
+                  `build_review FAIL unresolved after ${count} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
@@ -6373,12 +6373,10 @@ export class Conductor {
           count,
         });
         if (kickback.exhausted) {
-          const reason = `kickback ping-pong: ${target} re-opened ${count + 1} times (cap ${MAX_KICKBACKS_PER_GATE})`;
-          await writeFile(
-            join(this.projectRoot, LOOP_HALT_MARKER),
-            reason + '\n',
-            'utf-8',
-          );
+          const reason =
+            `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
+            `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+          await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           await writeState(this.stateFilePath, state).catch(() => {});
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
