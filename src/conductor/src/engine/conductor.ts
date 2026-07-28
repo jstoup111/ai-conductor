@@ -1799,8 +1799,12 @@ export class Conductor {
       // derived from the step definitions (no hardcoded step list). BUILD-phase
       // targets (build, acceptance_specs) keep routing so re-audit-after-gap-
       // close still works. Interactive mode never reaches planRemediation.
-      const targetPhase = steps.find((s) => s.name === target)?.phase;
-      if (this.daemon && targetPhase === 'DECIDE') {
+      const disposition = decideKickbackDisposition({
+        target,
+        steps,
+        daemon: this.daemon,
+      });
+      if (disposition.kind === 'halt') {
         return {
           kind: 'halt',
           detail:
