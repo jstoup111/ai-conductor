@@ -33,6 +33,7 @@ export type ParkClassification = 'merged' | 'orphan' | 'normal' | 'unclassified'
 export interface ParkedSweepEntry {
   slug: string;
   classification: ParkClassification;
+  annotation?: 'orphan' | 'merged-ready';
 }
 
 export interface ParkedSweepResult {
@@ -103,15 +104,24 @@ export async function reconcileParkedFeatures(
       }
     }
 
-    entries.push({ slug, classification });
-    if (classification === 'merged' && opts.autoCleanup) {
+    const autoCleanup = opts.autoCleanup ?? true;
+    entries.push({
+      slug,
+      classification,
+      annotation: classification === 'orphan' ? 'orphan' : classification === 'merged' && !autoCleanup ? 'merged-ready' : undefined,
+    });
+    if (classification === 'merged' && autoCleanup) {
       const outcome = await reconcileMergedPark({ ...opts, slug });
-      if (outcome.refusal === undefined) counts.reconciled++;
+      if (outcome.refusal === undefined) {
+        counts.reconciled++;
+        opts.log?.(`[parked-reconciliation] reconciled ${slug}`);
+      }
       else if (outcome.deferred) counts.deferred++;
     }
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
     else counts.parked++;
+    if (classification === 'orphan') opts.log?.(`[parked-reconciliation] ${slug} orphan`);
     if (opts.cache && opts.cache.get(slug) !== classification) {
       opts.log?.(`[parked-reconciliation] ${slug} ${classification}`);
     }
