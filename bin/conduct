@@ -2779,7 +2779,8 @@ STEP_COOLDOWN_ORIG=10     # original value for escalation math
 CLAUDE_CALL_COUNT=0       # cumulative calls this session
 
 # Forward conduct-ts-owned subcommands to conduct-ts which handles:
-# - daemon: Supervisor port (management verbs) and daemon run/observe/status paths
+# - daemon: Supervisor port (management verbs), daemon run/observe/status paths,
+#   and the pre-boot `daemon reconcile-parked <slug>` guarded cleanup verb
 # - render-diagrams: Architecture diagram rendering
 # - register: Daemon registration
 # - create: Resource creation
