@@ -126,6 +126,22 @@ cat .worktrees/<slug>/.pipeline/build-stall-question.md
 The build completion gate returns "not done" while that marker exists, so a surviving marker
 also blocks the build gate directly.
 
+#### `ENVIRONMENT_CLAIM_REFUTED`
+
+A step failed with a reason beginning `ENVIRONMENT_CLAIM_REFUTED`. That is not an environment
+problem: the dispatch blamed the environment for blocking `git push` or `gh`, and the engine
+disproved it from the dispatch it actually performed (unsandboxed `claude`, and a write fence whose
+generated script carries no such rule). The failure message quotes the claim and states the facts.
+
+Nothing needs fixing in the sandbox — do **not** go looking for one. The attempt is retried with the
+disproof as its retry hint so the step performs the operation for real. If the same refutation
+repeats until the budget is exhausted, the model is inventing the blocker rather than running the
+command: escalate the step's model tier or take the finish over manually (a manual PR still needs
+its `shipped-record`, see [shipped-record reconciliation](shipped-record-reconciliation.md)).
+
+Claims from `codex` are never refuted — its unattended runs really are sandboxed
+(`sandbox_mode="workspace-write"`), so a blocked operation there may be genuine.
+
 #### Build-progress ceilings
 
 A build that *is* resolving new tasks re-dispatches without consuming the fixed retry budget,

@@ -67,6 +67,20 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- A self-build dispatch can no longer halt on a fabricated environmental blocker. A `finish` step
+  refused to ship completed, tested work by reporting that "the environment's write-fence sandbox
+  blocks both `git push` and `gh pr` operations" — a blocker that cannot exist: the generated fence
+  script denies nothing but writes to the live harness checkout outside the build worktree, and the
+  `claude` provider that ran it is dispatched with `--dangerously-skip-permissions`, no OS sandbox,
+  and full environment inheritance. The claim arrived formatted exactly like the four genuinely
+  verified gate results above it, so nothing distinguished invention from diagnosis, and the branch
+  simply never shipped. The engine now audits every self-host dispatch's output against the dispatch
+  it actually performed: a line carrying an environmental cause, a blocking assertion, and a named
+  remote operation the fence provably cannot deny fails the attempt with the disproof as its retry
+  reason (prefixed `ENVIRONMENT_CLAIM_REFUTED`) instead of being trusted as prose. The
+  deniable-operation set is derived from the fence generator itself, so a real `git push` rule would
+  retire the refutation automatically; claims on the genuinely sandboxed `codex` provider, or on an
+  unrecognized provider, are never refuted ([#1106](https://github.com/jstoup111/ai-conductor/issues/1106)).
 - The parked-feature reconciliation sweep no longer classifies every parked feature `unclassified`.
   It probed a hardcoded `feature/<slug>` ref, but this repository's branches carry `feat/`, `spec/`,
   `fix/`, `chore/` and other prefixes, so that ref usually did not exist; git exited 128 ("Not a
