@@ -69,6 +69,13 @@ export function parseCostBlock(content: string): KpiCostFields | null {
 interface FeatureKpi {
   slug: string;
   cost: KpiCostFields | null;
+  /**
+   * Engine build that shipped this feature. `unknown` for records written
+   * before engine-version stamping — reported explicitly rather than omitted
+   * so an unattributed ship stays visible in the report instead of silently
+   * blending into the stamped ones.
+   */
+  engineVersion: string;
 }
 
 async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
@@ -89,7 +96,8 @@ async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
     }
     const parsed = parseShippedRecord(content);
     const slug = 'slug' in parsed ? parsed.slug : file.replace(/\.md$/, '');
-    features.push({ slug, cost: parseCostBlock(content) });
+    const engineVersion = ('engineVersion' in parsed ? parsed.engineVersion : undefined) ?? 'unknown';
+    features.push({ slug, cost: parseCostBlock(content), engineVersion });
   }
 
   return features;
@@ -118,14 +126,17 @@ export async function renderKpi(root: string): Promise<string> {
 
   for (const feature of features) {
     if (!feature.cost) {
-      lines.push(`- ${feature.slug}: no Cost data available (skipped)`);
+      lines.push(
+        `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)`,
+      );
       continue;
     }
     const tokens = feature.cost.input + feature.cost.output;
     const partial = feature.cost.unmeteredCount > 0;
     const marker = partial ? ' [PARTIAL — unmetered dispatches present]' : '';
     lines.push(
-      `- ${feature.slug}: input=${feature.cost.input} output=${feature.cost.output} ` +
+      `- ${feature.slug}: engine=${feature.engineVersion} ` +
+        `input=${feature.cost.input} output=${feature.cost.output} ` +
         `tokens=${tokens} cost_usd=${feature.cost.costUsd}${marker}`,
     );
     if (partial) {

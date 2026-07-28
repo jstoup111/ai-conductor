@@ -23,7 +23,7 @@ import { unlinkSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import { versionIdFromEngineDir } from './engine-store.js';
+import { versionIdFromEngineDir } from './engine-version-id.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Internal constants — ONLY place that encodes the pidfile path.
