@@ -1,132 +1,184 @@
-# Architecture Review: Cold-Start Within-Step Retries (#1071)
+# Architecture Review: Claude Declares No Resume (#1071)
 
 **Date:** 2026-07-27
 **Tier:** M (lightweight review)
-**Verdict:** APPROVED with three mandatory conditions
+**Verdict:** APPROVED with four mandatory conditions
 **ADR:** `adr-2026-07-27-cold-start-within-step-retries` (APPROVED)
+**Depends on:** spec PR #1069 / `adr-2026-07-27-codex-never-resumes-a-harness-minted-session`
 
 ## What was reviewed
 
-The proposal to stop resuming a prior attempt's provider session on within-step
-retries, against the current implementation in `src/conductor` and against the
-contract asserted by `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope`
-§2, `HARNESS.md:237-241`, and two accepted stories.
+The proposal to complete the operator's end state — a fresh session for both Claude and Codex on
+every iteration — by flipping Claude's `supportsSessionResume` declaration to `false` and
+closing the gaps #1069 leaves open, reviewed against #1069's authored spec and against the
+current implementation in `src/conductor`.
+
+**Revision note.** An earlier draft of this review was authored without knowledge of #1069,
+which was opened roughly fifteen minutes before that session began. It concluded that #903 had
+landed nothing, that Codex resume worked and was exercised, and that a `supportsSessionResume`
+capability should be rejected. All three were wrong. This review supersedes it; F1 and F2 record
+the corrections rather than hiding them, because the same mistake — specing against `main`
+without checking open spec PRs — is cheap to repeat.
 
 ## Findings
 
-### F1 — The issue understates the blast radius: there are three resume authorities, not one (blocking, resolved by scope expansion)
+### F1 — Codex resume never worked; the providers were not "identically wrong" (blocking, corrected)
 
-The issue names `ProviderSessionScope.prepare()`. Two further paths compute resume
-independently and would keep resuming after a fix confined to `provider-session.ts`:
+The superseded draft claimed Codex resume was "fully implemented and exercised by passing
+tests", concluding both providers resumed and were identically wrong. #1069 establishes
+otherwise, verified in #1042 against `codex exec --help` / `codex exec resume --help`:
 
-- `engine/group-core.ts:464-469` — `const resume = hasRun`, used for concurrent-group
-  branch members when no `providerSessions` scope is supplied.
-- `engine/step-runners.ts:529-530` — `resume = this.sessionStarted`, the legacy scalar
-  path backed by `.pipeline/session-created` and `execution/session.ts:83-90`.
+- The harness mints a `uuidv4` (`provider-session.ts:34`); Codex rollout ids are `uuidv7` and
+  are minted **by Codex**.
+- `codex exec` exposes no flag to pre-register a caller-supplied id.
+- Therefore `codex exec resume «harness-uuid»` (`codex-provider.ts:496-498`) can never resolve.
 
-All three flip on the same trigger — *this step has dispatched at least once*. A
-single-authority fix produces a partial, hard-to-observe result. **Condition: each
-authority carries its own story and its own test.**
+Every Codex retry spends a real provider invocation discovering something knowable before
+dispatch, then has the failure absorbed by `CODEX_SESSION_EXPIRED_RE`. The passing tests were
+fake-provider tests that never modeled the real failure — which is exactly why #1069's plan adds
+a Codex fake that mints its own uuidv7-shaped thread id and **fails** any `resume: true`
+invocation.
 
-### F2 — The issue's premise about #903 is false (blocking, corrected)
+Correct characterization: **Claude genuinely resumes; Codex silently burns an invocation per
+retry.** Two different defects, not one shared one.
 
-The issue states Codex "is being made cold-start-only by #903", framing this as a
-Claude-only correction that removes a divergence. #903 has not landed: repo-wide search
-returns zero hits for `supportsSessionResume`, `coldStart`, or `#903`, and Codex resume
-is implemented (`codex-provider.ts:495-516`) and exercised by passing tests
-(`codex-provider.test.ts:160,269,735,759,780,914`). The providers are not diverging —
-they behave identically and both resume.
+### F2 — The capability flag is the right seam, and rejecting it was wrong (blocking, corrected)
 
-This inverts the recommended shape. A Claude-only fix would *create* the divergence the
-issue wants removed. **Condition: the change is provider-neutral**, which is what makes
-the "described identically" outcome reachable without provider-conditional prose.
+The superseded draft rejected `supportsSessionResume` on the grounds that, with neither provider
+resuming, it would have no reachable `true` case. That reasoning evaluated the end state while
+ignoring the path to it. #1069 introduces the capability precisely so Claude can flip **later,
+as its own change with its own evidence** — Claude's resume mechanism is functional, and
+removing it changes token cost and behavior on the default execution path.
 
-### F3 — The filer's leading hypothesis is rejected on merit (advisory)
+The capability is a sequencing instrument. This feature is the sequel it was built for.
+**Condition: this feature consumes #1069's capability rather than re-litigating it**, and must
+not introduce a parallel mechanism.
 
-Hypothesis 1 proposed a `supportsSessionResume` capability with Claude set false. Given
-F2, both providers end up false, so the flag would have no reachable `true` case. A
-two-valued abstraction with one live value adds a branch, a test axis, and a
-provider-conditional sentence in the docs — the exact artifact the issue asks to
-delete. Rejected; reintroduce it only against a real second case.
+The end-state objection is still real but resolves differently — see F5.
 
-### F4 — Resume suppression and identity minting are one change, not two (blocking, accepted into the ADR)
+### F3 — #1069's "single place resume is decided" is an over-claim (blocking, new)
 
-`claude-provider.ts:649-653` selects `--resume «id»` versus `--session-id «id»` on the
-flag alone. Setting `resume: false` while `prepare()` returns the scope-stable id would
-dispatch `--session-id` against an id the CLI already registered. `SESSION_IN_USE_RE`
-(`claude-provider.ts:21-24`) exists for precisely that condition. The filer's finding is
-correct and is now ADR Decision 2.
+#1069's ADR Decision 2 states that `runProviderInvocation` "becomes the single place resume is
+decided", and its architecture review cites `group-core.ts:438-444` as evidence that all
+dispatch paths funnel through the gate. Verified false in the general case:
 
-Confidence that the CLI actually rejects the reused id: 85%, inferred from that regex's
-own comment, not reproduced. The coupling is worth making explicit regardless — if the
-CLI tolerates the reuse, minting per invocation is merely redundant, not harmful.
+- `step-runners.ts:613` returns into `runProviderAwareNormal` **only** when
+  `this.providerRuntimes` is set **and** no `branchSessionId` was supplied. Otherwise dispatch
+  falls through to `provider.invokeInteractive` at `:630`, carrying the `resume` computed
+  locally at `:529-530` (`resume = this.sessionStarted`) — never entering
+  `provider-execution.ts`.
+- `group-core.ts:464-469` computes `const resume = hasRun` and feeds that same scalar path via
+  `branchSessionId` when no `providerSessions` scope is supplied.
 
-### F5 — `runInteractive` is a real regression risk and needs its own story (blocking)
+So after #1069 alone, Codex is cold-start-only **on the provider-aware path**; the scalar paths
+remain ungated. This does not block #1069 — Codex's argv deletion (its Decision 3) makes a Codex
+resume unconstructable regardless of which path requests one, so #1069's own guarantee holds by
+a different mechanism than its prose claims. But it does mean the capability gate cannot be the
+sole instrument for Claude.
 
-`step-runners.ts:1141-1166` sends `Fix issues from the failed «step» step, then exit
-when done.` with an empty system prompt and `resume: true`; the provider-aware branch
-passes no `providerSessions`, so it inherits the step scope's `created`. All of its
-context lives in the conversation it resumes. Its two callers
-(`conductor.ts:4785` stall-breaker, `conductor.ts:5808` recovery menu) are both
-operator-facing and non-auto.
+**Condition: close both scalar paths at their own source**, and mirror #1069's structural
+approach by deleting Claude's `--resume` argv branch so the invariant does not depend on any
+gate being reached.
 
-Cold-starting it without threading context degrades the operator's recovery from "a
-session that knows what failed" to "a stub with no information". `retryHint` already
-exists at `conductor.ts:4076` in the right shape. **Condition: this is a separate story
-with its own acceptance criteria, and it must not be folded into the mechanical change.**
+Confidence 90%, basis: read `step-runners.ts:613`, `:630`, `:529-530` and `group-core.ts:444-495`
+directly. If the scalar paths turn out to be unreachable in production, the corresponding tasks
+become no-ops and their tests still document the invariant — cheap either way.
 
-### F6 — Telemetry correlation is not at risk (advisory, closes an issue concern)
+### F4 — Resume suppression and identity minting remain one change (blocking, carried forward)
 
-The issue flags `.pipeline/conduct-session-id` as load-bearing for `conductor.run.id`
-(`otel/resource.ts:46-55`). Verified: that file is written only from the step runner's
-own `this.sessionId` (`step-runners.ts:659, 926, 1137`), and `ProviderSessionScope`
-never writes it. Per-invocation provider identity does not churn the run id. Recorded as
-ADR Decision 7 so a future implementation cannot quietly start writing provider
-identifiers there.
+`claude-provider.ts:649-653` selects `--resume «id»` versus `--session-id «id»` on the flag
+alone, and #1069's plan explicitly declines to touch id minting (non-goal: *"Do not change
+`ProviderSessionStore` id minting or scoping"*). So the moment Claude declares `false`,
+`prepare()` still returns the scope-stable id and attempt 2 sends `--session-id` against an id
+the CLI already registered — the `SESSION_IN_USE_RE` condition. Every Claude retry would burn a
+`session_reset` cycle.
 
-### F7 — The `sessionExpired` recovery path must not be swept up as dead code (advisory)
+#1069's own deferral note records this finding and assigns it here. **Condition: per-invocation
+minting ships in the same change as the declaration flip.**
 
-With no resume, `STALE_SESSION_RE` / `SESSION_IN_USE_RE` / `CODEX_SESSION_EXPIRED_RE`
-lose their most common trigger and will look dead to a cleanup pass. They are not: an
-id collision, external interference, or a torn-down self-host home still reaches them,
-and `session_reset` recovery is non-budget-consuming, which matters for retry
-accounting. ADR Decision 6.
+### F5 — Retaining the flag with no `true` case is correct; deleting it is churn (advisory)
 
-### F8 — Roughly a dozen tests pin the removed behavior as intended (advisory, feeds the plan)
+Once Claude declares `false`, `supportsSessionResume` has no reachable `true` case — the
+superseded draft's objection, now arriving one feature later than it thought. The resolution is
+not to delete it:
 
-These assert the old contract deliberately and must be **inverted**, not deleted —
-deleting them removes the regression guard:
+- It is #1069's fail-closed contract point: an adapter that omits the declaration is treated as
+  non-resuming, which keeps adapters added later correct by default.
+- With both `buildArgs` resume branches deleted, a `true` declaration could not construct a
+  resume argv anyway. The flag documents the invariant; the adapters enforce it.
+- Removing a seam one feature after it lands, before any third adapter exists to justify the
+  decision either way, is churn.
 
-- `per-step-provider-routing-927.acceptance.test.ts:962-964, 365-368`
-- `retry-as-escalation.acceptance.test.ts:332-342, 353-377`
-- `provider-session.test.ts:178-195` (the expected-table)
-- `provider-execution.test.ts:164` (`'still resumes within a step…'`)
-- `step-runners.test.ts:791/843-844, 1472/1481-1482, 1671-1698, 2333/2351-2353`
-- `session.test.ts:89` (`'returns --resume when session has been created'`)
+Recorded as ADR Decision 4. `ProviderSession.created`, `markCreated`, and `forceFreshSession` do
+become genuinely vestigial, and are evaluated for deletion only after the F7 guards are green.
 
-`provider-execution.test.ts:116` (self-host never resumes) should survive unchanged as a
-guard on the general behavior even if `forceFreshSession` itself is deleted.
+### F6 — `runInteractive` is a real regression risk and needs its own story (blocking, carried forward)
+
+`step-runners.ts:1141-1166` sends `Fix issues from the failed «step» step, then exit when done.`
+with an empty system prompt and `resume: true`; the provider-aware branch passes no
+`providerSessions`, so it inherits the step scope's `created`. All of its context lives in the
+conversation it resumes. Both callers (`conductor.ts:4785` stall-breaker, `:5808` recovery menu)
+are operator-facing and non-auto.
+
+#1069 cites this as #1071's work. `retryHint` already exists at `conductor.ts:4076` in the right
+shape. **Condition: this is a separate story with its own acceptance criteria and must not be
+folded into the mechanical change.**
+
+### F7 — Recovery machinery must not be swept up as dead code (advisory)
+
+With no provider resuming, `STALE_SESSION_RE` / `SESSION_IN_USE_RE` / `CODEX_SESSION_EXPIRED_RE`
+lose their most common trigger and will look dead to a cleanup pass. They are not: an id
+collision, external interference, or a torn-down self-host home still reaches them, and
+`session_reset` recovery is non-budget-consuming, which matters for retry accounting.
+
+#1069's `session_policy` diagnostic also changes character — after this feature it fires for
+every dispatch, so its once-per-step scoping stops being a nicety and becomes the thing standing
+between it and log spam. ADR Decision 6; asserted in ST-1071-5.
+
+### F8 — Telemetry correlation is not at risk (advisory)
+
+`.pipeline/conduct-session-id` is written only from the step runner's own `this.sessionId`
+(`step-runners.ts:659, 926, 1137`); `ProviderSessionScope` never writes it. Per-invocation
+provider identity does not churn `conductor.run.id` (`otel/resource.ts:46-55`). Recorded as ADR
+Decision 7 so a future implementation cannot quietly introduce a dependency.
+
+### F9 — Test files are touched by both features in sequence (advisory, feeds the plan)
+
+#1069 amends the **Codex** half of several suites and instructs "Amend, never delete — each test
+also carries the Claude invariant". This feature amends that surviving Claude half. The overlap
+is intentional and sequential, not a conflict, but it means this feature must be rebased on
+#1069 before its test edits will apply cleanly:
+
+- `per-step-provider-routing-927.acceptance.test.ts:922-973` — #1069 changes the Codex half and
+  explicitly keeps `claude.calls[1].resume === true`; this feature inverts that line.
+- `conductor.test.ts:9082-9245` — #1069 amends the Codex expectation and keeps the Claude one.
+- `retry-as-escalation.acceptance.test.ts:325-377`, `provider-session.test.ts:178-195`,
+  `provider-execution.test.ts:164`, `step-runners.test.ts` (four sites), `session.test.ts:89` —
+  Claude-only, untouched by #1069, inverted here.
+
+`provider-execution.test.ts:116` (self-host never resumes) survives unchanged under both.
 
 ## Alignment with repository design principles
 
-**Deterministic where possible.** The change replaces a resume-by-default that must be
-suppressed correctly at each call site with a cold-start-by-construction that has no
-suppression to forget. This is why the smaller "call `replace()` before each retry"
-alternative was rejected despite its smaller diff — it preserves the trap.
+**Deterministic where possible.** Deleting Claude's `--resume` argv branch makes the invariant
+structural — a future call site cannot reintroduce a resume by forgetting a flag. This is the
+same reasoning #1069 applied to Codex, and it is why F3's gate gap does not sink the design:
+the guarantee does not depend on every path reaching the gate.
 
-**No provider-conditional prose.** Provider-neutral scope removes the divergence rather
-than documenting it.
+**No provider-conditional prose.** After both features the contract is one sentence with no
+qualifier, which is what makes ST-1071-6's documentation work a deletion of exceptions rather
+than an addition of caveats.
 
 ## Conditions on APPROVED
 
-1. All three resume authorities (F1) are addressed, each with its own test.
-2. Session identity is minted per invocation together with resume suppression (F4) —
-   never the flag alone.
-3. `runInteractive` gains explicit failure context before it cold-starts (F5).
+1. Consume #1069's capability; do not introduce a parallel mechanism (F2).
+2. Close both scalar dispatch paths at their source, and delete Claude's `--resume` argv so the
+   invariant is structural rather than gate-dependent (F3).
+3. Per-invocation id minting ships with the declaration flip, never after it (F4).
+4. `runInteractive` gains explicit failure context before it cold-starts (F6).
 
-## Open question for the operator (merge-time)
+## Sequencing requirement
 
-Provider-neutral scope makes **Codex** cold-start too, overlapping #903's stated remit.
-This rests on the operator's recorded preference for fresh sessions on both providers
-rather than a confirmation given for this issue. Merging the spec PR ratifies it.
-Recommendation: proceed provider-neutral, close #903 as resolved by this change.
+**#1069 must merge before this feature builds.** Building against `main` would require inventing
+the capability this feature is meant to consume, guaranteeing a conflict at merge. The plan's
+first task asserts the capability already exists and halts if it does not.
