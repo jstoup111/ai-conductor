@@ -41,7 +41,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the branch, and unparks any slug that is merged into `origin/main` and has a shipped record,
   requesting an ST-916 record-repair PR first when the record is still missing. The new `conduct-ts
   daemon reconcile-parked <slug>` verb runs the same guarded cleanup on demand for one slug
-  ({{IMPLEMENTATION_PR}}).
+  ([implementation PR #1063](https://github.com/jstoup111/ai-conductor/pull/1063)).
 
 ### Changed
 
