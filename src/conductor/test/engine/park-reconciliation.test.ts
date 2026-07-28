@@ -349,7 +349,11 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       const result = await reconcileParkedFeatures({ projectRoot, runGit, getIssueState });
 
       expect({ entries: result.entries, destructive: runGit.mock.calls.filter(([args]) => args[0] === 'worktree' || args[0] === 'branch') }).toEqual({
-        entries: [{ slug, classification }],
+        entries: [{
+          slug,
+          classification,
+          annotation: classification === 'orphan' ? 'orphan' : undefined,
+        }],
         destructive: [],
       });
     } finally {
@@ -377,8 +381,9 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
 
       expect({ firstPass, secondPass, cache: [...cache.entries()] }).toEqual({
         firstPass: [
+          [`[parked-reconciliation] ${slug} not reconcilable until the record lands`],
           [`[parked-reconciliation] ${slug} merged`],
-          ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 skipped=0'],
+          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0'],
         ],
         secondPass: [],
         cache: [],
@@ -402,9 +407,9 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       const result = await reconcileParkedFeatures({ projectRoot, runGit, getIssueState, log });
 
       expect({ entries: result.entries, issueCalls: getIssueState.mock.calls, logs: log.mock.calls }).toEqual({
-        entries: [{ slug, classification: 'unclassified' }],
+        entries: [{ slug, classification: 'unclassified', annotation: undefined }],
         issueCalls: [],
-        logs: [['[parked-reconciliation] missing-origin ancestry check unavailable; skipped']],
+        logs: [['[parked-reconciliation] missing-origin origin/main ancestry check unavailable; skipped']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -432,14 +437,15 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       const result = await reconcileParkedFeatures({
         projectRoot,
         runGit,
+        autoCleanup: false,
         getIssueState: async () => { throw new Error('gh unavailable'); },
         log,
       });
 
       expect({ entries: result.entries.sort((a, b) => a.slug.localeCompare(b.slug)), logs: log.mock.calls }).toEqual({
         entries: [
-          { slug: failingSlug, classification: 'unclassified' },
-          { slug: mergedSlug, classification: 'merged' },
+          { slug: failingSlug, classification: 'unclassified', annotation: undefined },
+          { slug: mergedSlug, classification: 'merged', annotation: 'merged-ready' },
         ],
         logs: [['[parked-reconciliation] issue-down issue lookup unavailable; skipped']],
       });

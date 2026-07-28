@@ -110,8 +110,16 @@ export async function reconcileParkedFeatures(
       classification,
       annotation: classification === 'orphan' ? 'orphan' : classification === 'merged' && !autoCleanup ? 'merged-ready' : undefined,
     });
+    const classificationChanged = !opts.cache || opts.cache.get(slug) !== classification;
     if (classification === 'merged' && autoCleanup) {
-      const outcome = await reconcileMergedPark({ ...opts, slug });
+      // The helper reports its refusal reason for direct/operator invocation.
+      // In a daemon sweep, route that per-slug report through the outcome cache
+      // too, so an unchanged deferred record does not fill every idle-tick log.
+      const outcome = await reconcileMergedPark({
+        ...opts,
+        slug,
+        log: classificationChanged ? opts.log : undefined,
+      });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
         opts.log?.(`[parked-reconciliation] reconciled ${slug}`);
@@ -122,7 +130,7 @@ export async function reconcileParkedFeatures(
     else if (classification === 'unclassified') counts.skipped++;
     else counts.parked++;
     if (classification === 'orphan') opts.log?.(`[parked-reconciliation] ${slug} orphan`);
-    if (opts.cache && opts.cache.get(slug) !== classification) {
+    if (opts.cache && classificationChanged) {
       opts.log?.(`[parked-reconciliation] ${slug} ${classification}`);
     }
     opts.cache?.set(slug, classification);
