@@ -169,6 +169,20 @@ describe('engine/worktree-prepare', () => {
     await readFile(join(dir, 'ran.marker'), 'utf-8'); // ran in the worktree cwd
   });
 
+  it('continues to bin/setup when session-hook provisioning cannot write', async () => {
+    await writeSetup('#!/usr/bin/env bash\ntouch setup-ran-despite-hooks.marker\n');
+    const hooksDir = join(dir, '.pipeline', 'session-hooks');
+    await mkdir(hooksDir, { recursive: true });
+    await chmod(hooksDir, 0o500);
+
+    try {
+      await expect(prepareWorktree(dir)).resolves.toBeUndefined();
+      await access(join(dir, 'setup-ran-despite-hooks.marker'));
+    } finally {
+      await chmod(hooksDir, 0o700);
+    }
+  });
+
   describe('setup output logging (daemon log noise)', () => {
     // A successful bin/setup emitting install/build chatter — including a
     // blank spacer line and publish-engine's machine-readable JSON, the two

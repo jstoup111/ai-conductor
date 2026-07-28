@@ -83,8 +83,7 @@ export async function prepareWorktree(
   await writeNamespaceEnv(worktreePath, namespace, log);
   // Write git hooks before setup so they exist even if setup fails
   await writeGitHooksAndWire(worktreePath, log);
-  await writeSessionHooks(worktreePath, log);
-  await wireSessionHookSettings(worktreePath, log);
+  await ensureSessionHooks(worktreePath, log);
   await excludeEngineArtifacts(worktreePath, log);
   await runProjectSetup(worktreePath, namespace, log, opts?.verbose ?? false);
 }
