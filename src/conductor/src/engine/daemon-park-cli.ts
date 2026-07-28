@@ -15,8 +15,10 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
+import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 
 const execFile = promisify(execFileCb);
+const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
 
 /**
  * Resolve the main repo root (the parent of `.git`) from any cwd — the
@@ -47,7 +49,8 @@ export async function resolveMainRepoRoot(
 
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
-  | { kind: 'unpark'; slug: string };
+  | { kind: 'unpark'; slug: string }
+  | { kind: 'reconcile-parked'; slug?: string; invalidArgs?: true };
 
 /**
  * Detect a `conduct daemon park <slug>` / `conduct daemon unpark <slug>`
@@ -59,6 +62,11 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
   const args = argv.slice(2);
   if (args[0] !== 'daemon') return null;
   const sub = args[1];
+  if (sub === 'reconcile-parked') {
+    return args.length === 3 && args[2]
+      ? { kind: 'reconcile-parked', slug: args[2] }
+      : { kind: 'reconcile-parked', invalidArgs: true };
+  }
   if (sub !== 'park' && sub !== 'unpark') return null;
   const slug = args[2];
   if (!slug) return null;
@@ -87,6 +95,12 @@ export interface DaemonParkDeps {
   cwd?: string;
   /** Output sink (tests capture lines; default: console.log). */
   out?: (line: string) => void;
+  /** Guarded reconciliation seam; tests inject a faithful in-process fake. */
+  reconcileMergedPark?: (opts: {
+    projectRoot: string;
+    slug: string;
+    log: (line: string) => void;
+  }) => Promise<ReconcileMergedParkOutcome>;
 }
 
 /**
@@ -105,6 +119,18 @@ export async function dispatchDaemonPark(
   const out = deps.out ?? ((l: string) => console.log(l));
 
   try {
+    // Reject malformed/manual-usage reconciliation requests before resolving
+    // the repository root. This keeps invalid input entirely pre-Git while
+    // every valid request still flows through the guarded helper below.
+    if (cmd.kind === 'reconcile-parked' && (cmd.invalidArgs || !cmd.slug)) {
+      out('Usage: conduct daemon reconcile-parked <slug>');
+      return 1;
+    }
+    if (cmd.kind === 'reconcile-parked' && !SINGLE_SLUG.test(cmd.slug ?? '')) {
+      out(`Could not reconcile '${cmd.slug}': invalid-slug`);
+      return 1;
+    }
+
     // Resolve the cwd to the main repo root once at dispatch start.
     // This ensures all operations (validation, write, read) happen against
     // the main root even when dispatched from a worktree cwd. If resolution
@@ -112,6 +138,21 @@ export async function dispatchDaemonPark(
     // fall back to the given cwd (fail-toward-parked, pre-#486 behavior).
     const rootResult = await resolveMainRepoRoot(cwd);
     const resolvedRoot = 'error' in rootResult ? cwd : rootResult.root;
+
+    if (cmd.kind === 'reconcile-parked') {
+      const slug = cmd.slug;
+      if (!slug) return 1;
+      const reconcile =
+        deps.reconcileMergedPark ??
+        (await import('./park-reconciliation.js')).reconcileMergedPark;
+      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out });
+      if (outcome.refusal) {
+        out(`Could not reconcile '${slug}': ${outcome.refusal}`);
+        return 1;
+      }
+      out(`Reconciled '${slug}': ${outcome.steps.join(', ')}`);
+      return 0;
+    }
 
     if (cmd.kind === 'park') {
       if (!validateSlug(cmd.slug, resolvedRoot)) {
