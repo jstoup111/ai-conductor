@@ -109,6 +109,7 @@ import {
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
 import { reconcileParkedFeatures, type ParkClassification } from './engine/park-reconciliation.js';
+import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
@@ -1612,12 +1613,21 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       reconcileHaltPrs: async () => {
         await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
       },
-      reconcileParkedFeatures: async () => {
+      // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
+      // hand-off seams are supplied here. `requestRecordRepair` is the ST-916
+      // record-only repair-PR adapter (a merged park with no shipped record
+      // otherwise defers forever); `disposeHaltWatcher` is the daemon's own
+      // per-slug watcher disposer (cleanup otherwise leaves a watcher on a
+      // deleted worktree). Removing either silently reverts this sweep to a
+      // no-op fallback path — the same failure mode as the bindings above.
+      reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
         await reconcileParkedFeatures({
           projectRoot,
           log,
           cache: parkedSweepCache,
           autoCleanup: reconcileParkedAutoCleanup,
+          requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
+          disposeHaltWatcher,
         });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.

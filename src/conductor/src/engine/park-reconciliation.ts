@@ -53,6 +53,11 @@ export interface ReconcileParkedFeaturesOptions {
   runGh?: GhRunner;
   getIssueState?: (ref: string, cwd: string) => Promise<string>;
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
+  /**
+   * Daemon-owned per-slug HALT-watcher disposal, threaded through to the guarded
+   * helper so cleanup never leaves a watcher on a worktree it just deleted.
+   */
+  disposeHaltWatcher?: (slug: string) => void;
   log?: (message: string) => void;
   autoCleanup?: boolean;
   cache?: Map<string, ParkClassification>;
@@ -119,6 +124,11 @@ export async function reconcileParkedFeatures(
         ...opts,
         slug,
         log: classificationChanged ? opts.log : undefined,
+        // Named explicitly (not merely carried by the spread) so the two
+        // production hand-off seams stay visible at the only call site that
+        // supplies them.
+        requestRecordRepair: opts.requestRecordRepair,
+        disposeHaltWatcher: opts.disposeHaltWatcher,
       });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
