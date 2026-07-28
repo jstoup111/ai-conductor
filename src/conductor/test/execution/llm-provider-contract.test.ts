@@ -65,6 +65,30 @@ async function executeCodexCandidate(
 }
 
 describe('InvokeResult provider-unavailable contract', () => {
+  it('exposes the #1069 fail-closed Codex session-resume capability seam', () => {
+    const provider: LLMProvider = new CodexProvider();
+    const buildArgs = (
+      provider as unknown as {
+        buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[];
+      }
+    ).buildArgs.bind(provider);
+    const args = buildArgs({
+      prompt: 'contract check',
+      sessionId: 'codex-session',
+      resume: true,
+    }, true, true);
+
+    expect({
+      supportsSessionResume: provider.supportsSessionResume,
+      command: args.slice(0, 2),
+      canResume: args.includes('resume'),
+    }).toEqual({
+      supportsSessionResume: false,
+      command: ['exec', '--config'],
+      canResume: false,
+    });
+  });
+
   it('never invokes a provider that declares no session-resume support with resume enabled', async () => {
     const calls: InvokeOptions[] = [];
     const provider: LLMProvider = {
