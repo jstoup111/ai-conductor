@@ -5408,6 +5408,30 @@ export class Conductor {
               }
               if (gapMessages.length > 0) {
                 const evidenceText = gapMessages.join('\n');
+                // D2: a wiring_check gap that re-enters right after a prior
+                // kickback-to-build cycle made zero net progress escalates to
+                // HALT on this cycle instead of spending another kickback
+                // toward the cap.
+                const escalation = await checkKickbackToBuildEscalation('wiring_check');
+                if (escalation.halt) {
+                  const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
+                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
+                    () => {},
+                  );
+                  await writeFile(
+                    join(this.projectRoot, LOOP_HALT_MARKER),
+                    reason + '\n',
+                    'utf-8',
+                  ).catch(() => {
+                    /* best-effort marker */
+                  });
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
                 const kickback = await consumeKickbackBudget('wiring_check', evidenceText);
                 const count = kickback.entry.count;
                 // The durable budget records the failing occurrence that just
@@ -5450,6 +5474,7 @@ export class Conductor {
                   if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) {
                     return;
                   }
+                  await captureKickbackToBuildContext('wiring_check');
                   const nav = navigateBack(state, 'build', steps);
                   state = nav.state;
                   // markDownstreamStale only restages `done` steps; wiring_check
