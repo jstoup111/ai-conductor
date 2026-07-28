@@ -72,10 +72,13 @@ daemon-triage is operator-only and must not run inside a dispatched step
 and do nothing else. A step that triages itself will read its own in-flight state
 as evidence of failure and recommend recovery against a run that is working.
 
-> The harness also suppresses this skill mechanically for step sessions
-> (`operator_only: true` in the frontmatter above drives a `skillOverrides` entry
-> in the worktree's session settings). This runtime check is the second layer,
-> for hosts or sessions where that suppression did not apply.
+> The harness also suppresses this skill mechanically for step sessions, but
+> coverage differs by provider: Claude gets a `skillOverrides` entry in the
+> worktree's session settings, and on a self-host build Codex has the skill
+> pruned from its throwaway home entirely. Codex in any other repo has **no**
+> mechanical suppression — it lists a user-space skills directory and honors no
+> per-session override. That cell is exactly why this runtime check exists and
+> why it is not optional: for that combination, it is the only guard.
 
 ### Confirm you have a slug and a repo root
 

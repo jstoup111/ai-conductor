@@ -62,6 +62,14 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `.claude/settings.local.json` at dispatch, merge-preserving any operator-authored overrides
   already there. Integrity check 5d fails on drift in either direction between the frontmatter flag
   and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`, so the suppression list cannot silently rot.
+  Codex needs a different mechanism — it discovers skills by listing a directory and honors no
+  per-session override — so on a self-host build the skill is pruned from the throwaway `CODEX_HOME`
+  skills copy instead, which is stronger than an override: neither provider has an artifact to load.
+  The operator keeps the skill on both providers, since `bin/install` still symlinks it into
+  `~/.claude/skills` and `~/.agents/skills`. Coverage is documented per provider in
+  `docs/reference/skills.md`, including the one cell that is **not** mechanically enforced — Codex in
+  a non-self-host repo, where the isolated-home path is deliberately not taken — which relies on the
+  skill's own `.pipeline/phase-active` refusal until the engine owns the entry point.
 
 ### Changed
 

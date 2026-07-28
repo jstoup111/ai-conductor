@@ -6,6 +6,7 @@ import * as fsp from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { redactSafetyText } from '../safety-diagnostics.js';
+import { OPERATOR_ONLY_SKILLS } from '../worktree-prepare.js';
 
 export type SelfHostProviderId = 'claude' | 'codex';
 
@@ -148,6 +149,19 @@ export async function provisionProviderHome(
       // markdown-only) skills asset keeps discovery in sync with whatever is
       // currently checked out without exposing the worktree path itself.
       await fs.cp(target, join(homeDir, asset));
+
+      // Operator-only skills exist to debug a run from the outside; a
+      // dispatched step that loads one reads its own in-flight state as
+      // evidence of failure. Claude gets this via a `skillOverrides` entry in
+      // the worktree settings, but Codex discovers skills by listing this
+      // directory and honors no such override. Pruning the throwaway COPY
+      // (never the worktree) is therefore both provider-neutral and stronger
+      // than an override: neither provider has an artifact to load at all.
+      if (asset === 'skills') {
+        for (const skill of OPERATOR_ONLY_SKILLS) {
+          await fs.rm(join(homeDir, asset, skill), { recursive: true, force: true });
+        }
+      }
     }
     if (options.provider.id === 'codex') {
       await fs.mkdir(join(homeDir, '.agents'));

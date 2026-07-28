@@ -3,6 +3,7 @@ import { access, lstat, mkdir, mkdtemp, readdir, realpath, rm, writeFile } from 
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { provisionProviderHome } from '../../../src/engine/self-host/provider-home.js';
+import { OPERATOR_ONLY_SKILLS } from '../../../src/engine/worktree-prepare.js';
 
 describe('provider-aware self-host homes', () => {
   it.each([
@@ -114,6 +115,54 @@ describe('provider-aware self-host homes', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  // Operator-only skills must not be loadable from a dispatched step, on EITHER
+  // provider. Claude honors a `skillOverrides` entry; Codex discovers skills by
+  // listing the directory and honors no override — so the enforcement that
+  // covers both is pruning the throwaway copy, leaving no artifact to load.
+  it.each(['claude', 'codex'] as const)(
+    'prunes every operator-only skill from the %s throwaway skills copy, leaving the worktree intact',
+    async (providerId) => {
+      const root = await mkdtemp(join(tmpdir(), 'operator-only-home-'));
+      const worktree = join(root, 'worktree');
+      await mkdir(join(worktree, 'skills', 'HARNESS'), { recursive: true });
+      // A skill that must survive, alongside every operator-only one.
+      await mkdir(join(worktree, 'skills', 'keeper'), { recursive: true });
+      await writeFile(join(worktree, 'skills', 'keeper', 'SKILL.md'), 'keep me\n', 'utf-8');
+      for (const skill of OPERATOR_ONLY_SKILLS) {
+        await mkdir(join(worktree, 'skills', skill), { recursive: true });
+        await writeFile(join(worktree, 'skills', skill, 'SKILL.md'), 'operator only\n', 'utf-8');
+      }
+
+      const home = await provisionProviderHome({
+        provider: { id: providerId },
+        worktreeRoot: worktree,
+        baseDir: root,
+      });
+      try {
+        expect(OPERATOR_ONLY_SKILLS.length).toBeGreaterThan(0);
+        for (const skill of OPERATOR_ONLY_SKILLS) {
+          // Absent from the copy the provider actually reads…
+          await expect(access(join(home.homeDir, 'skills', skill))).rejects.toThrow();
+          // …and still present in the worktree, which is never pruned.
+          await expect(access(join(worktree, 'skills', skill))).resolves.toBeUndefined();
+        }
+        // Codex's view is the same pruned copy, not a second path to the worktree.
+        if (providerId === 'codex') {
+          for (const skill of OPERATOR_ONLY_SKILLS) {
+            await expect(access(join(home.homeDir, '.agents', 'skills', skill))).rejects.toThrow();
+          }
+        }
+        // Pruning is surgical: every other skill survives.
+        await expect(
+          access(join(home.homeDir, 'skills', 'keeper', 'SKILL.md')),
+        ).resolves.toBeUndefined();
+      } finally {
+        await home.teardown();
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it('never lets provider skill-discovery writes land inside the worktree (isolation regression)', async () => {
     // Regression for the leak where $CODEX_HOME/skills symlinked straight to

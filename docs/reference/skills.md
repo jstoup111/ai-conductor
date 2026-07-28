@@ -22,9 +22,27 @@ matches on when deciding to invoke the skill.
 | `enforcement` | yes for `skills/*` | Declared strictness: `advisory`, `gating`, or `structural`. **Advisory only.** The engine's step definition decides real skippability — see [Known limitations](#known-limitations) |
 | `phase` | yes for `skills/*` | `understand`, `decide`, `build`, `ship`, or `all` |
 | `standalone` | no | Whether an operator can run the skill on its own. Absent means non-standalone |
-| `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. The engine suppresses it for dispatched-step sessions via a `skillOverrides` entry in each worktree's `.claude/settings.local.json`. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts` |
+| `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. `bin/install` still symlinks it into both user-space catalogs (`~/.claude/skills`, `~/.agents/skills`), so the operator has it on either provider; the engine suppresses it per dispatch instead. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`. See [operator-only suppression coverage](#operator-only-suppression-coverage) for what each provider actually enforces |
 | `requires` | no | Prerequisite skills or artifact paths |
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
+
+### Operator-only suppression coverage
+
+`operator_only: true` is enforced per dispatch, not at install time — the operator keeps the skill on
+both providers. Coverage is not uniform, and the gap is load-bearing enough to state plainly:
+
+| | Claude | Codex |
+| --- | --- | --- |
+| **Self-host build** | `skillOverrides` in the worktree's `.claude/settings.local.json` | the skill is pruned from the throwaway `CODEX_HOME` skills copy — no artifact to load |
+| **Any other repo** | `skillOverrides`, same as above | **not mechanically suppressed** |
+
+The bottom-right cell is a real gap. Codex discovers skills by listing `~/.agents/skills` and honors
+no per-session override, and the isolated-home path that would let the engine prune that view is
+gated to self-host builds (`isSelfBuild()`, `conductor.ts`) precisely so other repos stay
+byte-for-byte unchanged. In that cell the only guard is the skill's own refusal check on
+`.pipeline/phase-active` — prompt-level, which this repo's design principle is rightly skeptical of.
+Closing it properly means the engine owning the entry point rather than shipping a loadable skill at
+all; that is [#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
 `enforcement`, and `phase`. The three `.agents/skills/` entries are outside that check and declare only
