@@ -93,6 +93,10 @@ describe('acceptance/engine-invoked-task-attribution-494-freezes-curren', () => 
         const code = err && typeof (err as { code?: number }).code === 'number' ? (err as { code: number }).code : 0;
         resolve({ stdout: stdout?.toString() ?? '', stderr: stderr?.toString() ?? '', code });
       });
+      // The hook can exit before the fixture has delivered its stdin payload.
+      // Consume that harmless pipe-close race so it cannot escape Vitest as an
+      // unhandled EPIPE after the command callback has already captured exit.
+      child.stdin?.once('error', () => undefined);
       child.stdin?.end(payload(taskLine));
     });
   }
