@@ -12,6 +12,7 @@ import {
   diffEngineerSignals,
   type EngineerSignalsDiff,
 } from './signals-leak-guard.js';
+import { ensureEngineDist } from './engine-dist-guard.js';
 
 /**
  * REAL engineer signals dir (the operator's actual store) — deliberately NOT
@@ -141,6 +142,19 @@ function installInterruptReap(
 }
 
 export default async function setup() {
+  // Engine-dist guard: 13 test files spawn the real `bin/conduct-ts`, which
+  // exits 1 when `src/conductor/dist` is missing or dangling. `dist` is a
+  // gitignored symlink absent from a fresh clone/worktree, and there is no
+  // `pretest` hook, so it used to appear only partway through a run — failing
+  // every real-binary test scheduled before that point. Satisfy the dependency
+  // once, here, before the first test. No-op on a warm checkout.
+  if (await ensureEngineDist(process.cwd())) {
+    console.error(
+      'engine-dist-guard: built the engine before the run — src/conductor/dist was ' +
+        'missing or dangling, which would have failed every test that spawns bin/conduct-ts'
+    );
+  }
+
   const beforeState = await snapshotPipeline(process.cwd());
 
   // Signals leak guard (#861): snapshot the REAL engineer signals store

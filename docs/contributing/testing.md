@@ -35,6 +35,23 @@ The `AGGREGATE_TEST_SUITE_PASS` sentinel is load-bearing: it is the success toke
 `test_suite` gate reads. Do not replace `npm test` with a raw `vitest run` when producing completion
 evidence.
 
+### The engine-dist guard
+
+Thirteen test files spawn the real `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is
+missing or its symlink dangles. `dist` is gitignored, so it does not exist in a fresh clone or
+`git worktree` after `npm ci`, and there is no `pretest` hook — nothing built it before the tests
+ran. It appeared only partway through a run, whenever some test happened to publish an engine, and
+every real-binary test scheduled before that point failed on exit 1.
+
+`test/global-setup.ts` now calls `ensureEngineDist` (`test/engine-dist-guard.ts`) before the first
+test: it builds the engine when `dist` does not resolve and is a no-op otherwise, so a warm checkout
+pays nothing. When it builds, it prints `engine-dist-guard: built the engine before the run`. You do
+not need to run `npm run build` by hand before `npm test`.
+
+This presents as flakiness — a cold worktree fails a handful of real-binary tests, and every re-run
+afterwards is green with no code change. If you see that pattern, check whether `dist` resolves
+before assuming a race in the code under test.
+
 ## Linters
 
 Three linters run in CI, each scoped to what `tsc` and `bash -n` cannot tell you.

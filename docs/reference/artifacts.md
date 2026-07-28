@@ -397,8 +397,15 @@ slug: <slug>
 spec_hash: <sha256-hex>
 pr: <pr url | local>
 shipped: <YYYY-MM-DD>
+engine_version: <engine-version-id | dev>
 ---
 ```
+
+`engine_version` is the engine build that shipped the feature — the same id `conduct-ts daemon status`
+prints as `version:<id>`, resolved from the running engine's own module path (`dev` for an unpublished
+source checkout). The line is emitted only when a value is supplied, so records written before this
+field existed, backfill proposals, and repair writes stay byte-identical to the four-field form.
+`conduct-ts kpi` reports an unstamped record as `engine=unknown`, keeping unattributed ships visible.
 
 `spec_hash` is SHA-256 over the trimmed plan bytes, a `0x00` separator, and the trimmed stories bytes.
 Only trailing newline runs are trimmed; interior bytes are never modified and CRLF is deliberately not

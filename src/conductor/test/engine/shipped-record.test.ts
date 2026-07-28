@@ -6,6 +6,7 @@ import {
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
+  resolveEngineVersion,
   parseShippedRecord,
   writeShippedRecord,
   listShippedRecords,
@@ -99,6 +100,32 @@ describe('renderShippedRecord', () => {
     );
   });
 
+  it('emits engine_version when the engine version is supplied', () => {
+    const body = renderShippedRecord({
+      slug: 'billing-export',
+      specHash: 'abc123',
+      pr: 'https://github.com/acme/repo/pull/42',
+      shipped: '2026-07-01',
+      engineVersion: '20260727T234833Z-b5b34bb9f015',
+    });
+
+    expect(body).toBe(
+      '---\n' +
+        'slug: billing-export\n' +
+        'spec_hash: abc123\n' +
+        'pr: https://github.com/acme/repo/pull/42\n' +
+        'shipped: 2026-07-01\n' +
+        'engine_version: 20260727T234833Z-b5b34bb9f015\n' +
+        '---\n'
+    );
+  });
+
+  it('omits the engine_version line entirely when no version is supplied', () => {
+    const body = renderShippedRecord({ slug: 'legacy', specHash: 'abc123' });
+
+    expect(body).not.toContain('engine_version');
+  });
+
   it('uses defaults when pr/shipped are missing', () => {
     const body = renderShippedRecord({ slug: 'no-defaults-yet', specHash: 'deadbeef' });
 
@@ -109,7 +136,54 @@ describe('renderShippedRecord', () => {
   });
 });
 
+describe('resolveEngineVersion', () => {
+  it('extracts the published version id from a dist-versions engine dir', () => {
+    expect(
+      resolveEngineVersion(
+        '/home/u/.local/share/ai-conductor/dist-versions/20260727T234833Z-b5b34bb9f015/engine'
+      )
+    ).toBe('20260727T234833Z-b5b34bb9f015');
+  });
+
+  it('reports dev for an unpublished source checkout', () => {
+    expect(resolveEngineVersion('/home/u/code/ai-conductor/src/conductor/src/engine')).toBe('dev');
+  });
+
+  it('reports dev rather than throwing on an empty engine dir', () => {
+    expect(resolveEngineVersion('')).toBe('dev');
+  });
+});
+
 describe('parseShippedRecord', () => {
+  it('round-trips engine_version when present', () => {
+    const rendered = renderShippedRecord({
+      slug: 'billing-export',
+      specHash: 'abc123',
+      pr: 'https://github.com/acme/repo/pull/42',
+      shipped: '2026-07-01',
+      engineVersion: '20260727T234833Z-b5b34bb9f015',
+    });
+
+    const parsed = parseShippedRecord(rendered);
+
+    expect(parsed).toMatchObject({ engineVersion: '20260727T234833Z-b5b34bb9f015' });
+  });
+
+  it('parses a legacy record with no engine_version without malforming it', () => {
+    const legacy =
+      '---\n' +
+      'slug: legacy-feat\n' +
+      'spec_hash: abc123\n' +
+      'pr: https://github.com/acme/repo/pull/1\n' +
+      'shipped: 2026-07-01\n' +
+      '---\n';
+
+    const parsed = parseShippedRecord(legacy);
+
+    expect(parsed).toMatchObject({ slug: 'legacy-feat', specHash: 'abc123' });
+    expect(parsed).not.toHaveProperty('engineVersion', expect.anything());
+  });
+
   it('round-trips a rendered record', () => {
     const rendered = renderShippedRecord({
       slug: 'billing-export',

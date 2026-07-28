@@ -35,6 +35,12 @@ import { createHash, randomBytes } from 'node:crypto';
 import { join, basename, dirname, relative } from 'node:path';
 import { readRegistry, resolveRegistryPath, type ProjectRecord } from './registry.js';
 import { getPidfilePath } from './daemon-lock.js';
+import { isEngineVersionId, versionIdFromEngineDir, type EngineVersionId } from './engine-version-id.js';
+
+// Re-exported so existing importers of the version-id grammar keep working;
+// the definitions live in the leaf module to keep this file out of an import
+// cycle with daemon-lock.ts.
+export { isEngineVersionId, versionIdFromEngineDir, type EngineVersionId };
 
 /**
  * A branded string type for version ids so callers can't accidentally pass a
@@ -42,18 +48,9 @@ import { getPidfilePath } from './daemon-lock.js';
  * `computeVersionId` or read back via `listVersions`/`currentTarget`) is
  * required.
  */
-export type EngineVersionId = string & { readonly __brand: 'EngineVersionId' };
-
 const ENGINE_STORE_ENV_VAR = 'AI_CONDUCTOR_ENGINE_STORE';
 const DIST_VERSIONS_DIR = 'dist-versions';
 const DIST_SYMLINK = 'dist';
-
-/** Format: `<YYYYMMDDTHHMMSSZ>-<12 hex chars of content hash>`. */
-const VERSION_ID_PATTERN = /^\d{8}T\d{6}Z-[0-9a-f]{12}$/;
-
-export function isEngineVersionId(name: string): name is EngineVersionId {
-  return VERSION_ID_PATTERN.test(name);
-}
 
 export interface ResolveEngineStoreRootOpts {
   /** The conductor package root (e.g. `src/conductor`). */
@@ -338,11 +335,7 @@ const NO_DELETIONS: Omit<GcVersionsResult, 'deleted'> & { deleted: EngineVersion
  * `src/engine` run, which references no published version and therefore
  * blocks nothing).
  */
-export function versionIdFromEngineDir(engineDir: string): EngineVersionId | undefined {
-  const segments = engineDir.split(/[\\/]/);
-  const match = segments.find((segment) => isEngineVersionId(segment));
-  return match as EngineVersionId | undefined;
-}
+
 
 /**
  * Read the fleet-wide set of version ids currently referenced by a LIVE

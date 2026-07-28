@@ -10,6 +10,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Shipped records now carry `engine_version` in their frontmatter: the engine build id that shipped
+  the feature — the same value `conduct-ts daemon status` prints as `version:<id>`. It is resolved
+  from the running engine's own module path (a published build records e.g.
+  `20260727T234833Z-b5b34bb9f015`; an unpublished source checkout records `dev`), so
+  `conduct-ts shipped-record` needs no pidfile to consult. Resolution never throws, preserving the
+  command's degrade-never-block contract — a version that cannot be resolved must never cost a
+  feature its record. The line is emitted only when a value is supplied, so legacy records, backfill
+  proposals, and repair writes stay byte-identical to the previous four-field frontmatter, and every
+  existing parser (which ignores unknown keys) is unaffected.
+- `conduct-ts kpi` renders `engine=<id>` on each per-feature row, so ships can be attributed to the
+  daemon build that produced them. A record written before stamping reports `engine=unknown` rather
+  than omitting the field, keeping unattributed ships visible in the report instead of silently
+  blending into the stamped ones.
+
+### Fixed
+
+- The test suite no longer fails a handful of real-binary tests on a cold checkout. Thirteen test
+  files spawn `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is missing or dangling;
+  `dist` is gitignored and there is no `pretest` hook, so nothing built it before the run and it
+  only appeared partway through, when some test happened to publish an engine. Every real-binary
+  test scheduled before that point failed. Observed on a fresh worktree: `dist` was created 86
+  seconds into the run, 10 tests across 2 files failed, and three consecutive re-runs were green
+  with no code change — which reads as flakiness but is an ordering dependency. `test/global-setup.ts`
+  now builds the engine before the first test when `dist` does not resolve, and is a no-op when it
+  does, so a warm checkout pays nothing.
+
 ### Removed
 
 - `conduct-ts`'s `--output` and `--step <step>` CLI flags are gone. Neither did what its `--help`
