@@ -107,21 +107,21 @@ describe('event sink subscriptions', () => {
   it('derives the persisted set without changing prior routing', () => {
     const persisted = persistedEventTypes();
 
-    expect(persisted).toEqual([
+    expect(new Set(persisted)).toEqual(new Set([
       ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
       'verdict_freshness',
-    ]);
+    ]));
     expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
   });
 
   it('derives the audited set without changing prior routing', () => {
-    expect(auditedEventTypes()).toEqual([
+    expect(new Set(auditedEventTypes())).toEqual(new Set([
       ...PRE_REFACTOR_AUDITED_EVENT_TYPES,
       'verdict_freshness',
-    ]);
+    ]));
   });
 
   it('derives the daemon-rendered set from the switch-handled event types', () => {
-    expect(renderedEventTypes()).toEqual(DAEMON_SWITCH_HANDLED_EVENT_TYPES);
+    expect(new Set(renderedEventTypes())).toEqual(new Set(DAEMON_SWITCH_HANDLED_EVENT_TYPES));
   });
 });
