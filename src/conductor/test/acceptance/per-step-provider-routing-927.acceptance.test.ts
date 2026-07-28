@@ -185,9 +185,11 @@ function scriptedProvider(
   script:
     | InvokeResult[]
     | ((options: InvokeOptions, call: number) => InvokeResult),
+  supportsSessionResume = false,
 ) {
   const calls: InvokeOptions[] = [];
   const provider: LLMProvider = {
+    supportsSessionResume,
     invoke: vi.fn(async (options: InvokeOptions) => {
       calls.push(options);
       if (typeof script === 'function') return script(options, calls.length);
@@ -340,7 +342,7 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
           exitCode: 1,
         },
         ok(`${providerKey} retry success`),
-      ]);
+      ], providerKey === 'claude');
       const sessions = new Map<string, ProviderSessionScope>();
       const warnings: string[] = [];
       const sharedInput = {
@@ -365,7 +367,7 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
       expect(scripted.calls[0].resume).toBe(false);
       expect(scripted.calls[1]).toMatchObject({
         sessionId: scripted.calls[0].sessionId,
-        resume: true,
+        resume: providerKey === 'claude',
       });
       expect(first).toMatchObject({
         success: false,
@@ -379,7 +381,11 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
         preferredProvider: providerKey,
         actualProvider: providerKey,
       });
-      expect(warnings).toEqual([]);
+      expect(warnings).toEqual(
+        providerKey === 'codex'
+          ? ['Step build: provider codex does not support session resume; using a fresh session.']
+          : [],
+      );
     },
   );
 
@@ -925,7 +931,7 @@ describe('ST-927-7 — provider-local sessions and accounting', () => {
     const claude = scriptedProvider([
       { success: false, output: 'retry me', exitCode: 1 },
       ok('claude retry', { input: 20, output: 5 }),
-    ]);
+    ], true);
     const codex = scriptedProvider(() =>
       ok('codex next step', { input: 10, output: 3 }),
     );
@@ -962,7 +968,7 @@ describe('ST-927-7 — provider-local sessions and accounting', () => {
     expect(claude.calls[0].resume).toBe(false);
     expect(claude.calls[1].resume).toBe(true);
     expect(claude.calls[1].sessionId).toBe(claude.calls[0].sessionId);
-    expect(codex.calls[0].resume).toBe(false);
+    expect(codex.calls.every(({ resume }) => resume === false)).toBe(true);
     expect(codex.calls[0].sessionId).not.toBe(claude.calls[0].sessionId);
     expect(retry.attempts[0]).toMatchObject({
       provider: 'claude',

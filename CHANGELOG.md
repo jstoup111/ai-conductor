@@ -136,6 +136,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   process CPU ticks and file mtimes.
 ### Changed
 
+- Codex now declares no session-resume capability, so every Codex dispatch is a cold start rather than a
+  `codex exec resume` invocation — including within-step retries, which carry their context via the
+  `RETRY:`-prefixed full step prompt instead — removing the per-retry `no rollout found` round-trip from
+  resuming a harness-minted UUID against a Codex thread id, while Claude's resume behavior is unchanged
+  (ai-conductor#903; partially supersedes `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope`
+  §2; [implementation PR #1089](https://github.com/jstoup111/ai-conductor/pull/1089)).
 - `.daemon/daemon.log` no longer tees a provider subprocess's raw result envelope. A completed
   Claude (`--print --output-format json`) or Codex (`exec --json`) dispatch previously landed as a
   single unreadable line mixing cost/usage telemetry, tool permission-denial records, and the

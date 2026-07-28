@@ -47,6 +47,14 @@ The host agent's output is always a file — a spec, a plan, code and commits, a
 never reports "done" to the engine as a fact the engine acts on. Two hosts exist, `claude` and `codex`,
 selected by the `llm_provider` config key; an ordered array makes it a fallback ladder.
 
+### Per-step session capability contract
+
+Every executed step starts a fresh provider session. A retry may continue that step's session only when its
+provider declares `supportsSessionResume`; the capability is fail-closed for adapters that do not declare it.
+Codex declares no resume capability, so every Codex invocation is a cold start, including within-step retries.
+Those retries retain their task context through the `RETRY:`-prefixed full step prompt rather than a resumed
+conversation. Claude's declared resume capability preserves its existing same-step retry behavior.
+
 ## The two loops
 
 Work moves through two independent loops that meet at exactly one place: the base branch.

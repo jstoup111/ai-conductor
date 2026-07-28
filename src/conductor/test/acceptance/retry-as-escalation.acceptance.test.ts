@@ -240,6 +240,7 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
       };
     };
     const provider = (key: 'claude' | 'codex'): LLMProvider => ({
+      supportsSessionResume: key === 'claude',
       invoke: invoke(key),
       invokeInteractive: invoke(key),
     });
@@ -360,14 +361,14 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
         provider: 'codex',
         model: 'gpt-5.6-luna',
         effort: 'medium',
-        resume: true,
+        resume: false,
       },
       {
         step: 'explore',
         provider: 'codex',
         model: 'gpt-5.6-terra',
         effort: 'medium',
-        resume: true,
+        resume: false,
       },
       {
         step: 'explore',

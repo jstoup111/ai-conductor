@@ -258,18 +258,19 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
 
   const fakeState = {} as ConductState;
 
-  it("transports provider retry attempt and disabled escalation without changing the branch session", async () => {
+  it("transports resume-capable provider retry attempt and disabled escalation without changing the branch session", async () => {
     const providerExecutor = vi.fn(executeProviderCandidates);
     const invokeInteractive = vi
       .fn<LLMProvider["invokeInteractive"]>()
       .mockResolvedValueOnce({ success: false, output: "retry", exitCode: 1 })
       .mockResolvedValueOnce({ success: true, output: "passed", exitCode: 0 });
     const provider: LLMProvider = {
+      supportsSessionResume: true,
       invoke: vi.fn(),
       invokeInteractive,
     };
     const sessions = new ProviderSessionStore({
-      createSessionId: () => "manual-codex-session",
+      createSessionId: () => "manual-claude-session",
     });
     const runner = new DefaultStepRunner(
       provider,
@@ -278,10 +279,10 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       {
         mode: "interactive",
         config: {
-          llm_provider: "codex",
+          llm_provider: "claude",
           steps: {
             manual_test: {
-              llm_provider: "codex",
+              llm_provider: "claude",
               escalate: false,
             },
           },
@@ -289,16 +290,16 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         sessionStore: sessions,
         providerRuntimes: new ProviderRuntimeSet([
           {
-            key: "codex",
+            key: "claude",
             provider,
-            policy: CODEX_MODEL_POLICY,
+            policy: CLAUDE_MODEL_POLICY,
             builtIn: true,
             availability: new ModelAvailability(
-              CODEX_MODEL_POLICY.modelFallbackLadder,
+              CLAUDE_MODEL_POLICY.modelFallbackLadder,
             ),
           },
         ]),
-        configuredProviders: ["codex"],
+        configuredProviders: ["claude"],
         providerExecutor,
       },
     );
@@ -329,8 +330,8 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         { attempt: 2, escalate: false },
       ],
       sessions: [
-        { sessionId: "manual-codex-session", resume: false },
-        { sessionId: "manual-codex-session", resume: true },
+        { sessionId: "manual-claude-session", resume: false },
+        { sessionId: "manual-claude-session", resume: true },
       ],
     });
   });
@@ -581,7 +582,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           {
             prompt: "$manual-test",
             sessionId: "manual-codex-session",
-            resume: true,
+            resume: false,
             cwd: "/tmp/project",
             interactive: true,
             dangerouslySkipPermissions: false,

@@ -108,4 +108,24 @@ describe.skipIf(!shouldRun)('codex CLI readiness compatibility (real binary)', (
 
     expect([initial.exitCode, resumed.exitCode]).toEqual([0, 0]);
   });
+
+  it('exposes no flag that pre-registers a caller-supplied session id', async () => {
+    const [initial, resumed] = await Promise.all([
+      execa('codex', ['exec', '--help'], {
+        reject: false,
+        timeout: 15_000,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+      execa('codex', ['exec', 'resume', '--help'], {
+        reject: false,
+        timeout: 15_000,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }),
+    ]);
+
+    expect([initial.exitCode, resumed.exitCode]).toEqual([0, 0]);
+    expect([initial.stdout, resumed.stdout].join('\n')).not.toMatch(/--(?:session|thread)[-_]?id\b/i);
+  });
 });

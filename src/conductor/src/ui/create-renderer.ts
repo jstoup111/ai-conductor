@@ -162,6 +162,14 @@ export function createRenderer(
         );
         break;
 
+      case 'session_policy':
+        region.log(
+          chalk.yellow(
+            `  ⟳  ${event.step}: ${event.provider} session policy — ${event.reason}`,
+          ),
+        );
+        break;
+
       case 'when_skip': {
         currentStep = undefined;
         const undefinedNote = event.undefinedKey

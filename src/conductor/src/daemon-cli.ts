@@ -828,6 +828,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     );
     scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
+    scopedEvents.on('session_policy', (event) => renderDaemonEvent(event, scopedLog));
     return createProviderExecution(scopedEvents, scopedLog);
   };
   // The pool emits a feature's start/resume/done records before and after its
@@ -856,7 +857,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
       'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
       'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall',
-      'provider_attempt', 'feature_usage_total', 'provider_fallback',
+      'provider_attempt', 'feature_usage_total', 'provider_fallback', 'session_policy',
       'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
       'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
       'auto_park_contradiction',
@@ -2002,6 +2003,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(
         chalk.bold.yellow(
           `⚠ PROVIDER FALLBACK: ${event.step} — ${event.failedProvider} unavailable (${event.reason}); trying ${event.nextProvider}`,
+        ),
+      );
+      break;
+    case 'session_policy':
+      log(
+        chalk.yellow(
+          `${dot}   ${event.step}: ${event.provider} session policy — ${event.reason}`,
         ),
       );
       break;
