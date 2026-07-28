@@ -149,7 +149,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-import { currentCommitSha } from './project-prelude.js';
+import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
@@ -2423,13 +2423,13 @@ export class Conductor {
     // immediately before a kickback routes back to BUILD, keyed by the
     // source gate that initiated the kickback. Consulted the next time that
     // same gate fails again — if the intervening build produced zero net
-    // progress (no HEAD movement, no resolved-task movement) AND the gate's
+    // progress (no tree movement, no resolved-task movement) AND the gate's
     // verdict is unchanged, the loop HALTs instead of re-kicking toward
     // MAX_KICKBACKS_PER_GATE. Cleared once consulted (or once the gate
     // clears) so a later, unrelated kickback starts with a fresh baseline.
     const kickbackToBuildContext = new Map<
       StepName,
-      { priorVerdict: boolean; resolvedBefore: number; headBefore: string | null }
+      { priorVerdict: boolean; resolvedBefore: number; treeBefore: string | null }
     >();
     const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
 
@@ -2440,14 +2440,14 @@ export class Conductor {
      * cycle made any real progress.
      */
     const captureKickbackToBuildContext = async (sourceGate: StepName): Promise<void> => {
-      const [headBefore, resolvedBefore] = await Promise.all([
-        currentCommitSha(this.projectRoot),
+      const [treeBefore, resolvedBefore] = await Promise.all([
+        currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
       ]);
       kickbackToBuildContext.set(sourceGate, {
         priorVerdict: false, // we only ever kick back to build on a failing gate
         resolvedBefore,
-        headBefore,
+        treeBefore,
       });
     };
 
@@ -2463,13 +2463,13 @@ export class Conductor {
       const ctx = kickbackToBuildContext.get(sourceGate);
       if (!ctx) return { halt: false };
       kickbackToBuildContext.delete(sourceGate);
-      const [headAfter, resolvedAfter] = await Promise.all([
-        currentCommitSha(this.projectRoot),
+      const [treeAfter, resolvedAfter] = await Promise.all([
+        currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
       ]);
       const progress = classifyBuildProgress({
-        headBefore: ctx.headBefore,
-        headAfter,
+        treeBefore: ctx.treeBefore,
+        treeAfter,
         resolvedBefore: ctx.resolvedBefore,
         resolvedAfter,
       });
@@ -2483,15 +2483,15 @@ export class Conductor {
       });
       // #647 D3: when the intervening build DID make progress (so D2 never
       // fires), surface that classification for the audit trail's next
-      // 'kickback' event — the commit range + resolved-count delta is the
+      // 'kickback' event — the tree range + resolved-count delta is the
       // evidence that this cycle was productive, not a no-op.
       if (progress === 'did-work') {
-        const before = ctx.headBefore ? ctx.headBefore.slice(0, 7) : 'unknown';
-        const after = headAfter ? headAfter.slice(0, 7) : 'unknown';
+        const before = ctx.treeBefore ? ctx.treeBefore.slice(0, 7) : 'unknown';
+        const after = treeAfter ? treeAfter.slice(0, 7) : 'unknown';
         const resolvedDelta = resolvedAfter - ctx.resolvedBefore;
         return {
           ...result,
-          kickbackOutcome: `did-work (commits ${before}..${after} / resolved +${resolvedDelta})`,
+          kickbackOutcome: `did-work (trees ${before}..${after} / resolved +${resolvedDelta})`,
         };
       }
       return result;
