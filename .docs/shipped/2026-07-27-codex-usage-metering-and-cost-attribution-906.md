@@ -7,15 +7,15 @@ engine_version: 20260728T022446Z-e0a2a7af222c
 ---
 
 ## Cost
-input: 20839769
-output: 116194
-cache_read: 27302206
-cache_creation: 281713
-cost_usd: 10.3783
-dispatches: 12
+input: 22680311
+output: 133173
+cache_read: 29831545
+cache_creation: 352041
+cost_usd: 13.0659
+dispatches: 23
 retries: 0
 halts: 0
-unmetered: count: 5, duration_ms: 0
+unmetered: count: 13, duration_ms: 0
 providers:
-  claude: input: 131, output: 65710, cache_read: 7012158, cache_creation: 281713, cost_usd: 10.3783, dispatches: 5
-  codex: input: 20839638, output: 50484, cache_read: 20290048, cache_creation: 0, cost_usd: 0, dispatches: 4
+  claude: input: 152, output: 74440, cache_read: 7821433, cache_creation: 352041, cost_usd: 13.0659, dispatches: 9
+  codex: input: 22680159, output: 58733, cache_read: 22010112, cache_creation: 0, cost_usd: 0, dispatches: 8
