@@ -89,6 +89,13 @@ export type ConductorEvent =
       nextProvider: string;
     }
   | {
+      /** A provider capability suppressed a would-be session resume. */
+      type: 'session_policy';
+      step: StepName;
+      provider: string;
+      reason: string;
+    }
+  | {
       type: 'step_retry';
       step: StepName;
       attempt: number; // 1-based: "attempt 2 of 3"

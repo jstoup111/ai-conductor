@@ -167,6 +167,14 @@ export class TerminalRenderer implements UIRenderer {
         );
         break;
 
+      case 'session_policy':
+        this.region.log(
+          chalk.yellow(
+            `  ⟳  ${event.step}: ${event.provider} session policy — ${event.reason}`,
+          ),
+        );
+        break;
+
       case 'rate_limit': {
         const mins = Math.ceil(event.waitSeconds / 60);
         this.stopSpinner();

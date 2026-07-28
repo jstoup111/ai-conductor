@@ -74,13 +74,21 @@ export interface ProviderExecutionResult extends InvokeResult, ProviderAttributi
   attempts: ProviderAttemptMetadata[];
 }
 
-export interface ProviderTransitionWarning {
-  type: 'provider_fallback';
-  step: StepName;
-  failedProvider: string;
-  reason: string;
-  nextProvider: string;
-}
+export type ProviderTransitionWarning =
+  | {
+      type: 'provider_fallback';
+      step: StepName;
+      failedProvider: string;
+      reason: string;
+      nextProvider: string;
+    }
+  | {
+      /** Resume was intentionally suppressed by the provider capability contract. */
+      type: 'session_policy';
+      step: StepName;
+      provider: string;
+      reason: string;
+    };
 
 /**
  * Resolved provider identity exposed to the per-candidate safety boundary.
@@ -376,6 +384,14 @@ export interface InvokeProviderCandidateInput {
   forceFreshSession?: boolean;
 }
 
+interface SessionPolicySuppression {
+  provider: string;
+  reason: string;
+}
+
+/** A session scope owns one step's deduplicated capability diagnostics. */
+const sessionPolicyDiagnostics = new WeakMap<object, Set<string>>();
+
 /** Invoke one candidate while preserving its provider-scoped session state. */
 export async function invokeProviderCandidate({
   providerKey,
@@ -387,14 +403,22 @@ export async function invokeProviderCandidate({
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
+  sessionPolicySuppression?: SessionPolicySuppression;
 }> {
   const session = await sessions.prepare(providerKey);
+  const suppressForUnsupportedCapability =
+    runtime.provider.supportsSessionResume !== true &&
+    forceFreshSession !== true &&
+    session.resume;
   let invocation: Awaited<ReturnType<typeof invokeRuntimeResolved>>;
   try {
     invocation = await invokeRuntimeResolved(runtime, {
       ...options,
       sessionId: session.id,
-      resume: forceFreshSession ? false : session.resume,
+      resume:
+        runtime.provider.supportsSessionResume === true &&
+        forceFreshSession !== true &&
+        session.resume,
       model: resolved.model,
       effort: resolved.effort,
     });
@@ -410,6 +434,14 @@ export async function invokeProviderCandidate({
   return {
     result: invocation.result,
     invokedModel: invocation.model,
+    ...(suppressForUnsupportedCapability
+      ? {
+          sessionPolicySuppression: {
+            provider: providerKey,
+            reason: 'Session resume suppressed: provider does not support session resume.',
+          },
+        }
+      : {}),
   };
 }
 
@@ -562,6 +594,21 @@ export async function executeProviderCandidates({
         )
       : await invoke();
     const invokedModel = invocation?.invokedModel;
+    const suppression = invocation?.sessionPolicySuppression;
+    const emittedProviders = sessionPolicyDiagnostics.get(sessions) ?? new Set<string>();
+    if (suppression && !emittedProviders.has(suppression.provider)) {
+      emittedProviders.add(suppression.provider);
+      sessionPolicyDiagnostics.set(sessions, emittedProviders);
+      await warn?.(
+        `Step ${step}: provider ${suppression.provider} does not support session resume; using a fresh session.`,
+        {
+          type: 'session_policy',
+          step,
+          provider: suppression.provider,
+          reason: suppression.reason,
+        },
+      );
+    }
 
     const unavailable = classifyProviderCandidateFailure(result);
     const safeResult = result.output === undefined

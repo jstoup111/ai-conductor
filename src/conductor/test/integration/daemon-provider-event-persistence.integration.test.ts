@@ -148,7 +148,7 @@ describe('daemon feature provider-event persistence', () => {
             _message: string,
             transition: Extract<
               ConductorEvent,
-              { type: 'provider_fallback' }
+              { type: 'provider_fallback' | 'session_policy' }
             >,
           ) => featureEvents.emit(transition),
         };

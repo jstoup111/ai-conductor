@@ -300,7 +300,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     });
   });
 
-  it('composes with forceFreshSession without an error or a doubled diagnostic', async () => {
+  it('composes with forceFreshSession without an unsupported-resume diagnostic', async () => {
     const execute = await loadExecuteProviderCandidates();
     const codex = scriptedProvider(() => ok('self-host attempt'), false);
     const sessions = new ProviderSessionScope(() => 'self-host-session');
@@ -323,7 +323,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
       sessionPolicyCount: transitions.filter(
         (transition) => transition.type === 'session_policy',
       ).length,
-    }).toEqual({ resumeFlags: [false, false], sessionPolicyCount: 1 });
+    }).toEqual({ resumeFlags: [false, false], sessionPolicyCount: 0 });
   });
 });
 
