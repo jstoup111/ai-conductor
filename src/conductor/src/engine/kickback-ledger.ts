@@ -18,6 +18,20 @@ export interface KickbackLedger {
 
 export const KICKBACK_LEDGER_PATH = '.pipeline/kickback-ledger.json';
 
+/** A gate may be kicked back to BUILD this many times for one progress state. */
+export const MAX_KICKBACKS_PER_GATE = 2;
+
+export interface BumpKickbackGateInput {
+  treeHash: string | null;
+  resolvedCount: number;
+  reason: string;
+}
+
+export interface BumpKickbackGateResult {
+  entry: KickbackGateEntry;
+  exhausted: boolean;
+}
+
 function emptyLedger(): KickbackLedger {
   return { version: 1, gates: {} };
 }
@@ -98,4 +112,52 @@ export async function writeKickbackLedger(
 /** Remove the ledger when a genuinely fresh feature session begins. */
 export async function clearKickbackLedger(projectRoot: string): Promise<void> {
   await rm(join(projectRoot, KICKBACK_LEDGER_PATH), { force: true });
+}
+
+/**
+ * Consume a gate's kickback budget, resetting it only when observable progress
+ * occurred. Failure text is diagnostic data, never part of the budget key.
+ */
+export function bumpKickbackGate(
+  entry: KickbackGateEntry | undefined,
+  input: BumpKickbackGateInput,
+): BumpKickbackGateResult {
+  const previous: KickbackGateEntry = entry ?? {
+    count: 0,
+    treeHash: null,
+    lastReason: '',
+    priorVerdict: false,
+    resolvedBefore: input.resolvedCount,
+  };
+  const madeProgress =
+    previous.treeHash !== input.treeHash || input.resolvedCount > previous.resolvedBefore;
+  const nextCount = madeProgress ? 1 : Math.min(previous.count + 1, MAX_KICKBACKS_PER_GATE);
+
+  return {
+    entry: {
+      ...previous,
+      count: nextCount,
+      treeHash: input.treeHash,
+      lastReason: input.reason,
+      resolvedBefore: input.resolvedCount,
+    },
+    exhausted: !madeProgress && previous.count >= MAX_KICKBACKS_PER_GATE,
+  };
+}
+
+/** Load, update, and atomically persist one gate's durable kickback budget. */
+export async function bumpKickbackGateInLedger(
+  projectRoot: string,
+  gate: string,
+  input: BumpKickbackGateInput,
+): Promise<BumpKickbackGateResult> {
+  const ledger = await readKickbackLedger(projectRoot);
+  const result = bumpKickbackGate(ledger.gates[gate], input);
+
+  await writeKickbackLedger(projectRoot, {
+    ...ledger,
+    gates: { ...ledger.gates, [gate]: result.entry },
+  });
+
+  return result;
 }
