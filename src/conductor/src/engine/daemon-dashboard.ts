@@ -323,8 +323,12 @@ export async function scanInheritedState(
       }
       // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
       // never a scan failure — same tolerance as every other worktree read here.
+      // A heartbeat naming a different step than the one in flight is a
+      // leftover from an earlier dispatch (the file is overwritten, never
+      // cleared) — rendering its age against the current step reports a
+      // multi-hour "stall" for a step that just started.
       const heartbeat = await readStepHeartbeat(wt);
-      if (heartbeat) {
+      if (heartbeat && heartbeat.step === entry.step) {
         const ageMs = Date.now() - Date.parse(heartbeat.ts);
         if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
       }

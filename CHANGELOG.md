@@ -37,6 +37,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The step-heartbeat stall watchdog no longer kills a step over a heartbeat that belongs to an
+  earlier dispatch. `.pipeline/step-heartbeat` is a single per-worktree file that is overwritten and
+  never cleared, so a re-kicked step starts life next to whatever the previous step left behind. The
+  watchdog read that leftover as its own silence: a resumed `architecture_review_as_built` was killed
+  31 seconds — one poll tick — after it started, against a `build` heartbeat 3h34m old, and the
+  `daemon status` dashboard had been annotating the pending step `(heartbeat 214m32s ago)` the whole
+  time. Both the watchdog and the dashboard now ignore any heartbeat that names a different step or
+  predates the current dispatch, treating it exactly like "no heartbeat yet" — never evidence of a
+  stall. A genuine stall (a dispatch that pulses, then goes silent past the threshold) is still
+  killed and still raises the same `mechanical`-class HALT.
 - The test suite no longer fails a handful of real-binary tests on a cold checkout. Thirteen test
   files spawn `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is missing or dangling;
   `dist` is gitignored and there is no `pretest` hook, so nothing built it before the run and it

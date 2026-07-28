@@ -118,6 +118,32 @@ export function classifyHeartbeatAge(
   return ageMs > staleAfterMs ? { kind: 'stale', ageMs } : { kind: 'fresh', ageMs };
 }
 
+/**
+ * True when a heartbeat file's contents were produced by the dispatch that is
+ * currently running — i.e. it names the same step AND was stamped at or after
+ * that dispatch started.
+ *
+ * `.pipeline/step-heartbeat` is a single per-worktree file that is overwritten,
+ * never cleared: after a step finishes, its last pulse stays on disk for the
+ * lifetime of the worktree. A later dispatch (a different step, or the same
+ * step re-kicked hours later) therefore starts life next to a heartbeat that is
+ * arbitrarily old and belongs to nobody. Reading that as "this step has been
+ * silent for 3.5 hours" is what killed a freshly-started
+ * `architecture_review_as_built` 31 seconds — one poll tick — after it started.
+ *
+ * A leftover heartbeat carries no information about the current dispatch, so it
+ * is treated exactly like "no heartbeat yet": never evidence of a stall.
+ */
+export function heartbeatBelongsToDispatch(
+  heartbeat: StepHeartbeat | null,
+  step: string,
+  dispatchStartedAtMs: number,
+): boolean {
+  if (!heartbeat || heartbeat.step !== step) return false;
+  const ts = Date.parse(heartbeat.ts);
+  return Number.isFinite(ts) && ts >= dispatchStartedAtMs;
+}
+
 /** Render a millisecond age as a short human string, e.g. "3m12s" or "45s". */
 export function formatHeartbeatAge(ageMs: number): string {
   const totalSeconds = Math.floor(ageMs / 1000);
@@ -154,6 +180,13 @@ export interface StallWatchdogOptions {
   graceMinutes?: number;
   /** How often to check heartbeat staleness. Milliseconds; default 30s. */
   pollIntervalMs?: number;
+  /**
+   * When this dispatch began, on the same clock as `now`. Any heartbeat older
+   * than this — or naming a different step — is a leftover from an earlier
+   * dispatch in the same worktree and is ignored entirely (see
+   * `heartbeatBelongsToDispatch`). Defaults to `now()` at arm time.
+   */
+  dispatchStartedAtMs?: number;
   /** Injectable clock/heartbeat reader seam for tests. */
   now?: () => number;
   readHeartbeat?: (worktreePath: string) => Promise<StepHeartbeat | null>;
@@ -195,6 +228,7 @@ export async function runWithStallWatchdog<T>(
   const graceMinutes = opts.graceMinutes ?? DEFAULT_GRACE_MINUTES;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const staleAfterMs = (opts.thresholdMinutes + graceMinutes) * 60_000;
+  const dispatchStartedAtMs = opts.dispatchStartedAtMs ?? now();
 
   let settled = false;
 
@@ -203,10 +237,14 @@ export async function runWithStallWatchdog<T>(
       void (async () => {
         if (settled) return;
         const heartbeat = await readHeartbeat(opts.worktreePath);
-        // No heartbeat yet is never treated as a stall — a step that has not
-        // produced its first activity pulse is not evidence of a hang, and
-        // treating it as one would kill every step in its opening seconds.
-        if (heartbeat === null) return;
+        // No heartbeat *from this dispatch* is never treated as a stall — a
+        // step that has not produced its first activity pulse is not evidence
+        // of a hang, and treating it as one would kill every step in its
+        // opening seconds. A heartbeat left behind by an earlier step (or an
+        // earlier run of this one) is equally uninformative and is ignored the
+        // same way, rather than read as this dispatch having been silent for
+        // however long the file has sat there.
+        if (!heartbeatBelongsToDispatch(heartbeat, opts.step, dispatchStartedAtMs)) return;
         const status = classifyHeartbeatAge(heartbeat, now(), staleAfterMs);
         if (status.kind !== 'stale' || settled) return;
         settled = true;

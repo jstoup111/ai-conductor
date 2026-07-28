@@ -101,6 +101,28 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(entry?.heartbeatAgeMs).toBeLessThan(50_000);
   });
 
+  it('leaves heartbeatAgeMs undefined when the heartbeat belongs to an earlier step', async () => {
+    // The heartbeat file is overwritten, never cleared: a feature now running
+    // architecture_review_as_built still carries its last `build` pulse. Its
+    // age says nothing about the step in flight and must not be rendered.
+    await makeStateful('ip1', { architecture_review_as_built: 'in_progress' });
+    await writeFile(
+      join(worktreeBase, 'ip1', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'build', ts: new Date(Date.now() - 214 * 60_000).toISOString() }),
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    const entry = state.inProgress.find((p) => p.slug === 'ip1');
+    expect(entry?.step).toBe('architecture_review_as_built');
+    expect(entry?.heartbeatAgeMs).toBeUndefined();
+  });
+
   it('leaves heartbeatAgeMs undefined when no step-heartbeat file exists (not "0s ago")', async () => {
     await makeStateful('ip1', { build: 'in_progress' });
 

@@ -176,6 +176,12 @@ A feature with no `(heartbeat … ago)` suffix hasn't produced its first activit
 that just started) — that's distinct from a stale heartbeat, and is never rendered as if the step
 were stuck.
 
+The heartbeat file is overwritten, never cleared, so a worktree keeps its last pulse after the step
+that wrote it ends. Both the dashboard and the watchdog therefore ignore any heartbeat that doesn't
+belong to the dispatch currently in flight — a different step name, or a timestamp from before this
+dispatch started. A leftover heartbeat is treated exactly like "no heartbeat yet": the suffix is
+omitted, and it is never evidence of a stall.
+
 If a step's heartbeat goes silent for longer than `step_heartbeat_stall_minutes` (default 20; see
 [configuration](../reference/configuration.md#step_heartbeat_stall_minutes)) plus a small fixed
 grace buffer, the stall watchdog kills the wedged subprocess itself and raises a `mechanical`-class
