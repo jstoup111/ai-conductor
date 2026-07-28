@@ -512,6 +512,8 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 - Keep build dispatches running by restoring missing session-hook scripts and wiring at preflight, halting only when an enforcement script cannot be restored ([#896](https://github.com/jstoup111/ai-conductor/issues/896); {{IMPLEMENTATION_PR}}).
 
+- Reject a restored session-hook script that isn't an executable regular file or that resolves through a symlink, so a build can never arm attribution enforcement against a hook that only looks restored ([#896](https://github.com/jstoup111/ai-conductor/issues/896); {{IMPLEMENTATION_PR}}).
+
 - Self-host `provider-home` provisioning no longer symlinks the throwaway
   `CODEX_HOME`/`CLAUDE_CONFIG_DIR`'s `skills` (and Codex's `.agents/skills`) directly to
   the feature worktree's own `skills/` directory. That live link let provider-owned

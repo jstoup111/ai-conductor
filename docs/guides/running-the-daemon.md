@@ -171,7 +171,9 @@ One repair needs no operator action: do not park the feature or recreate
 [worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md) and the related
 [#549](https://github.com/jstoup111/ai-conductor/issues/549) / [PR #770](https://github.com/jstoup111/ai-conductor/pull/770).
 If an enforcement script still cannot be restored, the build remains halted rather than dispatching
-without its attribution gate.
+without its attribution gate. The recheck after a repair is authoritative and strict: a script must
+exist as an executable regular file at the expected path, so a hook that restored non-executable or
+that resolves through a symlink still counts as not restored and halts the build rather than arming.
 
 ## Step heartbeat and the stall watchdog
 
