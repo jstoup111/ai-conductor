@@ -906,3 +906,137 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
     expect(await isOperatorParked(projectRoot, slug)).toBe(false);
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// rem-adr-006 — PRODUCTION-CALLER wiring (adr-2026-07-27 Decision 4).
+//
+// The specs above prove the ST-916 hand-off is *injectable*. This one proves it
+// is *reachable*: it drives the real `conduct daemon reconcile-parked <slug>`
+// operator verb with NO `reconcileMergedPark` fake and NO `requestRecordRepair`
+// fake — only the `gh` third-party boundary is faked — and asserts a real
+// record-only repair PR is published for a merged park whose record never
+// landed, with the park itself left completely untouched.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('parked-feature reconciliation acceptance (rem-adr-006): the production operator verb reaches the ST-916 repair seam', () => {
+  it('publishes a record-only, human-reviewed repair PR and deletes nothing', async () => {
+    const slug = 'merged-record-never-landed';
+    const implementationPr = 'https://github.com/acme/repo/pull/1060';
+    const repairBranch = `shipment-repair/1060/${slug}`;
+    const repairPr = 'https://github.com/acme/repo/pull/2000';
+    await seedParkedFeature(slug, { merged: true, record: false });
+
+    // Actions supplies GITHUB_REPOSITORY; a long-running daemon does not, so
+    // the adapter must resolve the repository from `gh` itself.
+    vi.stubEnv('GITHUB_REPOSITORY', '');
+
+    const ghCalls: string[][] = [];
+    const gh: GhRunner = async (args, opts) => {
+      ghCalls.push(args);
+      const json = (value: unknown) => ({ stdout: JSON.stringify(value) });
+      const has = (flag: string, value: string) => args[args.indexOf(flag) + 1] === value;
+
+      if (args[0] === 'repo' && args[1] === 'view') return json({ nameWithOwner: 'acme/repo' });
+      if (args[0] === 'pr' && args[1] === 'list' && args.includes('--state') && has('--state', 'merged')) {
+        return json([{ url: implementationPr }]);
+      }
+      if (args[0] === 'pr' && args[1] === 'list') return json([]); // no open repair PR yet
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === implementationPr) {
+        if (has('--json', 'mergedAt')) return json({ mergedAt: '2026-07-27T10:11:12Z' });
+        return json({
+          url: implementationPr,
+          body: `Implements \`.docs/plans/${slug}.md\``,
+          files: [{ path: `src/${slug}.ts` }],
+          headRefOid: await git(['rev-parse', `refs/heads/feature/${slug}`]),
+        });
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === repairPr) {
+        return json({ url: repairPr, headRefOid: await git(['rev-parse', 'HEAD'], opts.cwd) });
+      }
+      if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${repairPr}\n` };
+      // The repair branch does not exist on the remote yet.
+      if (args[0] === 'api' && args[1]?.startsWith('repos/')) throw new Error('gh: HTTP 404');
+      if (args[0] === 'api') return { stdout: '' }; // status POST
+      throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
+    };
+
+    const { detect, dispatch } = await loadReconcileVerb();
+    const out: string[] = [];
+    const code = await dispatch(
+      detect(['node', 'conduct', 'daemon', 'reconcile-parked', slug]) as { kind: string; slug: string },
+      { cwd: projectRoot, out: (line) => out.push(line), runGit: realGit, runGh: gh },
+    );
+
+    // Cleanup is correctly refused and deferred — the record still is not on main.
+    expect(code).toBe(1);
+    expect(out.join('\n')).toContain(`Could not reconcile '${slug}': record-missing`);
+    expect(await worktreeExists(slug)).toBe(true);
+    expect(await branchExists(slug)).toBe(true);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
+
+    // …but the ST-916 repair seam actually ran: a record-only repair branch is
+    // on the remote, carrying exactly the record and naming the REAL merged PR.
+    const pushedRecord = (
+      await execFile('git', ['show', `${repairBranch}:.docs/shipped/${slug}.md`], { cwd: originDir })
+    ).stdout;
+    expect(pushedRecord).toContain(`slug: ${slug}`);
+    expect(pushedRecord).toContain(`pr: ${implementationPr}`);
+    expect(pushedRecord).toContain('shipped: 2026-07-27');
+    const pushedPaths = (
+      await execFile('git', ['show', '--name-only', '--format=', repairBranch], { cwd: originDir })
+    ).stdout.split('\n').filter(Boolean);
+    expect(pushedPaths).toEqual([`.docs/shipped/${slug}.md`]);
+
+    // A human-reviewed PR, a required-check status at its exact head, and no
+    // merge/auto-merge anywhere.
+    const created = ghCalls.find((args) => args[0] === 'pr' && args[1] === 'create');
+    expect(created).toBeDefined();
+    expect(created).toContain(repairBranch);
+    expect(created?.join(' ')).toContain('Human review and merge required');
+    expect(ghCalls.some((args) => args.join(' ').includes('statuses/') && args.includes('state=success'))).toBe(true);
+    expect(ghCalls.some((args) => args.includes('merge') || args.includes('--auto'))).toBe(false);
+    expect(out.some((line) => line.includes(repairPr))).toBe(true);
+  });
+
+  it('never invents identity: a PR that does not associate with the slug produces no repair branch and no PR', async () => {
+    const slug = 'merged-unassociated-pr';
+    const implementationPr = 'https://github.com/acme/repo/pull/1061';
+    await seedParkedFeature(slug, { merged: true, record: false });
+    vi.stubEnv('GITHUB_REPOSITORY', '');
+
+    const ghCalls: string[][] = [];
+    const gh: GhRunner = async (args) => {
+      ghCalls.push(args);
+      if (args[0] === 'pr' && args[1] === 'list') return { stdout: JSON.stringify([{ url: implementationPr }]) };
+      if (args[0] === 'pr' && args[1] === 'view' && args.includes('mergedAt')) {
+        return { stdout: JSON.stringify({ mergedAt: '2026-07-27T10:11:12Z' }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            url: implementationPr,
+            body: 'Implements `.docs/plans/some-other-feature.md`',
+            files: [{ path: 'src/other.ts' }],
+            headRefOid: 'a'.repeat(40),
+          }),
+        };
+      }
+      if (args[0] === 'repo') return { stdout: JSON.stringify({ nameWithOwner: 'acme/repo' }) };
+      throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
+    };
+
+    const { detect, dispatch } = await loadReconcileVerb();
+    const out: string[] = [];
+    const code = await dispatch(
+      detect(['node', 'conduct', 'daemon', 'reconcile-parked', slug]) as { kind: string; slug: string },
+      { cwd: projectRoot, out: (line) => out.push(line), runGit: realGit, runGh: gh },
+    );
+
+    expect(code).toBe(1);
+    expect(ghCalls.some((args) => args[0] === 'pr' && args[1] === 'create')).toBe(false);
+    expect(await exists(join(projectRoot, '.docs', 'shipped', `${slug}.md`))).toBe(false);
+    expect(await worktreeExists(slug)).toBe(true);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
+    expect(out.some((line) => line.includes('no repair requested'))).toBe(true);
+  });
+});
