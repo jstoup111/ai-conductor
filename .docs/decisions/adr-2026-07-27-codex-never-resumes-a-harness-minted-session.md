@@ -69,6 +69,12 @@ Concretely:
 
 ### Amends prior decisions
 
+> **Forward amendment — #1071:** The Claude/Codex divergence introduced here is
+> closed by `adr-2026-07-27-cold-start-within-step-retries.md`. Both built-in
+> providers now declare session resume unsupported, and every dispatch,
+> including every within-step retry, starts a fresh session. The capability
+> remains fail-closed as a structural invariant.
+
 This ADR **supersedes in part** `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope`
 §2 ("Retries resume only within the same step and provider"). That clause permitted a within-step
 retry to resume the session created by the same provider for the current step, unqualified by
@@ -118,9 +124,9 @@ carries that observation to its conclusion.
 - **Neutral.** `CODEX_SESSION_EXPIRED_RE` and the conductor's `sessionExpired` branch remain.
   They can no longer be triggered by our own resume request; retiring them is deliberately out
   of scope and left to #1042, which owns the broader session-identity question.
-- **Divergence, named.** Claude and Codex now behave differently on within-step retries (resume
-  vs cold start). That divergence is declared in the interface rather than implicit, and is
-  expected to disappear when Claude follows.
+- **Divergence, closed by #1071.** This decision initially made Claude and Codex differ on
+  within-step retries. `adr-2026-07-27-cold-start-within-step-retries.md` subsequently made
+  both providers cold-start every dispatch while retaining the fail-closed capability seam.
 
 ## Assumptions
 
