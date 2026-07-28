@@ -52,6 +52,38 @@ export type ArtifactPatternContract =
       identity?: never;
     };
 
+export function artifactMatchesFeatureIdentity(
+  artifactPath: string,
+  featureIdentity: string,
+  strategy: FeatureArtifactIdentityStrategy,
+): boolean {
+  const artifactStem = basename(artifactPath, '.md');
+  const featureStem = basename(featureIdentity, '.md');
+  if (strategy.strategy === 'plan-stem') return artifactStem === featureStem;
+
+  const normalize = (stem: string): string => {
+    let normalized = stem.toLowerCase();
+    let previous: string;
+    do {
+      previous = normalized;
+      if (strategy.stripDatePrefix) {
+        normalized = normalized.replace(/^\d{4}-\d{2}-\d{2}-/, '');
+      }
+      for (const prefix of strategy.stripPrefixes ?? []) {
+        const normalizedPrefix = slugify(prefix);
+        if (normalizedPrefix && normalized.startsWith(`${normalizedPrefix}-`)) {
+          normalized = normalized.slice(normalizedPrefix.length + 1);
+        }
+      }
+    } while (normalized !== previous);
+    return slugify(normalized);
+  };
+
+  const normalizedArtifact = normalize(artifactStem);
+  const normalizedFeature = normalize(featureStem);
+  return normalizedArtifact.length > 0 && normalizedArtifact === normalizedFeature;
+}
+
 /**
  * Lifecycle and identity policy for every built-in artifact pattern.
  *
