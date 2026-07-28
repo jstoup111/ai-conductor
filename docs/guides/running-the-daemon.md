@@ -375,6 +375,26 @@ The sweep never dispatches directly; the cleared feature is re-dispatched on the
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
 
+### Post-rebase gate invalidation on resume
+
+Honouring the `REKICK` sentinel rebases the feature onto the advanced base before any gate resumes.
+When that rebase changes code or test paths, the downstream judged gates — `build_review`,
+`wiring_check`, and (when they ran) `manual_test`, `prd_audit`,
+`architecture_review_as_built` — are re-opened, because their verdicts graded the pre-rebase diff.
+
+`build` is the exception. Its predicate re-derives mechanically from the rebased history — the union
+of `Task:` commit trailers with the `.pipeline/task-status.json` rows — so the daemon re-evaluates it
+against the new tree *before* deciding. If every plan task is still evidenced, the gate keeps a fresh
+`satisfied: true` verdict, a `rebase_gate_reverified` event records that dispatch was skipped, and no
+build agent re-runs finished work. Anything less — a plan task with no trailer, an unresolvable plan,
+or an error during the check — falls back to the ordinary kickback and the build step re-runs.
+This is fail-closed: the confirmation is itself a fresh evaluation of the rebased tree, never a
+carried-over verdict.
+
+`.pipeline/task-status.json` is not the authority here. Nothing in the engine flips its rows to
+`completed`; the durable record of finished work is the `Task:` trailer on each commit, which is why
+losing or re-seeding that file does not by itself re-open a finished build.
+
 ### Kickback-cap halt
 
 The kickback budget is durable for each gate: it survives daemon re-dispatch while the feature's

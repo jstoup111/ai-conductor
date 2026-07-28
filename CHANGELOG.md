@@ -47,6 +47,18 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- A daemon re-kick no longer re-opens a finished `build` gate and dispatches a build agent that
+  redoes already-committed work. When the re-kick's play-forward rebase changed code paths, that path
+  wrote an unconditional `invalidated by file-changing rebase` kickback for `build`, skipping the
+  mechanical pre-verify (`adr-2026-07-08-post-rebase-gate-first-mechanical-reverify`) that the
+  conductor's own in-loop rebase step has always injected. The re-kick path now runs the same
+  pre-verify: `build` keeps its `satisfied` verdict when every plan task is still evidenced by a
+  `Task:` commit trailer on the rebased history, and emits `rebase_gate_reverified`. This is
+  fail-closed — a missing trailer, an unresolvable plan, or any error during the check falls back to
+  the ordinary kickback, and the non-tree-attesting gates (`build_review`, `wiring_check`,
+  `manual_test`, `prd_audit`, `architecture_review_as_built`) are still invalidated as before.
+  Observed live on `codex-fresh-session-per-step-contract`: all ten `Task:` trailers present, build
+  re-dispatched anyway after a resume rebase.
 - The `build_progress` / `build_no_progress` events — and the `▶ build <resolved>/<total>` line they
   render into `.daemon/daemon.log` — no longer report a permanently pinned `resolved: 0` while a
   build is committing task after task. The watcher counted `.pipeline/task-status.json` rows only,
