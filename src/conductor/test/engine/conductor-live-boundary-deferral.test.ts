@@ -48,7 +48,11 @@ const BUILD_ONLY: ConductState = {
   complexity_tier: 'M', track: 'technical', feature_desc: 'live-boundary-deferral',
 } as ConductState;
 
-const BOUNDARY_REASON = 'provider state changed during self-host execution.';
+// Asserted verbatim: the differing path must survive all the way to the
+// `loop_halt` event and the HALT marker, since that is what an operator reads
+// in daemon.log instead of re-deriving the diff by hand.
+const BOUNDARY_REASON =
+  'provider state changed during self-host execution — 0 added, 0 removed, 1 changed: changed settings.json.';
 
 function fullSuiteVerifierStub() {
   return {
@@ -237,7 +241,8 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
 
     const state = await readState(statePath);
     expect(state.ok && state.value.build).toBe('done');
-    expect(await haltReason()).toContain('live checkout changed during self-host execution.');
+    expect(await haltReason()).toContain('live checkout changed during self-host execution — ');
+    expect(await haltReason()).toContain('changed VERSION');
   });
 
   it('refuses the NEXT dispatch instead of continuing under a violated boundary', async () => {

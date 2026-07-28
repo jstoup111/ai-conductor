@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { redactSafetyText } from '../safety-diagnostics.js';
 
 interface Surface { root: string; label: string; exclude: readonly string[]; manifest: readonly Entry[]; }
 interface Entry { path: string; digest: string; }
@@ -69,6 +70,22 @@ const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
  * build. This implementation keeps detection: `settings.json`,
  * `settings.local.json`, `CLAUDE.md`, `rules/`, `skills/`, and any other
  * config-like path not listed below stay fingerprinted.
+ *
+ * `file-history` added after five halts on 2026-07-28 (build_review,
+ * maintain-documentation and three `architecture_review_as_built` steps, all
+ * dispatched `via claude`). Every halt window contained fresh
+ * `file-history/<session-uuid>/<hash>@vN` entries written by UNRELATED
+ * interactive sessions — the CLI snapshots every file it edits there, so any
+ * concurrent session editing a file tripped the guard. The sandboxed build
+ * writes its own snapshots under its throwaway `CLAUDE_CONFIG_DIR`, so
+ * excluding this costs no leak detection: the subtree holds edited-file
+ * content only, never config, hooks, or credentials. `paste-cache` is the
+ * same category (per-session scratch for large pasted inputs).
+ *
+ * `downloads`, `settings.json.bak` and `ai-conductor.config.json` were left
+ * fingerprinted: no churn was observed for them, and the latter two are
+ * config-like — a self-host process rewriting harness config in the operator
+ * home is exactly what this surface exists to catch.
  */
 const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'history.jsonl',                    // append-only prompt/response log for every session on the machine
@@ -84,6 +101,8 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'stats-cache.json',                 // usage/statistics aggregation cache
   'mcp-needs-auth-cache.json',        // cache of which MCP servers still need an auth prompt
   'cache',                            // misc read-through caches (issue lists, changelog mirrors, etc.)
+  'file-history',                     // per-session snapshots of every file any concurrent session edits
+  'paste-cache',                      // per-session scratch for large pasted inputs
 ];
 
 /** Codex counterpart of `CLAUDE_PROVIDER_STATE_VOLATILE` — same leak-detector caveat applies. */
@@ -99,10 +118,16 @@ const CODEX_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'tmp',                   // scratch dir (e.g. `arg0`) written by the CLI at startup
   'packages/standalone',   // self-update installer bookkeeping (current release, install lock)
   'models_cache.json',     // cache of available models, refreshed periodically
-  'goals_1.sqlite', 'goals_1.sqlite-shm', 'goals_1.sqlite-wal',       // Codex's own goal-tracking DB, written by any running session
-  'logs_2.sqlite', 'logs_2.sqlite-shm', 'logs_2.sqlite-wal',          // Codex's own internal log DB, written continuously
-  'memories_1.sqlite', 'memories_1.sqlite-shm', 'memories_1.sqlite-wal', // Codex's own memory-store DB
-  'state_5.sqlite', 'state_5.sqlite-shm', 'state_5.sqlite-wal',       // Codex's own session-state DB
+  // Codex's own SQLite stores at the provider-state ROOT — `goals_1`, `logs_2`,
+  // `memories_1`, `state_5` today — plus their WAL sidecars, written continuously
+  // by any running session. Matched by pattern rather than enumerated because the
+  // trailing digit is Codex's SCHEMA GENERATION: when Codex bumps one (`state_5`
+  // -> `state_6`) or adds a store, the enumerated name stops matching, the new
+  // file churns through its `-wal`/`-shm`, and every self-host build halts until
+  // the list is patched. `*` matches a root-level basename only (see
+  // `isExcluded`), so nothing under a subdirectory is affected and the live
+  // checkout surface — which declares no patterns — is untouched.
+  '*.sqlite', '*.sqlite-shm', '*.sqlite-wal', '*.sqlite-journal',
 ];
 
 /**
@@ -121,9 +146,28 @@ function providerStateVolatile(provider: 'claude' | 'codex' | undefined): readon
   return [];
 }
 
-/** True iff `path` (root-relative, POSIX-ish) is an excluded path or sits under one. */
+/**
+ * True iff the root-level basename `path` matches `pattern`, where `*` stands for
+ * any run of non-separator characters. Deliberately ROOT-LEVEL ONLY: a path
+ * containing a separator never matches, so a pattern can never reach into a
+ * subdirectory and silently blind the guard to (say)
+ * `skills/evil/state_9.sqlite`.
+ */
+function matchesRootPattern(path: string, pattern: string): boolean {
+  if (path.includes('/')) return false;
+  const source = pattern.split('*').map(part => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[^/]*');
+  return new RegExp(`^${source}$`).test(path);
+}
+
+/**
+ * True iff `path` (root-relative, POSIX-ish) is an excluded path, sits under one,
+ * or matches a root-level `*` pattern. An exclusion entry containing `*` is a
+ * pattern; every other entry keeps the exact-or-prefix semantics it always had.
+ */
 function isExcluded(path: string, exclude: readonly string[]): boolean {
-  return exclude.some(ex => path === ex || path.startsWith(`${ex}/`));
+  return exclude.some(ex => ex.includes('*')
+    ? matchesRootPattern(path, ex)
+    : path === ex || path.startsWith(`${ex}/`));
 }
 
 async function manifest(root: string, exclude: readonly string[]): Promise<Entry[]> {
@@ -165,11 +209,60 @@ export async function fingerprintLiveBoundary(args: {
   ] };
 }
 
+/** Most paths named in a halt reason before it collapses to a bare count. */
+const MAX_REPORTED_PATHS = 8;
+
+/**
+ * The differing entries between two manifests, split by KIND. Added vs removed
+ * vs changed are diagnostically different: a removal is a deletion in the
+ * operator's live environment, an addition is usually unlisted churn from a
+ * concurrent session, and a digest change is a rewrite.
+ */
+function diffManifests(before: readonly Entry[], after: readonly Entry[]): {
+  added: string[]; removed: string[]; changed: string[];
+} {
+  const priorDigests = new Map(before.map(entry => [entry.path, entry.digest]));
+  const currentDigests = new Map(after.map(entry => [entry.path, entry.digest]));
+  const added: string[] = []; const removed: string[] = []; const changed: string[] = [];
+  for (const [path, digest] of currentDigests) {
+    if (!priorDigests.has(path)) added.push(path);
+    else if (priorDigests.get(path) !== digest) changed.push(path);
+  }
+  for (const path of priorDigests.keys()) if (!currentDigests.has(path)) removed.push(path);
+  return { added, removed, changed };
+}
+
+/**
+ * A bounded, redacted, kind-tagged rendering of a manifest diff.
+ *
+ * Bounded because this string lands in `daemon.log`: a diff of a few thousand
+ * entries (a cache directory the exclusion list does not cover yet) would
+ * otherwise flood the log and bury the halt itself. Redacted because a provider
+ * state path is operator-supplied text — paths under `~/.codex` and `~/.claude`
+ * are not secret in themselves, and the credential files (`auth.json`,
+ * `.credentials.json`) are already excluded via `selectedAuthPaths` so they can
+ * never appear here, but a filename can still embed a token-shaped fragment and
+ * `redactSafetyText` is what this codebase uses for exactly that concern.
+ */
+function describeDiff(diff: { added: string[]; removed: string[]; changed: string[] }): string {
+  const total = diff.added.length + diff.removed.length + diff.changed.length;
+  const labelled = [
+    ...diff.added.map(path => `added ${path}`),
+    ...diff.removed.map(path => `removed ${path}`),
+    ...diff.changed.map(path => `changed ${path}`),
+  ];
+  const shown = labelled.slice(0, MAX_REPORTED_PATHS).map(redactSafetyText);
+  const elided = total - shown.length;
+  const counts = `${diff.added.length} added, ${diff.removed.length} removed, ${diff.changed.length} changed`;
+  return `${counts}: ${shown.join('; ')}${elided > 0 ? `; and ${elided} more` : ''}`;
+}
+
 export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promise<{ ok: boolean; reason?: string }> {
   for (const surface of snapshot.surfaces) {
     const current = await manifest(surface.root, surface.exclude);
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
-      return { ok: false, reason: `${surface.label} changed during self-host execution.` };
+      const diff = diffManifests(surface.manifest, current);
+      return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };
     }
   }
   return { ok: true };
