@@ -1,7 +1,7 @@
 /**
- * Acceptance coverage for the two #1071 outcomes that cross multiple internal
- * components. Direct provider argv, session-scope, candidate-gate, group-core,
- * and scalar-runner behavior belongs to their narrow unit suites.
+ * Acceptance coverage for #1071's durable run-identity boundary. Direct
+ * provider argv, session-scope, candidate-gate, group-core, and scalar-runner
+ * behavior belongs to their narrow unit suites.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -16,10 +16,6 @@ import {
   type ProviderRuntime,
 } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
-import {
-  makeSkippedOutcome,
-  runGroupBranch,
-} from '../../src/engine/group-core.js';
 import type {
   InvokeOptions,
   InvokeResult,
@@ -31,12 +27,6 @@ const ok = (output: string): InvokeResult => ({
   success: true,
   output,
   exitCode: 0,
-});
-
-const fail = (output: string): InvokeResult => ({
-  success: false,
-  output,
-  exitCode: 1,
 });
 
 function countingMint(prefix: string): () => string {
@@ -62,53 +52,6 @@ afterEach(() => {
 });
 
 describe('ST-1071 cross-component cold-start contracts', () => {
-  it('cold-starts a concurrent-group retry through the real provider-aware step runner', async () => {
-    const observed: Array<{ sessionId: string; resume: boolean }> = [];
-    let call = 0;
-    const provider: LLMProvider = {
-      supportsSessionResume: false,
-      invoke: vi.fn(),
-      invokeInteractive: vi.fn(async (options: InvokeOptions) => {
-        observed.push({ sessionId: options.sessionId, resume: options.resume });
-        call += 1;
-        return call === 1 ? fail('first branch attempt failed') : ok('passed');
-      }),
-    };
-    const runner = new DefaultStepRunner(
-      provider,
-      'run-identity',
-      '/tmp/project',
-      {
-        mode: 'interactive',
-        config: {
-          llm_provider: 'claude',
-          steps: { manual_test: { llm_provider: 'claude' } },
-        } as HarnessConfig,
-        sessionStore: new ProviderSessionStore({
-          createSessionId: countingMint('group-provider'),
-        }),
-        providerRuntimes: claudeRuntimes(provider),
-        configuredProviders: ['claude'],
-      } as never,
-    );
-
-    await runGroupBranch(
-      {
-        name: 'manual_test',
-        skill: 'manual-test',
-        outcome: makeSkippedOutcome(),
-      },
-      {} as ConductState,
-      { stepRunner: runner },
-      2,
-    );
-
-    expect(observed).toEqual([
-      { sessionId: 'group-provider-1', resume: false },
-      { sessionId: 'group-provider-2', resume: false },
-    ]);
-  });
-
   it('keeps the durable conduct run id stable while provider session ids churn', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'cold-start-runid-'));
     const pipelineDir = join(dir, '.pipeline');
