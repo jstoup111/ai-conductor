@@ -53,6 +53,7 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
 }));
 
 import {
+  STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
   findArtifactFiles,
   stepHasArtifacts,
@@ -104,6 +105,36 @@ describe('engine/artifacts', () => {
   }
 
   describe('STEP_ARTIFACT_GLOBS', () => {
+    it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {
+      const violations: string[] = [];
+
+      for (const step of Object.keys(STEP_ARTIFACT_GLOBS) as StepName[]) {
+        const patterns = STEP_ARTIFACT_GLOBS[step];
+        const contracts = STEP_ARTIFACT_CONTRACTS[step];
+        if (!contracts) {
+          violations.push(`${step}: missing step contract`);
+          continue;
+        }
+        if (contracts.length !== patterns.length) {
+          violations.push(`${step}: expected ${patterns.length} pattern contracts`);
+        }
+
+        for (const [index, contract] of contracts.entries()) {
+          if (contract.pattern !== patterns[index]) {
+            violations.push(`${step}[${index}]: pattern does not match legacy registry`);
+          }
+          if (!['feature', 'repository', 'run'].includes(contract.scope)) {
+            violations.push(`${step}[${index}]: missing lifecycle scope`);
+          }
+          if (contract.scope === 'feature' && !contract.identity) {
+            violations.push(`${step}[${index}]: missing feature identity strategy`);
+          }
+        }
+      }
+
+      expect(violations).toEqual([]);
+    });
+
     it('declares plan output in .docs/plans/', () => {
       expect(STEP_ARTIFACT_GLOBS.plan).toEqual(['.docs/plans/*.md']);
     });

@@ -30,6 +30,146 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 
+export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
+
+export type FeatureArtifactIdentityStrategy =
+  | { strategy: 'plan-stem' }
+  | {
+      strategy: 'normalized-stem';
+      stripDatePrefix?: boolean;
+      stripPrefixes?: readonly string[];
+    };
+
+export type ArtifactPatternContract =
+  | {
+      pattern: string;
+      scope: 'feature';
+      identity: FeatureArtifactIdentityStrategy;
+    }
+  | {
+      pattern: string;
+      scope: Exclude<ArtifactLifecycleScope, 'feature'>;
+      identity?: never;
+    };
+
+/**
+ * Lifecycle and identity policy for every built-in artifact pattern.
+ *
+ * This is introduced alongside the legacy glob registry so existing consumers
+ * remain unchanged. The compatibility projection becomes derived in Task 2.
+ */
+export const STEP_ARTIFACT_CONTRACTS = {
+  bootstrap: [],
+  memory: [],
+  assess: [
+    {
+      pattern: '.docs/decisions/technical-assessment-*.md',
+      scope: 'repository',
+    },
+  ],
+  explore: [],
+  prd: [
+    {
+      pattern: '.docs/specs/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
+  complexity: [],
+  stories: [
+    {
+      pattern: '.docs/stories/**/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
+  conflict_check: [
+    {
+      pattern: '.docs/conflicts/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
+  plan: [
+    {
+      pattern: '.docs/plans/*.md',
+      scope: 'feature',
+      identity: { strategy: 'plan-stem' },
+    },
+  ],
+  coherence_check: [
+    {
+      pattern: '.docs/coherence/*.md',
+      scope: 'feature',
+      identity: { strategy: 'plan-stem' },
+    },
+  ],
+  architecture_diagram: [
+    {
+      pattern: '.docs/architecture/*.md',
+      scope: 'repository',
+    },
+  ],
+  architecture_review: [
+    {
+      pattern: '.docs/decisions/architecture-review-*.md',
+      scope: 'feature',
+      identity: {
+        strategy: 'normalized-stem',
+        stripDatePrefix: true,
+        stripPrefixes: ['architecture-review'],
+      },
+    },
+    {
+      pattern: '.docs/decisions/adr-*.md',
+      scope: 'feature',
+      identity: {
+        strategy: 'normalized-stem',
+        stripDatePrefix: true,
+        stripPrefixes: ['adr'],
+      },
+    },
+  ],
+  worktree: [],
+  acceptance_specs: [
+    'spec/acceptance/**/*',
+    'spec/requests/**/*',
+    'spec/system/**/*',
+    'test/acceptance/**/*',
+    'test/**/*',
+    'tests/**/*',
+    '__tests__/**/*',
+    '*.test.js',
+    '*.test.ts',
+    '*.test.jsx',
+    '*.test.tsx',
+    '*.spec.js',
+    '*.spec.ts',
+    '*.spec.jsx',
+    '*.spec.tsx',
+  ].map((pattern) => ({ pattern, scope: 'repository' as const })),
+  build: [{ pattern: '.pipeline/task-status.json', scope: 'run' }],
+  build_review: [{ pattern: '.pipeline/build-review.json', scope: 'run' }],
+  wiring_check: [{ pattern: '.pipeline/wiring-evidence.json', scope: 'run' }],
+  test_suite: [{ pattern: FULL_SUITE_EVIDENCE_PATH, scope: 'run' }],
+  manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
+  prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
+  architecture_review_as_built: [
+    { pattern: '.pipeline/architecture-review-as-built.md', scope: 'run' },
+  ],
+  retro: [
+    {
+      pattern: '.docs/retros/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
+  rebase: [],
+  finish: [],
+  remediate: [],
+  attribution_verify: [],
+} satisfies Record<StepName, readonly ArtifactPatternContract[]>;
+
 /**
  * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
  * or a literal filename. Empty list = step produces no file artifacts; verification
