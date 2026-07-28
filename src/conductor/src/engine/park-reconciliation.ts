@@ -1,4 +1,4 @@
-import type { GhRunner, GitRunner } from './pr-labels.js';
+import { makeProductionGit, type GhRunner, type GitRunner } from './pr-labels.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -25,6 +25,23 @@ export async function reconcileMergedPark(
 ): Promise<ReconcileMergedParkOutcome> {
   if (!SINGLE_SLUG.test(opts.slug)) {
     return { slug: opts.slug, steps: [], refusal: 'invalid-slug' };
+  }
+
+  try {
+    await (opts.runGit ?? makeProductionGit())(
+      ['merge-base', '--is-ancestor', `feature/${opts.slug}`, 'origin/main'],
+      { cwd: opts.projectRoot },
+    );
+  } catch (error) {
+    const failure = error as { code?: unknown; stderr?: unknown };
+    const stderr = typeof failure.stderr === 'string' ? failure.stderr : '';
+    if (failure.code === 1) {
+      return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
+    }
+    if (/not a valid object name|unknown revision|ambiguous argument|bad object/i.test(stderr)) {
+      return { slug: opts.slug, steps: [], refusal: 'branch-missing' };
+    }
+    return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
   }
 
   return { slug: opts.slug, steps: [], refusal: 'not-implemented' };
