@@ -427,16 +427,30 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 **Story:** ST-1071-6
 **Type:** docs
 
+> **Operator amendment (2026-07-28): steps 1 and 2's shared-artifact edits are DONE — do not
+> redo them.** The four DECIDE artifacts below belong to #1069 and #927, not to this feature.
+> Editing them in-branch tripped the protected-artifact seal, which halts on third-party
+> amendments by design (`adr-2026-07-27-protected-artifact-seal-self-amendment-visibility`
+> §Decision, §Consequences — only own-feature self-amendment is tolerated). They were therefore
+> landed on `main` as a standalone docs PR (**#1111**, merged 2026-07-28T18:14Z):
+>
+> - `adr-2026-07-24-...-fresh-session-scope.md` §2 → unconditional
+> - `adr-2026-07-27-codex-never-resumes-a-harness-minted-session.md` → divergence-closed pointer
+> - `.docs/stories/fresh-session-per-step.md`
+> - `.docs/stories/per-step-provider-routing-927.md` ST-927-7
+>
+> This branch now carries those files byte-identical to `origin/main`, so the seal tolerates them
+> via the #976 base-inheritance path (`protected-artifact-seal.ts:390,398`) rather than halting.
+> **Re-editing any of the four re-breaks the seal.** Only the non-sealed items remain: `HARNESS.md`,
+> `docs/explanation/architecture.md`, and steps 3-5.
+
 **Steps:**
-1. Update `HARNESS.md:237-241` to state that every dispatch, including every retry, starts a
-   fresh session — no provider qualifier, no within-step exception. Amend
-   `adr-2026-07-24-...-fresh-session-scope.md` §2 (which #1069 re-qualified as
-   capability-dependent) to unconditional, and add a forward pointer in
-   `adr-2026-07-27-codex-never-resumes-a-harness-minted-session.md` recording that its named
-   Claude/Codex divergence is now closed.
-2. Amend `.docs/stories/fresh-session-per-step.md:100-126` and
-   `.docs/stories/per-step-provider-routing-927.md` ST-927-7 — completing #1069's annotations,
-   never reverting them. Update `docs/explanation/architecture.md` near `:143`.
+1. ~~Amend the two fresh-session ADRs~~ — **done in #1111**. Still do: update `HARNESS.md:237-241`
+   to state that every dispatch, including every retry, starts a fresh session — no provider
+   qualifier, no within-step exception. (`HARNESS.md` is not a protected artifact.)
+2. ~~Amend `.docs/stories/fresh-session-per-step.md:100-126` and
+   `.docs/stories/per-step-provider-routing-927.md` ST-927-7~~ — **done in #1111**. Still do:
+   update `docs/explanation/architecture.md` near `:143`.
 3. Add a `CHANGELOG.md` `[Unreleased]` entry. Confirm no `bin/conduct-ts` flag, hook wiring,
    skill symlink target, or `settings.json` schema change occurred, so no migration block is
    required; if the release gate's path classifier flags a surface anyway, commit
@@ -448,11 +462,13 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 **Files likely touched:**
 - `HARNESS.md`
 - `CHANGELOG.md`
+- `docs/explanation/architecture.md`
+
+**Landed in #1111 — do NOT touch from this branch (protected artifacts of #1069 / #927):**
 - `.docs/decisions/adr-2026-07-24-provider-aware-step-execution-fresh-session-scope.md`
 - `.docs/decisions/adr-2026-07-27-codex-never-resumes-a-harness-minted-session.md`
 - `.docs/stories/fresh-session-per-step.md`
 - `.docs/stories/per-step-provider-routing-927.md`
-- `docs/explanation/architecture.md`
 
 **Wired-into:** none
 **Dependencies:** Task 15
