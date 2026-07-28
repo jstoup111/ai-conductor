@@ -4,6 +4,9 @@ Diagnose and clear a feature that is dispatched but not progressing: no-task-pro
 build-progress ceilings, rate-limit waits, auth parks, and kickback loops. For operators
 reading `.pipeline/` state and the daemon log.
 
+> **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
+> read-only, classifies the failure, and routes to the one runbook that owns it.
+
 ## Symptom
 
 Any of these:

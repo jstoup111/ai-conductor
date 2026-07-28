@@ -380,6 +380,57 @@ else
   fi
 fi
 
+# ── 5d. operator_only frontmatter ↔ engine constant agreement ────────────────
+# A skill marked `operator_only: true` is suppressed for dispatched-step
+# sessions via the OPERATOR_ONLY_SKILLS constant in
+# src/conductor/src/engine/worktree-prepare.ts, which drives a `skillOverrides`
+# entry into each worktree's .claude/settings.local.json. The engine cannot
+# parse SKILL.md frontmatter from inside a consumer worktree, so the list is a
+# hand-maintained constant — this check is what keeps it honest. Drift in
+# EITHER direction is a hard failure: a skill marked operator-only but absent
+# from the constant silently loads inside steps (the exact bug the flag exists
+# to prevent), and a constant entry with no matching frontmatter suppresses a
+# skill nobody asked to suppress.
+
+echo ""
+echo -e "${BOLD}5d. operator_only frontmatter <-> engine constant agreement${NC}"
+
+wt_prepare="${HARNESS_DIR}/src/conductor/src/engine/worktree-prepare.ts"
+
+if [ ! -f "$wt_prepare" ]; then
+  assert "worktree-prepare.ts present (source of OPERATOR_ONLY_SKILLS)" 1
+else
+  # NOTE: every extraction below is `|| true`-guarded. Under `set -e` a `grep`
+  # that matches nothing exits 1 and aborts the whole script inside a command
+  # substitution — which would silently skip this check (and every check after
+  # it) in exactly the empty-list case it most needs to catch.
+  fm_operator_only=$(
+    for skill_file in "${HARNESS_DIR}"/skills/*/SKILL.md; do
+      [ -f "$skill_file" ] || continue
+      fm=$(sed -n '2,/^---$/p' "$skill_file" | head -n -1)
+      if echo "$fm" | grep -qE '^operator_only:[[:space:]]*true[[:space:]]*$'; then
+        basename "$(dirname "$skill_file")"
+      fi
+    done | sort
+  )
+
+  # Only the `export const OPERATOR_ONLY_SKILLS … = [ … ]` declaration line —
+  # anchored so the later *uses* of the constant inside wireSessionHookSettings
+  # can never be scraped as if they were entries.
+  engine_operator_only=$(
+    { grep -E '^export const OPERATOR_ONLY_SKILLS' "$wt_prepare" || true; } \
+      | sed -E 's/.*\[([^]]*)\].*/\1/' \
+      | { grep -oE "'[a-z0-9-]+'" || true; } | tr -d "'" | sort
+  )
+
+  if [ "$fm_operator_only" = "$engine_operator_only" ]; then
+    oo_count=$({ printf '%s\n' "$fm_operator_only" | grep -c . || true; })
+    assert "operator_only skills agree between frontmatter and engine (${oo_count})" 0
+  else
+    assert "operator_only drift — frontmatter: [$(echo "$fm_operator_only" | tr '\n' ' ')] engine: [$(echo "$engine_operator_only" | tr '\n' ' ')]" 1
+  fi
+fi
+
 # ── 5c. Docs-guard generated-hook drift gate ─────────────────────────────────
 # bin/generate-docs-guard-hook --check validates that the committed
 # hooks/claude/docs-guard.sh artifact matches what the TypeScript source

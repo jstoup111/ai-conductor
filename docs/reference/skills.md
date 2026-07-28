@@ -22,6 +22,7 @@ matches on when deciding to invoke the skill.
 | `enforcement` | yes for `skills/*` | Declared strictness: `advisory`, `gating`, or `structural`. **Advisory only.** The engine's step definition decides real skippability — see [Known limitations](#known-limitations) |
 | `phase` | yes for `skills/*` | `understand`, `decide`, `build`, `ship`, or `all` |
 | `standalone` | no | Whether an operator can run the skill on its own. Absent means non-standalone |
+| `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. The engine suppresses it for dispatched-step sessions via a `skillOverrides` entry in each worktree's `.claude/settings.local.json`. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts` |
 | `requires` | no | Prerequisite skills or artifact paths |
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
 
@@ -38,6 +39,7 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
+| `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only; diagnoses and recommends |
 | `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
@@ -98,6 +100,28 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   assumption ledger as its body.
 - **Gate role** — blocking. Verdict `CLEAR` proceeds; `ASSUMPTIONS_PENDING` blocks. Interactive runs
   wait for operator approval; autonomous runs HALT and never guess a likely value.
+
+### daemon-triage
+
+> Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why.
+
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `operator_only: true`,
+  `requires: [verify-claims]`, no model pin.
+- **Engine step** — none, by design. It is never dispatched. `operator_only: true` suppresses it for
+  step sessions (see [Frontmatter fields](#frontmatter-fields)), and the skill itself refuses to run
+  when `.pipeline/phase-active` is present — a step that triages itself reads its own in-flight state
+  as evidence of failure.
+- **Inputs** — read-only evidence only: `conduct-ts daemon status`, `.daemon/daemon.log`, and the
+  feature's `.pipeline/` state (`HALT` + `HALT.class`, `events.jsonl`, `task-status.json`,
+  `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.
+- **Outputs** — a triage report at `.daemon/triage/<slug>-<timestamp>.md`. Deliberately **not** under
+  `.pipeline/` — triage output is not feature evidence and must never be read as such by a gate.
+- **Gate role** — none. Read-only by contract: it never clears a halt, parks/unparks, edits
+  `.pipeline/`, or touches git. It classifies against a deterministic signal table, names exactly one
+  runbook, and hands the operator the commands to run.
+- **Runbooks** — reached via `skills/daemon-triage/runbooks`, a symlink to `docs/runbooks/`. The
+  symlink is what makes the reference resolve correctly in a consumer repo, where the harness's
+  `docs/` tree is not present but the skill directory itself is symlinked in by `bin/install`.
 
 ### architecture-diagram
 

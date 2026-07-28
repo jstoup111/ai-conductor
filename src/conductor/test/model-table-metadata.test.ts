@@ -168,6 +168,7 @@ const EXPECTED_EXTRA_ROW_NAMES = [
   'engineer',
   'intake',
   'conduct',
+  'daemon-triage',
   'pr',
   'tdd-red',
   'tdd-green',

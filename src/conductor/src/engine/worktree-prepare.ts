@@ -13,6 +13,24 @@ import {
 export const SETUP_SCRIPT = join('bin', 'setup');
 
 /**
+ * Skills declaring `operator_only: true` in their SKILL.md frontmatter.
+ *
+ * These exist for an operator debugging the harness from the outside; loading
+ * one inside a dispatched step is a category error (a step that triages itself
+ * reads its own in-flight state as evidence of failure). `bin/install` symlinks
+ * every skill to user scope, so a step session would otherwise see them — the
+ * suppression has to happen per-worktree, at dispatch, which is what
+ * `wireSessionHookSettings` does via `skillOverrides`.
+ *
+ * Kept as an engine constant rather than parsed from frontmatter at dispatch
+ * time: the engine has no reliable handle on the harness checkout from inside a
+ * consumer's worktree. `test/test_harness_integrity.sh` asserts this list and
+ * the frontmatter agree in both directions, so drift fails the build rather
+ * than silently un-suppressing a skill.
+ */
+export const OPERATOR_ONLY_SKILLS: readonly string[] = ['daemon-triage'];
+
+/**
  * Thrown when `bin/setup` fails to run or exits non-zero. Carries the tail of
  * the script's output (last 50 lines) for triage.
  */
@@ -227,8 +245,24 @@ async function wireSessionHookSettings(
       { matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: docsGuardPath }] },
     );
 
+    // Operator-only skills are suppressed for this dispatched-step session.
+    // Merge-preserve: only the keys this engine owns are set, so an operator's
+    // own skillOverrides entries in the worktree survive untouched.
+    if (OPERATOR_ONLY_SKILLS.length > 0) {
+      if (!settings.skillOverrides || typeof settings.skillOverrides !== 'object') {
+        settings.skillOverrides = {};
+      }
+      const overrides = settings.skillOverrides as Record<string, unknown>;
+      for (const skill of OPERATOR_ONLY_SKILLS) {
+        overrides[skill] = 'off';
+      }
+    }
+
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
     log?.('session hook settings: wired into .claude/settings.local.json');
+    if (OPERATOR_ONLY_SKILLS.length > 0) {
+      log?.(`operator-only skills suppressed for this session: ${OPERATOR_ONLY_SKILLS.join(', ')}`);
+    }
     return undefined;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

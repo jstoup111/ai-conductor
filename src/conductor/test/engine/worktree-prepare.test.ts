@@ -11,6 +11,7 @@ import {
   SETUP_SCRIPT,
   NAMESPACE_VAR,
   SetupFailureError,
+  OPERATOR_ONLY_SKILLS,
 } from '../../src/engine/worktree-prepare.js';
 import {
   PRE_DISPATCH_HOOK,
@@ -453,6 +454,43 @@ describe('engine/worktree-prepare', () => {
         return hooks?.some((h) => typeof h.command === 'string' && h.command.includes(substr));
       });
     }
+
+    // Operator-only skills (e.g. daemon-triage) exist for an operator debugging
+    // the harness from outside a run. bin/install symlinks every skill to user
+    // scope, so without this suppression a dispatched step would see them — and
+    // a step that triages itself reads its own in-flight state as evidence of
+    // failure. Suppression is per-worktree because that is the only seam the
+    // engine controls at dispatch time.
+    it('suppresses every operator-only skill for a dispatched-step session', async () => {
+      await prepareWorktree(dir);
+
+      const settings = JSON.parse(await readFile(settingsPath(dir), 'utf-8'));
+
+      expect(OPERATOR_ONLY_SKILLS.length).toBeGreaterThan(0);
+      for (const skill of OPERATOR_ONLY_SKILLS) {
+        expect(settings.skillOverrides?.[skill]).toBe('off');
+      }
+    });
+
+    it('preserves operator-authored skillOverrides while adding its own', async () => {
+      const claudeDir = join(dir, '.claude');
+      await mkdir(claudeDir, { recursive: true });
+      await writeFile(
+        settingsPath(dir),
+        JSON.stringify({ skillOverrides: { 'some-other-skill': 'name-only' } }, null, 2),
+        'utf-8',
+      );
+
+      await prepareWorktree(dir);
+
+      const settings = JSON.parse(await readFile(settingsPath(dir), 'utf-8'));
+      // The operator's own entry survives untouched…
+      expect(settings.skillOverrides['some-other-skill']).toBe('name-only');
+      // …alongside the engine-owned suppressions.
+      for (const skill of OPERATOR_ONLY_SKILLS) {
+        expect(settings.skillOverrides[skill]).toBe('off');
+      }
+    });
 
     it('writes PreToolUse and PostToolUse hook entries into a fresh worktree', async () => {
       await prepareWorktree(dir);

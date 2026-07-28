@@ -42,6 +42,23 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   requesting an ST-916 record-repair PR first when the record is still missing. The new `conduct-ts
   daemon reconcile-parked <slug>` verb runs the same guarded cleanup on demand for one slug
   ([implementation PR #1063](https://github.com/jstoup111/ai-conductor/pull/1063)).
+- New `daemon-triage` skill: an operator's entry point when the daemon has a feature wedged. It
+  gathers read-only evidence (daemon status, the feature's `HALT` + class, stall events, heartbeat,
+  task rows vs. actual `Task:`-trailered commits, gate verdicts), classifies the failure against a
+  deterministic signal table, and names exactly one runbook — rather than leaving the operator to
+  guess which of five applies. It is **read-only by contract**: it never clears a halt, parks or
+  unparks, edits `.pipeline/`, or touches git; it emits the commands and the operator runs them. Two
+  of its table rows exist specifically to stop confident wrong moves: a pinned resolved-count with
+  HEAD advancing is telemetry desync, not a stalled build, and a stale heartbeat belongs to whichever
+  step wrote it. Reports land in `.daemon/triage/`, never `.pipeline/`, so no gate can mistake triage
+  output for feature evidence. Runbooks resolve through a `runbooks` symlink inside the skill
+  directory, which is what makes the reference correct in a consumer repo that has no `docs/` tree.
+- New `operator_only: true` SKILL.md frontmatter field for skills an operator invokes from outside a
+  run. `bin/install` symlinks every skill to user scope, so a dispatched step would otherwise see
+  them; the engine now writes a `skillOverrides: { <skill>: 'off' }` entry into each worktree's
+  `.claude/settings.local.json` at dispatch, merge-preserving any operator-authored overrides
+  already there. Integrity check 5d fails on drift in either direction between the frontmatter flag
+  and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`, so the suppression list cannot silently rot.
 
 ### Changed
 

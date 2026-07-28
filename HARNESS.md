@@ -182,6 +182,7 @@ this section. CI enforces both content drift (the table matches the source) and 
 | engineer | Claude interactive | fable |  |  |  | Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus). |
 | intake | Claude interactive | inherits caller |  |  |  | Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch. |
 | conduct | Claude interactive | haiku |  |  |  | Artifact checking and status reporting — mechanical. |
+| daemon-triage | Claude interactive | sonnet |  |  |  | Operator-invoked, read-only triage. Routing determinism lives in the skill's signal table, not the model; the model gathers evidence and matches rows. |
 | pr | Claude interactive | sonnet |  |  |  | Diff analysis and structured PR body — templated output. |
 | tdd-red | Claude interactive | sonnet |  |  |  | Writing one test at a time — focused, constrained. |
 | tdd-green | Claude interactive | sonnet |  |  |  | Writing minimal implementation — constrained scope. |

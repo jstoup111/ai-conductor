@@ -3,6 +3,9 @@
 Land the missing `.docs/shipped/<slug>.md` for work that already shipped, so the daemon stops
 re-dispatching it. For operators who finished a feature by hand.
 
+> **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
+> read-only, classifies the failure, and routes to the one runbook that owns it.
+
 **A manual PR is not a harness finish.** Opening and merging a PR yourself tells the daemon
 nothing. The only thing that records a ship is a committed shipped record on the base branch.
 

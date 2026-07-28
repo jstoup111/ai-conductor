@@ -4,6 +4,9 @@ Recreate a feature's worktree from its branch and backfill the run state that we
 without letting the build redo work that is already committed. For operators who removed,
 moved, or lost `.worktrees/<slug>`.
 
+> **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
+> read-only, classifies the failure, and routes to the one runbook that owns it.
+
 **The branch is the source of truth. A worktree checkout is disposable.** Everything in
 `.worktrees/<slug>` except the git checkout itself can be rebuilt; the commits on
 `feat/daemon-<slug>` cannot.
