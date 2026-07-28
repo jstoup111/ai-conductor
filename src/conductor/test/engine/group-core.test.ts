@@ -408,7 +408,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       });
       await sessions.beginStep("build");
       await sessions.prepare("claude");
-      await sessions.markCreated("claude");
       const serialBefore = {
         session: sessions.current("claude"),
         legacyId: await legacySession.getSessionId(),
@@ -629,14 +628,14 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           architecture: "no-verdict",
         },
         serialBefore: {
-          session: { id: "serial-claude-session", created: true },
+          session: { id: "serial-claude-session" },
           legacyId: "serial-claude-session",
-          legacyCreated: true,
+          legacyCreated: false,
         },
         serialAfter: {
-          session: { id: "serial-claude-session", created: true },
+          session: { id: "serial-claude-session" },
           legacyId: "serial-claude-session",
-          legacyCreated: true,
+          legacyCreated: false,
         },
       });
     } finally {

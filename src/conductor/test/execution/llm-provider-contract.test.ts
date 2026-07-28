@@ -160,7 +160,6 @@ describe('InvokeResult provider-unavailable contract', () => {
     const transitions: Array<Record<string, unknown>> = [];
     const sessions = {
       prepare: vi.fn(async () => ({ id: 'diagnostic-session', resume: true })),
-      markCreated: vi.fn(async () => {}),
     } as unknown as ProviderSessionScope;
 
     await executeCodexCandidate(provider, sessions, transitions);
@@ -168,12 +167,11 @@ describe('InvokeResult provider-unavailable contract', () => {
     await executeCodexCandidate(provider, sessions, transitions);
 
     const forceFreshTransitions: Array<Record<string, unknown>> = [];
-    const forceFreshSessions = {
+    const selfHostSessions = {
       prepare: vi.fn(async () => ({ id: 'self-host-session', resume: true })),
-      markCreated: vi.fn(async () => {}),
     } as unknown as ProviderSessionScope;
-    await executeCodexCandidate(provider, forceFreshSessions, forceFreshTransitions, true);
-    await executeCodexCandidate(provider, forceFreshSessions, forceFreshTransitions, true);
+    await executeCodexCandidate(provider, selfHostSessions, forceFreshTransitions, true);
+    await executeCodexCandidate(provider, selfHostSessions, forceFreshTransitions, true);
 
     expect({
       resumeFlags: calls.map(({ resume }) => resume),
@@ -187,7 +185,12 @@ describe('InvokeResult provider-unavailable contract', () => {
         provider: 'codex',
         reason: 'Session resume suppressed: provider does not support session resume.',
       }],
-      forceFreshPolicies: [],
+      forceFreshPolicies: [{
+        type: 'session_policy',
+        step: 'build',
+        provider: 'codex',
+        reason: 'Session resume suppressed: provider does not support session resume.',
+      }],
     });
   });
 

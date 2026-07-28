@@ -3,7 +3,6 @@ import { v4 as uuidv4 } from 'uuid';
 
 export interface ProviderSession {
   id: string;
-  created: boolean;
 }
 
 export interface ProviderSessionInvocation {
@@ -33,7 +32,7 @@ export class ProviderSessionScope {
     const existing = this.sessions.get(providerKey);
     if (existing) return { ...existing };
 
-    const session = { id: this.createSessionId(), created: false };
+    const session = { id: this.createSessionId() };
     this.sessions.set(providerKey, session);
     if (this.legacy?.providerKey === providerKey) {
       await this.legacy.session.recordCompatibilitySession(session.id, false);
@@ -49,17 +48,6 @@ export class ProviderSessionScope {
     this.sessions.delete(providerKey);
     const session = await this.create(providerKey);
     return { id: session.id, resume: false };
-  }
-
-  async markCreated(providerKey: string): Promise<void> {
-    const session = this.sessions.get(providerKey);
-    if (!session) {
-      throw new Error(`Provider session not created for current scope: ${providerKey}`);
-    }
-    session.created = true;
-    if (this.legacy?.providerKey === providerKey) {
-      await this.legacy.session.recordCompatibilitySession(session.id, true);
-    }
   }
 
   current(providerKey: string): ProviderSession | undefined {
@@ -97,10 +85,6 @@ export class ProviderSessionStore {
 
   async replace(providerKey: string): Promise<ProviderSessionInvocation> {
     return this.step().replace(providerKey);
-  }
-
-  async markCreated(providerKey: string): Promise<void> {
-    await this.step().markCreated(providerKey);
   }
 
   current(providerKey: string): ProviderSession | undefined {

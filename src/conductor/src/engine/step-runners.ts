@@ -360,6 +360,7 @@ export class DefaultStepRunner implements StepRunner {
   private gitRunner: GitRunner;
   private planPathOverride?: string;
   private sessionStore?: ProviderSessionStore;
+  private readonly runId: string;
   private providerKey: string;
   private providerRuntimes?: ProviderRuntimeSet;
   private configuredProviders: readonly string[];
@@ -382,6 +383,7 @@ export class DefaultStepRunner implements StepRunner {
     private projectDir: string,
     options?: StepRunnerOptions,
   ) {
+    this.runId = sessionId;
     this.featureDesc = options?.featureDesc ?? '';
     this.totalSteps = options?.totalSteps ?? ALL_STEPS.length;
     this.pipelineDir = options?.pipelineDir ?? null;
@@ -669,7 +671,6 @@ export class DefaultStepRunner implements StepRunner {
 
       if (branchSessionId === undefined) {
         this.sessionStarted = true;
-        await this.sessionStore?.markCreated(this.providerKey);
 
         // Persist marker and session ID after first success.
         if (this.pipelineDir) {
@@ -683,9 +684,6 @@ export class DefaultStepRunner implements StepRunner {
 
       return { success: true };
     } catch (error) {
-      if (branchSessionId === undefined) {
-        await this.sessionStore?.markCreated(this.providerKey);
-      }
       this.callCount++;
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`Session for ${step} exited with error: ${errorMessage}`);
@@ -1088,9 +1086,6 @@ export class DefaultStepRunner implements StepRunner {
       effort: resolved.effort,
       cwd: this.projectDir,
     });
-    if (branchSessionId === undefined) {
-      await this.sessionStore?.markCreated(this.providerKey);
-    }
     this.callCount++;
 
     // Auth failure: operator's OAuth token is expired or invalid.
@@ -1892,6 +1887,10 @@ export class DefaultStepRunner implements StepRunner {
     // this handles both the missing case (creates it) and the present case (no-op).
     try {
       await mkdir(this.pipelineDir, { recursive: true });
+      const runIdPath = join(this.pipelineDir, 'conduct-session-id');
+      if (!(await this.fileExists(runIdPath))) {
+        await writeFile(runIdPath, this.runId, 'utf-8');
+      }
     } catch (error) {
       // Only allow ENOENT to pass through silently (recursive mkdir shouldn't throw it,
       // but if it does, the directory wasn't creatable anyway). Re-throw any other errors

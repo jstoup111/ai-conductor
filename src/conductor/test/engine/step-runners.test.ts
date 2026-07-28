@@ -834,8 +834,8 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
-      buildSession: { id: 'build-codex-session', created: true },
-      exploreSession: { id: 'explore-claude-session', created: true },
+      buildSession: { id: 'build-codex-session' },
+      exploreSession: { id: 'explore-claude-session' },
       build: {
         success: true,
         output: 'codex built',
@@ -936,11 +936,11 @@ describe('DefaultStepRunner', () => {
         fallbackReason: 'codex executable missing',
         invoked: false,
       },
-      cachedSession: { id: 'cached-3', created: false },
+      cachedSession: { id: 'cached-3' },
     });
   });
 
-  it('marks a rejected interactive attempt created without resuming it on same-step retry', async () => {
+  it('cold-starts after a rejected interactive attempt without created bookkeeping', async () => {
     const throwingInteractive = vi
       .fn<LLMProvider['invokeInteractive']>()
       .mockRejectedValueOnce(new Error('interactive process rejected'))
@@ -990,7 +990,7 @@ describe('DefaultStepRunner', () => {
         success: false,
         output: 'Session for explore exited with error: interactive process rejected',
       },
-      afterFailure: { id: 'retry-claude-session', created: true },
+      afterFailure: { id: 'retry-claude-session' },
       retryInvocations: [
         { sessionId: 'retry-claude-session', resume: false },
         { sessionId: 'retry-claude-session', resume: false },

@@ -384,11 +384,10 @@ describe('ST-1071-2 — a cold-started attempt carries an id the CLI has never s
     ]);
   });
 
-  it('prepare() returns a distinct id and resume:false on consecutive calls, even after markCreated', async () => {
+  it('prepare() returns a distinct id and resume:false on consecutive calls', async () => {
     const sessions = new ProviderSessionScope(countingMint('prepared'));
 
     const first = await sessions.prepare('claude');
-    await sessions.markCreated('claude');
     const second = await sessions.prepare('claude');
 
     expect({

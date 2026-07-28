@@ -768,7 +768,7 @@ describe('executeProviderCandidates', () => {
       ],
       sessions: {
         claude: undefined,
-        codex: { id: 'review-codex-session', created: true },
+        codex: { id: 'review-codex-session' },
       },
       result: {
         success: true,
@@ -1051,7 +1051,9 @@ describe('executeProviderCandidates', () => {
       message: string,
       transition: ProviderTransitionWarning,
     ): void => {
-      warnings.push({ message, transition });
+      if ((transition as { type: string }).type !== 'session_policy') {
+        warnings.push({ message, transition });
+      }
     };
     const module = await import('../../src/engine/provider-execution.js');
     const execute = (
@@ -1106,13 +1108,11 @@ describe('executeProviderCandidates', () => {
         third: firstSessions.current('third'),
       },
       cachedSessions: {
-        codexCreated:
-          cachedSessions.current('codex')?.created ?? false,
+        codex: cachedSessions.current('codex'),
         claude: cachedSessions.current('claude'),
         third: cachedSessions.current('third'),
       },
-      noNextCodexCreated:
-        noNextSessions.current('codex')?.created ?? false,
+      noNextCodex: noNextSessions.current('codex'),
       warnings,
       live,
       cached,
@@ -1154,16 +1154,16 @@ describe('executeProviderCandidates', () => {
       ],
       thirdCalls: [],
       firstSessions: {
-        codex: { id: 'live-codex-session', created: true },
-        claude: { id: 'live-claude-session', created: true },
+        codex: { id: 'live-codex-session' },
+        claude: { id: 'live-claude-session' },
         third: undefined,
       },
       cachedSessions: {
-        codexCreated: false,
-        claude: { id: 'cached-claude-session', created: true },
+        codex: { id: 'cached-codex-session' },
+        claude: { id: 'cached-claude-session' },
         third: undefined,
       },
-      noNextCodexCreated: false,
+      noNextCodex: { id: 'no-next-codex-session' },
       warnings: [
         {
           message:
@@ -1330,7 +1330,9 @@ describe('executeProviderCandidates', () => {
       message: string,
       transition: ProviderTransitionWarning,
     ): void => {
-      warnings.push({ message, transition });
+      if ((transition as { type: string }).type !== 'session_policy') {
+        warnings.push({ message, transition });
+      }
     };
     const module = await import('../../src/engine/provider-execution.js');
     const execute = (
@@ -1453,8 +1455,8 @@ describe('executeProviderCandidates', () => {
           },
         ],
         sessions: {
-          codex: { id: 'full-codex-session', created: true },
-          claude: { id: 'full-claude-session', created: true },
+          codex: { id: 'full-codex-session' },
+          claude: { id: 'full-claude-session' },
         },
         result: {
           success: true,
@@ -1642,7 +1644,11 @@ describe('executeProviderCandidates', () => {
           llm_provider: ['codex', 'claude'],
           steps: { build: { llm_provider: 'codex' } },
         },
-        warn: (_message, transition) => warnings.push(transition),
+        warn: (_message, transition) => {
+          if ((transition as { type: string }).type !== 'session_policy') {
+            warnings.push(transition);
+          }
+        },
         options: {
           prompt: 'Execute the step.',
           cwd: '/workspace/feature',
@@ -1839,8 +1845,11 @@ describe('executeProviderCandidates', () => {
         llm_provider: ['claude', 'codex', 'third'],
         steps: { build: { llm_provider: 'codex' } },
       },
-      warn: (message, transition) =>
-        warnings.push({ message, transition }),
+      warn: (message, transition) => {
+        if ((transition as { type: string }).type !== 'session_policy') {
+          warnings.push({ message, transition });
+        }
+      },
       options: {
         prompt: 'Execute the step.',
         cwd: '/workspace/feature',
