@@ -3966,6 +3966,27 @@ export class Conductor {
             if (attempt >= 2) {
               await writeHaltMarker(this.projectRoot, protectedArtifactIssue);
             }
+            // T7 invariant: EVERY build-step exit path records
+            // `lastResolvedCount`. This exit short-circuits before any build
+            // dispatch, so none of the T7 stamp sites further below are
+            // reached — and without a stamp here the sidecar keeps whatever
+            // stale (typically 0) count it had while the live count still
+            // counts `Task:`-trailered commits already on the branch. That
+            // makes daemon-cli's `isProgressReKickEligible`
+            // (`liveResolvedCount > lastResolvedCount`) permanently true for
+            // a feature halted at the seal, so the daemon re-dispatches it
+            // forever — a tight spin bounded only by the IN-MEMORY per-run
+            // progress-re-kick dispatch ceiling, which resets on every daemon
+            // restart. Recording the count on this exit is the honest reading
+            // of the predicate's own contract: this dispatch ended without
+            // making forward progress, so it must not earn a re-kick.
+            if (step.name === 'build' && this.taskEvidence) {
+              // Re-read fresh from disk rather than writing the possibly-
+              // stale in-memory snapshot — same reason as the other T7 stamps.
+              const freshEvidence = await createTaskEvidence(this.projectRoot);
+              freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
+              await freshEvidence.write();
+            }
           } else
           try {
             if (
