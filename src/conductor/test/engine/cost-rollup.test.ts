@@ -3,10 +3,10 @@ import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import {
-  classifyMetering,
   computeCostRollup,
   toFeatureUsageTotals,
 } from '../../src/engine/cost-rollup.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 import { formatFeatureUsageTotal } from '../../src/execution/provider-diagnostics.js';
 
 describe('engine/cost-rollup', () => {
