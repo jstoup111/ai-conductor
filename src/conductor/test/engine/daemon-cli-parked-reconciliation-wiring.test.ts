@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 import { runDaemon, type DaemonDeps } from '../../src/engine/daemon.js';
+import { reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
+import { writeOperatorPark } from '../../src/engine/park-marker.js';
+import { createGithubTrackerClient, type GhRunner } from '../../src/engine/tracker-client.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
 
 const source = readFileSync(resolve(process.cwd(), 'src/daemon-cli.ts'), 'utf8');
 
@@ -25,11 +31,38 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(source).toContain("import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';");
   });
 
-  it('passes the existing tracker issue-state lookup to the idle sweep, so only non-ancestor closed parks can be labeled orphan', () => {
+  it('binds the receiver-dependent tracker issue-state lookup for the idle sweep', () => {
     const sweepBinding = source.match(
       /reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{([\s\S]*?)\n {6}\},/,
     );
-    expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState,');
+    expect(sweepBinding?.[1]).toContain('getIssueState: tracker.getIssueState.bind(tracker),');
+  });
+
+  it('classifies a CLOSED non-ancestor park as orphan through the bound real tracker seam', async () => {
+    const projectRoot = await mkdtemp(resolve(tmpdir(), 'daemon-parked-tracker-binding-'));
+    try {
+      await mkdir(resolve(projectRoot, '.docs', 'intake'), { recursive: true });
+      await writeOperatorPark(projectRoot, 'orphan-park');
+      await writeFile(resolve(projectRoot, '.docs', 'intake', 'orphan-park.md'), 'Source-Ref: owner/repo#42\n');
+      const tracker = createGithubTrackerClient((async () => ({
+        stdout: JSON.stringify({ state: 'closed' }),
+      })) as GhRunner);
+      const runGit = (async () => {
+        throw Object.assign(new Error('not an ancestor'), { code: 1 });
+      }) as GitRunner;
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit,
+        autoCleanup: false,
+        // getIssueState calls this.viewIssue; this mirrors the idle callback binding.
+        getIssueState: tracker.getIssueState.bind(tracker),
+      });
+
+      expect(result.entries).toEqual([{ slug: 'orphan-park', classification: 'orphan', annotation: 'orphan' }]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('forces dashboard classification to autoCleanup: false, so a configured false toggle cannot delete during render', () => {

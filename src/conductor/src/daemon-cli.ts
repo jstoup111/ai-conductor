@@ -1524,7 +1524,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         }
         const reconciliation = await reconcileParkedFeatures({
           projectRoot,
-          getIssueState: tracker.getIssueState,
+          getIssueState: tracker.getIssueState.bind(tracker),
           // Rendering is observational. The daemon sweep below owns cleanup
           // and is the sole consumer of the startup-resolved toggle.
           autoCleanup: false,
@@ -1627,7 +1627,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           log,
           cache: parkedSweepCache,
           autoCleanup: reconcileParkedAutoCleanup,
-          getIssueState: tracker.getIssueState,
+          getIssueState: tracker.getIssueState.bind(tracker),
           requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
           disposeHaltWatcher,
         });
