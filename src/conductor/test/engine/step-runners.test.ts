@@ -1000,6 +1000,7 @@ describe('DefaultStepRunner', () => {
   });
 
   it('routes interactive recovery through the selected provider candidates', async () => {
+    const failureReason = 'explore artifact review rejected the generated stories';
     const capturedInteractive = vi.fn().mockResolvedValue(undefined);
     const unavailableCodex = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: false,
@@ -1046,7 +1047,12 @@ describe('DefaultStepRunner', () => {
     );
 
     await runner.resetSession('explore');
-    await runner.runInteractive('explore');
+    await (
+      runner.runInteractive as unknown as (
+        step: StepName,
+        context: { step: StepName; reason: string },
+      ) => Promise<void>
+    )('explore', { step: 'explore', reason: failureReason });
 
     expect({
       capturedCalls: capturedInteractive.mock.calls,
@@ -1067,7 +1073,7 @@ describe('DefaultStepRunner', () => {
       capturedCalls: [],
       codexCalls: [
         {
-          prompt: 'Fix issues from the failed explore step, then exit when done.',
+          prompt: expect.stringContaining(failureReason),
           sessionId: 'recovery-1',
           resume: false,
           interactive: true,
@@ -1075,7 +1081,7 @@ describe('DefaultStepRunner', () => {
       ],
       claudeCalls: [
         {
-          prompt: 'Fix issues from the failed explore step, then exit when done.',
+          prompt: expect.stringContaining(failureReason),
           sessionId: 'recovery-2',
           resume: false,
           interactive: true,
@@ -1095,6 +1101,49 @@ describe('DefaultStepRunner', () => {
           invoked: true,
         }),
       ],
+    });
+  });
+
+  it('cold-starts legacy interactive recovery with the failed step and reason', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
+    const failureReason = 'manual test returned a failing acceptance scenario';
+
+    await (
+      runner.runInteractive as unknown as (
+        step: StepName,
+        context: { step: StepName; reason: string },
+      ) => Promise<void>
+    )('manual_test', { step: 'manual_test', reason: failureReason });
+
+    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect({
+      prompt: options.prompt,
+      resume: options.resume,
+    }).toEqual({
+      prompt: expect.stringMatching(new RegExp(`manual_test.*${failureReason}`, 's')),
+      resume: false,
+    });
+  });
+
+  it('states explicitly when interactive recovery captured no failure reason', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
+
+    await (
+      runner.runInteractive as unknown as (
+        step: StepName,
+        context: { step: StepName; reason: string },
+      ) => Promise<void>
+    )('build', { step: 'build', reason: '  ' });
+
+    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect({
+      prompt: options.prompt,
+      resume: options.resume,
+    }).toEqual({
+      prompt: expect.stringMatching(/build.*no (failure )?reason (was )?captured/is),
+      resume: false,
     });
   });
 
