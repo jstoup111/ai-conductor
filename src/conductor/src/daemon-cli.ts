@@ -319,6 +319,14 @@ export function preseedStepStatuses(
   );
 }
 
+/** Clear provider-session markers before a daemon dispatch or re-dispatch. */
+export async function preparePipelineForDaemonDispatch(
+  pipelineDir: string,
+): Promise<void> {
+  await rm(join(pipelineDir, 'session-created'), { force: true });
+  await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
+}
+
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
 // plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
 // this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
@@ -907,8 +915,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // created → "No conversation found" → "session unavailable (expired or in
     // use)" → the feature errors out. The conductor also resets per step
     // before every step, but sweeping here guarantees a clean start.
-    await rm(join(pipelineDir, 'session-created'), { force: true });
-    await rm(join(pipelineDir, 'conduct-session-id'), { force: true });
+    await preparePipelineForDaemonDispatch(pipelineDir);
 
     // Pre-seed: specs are authored, so DECIDE is stamped done and the loop
     // resumes at BUILD for a fresh feature. On re-dispatch of a halted feature,
