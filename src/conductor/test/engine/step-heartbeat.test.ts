@@ -10,6 +10,7 @@ import {
   classifyHeartbeatAge,
   formatHeartbeatAge,
   runWithStallWatchdog,
+  heartbeatBelongsToDispatch,
   stepHeartbeatPath,
   type StepHeartbeat,
 } from '../../src/engine/step-heartbeat.js';
@@ -195,6 +196,7 @@ describe('engine/step-heartbeat', () => {
           killRef,
           pollIntervalMs: 5,
           now: () => 2 * 60_000, // 2 minutes after the heartbeat's ts
+          dispatchStartedAtMs: 0, // this dispatch owns the heartbeat at ts 0
           readHeartbeat: async () => staleHeartbeat,
           writeHalt,
         },
@@ -205,6 +207,92 @@ describe('engine/step-heartbeat', () => {
       expect(kill).toHaveBeenCalledTimes(1);
       expect(writeHalt).toHaveBeenCalledTimes(1);
       expect(writeHalt.mock.calls[0][0]).toMatch(/heartbeat stalled/i);
+    });
+
+    it('ignores a stale heartbeat left behind by a DIFFERENT step (regression: architecture_review_as_built killed 31s in)', async () => {
+      const writeHalt = vi.fn(async (_reason: string) => {});
+      const kill = vi.fn();
+      // The worktree's last dispatch was a `build` that finished hours ago; its
+      // heartbeat is still on disk. A freshly re-kicked review step must not
+      // inherit that silence as its own.
+      const leftover: StepHeartbeat = { step: 'build', ts: new Date(0).toISOString() };
+
+      const outcome = await runWithStallWatchdog(
+        {
+          worktreePath: root,
+          step: 'architecture_review_as_built',
+          thresholdMinutes: 1,
+          graceMinutes: 0,
+          killRef: { kill },
+          pollIntervalMs: 5,
+          now: () => 214 * 60_000, // 3h34m after the leftover heartbeat's ts
+          dispatchStartedAtMs: 214 * 60_000,
+          readHeartbeat: async () => leftover,
+          writeHalt,
+        },
+        async () => {
+          await new Promise((r) => setTimeout(r, 40));
+          return 'ok';
+        },
+      );
+
+      expect(outcome).toEqual({ stalled: false, value: 'ok' });
+      expect(kill).not.toHaveBeenCalled();
+      expect(writeHalt).not.toHaveBeenCalled();
+    });
+
+    it('ignores a same-step heartbeat stamped before this dispatch started', async () => {
+      const writeHalt = vi.fn(async (_reason: string) => {});
+      const kill = vi.fn();
+      const priorRun: StepHeartbeat = { step: 'build', ts: new Date(0).toISOString() };
+
+      const outcome = await runWithStallWatchdog(
+        {
+          worktreePath: root,
+          step: 'build',
+          thresholdMinutes: 1,
+          graceMinutes: 0,
+          killRef: { kill },
+          pollIntervalMs: 5,
+          now: () => 60 * 60_000,
+          dispatchStartedAtMs: 60 * 60_000, // this run started an hour after that pulse
+          readHeartbeat: async () => priorRun,
+          writeHalt,
+        },
+        async () => {
+          await new Promise((r) => setTimeout(r, 40));
+          return 'ok';
+        },
+      );
+
+      expect(outcome).toEqual({ stalled: false, value: 'ok' });
+      expect(writeHalt).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('heartbeatBelongsToDispatch', () => {
+    it('accepts a heartbeat for this step stamped at or after dispatch start', () => {
+      expect(
+        heartbeatBelongsToDispatch({ step: 'build', ts: new Date(5_000).toISOString() }, 'build', 5_000),
+      ).toBe(true);
+    });
+    it('rejects a heartbeat naming another step', () => {
+      expect(
+        heartbeatBelongsToDispatch(
+          { step: 'build', ts: new Date(10_000).toISOString() },
+          'architecture_review_as_built',
+          5_000,
+        ),
+      ).toBe(false);
+    });
+    it('rejects a heartbeat stamped before dispatch start', () => {
+      expect(
+        heartbeatBelongsToDispatch({ step: 'build', ts: new Date(1_000).toISOString() }, 'build', 5_000),
+      ).toBe(false);
+    });
+    it('rejects null and malformed timestamps', () => {
+      expect(heartbeatBelongsToDispatch(null, 'build', 0)).toBe(false);
+      expect(heartbeatBelongsToDispatch({ step: 'build', ts: 'not-a-date' }, 'build', 0)).toBe(false);
     });
   });
 });
