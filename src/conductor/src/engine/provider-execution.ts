@@ -180,7 +180,7 @@ export interface ExecuteProviderCandidatesInput {
   configuredProviders: readonly string[];
   preferredProvider?: ProviderSelection;
   runtimes: ProviderRuntimeSet;
-  sessions: Pick<ProviderSessionScope, 'prepare' | 'markCreated'>;
+  sessions: Pick<ProviderSessionScope, 'prepare'>;
   config?: HarnessConfig;
   tier?: ComplexityTier;
   attempt?: number;
@@ -371,17 +371,9 @@ export function resolveProviderCandidateNativeConfig({
 export interface InvokeProviderCandidateInput {
   providerKey: string;
   runtime: ProviderRuntime;
-  sessions: Pick<ProviderSessionScope, 'prepare' | 'markCreated'>;
+  sessions: Pick<ProviderSessionScope, 'prepare'>;
   resolved: ResolvedProviderNativeStepConfig;
   options: Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>;
-  /**
-   * Suppress resume for this invocation even when this provider's session was
-   * already created earlier in the step. Set when the invocation runs against a
-   * freshly provisioned isolated provider home: that throwaway home carries no
-   * session/rollout state forward, so resuming into it can only fail (Codex
-   * reports `no rollout found for thread id <id>`).
-   */
-  forceFreshSession?: boolean;
 }
 
 interface SessionPolicySuppression {
@@ -399,7 +391,6 @@ export async function invokeProviderCandidate({
   sessions,
   resolved,
   options,
-  forceFreshSession,
 }: InvokeProviderCandidateInput): Promise<{
   result: InvokeResult;
   invokedModel?: string;
@@ -407,30 +398,14 @@ export async function invokeProviderCandidate({
 }> {
   const session = await sessions.prepare(providerKey);
   const suppressForUnsupportedCapability =
-    runtime.provider.supportsSessionResume !== true &&
-    forceFreshSession !== true &&
-    session.resume;
-  let invocation: Awaited<ReturnType<typeof invokeRuntimeResolved>>;
-  try {
-    invocation = await invokeRuntimeResolved(runtime, {
-      ...options,
-      sessionId: session.id,
-      resume:
-        runtime.provider.supportsSessionResume === true &&
-        forceFreshSession !== true &&
-        session.resume,
-      model: resolved.model,
-      effort: resolved.effort,
-    });
-  } catch (error) {
-    // A runtime rejection occurs only after a live dispatch was attempted.
-    // Preserve same-step retry continuity without marking cached skips.
-    await sessions.markCreated(providerKey);
-    throw error;
-  }
-  if (!invocation.result.providerInvocationSkipped) {
-    await sessions.markCreated(providerKey);
-  }
+    runtime.provider.supportsSessionResume !== true;
+  const invocation = await invokeRuntimeResolved(runtime, {
+    ...options,
+    sessionId: session.id,
+    resume: false,
+    model: resolved.model,
+    effort: resolved.effort,
+  });
   return {
     result: invocation.result,
     invokedModel: invocation.model,
@@ -572,10 +547,6 @@ export async function executeProviderCandidates({
           sessions,
           resolved,
           options: selfHost ? { ...candidateOptions, selfHost } : candidateOptions,
-          // A self-host invocation runs against a home provisioned just above
-          // and torn down in the `finally` below, so no prior session survives
-          // into it. Resuming would target state the home cannot contain.
-          forceFreshSession: selfHost !== undefined,
         });
         return invocation.result;
       } finally {

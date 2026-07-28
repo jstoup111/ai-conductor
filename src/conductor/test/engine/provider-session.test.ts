@@ -17,6 +17,35 @@ describe('ProviderSessionStore', () => {
     );
   });
 
+  it('mints and mirrors a fresh session id for every provider invocation', async () => {
+    const pipelineDir = await mkdtemp(join(tmpdir(), 'provider-invocation-session-'));
+    tempDirs.push(pipelineDir);
+    const legacySession = new SessionManager(pipelineDir);
+    const ids = ['claude-invocation-1', 'claude-invocation-2'];
+    const store = new ProviderSessionStore({
+      createSessionId: () => ids.shift()!,
+      legacy: { providerKey: 'claude', session: legacySession },
+    });
+    await store.beginStep('build');
+
+    const first = await store.prepare('claude');
+    const second = await store.prepare('claude');
+
+    expect({
+      first,
+      second,
+      current: store.current('claude'),
+      legacyId: await legacySession.getSessionId(),
+      legacyCreated: await legacySession.isSessionCreated(),
+    }).toEqual({
+      first: { id: 'claude-invocation-1', resume: false },
+      second: { id: 'claude-invocation-2', resume: false },
+      current: { id: 'claude-invocation-2' },
+      legacyId: 'claude-invocation-2',
+      legacyCreated: false,
+    });
+  });
+
   it('isolates providers within one execution and invalidates them at every later step boundary', async () => {
     const pipelineDir = await mkdtemp(join(tmpdir(), 'provider-session-'));
     tempDirs.push(pipelineDir);
@@ -34,9 +63,7 @@ describe('ProviderSessionStore', () => {
     const seededLegacyImported = store.current('claude');
     const seededLegacyCreatedAfterBoundary = await legacySession.isSessionCreated();
     const buildClaude = { ...(await store.create('claude')) };
-    await store.markCreated('claude');
     const buildCodex = { ...(await store.create('codex')) };
-    await store.markCreated('codex');
     const activeClaude = store.current('claude');
     const activeCodex = store.current('codex');
     const activeBuildSessions = {
@@ -66,35 +93,33 @@ describe('ProviderSessionStore', () => {
       reviewClaude,
       buildClaudeStillCurrent: store.current('claude')?.id === buildClaude.id,
       codexStillCurrent: store.current('codex') !== undefined,
-      reviewClaudeCreated: store.current('claude')?.created,
       legacyId: await legacySession.getSessionId(),
       legacyCreated: await legacySession.isSessionCreated(),
     }).toEqual({
       seededLegacyImported: undefined,
       seededLegacyCreatedAfterBoundary: false,
-      buildClaude: { id: 'build-claude', created: false },
-      buildCodex: { id: 'build-codex', created: false },
+      buildClaude: { id: 'build-claude' },
+      buildCodex: { id: 'build-codex' },
       activeBuildSessions: {
-        claude: { id: 'build-claude', created: true },
-        codex: { id: 'build-codex', created: true },
+        claude: { id: 'build-claude' },
+        codex: { id: 'build-codex' },
         legacyId: 'build-claude',
-        legacyCreated: true,
+        legacyCreated: false,
       },
       priorSessionsAfterBoundary: {
         claude: undefined,
         codex: undefined,
         legacyCreated: false,
       },
-      reviewClaude: { id: 'review-claude', created: false },
+      reviewClaude: { id: 'review-claude' },
       buildClaudeStillCurrent: false,
       codexStillCurrent: false,
-      reviewClaudeCreated: false,
       legacyId: 'review-claude',
       legacyCreated: false,
     });
   });
 
-  it('resumes only matching retries while stale resets, provider switches, later steps, and concurrent branches stay isolated', async () => {
+  it('cold-starts every invocation while provider switches, later steps, and concurrent branches stay isolated', async () => {
     const pipelineDir = await mkdtemp(join(tmpdir(), 'provider-retry-session-'));
     tempDirs.push(pipelineDir);
     const legacySession = new SessionManager(pipelineDir);
@@ -102,14 +127,21 @@ describe('ProviderSessionStore', () => {
     await legacySession.markSessionCreated();
 
     const ids = [
-      'step-claude',
-      'step-codex',
+      'step-claude-1',
+      'step-claude-2',
+      'step-codex-1',
       'replacement-claude',
+      'replacement-claude-retry',
+      'step-codex-2',
       'next-step-claude',
-      'ab-a',
-      'ab-b',
-      'ba-a',
-      'ba-b',
+      'ab-a-1',
+      'ab-b-1',
+      'ab-a-2',
+      'ab-b-2',
+      'ba-a-1',
+      'ba-b-1',
+      'ba-a-2',
+      'ba-b-2',
     ];
     const store = new ProviderSessionStore({
       createSessionId: () => ids.shift()!,
@@ -118,10 +150,8 @@ describe('ProviderSessionStore', () => {
 
     await store.beginStep('build');
     const firstClaude = await store.prepare('claude');
-    await store.markCreated('claude');
     const retryClaude = await store.prepare('claude');
     const switchedCodex = await store.prepare('codex');
-    await store.markCreated('codex');
     const replacementClaude = await store.replace('claude');
     const retryAfterReplacement = await store.prepare('claude');
     const codexAfterClaudeReplacement = await store.prepare('codex');
@@ -129,14 +159,11 @@ describe('ProviderSessionStore', () => {
     // A repeated label is still a distinct step execution.
     await store.beginStep('build');
     const nextStepClaude = await store.prepare('claude');
-    await store.markCreated('claude');
 
     const branchAB_A = store.beginBranch('manual_test');
     const branchAB_B = store.beginBranch('prd_audit');
     const branchAB_AFirst = await branchAB_A.prepare('claude');
     const branchAB_BFirst = await branchAB_B.prepare('claude');
-    await branchAB_A.markCreated('claude');
-    await branchAB_B.markCreated('claude');
     const branchAB_ARetry = await branchAB_A.prepare('claude');
     const branchAB_BRetry = await branchAB_B.prepare('claude');
 
@@ -144,8 +171,6 @@ describe('ProviderSessionStore', () => {
     const branchBA_B = store.beginBranch('prd_audit');
     const branchBA_AFirst = await branchBA_A.prepare('claude');
     const branchBA_BFirst = await branchBA_B.prepare('claude');
-    await branchBA_B.markCreated('claude');
-    await branchBA_A.markCreated('claude');
     const branchBA_ARetry = await branchBA_A.prepare('claude');
     const branchBA_BRetry = await branchBA_B.prepare('claude');
 
@@ -175,27 +200,27 @@ describe('ProviderSessionStore', () => {
         created: await legacySession.isSessionCreated(),
       },
     }).toEqual({
-      firstClaude: { id: 'step-claude', resume: false },
-      retryClaude: { id: 'step-claude', resume: true },
-      switchedCodex: { id: 'step-codex', resume: false },
+      firstClaude: { id: 'step-claude-1', resume: false },
+      retryClaude: { id: 'step-claude-2', resume: false },
+      switchedCodex: { id: 'step-codex-1', resume: false },
       replacementClaude: { id: 'replacement-claude', resume: false },
-      retryAfterReplacement: { id: 'replacement-claude', resume: false },
-      codexAfterClaudeReplacement: { id: 'step-codex', resume: true },
+      retryAfterReplacement: { id: 'replacement-claude-retry', resume: false },
+      codexAfterClaudeReplacement: { id: 'step-codex-2', resume: false },
       nextStepClaude: { id: 'next-step-claude', resume: false },
       branchAB: {
-        aFirst: { id: 'ab-a', resume: false },
-        bFirst: { id: 'ab-b', resume: false },
-        aRetry: { id: 'ab-a', resume: true },
-        bRetry: { id: 'ab-b', resume: true },
+        aFirst: { id: 'ab-a-1', resume: false },
+        bFirst: { id: 'ab-b-1', resume: false },
+        aRetry: { id: 'ab-a-2', resume: false },
+        bRetry: { id: 'ab-b-2', resume: false },
       },
       branchBA: {
-        aFirst: { id: 'ba-a', resume: false },
-        bFirst: { id: 'ba-b', resume: false },
-        aRetry: { id: 'ba-a', resume: true },
-        bRetry: { id: 'ba-b', resume: true },
+        aFirst: { id: 'ba-a-1', resume: false },
+        bFirst: { id: 'ba-b-1', resume: false },
+        aRetry: { id: 'ba-a-2', resume: false },
+        bRetry: { id: 'ba-b-2', resume: false },
       },
-      serialScopeAfterBranches: { id: 'next-step-claude', created: true },
-      legacyAfterBranches: { id: 'next-step-claude', created: true },
+      serialScopeAfterBranches: { id: 'next-step-claude' },
+      legacyAfterBranches: { id: 'next-step-claude', created: false },
     });
   });
 
@@ -250,7 +275,7 @@ describe('ProviderSessionStore', () => {
         outcome: 'success',
         calls: [{ sessionId: 'branch-success', resume: false }],
         result: { success: true },
-        serial: { id: 'serial-success', created: false },
+        serial: { id: 'serial-success' },
         legacyId: 'serial-success',
         legacyCreated: false,
       },
@@ -261,7 +286,7 @@ describe('ProviderSessionStore', () => {
           success: false,
           output: 'Session for manual_test exited with error: branch failed',
         },
-        serial: { id: 'serial-throw', created: false },
+        serial: { id: 'serial-throw' },
         legacyId: 'serial-throw',
         legacyCreated: false,
       },

@@ -834,8 +834,8 @@ describe('DefaultStepRunner', () => {
           }),
         ],
       ],
-      buildSession: { id: 'build-codex-session', created: true },
-      exploreSession: { id: 'explore-claude-session', created: true },
+      buildSession: { id: 'build-codex-session' },
+      exploreSession: { id: 'explore-claude-session' },
       build: {
         success: true,
         output: 'codex built',
@@ -936,11 +936,11 @@ describe('DefaultStepRunner', () => {
         fallbackReason: 'codex executable missing',
         invoked: false,
       },
-      cachedSession: { id: 'cached-3', created: false },
+      cachedSession: { id: 'cached-3' },
     });
   });
 
-  it('marks a rejected interactive attempt created and resumes its session on same-step retry', async () => {
+  it('cold-starts after a rejected interactive attempt without created bookkeeping', async () => {
     const throwingInteractive = vi
       .fn<LLMProvider['invokeInteractive']>()
       .mockRejectedValueOnce(new Error('interactive process rejected'))
@@ -990,16 +990,17 @@ describe('DefaultStepRunner', () => {
         success: false,
         output: 'Session for explore exited with error: interactive process rejected',
       },
-      afterFailure: { id: 'retry-claude-session', created: true },
+      afterFailure: { id: 'retry-claude-session' },
       retryInvocations: [
         { sessionId: 'retry-claude-session', resume: false },
-        { sessionId: 'retry-claude-session', resume: true },
+        { sessionId: 'retry-claude-session', resume: false },
       ],
       retriedActualProvider: 'claude',
     });
   });
 
   it('routes interactive recovery through the selected provider candidates', async () => {
+    const failureReason = 'explore artifact review rejected the generated stories';
     const capturedInteractive = vi.fn().mockResolvedValue(undefined);
     const unavailableCodex = vi.fn(async (_options: InvokeOptions): Promise<InvokeResult> => ({
       success: false,
@@ -1046,7 +1047,12 @@ describe('DefaultStepRunner', () => {
     );
 
     await runner.resetSession('explore');
-    await runner.runInteractive('explore');
+    await (
+      runner.runInteractive as unknown as (
+        step: StepName,
+        context: { step: StepName; reason: string },
+      ) => Promise<void>
+    )('explore', { step: 'explore', reason: failureReason });
 
     expect({
       capturedCalls: capturedInteractive.mock.calls,
@@ -1067,7 +1073,7 @@ describe('DefaultStepRunner', () => {
       capturedCalls: [],
       codexCalls: [
         {
-          prompt: 'Fix issues from the failed explore step, then exit when done.',
+          prompt: expect.stringContaining(failureReason),
           sessionId: 'recovery-1',
           resume: false,
           interactive: true,
@@ -1075,7 +1081,7 @@ describe('DefaultStepRunner', () => {
       ],
       claudeCalls: [
         {
-          prompt: 'Fix issues from the failed explore step, then exit when done.',
+          prompt: expect.stringContaining(failureReason),
           sessionId: 'recovery-2',
           resume: false,
           interactive: true,
@@ -1095,6 +1101,49 @@ describe('DefaultStepRunner', () => {
           invoked: true,
         }),
       ],
+    });
+  });
+
+  it('cold-starts legacy interactive recovery with the failed step and reason', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
+    const failureReason = 'manual test returned a failing acceptance scenario';
+
+    await (
+      runner.runInteractive as unknown as (
+        step: StepName,
+        context: { step: StepName; reason: string },
+      ) => Promise<void>
+    )('manual_test', { step: 'manual_test', reason: failureReason });
+
+    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect({
+      prompt: options.prompt,
+      resume: options.resume,
+    }).toEqual({
+      prompt: expect.stringMatching(new RegExp(`manual_test.*${failureReason}`, 's')),
+      resume: false,
+    });
+  });
+
+  it('states explicitly when interactive recovery captured no failure reason', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'legacy-session', '/tmp/project');
+
+    await (
+      runner.runInteractive as unknown as (
+        step: StepName,
+        context: { step: StepName; reason: string },
+      ) => Promise<void>
+    )('build', { step: 'build', reason: '  ' });
+
+    const options = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect({
+      prompt: options.prompt,
+      resume: options.resume,
+    }).toEqual({
+      prompt: expect.stringMatching(/build.*no (failure )?reason (was )?captured/is),
+      resume: false,
     });
   });
 
@@ -1225,12 +1274,12 @@ describe('DefaultStepRunner', () => {
         model: expect.any(String),
         effort: expect.any(String),
         cwd: '/wt/feature-x',
-        sessionId: 'shared-session',
+        sessionId: expect.any(String),
         resume: false,
         dangerouslySkipPermissions: false,
         interactive: true,
       },
-      differingInvocationFields: [],
+      differingInvocationFields: ['sessionId'],
     });
   });
 
@@ -1621,7 +1670,7 @@ describe('DefaultStepRunner', () => {
     );
   });
 
-  it('first step does not resume, subsequent steps do', async () => {
+  it('does not resume legacy scalar steps', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -1631,7 +1680,7 @@ describe('DefaultStepRunner', () => {
     const call1 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     const call2 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
     expect(call1.resume).toBe(false);
-    expect(call2.resume).toBe(true);
+    expect(call2.resume).toBe(false);
   });
 
   // --- Feature 1: Step-scoped system prompts ---
@@ -1811,7 +1860,28 @@ describe('DefaultStepRunner', () => {
       await expect(access(markerPath).then(() => true, () => false)).resolves.toBe(true);
     });
 
-    it('reads existing session-created marker on init', async () => {
+    it('cold-starts a legacy scalar retry with a fresh session id', async () => {
+      const provider = createMockProvider();
+      const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
+        pipelineDir: pipeDir,
+      });
+
+      await runner.run('worktree', emptyState);
+      await runner.run('worktree', emptyState);
+
+      const attempts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls.map(
+        ([options]) => options as InvokeOptions,
+      );
+      expect({
+        resumes: attempts.map(({ resume }) => resume),
+        sessionIdChanged: attempts[0].sessionId !== attempts[1].sessionId,
+      }).toEqual({
+        resumes: [false, false],
+        sessionIdChanged: true,
+      });
+    });
+
+    it('does not resume from an inherited session-created marker', async () => {
       // Pre-create the marker file
       await writeFile(join(pipeDir, 'session-created'), '1', 'utf-8');
 
@@ -1820,11 +1890,10 @@ describe('DefaultStepRunner', () => {
         pipelineDir: pipeDir,
       });
 
-      // First run should use resume=true because marker exists
       await runner.run('explore', emptyState);
 
       const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
-      expect(opts.resume).toBe(true);
+      expect(opts.resume).toBe(false);
     });
 
     it('resetSession() overrides an inherited stale marker so the next step CREATES (no --resume)', async () => {
@@ -1850,7 +1919,8 @@ describe('DefaultStepRunner', () => {
       expect(opts.resume).toBe(false);
     });
 
-    it('persists session ID to conduct-session-id file', async () => {
+    it('does not replace the feature run id with a provider invocation id', async () => {
+      await writeFile(join(pipeDir, 'conduct-session-id'), 'feature-run-id', 'utf-8');
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'my-session-id', '/tmp/project', {
         pipelineDir: pipeDir,
@@ -1860,7 +1930,14 @@ describe('DefaultStepRunner', () => {
 
       const sessionIdPath = join(pipeDir, 'conduct-session-id');
       const content = await readFile(sessionIdPath, 'utf-8');
-      expect(content.trim()).toBe('my-session-id');
+      const invoked = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect({
+        runId: content.trim(),
+        providerIdIsSeparate: invoked.sessionId !== content.trim(),
+      }).toEqual({
+        runId: 'feature-run-id',
+        providerIdIsSeparate: true,
+      });
     });
 
     it('does not write marker when step fails', async () => {
@@ -2240,6 +2317,34 @@ STORIES: 10`;
   });
 
   describe('assessComplexity deterministic scoring', () => {
+    it('cold-starts legacy complexity assessment despite an inherited session marker', async () => {
+      const dir = await mkdtemp(join(tmpdir(), 'complexity-cold-start-'));
+      const pipelineDir = join(dir, '.pipeline');
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(join(pipelineDir, 'session-created'), '1', 'utf-8');
+      const provider = createMockProvider();
+      (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
+        success: true,
+        output: 'MODELS: 2\nINTEGRATIONS: 0\nAUTH: 0\nTIER: S',
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(provider, 'legacy-session', dir, {
+        pipelineDir,
+      });
+
+      try {
+        await runner.assessComplexity();
+        const options = (provider.invoke as ReturnType<typeof vi.fn>).mock
+          .calls[0][0] as InvokeOptions;
+        expect({
+          resume: options.resume,
+          freshSessionId: options.sessionId !== 'legacy-session',
+        }).toEqual({ resume: false, freshSessionId: true });
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+
     it('prefers count-based scoring over Claude letter (L despite TIER: S)', async () => {
       const provider = createMockProvider();
       (provider.invoke as ReturnType<typeof vi.fn>).mockResolvedValue({
@@ -2451,7 +2556,7 @@ TIER: M`,
       await rm(pipeDir, { recursive: true, force: true });
     });
 
-    it('deletes session-created marker and writes a fresh session ID', async () => {
+    it('deletes the marker and preserves the feature run id while the provider cold-starts', async () => {
       const provider = createMockProvider();
       const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project', {
         pipelineDir: pipeDir,
@@ -2468,10 +2573,17 @@ TIER: M`,
         .then(() => true, () => false);
       expect(stillExists).toBe(false);
 
-      // Fresh session ID persisted
-      const newId = (await readFile(join(pipeDir, 'conduct-session-id'), 'utf-8')).trim();
-      expect(newId).not.toBe('session-1');
-      expect(newId).toMatch(/^[0-9a-f-]{36}$/);
+      await runner.run('worktree', emptyState);
+      const invocation = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect({
+        runId: (await readFile(join(pipeDir, 'conduct-session-id'), 'utf-8')).trim(),
+        providerSessionChanged: invocation.sessionId !== 'session-1',
+        resume: invocation.resume,
+      }).toEqual({
+        runId: 'session-1',
+        providerSessionChanged: true,
+        resume: false,
+      });
     });
 
     it('tolerates resetSession when the marker never existed', async () => {
@@ -2490,7 +2602,7 @@ TIER: M`,
 
       // First run — creates session
       await runner.run('worktree', emptyState);
-      // Second run — would normally use resume (sessionStarted=true)
+      // Second run also cold-starts.
       await runner.run('memory', emptyState);
 
       // Reset and run again — should go back to resume=false. Use a
@@ -2501,7 +2613,7 @@ TIER: M`,
 
       const calls = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls;
       expect(calls[0][0].resume).toBe(false);  // first
-      expect(calls[1][0].resume).toBe(true);   // second
+      expect(calls[1][0].resume).toBe(false);  // second
       expect(calls[2][0].resume).toBe(false);  // post-reset
     });
   });

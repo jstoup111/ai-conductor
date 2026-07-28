@@ -546,7 +546,10 @@ export interface StepRunner {
    * Legacy runners omit this seam and continue using scalar branch sessions.
    */
   beginProviderBranch?(step: StepName): ProviderSessionScope | undefined;
-  runInteractive?(step: StepName): Promise<void>;
+  runInteractive?(
+    step: StepName,
+    failureContext: { reason?: string },
+  ): Promise<void>;
   assessComplexity?(): Promise<ComplexityTier | ComplexityAssessment | null>;
   /**
    * Drop session state so the next invocation creates a fresh provider session.
@@ -5005,7 +5008,9 @@ export class Conductor {
                   // detection per run.
                   if (!(this.daemon && stalled === 'no_task_progress')) {
                     if (this.mode !== 'auto' && this.stepRunner.runInteractive) {
-                      await this.stepRunner.runInteractive(step.name);
+                      await this.stepRunner.runInteractive(step.name, {
+                        reason: result.output?.trim() || retryHint?.trim(),
+                      });
                     }
                     const recheck = await checkStepCompletion(
                       this.projectRoot,
@@ -6044,7 +6049,9 @@ export class Conductor {
             }
             if (action === 'interactive') {
               if (this.stepRunner.runInteractive) {
-                await this.stepRunner.runInteractive(step.name);
+                await this.stepRunner.runInteractive(step.name, {
+                  reason: retryHint?.trim() || lastError,
+                });
               }
               i--;
               continue;

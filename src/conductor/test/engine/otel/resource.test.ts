@@ -3,7 +3,7 @@
  * FR-6: service.name, conductor.run.id, conductor.feature, conductor.project.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { buildResource } from '../../../src/engine/otel/resource.js';
@@ -52,6 +52,22 @@ describe('buildResource', () => {
     expect(resource.attributes['conductor.run.id']).toBe(sessionId);
   });
 
+  it('keeps conductor.run.id stable when telemetry is rebuilt after a process restart', async () => {
+    const firstProcess = buildResource({ pipelineDir, feature: 'f', project: 'p' });
+    const restartedProcess = buildResource({ pipelineDir, feature: 'f', project: 'p' });
+    const persisted = await readFile(join(pipelineDir, 'conduct-session-id'), 'utf-8');
+
+    expect({
+      firstProcess: firstProcess.attributes['conductor.run.id'],
+      restartedProcess: restartedProcess.attributes['conductor.run.id'],
+      persisted,
+    }).toEqual({
+      firstProcess: persisted,
+      restartedProcess: persisted,
+      persisted,
+    });
+  });
+
   it('generates a non-empty run.id when conduct-session-id is absent', () => {
     // pipelineDir exists but no session-id file
     const resource = buildResource({ pipelineDir, feature: 'f', project: 'p' });
@@ -60,10 +76,10 @@ describe('buildResource', () => {
     expect(runId.length).toBeGreaterThan(4);
   });
 
-  it('two builds without session-id file produce distinct run ids', () => {
+  it('two builds without an initial session-id file share the newly persisted run id', () => {
     const r1 = buildResource({ pipelineDir, feature: 'f', project: 'p' });
     const r2 = buildResource({ pipelineDir, feature: 'f', project: 'p' });
-    expect(r1.attributes['conductor.run.id']).not.toBe(r2.attributes['conductor.run.id']);
+    expect(r1.attributes['conductor.run.id']).toBe(r2.attributes['conductor.run.id']);
   });
 
   it('accepts a pre-supplied runId that overrides file/generated', () => {

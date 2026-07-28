@@ -49,11 +49,10 @@ selected by the `llm_provider` config key; an ordered array makes it a fallback 
 
 ### Per-step session capability contract
 
-Every executed step starts a fresh provider session. A retry may continue that step's session only when its
-provider declares `supportsSessionResume`; the capability is fail-closed for adapters that do not declare it.
-Codex declares no resume capability, so every Codex invocation is a cold start, including within-step retries.
-Those retries retain their task context through the `RETRY:`-prefixed full step prompt rather than a resumed
-conversation. Claude's declared resume capability preserves its existing same-step retry behavior.
+Every provider dispatch starts a fresh session, including every within-step retry. Both built-in providers
+declare `supportsSessionResume: false`; the retained capability seam is fail-closed for adapters that omit
+the declaration. Retries retain task context through committed artifacts and the `RETRY:`-prefixed full step
+prompt rather than a resumed conversation.
 
 ## The two loops
 

@@ -151,6 +151,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   selector already treated a skipped gate as satisfied) and no enforcement level changed; what
   changes is that a skip is now recorded rather than absent, and the `skipped: ` prefix keeps it from
   reading as passing evidence.
+- Ensure every Claude and Codex dispatch, including within-step retries, starts a fresh session while retaining retry context through committed artifacts and the full retry prompt ([implementation PR #1110](https://github.com/jstoup111/ai-conductor/pull/1110)).
 - The `build_progress` / `build_no_progress` events — and the `▶ build <resolved>/<total>` line they
   render into `.daemon/daemon.log` — no longer report a permanently pinned `resolved: 0` while a
   build is committing task after task. The watcher counted `.pipeline/task-status.json` rows only,

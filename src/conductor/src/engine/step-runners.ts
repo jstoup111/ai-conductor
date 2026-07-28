@@ -360,6 +360,7 @@ export class DefaultStepRunner implements StepRunner {
   private gitRunner: GitRunner;
   private planPathOverride?: string;
   private sessionStore?: ProviderSessionStore;
+  private readonly runId: string;
   private providerKey: string;
   private providerRuntimes?: ProviderRuntimeSet;
   private configuredProviders: readonly string[];
@@ -382,6 +383,7 @@ export class DefaultStepRunner implements StepRunner {
     private projectDir: string,
     options?: StepRunnerOptions,
   ) {
+    this.runId = sessionId;
     this.featureDesc = options?.featureDesc ?? '';
     this.totalSteps = options?.totalSteps ?? ALL_STEPS.length;
     this.pipelineDir = options?.pipelineDir ?? null;
@@ -544,7 +546,9 @@ export class DefaultStepRunner implements StepRunner {
       this.sessionId = invocation.id;
       resume = invocation.resume;
     } else {
-      resume = this.sessionStarted;
+      const { v4: uuidv4 } = await import('uuid');
+      this.sessionId = uuidv4();
+      resume = false;
     }
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const baseResolved = this.resolvedConfigFor(step, state.complexity_tier);
@@ -667,13 +671,11 @@ export class DefaultStepRunner implements StepRunner {
 
       if (branchSessionId === undefined) {
         this.sessionStarted = true;
-        await this.sessionStore?.markCreated(this.providerKey);
 
         // Persist marker and session ID after first success.
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
           await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
           // After successful first marker write, we know a session has been established.
           // Mark that for future mid-run detection.
           this.wasSessionMarkerFoundOnInit = true;
@@ -682,9 +684,6 @@ export class DefaultStepRunner implements StepRunner {
 
       return { success: true };
     } catch (error) {
-      if (branchSessionId === undefined) {
-        await this.sessionStore?.markCreated(this.providerKey);
-      }
       this.callCount++;
       const errorMessage = error instanceof Error ? error.message : String(error);
       this.log(`Session for ${step} exited with error: ${errorMessage}`);
@@ -1012,11 +1011,6 @@ export class DefaultStepRunner implements StepRunner {
     if (this.pipelineDir) {
       await this.ensurePipelineDir();
       await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-      await writeFile(
-        join(this.pipelineDir, 'conduct-session-id'),
-        this.sessionId,
-        'utf-8',
-      );
       this.wasSessionMarkerFoundOnInit = true;
     }
   }
@@ -1092,9 +1086,6 @@ export class DefaultStepRunner implements StepRunner {
       effort: resolved.effort,
       cwd: this.projectDir,
     });
-    if (branchSessionId === undefined) {
-      await this.sessionStore?.markCreated(this.providerKey);
-    }
     this.callCount++;
 
     // Auth failure: operator's OAuth token is expired or invalid.
@@ -1159,7 +1150,6 @@ export class DefaultStepRunner implements StepRunner {
         if (this.pipelineDir) {
           await this.ensurePipelineDir();
           await writeFile(join(this.pipelineDir, 'session-created'), '1', 'utf-8');
-          await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
           // After successful first marker write, we know a session has been established.
           // Mark that for future mid-run detection.
           this.wasSessionMarkerFoundOnInit = true;
@@ -1225,12 +1215,18 @@ export class DefaultStepRunner implements StepRunner {
       await unlink(join(this.pipelineDir, 'session-created')).catch(() => {
         // Marker didn't exist — nothing to clear.
       });
-      await writeFile(join(this.pipelineDir, 'conduct-session-id'), this.sessionId, 'utf-8');
     }
   }
 
-  async runInteractive(step: StepName): Promise<void> {
-    const prompt = `Fix issues from the failed ${step} step, then exit when done.`;
+  async runInteractive(
+    step: StepName,
+    failureContext: { reason?: string },
+  ): Promise<void> {
+    await this.resetSession(step);
+    const reason = failureContext.reason?.trim() || 'no reason captured';
+    const prompt =
+      `Fix issues from the failed ${step} step. ` +
+      `Failure reason: ${reason}. Then exit when done.`;
     if (this.providerRuntimes && this.sessionStore) {
       await this.runProviderAwareNormal(
         step,
@@ -1248,7 +1244,7 @@ export class DefaultStepRunner implements StepRunner {
     await this.provider.invokeInteractive({
       prompt,
       sessionId: this.sessionId,
-      resume: true,
+      resume: false,
       interactive: true,
       dangerouslySkipPermissions: false,
       model: resolved.model,
@@ -1303,12 +1299,14 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     const resolved = this.resolvedConfigFor('complexity');
+    const { v4: uuidv4 } = await import('uuid');
+    this.sessionId = uuidv4();
     // Walk the fallback ladder so a dead/out-of-credits configured model
     // (e.g. fable) degrades to the next available one instead of failing.
     const result = await this.modelAvailability.invokeWithLadder(this.provider, {
       prompt: '/conduct complexity',
       sessionId: this.sessionId,
-      resume: this.sessionStarted,
+      resume: false,
       dangerouslySkipPermissions: true,
       systemPrompt,
       model: this.modelAvailability.effectiveModel(resolved.model).model,
@@ -1891,6 +1889,10 @@ export class DefaultStepRunner implements StepRunner {
     // this handles both the missing case (creates it) and the present case (no-op).
     try {
       await mkdir(this.pipelineDir, { recursive: true });
+      const runIdPath = join(this.pipelineDir, 'conduct-session-id');
+      if (!(await this.fileExists(runIdPath))) {
+        await writeFile(runIdPath, this.runId, 'utf-8');
+      }
     } catch (error) {
       // Only allow ENOENT to pass through silently (recursive mkdir shouldn't throw it,
       // but if it does, the directory wasn't creatable anyway). Re-throw any other errors

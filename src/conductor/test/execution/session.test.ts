@@ -86,13 +86,13 @@ describe('SessionManager', () => {
       expect(args).not.toContain('--resume');
     });
 
-    it('returns --resume when session has been created', async () => {
+    it('returns --session-id when the created marker was inherited', async () => {
       const id = await mgr.getSessionId();
       await mgr.markSessionCreated();
       const args = mgr.buildClaudeArgs({});
-      expect(args).toContain('--resume');
+      expect(args).toContain('--session-id');
       expect(args).toContain(id);
-      expect(args).not.toContain('--session-id');
+      expect(args).not.toContain('--resume');
     });
 
     it('includes --dangerously-skip-permissions for non-interactive mode', async () => {

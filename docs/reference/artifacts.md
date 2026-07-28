@@ -265,7 +265,7 @@ Existence is the signal. Alphabetized.
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |
 | `build-step-active` | build step entry | Attribution scoping. A stale marker is cleared at every step entry, fail-open |
-| `conduct-session-id` | step runners | The current session id |
+| `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
 | `current-task` | `conduct-ts task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
 | `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
 | `finish-choice` | `finish` skill | SHIP-tail routing; subject to the session freshness check |
@@ -451,9 +451,11 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`,
 `attribution_divergence`.
 
-`session_policy` records when a provider's declared `supportsSessionResume` capability suppressed a
-would-be session resume — emitted by the same session-capability contract described in
-[Per-step session capability contract](architecture.md#per-step-session-capability-contract).
+`session_policy` records when the fail-closed `supportsSessionResume` capability seam suppresses a
+would-be session resume. Both built-in providers declare the capability false, so this is diagnostic
+evidence of a prevented resume rather than a path to a later resumed invocation. It is emitted by the
+same session-capability contract described in
+[Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).
 
 Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the shipped record's `## Cost`
 block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.

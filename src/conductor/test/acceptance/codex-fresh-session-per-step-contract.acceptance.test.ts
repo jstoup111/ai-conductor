@@ -207,7 +207,7 @@ afterEach(() => {
 });
 
 describe('S1 — Codex dispatch never requests session resume', () => {
-  it('declares session resume as a provider capability: Codex false, Claude true', () => {
+  it('declares session resume unsupported for every provider', () => {
     const codex = new CodexProvider(
       vi.fn(async () => ({ stdout: '{}', exitCode: 0 })) as never,
     );
@@ -216,7 +216,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     expect({
       codex: declaredResumeCapability(codex),
       claude: declaredResumeCapability(claude),
-    }).toEqual({ codex: false, claude: true });
+    }).toEqual({ codex: false, claude: false });
   });
 
   it('suppresses a would-be Codex resume on a second same-step dispatch', async () => {
@@ -234,7 +234,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     };
 
     await dispatch(shared);
-    // The scope itself still wants a resume — only the capability gate says no.
+    // The scope preserves the session id for accounting but never requests resume.
     const scopeWantsResume = (await sessions.prepare('codex')).resume;
     await dispatch(shared);
 
@@ -243,7 +243,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
       resumeFlags: codex.calls.map((call) => call.resume),
       sessionIds: codex.calls.map((call) => call.sessionId),
     }).toEqual({
-      scopeWantsResume: true,
+      scopeWantsResume: false,
       resumeFlags: [false, false],
       sessionIds: ['harness-minted-uuid', 'harness-minted-uuid'],
     });
@@ -272,7 +272,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
     }).toEqual({ declared: undefined, resumeFlags: [false, false] });
   });
 
-  it('leaves Claude resume behavior unchanged on a same-step retry', async () => {
+  it('starts a same-step Claude retry cold', async () => {
     const execute = await loadExecuteProviderCandidates();
     const claude = scriptedProvider(() => ok('claude attempt'), true);
     const sessions = new ProviderSessionScope(() => 'claude-session');
@@ -294,13 +294,13 @@ describe('S1 — Codex dispatch never requests session resume', () => {
       sessionIds: claude.calls.map((call) => call.sessionId),
       transitionTypes: transitions.map((transition) => transition.type),
     }).toEqual({
-      resumeFlags: [false, true],
+      resumeFlags: [false, false],
       sessionIds: ['claude-session', 'claude-session'],
       transitionTypes: [],
     });
   });
 
-  it('composes with forceFreshSession without an unsupported-resume diagnostic', async () => {
+  it('keeps isolated self-host dispatches fresh', async () => {
     const execute = await loadExecuteProviderCandidates();
     const codex = scriptedProvider(() => ok('self-host attempt'), false);
     const sessions = new ProviderSessionScope(() => 'self-host-session');
@@ -323,7 +323,7 @@ describe('S1 — Codex dispatch never requests session resume', () => {
       sessionPolicyCount: transitions.filter(
         (transition) => transition.type === 'session_policy',
       ).length,
-    }).toEqual({ resumeFlags: [false, false], sessionPolicyCount: 0 });
+    }).toEqual({ resumeFlags: [false, false], sessionPolicyCount: 1 });
   });
 });
 
@@ -359,7 +359,7 @@ describe('S3 — a capability-suppressed resume is visible in the audit trail', 
     });
   });
 
-  it('emits no session_policy diagnostic on a cold first Codex dispatch', async () => {
+  it('emits a session_policy diagnostic on a cold first Codex dispatch', async () => {
     const execute = await loadExecuteProviderCandidates();
     const codex = scriptedProvider(() => ok('first attempt'), false);
     const transitions: RecordedTransition[] = [];
@@ -376,10 +376,10 @@ describe('S3 — a capability-suppressed resume is visible in the audit trail', 
     expect({
       resume: codex.calls[0]?.resume,
       transitionTypes: transitions.map((transition) => transition.type),
-    }).toEqual({ resume: false, transitionTypes: [] });
+    }).toEqual({ resume: false, transitionTypes: ['session_policy'] });
   });
 
-  it('emits no session_policy diagnostic when a Claude resume proceeds normally', async () => {
+  it('starts a repeated Claude dispatch cold without a session_policy diagnostic', async () => {
     const execute = await loadExecuteProviderCandidates();
     const claude = scriptedProvider(() => ok('claude attempt'), true);
     const sessions = new ProviderSessionScope(() => 'claude-quiet-session');
@@ -401,7 +401,7 @@ describe('S3 — a capability-suppressed resume is visible in the audit trail', 
       sessionPolicyCount: transitions.filter(
         (transition) => transition.type === 'session_policy',
       ).length,
-    }).toEqual({ resumed: true, sessionPolicyCount: 0 });
+    }).toEqual({ resumed: false, sessionPolicyCount: 0 });
   });
 });
 

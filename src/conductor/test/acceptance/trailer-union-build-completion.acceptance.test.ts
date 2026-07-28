@@ -239,7 +239,10 @@ describe('#859 trailer-union build completion (real Conductor.run() loop)', () =
     // The initial stall is still classified/routed as halt_marker, and the
     // REPL hand-off still happens — that routing is unchanged by #859.
     expect(stallEvents.some((e) => e.reason === 'halt_marker')).toBe(true);
-    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    expect(runner.runInteractive).toHaveBeenCalledWith('build', {
+      reason:
+        'Previous attempt did not satisfy the completion check: .pipeline/halt-user-input-required is present — pipeline halted; conductor will open a recovery REPL. Finish the work now.',
+    });
     // With task 5 genuinely unresolved, the post-REPL recheck still fails,
     // so the loop must not fabricate a path to build_review.
     expect(stepOrder).not.toContain('build_review');

@@ -460,7 +460,7 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
 }
 
 export class ClaudeProvider implements LLMProvider {
-  readonly supportsSessionResume = true;
+  readonly supportsSessionResume = false;
 
   private async runClaude(
     args: string[],
@@ -671,11 +671,7 @@ export class ClaudeProvider implements LLMProvider {
 
     if (options.selfHost?.args) args.push(...options.selfHost.args);
 
-    if (options.resume) {
-      args.push('--resume', options.sessionId);
-    } else {
-      args.push('--session-id', options.sessionId);
-    }
+    args.push('--session-id', options.sessionId);
 
     if (options.dangerouslySkipPermissions) {
       args.push('--dangerously-skip-permissions');
