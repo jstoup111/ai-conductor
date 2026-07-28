@@ -4,6 +4,7 @@ import {
   type GhRunner,
   type GitRunner,
 } from './pr-labels.js';
+import { detectAutoResume } from './auto-resume.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -93,6 +94,12 @@ export async function reconcileMergedPark(
     if (prUrl) await opts.requestRecordRepair?.({ slug: opts.slug, prUrl });
     opts.log?.(`[parked-reconciliation] ${opts.slug} not reconcilable until the record lands`);
     return { slug: opts.slug, steps: [], refusal: 'record-missing', deferred: true };
+  }
+
+  const resume = await detectAutoResume(opts.projectRoot, opts.slug);
+  if (resume.kind === 'resume') {
+    opts.log?.(`[parked-reconciliation] ${opts.slug} has an in-progress run; refusing cleanup`);
+    return { slug: opts.slug, steps: [], refusal: 'in-progress' };
   }
 
   return { slug: opts.slug, steps: [], refusal: 'not-implemented' };
