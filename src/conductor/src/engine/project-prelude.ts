@@ -421,6 +421,15 @@ export async function currentCommitSha(projectRoot: string): Promise<string | nu
   }
 }
 
+export async function currentTreeHash(projectRoot: string): Promise<string | null> {
+  try {
+    const { stdout } = await exec('git rev-parse HEAD^{tree}', { cwd: projectRoot });
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 export async function commitsSince(projectRoot: string, sha: string): Promise<number | null> {
   if (!sha) return null;
   try {

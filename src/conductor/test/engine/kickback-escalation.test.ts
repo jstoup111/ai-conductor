@@ -46,23 +46,19 @@ function classifySnapshots(
   resolvedAfter = 0,
 ) {
   return classifyBuildProgress({
-    // Task 4 will consume the tree fields. The head fields keep this RED test
-    // runnable against the current commit-SHA implementation.
-    headBefore: before.head,
-    headAfter: after.head,
     treeBefore: before.tree,
     treeAfter: after.tree,
     resolvedBefore,
     resolvedAfter,
-  } as unknown as Parameters<typeof classifyBuildProgress>[0]);
+  });
 }
 
 describe('classifyBuildProgress', () => {
-  it('is did-work when head changed', () => {
+  it('is did-work when tree changed', () => {
     expect(
       classifyBuildProgress({
-        headBefore: 'abc123',
-        headAfter: 'def456',
+        treeBefore: 'abc123',
+        treeAfter: 'def456',
         resolvedBefore: 2,
         resolvedAfter: 2,
       }),
@@ -72,30 +68,30 @@ describe('classifyBuildProgress', () => {
   it('is did-work when resolvedAfter > resolvedBefore', () => {
     expect(
       classifyBuildProgress({
-        headBefore: 'abc123',
-        headAfter: 'abc123',
+        treeBefore: 'abc123',
+        treeAfter: 'abc123',
         resolvedBefore: 2,
         resolvedAfter: 3,
       }),
     ).toBe('did-work');
   });
 
-  it('is no-work when neither head nor resolved count moved', () => {
+  it('is no-work when neither tree nor resolved count moved', () => {
     expect(
       classifyBuildProgress({
-        headBefore: 'abc123',
-        headAfter: 'abc123',
+        treeBefore: 'abc123',
+        treeAfter: 'abc123',
         resolvedBefore: 2,
         resolvedAfter: 2,
       }),
     ).toBe('no-work');
   });
 
-  it('is no-work when both heads are null (unknown head treated conservatively)', () => {
+  it('is no-work when both tree hashes are null (unknown tree treated conservatively)', () => {
     expect(
       classifyBuildProgress({
-        headBefore: null,
-        headAfter: null,
+        treeBefore: null,
+        treeAfter: null,
         resolvedBefore: 0,
         resolvedAfter: 0,
       }),
@@ -104,8 +100,8 @@ describe('classifyBuildProgress', () => {
 
   it('is idempotent across repeated calls with identical input', () => {
     const input = {
-      headBefore: 'abc123',
-      headAfter: 'abc123',
+      treeBefore: 'abc123',
+      treeAfter: 'abc123',
       resolvedBefore: 1,
       resolvedAfter: 1,
     };
@@ -142,13 +138,11 @@ describe('classifyBuildProgress tree-hash witness', () => {
   ] as const)('classifies a null tree hash on the %s side as no-work', (_side, before, after) => {
     expect(
       classifyBuildProgress({
-        headBefore: before.head,
-        headAfter: after.head,
         treeBefore: before.tree,
         treeAfter: after.tree,
         resolvedBefore: 0,
         resolvedAfter: 0,
-      } as unknown as Parameters<typeof classifyBuildProgress>[0]),
+      }),
     ).toBe('no-work');
   });
 
