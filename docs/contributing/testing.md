@@ -144,7 +144,26 @@ in `AGENT_INSTRUCTIONS.md:60-64`.
 
 ## Global guards
 
-Three files run automatically and exist because each one prevented a real incident.
+Four files run automatically and exist because each one prevented a real incident.
+
+### vitest.config.ts — the run-scoped `TMPDIR`
+
+The config module calls `ensureRunTmpRootSync(tmpdir())` before Vitest constructs anything. That creates
+one `ai-conductor-vitest-run-*` root inside the real tmpdir and points `TMPDIR` at it.
+
+`os.tmpdir()` reads `TMPDIR` on every call, so all ~1,426 `mkdtemp(join(tmpdir(), '<prefix>-'))` call
+sites across the suite — including ones written later — land inside that root with no test-file changes,
+and `global-setup.ts` deletes the root wholesale at teardown. Before this, the tests that never cleaned
+up left tens of thousands of directories in the operator's real `/tmp`; on a tmpfs that exhausted inodes
+and broke unrelated production processes with `ENOSPC`.
+
+It is installed in the config rather than in `globalSetup` because Vitest's own project `tmpDir` is
+`join(tmpdir(), nanoid())`, evaluated between the two — a redirect any later leaves Vitest's own
+random-named SSR cache in the real tmpdir every run. `test/tmpdir-redirect-propagation.test.ts` runs
+inside a forked worker and asserts `os.tmpdir()` resolves to the run root, so the env propagation this
+all depends on is proven rather than assumed.
+
+None of this excuses a fixture from cleaning up after itself — it bounds the damage when one does not.
 
 ### setup.ts
 
@@ -167,14 +186,23 @@ kill-switches:
 - Daemon tmux sessions — leaked `cc-daemon-*` sessions are reaped; a killed session fails the run, an
   `indeterminate` one is logged non-fatally.
 - The real engineer signals store — a `test-project`-tagged line that leaked into it throws.
+- The real tmpdir's top-level entries — anything that appeared during the run and is neither the run root
+  nor known concurrent-tooling noise (`self-host-*`, `claude-*`, …) throws `tmpdir-leak-guard: N temp
+  entry/entries leaked into the REAL tmpdir …`. That is a temp dir the `TMPDIR` redirect did not
+  contain: a hardcoded `/tmp`, an `os.tmpdir()` value cached before the redirect, or a subprocess spawned
+  without the inherited env. Fix the call site; widening `IGNORED_TMPDIR_PREFIXES` is only for a genuine
+  false positive from a new concurrent tool.
+
+The tmpdir check runs last, so a `.pipeline`, tmux, or signals failure — the more specific diagnosis —
+still throws first. The run root is removed in a `finally`, so a failing run still frees the disk.
 
 It also sweeps stale tmpdir-rooted daemon sessions before the run and installs a best-effort SIGINT and
 SIGTERM reap, because Vitest's global teardown only fires on a normal exit.
 
 ### Leak guards
 
-`test/pipeline-leak-guard.ts`, `test/signals-leak-guard.ts`, and `test/tmux-leak-guard.ts` hold the
-snapshot and diff logic. The tmux guard is fail-closed by design: killing a session requires both that
+`test/pipeline-leak-guard.ts`, `test/signals-leak-guard.ts`, `test/tmux-leak-guard.ts`, and
+`test/tmpdir-leak-guard.ts` hold the snapshot and diff logic. The tmux guard is fail-closed by design: killing a session requires both that
 the baseline snapshot succeeded and that the pane cwd resolves and is tmpdir-rooted. Missing either
 signal leaves the session running and logs `tmux-leak-guard: NOT killed (fail-closed): …`.
 

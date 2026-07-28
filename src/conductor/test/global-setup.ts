@@ -1,6 +1,15 @@
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { rmSync } from 'node:fs';
+import { homedir, tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
+import {
+  createRunTmpRoot,
+  diffTmpdirEntries,
+  removeRunTmpRoot,
+  snapshotTmpdirEntries,
+  RUN_TMP_ROOT_ENV,
+  type TmpdirDiff,
+} from './tmpdir-leak-guard.js';
 import {
   snapshotDaemonSessions,
   reapLeakedDaemonSessions,
@@ -107,6 +116,48 @@ export function applyEngineerSignalsTeardownDecision(
 }
 
 /**
+ * Decide the teardown outcome from a real-tmpdir diff (#1112).
+ *
+ * Any entry that appeared in the REAL tmpdir during the run and is neither the
+ * run root nor known concurrent-tooling noise is a temp directory the suite
+ * created OUTSIDE the run root — the `TMPDIR` redirect installed in `setup()`
+ * did not contain it (hardcoded `/tmp`, an `os.tmpdir()` value cached before
+ * the redirect, or a subprocess spawned with a scrubbed env). Those are the
+ * calls that filled the operator's tmpfs to the point of breaking unrelated
+ * production processes with `ENOSPC`, so the run FAILS naming them.
+ *
+ * Ignored entries are reported through the logger only — a browser or the
+ * daemon writing to `/tmp` mid-run is not the suite's fault and must never
+ * fail it (same warn-don't-fail stance as the tmux guard's indeterminate set).
+ *
+ * Exported for direct unit testing of the throw-vs-warn decision, separate
+ * from the real fs/vitest wiring — mirrors the two decisions above.
+ */
+export function applyTmpdirTeardownDecision(
+  diff: TmpdirDiff,
+  realTmpdir: string,
+  logger: (message: string) => void = console.error
+): void {
+  if (diff.ignored.length > 0) {
+    logger(
+      `tmpdir-leak-guard: ignored ${diff.ignored.length} new ${realTmpdir} entry/entries ` +
+        `attributed to concurrent tooling (not the test suite): ${diff.ignored.join(', ')}`
+    );
+  }
+
+  if (diff.stray.length > 0) {
+    throw new Error(
+      `tmpdir-leak-guard: ${diff.stray.length} temp entry/entries leaked into the REAL ` +
+        `tmpdir (${realTmpdir}) during this test run (#1112): ${diff.stray.join(', ')} — the ` +
+        `run-scoped TMPDIR redirect in src/conductor/test/global-setup.ts should have ` +
+        `contained these; find the path that bypassed it (hardcoded '/tmp', an os.tmpdir() ` +
+        `value read before setup, or a subprocess spawned without the inherited env) and ` +
+        `fix it there rather than widening IGNORED_TMPDIR_PREFIXES`
+    );
+  }
+}
+
+/**
  * Best-effort reap on graceful interruption (SIGINT/SIGTERM). vitest's
  * `globalTeardown` only runs on a normal process exit — Ctrl-C, an external
  * `timeout`-style SIGTERM, or a killed worker all bypass it entirely, which
@@ -116,7 +167,8 @@ export function applyEngineerSignalsTeardownDecision(
  */
 function installInterruptReap(
   getSnapshot: () => ReturnType<typeof snapshotDaemonSessions>,
-  logger: (message: string) => void
+  logger: (message: string) => void,
+  runTmpRoot: string
 ): () => void {
   let handled = false;
   const onSignal = (signal: NodeJS.Signals) => {
@@ -129,6 +181,15 @@ function installInterruptReap(
       }
     } catch {
       // Best-effort only — never let reap failure block shutdown.
+    }
+    try {
+      // Same bypassed-teardown problem the reap above exists for: a Ctrl-C
+      // would otherwise strand this run's whole temp root, and an operator who
+      // interrupts often is exactly the operator whose tmpfs fills up. Sync
+      // removal because the process exits on the next line.
+      rmSync(runTmpRoot, { recursive: true, force: true });
+    } catch {
+      // Best-effort only — never let cleanup failure block shutdown.
     } finally {
       process.exit(1);
     }
@@ -142,6 +203,18 @@ function installInterruptReap(
 }
 
 export default async function setup() {
+  // Tmpdir leak guard (#1112), part 1 of 2 — the REDIRECT. It is installed one
+  // stage earlier, in vitest.config.ts module scope (see `ensureRunTmpRootSync`
+  // for why it cannot wait until here), so by now `TMPDIR` and `os.tmpdir()`
+  // already point at this run's root. Recover the root from the env and derive
+  // the operator's REAL tmpdir from it — every guard below is defined against
+  // the real one, and the fallback keeps this file runnable as a globalSetup
+  // even if the config-level install is ever missing.
+  const runTmpRoot = process.env[RUN_TMP_ROOT_ENV] ?? (await createRunTmpRoot(tmpdir()));
+  process.env[RUN_TMP_ROOT_ENV] = runTmpRoot;
+  process.env.TMPDIR = runTmpRoot;
+  const realTmpdir = dirname(runTmpRoot);
+
   // Engine-dist guard: 13 test files spawn the real `bin/conduct-ts`, which
   // exits 1 when `src/conductor/dist` is missing or dangling. `dist` is a
   // gitignored symlink absent from a fresh clone/worktree, and there is no
@@ -157,6 +230,11 @@ export default async function setup() {
 
   const beforeState = await snapshotPipeline(process.cwd());
 
+  // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
+  // tmpdir's top-level entries here, before any test has run, so the teardown
+  // diff sees only what appeared during the run and escaped the redirect.
+  const tmpdirBefore = await snapshotTmpdirEntries(realTmpdir);
+
   // Signals leak guard (#861): snapshot the REAL engineer signals store
   // before the run so only test-project-tagged lines ADDED during this run
   // count as pollution leaked past the test-process env redirect.
@@ -168,6 +246,14 @@ export default async function setup() {
   // interrupted before ITS teardown could reap it. Runs BEFORE the baseline
   // snapshot below so that debris is never silently absorbed as "pre-existing,
   // therefore never inspected again".
+  //
+  // Run this whole tmux window against the REAL tmpdir: the sweep and the reap
+  // decide what to kill via `isTmpdirRooted`, i.e. `os.tmpdir()` at call time.
+  // Under the redirect that would narrow to this run's root and blind the
+  // sweep to debris left under a PREVIOUS run's root. Nothing in the window
+  // writes temp files, so nothing escapes containment; teardown restores the
+  // real tmpdir before the reap for exactly the same reason.
+  process.env.TMPDIR = realTmpdir;
   const sweep = sweepStaleDaemonSessions();
   if (sweep.killed.length > 0) {
     console.error(
@@ -182,15 +268,46 @@ export default async function setup() {
   const daemonSnapshot = snapshotDaemonSessions();
   globalThis.__tmuxSnapshot = daemonSnapshot;
 
+  // Close the real-tmpdir window opened for the tmux sweep: from here on —
+  // crucially, before the pool forks its workers — TMPDIR points back at this
+  // run's root, which is what contains every test's `mkdtemp`.
+  process.env.TMPDIR = runTmpRoot;
+
   const removeInterruptHandlers = installInterruptReap(
     () => globalThis.__tmuxSnapshot ?? daemonSnapshot,
-    console.error
+    console.error,
+    runTmpRoot
   );
 
   // Return the async teardown function
   return async () => {
     removeInterruptHandlers();
 
+    // Restore the real tmpdir FIRST so every guard below observes exactly the
+    // `os.tmpdir()` it observed before this redirect existed — in particular
+    // the tmux reap's `isTmpdirRooted` corroboration, which must still match a
+    // pane cwd anywhere under the real tmpdir, not only under the run root.
+    process.env.TMPDIR = realTmpdir;
+    delete process.env[RUN_TMP_ROOT_ENV];
+
+    try {
+      await runTeardownGuards();
+    } finally {
+      // Reclaim the run root whatever the guards decided. In `finally` so a
+      // guard failure still frees the disk, and self-contained try/catch so a
+      // removal failure can never mask the guard error being propagated.
+      try {
+        await removeRunTmpRoot(runTmpRoot);
+      } catch (err) {
+        console.error(
+          `tmpdir-leak-guard: could not remove the run temp root ${runTmpRoot} — remove it ` +
+            `manually to reclaim the space: ${err}`
+        );
+      }
+    }
+  };
+
+  async function runTeardownGuards(): Promise<void> {
     const afterState = await snapshotPipeline(process.cwd());
     const diff = diffPipeline(beforeState, afterState);
 
@@ -227,7 +344,14 @@ export default async function setup() {
           `real engineer signals store for leaked test-project lines — investigate manually: ${err}`
       );
     }
-  };
+
+    // Tmpdir leak guard (#1112): re-snapshot the REAL tmpdir and fail on any
+    // entry that appeared outside the run root. Runs LAST so it can never
+    // pre-empt an existing guard's verdict — a .pipeline, tmux, or signals
+    // failure is the more specific diagnosis and still throws first.
+    const tmpdirAfter = await snapshotTmpdirEntries(realTmpdir);
+    applyTmpdirTeardownDecision(diffTmpdirEntries(tmpdirBefore, tmpdirAfter), realTmpdir);
+  }
 }
 
 declare global {
