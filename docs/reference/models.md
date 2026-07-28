@@ -74,7 +74,7 @@ not a tuning knob.
 | `architecture_review_as_built` | fable | gpt-5.6-sol | high | 3 | conditional |
 | `retro` | sonnet | gpt-5.6-terra | medium | 3 | manual |
 | `rebase` | opus | gpt-5.6-terra | high | 1 | auto |
-| `finish` | haiku | gpt-5.6-luna | medium | 1 | auto |
+| `finish` | sonnet | gpt-5.6-terra | medium | 1 | auto |
 | `remediate` | fable | gpt-5.6-sol | medium | 3 | auto |
 | `attribution_verify` | opus | gpt-5.6-sol | high | 3 | auto |
 

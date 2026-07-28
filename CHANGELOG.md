@@ -44,6 +44,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   still does real work, and the base and L-tier model now agreeing is not a reason to touch it.
   Codex's `plan` effort (`high`) and Claude's `plan` model/effort (`opus`/`high`) are unchanged;
   the shared `STEP_EFFORTS` table was not touched.
+- The `finish` skill's Push & PR path now authors and publishes the pull request **inline** instead
+  of delegating to the `/pr` skill. Delegating ended the finish turn: the step logged "Waiting for
+  the `/pr` skill to complete", never came back, and never ran `conduct-ts finish-record` — so the
+  completion gate saw a missing `.pipeline/finish-choice` and failed the step on try 1. A new
+  §5a inlines `/pr`'s title/body contract, pre-push checks, staleness proof, and
+  `gh pr create`/`gh pr edit`. `/pr` remains a standalone operator-invoked skill; every existing
+  refusal gate is unchanged — an environmental blocker still leaves the marker unwritten.
+- The `finish` step now runs one tier up each provider's model ladder: Claude `haiku` → `sonnet`,
+  Codex `gpt-5.6-luna` → `gpt-5.6-terra`. It drives the pipeline's most procedurally intricate
+  skill — a multi-branch STOP contract, inline push/PR sequencing, and a mandatory terminal
+  `conduct-ts finish-record` — and the weakest tier lost the turn often enough to leave features
+  complete-but-unshipped. The shared `STEP_EFFORTS` table is untouched; `finish` effort stays
+  `medium` on both providers.
 
 ### Fixed
 
