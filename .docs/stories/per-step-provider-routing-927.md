@@ -292,10 +292,6 @@ their established recovery semantics.
 
 **Requirement:** FR-19
 
-> **Capability qualification (2026-07-27):** The retry-resume rule applies only
-> to providers that declare `supportsSessionResume`. Codex does not; its retries
-> are cold starts that receive context through the `RETRY:`-prefixed full prompt.
-
 As a harness operator, I want execution identity and accounting to follow the
 actual provider and current step so that mixed runs remain isolated and
 auditable without carrying conversation context across step boundaries.
