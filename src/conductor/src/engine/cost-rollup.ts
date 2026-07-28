@@ -9,6 +9,7 @@
  */
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { FeatureUsageTotals } from '../execution/provider-diagnostics.js';
 
 export interface CostRollup {
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number };
@@ -57,6 +58,26 @@ function addDispatch(
     target.unmetered.count += 1;
     target.unmetered.durationMs += Number(tokenUsage?.durationMs) || 0;
   }
+}
+
+/**
+ * Project a rollup onto the flat shape the whole-feature usage log line needs.
+ *
+ * `unmetered.count` also absorbs records the rollup could not read at all
+ * (corrupt lines, a missing event log), so it can exceed `dispatches`; the
+ * metered count is clamped at zero rather than going negative. Those
+ * unreadable records stay visible as "unmetered" instead of silently
+ * inflating a build's apparent measured cost.
+ */
+export function toFeatureUsageTotals(rollup: CostRollup): FeatureUsageTotals {
+  return {
+    dispatches: rollup.dispatches,
+    meteredDispatches: Math.max(0, rollup.dispatches - rollup.unmetered.count),
+    unmeteredDispatches: rollup.unmetered.count,
+    costUsd: rollup.costUsd,
+    inputTokens: rollup.tokens.input,
+    outputTokens: rollup.tokens.output,
+  };
 }
 
 export async function computeCostRollup(worktreeDir: string): Promise<CostRollup> {

@@ -102,7 +102,8 @@ lines are daemon-wide, not feature work. The exact shapes and the slug length bo
 
 ### Provider attribution and result summaries
 
-Two line kinds tell you what a step actually did and which provider ran it — this matters because
+Three line kinds tell you what a step actually did, which provider ran it, and what the feature
+cost in total — the per-step attribution matters because
 providers are routed per step (`llm_provider` top level plus per-step overrides; see
 [configuration](../reference/configuration.md)), so the provider executing a given step is not
 necessarily the repo default.
@@ -117,6 +118,17 @@ necessarily the repo default.
   dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
   process argv. A provider skipped from a cached availability result dispatches no process and is
   not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
+- **`·   finish: total usage — <dispatches>, <cost>, <in>→<out> tok, <n> unmetered`** is logged once,
+  when the feature's `finish` step completes. It is the sum of every dispatch that feature recorded
+  in its own `.pipeline/events.jsonl` — so it spans the whole build, including steps run in earlier
+  daemon dispatches, not just the session that happened to reach `finish`. The same rollup feeds the
+  `## Cost` block of the committed `.docs/shipped/<slug>.md`, so the two never disagree.
+
+  Cost and token figures appear only when at least one dispatch was actually metered. A build whose
+  provider reported no usage prints its dispatch count and an explicit `<n> unmetered` instead of a
+  fabricated `$0.00` — "never measured" must not read as "free". Unreadable or missing event records
+  are counted as unmetered for the same reason. The line is best-effort: a feature never fails to
+  ship because its cost could not be computed.
 
 `daemon status` does not yet carry the provider for a step that is still in flight
 ([#1081](https://github.com/jstoup111/ai-conductor/issues/1081)).

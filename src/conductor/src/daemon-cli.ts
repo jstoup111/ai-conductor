@@ -6,7 +6,10 @@ import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
-import { formatDiagnosticDuration } from './execution/provider-diagnostics.js';
+import {
+  formatDiagnosticDuration,
+  formatFeatureUsageTotal,
+} from './execution/provider-diagnostics.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import {
@@ -849,7 +852,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
       'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
       'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall',
-      'provider_attempt', 'provider_fallback',
+      'provider_attempt', 'feature_usage_total', 'provider_fallback',
       'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
       'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
       'auto_park_contradiction',
@@ -1943,6 +1946,13 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot}   ${event.step} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
       break;
     }
+    case 'feature_usage_total':
+      // The per-step provider lines above answer "what did this step cost?".
+      // This one answers "what did the whole feature cost?" — the question an
+      // operator actually asks once a build ships, and one they otherwise have
+      // to answer by summing a hundred log lines by hand.
+      log(`${dot}   ${chalk.dim(formatFeatureUsageTotal(event))}`);
+      break;
     case 'provider_fallback':
       log(
         chalk.bold.yellow(

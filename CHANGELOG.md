@@ -12,6 +12,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Whole-feature usage total at `finish`: when a feature's `finish` step completes, the build logs
+  one aggregate line — `finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered` —
+  summed from that feature's own `.pipeline/events.jsonl`, so it spans the entire build rather than
+  only the session that reached `finish`. Emitted on the shared engine path, so it appears in both
+  `.daemon/daemon.log` and an interactive `conduct` run. Cost and token figures are printed only
+  when at least one dispatch was actually metered: an unmetered build reports its dispatch count and
+  an explicit unmetered count instead of a fabricated `$0.00`. The line is best-effort and never
+  blocks a ship. Reuses the existing per-feature cost rollup that already feeds the committed
+  shipped record's `## Cost` block — no new tracking or persistence.
 - Step-heartbeat liveness signal and stall watchdog: a running step's provider dispatch now
   touches `.pipeline/step-heartbeat` on every observed Claude/Codex subprocess activity boundary
   (throttled, fire-and-forget), and `daemon status` renders `(heartbeat Ns ago)` for any

@@ -8,6 +8,7 @@ import type { DashboardSnapshot, UIRenderer, ViewMode } from './types.js';
 import { getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 import { formatProgressDelta } from '../engine/format-retry-line.js';
+import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
 
 export interface TerminalRendererOptions {
   stateFilePath: string;
@@ -153,6 +154,10 @@ export class TerminalRenderer implements UIRenderer {
         );
         break;
       }
+
+      case 'feature_usage_total':
+        this.region.log(chalk.dim(`  ${formatFeatureUsageTotal(event)}`));
+        break;
 
       case 'provider_fallback':
         this.region.log(

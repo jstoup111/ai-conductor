@@ -235,6 +235,7 @@ import {
   bodyFloor,
   ensureShipReady,
 } from './halt-pr-rehabilitation.js';
+import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -6078,6 +6079,22 @@ export class Conductor {
           // scraping the first URL out of the runner's stdout so the common
           // path of `gh pr create` printing the URL just works.
           if (step.name === 'finish') {
+            // Whole-feature usage, summed from the feature's own event log —
+            // which already carries the `finish` step_completed emitted just
+            // above, so the aggregate includes the step that triggered it.
+            // Read-only and best-effort: a build must never fail because its
+            // cost line could not be computed.
+            try {
+              const rollup: CostRollup = await computeCostRollup(this.projectRoot);
+              await emitTracked({
+                type: 'feature_usage_total',
+                ...toFeatureUsageTotals(rollup),
+              });
+            } catch {
+              // No event log, or an unreadable one: the per-step provider
+              // lines remain the record. Nothing else about the run changes.
+            }
+
             const current = await readState(this.stateFilePath);
             if (current.ok && current.value.pr_url) {
               state.pr_url = current.value.pr_url;
