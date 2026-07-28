@@ -129,6 +129,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   process CPU ticks and file mtimes.
 ### Changed
 
+- Session resume is now a declared provider capability. Codex declares it unsupported and can no longer
+  construct a `codex exec resume` invocation — every Codex dispatch is a cold start, including within-step
+  retries, which carry their context via the `RETRY:`-prefixed full step prompt. This removes the per-retry
+  `no rollout found` round-trip caused by resuming a harness-minted UUID against a Codex thread id
+  (ai-conductor#903; partially supersedes
+  `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope` §2). Claude behavior is unchanged.
 - `.daemon/daemon.log` no longer tees a provider subprocess's raw result envelope. A completed
   Claude (`--print --output-format json`) or Codex (`exec --json`) dispatch previously landed as a
   single unreadable line mixing cost/usage telemetry, tool permission-denial records, and the

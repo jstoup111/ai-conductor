@@ -42,6 +42,11 @@ multiple providers.
 
 ### 2. Retries resume only within the same step and provider
 
+> **Superseded in part (2026-07-27):**
+> `adr-2026-07-27-codex-never-resumes-a-harness-minted-session` qualifies this
+> rule by provider capability. A retry may resume only when its provider declares
+> `supportsSessionResume`; Codex does not declare that capability.
+
 A budget-consuming retry or non-consuming recovery retry may resume the session
 created by the same provider for the current step. It may not resume:
 
