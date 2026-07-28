@@ -234,11 +234,11 @@ supported with a warned Claude-compatible model policy, but automatic
 mixed-provider fallback involving a custom provider is not guaranteed until a
 plugin policy contract exists.
 
-Every execution creates a fresh session for each step and provider. Retries
-within the same step-execution scope/provider may resume that matching session,
-including its permissions and credentials. Re-entering a one-shot phase/step
-execution, reaching a later step, or falling back to another provider starts
-fresh.
+Every provider dispatch starts a fresh session, including every retry within
+the same step-execution scope. No provider, fallback, concurrent branch,
+one-shot phase, or later step resumes an earlier session. Retries recover
+context from committed artifacts and the full retry prompt, not conversation
+history.
 
 > **Provider-native model availability fallback (#186/#902):** When the requested model
 > is detected unavailable, the daemon descends the selected provider policy's native
