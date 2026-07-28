@@ -10,6 +10,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- `.daemon/daemon.log` no longer tees a provider subprocess's raw result envelope. A completed
+  Claude (`--print --output-format json`) or Codex (`exec --json`) dispatch previously landed as a
+  single unreadable line mixing cost/usage telemetry, tool permission-denial records, and the
+  agent's own prose. It is now rendered as a summary headline plus that prose — e.g.
+  `claude: done — 54 turns, 8m7s, $4.96` followed by the result text. Output the daemon does not
+  recognize as a machine envelope (prose stdout, stderr, crash traces, unknown payload shapes) is
+  still logged verbatim, so no diagnostic detail is traded for readability.
+
+### Added
+
+- `.daemon/daemon.log` now attributes each completed provider dispatch to the provider and model
+  that ran it: `·   <step> via <provider> (<model>) ✓ — <turns>, <duration>, <cost>`. Because this
+  repo routes providers per step (`llm_provider` plus per-step overrides), the provider executing a
+  given step previously could not be read off the log at all — it required inspecting the
+  subprocess argv with `ps`. `grep ' via '` over the log now answers it. Attempts skipped from a
+  cached availability result dispatch no process and are not logged. `daemon status` still does not
+  carry the provider for a step that is in flight
+  ([#1081](https://github.com/jstoup111/ai-conductor/issues/1081)).
 ### Fixed
 
 - The `intake-label-sync` Action no longer stamps default `priority: medium` / `size: M` labels

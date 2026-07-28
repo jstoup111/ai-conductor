@@ -6,6 +6,7 @@ import { mkdir, rm, readFile, writeFile, readlink } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { formatRetryReason, formatProgressDelta, displayBuildPosition } from './engine/format-retry-line.js';
+import { formatDiagnosticDuration } from './execution/provider-diagnostics.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
 import {
@@ -818,6 +819,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       (message) => log(message, true),
       formatDaemonFeatureTag(slug),
     );
+    scopedEvents.on('provider_attempt', (event) => renderDaemonEvent(event, scopedLog));
     scopedEvents.on('provider_fallback', (event) => renderDaemonEvent(event, scopedLog));
     return createProviderExecution(scopedEvents, scopedLog);
   };
@@ -846,7 +848,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       'step_started', 'step_completed', 'step_failed', 'step_retry', 'checkpoint_reached',
       'recovery_needed', 'dashboard_refresh', 'tier_skip', 'config_skip', 'gate_blocked',
       'rate_limit', 'session_reset', 'feature_complete', 'auto_heal', 'mode_skip',
-      'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall', 'provider_fallback',
+      'build_progress', 'unattributed_progress', 'build_no_progress', 'build_stall',
+      'provider_attempt', 'provider_fallback',
       'gate_verdict', 'kickback', 'navigation_back', 'loop_halt', 'loop_converged',
       'ci_failed', 'build_review_base', 'build_review_stale_mirage_regrade',
       'auto_park_contradiction',
@@ -1917,6 +1920,27 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       const delta = formatProgressDelta(event.resolvedBefore, event.resolvedAfter);
       const deltaFragment = delta ? ' ' + delta : '';
       log(`${dot} ${chalk.yellow('↻')} ${event.step} retry (try ${event.attempt}/${event.maxAttempts}: ${formatRetryReason(event.reason)})${deltaFragment}`);
+      break;
+    }
+    case 'provider_attempt': {
+      // Which provider actually executed this step. The daemon routes per-step
+      // (`llm_provider` top-level + per-step overrides), so without this line an
+      // operator has to read process argv to learn whether a step ran under
+      // claude or codex. A non-invoked attempt is a cached availability skip —
+      // no process was dispatched, so there is nothing to attribute.
+      if (!event.invoked) break;
+      const model = event.model ? chalk.dim(` (${event.model})`) : '';
+      const usage = event.tokenUsage;
+      const facts: string[] = [];
+      if (usage?.numTurns !== undefined) {
+        facts.push(`${usage.numTurns} turn${usage.numTurns === 1 ? '' : 's'}`);
+      }
+      if (usage?.durationMs !== undefined) facts.push(formatDiagnosticDuration(usage.durationMs));
+      if (usage?.costUsd !== undefined) facts.push(`$${usage.costUsd.toFixed(2)}`);
+      const detail = facts.length > 0 ? chalk.dim(` — ${facts.join(', ')}`) : '';
+      const glyph =
+        event.outcome === 'success' ? chalk.green('✓') : chalk.yellow(`✗ ${event.outcome}`);
+      log(`${dot}   ${event.step} via ${chalk.cyan(event.provider)}${model} ${glyph}${detail}`);
       break;
     }
     case 'provider_fallback':
