@@ -315,6 +315,25 @@ supplies it in the step's system prompt) and do so **before** any merge/cleanup
 step — never from inside a `cd`'d main checkout. If a PR for the branch already
 exists, reuse it (`gh pr view --json url -q .url`) rather than failing.
 
+**Reusing a PR never means reusing its body.** A reused PR — especially one born
+as a `needs-remediation` halt PR — must still get a real `/pr`-authored title and
+body before `finish-record`. Run the `/pr` skill (it updates the existing PR in place);
+do NOT skip straight to `finish-record` on a PR whose body is still halt
+boilerplate or an engine-generated placeholder. The shipped body is ALWAYS the
+plain `/pr` template (`## Why` / `## What Changed` / `## Testing`, plus the
+`Closes #N` reference) and reads exactly like a clean first-pass finish produced
+it — halt history, remediation notes and recovery narrative go in a PR **comment**
+(`gh pr comment`), never in the body. The engine posts that halt-history comment
+for you.
+
+The finish completion gate enforces this: it reads the PR's presentation BEFORE
+applying any deterministic repair, and refuses once with a reason naming the
+`/pr` skill and a real templated body. That kickback is bounded to a single attempt per PR
+(recorded in `.pipeline/pr-body-regen-attempt.json`); if the body is still
+placeholder/halt content on the next pass, the engine applies its last-resort
+floor so the feature converges — but a floored body is a failure mode, not the
+intended path.
+
 ### 5. Execute Choice
 
 After executing any choice, **record the outcome** so the conductor's

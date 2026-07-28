@@ -232,10 +232,22 @@ conductor's finish step automatically rehabilitates the PR after you complete:
 - The engine rewrites the title to remove `needs-remediation:` prefix (if stale)
 - The engine injects or updates the `Closes` reference to match the implementation
 - The engine flips the PR from draft to ready (if it was drafted)
+- The engine posts the halt history (original halt title, banner, halt reason) as a
+  PR **comment**
 
 This means your fresh title/body (from §3 and §4) and the engine's rehabilitation
 happen in sequence. The finish completion gate verifies the final PR state does NOT
 start with `needs-remediation:` (adr-2026-07-03-halt-pr-rehabilitation-at-finish).
+
+**The body is always the plain template — writing it is YOUR job, not the
+engine's.** A rehabilitated PR gets the same body shape as a clean first-pass
+finish: `## Why` / `## What Changed` / `## Testing` (+ optional
+`## Notes for Reviewers`) and the `Closes #N` reference. Never write remediation
+prose, halt narrative, "rehabilitated from…" footnotes, or recovery history into
+the body — that content belongs in the engine-posted PR comment. The engine's
+deterministic body floor exists only as a last resort when `/pr` did not run at
+all; if you see a floored body (`<!-- conductor:pr-body-floor -->`) on a PR you
+are updating, replace it wholesale with real prose.
 
 ### 7. Verify
 

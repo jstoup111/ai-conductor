@@ -240,6 +240,7 @@ import {
   retitleFloor,
   bodyFloor,
   ensureShipReady,
+  postHaltHistoryComment,
 } from './halt-pr-rehabilitation.js';
 import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
 
@@ -1106,16 +1107,41 @@ export class Conductor {
     }
 
     // Compose the repair callback that applies the four repairs in order
-    const repairFinishPr = async (prUrl: string): Promise<void> => {
+    const repairFinishPr = async (
+      prUrl: string,
+      opts: { mode?: 'capture-only' | 'full' } = {},
+    ): Promise<void> => {
       const gh = this.gh;
       const cwd = this.projectRoot;
       const branch = state.worktree_branch;
       const featureDesc = state.feature_desc;
       const repairLog = this.log ?? console.warn;
+      const mode = opts.mode ?? 'full';
+
+      // Step 0 (both modes): preserve the halt/remediation narrative as a PR
+      // COMMENT before anything rewrites the presentation. The shipped body is
+      // always the plain /pr template — recovery narrative never goes in it.
+      try {
+        const haltReason = await readFile(
+          join(this.projectRoot, '.pipeline/halt-user-input-required'),
+          'utf-8',
+        ).catch(() => null);
+        await postHaltHistoryComment({ gh, cwd, prUrl, haltReason, log: repairLog });
+      } catch (err) {
+        repairLog(`[conductor-repair] postHaltHistoryComment failed: ${err}`);
+      }
+
+      // capture-only: the finish gate is about to kick this PR back so /pr can
+      // author a real body. Mutating title/body/label/draft here would erase
+      // the very halt signals the gate re-reads on the next pass, letting a
+      // skipped /pr ship unchallenged — exactly the bug this ordering fixes.
+      if (mode === 'capture-only') return;
 
       // Best-effort test-evidence line for the body floor: derived from
       // .pipeline/task-status.json. Left undefined on any error — the floor
-      // then simply omits the "Test evidence" section.
+      // then simply omits the "Test evidence" section. Also omitted when ZERO
+      // tasks are complete: the floor must never assert completion that did
+      // not happen (three merged PRs shipped "- [x] 0/16 plan tasks completed").
       let testEvidenceLine: string | undefined;
       try {
         const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
@@ -1126,7 +1152,10 @@ export class Conductor {
           const completed = tasks.filter(
             (t) => t.status === 'completed' || t.status === 'skipped',
           ).length;
-          testEvidenceLine = `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`;
+          testEvidenceLine =
+            completed > 0
+              ? `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`
+              : undefined;
         }
       } catch {
         testEvidenceLine = undefined;

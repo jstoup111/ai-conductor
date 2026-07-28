@@ -1,12 +1,16 @@
 import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
-import { basename, join, relative } from 'path';
+import { basename, dirname, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
 import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
 import { makeProductionGh } from './pr-labels.js';
-import { readStaleHaltBanner, readStaleHaltTitle } from './halt-pr-rehabilitation.js';
+import {
+  readFlooredBody,
+  readStaleHaltBanner,
+  readStaleHaltTitle,
+} from './halt-pr-rehabilitation.js';
 import { seedTaskStatus } from './task-seed.js';
 import type { GitRunner } from './rebase.js';
 import { makeGitRunner } from './rebase.js';
@@ -507,6 +511,47 @@ export const FINISH_CHOICE_MARKER = '.pipeline/finish-choice';
 export const FINISH_CHOICE_VALUES = ['pr', 'merge-local', 'keep', 'discard'] as const;
 export type FinishChoice = (typeof FINISH_CHOICE_VALUES)[number];
 
+/**
+ * Durable per-feature record that the finish gate has already kicked a PR back
+ * once for body regeneration. Bounds the kickback to a single attempt: the
+ * second time the gate sees the same PR still carrying halt/placeholder
+ * presentation, it applies the deterministic floor instead of refusing again,
+ * so a feature can never stall on an LLM that will not converge.
+ */
+export const PR_BODY_REGEN_ATTEMPT_MARKER = '.pipeline/pr-body-regen-attempt.json';
+
+/**
+ * True when this feature has already been kicked back once for PR-body
+ * regeneration of THIS pr_url. Keyed by URL so a different (freshly opened) PR
+ * gets its own budget. Unreadable/corrupt marker → false (fail toward the
+ * kickback, which is the safe direction: it never ships a placeholder).
+ */
+export async function readPrBodyRegenAttempt(dir: string, prUrl: string): Promise<boolean> {
+  try {
+    const raw = await readFile(join(dir, PR_BODY_REGEN_ATTEMPT_MARKER), 'utf-8');
+    const parsed = JSON.parse(raw) as { pr_url?: unknown };
+    return String(parsed.pr_url ?? '') === prUrl;
+  } catch {
+    return false;
+  }
+}
+
+/** Persist the one-shot PR-body regeneration kickback record. Never throws. */
+export async function recordPrBodyRegenAttempt(dir: string, prUrl: string): Promise<void> {
+  try {
+    const path = join(dir, PR_BODY_REGEN_ATTEMPT_MARKER);
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(
+      path,
+      JSON.stringify({ pr_url: prUrl, attempted_at: new Date().toISOString() }, null, 2) + '\n',
+      'utf-8',
+    );
+  } catch {
+    // Best-effort: an unwritable .pipeline degrades to "always kick back",
+    // which blocks rather than ships a placeholder.
+  }
+}
+
 /** Context threaded through completion predicates. Optional fields fail open. */
 export interface CompletionContext {
   /**
@@ -570,11 +615,25 @@ export interface CompletionContext {
   planPath?: string;
   /**
    * Optional repair callback (Task 8, ADR D1 order-gate).
-   * Invoked after Phase 1 evidence checks pass and before Phase 2 presentation checks.
+   *
+   * Invoked during Phase 2, AFTER the presentation staleness reads (the
+   * original "repair first" order made those reads structurally unreachable —
+   * the repair rewrote exactly the content they looked for, so engine
+   * placeholder bodies shipped to main unchallenged).
+   *
+   * `mode: 'capture-only'` preserves the halt narrative as a PR comment and
+   * performs no title/body/label/draft mutation — used on the bounded kickback
+   * pass so `/pr` still has to author a real body. `mode: 'full'` (the
+   * default, for backward compatibility) additionally applies the
+   * deterministic last-resort floor.
+   *
    * If the injectable is absent, repair is skipped (backward compatible).
-   * If repair throws, a warning is logged and Phase 2 proceeds (warn-only, not fatal).
+   * If repair throws, a warning is logged and the gate proceeds (warn-only).
    */
-  repairFinishPr?: (prUrl: string) => Promise<void>;
+  repairFinishPr?: (
+    prUrl: string,
+    opts?: { mode?: 'capture-only' | 'full' },
+  ) => Promise<void>;
   /**
    * Injected wiring-reachability probe runner (Task 18 — ties Layer 1's
    * `runWiringProbe`/`verifyDeclaredSites`/`orphanBackstop`/
@@ -2329,59 +2388,88 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
 
-    // ---- Order-gate: repair invocation (Task 8, ADR D1) — runs after Phase 1
-    // passes, before Phase 2 presentation checks. Only when repairFinishPr injectable
-    // is present and we have a valid prUrl. Fail-open: repair errors are logged but
-    // do not block the gate (warn-only, not fatal).
-    if (choice === 'pr' && prUrl && ctx.repairFinishPr) {
-      try {
-        await ctx.repairFinishPr(prUrl);
-      } catch (error) {
-        console.warn(
-          `[finish] repair failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing to Phase 2 (warn-only)`,
-        );
-      }
-    }
-
     // ---- Phase 2: presentation — only reached once every Phase 1 evidence
     // condition has been satisfied. ----
     if (choice === 'pr' && prUrl) {
-      // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3): the gate
-      // fails while a SUCCESSFUL gh read shows the recorded PR still titled
-      // `needs-remediation:` — the skill must rewrite the reused halt PR's
-      // presentation. Fail-open on any gh error (readStaleHaltTitle returns
-      // null): network unavailability never blocks a ship.
+      // Presentation staleness is now read BEFORE the deterministic repair
+      // floor. Under the previous order (Task 8, ADR D1) the floor ran first
+      // and rewrote exactly the content these reads look for, so the checks
+      // below could never fire and three PRs (#1067, #1056, #1031) shipped
+      // with an engine-generated placeholder body. Convergence — D1's actual
+      // concern — is preserved by the bounded one-shot kickback below: the
+      // floor still runs, but only as a genuine last resort.
+      const ghRunner = ctx.gh ?? makeProductionGh();
+
+      // Fail-open on any gh error (each reader returns null): network
+      // unavailability never blocks a ship.
+      let staleReason: string | null = null;
       try {
-        const ghRunner = ctx.gh ?? makeProductionGh();
+        // adr-2026-07-03-halt-pr-rehabilitation-at-finish (Decision 3).
         const staleTitle = await readStaleHaltTitle(ghRunner, dir, prUrl);
         if (staleTitle !== null) {
-          return {
-            done: false,
-            reason: `recorded PR ${prUrl} is still titled "${staleTitle}" — the finish/pr skill must rewrite the reused halt PR's title/body before completing`,
-            missing: 'other',
-          };
+          staleReason = `is still titled "${staleTitle}"`;
+        }
+        if (staleReason === null) {
+          // adr-2026-07-06-halt-pr-rehab-body-floor: the halt banner is a
+          // stateless halt signal.
+          const staleBanner = await readStaleHaltBanner(ghRunner, dir, prUrl);
+          if (staleBanner !== null) {
+            staleReason = `body still carries the halt banner ("${staleBanner}")`;
+          }
+        }
+        if (staleReason === null) {
+          // A body the engine floored is a placeholder, never a /pr-authored
+          // body — reusing a PR must not skip body regeneration.
+          const floored = await readFlooredBody(ghRunner, dir, prUrl);
+          if (floored !== null) {
+            staleReason = 'body is an engine-generated placeholder, not a /pr-authored body';
+          }
         }
       } catch {
         // fail-open — presentation is not worth blocking a ship on gh failure
+        staleReason = null;
       }
 
-      // adr-2026-07-06-halt-pr-rehab-body-floor: the halt banner is a
-      // stateless halt signal — a reused PR whose body still carries it
-      // must be rewritten before the ship can complete. Fail-open on any
-      // gh error (readStaleHaltBanner returns null): network unavailability
-      // never blocks a ship.
-      try {
-        const ghRunner = ctx.gh ?? makeProductionGh();
-        const staleBanner = await readStaleHaltBanner(ghRunner, dir, prUrl);
-        if (staleBanner !== null) {
+      if (staleReason !== null) {
+        const attempted = await readPrBodyRegenAttempt(dir, prUrl);
+        if (!attempted) {
+          // Bounded one-shot kickback: capture the halt narrative into a PR
+          // COMMENT (never the body) while it is still observable, record the
+          // attempt durably, and refuse — /pr must author a real templated
+          // body.
+          if (ctx.repairFinishPr) {
+            try {
+              await ctx.repairFinishPr(prUrl, { mode: 'capture-only' });
+            } catch (error) {
+              console.warn(
+                `[finish] halt-history capture failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing (warn-only)`,
+              );
+            }
+          }
+          await recordPrBodyRegenAttempt(dir, prUrl);
           return {
             done: false,
-            reason: `recorded PR ${prUrl} body still carries the halt banner ("${staleBanner}") — the engine bodyFloor/finish skill must rewrite the reused halt PR's body before completing`,
+            reason: `recorded PR ${prUrl} ${staleReason} — run /pr to author a real templated body (## Why / ## What Changed / ## Testing, plus the Closes reference) before completing; halt/remediation narrative belongs in a PR comment, not the body`,
             missing: 'other',
           };
         }
-      } catch {
-        // fail-open — presentation is not worth blocking a ship on gh failure
+        // Regeneration budget exhausted: fall through to the deterministic
+        // floor rather than stalling the feature forever. Shipping a floored
+        // body is worse than a /pr-authored one, but better than never
+        // converging.
+        console.warn(
+          `[finish] ${prUrl} ${staleReason} after a /pr regeneration kickback — applying the deterministic presentation floor as a last resort`,
+        );
+      }
+
+      if (ctx.repairFinishPr) {
+        try {
+          await ctx.repairFinishPr(prUrl, { mode: 'full' });
+        } catch (error) {
+          console.warn(
+            `[finish] repair failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing (warn-only)`,
+          );
+        }
       }
 
       // Story 3: Ship-readiness gate — fail if the recorded PR is still in draft
@@ -2390,7 +2478,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       // completing. Fail-open on any gh error: network unavailability never blocks
       // a ship.
       try {
-        const ghRunner = ctx.gh ?? makeProductionGh();
         const { stdout } = await ghRunner(['pr', 'view', prUrl, '--json', 'isDraft'], { cwd: dir });
         const parsed = JSON.parse(stdout || '{}') as { isDraft?: unknown };
         const isDraft = Boolean(parsed.isDraft);
