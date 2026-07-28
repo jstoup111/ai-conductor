@@ -66,7 +66,7 @@ const CLAUDE_MODELS: Record<StepName, string> = {
   architecture_review_as_built: 'fable',
   retro: 'sonnet',
   rebase: 'opus',
-  finish: 'haiku',
+  finish: 'sonnet',
   remediate: 'fable',
   attribution_verify: 'opus',
 };
@@ -95,7 +95,7 @@ const CODEX_MODELS: Record<StepName, string> = {
   architecture_review_as_built: 'gpt-5.6-sol',
   retro: 'gpt-5.6-terra',
   rebase: 'gpt-5.6-terra',
-  finish: 'gpt-5.6-luna',
+  finish: 'gpt-5.6-terra',
   remediate: 'gpt-5.6-sol',
   attribution_verify: 'gpt-5.6-sol',
 };

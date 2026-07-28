@@ -88,6 +88,52 @@ export async function writeVerdict(
   );
 }
 
+/**
+ * Prefix every skip-origin verdict `reason` carries, so a reader (and the
+ * dashboard) can tell "this gate was deliberately not run" apart from "this
+ * gate ran and its evidence passed".
+ */
+export const SKIP_VERDICT_PREFIX = 'skipped: ';
+
+/**
+ * Record a verdict-bearing gate that was resolved by a SKIP rather than by a
+ * run (tier skip, track skip, config disable, `when:` false, upstream skip, or
+ * the daemon's in-loop `retro` skip).
+ *
+ * Why this exists: `advanceTail` is the only place a run-step's objective
+ * verdict is computed, and it is reached exclusively on the success tail. Every
+ * skip path resolves the step and `continue`s, so the gate used to end the run
+ * with NO verdict on disk at all — and `gateSatisfied` (selector.ts) then falls
+ * back to the step-state flag, i.e. exactly the self-report the verdict layer
+ * exists to distrust. `retro` is the step this bit hardest: it is `loopGate`,
+ * it is skipped for tier S and on every daemon run, and it therefore shipped
+ * "done" with no `.pipeline/gates/retro.json` anywhere in the audit record.
+ *
+ * The verdict is `satisfied: true` because that is what the selector already
+ * does with a skipped gate (`isSkipped` short-circuits ahead of
+ * `gateSatisfied`) — this writes the fact down instead of changing it. The
+ * `reason` names the skip cause so a skip is never mistaken for passing
+ * evidence.
+ */
+export async function recordSkipVerdict(
+  dir: string,
+  step: StepName,
+  cause: string,
+): Promise<GateVerdict> {
+  const verdict: GateVerdict = {
+    satisfied: true,
+    reason: `${SKIP_VERDICT_PREFIX}${cause}`,
+    checkedAt: Date.now(),
+  };
+  await writeVerdict(dir, step, verdict);
+  return verdict;
+}
+
+/** True when a persisted verdict records a skip rather than evaluated evidence. */
+export function isSkipVerdict(verdict: GateVerdict | null | undefined): boolean {
+  return verdict?.reason?.startsWith(SKIP_VERDICT_PREFIX) === true;
+}
+
 /** Read one gate's verdict, or null if absent/unreadable/malformed. */
 export async function readVerdict(
   dir: string,

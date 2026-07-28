@@ -245,8 +245,9 @@ describe the choice):
   as-is** — leave the work committed on the branch.
 
 **A PR finish is one ordered shipment sequence.** Derive `<slug>` from the active
-`.docs/plans/<slug>.md`. After `/pr` creates or reuses the PR, run every command below
-from the feature worktree, in order:
+`.docs/plans/<slug>.md`. After you have created or reused the PR **inline** (§5a — never
+by invoking another skill), run every command below from the feature worktree, in order,
+without ending your turn in between:
 
 ```
 conduct-ts finalize-changelog-pr --pr-url <PR_URL>
@@ -316,11 +317,12 @@ step — never from inside a `cd`'d main checkout. If a PR for the branch alread
 exists, reuse it (`gh pr view --json url -q .url`) rather than failing.
 
 **Reusing a PR never means reusing its body.** A reused PR — especially one born
-as a `needs-remediation` halt PR — must still get a real `/pr`-authored title and
-body before `finish-record`. Run the `/pr` skill (it updates the existing PR in place);
-do NOT skip straight to `finish-record` on a PR whose body is still halt
-boilerplate or an engine-generated placeholder. The shipped body is ALWAYS the
-plain `/pr` template (`## Why` / `## What Changed` / `## Testing`, plus the
+as a `needs-remediation` halt PR — must still get a real, freshly authored title and
+body before `finish-record`. Author it inline per §5a and update the existing PR in
+place with `gh pr edit`; do NOT skip straight to `finish-record` on a PR whose body is
+still halt boilerplate or an engine-generated placeholder, and do NOT delegate the
+rewrite to another skill. The shipped body is ALWAYS the
+plain PR template (`## Why` / `## What Changed` / `## Testing`, plus the
 `Closes #N` reference) and reads exactly like a clean first-pass finish produced
 it — halt history, remediation notes and recovery narrative go in a PR **comment**
 (`gh pr comment`), never in the body. The engine posts that halt-history comment
@@ -328,7 +330,8 @@ for you.
 
 The finish completion gate enforces this: it reads the PR's presentation BEFORE
 applying any deterministic repair, and refuses once with a reason naming the
-`/pr` skill and a real templated body. That kickback is bounded to a single attempt per PR
+`/pr` skill and a real templated body (that wording names the body *contract*; satisfy it
+inline per §5a rather than by invoking the skill). That kickback is bounded to a single attempt per PR
 (recorded in `.pipeline/pr-body-regen-attempt.json`); if the body is still
 placeholder/halt content on the next pass, the engine applies its last-resort
 floor so the feature converges — but a floored body is a failure mode, not the
@@ -379,8 +382,13 @@ conductor reads.
 - Write `merge-local` to `.pipeline/finish-choice`
 
 **Option 2: Push & PR**
-- Run the `/pr` skill — it handles pre-push verification, title/body generation, push, and
-  PR creation
+- **Author and publish the PR INLINE — never delegate.** Do the push and the
+  `gh pr create`/`gh pr edit` yourself, in this same turn, using §5a below. Do NOT
+  invoke the `/pr` skill (or any other skill/subagent) to do it: handing the work to
+  another skill ends this turn, and the finish step then dies without ever running
+  `conduct-ts finish-record`, leaving `.pipeline/finish-choice` unwritten and the
+  feature complete-but-unshipped. `skills/pr/SKILL.md` remains the reference for the
+  title/body contract; §5a inlines everything finish needs from it.
 - **Engine Behavior — Halt-PR Rehabilitation:** After the agent creates or updates the PR,
   the conductor automatically rehabilitates any reused halt PR:
   - Removes the `needs-remediation` label (if present)
@@ -391,6 +399,78 @@ conductor reads.
   This automation runs before the completion gate checks the PR state
   (adr-2026-07-03-halt-pr-rehabilitation-at-finish), so the finish gate only
   succeeds if the PR's final title does NOT start with `needs-remediation:`.
+
+#### 5a. Inline PR Authoring — Do This Yourself
+
+Run all of the following in the current turn. Do not spawn a subagent and do not
+invoke another skill for any of it; the only sanctioned delegation in this skill is
+the post-record `worktree-manager` cleanup in §6.
+
+1. **Gather context** (base branch, log, stat, diff):
+   ```bash
+   git remote show origin | grep 'HEAD branch'
+   git log --oneline <base>..HEAD
+   git diff --stat <base>..HEAD
+   git diff <base>..HEAD
+   ```
+   If the diff is too large to read whole, read it by path groups with
+   `git diff <base>..HEAD -- <paths>` — still inline. Also skim `.docs/specs/*.md`
+   and `.docs/stories/*.md` for the "why".
+2. **Pre-push checks.** Reuse the aggregate-verifier PASS from §1 — do NOT relaunch
+   the project's aggregate test command here. Run the project's linter and type
+   checker if it has them; fix failures before pushing.
+3. **Write the title.** Under 72 characters, imperative mood, specific, no trailing
+   period. Follow any `### PR Title Format` convention in the project's repo
+   instruction file if one exists.
+4. **Write the body** using exactly this template — nothing else:
+   ```markdown
+   ## Why
+
+   1-3 sentences of motivation.
+
+   ## What Changed
+
+   ### [Logical area]
+   - What changed and why (never a file-by-file listing)
+
+   ## Testing
+
+   How it was actually verified.
+
+   ## Notes for Reviewers (optional)
+   ```
+   Plus the `Closes #N` reference. Never paste planning artifacts, halt narrative,
+   remediation prose, or "rehabilitated from…" history into the body — that goes in a
+   `gh pr comment`, and the engine posts it for you.
+5. **Push**, following §1b's staleness-proof and force-with-lease rules:
+   ```bash
+   git push -u origin HEAD
+   ```
+   On a non-fast-forward rejection, prove staleness (§1b) and then
+   `git push --force-with-lease -u origin HEAD`. If the staleness proof or the lease
+   fails, §1b's STOP contract applies: no push, no PR, no `finish-choice`.
+6. **Create or update the PR:**
+   ```bash
+   gh pr view --json number,url 2>&1   # does one already exist?
+   gh pr create --title "<title>" --body "$(cat <<'EOF'
+   <body>
+   EOF
+   )"
+   # or, if a PR already exists (including a reused halt PR):
+   gh pr edit --title "<title>" --body "$(cat <<'EOF'
+   <body>
+   EOF
+   )"
+   ```
+   A reused PR always gets a freshly authored title and body — never keep halt
+   boilerplate or an engine-generated floor body (`<!-- conductor:pr-body-floor -->`).
+7. **Capture the PR URL** and continue straight into the STOP gate below. Do not end
+   your turn between creating the PR and running `conduct-ts finish-record`.
+
+If `gh pr create`/`gh pr edit` or the push fails for an environmental reason (no
+network, sandbox write-fence, unauthenticated `gh`), that is a genuine blocker: report
+it plainly, do NOT write `.pipeline/finish-choice`, and end. The absent marker is the
+refusal signal.
 
 #### STOP Gate: Verify Push + PR Before Recording Choice
 
@@ -506,9 +586,12 @@ After executing the chosen option:
 - [ ] Outcome recorded via `conduct-ts finish-record --choice <c> [--pr-url <url>]` — the
       completion gate reads `.pipeline/finish-choice` AND the recorded PR URL; a choice of
       `pr` without a recorded URL fails the gate
+- [ ] If Option 2 (PR): the push and `gh pr create`/`gh pr edit` were performed INLINE in
+      this turn (§5a) — no skill invocation or subagent was used to author or publish the
+      PR, and the turn did not end between creating the PR and `conduct-ts finish-record`
 - [ ] Reused halt-PR verified for engine rehabilitation: PR title does not start with
       `needs-remediation:` and does not carry the `needs-remediation` label (engine
-      automatically removes/rewrites these after `/pr` completes; if title still contains
+      automatically removes/rewrites these after the PR is created/updated; if title still contains
       `needs-remediation:`, halt-PR rehabilitation failed — check conductor logs)
 - [ ] HEAD pushed and present at the recorded PR's head (push evidence — the gate verifies
       `refs/remotes/origin/<branch>` contains HEAD)

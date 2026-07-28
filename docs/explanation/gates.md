@@ -15,6 +15,16 @@ A gate is a check that can block progression. Every step passes through two of t
    evidence off disk, and writes the verdict to `.pipeline/gates/<step>.json`. The loop owns that verdict.
    An agent cannot declare its own step complete; see [evidence model](evidence-model.md).
 
+A step that never ran still leaves a verdict. When the engine resolves a verdict-bearing step by *skipping*
+it — complexity tier, work track, bootstrap mode, an upstream skip, `disable: true`, a false `when:`, the
+daemon's in-loop `retro` skip, or an advisory step that failed and was auto-skipped in auto mode — it writes
+`{"satisfied": true, "reason": "skipped: <cause>"}` to `.pipeline/gates/<step>.json`. Satisfaction is
+unchanged (the selector has always treated a skipped gate as satisfied); what changes is that the skip is
+*recorded*. Before this, a skipped gate left no verdict file at all and the selector fell back to the step's
+own status flag, so `retro` — advisory, tier-S-skippable, and skipped on every daemon run — could reach a
+resolved state with no verdict anywhere in the audit record. Read the `skipped: ` prefix as "this gate was
+deliberately not run", never as "this gate's evidence passed".
+
 Those two are orthogonal. Prerequisites answer *may this run yet*; completion answers *did it actually
 happen*. A step can pass the first and fail the second forever, which is exactly what a halt looks like.
 
