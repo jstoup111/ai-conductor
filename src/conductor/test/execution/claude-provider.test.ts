@@ -178,7 +178,7 @@ describe('ClaudeProvider', () => {
       expect(args).not.toContain('--print');
     });
 
-    it('builds correct args for resume call', async () => {
+    it('starts a fresh Claude session when handed resume: true', async () => {
       mockExeca.mockResolvedValue({
         stdout: 'ok',
         exitCode: 0,
@@ -188,7 +188,8 @@ describe('ClaudeProvider', () => {
       await provider.invoke({ ...baseOptions, resume: true, dangerouslySkipPermissions: true });
 
       const [, args] = mockExeca.mock.calls[0] as [string, string[], any];
-      expect(args).toContain('--resume');
+      expect(args).toContain('--session-id');
+      expect(args).not.toContain('--resume');
       expect(args).toContain('abc-123');
     });
 
