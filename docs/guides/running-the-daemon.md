@@ -256,16 +256,34 @@ succeeds — a failed reset deliberately leaves the marker in place for retry. Y
 
 ### Parked-feature reconciliation
 
-On startup and on every idle poll tick, the daemon classifies each parked slug: `merged` (its
-branch is an ancestor of `origin/main`), `orphan` (its source issue is closed but the branch never
-merged), `normal`, or `unclassified` (the check was unavailable). `conduct-ts daemon status`
-annotates the parked list accordingly — `— orphan — needs manual review` or `— merged — ready to
-reconcile`.
+On startup and on every idle poll tick, the daemon classifies each parked slug: `merged`, `orphan`
+(its source issue is closed but the work never merged), `normal`, or `unclassified` (the check was
+unavailable). `conduct-ts daemon status` annotates the parked list accordingly — `— orphan — needs
+manual review` or `— merged — ready to reconcile`.
+
+A slug counts as `merged` on either of two signals:
+
+- **A shipped record on the base branch.** `.docs/shipped/<stem>.md` committed on `origin/main` is
+  this harness's definition of "the work shipped", and it is what the daemon backlog dedups on. It
+  is matched allowing for the `YYYY-MM-DD-` plan-date prefix, because park markers are keyed by the
+  undated slug while records are keyed by the dated plan stem. This signal is durable: it still
+  answers after the branch is deleted at merge, and after a squash or rebase merge leaves the branch
+  tip outside `origin/main`.
+- **Branch ancestry.** Any local branch whose final path segment is the slug — `feat/`, `spec/`,
+  `fix/`, `chore/`, whatever prefix the author used — that `git merge-base --is-ancestor` proves is
+  contained in `origin/main`.
+
+A missing branch, an unreadable `origin/main`, or a git failure yields `unclassified` and no action.
+It never reads as "not merged".
 
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
 is unset or `true`), a `merged` slug with a `.docs/shipped/<slug>.md` record on `origin/main` is
-reconciled automatically: its worktree is removed, its branch is deleted, and it is unparked — with
-no in-progress resume for that slug. A merged slug with no shipped record yet is left parked and,
+reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked
+— with no in-progress resume for that slug. Branch ancestry remains the sole authority for the
+deletion itself: if a branch for the slug exists and is *not* contained in `origin/main` (a stale
+local branch, or work that landed on it after the merge), cleanup is refused with `not-ancestor` and
+nothing is deleted, even though the slug still classifies `merged`. A merged slug with no shipped
+record yet is left parked and,
 when a merged PR can be found, gets an ST-916 record-repair PR requested on its behalf; it
 reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cleanup: false` to
 disable the automatic cleanup step and only classify/annotate, then reconcile explicitly per slug:
