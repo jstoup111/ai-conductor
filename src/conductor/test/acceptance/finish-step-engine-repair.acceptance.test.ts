@@ -48,6 +48,7 @@ import {
 } from '../../src/engine/halt-pr-rehabilitation.js';
 import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 
 const PR_URL = 'https://github.com/owner/repo/pull/499';
 const SOURCE_REF = 'owner/repo#499';
@@ -196,7 +197,7 @@ describe('acceptance: reused halt PR is kicked back once for a real /pr body, th
       sessionStartedAt: Date.now() - 60_000,
       daemon: true,
       isHeadPushed: async () => true,
-      shipmentEvidence: async (input) => ({
+      shipmentEvidence: async (input: ShipmentEvidenceInput) => ({
         kind: 'valid',
         slug: input.slug,
         pr: input.implementationPr,

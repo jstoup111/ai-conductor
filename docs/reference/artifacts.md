@@ -453,7 +453,7 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 
 `session_policy` records when a provider's declared `supportsSessionResume` capability suppressed a
 would-be session resume — emitted by the same session-capability contract described in
-[Per-step session capability contract](architecture.md#per-step-session-capability-contract).
+[Per-step session capability contract](../explanation/architecture.md#per-step-session-capability-contract).
 
 Readers: `conduct-ts inline --report`, `computeCostRollup` (which feeds the shipped record's `## Cost`
 block), the daemon signal emitters, the engineer-loop signal assembler, and the `retro` skill by prose.
