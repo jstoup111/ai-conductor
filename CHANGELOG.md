@@ -252,6 +252,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   whose contents parse as JSON carrying a `tasks` array, matching the executable/non-symlink recheck
   #1088 added for session hooks. Its halt text changed from "is missing" to "could not restore
   `.pipeline/task-status.json`", since by that point the repair has already been attempted.
+- Halt daemon-mode kickbacks that target DECIDE as `needs-human` instead of reopening human-judgment steps, while interactive amendment kickbacks continue routing unchanged ({{IMPLEMENTATION_PR}}).
 - Self-host builds no longer halt with `provider state changed during self-host execution` because an
   unrelated interactive Claude session edited a file. `~/.claude/file-history/` — where the CLI
   snapshots every file it edits, per session — was fingerprinted by the live boundary but written by
