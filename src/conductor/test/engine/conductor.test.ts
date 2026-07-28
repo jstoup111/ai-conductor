@@ -9135,6 +9135,7 @@ describe('engine/conductor', () => {
         return { success: true, output: 'completed', exitCode: 0 };
       };
       const provider = (key: 'claude' | 'codex'): LLMProvider => ({
+        supportsSessionResume: key === 'claude',
         invoke: invoke(key),
         invokeInteractive: invoke(key),
       });
@@ -9222,7 +9223,7 @@ describe('engine/conductor', () => {
             step: 'memory',
             provider: 'codex',
             sessionId: 'memory-codex-recovered',
-            resume: true,
+            resume: false,
           },
           {
             step: 'explore',
