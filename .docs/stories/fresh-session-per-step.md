@@ -102,10 +102,6 @@ leaving the flag false.
 **Requirement:** A step's own internal retry attempts continue that step's session — a retry
 is a continuation of the same task, not a new step, so it must resume rather than reset.
 
-> **Capability qualification (2026-07-27):** This rule applies only to providers
-> declaring `supportsSessionResume`. Codex does not declare it; each Codex retry
-> is a cold start carrying retry context via the `RETRY:`-prefixed full prompt.
-
 As the conductor, I want retries of a failing step to reuse the step's session so that the
 retry sees the partial work/errors of the prior attempt and can finish the task, while the
 *step boundary* (not the retry) is the only place a fresh session is minted.
