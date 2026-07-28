@@ -14,6 +14,7 @@ import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from
 import {
   resolveStepConfig,
   phaseForStep,
+  resolveStepHeartbeatStallMinutes,
   type ResolvedStepConfig,
 } from './resolved-config.js';
 import {
@@ -55,6 +56,12 @@ import {
   renderSkillInvocation,
   STEP_SKILL_INVOCATIONS,
 } from './skill-invocation.js';
+import {
+  createHeartbeatPulse,
+  runWithStallWatchdog,
+  type KillRef,
+} from './step-heartbeat.js';
+import { writeHaltMarker } from './halt-marker.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -296,6 +303,14 @@ export interface StepRunnerOptions {
   providerWarn?: ExecuteProviderCandidatesInput['warn'];
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
+  /**
+   * Test-only overrides for the step-heartbeat stall watchdog's polling
+   * cadence and clock (`runWithStallWatchdog`). Production always uses the
+   * real 30s poll interval and `Date.now`; tests inject a tight interval and
+   * a scripted clock so a simulated stall resolves in milliseconds, not
+   * real minutes.
+   */
+  heartbeatWatchdog?: { pollIntervalMs?: number; now?: () => number };
 }
 
 type ProviderAwareSkillOneShotStep = 'complexity' | 'remediate' | 'rebase';
@@ -358,6 +373,7 @@ export class DefaultStepRunner implements StepRunner {
   private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
+  private heartbeatWatchdogOverrides?: { pollIntervalMs?: number; now?: () => number };
   callCount = 0;
 
   constructor(
@@ -409,6 +425,7 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerWarn ??
       options?.providerExecution?.warn ??
       this.log;
+    this.heartbeatWatchdogOverrides = options?.heartbeatWatchdog;
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {
@@ -706,40 +723,45 @@ export class DefaultStepRunner implements StepRunner {
     });
     const safety = this.candidateSafetyFor(step);
     try {
-      const result = await this.providerExecutor({
+      const result = await this.dispatchProviderWithWatchdog(
         step,
-        configuredProviders: this.configuredProviders,
-        preferredProvider: this.config?.steps?.[step]?.llm_provider,
-        runtimes,
-        sessions,
-        config: this.config,
-        tier: state.complexity_tier,
-        attempt: opts?.attempt ?? 1,
-        escalate: opts?.escalate ?? true,
-        modelOverride: opts?.modelOverride ?? this.modelOverride,
-        effortOverride: opts?.effortOverride ?? this.effortOverride,
-        taskAttribution: this.taskAttribution,
-        withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
-        prepareCandidateSelfHost:
-          this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
-        onAttempt: this.providerAttempt,
-        warn: this.providerWarn,
-        options: invocationOptions,
-        ...(invocationKind === 'skill' && Object.prototype.hasOwnProperty.call(
-          STEP_SKILL_INVOCATIONS,
-          step,
-        )
-          ? {
-              optionsForCandidate: (candidateKey: string) => ({
-                ...invocationOptions,
-                prompt: renderSkillInvocation(
-                  STEP_SKILL_INVOCATIONS[step],
-                  candidateKey,
-                ),
-              }),
-            }
-          : {}),
-      });
+        invocationOptions,
+        (options) =>
+          this.providerExecutor({
+            step,
+            configuredProviders: this.configuredProviders,
+            preferredProvider: this.config?.steps?.[step]?.llm_provider,
+            runtimes,
+            sessions,
+            config: this.config,
+            tier: state.complexity_tier,
+            attempt: opts?.attempt ?? 1,
+            escalate: opts?.escalate ?? true,
+            modelOverride: opts?.modelOverride ?? this.modelOverride,
+            effortOverride: opts?.effortOverride ?? this.effortOverride,
+            taskAttribution: this.taskAttribution,
+            withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+            prepareCandidateSelfHost:
+              this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+            onAttempt: this.providerAttempt,
+            warn: this.providerWarn,
+            options,
+            ...(invocationKind === 'skill' && Object.prototype.hasOwnProperty.call(
+              STEP_SKILL_INVOCATIONS,
+              step,
+            )
+              ? {
+                  optionsForCandidate: (candidateKey: string) => ({
+                    ...options,
+                    prompt: renderSkillInvocation(
+                      STEP_SKILL_INVOCATIONS[step],
+                      candidateKey,
+                    ),
+                  }),
+                }
+              : {}),
+          }),
+      );
       const verifiedResult = safety?.verify(result) ?? result;
       this.callCount++;
       if (!opts?.providerSessions) {
@@ -791,38 +813,106 @@ export class DefaultStepRunner implements StepRunner {
 
     const safety = this.candidateSafetyFor(request.step);
     const invocationOptions = this.withFeatureDiagnosticLog(request.options);
-    const result = await this.providerExecutor({
-      step: request.step,
-      configuredProviders: this.configuredProviders,
-      preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
-      runtimes: this.providerRuntimes,
-      sessions: this.sessionStore.beginBranch(request.step),
-      config: this.config,
-      tier: request.tier,
-      attempt: request.dispatch?.attempt ?? 1,
-      escalate: request.dispatch?.escalate ?? true,
-      modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
-      effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
-      taskAttribution: this.taskAttribution,
-      withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
-      prepareCandidateSelfHost:
-        this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
-      onAttempt: this.providerAttempt,
-      warn: this.providerWarn,
-      options: invocationOptions,
-      ...(request.kind === 'skill'
-        ? {
-            optionsForCandidate: (candidateKey: string) => ({
-              ...invocationOptions,
-              prompt: renderSkillInvocation(
-                STEP_SKILL_INVOCATIONS[request.step],
-                candidateKey,
-              ),
-            }),
-          }
-        : {}),
-    });
+    const result = await this.dispatchProviderWithWatchdog(
+      request.step,
+      invocationOptions,
+      (options) =>
+        this.providerExecutor({
+          step: request.step,
+          configuredProviders: this.configuredProviders,
+          preferredProvider: this.config?.steps?.[request.step]?.llm_provider,
+          runtimes: this.providerRuntimes!,
+          sessions: this.sessionStore!.beginBranch(request.step),
+          config: this.config,
+          tier: request.tier,
+          attempt: request.dispatch?.attempt ?? 1,
+          escalate: request.dispatch?.escalate ?? true,
+          modelOverride: request.dispatch?.modelOverride ?? this.modelOverride,
+          effortOverride: request.dispatch?.effortOverride ?? this.effortOverride,
+          taskAttribution: this.taskAttribution,
+          withCandidateSafety: safety?.wrapper ?? this.withCandidateSafety,
+          prepareCandidateSelfHost:
+            this.providerExecutionContext?.prepareCandidateSelfHost ?? this.prepareCandidateSelfHost,
+          onAttempt: this.providerAttempt,
+          warn: this.providerWarn,
+          options,
+          ...(request.kind === 'skill'
+            ? {
+                optionsForCandidate: (candidateKey: string) => ({
+                  ...options,
+                  prompt: renderSkillInvocation(
+                    STEP_SKILL_INVOCATIONS[request.step],
+                    candidateKey,
+                  ),
+                }),
+              }
+            : {}),
+        }),
+    );
     return safety?.verify(result) ?? result;
+  }
+
+  /**
+   * Wire the `.pipeline/step-heartbeat` activity pulse into `baseOptions` and
+   * race the actual dispatch (`run`) against the configured stall threshold
+   * (`resolveStepHeartbeatStallMinutes`). `run` receives the SAME augmented
+   * options object on every call, so its `onSpawn` always updates the same
+   * kill handle the watchdog reads — required for a multi-candidate dispatch,
+   * which may spawn more than one subprocess across retries/fallback.
+   *
+   * A threshold of 0 or less opts out of the watchdog entirely (heartbeat is
+   * still recorded and surfaced by `daemon status`; nothing is ever killed).
+   * On a genuine stall the underlying subprocess is killed and a
+   * `mechanical`-class HALT is raised via `writeHaltMarker` — the exact HALT
+   * machinery #1070 uses for live-boundary violations, so the daemon's
+   * existing auto-requeue path picks this up unchanged.
+   */
+  private async dispatchProviderWithWatchdog(
+    step: StepName,
+    baseOptions: ExecuteProviderCandidatesInput['options'],
+    run: (
+      options: ExecuteProviderCandidatesInput['options'],
+    ) => Promise<ProviderExecutionResult>,
+  ): Promise<ProviderExecutionResult> {
+    const killRef: KillRef = {};
+    const pulse = createHeartbeatPulse(this.projectDir, step);
+    const augmented: ExecuteProviderCandidatesInput['options'] = {
+      ...baseOptions,
+      onActivity: pulse,
+      onSpawn: (handle) => {
+        killRef.kill = handle.kill;
+      },
+    };
+
+    const thresholdMinutes = resolveStepHeartbeatStallMinutes(this.config);
+    if (thresholdMinutes <= 0) {
+      return run(augmented);
+    }
+
+    const outcome = await runWithStallWatchdog<ProviderExecutionResult>(
+      {
+        worktreePath: this.projectDir,
+        step,
+        thresholdMinutes,
+        killRef,
+        pollIntervalMs: this.heartbeatWatchdogOverrides?.pollIntervalMs,
+        now: this.heartbeatWatchdogOverrides?.now,
+        writeHalt: (reason) =>
+          writeHaltMarker(this.projectDir, `${reason}\n`, 'mechanical'),
+      },
+      () => run(augmented),
+    );
+    if (outcome.stalled) {
+      return {
+        success: false,
+        output:
+          'Step killed by the heartbeat stall watchdog: no provider activity beyond the configured threshold. See .pipeline/HALT.',
+        exitCode: 1,
+        preferredProvider: this.configuredProviders[0] ?? 'unknown',
+        attempts: [],
+      };
+    }
+    return outcome.value as ProviderExecutionResult;
   }
 
   private withFeatureDiagnosticLog(

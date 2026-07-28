@@ -78,7 +78,7 @@ the `build_review` normalizer (`:850,859,865`).
 
 ## Key index
 
-35 top-level keys are allow-listed. Everything else fails the load.
+36 top-level keys are allow-listed. Everything else fails the load.
 
 | Key | Type | Default | Section |
 | --- | --- | --- | --- |
@@ -117,6 +117,7 @@ the `build_review` normalizer (`:850,859,865`).
 | `wiring` | object | none | [wiring](#wiring) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
+| `step_heartbeat_stall_minutes` | number | `20` | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
 
 ## harness_version
 
@@ -875,6 +876,23 @@ Re-surfaces gated-spec skip notices (no-PR, terminal-PR, no-Source-Ref) on the d
 boolean; a non-boolean is a hard error (`config.ts:597-599`). The `false` default is applied at the
 wiring sites, not written back: `config?.daemon_verbose ?? false`
 (`src/conductor/src/daemon-cli.ts:1037, 1111, 1191`).
+
+## step_heartbeat_stall_minutes
+
+Stall threshold, in minutes, for a running step's `.pipeline/step-heartbeat` liveness signal (see
+`docs/guides/running-the-daemon.md#step-heartbeat-and-the-stall-watchdog` and
+`src/conductor/src/engine/step-heartbeat.ts`). While a step's provider dispatch is in flight, the
+engine touches `.pipeline/step-heartbeat` on every observed Claude/Codex subprocess activity
+boundary. If that heartbeat goes silent for longer than this many minutes (plus a small fixed grace
+buffer), the stall watchdog kills the wedged subprocess and raises a `mechanical`-class HALT — the
+same HALT class/machinery `fix/defer-live-boundary-halt-to-next-dispatch` (#1070) uses for
+live-boundary violations — so the daemon's existing auto-requeue path picks it up unchanged.
+
+Optional number; absent → `20`. Resolved by `resolveStepHeartbeatStallMinutes`
+(`resolved-config.ts`), mirroring `auth_park_timeout_minutes`'s resolution rules: `0` or a negative
+value is a deliberate opt-out (the heartbeat file is still written and surfaced by `daemon status`,
+but the watchdog never kills anything); a non-numeric or non-finite value is a load-time validation
+warning (`config.ts`) that falls back to the default.
 
 ## spec_owner
 

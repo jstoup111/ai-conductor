@@ -142,6 +142,20 @@ export interface InvokeOptions {
   diagnosticLog?: (message: string) => void;
   /** Set only for the resolved self-host provider candidate. */
   selfHost?: SelfHostInvocation;
+  /**
+   * Fired on every observed stdout/stderr activity boundary from the spawned
+   * provider subprocess (each streamed JSON event line). Used to drive the
+   * `.pipeline/step-heartbeat` liveness signal (see `step-heartbeat.ts`) so a
+   * genuinely-working step is never mistaken for a silent hang. Best-effort:
+   * a throwing handler must never affect provider dispatch.
+   */
+  onActivity?: () => void;
+  /**
+   * Fired once, synchronously, right after the provider subprocess spawns,
+   * with a handle that can terminate it. Used by the stall watchdog to kill a
+   * step whose heartbeat has gone stale past the configured threshold.
+   */
+  onSpawn?: (handle: { kill: () => void }) => void;
 }
 
 export interface LLMProvider {

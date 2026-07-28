@@ -143,6 +143,39 @@ conduct-ts daemon connect --write --attach-into mywindow:1.0
 `<target>` is a tmux session, `session:window`, or `session:window.pane` string. This also works on
 `daemon start`.
 
+## Step heartbeat and the stall watchdog
+
+`daemon.log` only records step start/end — it never shows mid-step activity, so a step that's
+genuinely working and a step that's silently wedged look identical from the outside for however
+long the dispatch runs.
+
+While a step's provider (Claude or Codex) subprocess is running, the engine touches
+`.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
+boundary (throttled to at most once every few seconds — this is a liveness signal, not a transcript).
+The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) annotates
+each in-progress feature with the heartbeat's age when one exists:
+
+```text
+IN-PROGRESS (1)
+  • my-feature [M] @build (heartbeat 12s ago)
+```
+
+A feature with no `(heartbeat … ago)` suffix hasn't produced its first activity pulse yet (a step
+that just started) — that's distinct from a stale heartbeat, and is never rendered as if the step
+were stuck.
+
+If a step's heartbeat goes silent for longer than `step_heartbeat_stall_minutes` (default 20; see
+[configuration](../reference/configuration.md#step_heartbeat_stall_minutes)) plus a small fixed
+grace buffer, the stall watchdog kills the wedged subprocess itself and raises a `mechanical`-class
+HALT — the same HALT class the live-boundary deferral (#1070) uses — so the daemon's existing
+auto-requeue sweep picks the feature back up on its own, without an operator having to notice the
+hang and intervene by hand. Set `step_heartbeat_stall_minutes` to `0` or a negative number to opt a
+project out of the kill/HALT behavior entirely; the heartbeat file itself is still written and still
+shown by the dashboard either way.
+
+See [runbook: a feature looks stalled or stuck](../runbooks/stalled-or-stuck-feature.md) for how to
+triage a feature the watchdog hasn't (yet) caught.
+
 ## Pause and resume dispatch
 
 A pause stops the daemon starting **new** work while leaving in-flight work and the daemon process
