@@ -162,7 +162,7 @@ describe('executeProviderCandidates', () => {
     ]);
   });
 
-  it('resumes a resume-capable provider within a step when no isolated self-host home is provisioned', async () => {
+  it('cold-starts a resume-capable provider on every invocation within a step', async () => {
     const seen: boolean[] = [];
     const claude = {
       supportsSessionResume: true,
@@ -186,7 +186,7 @@ describe('executeProviderCandidates', () => {
       });
     }
 
-    expect(seen).toEqual([false, true]);
+    expect(seen).toEqual([false, false]);
   });
 
   it('does not resume the second Claude attempt', async () => {

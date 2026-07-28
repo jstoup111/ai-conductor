@@ -17,6 +17,36 @@ describe('ProviderSessionStore', () => {
     );
   });
 
+  it('mints and mirrors a fresh session id for every provider invocation', async () => {
+    const pipelineDir = await mkdtemp(join(tmpdir(), 'provider-invocation-session-'));
+    tempDirs.push(pipelineDir);
+    const legacySession = new SessionManager(pipelineDir);
+    const ids = ['claude-invocation-1', 'claude-invocation-2'];
+    const store = new ProviderSessionStore({
+      createSessionId: () => ids.shift()!,
+      legacy: { providerKey: 'claude', session: legacySession },
+    });
+    await store.beginStep('build');
+
+    const first = await store.prepare('claude');
+    await store.markCreated('claude');
+    const second = await store.prepare('claude');
+
+    expect({
+      first,
+      second,
+      current: store.current('claude'),
+      legacyId: await legacySession.getSessionId(),
+      legacyCreated: await legacySession.isSessionCreated(),
+    }).toEqual({
+      first: { id: 'claude-invocation-1', resume: false },
+      second: { id: 'claude-invocation-2', resume: false },
+      current: { id: 'claude-invocation-2', created: false },
+      legacyId: 'claude-invocation-2',
+      legacyCreated: false,
+    });
+  });
+
   it('isolates providers within one execution and invalidates them at every later step boundary', async () => {
     const pipelineDir = await mkdtemp(join(tmpdir(), 'provider-session-'));
     tempDirs.push(pipelineDir);
@@ -94,7 +124,7 @@ describe('ProviderSessionStore', () => {
     });
   });
 
-  it('resumes only matching retries while stale resets, provider switches, later steps, and concurrent branches stay isolated', async () => {
+  it('cold-starts every invocation while provider switches, later steps, and concurrent branches stay isolated', async () => {
     const pipelineDir = await mkdtemp(join(tmpdir(), 'provider-retry-session-'));
     tempDirs.push(pipelineDir);
     const legacySession = new SessionManager(pipelineDir);
@@ -102,14 +132,21 @@ describe('ProviderSessionStore', () => {
     await legacySession.markSessionCreated();
 
     const ids = [
-      'step-claude',
-      'step-codex',
+      'step-claude-1',
+      'step-claude-2',
+      'step-codex-1',
       'replacement-claude',
+      'replacement-claude-retry',
+      'step-codex-2',
       'next-step-claude',
-      'ab-a',
-      'ab-b',
-      'ba-a',
-      'ba-b',
+      'ab-a-1',
+      'ab-b-1',
+      'ab-a-2',
+      'ab-b-2',
+      'ba-a-1',
+      'ba-b-1',
+      'ba-a-2',
+      'ba-b-2',
     ];
     const store = new ProviderSessionStore({
       createSessionId: () => ids.shift()!,
@@ -175,24 +212,24 @@ describe('ProviderSessionStore', () => {
         created: await legacySession.isSessionCreated(),
       },
     }).toEqual({
-      firstClaude: { id: 'step-claude', resume: false },
-      retryClaude: { id: 'step-claude', resume: true },
-      switchedCodex: { id: 'step-codex', resume: false },
+      firstClaude: { id: 'step-claude-1', resume: false },
+      retryClaude: { id: 'step-claude-2', resume: false },
+      switchedCodex: { id: 'step-codex-1', resume: false },
       replacementClaude: { id: 'replacement-claude', resume: false },
-      retryAfterReplacement: { id: 'replacement-claude', resume: false },
-      codexAfterClaudeReplacement: { id: 'step-codex', resume: true },
+      retryAfterReplacement: { id: 'replacement-claude-retry', resume: false },
+      codexAfterClaudeReplacement: { id: 'step-codex-2', resume: false },
       nextStepClaude: { id: 'next-step-claude', resume: false },
       branchAB: {
-        aFirst: { id: 'ab-a', resume: false },
-        bFirst: { id: 'ab-b', resume: false },
-        aRetry: { id: 'ab-a', resume: true },
-        bRetry: { id: 'ab-b', resume: true },
+        aFirst: { id: 'ab-a-1', resume: false },
+        bFirst: { id: 'ab-b-1', resume: false },
+        aRetry: { id: 'ab-a-2', resume: false },
+        bRetry: { id: 'ab-b-2', resume: false },
       },
       branchBA: {
-        aFirst: { id: 'ba-a', resume: false },
-        bFirst: { id: 'ba-b', resume: false },
-        aRetry: { id: 'ba-a', resume: true },
-        bRetry: { id: 'ba-b', resume: true },
+        aFirst: { id: 'ba-a-1', resume: false },
+        bFirst: { id: 'ba-b-1', resume: false },
+        aRetry: { id: 'ba-a-2', resume: false },
+        bRetry: { id: 'ba-b-2', resume: false },
       },
       serialScopeAfterBranches: { id: 'next-step-claude', created: true },
       legacyAfterBranches: { id: 'next-step-claude', created: true },

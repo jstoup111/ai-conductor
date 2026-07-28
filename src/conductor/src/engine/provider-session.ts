@@ -42,8 +42,7 @@ export class ProviderSessionScope {
   }
 
   async prepare(providerKey: string): Promise<ProviderSessionInvocation> {
-    const session = await this.create(providerKey);
-    return { id: session.id, resume: session.created };
+    return this.replace(providerKey);
   }
 
   async replace(providerKey: string): Promise<ProviderSessionInvocation> {
