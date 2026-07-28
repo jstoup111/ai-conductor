@@ -162,16 +162,15 @@ Estimated: 8 min.
 **Story:** S1
 **Dependencies:** Task 4
 
-Add the provider qualification recorded in the conflict check:
-- `.docs/decisions/adr-2026-07-24-provider-aware-step-execution-fresh-session-scope.md` §2 — a
-  "Superseded in part by adr-2026-07-27-codex-never-resumes-a-harness-minted-session" note
-  qualifying retry-resume by `supportsSessionResume`.
-- `.docs/stories/per-step-provider-routing-927.md` ST-927-7 and
-  `.docs/stories/fresh-session-per-step.md` "Within-step retries resume the same session" — a
-  one-line note that the rule applies to providers declaring the capability, and that for Codex
-  the retry carries context via the `RETRY:`-prefixed full prompt instead.
-
-Do not rewrite their acceptance criteria; annotate only.
+**Plan amendment (2026-07-28, operator-approved):** the three target documents —
+`.docs/decisions/adr-2026-07-24-provider-aware-step-execution-fresh-session-scope.md`,
+`.docs/stories/per-step-provider-routing-927.md`, and `.docs/stories/fresh-session-per-step.md`
+— are sealed, already-shipped artifacts belonging to other, unrelated features (#325, #927);
+the protected-artifact seal correctly forbids editing them. The same qualification is recorded
+instead in this feature's own story doc, `.docs/stories/codex-fresh-session-per-step-contract.md`
+Story S2 ("Capability qualification (2026-07-27)"), where it documents this feature's own scope
+without amending another feature's sealed record. No edits to the three named documents are
+required; this task is satisfied by the existing annotation in this feature's own story.
 
 Estimated: 5 min.
 
