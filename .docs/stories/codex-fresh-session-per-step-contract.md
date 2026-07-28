@@ -2,11 +2,6 @@
 
 Status: Accepted
 
-> **Historical contract:** This story records the provider-capability transition made by
-> #1069. Its Claude-resume exception was subsequently removed by #1071; the current contract
-> cold-starts every Claude and Codex attempt. Historical acceptance criteria below are retained
-> to explain that transition, not as current behavior.
-
 ## Context
 
 #325 made every executed step start on a fresh LLM session, preserving one exception: a step's
