@@ -123,6 +123,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 ### Fixed
 
+- Prevent repeated gate kickbacks from looping a daemon feature indefinitely across re-dispatches, and surface an actionable `needs-human` HALT when the durable bound is exhausted ([#984](https://github.com/jstoup111/ai-conductor/issues/984); {{IMPLEMENTATION_PR}}).
 - A self-host live-boundary violation no longer retroactively fails the step that was already in
   flight when it happened. The boundary fingerprint is taken when a provider candidate is prepared
   and re-verified in that candidate's teardown, so any concurrent change to the live checkout or the
