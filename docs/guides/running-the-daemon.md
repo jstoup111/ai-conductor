@@ -373,8 +373,10 @@ only reliable way to make a feature stay stopped.
 
 The kickback budget is durable for each gate: it survives daemon re-dispatch while the feature's
 tree hash and resolved-task count are unchanged. After the cap is exhausted, the daemon writes a
-`needs-human` HALT that names the gate, lap count, and most recent gate reason; the re-kick sweep
-does not clear that class of halt.
+HALT that names the gate, lap count, and most recent gate reason. `build_review`, `wiring_check`,
+and the kickback-ping-pong guard classify that halt `needs-human`, so the re-kick sweep never
+clears it. `test_suite`'s cap halt stays `mechanical` and can still be cleared by the re-kick sweep
+on a base-branch advance.
 
 Read the marker and fix the reported gate failure before resuming. Use the recovery procedure in
 [stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md#clear-a-halt-and-let-the-feature-resume);
