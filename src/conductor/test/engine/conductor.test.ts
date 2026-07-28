@@ -9157,7 +9157,9 @@ describe('engine/conductor', () => {
       ]);
       const ids = [
         'memory-codex-stale',
+        'memory-codex-reset',
         'memory-codex-recovered',
+        'memory-codex-retry',
         'explore-codex',
         'explore-claude',
       ][Symbol.iterator]();
@@ -9222,7 +9224,7 @@ describe('engine/conductor', () => {
           {
             step: 'memory',
             provider: 'codex',
-            sessionId: 'memory-codex-recovered',
+            sessionId: 'memory-codex-retry',
             resume: false,
           },
           {
@@ -9275,10 +9277,17 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(resetSession).toHaveBeenCalled();
-      expect(resetSession).toHaveBeenCalledWith();
-      expect(resetEvents.length).toBeGreaterThanOrEqual(1);
-      expect(attempt).toBeGreaterThanOrEqual(2);
+      expect({
+        completedAfterReset: attempt > 1,
+        staleResetCalls: resetSession.mock.calls.filter((args) => args.length === 0),
+        resetEvents,
+      }).toEqual({
+        completedAfterReset: true,
+        staleResetCalls: [[]],
+        resetEvents: [{
+          reason: 'session unavailable (expired or in use) — resetting to a fresh session',
+        }],
+      });
     });
 
     it('tolerates a runner without resetSession', async () => {

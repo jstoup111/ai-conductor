@@ -123,7 +123,7 @@ describe('InvokeResult provider-unavailable contract', () => {
     expect(calls.map(({ resume }) => resume)).toEqual([false, false]);
   });
 
-  it('keeps Claude session resume enabled while Codex declares it unsupported', async () => {
+  it('keeps both built-in providers fail-closed for session resume', async () => {
     const codex = new CodexProvider(vi.fn(async () => ({ stdout: '{}', exitCode: 0 })) as never);
     const claude = new ClaudeProvider();
     const calls: InvokeOptions[] = [];
@@ -144,7 +144,7 @@ describe('InvokeResult provider-unavailable contract', () => {
       codex: codex.supportsSessionResume,
       claude: claude.supportsSessionResume,
       resumeFlags: calls.map(({ resume }) => resume),
-    }).toEqual({ codex: false, claude: true, resumeFlags: [false, true] });
+    }).toEqual({ codex: false, claude: false, resumeFlags: [false, false] });
   });
 
   it('deduplicates unsupported-resume diagnostics and composes with a forced fresh session', async () => {
@@ -158,14 +158,20 @@ describe('InvokeResult provider-unavailable contract', () => {
       async invokeInteractive(): Promise<void> {},
     };
     const transitions: Array<Record<string, unknown>> = [];
-    const sessions = new ProviderSessionScope(() => 'diagnostic-session');
+    const sessions = {
+      prepare: vi.fn(async () => ({ id: 'diagnostic-session', resume: true })),
+      markCreated: vi.fn(async () => {}),
+    } as unknown as ProviderSessionScope;
 
     await executeCodexCandidate(provider, sessions, transitions);
     await executeCodexCandidate(provider, sessions, transitions);
     await executeCodexCandidate(provider, sessions, transitions);
 
     const forceFreshTransitions: Array<Record<string, unknown>> = [];
-    const forceFreshSessions = new ProviderSessionScope(() => 'self-host-session');
+    const forceFreshSessions = {
+      prepare: vi.fn(async () => ({ id: 'self-host-session', resume: true })),
+      markCreated: vi.fn(async () => {}),
+    } as unknown as ProviderSessionScope;
     await executeCodexCandidate(provider, forceFreshSessions, forceFreshTransitions, true);
     await executeCodexCandidate(provider, forceFreshSessions, forceFreshTransitions, true);
 

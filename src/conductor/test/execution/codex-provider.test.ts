@@ -921,6 +921,7 @@ describe('CodexProvider', () => {
     ['rate limit', { stdout: '', stderr: 'Error 429: rate limit exceeded; retry after 45 seconds', exitCode: 1 }, 'rateLimited'],
     ['model unavailable', { stdout: '', stderr: 'Requested model gpt-nope is not available', exitCode: 1 }, 'modelUnavailable'],
     ['expired session', { stdout: '', stderr: 'Thread not found; cannot resume this session', exitCode: 1 }, 'sessionExpired'],
+    ['thread resume failed', { stdout: '', stderr: 'Error: thread/resume failed for thread id c6a57ca5-fe83-47a1-aa23-9c30b9bff882', exitCode: 1 }, 'sessionExpired'],
     // Codex 0.145 reports a resume against a home with no matching rollout this
     // way; it must heal as an expired session rather than burn every retry.
     ['missing rollout', { stdout: '', stderr: 'Error: thread/resume: thread/resume failed: no rollout found for thread id c6a57ca5-fe83-47a1-aa23-9c30b9bff882 (code -32600)', exitCode: 1 }, 'sessionExpired'],
