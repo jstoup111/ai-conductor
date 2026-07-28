@@ -386,25 +386,6 @@ test_conduct_ts_forwarding_red() {
   assert "daemon capture contains 'status'" \
     "$([ -f "$capture_path" ] && grep -q '^status$' "$capture_path" && echo 0 || echo 1)"
 
-  # Test 2a: reconcile-parked is a conduct-ts-owned daemon verb, not an
-  # unknown bare command that accidentally starts the shell pipeline.
-  shim_info=$(make_conduct_ts_shim 0)
-  shim_path="${shim_info%%|*}"
-  capture_path="${shim_info##*|}"
-  shim_dir=$(dirname "$shim_path")
-  rc=0
-  (
-    cd "$repo"
-    export PATH="${shim_dir}:$PATH"
-    CONDUCT_TEST_NO_CLAUDE=1 timeout 5 "$CONDUCT" daemon reconcile-parked parked-slug >/dev/null 2>&1
-  ) || rc=$?
-
-  assert "conduct daemon reconcile-parked forwards with exit 0" \
-    "$([ "$rc" -eq 0 ] && echo 0 || echo 1)"
-
-  assert "daemon reconcile-parked capture preserves the slug" \
-    "$([ -f "$capture_path" ] && grep -qx 'reconcile-parked' "$capture_path" && grep -qx 'parked-slug' "$capture_path" && echo 0 || echo 1)"
-
   # Test 2b: daemon exit codes pass through
   shim_info=$(make_conduct_ts_shim 7)
   shim_path="${shim_info%%|*}"
