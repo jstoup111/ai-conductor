@@ -155,6 +155,70 @@ describe('resolveEngineVersion', () => {
 });
 
 describe('parseShippedRecord', () => {
+  it('adds cost-unmetered counts to Cost blocks without changing their frontmatter round trip', () => {
+    const fields = {
+      slug: 'billing-export',
+      specHash: 'abc123',
+      pr: 'https://github.com/acme/repo/pull/42',
+      shipped: '2026-07-01',
+    };
+    const rollup: CostRollup = {
+      tokens: { input: 1600, output: 360, cacheRead: 50, cacheCreation: 17 },
+      costUsd: 0.15,
+      dispatches: 3,
+      retries: 1,
+      halts: 0,
+      unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 1 },
+      providers: {
+        claude: {
+          tokens: { input: 1500, output: 300, cacheRead: 50, cacheCreation: 10 },
+          costUsd: 0.15,
+          dispatches: 2,
+          unmetered: { count: 0, durationMs: 0 },
+          costUnmetered: { count: 0 },
+        },
+        codex: {
+          tokens: { input: 100, output: 60, cacheRead: 0, cacheCreation: 7 },
+          costUsd: 0,
+          dispatches: 1,
+          unmetered: { count: 0, durationMs: 0 },
+          costUnmetered: { count: 1 },
+        },
+      },
+    };
+
+    const rendered = renderShippedRecordWithCost(fields, rollup);
+
+    expect(rendered).toBe(
+      '---\n' +
+        'slug: billing-export\n' +
+        'spec_hash: abc123\n' +
+        'pr: https://github.com/acme/repo/pull/42\n' +
+        'shipped: 2026-07-01\n' +
+        '---\n' +
+        '\n' +
+        '## Cost\n' +
+        'input: 1600\n' +
+        'output: 360\n' +
+        'cache_read: 50\n' +
+        'cache_creation: 17\n' +
+        'cost_usd: 0.15\n' +
+        'dispatches: 3\n' +
+        'retries: 1\n' +
+        'halts: 0\n' +
+        'unmetered: count: 0, duration_ms: 0\n' +
+        'cost_unmetered: count: 1\n' +
+        'providers:\n' +
+        '  claude: input: 1500, output: 300, cache_read: 50, cache_creation: 10, cost_usd: 0.15, dispatches: 2, cost_unmetered: 0\n' +
+        '  codex: input: 100, output: 60, cache_read: 0, cache_creation: 7, cost_usd: 0, dispatches: 1, cost_unmetered: 1\n',
+    );
+
+    const parsed = parseShippedRecord(rendered);
+    if ('malformed' in parsed) throw new Error('rendered Cost block must preserve valid frontmatter');
+    expect(renderShippedRecordWithCost(parsed, rollup)).toBe(rendered);
+  });
+
   it('round-trips engine_version when present', () => {
     const rendered = renderShippedRecord({
       slug: 'billing-export',
