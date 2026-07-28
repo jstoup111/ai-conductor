@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { reconcileMergedPark } from '../../src/engine/park-reconciliation.js';
+import { reconcileMergedPark, reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
 
@@ -315,6 +315,42 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
           refusal: 'unpark-failed',
         },
         parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
+  it.each([
+    { slug: 'merged', ancestry: 'merged', intake: undefined, issue: undefined, classification: 'merged' },
+    { slug: 'orphan', ancestry: 'not-ancestor', intake: 'Source-Ref: acme/app#42\n', issue: 'CLOSED', classification: 'orphan' },
+    { slug: 'normal', ancestry: 'not-ancestor', intake: 'Source-Ref: acme/app#42\n', issue: 'OPEN', classification: 'normal' },
+    { slug: 'no-intake', ancestry: 'not-ancestor', intake: undefined, issue: undefined, classification: 'unclassified' },
+    { slug: 'bad-intake', ancestry: 'not-ancestor', intake: 'Source-Ref: not-a-ref\n', issue: undefined, classification: 'unclassified' },
+  ] as const)('classifies $slug without cleanup actions', async ({ slug, ancestry, intake, issue, classification }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'merge-base' && ancestry === 'not-ancestor') {
+        throw Object.assign(new Error('not an ancestor'), { code: 1 });
+      }
+      return { stdout: '' };
+    });
+    const getIssueState = vi.fn(async () => issue ?? 'OPEN');
+    try {
+      await writeOperatorPark(projectRoot, slug);
+      if (intake) {
+        const intakeDir = join(projectRoot, '.docs', 'intake');
+        await mkdir(intakeDir, { recursive: true });
+        await writeFile(join(intakeDir, `${slug}.md`), intake);
+      }
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit, getIssueState });
+
+      expect({ entries: result.entries, destructive: runGit.mock.calls.filter(([args]) => args[0] === 'worktree' || args[0] === 'branch') }).toEqual({
+        entries: [{ slug, classification }],
+        destructive: [],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

@@ -6,8 +6,10 @@ import {
 } from './pr-labels.js';
 import { detectAutoResume } from './auto-resume.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { access } from 'node:fs/promises';
+import { access, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { listOperatorParkedSlugs } from './park-marker.js';
+import { parseIntakeSourceRef } from './artifacts.js';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -26,7 +28,84 @@ export interface ReconcileMergedParkOutcome {
   deferred?: boolean;
 }
 
+export type ParkClassification = 'merged' | 'orphan' | 'normal' | 'unclassified';
+
+export interface ParkedSweepEntry {
+  slug: string;
+  classification: ParkClassification;
+}
+
+export interface ParkedSweepResult {
+  entries: ParkedSweepEntry[];
+  counts: {
+    reconciled: number;
+    deferred: number;
+    orphaned: number;
+    parked: number;
+    skipped: number;
+  };
+}
+
+export interface ReconcileParkedFeaturesOptions {
+  projectRoot: string;
+  runGit?: GitRunner;
+  runGh?: GhRunner;
+  getIssueState?: (ref: string, cwd: string) => Promise<string>;
+  requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
+  log?: (message: string) => void;
+  autoCleanup?: boolean;
+}
+
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
+
+/**
+ * Report the current reconciliation classification for each parked feature.
+ * Cleanup is deliberately not initiated here until the later auto-cleanup task.
+ */
+export async function reconcileParkedFeatures(
+  opts: ReconcileParkedFeaturesOptions,
+): Promise<ParkedSweepResult> {
+  const entries: ParkedSweepEntry[] = [];
+  const counts = { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, skipped: 0 };
+  const runGit = opts.runGit ?? makeProductionGit();
+
+  for (const slug of await listOperatorParkedSlugs(opts.projectRoot)) {
+    let classification: ParkClassification;
+    try {
+      await runGit(['merge-base', '--is-ancestor', `feature/${slug}`, 'origin/main'], {
+        cwd: opts.projectRoot,
+      });
+      classification = 'merged';
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== 1) {
+        classification = 'unclassified';
+      } else {
+        const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
+          .then((content) => content)
+          .catch(() => null);
+        const sourceRef = parseIntakeSourceRef(intake);
+        if (!sourceRef || !opts.getIssueState) {
+          classification = 'unclassified';
+        } else {
+          try {
+            classification = (await opts.getIssueState(sourceRef, opts.projectRoot)).toUpperCase() === 'CLOSED'
+              ? 'orphan'
+              : 'normal';
+          } catch {
+            classification = 'unclassified';
+          }
+        }
+      }
+    }
+
+    entries.push({ slug, classification });
+    if (classification === 'orphan') counts.orphaned++;
+    else if (classification === 'unclassified') counts.skipped++;
+    else counts.parked++;
+  }
+
+  return { entries, counts };
+}
 
 /**
  * Guarded deletion seam for one parked feature. Later gates establish every
