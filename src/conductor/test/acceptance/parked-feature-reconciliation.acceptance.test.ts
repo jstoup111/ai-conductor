@@ -1,7 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readFile, access } from 'node:fs/promises';
+import { execa } from 'execa';
+import { mkdtemp, mkdir, rm, writeFile, readFile, access, chmod } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -13,6 +15,8 @@ import {
 } from '../../src/engine/park-marker.js';
 
 const execFile = promisify(execFileCb);
+const REPO_ROOT = join(fileURLToPath(new URL('../../../..', import.meta.url)));
+const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Parked-Feature Reconciliation Sweep (#1060)"
@@ -763,6 +767,33 @@ describe('parked-feature reconciliation acceptance (S6/S7): orphan surfacing is 
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is the second deletion call site and re-verifies for itself', () => {
+  it('S5 negative: bare or malformed reconciliation input prints actionable rejection before attempting Git root resolution', async () => {
+    const nonGitCwd = join(tmpBase, 'not-a-repo');
+    const fakeBin = join(tmpBase, 'fake-bin');
+    const gitProbe = join(tmpBase, 'git-was-called');
+    await mkdir(nonGitCwd);
+    await mkdir(fakeBin);
+    await writeFile(join(fakeBin, 'git'), '#!/bin/sh\nprintf called > "$GIT_PROBE"\nexit 1\n');
+    await chmod(join(fakeBin, 'git'), 0o755);
+    const env = { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ''}`, GIT_PROBE: gitProbe };
+
+    const [bare, malformed] = await Promise.all([
+      execa(REAL_CONDUCT_TS, ['daemon', 'reconcile-parked'], { cwd: nonGitCwd, reject: false, all: true, env }),
+      execa(REAL_CONDUCT_TS, ['daemon', 'reconcile-parked', 'bad/slug'], { cwd: nonGitCwd, reject: false, all: true, env }),
+    ]);
+    const gitWasCalled = await access(gitProbe).then(() => true).catch(() => false);
+
+    expect({
+      bare: { code: bare.exitCode, output: `${bare.stdout}\n${bare.stderr}` },
+      malformed: { code: malformed.exitCode, output: `${malformed.stdout}\n${malformed.stderr}` },
+      gitWasCalled,
+    }).toEqual({
+      bare: { code: 1, output: expect.stringContaining('Usage: conduct daemon reconcile-parked <slug>') },
+      malformed: { code: 1, output: expect.stringContaining("Could not reconcile 'bad/slug': invalid-slug") },
+      gitWasCalled: false,
+    });
+  });
+
   it('S5 happy: `conduct daemon reconcile-parked <slug>` reconciles a merged, record-backed park, prints the steps taken, and exits 0', async () => {
     const slug = 'verb-reconciles-me';
     await seedParkedFeature(slug, { merged: true, record: true });

@@ -8,7 +8,7 @@
 // no heavy imports in the detector) so index.ts can decide whether to
 // dispatch before the pipeline boots.
 
-import { existsSync } from 'node:fs';
+import { existsSync, writeSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
@@ -94,7 +94,7 @@ export function validateSlug(slug: string, root: string = process.cwd()): boolea
 export interface DaemonParkDeps {
   /** Project/repo root the marker is written under (tests inject a tmp dir). */
   cwd?: string;
-  /** Output sink (tests capture lines; default: console.log). */
+  /** Output sink (tests capture lines; default: synchronous stdout). */
   out?: (line: string) => void;
   /** Guarded reconciliation seam; tests inject a faithful in-process fake. */
   reconcileMergedPark?: (opts: {
@@ -124,7 +124,10 @@ export async function dispatchDaemonPark(
   deps: DaemonParkDeps = {},
 ): Promise<number> {
   const cwd = deps.cwd ?? process.cwd();
-  const out = deps.out ?? ((l: string) => console.log(l));
+  // The pre-boot caller exits immediately after this returns. Write the
+  // command result synchronously so usage/refusal output reaches piped CLI
+  // callers before that exit, not only an interactive terminal.
+  const out = deps.out ?? ((l: string) => writeSync(process.stdout.fd, `${l}\n`));
 
   try {
     // Reject malformed/manual-usage reconciliation requests before resolving

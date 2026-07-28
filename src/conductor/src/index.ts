@@ -613,6 +613,15 @@ async function main(): Promise<void> {
   // and the daemon run command so they are never mistaken for either.
   const daemonParkCmd = detectDaemonParkCommand(process.argv);
   if (daemonParkCmd) {
+    // Reconciliation validates its exact one-slug command shape before any
+    // root resolution. Let its dispatcher own that ordering: invalid/bare
+    // input must not run Git merely to discover the current directory is not
+    // a repository. Returning lets its actionable output flush to piped CLI
+    // callers before Node exits naturally.
+    if (daemonParkCmd.kind === 'reconcile-parked') {
+      process.exitCode = await dispatchDaemonPark(daemonParkCmd, { cwd: process.cwd() });
+      return;
+    }
     const resolved = await resolveMainRepoRoot(process.cwd());
     if ('error' in resolved) {
       console.error(resolved.error);
