@@ -1,8 +1,61 @@
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
 import {
   classifyBuildProgress,
   shouldEscalateKickback,
 } from '../../src/engine/kickback-escalation.js';
+
+interface GitSnapshot {
+  head: string;
+  tree: string;
+}
+
+function git(repo: string, ...args: string[]): string {
+  return execFileSync('git', args, { cwd: repo, encoding: 'utf8' }).trim();
+}
+
+function snapshot(repo: string): GitSnapshot {
+  return {
+    head: git(repo, 'rev-parse', 'HEAD'),
+    tree: git(repo, 'rev-parse', 'HEAD^{tree}'),
+  };
+}
+
+function withTestRepo(run: (repo: string) => void): void {
+  const repo = mkdtempSync(join(tmpdir(), 'kickback-escalation-'));
+  try {
+    git(repo, 'init', '-b', 'main');
+    git(repo, 'config', 'user.email', 'test@example.com');
+    git(repo, 'config', 'user.name', 'Test User');
+    writeFileSync(join(repo, 'tracked.txt'), 'initial\n');
+    git(repo, 'add', 'tracked.txt');
+    git(repo, 'commit', '-m', 'initial');
+    run(repo);
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+}
+
+function classifySnapshots(
+  before: GitSnapshot,
+  after: GitSnapshot,
+  resolvedBefore = 0,
+  resolvedAfter = 0,
+) {
+  return classifyBuildProgress({
+    // Task 4 will consume the tree fields. The head fields keep this RED test
+    // runnable against the current commit-SHA implementation.
+    headBefore: before.head,
+    headAfter: after.head,
+    treeBefore: before.tree,
+    treeAfter: after.tree,
+    resolvedBefore,
+    resolvedAfter,
+  } as unknown as Parameters<typeof classifyBuildProgress>[0]);
+}
 
 describe('classifyBuildProgress', () => {
   it('is did-work when head changed', () => {
@@ -57,6 +110,54 @@ describe('classifyBuildProgress', () => {
       resolvedAfter: 1,
     };
     expect(classifyBuildProgress(input)).toBe(classifyBuildProgress(input));
+  });
+});
+
+describe('classifyBuildProgress tree-hash witness', () => {
+  it('classifies an allow-empty commit with an unchanged tree as no-work', () => {
+    withTestRepo((repo) => {
+      const before = snapshot(repo);
+      git(repo, 'commit', '--allow-empty', '-m', 'empty progress claim');
+      const after = snapshot(repo);
+
+      expect(classifySnapshots(before, after)).toBe('no-work');
+    });
+  });
+
+  it('classifies a real file change with a changed tree as did-work', () => {
+    withTestRepo((repo) => {
+      const before = snapshot(repo);
+      writeFileSync(join(repo, 'tracked.txt'), 'changed\n');
+      git(repo, 'add', 'tracked.txt');
+      git(repo, 'commit', '-m', 'change tracked file');
+      const after = snapshot(repo);
+
+      expect(classifySnapshots(before, after)).toBe('did-work');
+    });
+  });
+
+  it.each([
+    ['before', { head: 'before-commit', tree: null }, { head: 'after-commit', tree: 'after-tree' }],
+    ['after', { head: 'before-commit', tree: 'before-tree' }, { head: 'after-commit', tree: null }],
+  ] as const)('classifies a null tree hash on the %s side as no-work', (_side, before, after) => {
+    expect(
+      classifyBuildProgress({
+        headBefore: before.head,
+        headAfter: after.head,
+        treeBefore: before.tree,
+        treeAfter: after.tree,
+        resolvedBefore: 0,
+        resolvedAfter: 0,
+      } as unknown as Parameters<typeof classifyBuildProgress>[0]),
+    ).toBe('no-work');
+  });
+
+  it('retains a resolved-count increase as did-work when the tree is unchanged', () => {
+    withTestRepo((repo) => {
+      const unchanged = snapshot(repo);
+
+      expect(classifySnapshots(unchanged, unchanged, 2, 3)).toBe('did-work');
+    });
   });
 });
 
