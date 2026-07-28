@@ -67,6 +67,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The vitest suite no longer leaks temp directories into the operator's real `/tmp`. Around 1,426
+  `mkdtemp(join(tmpdir(), …))` call sites across ~398 test files, most with no cleanup, had left
+  83,000+ entries in a 15G tmpfs — 73% of its inodes — until unrelated production processes started
+  failing with `No space left on device`. Two deterministic mechanisms replace per-file discipline:
+  `vitest.config.ts` now points `TMPDIR` at one run-scoped root, so every existing and future
+  `os.tmpdir()`-based fixture lands inside it and global teardown deletes the whole tree; and a new
+  leak guard snapshots the real tmpdir before the run and **fails** the run on any entry that appeared
+  outside that root, naming it. No test-file edits were required for the containment, and the guard
+  makes silent reintroduction impossible. Verified by a full 608-file, 9,400-test run that left the
+  `/tmp` entry count unchanged.
+
 - A self-build dispatch can no longer halt on a fabricated environmental blocker. A `finish` step
   refused to ship completed, tested work by reporting that "the environment's write-fence sandbox
   blocks both `git push` and `gh pr` operations" — a blocker that cannot exist: the generated fence
