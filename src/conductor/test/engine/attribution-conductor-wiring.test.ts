@@ -1408,7 +1408,10 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
   });
 
-  it('(a) session-hooks missing → seedAndCheckAttributionMachinery still returns the session-hooks diagnostic unchanged', async () => {
+  it('(a) session-hooks missing → seedAndCheckAttributionMachinery repairs them and reports intact', async () => {
+    // #896 + adr-2026-07-23-session-hook-repair-before-halt intentionally
+    // supersede the former terminal-HALT assertion: pure hook assets are
+    // restored at preflight, then re-statted before build dispatch proceeds.
     // task-status.json present (so the seed path is a no-op / not the thing
     // under test) but session-hooks/ absent entirely.
     await writeFile(
@@ -1419,8 +1422,20 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
     const diagnostic = await seedAndCheckAttributionMachinery(dir, 'unused-feature-desc');
 
-    expect(diagnostic).not.toBeNull();
-    expect(diagnostic).toMatch(/session-hooks|session hooks/i);
+    expect(diagnostic).toBeNull();
+    await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+    await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+    await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), 'utf-8')).resolves.toBeTruthy();
+  });
+
+  it('plan-unresolvable worktree takes precedence when session hooks are also missing', async () => {
+    // No plan artifact makes the seed path report the established plan
+    // diagnostic before hook repair is considered; #896 does not alter this
+    // branch ordering.
+    const diagnostic = await seedAndCheckAttributionMachinery(dir, 'missing-plan-fixture');
+
+    expect(diagnostic).toMatch(/plan could not be resolved/i);
+    expect(diagnostic).not.toMatch(/session-hooks|session hooks/i);
   });
 
   it('(b) stamp path unwritable remains advisory to attribution machinery', async () => {
