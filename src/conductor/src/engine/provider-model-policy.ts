@@ -67,7 +67,7 @@ const CODEX_STEP_MODELS: Record<StepName, string> = {
   complexity: 'gpt-5.6-terra',
   stories: 'gpt-5.6-terra',
   conflict_check: 'gpt-5.6-terra',
-  plan: 'gpt-5.6-terra',
+  plan: 'gpt-5.6-sol',
   coherence_check: 'gpt-5.6-terra',
   architecture_diagram: 'gpt-5.6-terra',
   architecture_review: 'gpt-5.6-sol',
