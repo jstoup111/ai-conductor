@@ -5,6 +5,9 @@ import {
   type GitRunner,
 } from './pr-labels.js';
 import { detectAutoResume } from './auto-resume.js';
+import { dispatchDaemonPark } from './daemon-park-cli.js';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 
 export interface ReconcileMergedParkOptions {
   projectRoot: string;
@@ -13,6 +16,7 @@ export interface ReconcileMergedParkOptions {
   runGh?: GhRunner;
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   log?: (message: string) => void;
+  disposeHaltWatcher?: (slug: string) => void;
 }
 
 export interface ReconcileMergedParkOutcome {
@@ -102,5 +106,38 @@ export async function reconcileMergedPark(
     return { slug: opts.slug, steps: [], refusal: 'in-progress' };
   }
 
-  return { slug: opts.slug, steps: [], refusal: 'not-implemented' };
+  const steps: string[] = [];
+  const worktreePath = join(opts.projectRoot, '.worktrees', opts.slug);
+  opts.disposeHaltWatcher?.(opts.slug);
+
+  try {
+    await access(worktreePath);
+    await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
+  } catch (error) {
+    const failure = error as { code?: unknown };
+    if (failure.code !== 'ENOENT') {
+      return { slug: opts.slug, steps, refusal: 'worktree-remove-failed' };
+    }
+  }
+  steps.push('worktree-removed');
+
+  try {
+    await runGit(['branch', '-d', `feature/${opts.slug}`], { cwd: opts.projectRoot });
+  } catch {
+    return { slug: opts.slug, steps, refusal: 'branch-delete-failed' };
+  }
+  steps.push('branch-deleted');
+
+  try {
+    const exitCode = await dispatchDaemonPark(
+      { kind: 'unpark', slug: opts.slug },
+      { cwd: opts.projectRoot, out: opts.log ?? (() => {}) },
+    );
+    if (exitCode !== 0) throw new Error('canonical unpark failed');
+  } catch {
+    return { slug: opts.slug, steps, refusal: 'unpark-failed' };
+  }
+  steps.push('unparked');
+
+  return { slug: opts.slug, steps };
 }

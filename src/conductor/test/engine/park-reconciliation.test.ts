@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import { reconcileMergedPark } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
 
 describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it.each(['*', 'a/b', 'a,b', ''])(
@@ -79,13 +80,14 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
 
     expect({ outcome, gitCalls: runGit.mock.calls, ghCalls: runGh.mock.calls }).toEqual({
-      outcome: { slug: 'recorded', steps: [], refusal: 'not-implemented' },
+      outcome: { slug: 'recorded', steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
       gitCalls: [
         [
           ['merge-base', '--is-ancestor', 'feature/recorded', 'origin/main'],
           { cwd: '/project' },
         ],
         [['ls-tree', '--name-only', 'origin/main:.docs/shipped'], { cwd: '/project' }],
+        [['branch', '-d', 'feature/recorded'], { cwd: '/project' }],
       ],
       ghCalls: [],
     });
@@ -190,7 +192,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     }
   });
 
-  it('allows a quiescent worktree pipeline to reach the later cleanup placeholder', async () => {
+  it('allows a quiescent worktree pipeline to reach ordered cleanup', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'quiescent-run';
     const runGit = vi
@@ -204,7 +206,116 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit });
 
-      expect(outcome).toEqual({ slug, steps: [], refusal: 'not-implemented' });
+      expect(outcome).toEqual({ slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('disposes the HALT watcher, removes the worktree and branch, then unparks last', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'ordered-cleanup';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const events: string[] = [];
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'worktree') events.push('worktree-removed');
+      if (args[0] === 'branch') events.push('branch-deleted');
+      return { stdout: args[0] === 'ls-tree' ? `${slug}.md\n` : '' };
+    });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({
+        projectRoot,
+        slug,
+        runGit,
+        disposeHaltWatcher: () => events.push('watcher-disposed'),
+      });
+
+      expect({ outcome, events, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+        events: ['watcher-disposed', 'worktree-removed', 'branch-deleted'],
+        parked: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('treats a missing worktree as removed and uses unpark fallback after deleting the branch', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'missing-worktree';
+    const runGit = vi.fn<GitRunner>(async (args) => ({
+      stdout: args[0] === 'ls-tree' ? `${slug}.md\n` : '',
+    }));
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit });
+
+      expect({ outcome, gitCalls: runGit.mock.calls, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+        gitCalls: [
+          [
+            ['merge-base', '--is-ancestor', `feature/${slug}`, 'origin/main'],
+            { cwd: projectRoot },
+          ],
+          [['ls-tree', '--name-only', 'origin/main:.docs/shipped'], { cwd: projectRoot }],
+          [['branch', '-d', `feature/${slug}`], { cwd: projectRoot }],
+        ],
+        parked: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the park marker when branch deletion fails after worktree removal', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'branch-delete-fails';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const runGit = vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'branch') throw new Error('branch delete failed');
+      return { stdout: args[0] === 'ls-tree' ? `${slug}.md\n` : '' };
+    });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit });
+
+      expect({ outcome, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: ['worktree-removed'], refusal: 'branch-delete-failed' },
+        parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the park marker when canonical unpark fails its counter reset', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'counter-reset-fails';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const runGit = vi.fn<GitRunner>(async (args) => ({
+      stdout: args[0] === 'ls-tree' ? `${slug}.md\n` : '',
+    }));
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeFile(join(worktree, '.pipeline'), 'not a directory');
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit });
+
+      expect({ outcome, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: {
+          slug,
+          steps: ['worktree-removed', 'branch-deleted'],
+          refusal: 'unpark-failed',
+        },
+        parked: true,
+      });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
