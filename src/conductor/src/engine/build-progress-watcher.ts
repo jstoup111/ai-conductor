@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { normalizeTasks } from './task-progress.js';
+import { normalizeTasks, resolveTaskIds, type NormalizedTask } from './task-progress.js';
 import { readNoEvidenceAttempts } from './task-evidence.js';
 import { makeGitRunner } from './rebase.js';
 import { resolveBuildProgressConfig } from './config.js';
@@ -48,6 +48,44 @@ export interface BuildProgressSnapshot {
  *   loosely, but genuinely absent) when the probe fails, e.g. `projectRoot`
  *   isn't a git repo or has no commits yet.
  */
+/**
+ * Resolved-task count for `tasks`, using the SAME union fold as
+ * `task-progress.ts#countResolvedTasks` — a task counts as resolved when its
+ * `.pipeline/task-status.json` row says `completed`/`skipped` OR a commit on
+ * the branch carries its `Task:` trailer.
+ *
+ * Why the union (#1086): since #773 deleted the evidence-ledger derivation
+ * engine, nothing writes rows back during a build — the pipeline skill's
+ * explicit `conduct task done` is the only writer, and an agent that commits
+ * with a `Task:` trailer but never calls it leaves every row `pending` for the
+ * whole build. Every *gating* consumer (the build completion predicate in
+ * artifacts.ts, the conductor's stall breaker, the daemon's progress-re-kick
+ * eligibility) already folds trailers in via `resolveTaskIds`; this watcher
+ * counted raw rows only, so the operator-facing `build_progress` /
+ * `build_no_progress` events reported a permanently pinned `resolved: 0`
+ * ("▶ build 0/7") while the build was in fact committing task after task.
+ *
+ * Fail-soft: `resolveTaskIds` degrades to the row-only set on any git/fs
+ * error, and a throw here falls back to the row count rather than aborting the
+ * poll tick.
+ */
+async function countResolvedForTasks(
+  projectRoot: string,
+  tasks: NormalizedTask[],
+): Promise<number> {
+  const rowResolved = tasks.filter(
+    (t) => t.status === 'completed' || t.status === 'skipped',
+  ).length;
+  const planIds = tasks.map((t) => t.id).filter((id): id is string => id !== undefined);
+  if (planIds.length === 0) return rowResolved;
+  try {
+    const resolved = await resolveTaskIds(projectRoot, planIds);
+    return resolved.size;
+  } catch {
+    return rowResolved;
+  }
+}
+
 export async function readSnapshot(projectRoot: string): Promise<BuildProgressSnapshot> {
   const statusPath = join(projectRoot, '.pipeline/task-status.json');
 
@@ -74,7 +112,7 @@ export async function readSnapshot(projectRoot: string): Promise<BuildProgressSn
     // File missing — fall through with the empty "no data" task list.
   }
 
-  const resolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
+  const resolved = await countResolvedForTasks(projectRoot, tasks);
   const total = explicitTotal ?? tasks.length;
   const current = tasks.find((t) => t.status === 'in_progress');
 
@@ -258,7 +296,7 @@ export class BuildProgressWatcher {
       return;
     }
 
-    const resolved = tasks.filter((t) => t.status === 'completed' || t.status === 'skipped').length;
+    const resolved = await countResolvedForTasks(this.projectRoot, tasks);
     const total = tasks.length;
     const current = tasks.find((t) => t.status === 'in_progress');
 

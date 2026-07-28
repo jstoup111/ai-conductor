@@ -47,6 +47,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The `build_progress` / `build_no_progress` events — and the `▶ build <resolved>/<total>` line they
+  render into `.daemon/daemon.log` — no longer report a permanently pinned `resolved: 0` while a
+  build is committing task after task. The watcher counted `.pipeline/task-status.json` rows only,
+  but since the evidence-ledger derivation engine was removed nothing writes those rows back
+  mid-build: an agent that commits `Task: <id>`-trailered work without calling `conduct task done`
+  leaves every row `pending` for the whole run. Every gating consumer (the build completion
+  predicate, the conductor's stall breaker, the daemon's progress-re-kick eligibility) already
+  folded `Task:` commit trailers in via `resolveTaskIds`; the watcher now uses that same union, so
+  the operator-facing progress figure matches the one the engine actually routes on. Telemetry only
+  — no gate changes behavior, and the read stays fail-soft (a git error degrades to the row count).
 - The step-heartbeat stall watchdog no longer kills a step over a heartbeat that belongs to an
   earlier dispatch. `.pipeline/step-heartbeat` is a single per-worktree file that is overwritten and
   never cleared, so a re-kicked step starts life next to whatever the previous step left behind. The

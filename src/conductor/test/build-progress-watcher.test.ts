@@ -280,6 +280,66 @@ describe('BuildProgressWatcher change-driven emission', () => {
     expect(last.featureSlug).toBe('my-feature');
     expect(last.noEvidenceAttempts).toBe(2);
   });
+
+  // #1086 regression: the production stall shape. Since #773 removed the
+  // evidence-ledger derivation engine, nothing writes task-status.json rows
+  // back mid-build — an agent that commits `Task: <id>`-trailered work without
+  // calling `conduct task done` leaves every row `pending` for the whole
+  // build. The gating consumers (artifacts.ts's completion predicate,
+  // countResolvedTasks) already union trailers in; the watcher counted rows
+  // only, so `build_progress` reported `resolved: 0` for the entire run while
+  // task after task was actually landing.
+  it('counts Task:-trailered commits as resolved even when every task-status row is still pending', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    // All seven rows pending — exactly the seeded-but-never-updated state.
+    await writeTasks(0, 7);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+
+    for (const id of ['1', '2', '3']) {
+      await writeFile(join(dir, `task-${id}.txt`), id);
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', `feat: task ${id}\n\nTask: ${id}`], { cwd: dir });
+    }
+
+    const watcher = new BuildProgressWatcher({
+      projectRoot: dir,
+      events: emitter,
+      step: 'build',
+      featureSlug: 'my-feature',
+    });
+    watcher.start();
+
+    await tick(watcher);
+    watcher.stop();
+
+    const events = buildProgressEvents();
+    expect(events.length).toBeGreaterThanOrEqual(1);
+    const last = events[events.length - 1];
+    expect(last.resolved).toBe(3);
+    expect(last.total).toBe(7);
+  });
+
+  it('readSnapshot folds Task: trailers into resolved the same way the watcher tick does', async () => {
+    await execa('git', ['init', '-b', 'main'], { cwd: dir });
+    await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeTasks(0, 7);
+    await writeFile(join(dir, 'README.md'), 'hello');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'initial commit'], { cwd: dir });
+    await writeFile(join(dir, 'task-1.txt'), '1');
+    await execa('git', ['add', '.'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'feat: task 1\n\nTask: 1'], { cwd: dir });
+
+    const snapshot = await readSnapshot(dir);
+
+    expect(snapshot.resolved).toBe(1);
+    expect(snapshot.total).toBe(7);
+  });
 });
 
 describe('BuildProgressWatcher lifecycle hardening', () => {
