@@ -1,5 +1,5 @@
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -9,6 +9,7 @@ import {
   KICKBACK_LEDGER_PATH,
   readKickbackLedger,
 } from '../../src/engine/kickback-ledger.js';
+import { HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
@@ -33,6 +34,95 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       run: async () => {
         throw new Error('stop after fresh-session initialization');
       },
+    };
+  }
+
+  async function runCapHalt(
+    gate: 'build_review' | 'wiring_check',
+    lastReason: string,
+  ): Promise<{ body: string; haltClass: string; recordedReason: string | undefined }> {
+    await writeState(statePath, {
+      run_started_at: 1,
+      complexity_tier: 'S',
+      track: 'technical',
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      prd: 'done',
+      stories: 'done',
+      conflict_check: 'skipped',
+      plan: 'done',
+      architecture_diagram: 'skipped',
+      architecture_review: 'skipped',
+      acceptance_specs: 'skipped',
+      build: 'done',
+      ...(gate === 'wiring_check' ? { build_review: 'skipped' } : {}),
+    });
+
+    const runner: StepRunner = {
+      run: async (step) => {
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+        } else if (step === 'build_review') {
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              rubric: { tautology: true, scope: false, rootCause: false },
+              findings: lastReason === '' ? {} : { tautology: [lastReason] },
+            }),
+          );
+        } else if (step === 'wiring_check') {
+          await writeFile(
+            join(dir, '.pipeline/wiring-evidence.json'),
+            JSON.stringify({
+              schema: 1,
+              base: 'base',
+              head: 'unavailable',
+              layer2: { applicable: false },
+              waivers: [],
+              tasks: [
+                {
+                  id: 't1',
+                  contract: 'src/x.ts#foo',
+                  gaps: [{ kind: 'orphan-export', message: lastReason }],
+                },
+              ],
+            }),
+          );
+        }
+        return { success: true };
+      },
+    };
+
+    await new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      verifyArtifacts: true,
+      mode: 'auto',
+      daemon: gate === 'build_review',
+      fromStep: gate,
+      maxRetries: 1,
+      config: {
+        build_review: { enabled: gate === 'build_review' },
+        kickback_escalation: { enabled: false },
+      },
+      fullSuiteVerifier: {
+        ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+        inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+      },
+    } as never).run();
+
+    const ledger = await readKickbackLedger(dir);
+    return {
+      body: await readFile(join(dir, HALT_MARKER), 'utf8'),
+      haltClass: await readHaltClass(dir),
+      recordedReason: ledger.gates[gate]?.lastReason,
     };
   }
 
@@ -274,6 +364,40 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       expect({ secondKickbacks, secondHalt: secondHalts[0] }).toEqual({
         secondKickbacks: [{ count: 2, evidence: secondReason }],
         secondHalt: expect.stringMatching(/wiring_check.*cap 2.*no reachable caller/i),
+      });
+    });
+  });
+
+  describe('classified cap HALTs (Task 14, #984)', () => {
+    it('names build_review, its cap lap, and the recorded failure reason in a needs-human HALT', async () => {
+      const lastReason = 'build review says the implementation is tautological';
+
+      await expect(runCapHalt('build_review', lastReason)).resolves.toEqual({
+        body: expect.stringMatching(
+          /build_review[\s\S]*cap 2[\s\S]*build review says the implementation is tautological/i,
+        ),
+        haltClass: 'needs-human',
+        recordedReason: expect.stringContaining(lastReason),
+      });
+    });
+
+    it('names wiring_check, its cap lap, and the recorded gap reason in a needs-human HALT', async () => {
+      const lastReason = 'route foo through the application entry point';
+
+      await expect(runCapHalt('wiring_check', lastReason)).resolves.toEqual({
+        body: expect.stringMatching(
+          /wiring_check[\s\S]*cap 2[\s\S]*route foo through the application entry point/i,
+        ),
+        haltClass: 'needs-human',
+        recordedReason: lastReason,
+      });
+    });
+
+    it('uses a stated placeholder when build_review has no recorded failure reason', async () => {
+      await expect(runCapHalt('build_review', '')).resolves.toEqual({
+        body: expect.stringMatching(/build_review[\s\S]*cap 2[\s\S]*(no .*reason|without reasons)/i),
+        haltClass: 'needs-human',
+        recordedReason: '',
       });
     });
   });
