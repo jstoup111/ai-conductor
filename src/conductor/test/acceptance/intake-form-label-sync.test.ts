@@ -266,3 +266,111 @@ describe('Story 1 — intake form is born with priority + size + linking (label-
     });
   });
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Source discrimination: the Action must default ONLY for issue-form
+// submissions. An issue filed by `bin/intake-file` carries a hand-authored
+// markdown body with no field headings and already has the operator's chosen
+// priority:/size: labels; since `addLabel` is additive, defaulting over it
+// stamps a second, contradictory band (observed on #1076: `size: S` + `size: M`,
+// and #1077: `priority: high` + `priority: medium`).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function requireFormPredicate(mod: Record<string, unknown>): (body: string) => boolean {
+  const fn = mod.isIssueFormSubmission;
+  if (typeof fn !== 'function') {
+    throw new Error(
+      'expected label-sync.ts to export "isIssueFormSubmission" (not yet exported)',
+    );
+  }
+  return fn as (body: string) => boolean;
+}
+
+/** A body in the shape GitHub renders for an intake.yml form submission. */
+const FORM_BODY = [
+  '### Observed',
+  '',
+  'the daemon re-dispatched a shipped spec',
+  '',
+  '### Impact',
+  '',
+  'duplicate build per rename',
+  '',
+  '### Priority',
+  '',
+  'high',
+  '',
+  '### Size',
+  '',
+  'M',
+].join('\n');
+
+/** A body in the shape `bin/intake-file` writes — plain markdown, no fields. */
+const CLI_BODY = [
+  '## Observed',
+  '',
+  'grep output and file:line evidence',
+  '',
+  '## Impact',
+  '',
+  'one line',
+  '',
+  '## Desired outcome',
+  '',
+  '- something observable',
+].join('\n');
+
+describe('label-sync only defaults for issue-form submissions', () => {
+  describe('Happy path', () => {
+    it('a rendered issue-form body is recognized as a form submission', async () => {
+      const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
+      expect(isIssueFormSubmission(FORM_BODY)).toBe(true);
+    });
+
+    it('a form submission with a blank dropdown is STILL a form submission — the heading, not the value, decides', async () => {
+      const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
+      const blank = FORM_BODY.replace('\nhigh\n', '\n_No response_\n').replace(
+        /### Size\n\nM$/,
+        '### Size\n\n_No response_',
+      );
+      // Still a form → the Action must still reach syncIssueLabels and default it,
+      // otherwise a half-filled form would be born with no bands at all.
+      expect(isIssueFormSubmission(blank)).toBe(true);
+    });
+  });
+
+  describe('Negative paths', () => {
+    it('a bin/intake-file body is NOT a form submission — its labels are owned by the filer', async () => {
+      const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
+      expect(isIssueFormSubmission(CLI_BODY)).toBe(false);
+    });
+
+    it('an empty body is not a form submission', async () => {
+      const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
+      expect(isIssueFormSubmission('')).toBe(false);
+    });
+
+    it('prose merely mentioning Priority or Size does not masquerade as a form', async () => {
+      const isIssueFormSubmission = requireFormPredicate(await loadLabelSyncModule());
+      expect(
+        isIssueFormSubmission('## Impact\n\nPriority is high and Size is M for this one.\n'),
+      ).toBe(false);
+      // A different heading level is not what GitHub renders for a form field.
+      expect(isIssueFormSubmission('## Priority\n\nhigh\n')).toBe(false);
+    });
+
+    it('syncIssueLabels itself is unchanged — it still defaults when handed undefined fields', async () => {
+      // The skip is the CALLER's decision (the Action), not a behavior change in
+      // the shared seam: bin/intake-backfill still relies on defaulting here.
+      const syncIssueLabels = requireSyncFn(await loadLabelSyncModule());
+      const gh = makeFakeGh();
+
+      const result = await syncIssueLabels({}, 'acme/app#208', { gh: gh.run, cwd: '.' });
+
+      expect(result.priorityLabel).toBe('priority: medium');
+      expect(result.sizeLabel).toBe('size: M');
+      expect(result.priorityDefaulted).toBe(true);
+      expect(result.sizeDefaulted).toBe(true);
+    });
+  });
+});

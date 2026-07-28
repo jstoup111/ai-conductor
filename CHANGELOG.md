@@ -30,6 +30,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   cached availability result dispatch no process and are not logged. `daemon status` still does not
   carry the provider for a step that is in flight
   ([#1081](https://github.com/jstoup111/ai-conductor/issues/1081)).
+### Fixed
+
+- The `intake-label-sync` Action no longer stamps default `priority: medium` / `size: M` labels
+  onto issues filed with `bin/intake-file`. It fired on every opened issue and read its bands from
+  `### Priority` / `### Size` issue-form headings, which a CLI-filed body does not have — so it
+  defaulted, and because label application is additive it *added* those defaults alongside the
+  labels `intake-file` had already applied, leaving issues with two contradictory bands (observed:
+  `size: S` + `size: M`, `priority: high` + `priority: medium`). The Action now detects a non-form
+  body structurally and skips it, since those issues are already labelled by the filer. Genuine
+  form submissions are unaffected, including ones that leave a dropdown blank — the heading, not
+  the value, decides.
 
 ### Removed
 

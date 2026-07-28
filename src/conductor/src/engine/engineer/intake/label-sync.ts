@@ -52,6 +52,27 @@ export interface SyncIssueLabelsResult {
 const PRIORITY_VALUES = new Set(['critical', 'high', 'medium', 'low']);
 const SIZE_VALUES = new Set(['S', 'M', 'L']);
 
+/**
+ * True when an issue body is an issue-form submission — i.e. GitHub rendered
+ * the `.github/ISSUE_TEMPLATE/intake.yml` fields as `### <Label>` headings.
+ *
+ * This is the discriminator the label-sync Action needs before it defaults
+ * anything: only a form submission has fields to read, and only a form
+ * submission is missing labels at open time. Issues filed by `bin/intake-file`
+ * carry a hand-authored markdown body with no field headings, and that command
+ * already applies the operator's chosen `priority:`/`size:` labels itself — so
+ * defaulting over them adds a SECOND, contradictory band (`addLabel` is
+ * additive, never a replace).
+ *
+ * Deliberately structural, not value-based: a form submission that left a
+ * dropdown blank still renders the heading (with `_No response_` under it), so
+ * it is still a form submission and must still be defaulted. Presence of the
+ * heading — not of a parseable value — is what distinguishes the two sources.
+ */
+export function isIssueFormSubmission(body: string): boolean {
+  return /^###\s+(Priority|Size)\s*$/im.test(body);
+}
+
 const DEFAULT_PRIORITY = 'medium';
 const DEFAULT_SIZE = 'M';
 
