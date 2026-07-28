@@ -1,6 +1,6 @@
 ---
 name: daemon-triage
-description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Gathers read-only evidence, classifies the failure against a deterministic signal table, routes to the right runbook, and writes a triage report. Diagnoses and recommends only; never mutates feature state. Operator-invoked only: never runs inside a dispatched step."
+description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Gathers read-only evidence, classifies the failure against a deterministic signal table, routes to the right runbook, and writes a triage report. May then perform recovery, but only with explicit operator approval for each action — it never mutates anything unprompted. Operator-invoked only: never runs inside a dispatched step."
 enforcement: advisory
 phase: all
 standalone: true
@@ -18,12 +18,33 @@ questions, in order:
 3. **What is the operator's next move?** — the one runbook that owns this class,
    plus the exact commands to run.
 
-This skill is **read-only by contract**. It never clears a halt, never parks or
-unparks, never edits `.pipeline/` state, never touches git. It produces a
-classification and the commands; the operator runs them. That boundary is the
-point: daemon recovery is where a confident wrong move costs the most, and the
-failure modes that hurt most are the ones where the *display* is lying and the
-work is fine, or the halt is legitimate and clearing it just re-halts.
+It may then **carry out** that recovery — but every mutation requires the
+operator's explicit approval first, and approval is per-action, never blanket.
+
+### The approval contract
+
+**Diagnosis is unconditionally read-only.** Everything in §1–§3 — reading state,
+classifying, choosing a runbook, writing the triage report — happens without
+asking. Gathering evidence must never change the thing being measured.
+
+**Every mutation stops and asks.** Before *any* action that changes state —
+clearing a halt, parking or unparking, editing `.pipeline/`, any git command
+that writes, restarting the daemon — present the action, what it changes, its
+blast radius, and wait for the operator to approve that specific action. Then do
+it. Do not batch several mutations behind one approval, and do not treat
+approval of a diagnosis as approval to act on it.
+
+**"Proceed" is not standing consent.** Approval covers the action just
+described, once. The next mutation asks again, even if it is the obvious next
+step in the same recovery.
+
+> **This is deliberately conservative, and deliberately temporary.** Daemon
+> recovery is where a confident wrong move costs the most, and the failure modes
+> that hurt worst are the ones where the *display* is lying and the work is fine,
+> or the halt is legitimate and clearing it just re-halts. Ask-first buys the
+> operator a veto at exactly those moments. As classification proves reliable in
+> practice, the safest, most reversible actions are the candidates to relax
+> first — the destructive ones in §4 are not.
 
 **Not a substitute for the runbooks.** The runbooks under `runbooks/` (symlinked
 into this skill directory) remain the canonical procedures. This skill exists to
@@ -160,7 +181,10 @@ itself the finding: recommend parking and escalating (§5) rather than guessing.
 ### 4. Safety rails — state these in every report that recommends action
 
 These are not advice; each encodes a failure that has already destroyed operator
-state. Any recommendation you emit must be consistent with all four.
+state. Any recommendation you emit — and any action you execute once approved —
+must be consistent with all four. Operator approval does **not** relax them: an
+approved delete is still enumerated explicitly and confirmed against that list,
+because what the operator approved was the named target, not a pattern.
 
 1. **Park before touching a feature's git state.** The daemon re-dispatches
    anything in its backlog and re-creates branches you delete. Park first, always.
@@ -226,13 +250,24 @@ What the evidence shows. Name explicitly what you ruled OUT and why.
 Exact commands, in order, each with what it changes and its blast radius.
 Mark any destructive step and what must be confirmed before it runs.
 
+## Actions taken
+
+Only what the operator approved and this skill then executed, each with the
+approval it was granted under and the observed result. Empty if nothing was
+approved — an empty section is the correct outcome for a diagnosis-only run,
+not a gap.
+
 ## Escalation
 
 Feature-side or harness-side. If harness-side, what the issue should say.
 ```
 
-Then report the classification and the recommendation to the operator directly —
-the report is the audit trail, not the delivery mechanism.
+Report the classification and the recommendation to the operator directly — the
+report is the audit trail, not the delivery mechanism. Write it **before**
+proposing any mutation, so the evidence behind a recommendation is on disk
+independent of whether the operator approves it. Append to *Actions taken* as
+each approved action completes, not in a batch at the end: if a recovery goes
+wrong midway, the record must already show what had actually run.
 
 ## Verification
 
@@ -241,10 +276,16 @@ the report is the audit trail, not the delivery mechanism.
 - [ ] Classification cites the specific signal it matched, or is declared a
       judgment call with a confidence estimate
 - [ ] Exactly one runbook named, and it exists at the referenced path
-- [ ] Nothing was mutated: no halt cleared, no park/unpark, no `.pipeline/` edit,
-      no git operation
+- [ ] Diagnosis mutated nothing — evidence gathering never changed the state
+      being measured
+- [ ] Every mutation was presented with its blast radius and **individually**
+      approved before it ran; none was batched behind another's approval, and no
+      approval was treated as standing consent
 - [ ] Every recommended command states what it changes; destructive ones are
-      marked and gated on explicit operator confirmation
+      marked and were confirmed against an explicit, enumerated target list
 - [ ] Safety rails restated in any report recommending action
-- [ ] Triage report written under `.daemon/triage/`, not `.pipeline/`
+- [ ] Triage report written under `.daemon/triage/`, not `.pipeline/`, and
+      written before any mutation was proposed
+- [ ] *Actions taken* records each approved action and its result, appended as it
+      completed — empty if the run was diagnosis-only
 - [ ] Feature-side vs harness-side called explicitly

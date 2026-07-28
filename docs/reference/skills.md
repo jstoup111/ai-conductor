@@ -39,7 +39,7 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
-| `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only; diagnoses and recommends |
+| `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
 | `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
@@ -116,9 +116,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.
 - **Outputs** — a triage report at `.daemon/triage/<slug>-<timestamp>.md`. Deliberately **not** under
   `.pipeline/` — triage output is not feature evidence and must never be read as such by a gate.
-- **Gate role** — none. Read-only by contract: it never clears a halt, parks/unparks, edits
-  `.pipeline/`, or touches git. It classifies against a deterministic signal table, names exactly one
-  runbook, and hands the operator the commands to run.
+- **Gate role** — none. Diagnosis is unconditionally read-only; gathering evidence never changes the
+  state being measured. It may then carry out recovery, but **every** mutation — clearing a halt,
+  park/unpark, editing `.pipeline/`, any writing git command — is presented with its blast radius and
+  individually approved by the operator first. Approval is per-action and never standing consent, and
+  it never relaxes the safety rails (an approved delete is still enumerated explicitly). Deliberately
+  conservative while classification accuracy is being established.
 - **Runbooks** — reached via `skills/daemon-triage/runbooks`, a symlink to `docs/runbooks/`. The
   symlink is what makes the reference resolve correctly in a consumer repo, where the harness's
   `docs/` tree is not present but the skill directory itself is symlinked in by `bin/install`.

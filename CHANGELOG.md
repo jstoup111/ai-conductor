@@ -46,8 +46,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   gathers read-only evidence (daemon status, the feature's `HALT` + class, stall events, heartbeat,
   task rows vs. actual `Task:`-trailered commits, gate verdicts), classifies the failure against a
   deterministic signal table, and names exactly one runbook — rather than leaving the operator to
-  guess which of five applies. It is **read-only by contract**: it never clears a halt, parks or
-  unparks, edits `.pipeline/`, or touches git; it emits the commands and the operator runs them. Two
+  guess which of five applies. Diagnosis is unconditionally read-only; it may then carry out the
+  recovery, but **every** mutation — clearing a halt, park/unpark, editing `.pipeline/`, any writing
+  git command — is presented with its blast radius and individually approved by the operator first.
+  Approval is per-action, never standing consent, and never relaxes the safety rails: an approved
+  delete is still enumerated explicitly and confirmed against that list. Two
   of its table rows exist specifically to stop confident wrong moves: a pinned resolved-count with
   HEAD advancing is telemetry desync, not a stalled build, and a stale heartbeat belongs to whichever
   step wrote it. Reports land in `.daemon/triage/`, never `.pipeline/`, so no gate can mistake triage
