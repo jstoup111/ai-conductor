@@ -162,9 +162,19 @@ that resolves through a symlink still counts as not restored and halts the build
 
 ## Step heartbeat and the stall watchdog
 
-`daemon.log` only records step start/end — it never shows mid-step activity, so a step that's
-genuinely working and a step that's silently wedged look identical from the outside for however
-long the dispatch runs.
+`daemon.log` records step boundaries, provider activity, build progress, and verdict-freshness
+decisions. For `build_review`, `prd_audit`, `architecture_review_as_built`, and preserved
+`manual_test` evidence, the freshness line names the step and artifact:
+
+```text
+· build_review verdict build-review.json preserved — surface miss
+· ✗ build_review verdict build-review.json invalidated — stale verdict rejected
+· prd_audit verdict prd-audit.md rewritten — current
+```
+
+`preserved` means the code changed outside the gate's judged surface, so the prior passing verdict
+remains valid. `invalidated` means the judged surface changed and the stale verdict was rejected;
+the gate must run again. `rewritten` means the current judging attempt produced the artifact.
 
 While a step's provider (Claude or Codex) subprocess is running, the engine touches
 `.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
