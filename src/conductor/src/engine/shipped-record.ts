@@ -187,7 +187,7 @@ export function renderShippedRecordWithCost(
   const costUsd = Math.round(rollup.costUsd * 10000) / 10000;
   const providerLines = Object.entries(rollup.providers ?? {}).map(
     ([provider, providerRollup]) =>
-      `  ${provider}: input: ${providerRollup.tokens.input}, output: ${providerRollup.tokens.output}, cache_read: ${providerRollup.tokens.cacheRead}, cache_creation: ${providerRollup.tokens.cacheCreation}, cost_usd: ${Math.round(providerRollup.costUsd * 10000) / 10000}, dispatches: ${providerRollup.dispatches}\n`
+      `  ${provider}: input: ${providerRollup.tokens.input}, output: ${providerRollup.tokens.output}, cache_read: ${providerRollup.tokens.cacheRead}, cache_creation: ${providerRollup.tokens.cacheCreation}, cost_usd: ${Math.round(providerRollup.costUsd * 10000) / 10000}, dispatches: ${providerRollup.dispatches}, cost_unmetered: ${providerRollup.costUnmetered?.count ?? 0}\n`
   );
 
   return (
@@ -203,6 +203,7 @@ export function renderShippedRecordWithCost(
     `retries: ${rollup.retries}\n` +
     `halts: ${rollup.halts}\n` +
     `unmetered: count: ${rollup.unmetered.count}, duration_ms: ${rollup.unmetered.durationMs}\n` +
+    `cost_unmetered: count: ${rollup.costUnmetered?.count ?? 0}\n` +
     (providerLines.length > 0 ? `providers:\n${providerLines.join('')}` : '')
   );
 }

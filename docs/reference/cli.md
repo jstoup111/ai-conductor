@@ -463,6 +463,10 @@ rather than an error, and malformed records do not throw. Does not appear in `--
 Each per-feature row carries `engine=<id>`, the engine build that shipped it, so ships can be
 attributed to a daemon build. A record written before engine-version stamping reports
 `engine=unknown` rather than omitting the field, keeping unattributed ships visible in the report.
+Rows also show token, cache, dispatch, retry, halt, duration, and cost totals. Cost-unmetered
+dispatches are marked `COST-PARTIAL`, retain their tokens, and render their cost as unavailable;
+truly unmetered dispatches remain excluded from both aggregates. Provider rows attribute tokens,
+cost, cost-unmetered dispatches, and dispatch counts by provider.
 
 ## `conduct-ts memory setup`
 

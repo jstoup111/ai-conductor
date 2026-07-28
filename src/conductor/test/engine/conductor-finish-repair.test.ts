@@ -256,6 +256,115 @@ describe('conductor/finish-repair', () => {
     expect(readyIdx).toBeGreaterThan(editBodyIdx);
   });
 
+  it("capture-only mode posts the halt-history COMMENT and makes zero presentation mutations", async () => {
+    const calls: string[][] = [];
+    const bannerBody = [
+      'This PR was opened automatically after an irrecoverable daemon HALT.',
+      'Manual remediation is required to unblock this feature.',
+      'See the comment below for the failure reason.',
+    ].join('\n');
+
+    const patchedGh: GhRunner = async (args: string[]) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            title: 'needs-remediation: test',
+            isDraft: true,
+            labels: [{ name: 'needs-remediation' }],
+            body: bannerBody,
+            comments: [],
+          }),
+        };
+      }
+      return { stdout: '{}' };
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/halt-user-input-required'),
+      'build stalled: no task progress',
+      'utf-8',
+    );
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      gh: patchedGh,
+    });
+
+    const ctx = await (conductor as any)['completionCtx']({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr('https://github.com/example/repo/pull/1', { mode: 'capture-only' });
+
+    const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment');
+    expect(commentCall).toBeDefined();
+    const commentBody = commentCall![commentCall!.indexOf('--body') + 1];
+    expect(commentBody).toContain('Halt history');
+    expect(commentBody).toContain('build stalled: no task progress');
+    // No title/body/label/draft mutation on the kickback pass.
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'ready')).toBe(false);
+    expect(calls.some((c) => c[0] === 'api')).toBe(false);
+  });
+
+  it('omits the test-evidence line entirely when ZERO plan tasks are complete (no false "- [x] 0/N")', async () => {
+    const bodies: string[] = [];
+    const bannerBody = 'This PR was opened automatically after an irrecoverable daemon HALT.';
+
+    const patchedGh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            title: 'needs-remediation: test',
+            isDraft: false,
+            labels: [],
+            body: bannerBody,
+            comments: [],
+          }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        bodies.push(args[args.indexOf('--body') + 1]);
+        return { stdout: '{}' };
+      }
+      return { stdout: '{}' };
+    };
+
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(dir, '.pipeline/task-status.json'),
+      JSON.stringify({
+        tasks: Array.from({ length: 16 }, (_, i) => ({ id: `T${i + 1}`, status: 'pending' })),
+      }),
+      'utf-8',
+    );
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      gh: patchedGh,
+    });
+
+    const ctx = await (conductor as any)['completionCtx']({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr('https://github.com/example/repo/pull/1');
+
+    expect(bodies.length).toBeGreaterThan(0);
+    for (const body of bodies) {
+      expect(body).not.toContain('- [x] 0/16');
+      expect(body).not.toContain('## Test evidence');
+    }
+  });
+
   it('routes a daemon finish-repair exception through its supplied feature logger', async () => {
     const featureLogs: string[] = [];
     const conductor = new Conductor({

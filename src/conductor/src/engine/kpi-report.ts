@@ -24,6 +24,18 @@ export interface KpiCostFields {
   halts: number;
   unmeteredCount: number;
   unmeteredDurationMs: number;
+  costUnmetered: number;
+  providers: Record<string, KpiProviderCostFields>;
+}
+
+export interface KpiProviderCostFields {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheCreation: number;
+  costUsd: number;
+  dispatches: number;
+  costUnmetered: number;
 }
 
 /**
@@ -48,9 +60,11 @@ export function parseCostBlock(content: string): KpiCostFields | null {
   const output = num('output');
   if (input === undefined || output === undefined) return null;
 
-  const unmeteredMatch = /unmetered:\s*\{?\s*count:\s*([\-0-9.]+)\s*,\s*duration_ms:\s*([\-0-9.]+)\s*\}?/.exec(
+  const unmeteredMatch = /^unmetered:\s*\{?\s*count:\s*([\-0-9.]+)\s*,\s*duration_ms:\s*([\-0-9.]+)\s*\}?/m.exec(
     body,
   );
+  const costUnmeteredMatch = /^cost_unmetered:\s*(?:\{?\s*count:\s*)?([\-0-9.]+)/m.exec(body);
+  const providers = parseProviderCostFields(body);
 
   return {
     input,
@@ -63,7 +77,47 @@ export function parseCostBlock(content: string): KpiCostFields | null {
     halts: num('halts') ?? 0,
     unmeteredCount: unmeteredMatch ? Number(unmeteredMatch[1]) : 0,
     unmeteredDurationMs: unmeteredMatch ? Number(unmeteredMatch[2]) : 0,
+    costUnmetered: costUnmeteredMatch ? Number(costUnmeteredMatch[1]) : 0,
+    providers,
   };
+}
+
+function parseProviderCostFields(body: string): Record<string, KpiProviderCostFields> {
+  const providers: Record<string, KpiProviderCostFields> = Object.create(null);
+  let inProviders = false;
+
+  for (const line of body.split('\n')) {
+    if (/^providers:\s*$/.test(line)) {
+      inProviders = true;
+      continue;
+    }
+    if (!inProviders) continue;
+
+    const providerMatch = /^  ([^:]+):\s*(.*)$/.exec(line);
+    if (!providerMatch) {
+      if (line.trim()) inProviders = false;
+      continue;
+    }
+
+    const fields = providerMatch[2];
+    const num = (name: string): number => {
+      const match = new RegExp(`(?:^|,\\s*)${name}:\\s*([\\-0-9.]+)(?:,|$)`).exec(fields);
+      return match ? Number(match[1]) : 0;
+    };
+    const costUnmeteredMatch = /(?:^|,\s*)cost_unmetered:\s*(?:count:\s*)?([\-0-9.]+)(?:,|$)/.exec(fields);
+
+    providers[providerMatch[1].trim()] = {
+      input: num('input'),
+      output: num('output'),
+      cacheRead: num('cache_read'),
+      cacheCreation: num('cache_creation'),
+      costUsd: num('cost_usd'),
+      dispatches: num('dispatches'),
+      costUnmetered: costUnmeteredMatch ? Number(costUnmeteredMatch[1]) : 0,
+    };
+  }
+
+  return providers;
 }
 
 interface FeatureKpi {
@@ -123,6 +177,7 @@ export async function renderKpi(root: string): Promise<string> {
   let totalOutput = 0;
   let totalCostUsd = 0;
   let counted = 0;
+  let costCounted = 0;
 
   for (const feature of features) {
     if (!feature.cost) {
@@ -132,27 +187,51 @@ export async function renderKpi(root: string): Promise<string> {
       continue;
     }
     const tokens = feature.cost.input + feature.cost.output;
-    const partial = feature.cost.unmeteredCount > 0;
-    const marker = partial ? ' [PARTIAL — unmetered dispatches present]' : '';
+    const unmetered = feature.cost.unmeteredCount > 0;
+    const costUnmetered = feature.cost.costUnmetered > 0;
+    const marker = unmetered
+      ? ' [PARTIAL — unmetered dispatches present]'
+      : costUnmetered
+        ? ' [COST-PARTIAL — cost-unmetered dispatches present]'
+        : '';
+    const cost = costUnmetered ? 'unavailable' : feature.cost.costUsd;
     lines.push(
       `- ${feature.slug}: engine=${feature.engineVersion} ` +
         `input=${feature.cost.input} output=${feature.cost.output} ` +
-        `tokens=${tokens} cost_usd=${feature.cost.costUsd}${marker}`,
+        `tokens=${tokens} cache_read=${feature.cost.cacheRead} ` +
+        `cache_creation=${feature.cost.cacheCreation} dispatches=${feature.cost.dispatches} ` +
+        `retries=${feature.cost.retries} halts=${feature.cost.halts} ` +
+        `duration_ms=${feature.cost.unmeteredDurationMs} cost_usd=${cost}${marker}`,
     );
-    if (partial) {
+    for (const [provider, providerCost] of Object.entries(feature.cost.providers)) {
+      const providerTokens = providerCost.input + providerCost.output;
+      const providerUsd = providerCost.costUnmetered > 0 ? 'unavailable' : providerCost.costUsd;
+      lines.push(
+        `  - ${provider}: input=${providerCost.input} output=${providerCost.output} ` +
+          `tokens=${providerTokens} cost_usd=${providerUsd} ` +
+          `cost_unmetered=${providerCost.costUnmetered} dispatches=${providerCost.dispatches}`,
+      );
+    }
+    if (unmetered) {
       continue;
     }
     totalInput += feature.cost.input;
     totalOutput += feature.cost.output;
-    totalCostUsd += feature.cost.costUsd;
     counted += 1;
+    if (!costUnmetered) {
+      totalCostUsd += feature.cost.costUsd;
+      costCounted += 1;
+    }
   }
 
   const totalTokens = totalInput + totalOutput;
   lines.push('');
+  const aggregateCost = costCounted > 0
+    ? Math.round(totalCostUsd * 10000) / 10000
+    : 'unavailable';
   lines.push(
     `Aggregate / trend across ${counted} feature(s): total tokens=${totalTokens} ` +
-      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${Math.round(totalCostUsd * 10000) / 10000}`,
+      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`,
   );
 
   return lines.join('\n') + '\n';

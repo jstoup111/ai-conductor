@@ -15,6 +15,10 @@ import {
   rehabilitateHaltPr,
   bodyFloor,
   readStaleHaltBanner,
+  readFlooredBody,
+  postHaltHistoryComment,
+  PR_BODY_FLOOR_MARKER,
+  HALT_HISTORY_COMMENT_MARKER,
 } from '../../src/engine/halt-pr-rehabilitation.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
@@ -237,7 +241,7 @@ describe('bodyFloor (Task 2)', () => {
     const { gh, calls } = fakeGh([
       { stdout: JSON.stringify({ body: BANNER_BODY }) }, // initial read
       { stdout: '' }, // pr edit
-      { stdout: JSON.stringify({ body: '## Summary\n\nwidget import flow\n\n_Rehabilitated from a reused needs-remediation halt PR; halt history is preserved in the PR comments._\n\n## Test evidence\n\n- [x] 3/3 plan tasks completed with evidence-gated commits' }) }, // verify re-read
+      { stdout: JSON.stringify({ body: '## Summary\n\nwidget import flow\n\n## Test evidence\n\n- [x] 3/3 plan tasks completed with evidence-gated commits' }) }, // verify re-read
     ]);
 
     const result = await bodyFloor(gh, CWD, PR_URL, {
@@ -256,6 +260,11 @@ describe('bodyFloor (Task 2)', () => {
     expect(newBody).toContain('## Test evidence');
     expect(newBody).toContain('3/3 plan tasks completed with evidence-gated commits');
     expect(newBody).not.toContain('This PR was opened automatically after an irrecoverable daemon HALT.');
+    // The floored body carries NO remediation narrative — that lives in a PR
+    // comment. Only the invisible provenance marker distinguishes it.
+    expect(newBody).not.toMatch(/Rehabilitated from a reused/i);
+    expect(newBody).not.toMatch(/halt history/i);
+    expect(newBody).toContain(PR_BODY_FLOOR_MARKER);
   });
 
   it('removes only banner lines from a residue body, preserving skill-authored Summary and Closes', async () => {
@@ -327,6 +336,146 @@ describe('bodyFloor (Task 2)', () => {
     const editCalls = calls.filter((c) => c[0] === 'pr' && c[1] === 'edit');
     expect(editCalls.length).toBe(3);
     expect(logs.length).toBeGreaterThan(0);
+  });
+});
+
+describe('bodyFloor: honest test-evidence checkbox (false-completion regression)', () => {
+  const BANNER_BODY = [
+    'This PR was opened automatically after an irrecoverable daemon HALT.',
+    '',
+    'Manual remediation is required to unblock this feature.',
+    'See the comment below for the failure reason.',
+  ].join('\n');
+
+  it('never emits a CHECKED box for a zero-completion evidence line (PRs #1067/#1056/#1031 shipped "- [x] 0/16")', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ body: BANNER_BODY }) },
+      { stdout: '' },
+      { stdout: JSON.stringify({ body: 'floored' }) },
+    ]);
+
+    await bodyFloor(gh, CWD, PR_URL, {
+      featureDesc: 'widget import flow',
+      testEvidenceLine: '0/16 plan tasks completed with evidence-gated commits',
+    });
+
+    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit')!;
+    const newBody = editCall[editCall.indexOf('--body') + 1];
+    expect(newBody).not.toContain('- [x] 0/16');
+    expect(newBody).toContain('- [ ] 0/16 plan tasks completed with evidence-gated commits');
+  });
+
+  it('still checks the box for a genuine completion line', async () => {
+    const { gh, calls } = fakeGh([
+      { stdout: JSON.stringify({ body: BANNER_BODY }) },
+      { stdout: '' },
+      { stdout: JSON.stringify({ body: 'floored' }) },
+    ]);
+
+    await bodyFloor(gh, CWD, PR_URL, {
+      featureDesc: 'widget import flow',
+      testEvidenceLine: '16/16 plan tasks completed with evidence-gated commits',
+    });
+
+    const editCall = calls.find((c) => c[0] === 'pr' && c[1] === 'edit')!;
+    const newBody = editCall[editCall.indexOf('--body') + 1];
+    expect(newBody).toContain('- [x] 16/16 plan tasks completed with evidence-gated commits');
+  });
+});
+
+describe('readFlooredBody', () => {
+  it('returns the floor marker for an engine-generated placeholder body', async () => {
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ body: `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\nslug` }) },
+    ]);
+    expect(await readFlooredBody(gh, CWD, PR_URL)).toBe(PR_BODY_FLOOR_MARKER);
+  });
+
+  it('returns null for a /pr-authored body', async () => {
+    const { gh } = fakeGh([
+      { stdout: JSON.stringify({ body: '## Why\n\nreal prose\n\n## What Changed\n\n## Testing' }) },
+    ]);
+    expect(await readFlooredBody(gh, CWD, PR_URL)).toBeNull();
+  });
+
+  it('returns null (fail-open) when gh errors', async () => {
+    const { gh } = fakeGh([new Error('gh: network error')]);
+    expect(await readFlooredBody(gh, CWD, PR_URL)).toBeNull();
+  });
+});
+
+describe('postHaltHistoryComment: halt narrative lands in a COMMENT, never the body', () => {
+  it('posts a halt-history comment carrying the halt title, banner and halt reason — and issues zero body edits', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          title: 'needs-remediation: widget import flow',
+          isDraft: true,
+          labels: [{ name: 'needs-remediation' }],
+          body: `${HALT_PR_BANNER_SENTINEL}\n\nManual remediation is required to unblock this feature.`,
+          comments: [],
+        }),
+      },
+      { stdout: '' }, // pr comment
+    ]);
+
+    const outcome = await postHaltHistoryComment({
+      gh,
+      cwd: CWD,
+      prUrl: PR_URL,
+      haltReason: 'build stalled: no task progress for 3 rounds',
+    });
+
+    expect(outcome).toBe('posted');
+    const commentCall = calls.find((c) => c[0] === 'pr' && c[1] === 'comment')!;
+    expect(commentCall).toBeDefined();
+    const commentBody = commentCall[commentCall.indexOf('--body') + 1];
+    expect(commentBody).toContain(HALT_HISTORY_COMMENT_MARKER);
+    expect(commentBody).toContain('Halt history');
+    expect(commentBody).toContain('needs-remediation: widget import flow');
+    expect(commentBody).toContain(HALT_PR_BANNER_SENTINEL);
+    expect(commentBody).toContain('build stalled: no task progress for 3 rounds');
+    // Narrative goes ONLY to the comment.
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'edit')).toBe(false);
+  });
+
+  it('is idempotent — a PR that already carries the marker gets no second comment', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          title: 'needs-remediation: widget import flow',
+          isDraft: false,
+          labels: [],
+          body: HALT_PR_BANNER_SENTINEL,
+          comments: [{ body: `${HALT_HISTORY_COMMENT_MARKER}\n## Halt history` }],
+        }),
+      },
+    ]);
+
+    expect(await postHaltHistoryComment({ gh, cwd: CWD, prUrl: PR_URL })).toBe('already-posted');
+    expect(calls.some((c) => c[0] === 'pr' && c[1] === 'comment')).toBe(false);
+  });
+
+  it('no-ops on a clean (non-halt) PR', async () => {
+    const { gh, calls } = fakeGh([
+      {
+        stdout: JSON.stringify({
+          title: 'feat: widget import flow',
+          isDraft: false,
+          labels: [],
+          body: '## Why\n\nreal prose',
+          comments: [],
+        }),
+      },
+    ]);
+
+    expect(await postHaltHistoryComment({ gh, cwd: CWD, prUrl: PR_URL })).toBe('not-halt-pr');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('returns gh-unavailable and never throws when the read fails', async () => {
+    const { gh } = fakeGh([new Error('gh: network error')]);
+    expect(await postHaltHistoryComment({ gh, cwd: CWD, prUrl: PR_URL })).toBe('gh-unavailable');
   });
 });
 

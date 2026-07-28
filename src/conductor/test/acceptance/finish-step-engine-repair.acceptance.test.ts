@@ -1,7 +1,18 @@
 /**
- * Acceptance spec for Story 1 / Task 14 (RED phase):
- * "Engine repairs a reused halt PR inside the finish step, before the gate
- * reads it" (.docs/stories/finish-step-completion-becomes-engine-machinery-re.md).
+ * Acceptance spec for the reused-halt-PR finish path.
+ *
+ * Originally Story 1 / Task 14 ("engine repairs a reused halt PR inside the
+ * finish step, before the gate reads it"). The ordering it locked in — repair
+ * BEFORE the presentation reads — is what let three PRs (#1067, #1056, #1031)
+ * ship an engine-generated placeholder body: the repair rewrote exactly the
+ * content the staleness reads looked for, so those reads could never fire.
+ *
+ * The contract is now a BOUNDED two-pass one:
+ *   pass 1 — presentation is read first; a reused halt PR is kicked back so
+ *            `/pr` authors a real templated body. Halt narrative is captured
+ *            into a PR COMMENT; title/label/draft/body are NOT mutated.
+ *   pass 2 — if the PR is still halt/placeholder, the deterministic floor runs
+ *            as a last resort and the feature ships (convergence preserved).
  *
  * Drives the REAL production entry point — `checkStepCompletion(dir, 'finish',
  * ctx)` from `src/engine/artifacts.ts` — with a fake `GhRunner` seeded with a
@@ -31,7 +42,10 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkStepCompletion, FINISH_CHOICE_MARKER } from '../../src/engine/artifacts.js';
-import { rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
+import {
+  postHaltHistoryComment,
+  rehabilitateHaltPr,
+} from '../../src/engine/halt-pr-rehabilitation.js';
 import { NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 
@@ -56,12 +70,19 @@ function makeGhFake(state: {
   // Return type is deliberately narrower than the `state` param: internally
   // `body` is always defaulted to a definite string (`state.body ?? ''`), so
   // callers never actually observe `undefined` here.
-  getState: () => { title: string; labels: string[]; isDraft: boolean; body: string };
+  getState: () => {
+    title: string;
+    labels: string[];
+    isDraft: boolean;
+    body: string;
+    comments: string[];
+  };
 } {
   let title = state.title;
   let labels = [...state.labels];
   let isDraft = state.isDraft;
   let body = state.body ?? '';
+  const comments: string[] = [];
   const calls: string[][] = [];
 
   const gh: GhRunner = async (args, opts?: { cwd?: string }) => {
@@ -74,8 +95,13 @@ function makeGhFake(state: {
           isDraft,
           labels: labels.map((name) => ({ name })),
           body,
+          comments: comments.map((c) => ({ body: c })),
         }),
       };
+    }
+    if (args[0] === 'pr' && args[1] === 'comment') {
+      comments.push(args[args.indexOf('--body') + 1]);
+      return { stdout: '' };
     }
     if (args[0] === 'pr' && args[1] === 'view') {
       return {
@@ -109,7 +135,7 @@ function makeGhFake(state: {
     return { stdout: '' };
   };
 
-  return { gh, calls, getState: () => ({ title, labels, isDraft, body }) };
+  return { gh, calls, getState: () => ({ title, labels, isDraft, body, comments: [...comments] }) };
 }
 
 let dir: string;
@@ -123,8 +149,8 @@ afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
-describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 / Task 14)', () => {
-  it('repairs the reused halt PR (ready, unlabeled, title clean, Closes once, body marker gone) and completes done:true on the same attempt', async () => {
+describe('acceptance: reused halt PR is kicked back once for a real /pr body, then converges', () => {
+  it('pass 1 kicks back without mutating presentation; pass 2 applies the floor and ships', async () => {
     // Recorded finish-choice + pr_url, written fresh so the predicate's phase-1
     // conditions are all satisfiable.
     await writeFile(join(dir, FINISH_CHOICE_MARKER), 'pr\n', 'utf-8');
@@ -146,8 +172,15 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
     // retitleFloor + ensureShipReady) against the SAME fake gh the predicate
     // is given — proving the order-gate invokes it before phase 2 reads.
     let repairCallCount = 0;
-    const repairFinishPr = async (prUrl: string): Promise<void> => {
+    const repairModes: Array<string | undefined> = [];
+    const repairFinishPr = async (
+      prUrl: string,
+      opts: { mode?: 'capture-only' | 'full' } = {},
+    ): Promise<void> => {
       repairCallCount++;
+      repairModes.push(opts.mode);
+      await postHaltHistoryComment({ gh, cwd: dir, prUrl });
+      if (opts.mode === 'capture-only') return;
       await rehabilitateHaltPr({ gh, cwd: dir, prUrl, sourceRef: SOURCE_REF });
       // Stand-in for the not-yet-existing `retitleFloor`: today's
       // rehabilitateHaltPr deliberately never edits the title (Decision 1 vs
@@ -159,7 +192,7 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
       }
     };
 
-    const result = await checkStepCompletion(dir, 'finish', {
+    const ctx = {
       sessionStartedAt: Date.now() - 60_000,
       daemon: true,
       isHeadPushed: async () => true,
@@ -175,10 +208,29 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
       // so the test still compiles against today's narrower interface while
       // exercising the seam the implementation will add.
       ...({ gh, repairFinishPr } as any),
-    });
+    };
 
-    // ── The repair ran, strictly before/instead of a stale gate failure ──
-    expect(repairCallCount).toBe(1);
+    // ── Pass 1: kicked back, presentation untouched ──────────────────────
+    const first = await checkStepCompletion(dir, 'finish', ctx);
+    expect(first.done).toBe(false);
+    expect(first.reason).toMatch(/\/pr/);
+    expect(repairModes).toEqual(['capture-only']);
+
+    const afterFirst = getState();
+    expect(afterFirst.title).toBe(HALT_TITLE);
+    expect(afterFirst.labels).toContain('needs-remediation');
+    expect(afterFirst.isDraft).toBe(true);
+    expect(afterFirst.body).toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    // The halt narrative went to a COMMENT, never the body.
+    expect(afterFirst.comments).toHaveLength(1);
+    expect(afterFirst.comments[0]).toContain('Halt history');
+    expect(afterFirst.comments[0]).toContain(HALT_TITLE);
+
+    // ── Pass 2: budget exhausted → deterministic floor ships the PR ──────
+    const result = await checkStepCompletion(dir, 'finish', ctx);
+
+    expect(repairCallCount).toBe(2);
+    expect(repairModes).toEqual(['capture-only', 'full']);
 
     const finalState = getState();
     expect(finalState.isDraft).toBe(false);
@@ -188,8 +240,13 @@ describe('acceptance: reused halt PR ships on the first finish attempt (Story 1 
     const closesMatches = finalState.body.match(/Closes\s+owner\/repo#499/gi) ?? [];
     expect(closesMatches).toHaveLength(1);
     expect(finalState.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    // Idempotent: still exactly one halt-history comment after the second pass.
+    expect(finalState.comments).toHaveLength(1);
+    // The narrative never leaks into the body.
+    expect(finalState.body).not.toMatch(/Rehabilitated from a reused/i);
+    expect(finalState.body).not.toMatch(/Halt history/i);
 
-    // ── First-try ship: the SAME completion evaluation returns done:true ──
+    // ── Converged: the second evaluation returns done:true ──
     expect(result.done).toBe(true);
 
     // Sanity: the fake gh was actually exercised (not a vacuous 0-call pass).

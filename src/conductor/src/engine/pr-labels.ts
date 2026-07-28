@@ -167,6 +167,13 @@ export interface PrMergeState {
   labels: string[];
   checksOutcome: 'failed' | 'pending' | 'green' | 'none';
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null; name?: string }>;
+  /**
+   * True when the PR is still a draft (not ready for review). Optional so
+   * existing constructors/fixtures stay valid; absent is read as "not draft".
+   * Consumers that act ON a PR (autoresolve / CI-fix dispatch) must skip
+   * drafts; consumers that merely LABEL a PR must not.
+   */
+  isDraft?: boolean;
 }
 
 /** Safe sentinel returned when the gh runner fails with a transient/unknown error. */
@@ -318,6 +325,7 @@ interface GhPrViewJson {
   mergeable?: string;
   statusCheckRollup?: Array<{ status?: string | null; conclusion?: string | null }> | null;
   labels?: Array<{ name?: string }> | null;
+  isDraft?: boolean | null;
 }
 
 /**
@@ -333,7 +341,7 @@ export async function prMergeState(
 ): Promise<PrMergeState> {
   try {
     const { stdout } = await runGh(
-      ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels'],
+      ['pr', 'view', prUrl, '--json', 'state,mergeable,statusCheckRollup,labels,isDraft'],
       { cwd },
     );
     const data: GhPrViewJson = JSON.parse(stdout);
@@ -344,7 +352,15 @@ export async function prMergeState(
       checks.length > 0 && checks.some(isCheckFailingOrPending);
     const labels = (data.labels ?? []).map((l) => l.name ?? '').filter(Boolean);
     const checksOutcome = classifyChecksOutcome(checks);
-    return { state, mergeable, hasFailingOrPendingChecks, labels, checksOutcome, statusCheckRollup: checks };
+    return {
+      state,
+      mergeable,
+      hasFailingOrPendingChecks,
+      labels,
+      checksOutcome,
+      statusCheckRollup: checks,
+      isDraft: data.isDraft ?? false,
+    };
   } catch (err) {
     log?.(`[pr-labels] prMergeState(${prUrl}) error: ${err}`);
     // Classify the error: a genuinely gone PR returns NOTFOUND so the sweep can

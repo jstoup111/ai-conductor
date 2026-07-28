@@ -517,7 +517,7 @@ describe('#902 generated provider documentation', () => {
       /\| memory \| autonomous engine \| haiku \| low \| gpt-5\.6-luna \| low \|/,
     );
     expect(table).toMatch(
-      /\| plan \| autonomous engine \| opus \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-terra \(S\/M\), gpt-5\.6-sol \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \|/,
+      /\| plan \| autonomous engine \| opus \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-sol \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );
     expect(table).toContain('| code-review | Claude interactive |');
     expect(table.match(/\| autonomous engine \|/g)).toHaveLength(Object.keys(CLAUDE_MODELS).length);

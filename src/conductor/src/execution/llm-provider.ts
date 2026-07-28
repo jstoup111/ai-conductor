@@ -1,6 +1,7 @@
 export interface TokenUsage {
   input: number;
   output: number;
+  reasoningOutput?: number;
   cacheRead?: number;
   cacheCreation?: number;
   costUsd?: number;

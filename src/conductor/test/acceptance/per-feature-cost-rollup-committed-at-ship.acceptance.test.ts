@@ -173,9 +173,10 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         `retries: 0\n` +
         `halts: 0\n` +
         `unmetered: count: 0, duration_ms: 0\n` +
+        `cost_unmetered: count: 0\n` +
         `providers:\n` +
-        `  codex: input: 40, output: 10, cache_read: 4, cache_creation: 1, cost_usd: 0.02, dispatches: 1\n` +
-        `  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1\n`,
+        `  codex: input: 40, output: 10, cache_read: 4, cache_creation: 1, cost_usd: 0.02, dispatches: 1, cost_unmetered: 0\n` +
+        `  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1, cost_unmetered: 0\n`,
     );
   });
 

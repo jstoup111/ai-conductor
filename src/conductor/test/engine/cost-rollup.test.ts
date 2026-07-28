@@ -2,7 +2,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { computeCostRollup, toFeatureUsageTotals } from '../../src/engine/cost-rollup.js';
+import {
+  computeCostRollup,
+  toFeatureUsageTotals,
+} from '../../src/engine/cost-rollup.js';
+import { classifyMetering } from '../../src/engine/metering.js';
 import { formatFeatureUsageTotal } from '../../src/execution/provider-diagnostics.js';
 
 describe('engine/cost-rollup', () => {
@@ -21,6 +25,72 @@ describe('engine/cost-rollup', () => {
     await mkdir(pipelineDir, { recursive: true });
     await writeFile(join(pipelineDir, 'events.jsonl'), lines.join('\n') + '\n', 'utf-8');
   }
+
+  it.each([
+    [{ input: 100, output: 10, costUsd: 0.12 }, 'fully-metered'],
+    [{ input: 100, output: 10, costUsd: 0 }, 'fully-metered'],
+    [{ input: 100, output: 10, costUsd: NaN }, 'cost-unmetered'],
+    [{ input: 100, output: 10, costUsd: Infinity }, 'cost-unmetered'],
+    [{ input: 100, output: 10 }, 'cost-unmetered'],
+    [undefined, 'unmetered'],
+  ] as const)('classifies %j as %s', (tokenUsage, expected) => {
+    expect(classifyMetering(tokenUsage)).toBe(expected);
+  });
+
+  it('keeps token usage with absent provider cost visibly cost-unmetered', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'codex',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 600, output: 60, cacheRead: 40, cacheCreation: 7 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toMatchObject({
+      tokens: { input: 600, output: 60, cacheRead: 40, cacheCreation: 7 },
+      costUsd: 0,
+      dispatches: 1,
+      unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 1 },
+      providers: {
+        codex: {
+          tokens: { input: 600, output: 60, cacheRead: 40, cacheCreation: 7 },
+          costUsd: 0,
+          dispatches: 1,
+          unmetered: { count: 0, durationMs: 0 },
+          costUnmetered: { count: 1 },
+        },
+      },
+    });
+  });
+
+  it('keeps an explicit zero provider cost fully-metered', async () => {
+    await writeEvents([
+      JSON.stringify({
+        type: 'provider_attempt',
+        step: 'build',
+        provider: 'claude',
+        outcome: 'success',
+        invoked: true,
+        tokenUsage: { input: 100, output: 10, costUsd: 0 },
+      }),
+    ]);
+
+    const rollup = await computeCostRollup(dir);
+
+    expect(rollup).toMatchObject({
+      tokens: { input: 100, output: 10 },
+      costUsd: 0,
+      unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 0 },
+      providers: { claude: { costUsd: 0, costUnmetered: { count: 0 } } },
+    });
+  });
 
   it('sums tokens/cost, counts dispatches/retries/halts for metered events', async () => {
     await writeEvents([
@@ -131,6 +201,7 @@ describe('engine/cost-rollup', () => {
       retries: 0,
       halts: 0,
       unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 0 },
       providers: {
         codex: {
           tokens: {
@@ -142,6 +213,7 @@ describe('engine/cost-rollup', () => {
           costUsd: expect.closeTo(0.02, 5),
           dispatches: 1,
           unmetered: { count: 0, durationMs: 0 },
+          costUnmetered: { count: 0 },
         },
         claude: {
           tokens: {
@@ -153,6 +225,7 @@ describe('engine/cost-rollup', () => {
           costUsd: expect.closeTo(0.05, 5),
           dispatches: 1,
           unmetered: { count: 0, durationMs: 0 },
+          costUnmetered: { count: 0 },
         },
       },
     });
@@ -230,12 +303,14 @@ describe('engine/cost-rollup', () => {
         costUsd: expect.closeTo(0.01, 5),
         dispatches: 1,
         unmetered: { count: 0, durationMs: 0 },
+        costUnmetered: { count: 0 },
       },
       ['__proto__']: {
         tokens: { input: 23, output: 5, cacheRead: 0, cacheCreation: 0 },
         costUsd: expect.closeTo(0.02, 5),
         dispatches: 1,
         unmetered: { count: 0, durationMs: 0 },
+        costUnmetered: { count: 0 },
       },
     });
   });
@@ -250,6 +325,7 @@ describe('engine/cost-rollup', () => {
       retries: 0,
       halts: 0,
       unmetered: { count: 1, durationMs: 0 },
+      costUnmetered: { count: 0 },
     });
   });
 
@@ -265,6 +341,7 @@ describe('engine/cost-rollup', () => {
       retries: 0,
       halts: 0,
       unmetered: { count: 0, durationMs: 0 },
+      costUnmetered: { count: 0 },
     });
   });
 
@@ -314,6 +391,7 @@ describe('engine/cost-rollup', () => {
     expect(rollup.unmetered.count).toBe(2);
     expect(rollup.tokens).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
     expect(rollup.costUsd).toBe(0);
+    expect(rollup.costUnmetered).toEqual({ count: 0 });
   });
 
   // The whole-feature usage line logged when `finish` completes reads the same

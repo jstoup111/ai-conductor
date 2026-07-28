@@ -376,7 +376,7 @@ describe('gate-writeback (Task 17)', () => {
       const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
         calls.push([...args]);
-        if (args[0] === 'pr' && args[1] === 'view' && args.includes('state,mergeable,statusCheckRollup,labels')) {
+        if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.startsWith('state,mergeable,statusCheckRollup,labels'))) {
           return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
         }
         if (args[0] === 'label' || (args[0] === 'api' && args.includes('POST'))) {
@@ -624,7 +624,7 @@ describe('gate-writeback (Task 17)', () => {
       const calls: string[][] = [];
       const gh: GhRunner = async (args) => {
         calls.push([...args]);
-        if (args[0] === 'pr' && args[1] === 'view' && args.includes('state,mergeable,statusCheckRollup,labels')) {
+        if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.startsWith('state,mergeable,statusCheckRollup,labels'))) {
           return { stdout: JSON.stringify({ state: 'OPEN', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }) };
         }
         if (args[0] === 'label') {

@@ -94,10 +94,24 @@ export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: 
       if (event.type === 'turn.completed' && event.usage) {
         const input = event.usage.input_tokens;
         const outputTokens = event.usage.output_tokens;
-        if (typeof input === 'number' && typeof outputTokens === 'number') {
-          tokenUsage = { input, output: outputTokens };
+        if (typeof input === 'number' && Number.isFinite(input)
+          && typeof outputTokens === 'number' && Number.isFinite(outputTokens)) {
+          tokenUsage ??= { input: 0, output: 0, numTurns: 0 };
+          tokenUsage.input += input;
+          tokenUsage.output += outputTokens;
+          tokenUsage.numTurns = (tokenUsage.numTurns ?? 0) + 1;
           const cached = event.usage.cached_input_tokens;
-          if (typeof cached === 'number') tokenUsage.cacheRead = cached;
+          if (typeof cached === 'number' && Number.isFinite(cached)) {
+            tokenUsage.cacheRead = (tokenUsage.cacheRead ?? 0) + cached;
+          }
+          const cacheCreation = event.usage.cache_write_input_tokens;
+          if (typeof cacheCreation === 'number' && Number.isFinite(cacheCreation)) {
+            tokenUsage.cacheCreation = (tokenUsage.cacheCreation ?? 0) + cacheCreation;
+          }
+          const reasoningOutput = event.usage.reasoning_output_tokens;
+          if (typeof reasoningOutput === 'number' && Number.isFinite(reasoningOutput)) {
+            tokenUsage.reasoningOutput = (tokenUsage.reasoningOutput ?? 0) + reasoningOutput;
+          }
         }
       }
     } catch {

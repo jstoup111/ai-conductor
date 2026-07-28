@@ -59,7 +59,7 @@ not a tuning knob.
 | `complexity` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `stories` | sonnet | gpt-5.6-terra | medium | 3 | manual |
 | `conflict_check` | opus | gpt-5.6-terra | medium | 3 | conditional |
-| `plan` | opus | gpt-5.6-terra | high | 3 | manual |
+| `plan` | opus | gpt-5.6-sol | high | 3 | manual |
 | `coherence_check` | sonnet | gpt-5.6-terra | medium | 3 | conditional |
 | `architecture_diagram` | sonnet | gpt-5.6-terra | medium | 3 | auto |
 | `architecture_review` | fable | gpt-5.6-sol | high | 5 | conditional |

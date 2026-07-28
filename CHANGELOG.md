@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- Add cost-unmetered metering and per-provider attribution to committed Cost records and `conduct-ts kpi` output ([implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
 - Whole-feature usage total at `finish`: when a feature's `finish` step completes, the build logs
   one aggregate line — `finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered` —
   summed from that feature's own `.pipeline/events.jsonl`, so it spans the entire build rather than
@@ -35,6 +36,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   than omitting the field, keeping unattributed ships visible in the report instead of silently
   blending into the stamped ones.
 
+### Changed
+
+- The `plan` step's Codex model is now `gpt-5.6-sol` (was `gpt-5.6-terra`) at every complexity
+  tier. `CODEX_MODEL_POLICY.stepTierOverrides.plan.L`'s own `model: 'gpt-5.6-sol'` override
+  becomes a no-op restating the new base model, but is left in place — its `effort: 'xhigh'` half
+  still does real work, and the base and L-tier model now agreeing is not a reason to touch it.
+  Codex's `plan` effort (`high`) and Claude's `plan` model/effort (`opus`/`high`) are unchanged;
+  the shared `STEP_EFFORTS` table was not touched.
+
 ### Fixed
 
 - The `build_progress` / `build_no_progress` events — and the `▶ build <resolved>/<total>` line they
@@ -47,6 +57,57 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   folded `Task:` commit trailers in via `resolveTaskIds`; the watcher now uses that same union, so
   the operator-facing progress figure matches the one the engine actually routes on. Telemetry only
   — no gate changes behavior, and the read stays fail-soft (a git error degrades to the row count).
+- The step-heartbeat stall watchdog no longer kills a step over a heartbeat that belongs to an
+  earlier dispatch. `.pipeline/step-heartbeat` is a single per-worktree file that is overwritten and
+  never cleared, so a re-kicked step starts life next to whatever the previous step left behind. The
+  watchdog read that leftover as its own silence: a resumed `architecture_review_as_built` was killed
+  31 seconds — one poll tick — after it started, against a `build` heartbeat 3h34m old, and the
+  `daemon status` dashboard had been annotating the pending step `(heartbeat 214m32s ago)` the whole
+  time. Both the watchdog and the dashboard now ignore any heartbeat that names a different step or
+  predates the current dispatch, treating it exactly like "no heartbeat yet" — never evidence of a
+  stall. A genuine stall (a dispatch that pulses, then goes silent past the threshold) is still
+  killed and still raises the same `mechanical`-class HALT.
+- The mergeable sweep no longer dispatches auto-resolution or CI fixes against draft PRs. `prMergeState`
+  now reads `isDraft` alongside `state`/`mergeable`/`labels`, and the sweep excludes draft PRs from both
+  the CONFLICTING (autoresolve) and failed-checks (ci-fix) candidate sets, logging
+  `skipping resolve|ci-fix for <url> (draft PR)` instead. Labeling is deliberately unchanged — a draft
+  still gets `mergeable` and `ci-failed`, which are informational only. Because this repo opens feature
+  PRs as drafts while the build is still running, resolution dispatch against a draft raced the build
+  that owned the branch; skipped drafts also no longer burn an attempt counter.
+- A build halted by the protected-artifact seal no longer spins the daemon. The seal check
+  short-circuits the `build` step before any dispatch, so it never reached any of the exit paths that
+  stamp `lastResolvedCount` into `.pipeline/task-evidence.json`. The stamp therefore stayed at its
+  stale value (0 on a worktree whose evidence sidecar had been reset) while the live resolved count
+  still counted the `Task:`-trailered commits already on the branch — making the daemon's
+  progress-gated re-kick predicate (`liveResolvedCount > lastResolvedCount`) permanently true. The
+  daemon re-dispatched the halted feature every ~15s, re-failed the identical seal check, and halted
+  again, bounded only by an in-memory per-run dispatch ceiling that resets on every daemon restart.
+  The protected-artifact halt now records the resolved count like every other build-step exit, so a
+  dispatch that ended without forward progress earns no re-kick and the feature stays parked for a
+  human, as intended. Detection of the artifact change itself is unchanged.
+- A reused halt PR no longer ships with a content-free, engine-generated body. Three merged PRs
+  (#1067, #1056, #1031) landed on `main` carrying only `## Summary / <slug> / _Rehabilitated from a
+  reused needs-remediation halt PR…_` — the engine's deterministic floor — because the finish gate
+  ran that floor BEFORE its presentation-staleness reads. The floor rewrote exactly the content
+  those reads look for, so the check could never fire and `/pr` was never forced to author real
+  prose. The order is now inverted: the gate reads the PR's presentation first and refuses with a
+  "run `/pr` to author a real templated body" reason. Convergence (the reason the floor was ordered
+  first) is preserved by a **bounded one-shot kickback** — the refusal is recorded durably in
+  `.pipeline/pr-body-regen-attempt.json`, keyed by `pr_url`, and if the body is still halt or
+  placeholder content on the next pass the floor runs as a genuine last resort. A body the engine
+  floored is now detectable on later passes via an invisible `<!-- conductor:pr-body-floor -->`
+  marker, so silently reusing a PR can no longer skip body regeneration.
+- The shipped PR body is now always the plain `/pr` template, whether the branch had a clean
+  first-pass finish or went through remediation. Halt history — original halt title, halt banner and
+  the `.pipeline/halt-user-input-required` reason — is posted as a PR **comment** (idempotent, via a
+  `<!-- conductor:halt-history -->` marker) instead of being narrated into the body, and the
+  "_Rehabilitated from a reused needs-remediation halt PR_" footnote is gone. The capture happens
+  before anything rewrites the presentation, so the narrative survives the rewrite.
+- The floor's test-evidence line no longer asserts completion that did not happen. It previously
+  emitted a CHECKED `- [x] 0/16 plan tasks completed with evidence-gated commits` on a build where
+  zero tasks were done — a false claim shipped to `main`. A zero-completion build now omits the
+  Test evidence section entirely, and the floor renders an unchecked `- [ ]` for any `0/N` line it
+  is nonetheless handed.
 - The test suite no longer fails a handful of real-binary tests on a cold checkout. Thirteen test
   files spawn `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is missing or dangling;
   `dist` is gitignored and there is no `pretest` hook, so nothing built it before the run and it
@@ -500,7 +561,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
   `conduct-ts inline "your feature description"` instead of the bare `conduct "your feature
   description"`, which the CLI rejected (`inline` is mandatory, and `conduct` is the deprecated
   bash CLI, not `conduct-ts`) ([implementation PR #1037](https://github.com/jstoup111/ai-conductor/pull/1037)).
-- Engineer authoring now commits the required M/L coherence artifact, while daemon runs never execute the DECIDE-phase coherence step and warn-skip non-S features whose artifacts are missing or unparseable during discovery ([spec PR #990](https://github.com/jstoup111/ai-conductor/pull/990); [#1067](https://github.com/jstoup111/ai-conductor/pull/1067)).
+- Engineer authoring now commits the required M/L coherence artifact, while daemon runs never execute the DECIDE-phase coherence step and warn-skip non-S features whose artifacts are missing or unparseable during discovery ([spec PR #990](https://github.com/jstoup111/ai-conductor/pull/990); [implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
 
 ## Migration
 

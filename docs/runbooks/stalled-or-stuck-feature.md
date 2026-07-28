@@ -99,6 +99,10 @@ clearing anything by hand:
 cat .worktrees/<slug>/.pipeline/step-heartbeat
 ```
 
+The `step` recorded there is the one whose silence was measured — a heartbeat left behind by an
+earlier step is ignored by the watchdog, so a HALT naming step X was always raised against X's own
+pulses.
+
 This differs from `no_task_progress`: that breaker only fires between whole build attempts and
 requires the retry budget to be in play; the heartbeat watchdog fires mid-dispatch, on any
 provider-aware step, purely from subprocess silence, and needs no retry to have happened yet. See

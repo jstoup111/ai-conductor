@@ -29,6 +29,7 @@ function prViewJson(
   mergeable: string = 'MERGEABLE',
   checks: Array<{ status?: string; conclusion?: string }> = [],
   labels: string[] = [],
+  isDraft = false,
 ): { stdout: string } {
   return {
     stdout: JSON.stringify({
@@ -36,6 +37,7 @@ function prViewJson(
       mergeable,
       statusCheckRollup: checks,
       labels: labels.map((name) => ({ name })),
+      isDraft,
     }),
   };
 }
@@ -1326,5 +1328,113 @@ describe('sweepMergeableLabels — Task 22: exhaustion failure and race negative
     expect(commentCalls).toHaveLength(0);
     const survivors = await readWatch(tmpDir);
     expect(survivors.some((e) => e.prUrl === PR_URL)).toBe(false);
+  });
+});
+
+// ── Draft PRs: label yes, resolve no ──────────────────────────────────────
+
+describe('sweepMergeableLabels — draft PRs are labeled but never resolved', () => {
+  it('does not dispatch ciFix for a draft PR with failing checks, but still applies ci-failed', async () => {
+    const dispatchCalls: WatchEntry[] = [];
+    const logs: string[] = [];
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson(
+        'OPEN',
+        'MERGEABLE',
+        [{ status: 'COMPLETED', conclusion: 'FAILURE' }],
+        [],
+        true, // draft
+      ),
+    });
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (msg) => logs.push(msg),
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (updated) => {
+          dispatchCalls.push(updated);
+        },
+      },
+    });
+
+    expect(dispatchCalls).toHaveLength(0);
+    expect(logs.some((l) => l.includes(PR_URL) && l.includes('draft PR'))).toBe(true);
+    // Labeling is unaffected by draft status.
+    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'ci-failed' });
+    // No attempt counter burn for a PR that was never dispatched.
+    const survivors = await readWatch(tmpDir);
+    expect(survivors[0]?.ciFixAttempts).toBe(0);
+    expect(survivors[0]?.lastCiFixAt).toBeUndefined();
+  });
+
+  it('does not dispatch autoresolve for a draft CONFLICTING PR', async () => {
+    const dispatchCalls: WatchEntry[] = [];
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'CONFLICTING', [], [], true),
+    });
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      autoresolve: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (updated) => {
+          dispatchCalls.push(updated);
+        },
+      },
+    });
+
+    expect(dispatchCalls).toHaveLength(0);
+    const survivors = await readWatch(tmpDir);
+    expect(survivors[0]?.resolveAttempts).toBe(0);
+  });
+
+  it('still adds the mergeable label to a green draft PR', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson(
+        'OPEN',
+        'MERGEABLE',
+        [{ status: 'COMPLETED', conclusion: 'SUCCESS' }],
+        [],
+        true,
+      ),
+    });
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    expect(addLabelCalls).toContainEqual({ prUrl: PR_URL, label: 'mergeable' });
+  });
+
+  it('dispatches ciFix for a non-draft PR with failing checks (control)', async () => {
+    const dispatchCalls: WatchEntry[] = [];
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson(
+        'OPEN',
+        'MERGEABLE',
+        [{ status: 'COMPLETED', conclusion: 'FAILURE' }],
+        [],
+        false,
+      ),
+    });
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        isEligible: async () => ({ eligible: true }),
+        dispatch: async (updated) => {
+          dispatchCalls.push(updated);
+        },
+      },
+    });
+
+    expect(dispatchCalls).toHaveLength(1);
   });
 });

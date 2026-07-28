@@ -448,7 +448,7 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
         defaults: { model: 'claude-global-default', effort: 'max' },
         phases: { DECIDE: { model: 'claude-phase-default', effort: 'max' } },
       },
-      expected: { model: 'gpt-5.6-terra', effort: 'medium' },
+      expected: { model: 'gpt-5.6-sol', effort: 'medium' },
     },
   ] satisfies Array<{
     name: string;
