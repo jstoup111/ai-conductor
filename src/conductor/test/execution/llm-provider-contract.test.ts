@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
@@ -6,6 +6,13 @@ import type {
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionScope } from '../../src/engine/provider-session.js';
+import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import { CodexProvider } from '../../src/execution/codex-provider.js';
+import type { StepName } from '../../src/types/index.js';
 
 type ProviderUnavailableClassification = {
   scope: 'run';
@@ -16,7 +23,144 @@ type ClassifyProviderAttempt = (
   result: InvokeResult,
 ) => ProviderUnavailableClassification | undefined;
 
+async function executeCodexCandidate(
+  provider: LLMProvider,
+  sessions: ProviderSessionScope,
+  transitions: Array<Record<string, unknown>> = [],
+  selfHost = false,
+): Promise<void> {
+  const module = await import('../../src/engine/provider-execution.js');
+  const execute = (module as unknown as {
+    executeProviderCandidates: (input: Record<string, unknown>) => Promise<unknown>;
+  }).executeProviderCandidates;
+  const runtimes = new ProviderRuntimeSet([{
+    key: 'codex',
+    provider,
+    policy: CODEX_MODEL_POLICY,
+    builtIn: true,
+    availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+  }]);
+
+  await execute({
+    step: 'build' as StepName,
+    configuredProviders: ['codex'],
+    preferredProvider: 'codex',
+    runtimes,
+    sessions,
+    options: { prompt: 'contract check' },
+    warn: (_message: string, transition: Record<string, unknown>) => {
+      transitions.push(transition);
+    },
+    ...(selfHost
+      ? {
+          prepareCandidateSelfHost: async () => ({
+            executable: '/resolved/codex',
+            env: { CODEX_HOME: '/tmp/isolated-codex-home' },
+            args: [] as readonly string[],
+            teardown: async () => {},
+          }),
+        }
+      : {}),
+  });
+}
+
 describe('InvokeResult provider-unavailable contract', () => {
+  it('never invokes a provider that declares no session-resume support with resume enabled', async () => {
+    const calls: InvokeOptions[] = [];
+    const provider: LLMProvider = {
+      supportsSessionResume: false,
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push(options);
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
+      async invokeInteractive(): Promise<void> {},
+    };
+    const sessions = new ProviderSessionScope(() => 'harness-session');
+    await executeCodexCandidate(provider, sessions);
+    await executeCodexCandidate(provider, sessions);
+
+    expect(calls.map(({ resume }) => resume)).toEqual([false, false]);
+  });
+
+  it('fails closed when a legacy custom provider leaves resume capability undeclared', async () => {
+    const calls: InvokeOptions[] = [];
+    const provider = {
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push(options);
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
+      async invokeInteractive(): Promise<void> {},
+    };
+    const sessions = new ProviderSessionScope(() => 'legacy-session');
+
+    await executeCodexCandidate(provider, sessions);
+    await executeCodexCandidate(provider, sessions);
+
+    expect(calls.map(({ resume }) => resume)).toEqual([false, false]);
+  });
+
+  it('keeps Claude session resume enabled while Codex declares it unsupported', async () => {
+    const codex = new CodexProvider(vi.fn(async () => ({ stdout: '{}', exitCode: 0 })) as never);
+    const claude = new ClaudeProvider();
+    const calls: InvokeOptions[] = [];
+    const resumeCapableProvider: LLMProvider = {
+      supportsSessionResume: true,
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push(options);
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
+      async invokeInteractive(): Promise<void> {},
+    };
+    const sessions = new ProviderSessionScope(() => 'claude-session');
+
+    await executeCodexCandidate(resumeCapableProvider, sessions);
+    await executeCodexCandidate(resumeCapableProvider, sessions);
+
+    expect({
+      codex: codex.supportsSessionResume,
+      claude: claude.supportsSessionResume,
+      resumeFlags: calls.map(({ resume }) => resume),
+    }).toEqual({ codex: false, claude: true, resumeFlags: [false, true] });
+  });
+
+  it('deduplicates unsupported-resume diagnostics and composes with a forced fresh session', async () => {
+    const calls: InvokeOptions[] = [];
+    const provider: LLMProvider = {
+      supportsSessionResume: false,
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push(options);
+        return { success: true, output: 'ok', exitCode: 0 };
+      }),
+      async invokeInteractive(): Promise<void> {},
+    };
+    const transitions: Array<Record<string, unknown>> = [];
+    const sessions = new ProviderSessionScope(() => 'diagnostic-session');
+
+    await executeCodexCandidate(provider, sessions, transitions);
+    await executeCodexCandidate(provider, sessions, transitions);
+    await executeCodexCandidate(provider, sessions, transitions);
+
+    const forceFreshTransitions: Array<Record<string, unknown>> = [];
+    const forceFreshSessions = new ProviderSessionScope(() => 'self-host-session');
+    await executeCodexCandidate(provider, forceFreshSessions, forceFreshTransitions, true);
+    await executeCodexCandidate(provider, forceFreshSessions, forceFreshTransitions, true);
+
+    expect({
+      resumeFlags: calls.map(({ resume }) => resume),
+      policies: transitions,
+      forceFreshPolicies: forceFreshTransitions,
+    }).toEqual({
+      resumeFlags: [false, false, false, false, false],
+      policies: [{
+        type: 'session_policy',
+        step: 'build',
+        provider: 'codex',
+        reason: 'Session resume suppressed: provider does not support session resume.',
+      }],
+      forceFreshPolicies: [],
+    });
+  });
+
   it('lets built-in providers expose a sanitized optional authentication readiness verdict', async () => {
     const readiness: AuthenticationReadiness = {
       provider: 'codex',

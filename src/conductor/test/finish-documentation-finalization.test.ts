@@ -18,7 +18,9 @@ describe('finish documentation finalization contract', () => {
     const focusedPush = sequence.indexOf('git push  # focused changelog finalization push');
     const conditionalEndMatch = /^\s*fi\s*$/m.exec(sequence.slice(focusedPush));
     const positions = {
-      prCreated: sequence.indexOf('After `/pr` creates or reuses the PR'),
+      prCreated: sequence.indexOf(
+        'After you have created or reused the PR **inline**',
+      ),
       finalize: sequence.indexOf('conduct-ts finalize-changelog-pr --pr-url <PR_URL>'),
       changeGuard: sequence.indexOf('if ! git diff --quiet -- CHANGELOG.md; then'),
       add: sequence.indexOf('git add CHANGELOG.md'),
@@ -66,6 +68,47 @@ describe('finish documentation finalization contract', () => {
     expect(finishSkill).toMatch(
       /If finalization, the focused commit, or its push fails, \*\*STOP immediately\.\*\*[\s\S]{0,800}Do NOT run `conduct-ts shipped-record`[\s\S]{0,800}Do NOT run `conduct-ts finish-record`[\s\S]{0,800}Do NOT write `\.pipeline\/finish-choice`/,
     );
+  });
+
+  it('authors the PR inline and forbids delegating it to another skill', () => {
+    // Regression: finish delegated PR creation to `/pr`, which ended the turn.
+    // The step never came back to run `conduct-ts finish-record`, so the
+    // completion gate saw a missing `.pipeline/finish-choice` and failed try 1.
+    const optionTwo = finishSkill.slice(
+      finishSkill.indexOf('**Option 2: Push & PR**'),
+      finishSkill.indexOf('#### STOP Gate: Verify Push + PR Before Recording Choice'),
+    );
+
+    expect({
+      hasOptionTwo: optionTwo.length > 0,
+      forbidsDelegation: /Do NOT\s+invoke the `\/pr` skill \(or any other skill\/subagent\)/.test(
+        optionTwo,
+      ),
+      namesTheLostTurn: /ends this turn[\s\S]{0,200}finish-choice` unwritten/.test(
+        optionTwo,
+      ),
+      hasInlineProcedure: optionTwo.includes(
+        '#### 5a. Inline PR Authoring — Do This Yourself',
+      ),
+      inlinesThePush: optionTwo.includes('git push -u origin HEAD'),
+      inlinesPrCreate: optionTwo.includes('gh pr create --title'),
+      inlinesPrEdit: optionTwo.includes('gh pr edit --title'),
+      // The refusal contract must survive: an environmental blocker still
+      // leaves the marker unwritten rather than papering over it.
+      keepsRefusalContract:
+        /genuine blocker[\s\S]{0,200}do NOT write `\.pipeline\/finish-choice`/.test(
+          optionTwo,
+        ),
+    }).toEqual({
+      hasOptionTwo: true,
+      forbidsDelegation: true,
+      namesTheLostTurn: true,
+      hasInlineProcedure: true,
+      inlinesThePush: true,
+      inlinesPrCreate: true,
+      inlinesPrEdit: true,
+      keepsRefusalContract: true,
+    });
   });
 
   it('preserves the existing finish path when no implementation token exists', () => {

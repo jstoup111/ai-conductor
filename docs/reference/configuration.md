@@ -117,6 +117,7 @@ the `build_review` normalizer (`:850,859,865`).
 | `wiring` | object | none | [wiring](#wiring) |
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
+| `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
 | `step_heartbeat_stall_minutes` | number | `20` | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
 
 ## harness_version
@@ -888,6 +889,18 @@ Re-surfaces gated-spec skip notices (no-PR, terminal-PR, no-Source-Ref) on the d
 boolean; a non-boolean is a hard error (`config.ts:597-599`). The `false` default is applied at the
 wiring sites, not written back: `config?.daemon_verbose ?? false`
 (`src/conductor/src/daemon-cli.ts:1037, 1111, 1191`).
+
+## reconcile_parked_auto_cleanup
+
+Whether the daemon's startup and idle-tick sweep automatically removes a merged, recorded parked
+feature's worktree and branch and unparks it, versus only classifying and annotating it on the
+dashboard. Optional boolean; a non-boolean is a hard error (`config.ts:607-609`). Absent config
+resolves to `true` at validation time (unlike `daemon_verbose`, the default is written back into
+`obj.reconcile_parked_auto_cleanup`, not just applied at the wiring site).
+
+Set to `false` to require an explicit `conduct-ts daemon reconcile-parked <slug>` (or manual
+cleanup) for every parked feature, even once it is merged and recorded — see
+[park a feature before you touch its git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state).
 
 ## step_heartbeat_stall_minutes
 

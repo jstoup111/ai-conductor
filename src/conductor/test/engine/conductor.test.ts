@@ -8556,7 +8556,7 @@ describe('engine/conductor', () => {
         step: StepName,
         attempt: Omit<Extract<ConductorEvent, { type: 'provider_attempt' }>, 'type' | 'step'>,
       ) => events.emit({ type: 'provider_attempt', step, ...attempt }),
-      warn: (_message: string, transition: Extract<ConductorEvent, { type: 'provider_fallback' }>) =>
+      warn: (_message: string, transition: Extract<ConductorEvent, { type: 'provider_fallback' | 'session_policy' }>) =>
         events.emit(transition),
     };
     const runner = new DefaultStepRunner(
@@ -9135,6 +9135,7 @@ describe('engine/conductor', () => {
         return { success: true, output: 'completed', exitCode: 0 };
       };
       const provider = (key: 'claude' | 'codex'): LLMProvider => ({
+        supportsSessionResume: key === 'claude',
         invoke: invoke(key),
         invokeInteractive: invoke(key),
       });
@@ -9222,7 +9223,7 @@ describe('engine/conductor', () => {
             step: 'memory',
             provider: 'codex',
             sessionId: 'memory-codex-recovered',
-            resume: true,
+            resume: false,
           },
           {
             step: 'explore',

@@ -160,6 +160,12 @@ export interface InvokeOptions {
 }
 
 export interface LLMProvider {
+  /**
+   * Whether this adapter can resume a caller-supplied session ID. Providers
+   * that cannot resume must declare `false`; an absent legacy/custom-provider
+   * declaration is also treated as `false` (only `=== true` authorizes resume).
+   */
+  supportsSessionResume?: boolean;
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;

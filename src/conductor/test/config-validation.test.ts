@@ -175,3 +175,22 @@ describe('step_heartbeat_stall_minutes config field', () => {
     expect(nanResult.warnings.length).toBeGreaterThan(0);
   });
 });
+
+describe('reconcile_parked_auto_cleanup config field', () => {
+  it('hard-errors a non-boolean value with the field name', () => {
+    expect(validateConfig({ reconcile_parked_auto_cleanup: 'yes' })).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/reconcile_parked_auto_cleanup.*boolean/i) },
+    });
+  });
+
+  it('accepts false and resolves the absent toggle to the safe auto-cleanup default', () => {
+    expect([
+      validateConfig({ reconcile_parked_auto_cleanup: false }),
+      validateConfig({}),
+    ]).toMatchObject([
+      { ok: true, config: { reconcile_parked_auto_cleanup: false }, warnings: [] },
+      { ok: true, config: { reconcile_parked_auto_cleanup: true }, warnings: [] },
+    ]);
+  });
+});

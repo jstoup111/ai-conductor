@@ -174,6 +174,14 @@ conduct-ts daemon unpark <slug>
 Ordering rules are in
 [emergency stop a running feature](emergency-stop-a-running-feature.md).
 
+If the implementation PR is already merged (the case this section is under), landing the record
+is usually enough on its own: the daemon's [parked-feature reconciliation
+sweep](../guides/running-the-daemon.md#parked-feature-reconciliation) detects the merged branch
+plus the newly-committed record on its next idle tick and removes the worktree, deletes the
+branch, and unparks the slug automatically — `daemon unpark` is then unnecessary. Run
+`conduct-ts daemon reconcile-parked <slug>` to do the same thing immediately instead of waiting
+for the next tick, or if `reconcile_parked_auto_cleanup` is set to `false`.
+
 ### The spec was renamed after it shipped
 
 You do not need a second record. The daemon runs two dedup passes: a stem match, then a

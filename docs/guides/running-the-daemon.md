@@ -254,6 +254,30 @@ succeeds — a failed reset deliberately leaves the marker in place for retry. Y
 > message unrelated to parking. Always pass the slug. Tracked in
 > [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
+### Parked-feature reconciliation
+
+On startup and on every idle poll tick, the daemon classifies each parked slug: `merged` (its
+branch is an ancestor of `origin/main`), `orphan` (its source issue is closed but the branch never
+merged), `normal`, or `unclassified` (the check was unavailable). `conduct-ts daemon status`
+annotates the parked list accordingly — `— orphan — needs manual review` or `— merged — ready to
+reconcile`.
+
+By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
+is unset or `true`), a `merged` slug with a `.docs/shipped/<slug>.md` record on `origin/main` is
+reconciled automatically: its worktree is removed, its branch is deleted, and it is unparked — with
+no in-progress resume for that slug. A merged slug with no shipped record yet is left parked and,
+when a merged PR can be found, gets an ST-916 record-repair PR requested on its behalf; it
+reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cleanup: false` to
+disable the automatic cleanup step and only classify/annotate, then reconcile explicitly per slug:
+
+```bash
+conduct-ts daemon reconcile-parked <slug>
+```
+
+See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for its exact output
+and refusal reasons. An `orphan` classification is never auto-reconciled — it needs an operator to
+decide whether to park it, delete it, or resume it manually.
+
 ## Operator safety rules
 
 Each of these encodes a failure that has already corrupted daemon state.
@@ -355,9 +379,9 @@ Three things shape the run itself. Every flag, its default, and its exact parsin
 guard runs before every daemon dispatcher on purpose: without it, `--help` would be treated as an
 unknown flag and would **launch a daemon run**.
 
-A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `start`, `stop`, `restart`,
-`connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown subcommand '<token>'.`
-followed by the daemon help, and exits 1.
+A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `reconcile-parked`,
+`start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown
+subcommand '<token>'.` followed by the daemon help, and exits 1.
 
 ## How a halted feature resumes
 

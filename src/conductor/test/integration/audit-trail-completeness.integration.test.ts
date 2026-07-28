@@ -58,6 +58,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   // friction — it is a summation of dispatches already mapped elsewhere.
   feature_usage_total: 'not-audited-by-design',
   provider_fallback: 'not-audited-by-design',
+  session_policy: 'not-audited-by-design',
   step_retry: 'friction-mapped',
   retry_decision: 'not-audited-by-design',
   checkpoint_reached: 'not-audited-by-design',
@@ -143,6 +144,12 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     failedProvider: 'claude',
     reason: 'unavailable',
     nextProvider: 'codex',
+  },
+  session_policy: {
+    type: 'session_policy',
+    step: 'build',
+    provider: 'codex',
+    reason: 'session resume unsupported',
   },
   step_retry: { type: 'step_retry', step: 'build', attempt: 2, maxAttempts: 3, reason: 'tests failed' },
   retry_decision: { type: 'retry_decision', step: 'build', attempt: 2, decision: 'rerun' },

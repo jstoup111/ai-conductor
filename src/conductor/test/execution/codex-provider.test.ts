@@ -154,14 +154,22 @@ describe('CodexProvider', () => {
     expect(result.tokenUsage).toEqual({ input: 12, cacheRead: 4, output: 7, numTurns: 1 });
   });
 
-  it('resumes the requested Codex session and continues using stdin', async () => {
-    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Resumed.'), exitCode: 0 } as any);
+  it('starts a fresh Codex exec and preserves cwd when handed resume: true', async () => {
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Fresh.'), exitCode: 0 } as any);
 
-    await provider.invoke({ ...baseOptions, resume: true });
+    await provider.invoke({ ...baseOptions, resume: true, model: 'gpt-5.4', effort: 'high' });
 
     const [, args, options] = mockExeca.mock.calls[0];
-    expect(args.slice(0, 3)).toEqual(['exec', 'resume', 'thread-123']);
-    expect(args).not.toContain('--cd');
+    expect(args.slice(0, 5)).toEqual([
+      'exec',
+      '--model',
+      'gpt-5.4',
+      '--config',
+      'model_reasoning_effort="high"',
+    ]);
+    expect(args).not.toContain('resume');
+    expect(args).not.toContain('thread-123');
+    expect(args).toEqual(expect.arrayContaining(['--cd', '/workspace/project']));
     expect(args).toEqual(expect.arrayContaining([
       'sandbox_mode="workspace-write"',
       'approval_policy="on-request"',
@@ -169,7 +177,7 @@ describe('CodexProvider', () => {
       'shell_environment_policy.ignore_default_excludes=false',
     ]));
     expect(args).not.toContain('--dangerously-bypass-approvals-and-sandbox');
-    expect(args).toContain('-');
+    expect(args.at(-1)).toBe('-');
     expect(options.cwd).toBe('/workspace/project');
   });
 
@@ -288,7 +296,12 @@ describe('CodexProvider', () => {
     expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual(
       expect.arrayContaining([
         expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"']),
-        expect.arrayContaining(['approval_policy="on-request"', 'approvals_reviewer="auto_review"', 'resume', 'thread-123']),
+        expect.arrayContaining([
+          'approval_policy="on-request"',
+          'approvals_reviewer="auto_review"',
+          '--cd',
+          '/workspace/project',
+        ]),
       ]),
     );
   });

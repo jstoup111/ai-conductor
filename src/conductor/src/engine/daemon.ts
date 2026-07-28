@@ -422,6 +422,16 @@ export interface DaemonDeps {
   reconcileHaltPrs?: () => Promise<void>;
 
   /**
+   * Optional parked-feature reconciliation hook; best-effort on startup and idle ticks.
+   * The daemon supplies `disposeHaltWatcher` because it — not the sweep — owns the
+   * per-slug HALT-clear watcher map: when reconciliation deletes a parked slug's
+   * worktree, the watcher on that (now-deleted) path must be invoked and dropped.
+   */
+  reconcileParkedFeatures?: (deps: {
+    disposeHaltWatcher: (slug: string) => void;
+  }) => Promise<void>;
+
+  /**
    * FR-14: sweep mergeable labels on startup (after reconciliation) and once per
    * idle poll tick. The caller binds projectRoot + log when wiring production
    * deps — this core accepts a pre-bound zero-arg function so it needs no
@@ -606,6 +616,11 @@ export async function runDaemon(
       log(`[daemon] reconcileHaltPrs error: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
+      await deps.reconcileParkedFeatures?.({ disposeHaltWatcher: disposeWatcher });
+    } catch (err) {
+      log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
       await deps.sweepMergeableLabels?.();
     } catch (err) {
       log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
@@ -761,6 +776,18 @@ export async function runDaemon(
     }
   };
 
+  // Dispose exactly the live watcher owned for `slug` and drop it from the map.
+  // Two owners of this lifecycle: re-dispatch (below) and parked-feature
+  // reconciliation, which deletes the very worktree a watcher is watching.
+  // A slug with no live watcher is a silent no-op.
+  const disposeWatcher = (slug: string): void => {
+    const dispose = watchers.get(slug);
+    if (dispose) {
+      dispose();
+      watchers.delete(slug);
+    }
+  };
+
   const processed: FeatureOutcome[] = [];
   const inFlight = new Map<string, Tagged>();
   // Task T28: track whether the restart trigger has been successfully called
@@ -804,11 +831,7 @@ export async function runDaemon(
     parked.delete(item.slug); // re-dispatching a cleared feature un-parks it
     // Dispose any existing watcher before re-dispatching (to avoid stale watchers
     // from the previous dispatch)
-    const dispose = watchers.get(item.slug);
-    if (dispose) {
-      dispose();
-      watchers.delete(item.slug);
-    }
+    disposeWatcher(item.slug);
 
     // Task 16: Emit resume marker for re-dispatches, start for fresh dispatches
     if (isResume) {

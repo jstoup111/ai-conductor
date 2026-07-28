@@ -984,6 +984,7 @@ export class DefaultStepRunner implements StepRunner {
             runtime.runWideUnavailable = value;
           },
           provider: {
+            supportsSessionResume: runtime.provider.supportsSessionResume,
             invoke: async (options) =>
               (await runtime.provider.invokeInteractive(options)) ?? {
                 success: true,

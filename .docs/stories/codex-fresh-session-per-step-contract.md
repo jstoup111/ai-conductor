@@ -69,6 +69,11 @@ dispatch can ask Codex to resume an id Codex never minted.
 As a retried Codex step attempt, I must receive the full step context through the prompt rather
 than through session memory, so that removing resume loses nothing.
 
+> **Capability qualification (2026-07-27):** #325's "within-step retries resume the same
+> session" rule applies only to providers declaring `supportsSessionResume`. Codex does not
+> declare it; each Codex retry is a cold start carrying retry context via the `RETRY:`-prefixed
+> full prompt (see Happy Path below).
+
 ### Happy Path
 
 - **Given** a Codex step whose attempt 1 failed and whose retry hint is set,

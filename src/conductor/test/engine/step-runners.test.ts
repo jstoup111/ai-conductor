@@ -43,6 +43,7 @@ function interactiveRuntime(
   return {
     key,
     provider: {
+      supportsSessionResume: key === 'claude',
       invoke: vi.fn(async (): Promise<InvokeResult> => ({
         success: true,
         output: 'wrong captured path',

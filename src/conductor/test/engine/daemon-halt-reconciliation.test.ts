@@ -345,3 +345,29 @@ describe('runDaemon — reconcileHaltPrs injection (Task 18)', () => {
     expect(res.processed[0].status).toBe('done');
   });
 });
+
+describe('runDaemon — reconcileParkedFeatures injection (Task 10)', () => {
+  it('runs after halt-PR reconciliation on startup and every idle tick', async () => {
+    const order: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: async () => [],
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      sleep: async () => {},
+      reconcileHaltPrs: async () => { order.push('halt'); },
+      reconcileParkedFeatures: async () => { order.push('parked'); },
+    };
+    await runDaemon(deps, { concurrency: 1, once: false, maxIdlePolls: 2 });
+    expect(order).toEqual(['halt', 'parked', 'halt', 'parked', 'halt', 'parked']);
+  });
+
+  it('swallows parked reconciliation errors and logs their daemon prefix', async () => {
+    const logs: string[] = [];
+    const res = await runDaemon({
+      discoverBacklog: async () => items(1),
+      runFeature: async (it) => ({ slug: it.slug, status: 'done' }),
+      log: (line) => logs.push(line),
+      reconcileParkedFeatures: async () => { throw new Error('parked failed'); },
+    }, { concurrency: 1, once: true });
+    expect({ processed: res.processed.length, log: logs.find((line) => line.startsWith('[daemon] reconcileParkedFeatures error:')) }).toEqual({ processed: 1, log: '[daemon] reconcileParkedFeatures error: parked failed' });
+  });
+});

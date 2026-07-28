@@ -129,6 +129,8 @@ function parseWaitSeconds(output: string): number {
 }
 
 export class CodexProvider implements LLMProvider {
+  readonly supportsSessionResume = false;
+
   private readonly authentication: SelectedAuthentication;
   private readonly executable: string;
   private readonly cachedLoginSource: string;
@@ -535,9 +537,7 @@ export class CodexProvider implements LLMProvider {
   }
 
   private buildArgs(options: InvokeOptions, json: boolean, unattended: boolean): string[] {
-    const args = options.resume
-      ? ['exec', 'resume', options.sessionId]
-      : ['exec'];
+    const args = ['exec'];
 
     if (options.model) args.push('--model', options.model);
     if (options.effort) args.push('--config', `model_reasoning_effort="${options.effort}"`);
@@ -549,8 +549,7 @@ export class CodexProvider implements LLMProvider {
         '--config', 'shell_environment_policy.ignore_default_excludes=false',
       );
     }
-    // `resume` does not expose --cd, but execa's cwd still sets the working root.
-    if (!options.resume && options.cwd) args.push('--cd', options.cwd);
+    if (options.cwd) args.push('--cd', options.cwd);
     if (json) args.push('--json');
     // An explicit '-' makes stdin prompt delivery unambiguous and avoids argv
     // length limits for large build-review prompts.

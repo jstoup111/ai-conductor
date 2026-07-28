@@ -35,6 +35,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   daemon build that produced them. A record written before stamping reports `engine=unknown` rather
   than omitting the field, keeping unattributed ships visible in the report instead of silently
   blending into the stamped ones.
+- The daemon now reconciles parked features automatically: on startup and every idle poll tick it
+  classifies each parked slug as merged, orphaned, or normal, annotates `conduct-ts daemon status`
+  accordingly, and — unless `reconcile_parked_auto_cleanup: false` — removes the worktree, deletes
+  the branch, and unparks any slug that is merged into `origin/main` and has a shipped record,
+  requesting an ST-916 record-repair PR first when the record is still missing. The new `conduct-ts
+  daemon reconcile-parked <slug>` verb runs the same guarded cleanup on demand for one slug
+  ([implementation PR #1063](https://github.com/jstoup111/ai-conductor/pull/1063)).
 
 ### Changed
 
@@ -44,6 +51,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   still does real work, and the base and L-tier model now agreeing is not a reason to touch it.
   Codex's `plan` effort (`high`) and Claude's `plan` model/effort (`opus`/`high`) are unchanged;
   the shared `STEP_EFFORTS` table was not touched.
+- The `finish` skill's Push & PR path now authors and publishes the pull request **inline** instead
+  of delegating to the `/pr` skill. Delegating ended the finish turn: the step logged "Waiting for
+  the `/pr` skill to complete", never came back, and never ran `conduct-ts finish-record` — so the
+  completion gate saw a missing `.pipeline/finish-choice` and failed the step on try 1. A new
+  §5a inlines `/pr`'s title/body contract, pre-push checks, staleness proof, and
+  `gh pr create`/`gh pr edit`. `/pr` remains a standalone operator-invoked skill; every existing
+  refusal gate is unchanged — an environmental blocker still leaves the marker unwritten.
+- The `finish` step now runs one tier up each provider's model ladder: Claude `haiku` → `sonnet`,
+  Codex `gpt-5.6-luna` → `gpt-5.6-terra`. It drives the pipeline's most procedurally intricate
+  skill — a multi-branch STOP contract, inline push/PR sequencing, and a mandatory terminal
+  `conduct-ts finish-record` — and the weakest tier lost the turn often enough to leave features
+  complete-but-unshipped. The shared `STEP_EFFORTS` table is untouched; `finish` effort stays
+  `medium` on both providers.
 
 ### Fixed
 
@@ -59,6 +79,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `manual_test`, `prd_audit`, `architecture_review_as_built`) are still invalidated as before.
   Observed live on `codex-fresh-session-per-step-contract`: all ten `Task:` trailers present, build
   re-dispatched anyway after a resume rebase.
+- A skipped gate no longer ends the run with no verdict at all. `retro` is a verdict-bearing loop
+  gate that is skipped for tier S, skipped on every daemon run, and auto-skipped in auto mode when
+  its advisory completion check fails — but the only place a step's objective verdict was persisted
+  is the success tail, so every skip path resolved the step and moved on without writing
+  `.pipeline/gates/<step>.json`. The selector then fell back to the step's own status flag, i.e. the
+  self-report the verdict layer exists to distrust, and `retro` shipped resolved with no verdict
+  anywhere in the audit record. Every skip now writes
+  `{"satisfied": true, "reason": "skipped: <cause>"}`, with the cause naming the tier, track,
+  bootstrap mode, upstream skip, config disable, false `when:`, daemon `retro` handoff, or — for an
+  auto-skipped advisory step — the completion failure that caused it. Satisfaction is unchanged (the
+  selector already treated a skipped gate as satisfied) and no enforcement level changed; what
+  changes is that a skip is now recorded rather than absent, and the `skipped: ` prefix keeps it from
+  reading as passing evidence.
 - The `build_progress` / `build_no_progress` events — and the `▶ build <resolved>/<total>` line they
   render into `.daemon/daemon.log` — no longer report a permanently pinned `resolved: 0` while a
   build is committing task after task. The watcher counted `.pipeline/task-status.json` rows only,
@@ -141,6 +174,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   process CPU ticks and file mtimes.
 ### Changed
 
+- Codex now declares no session-resume capability, so every Codex dispatch is a cold start rather than a
+  `codex exec resume` invocation — including within-step retries, which carry their context via the
+  `RETRY:`-prefixed full step prompt instead — removing the per-retry `no rollout found` round-trip from
+  resuming a harness-minted UUID against a Codex thread id, while Claude's resume behavior is unchanged
+  (ai-conductor#903; partially supersedes `adr-2026-07-24-provider-aware-step-execution-fresh-session-scope`
+  §2; [implementation PR #1089](https://github.com/jstoup111/ai-conductor/pull/1089)).
 - `.daemon/daemon.log` no longer tees a provider subprocess's raw result envelope. A completed
   Claude (`--print --output-format json`) or Codex (`exec --json`) dispatch previously landed as a
   single unreadable line mixing cost/usage telemetry, tool permission-denial records, and the
