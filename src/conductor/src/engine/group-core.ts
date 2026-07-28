@@ -396,8 +396,8 @@ export interface BranchExecutorDeps {
  * mints the legacy scalar session id. Neither path uses the shared
  * main-conductor session (adr-2026-07-10-concurrent-group-core.md). Dispatches
  * the member's OWN step/skill name (not the group name — the bug the ADR calls
- * out), and retries up to `maxRetries` times, resuming the same member/provider
- * session on retry.
+ * out), and retries up to `maxRetries` times with a fresh session identity for
+ * every dispatch.
  *
  * Returns a `BranchOutcome`: `verdict:pass` on the first successful
  * dispatch, or `no-verdict` (carrying the last failure's output) once
@@ -441,7 +441,6 @@ async function runGroupBranchInner(
   // provider branches would mutate the shared serial-session authority.
   if (!providerSessions) await deps.stepRunner.resetSession?.(memberStep);
   const escalate = deps.stepRunner.escalateForStep?.(memberStep, state) ?? true;
-  let sessionId = providerSessions ? "" : mintSessionId();
 
   // Task 9: sweep THIS member's own stale marker (if any) before its first
   // dispatch — scoped to member.name so branch A's leftover marker can
@@ -453,7 +452,6 @@ async function runGroupBranchInner(
   }
 
   let lastOutput = "";
-  let hasRun = false;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     // Task 8: check before every dispatch — an abort observed while queued
     // behind the semaphore, or between retries, must stop the branch from
@@ -462,11 +460,6 @@ async function runGroupBranchInner(
       return makeNoVerdictOutcome("aborted");
     }
 
-    // `resume` is true once this branch's session has ever been dispatched
-    // before — including a prior rate-limited/sessionExpired cycle, which
-    // still consumed the fresh (attempt 1) session slot but must not burn
-    // retry budget. A sessionExpired reset re-arms this to false below.
-    const resume = hasRun;
     await deps.onMemberEvent?.({
       type: "group_member_step",
       member: member.name,
@@ -480,7 +473,7 @@ async function runGroupBranchInner(
         state,
         providerSessions
           ? { providerSessions, attempt, escalate }
-          : { sessionId, resume, attempt, escalate },
+          : { sessionId: mintSessionId(), resume: false, attempt, escalate },
       );
     } catch (err) {
       // A THROW from the step runner is an infra failure of THIS branch
@@ -489,11 +482,9 @@ async function runGroupBranchInner(
       // would tear down `runWithConcurrency` and cancel/starve sibling
       // branches (acceptance flow B: a crashing validator must not stop
       // its siblings from dispatching).
-      hasRun = true;
       lastOutput = err instanceof Error ? err.message : String(err);
       continue;
     }
-    hasRun = true;
 
     if (result.success) {
       return makeVerdictOutcome("pass", result.authentication);
@@ -528,10 +519,7 @@ async function runGroupBranchInner(
       const expiredProvider = result.actualProvider ?? result.preferredProvider;
       if (providerSessions && expiredProvider) {
         await providerSessions.replace(expiredProvider);
-      } else {
-        sessionId = mintSessionId();
       }
-      hasRun = false;
       attempt -= 1;
       continue;
     }
