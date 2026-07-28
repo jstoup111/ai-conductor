@@ -130,6 +130,9 @@ steps:
     llm_provider: claude
   manual_test:
     disable: true
+  build:
+    model: gpt-5.6-sol
+    effort: low
   maintain-documentation:
     llm_provider: claude
     after: rebase

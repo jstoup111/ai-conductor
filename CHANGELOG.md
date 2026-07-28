@@ -36,6 +36,15 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   than omitting the field, keeping unattributed ships visible in the report instead of silently
   blending into the stamped ones.
 
+### Changed
+
+- The `plan` step's Codex model is now `gpt-5.6-sol` (was `gpt-5.6-terra`) at every complexity
+  tier. `CODEX_MODEL_POLICY.stepTierOverrides.plan.L`'s own `model: 'gpt-5.6-sol'` override
+  becomes a no-op restating the new base model, but is left in place — its `effort: 'xhigh'` half
+  still does real work, and the base and L-tier model now agreeing is not a reason to touch it.
+  Codex's `plan` effort (`high`) and Claude's `plan` model/effort (`opus`/`high`) are unchanged;
+  the shared `STEP_EFFORTS` table was not touched.
+
 ### Fixed
 
 - The step-heartbeat stall watchdog no longer kills a step over a heartbeat that belongs to an
