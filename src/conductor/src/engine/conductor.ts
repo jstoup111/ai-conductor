@@ -145,6 +145,7 @@ import {
   resetRegradeCounter,
   type Disposition,
 } from './build-review-disposition.js';
+import { clearKickbackLedger } from './kickback-ledger.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -2231,6 +2232,9 @@ export class Conductor {
     if (isFreshFeatureSession) {
       await resetRegradeCounter(this.projectRoot).catch(() => {
         // Missing/unwritable counter file — nothing to reset.
+      });
+      await clearKickbackLedger(this.projectRoot).catch(() => {
+        // Missing/unwritable ledger file — nothing to clear.
       });
     }
 
