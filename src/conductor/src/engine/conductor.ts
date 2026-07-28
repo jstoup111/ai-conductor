@@ -5252,10 +5252,7 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                const evidence =
-                    failureDetails.length > 0
-                      ? failureDetails.join('\n')
-                      : 'grader returned FAIL without reasons';
+                const evidence = failureDetails.join('\n');
                 const kickback = await consumeKickbackBudget('build_review', evidence);
                 const count = kickback.entry.count;
                 if (!kickback.exhausted) {
@@ -5334,17 +5331,8 @@ export class Conductor {
                 }
                 const reason =
                   `build_review FAIL unresolved after ${count - 1} build kickback(s) ` +
-                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${failureDetails.join('; ') || 'no reasons recorded'}`;
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  reason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -5447,8 +5435,8 @@ export class Conductor {
                   });
                   const reason =
                     `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
-                    `(cap ${MAX_KICKBACKS_PER_GATE}): ${gapMessages[0] ?? 'no reasons recorded'}`;
-                  await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+                    `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -5488,17 +5476,8 @@ export class Conductor {
                 }
                 const reason =
                   `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
-                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${gapMessages[0] ?? 'no reasons recorded'}`;
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  reason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
+                  `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
