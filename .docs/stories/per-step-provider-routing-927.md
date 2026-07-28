@@ -307,8 +307,7 @@ auditable without carrying conversation context across step boundaries.
   attempt first runs for that step, then it starts a fresh fallback-provider
   session with that provider's permissions and authentication context.
 - Given an ordinary failure retries the same step on a provider, when the retry
-  dispatches, then it resumes that step-and-provider session rather than minting
-  a new session.
+  dispatches, then it mints a new session and does not resume the prior attempt.
 - Given multiple provider attempts produce usage, retries, and events, when run
   accounting is reported, then every attempt is attributed to the provider that
   actually executed it while retaining one overall run identity.
@@ -334,12 +333,12 @@ auditable without carrying conversation context across step boundaries.
 
 - [ ] Mixed-provider tests prove every step boundary creates fresh
       provider-native sessions and no session survives into a later step.
-- [ ] Retry tests prove attempts within one step resume only the matching
-      step-and-provider session.
+- [ ] Retry tests prove every attempt within one step uses a fresh
+      step-and-provider session identity with resume disabled.
 - [ ] Event and token-usage tests carry both preferred and actual provider identity.
 - [ ] Concurrent-branch tests prove provider-local and branch-local session isolation.
-- [ ] Scalar single-provider runs retain the accepted #325 fresh-per-step and
-      within-step retry-resume behavior.
+- [ ] Scalar single-provider runs retain the accepted #325 isolation and
+      extend it to cold-start every retry.
 
 ## Story ST-927-8: Route every conductor execution path consistently
 
