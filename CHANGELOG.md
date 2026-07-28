@@ -491,7 +491,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
   `conduct-ts inline "your feature description"` instead of the bare `conduct "your feature
   description"`, which the CLI rejected (`inline` is mandatory, and `conduct` is the deprecated
   bash CLI, not `conduct-ts`) ([implementation PR #1037](https://github.com/jstoup111/ai-conductor/pull/1037)).
-- Engineer authoring now commits the required M/L coherence artifact, while daemon runs never execute the DECIDE-phase coherence step and warn-skip non-S features whose artifacts are missing or unparseable during discovery ([spec PR #990](https://github.com/jstoup111/ai-conductor/pull/990); [#1067](https://github.com/jstoup111/ai-conductor/pull/1067)).
+- Engineer authoring now commits the required M/L coherence artifact, while daemon runs never execute the DECIDE-phase coherence step and warn-skip non-S features whose artifacts are missing or unparseable during discovery ([spec PR #990](https://github.com/jstoup111/ai-conductor/pull/990); [implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
 
 ## Migration
 
