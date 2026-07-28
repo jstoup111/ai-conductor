@@ -176,4 +176,105 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       secondHalt: expect.stringMatching(/wiring_check.*cap 2/i),
     });
   });
+
+  describe('reason-instability regression (Task 11, #984)', () => {
+    it('terminates at the kickback cap when the unchanged wiring gap text varies each dispatch', async () => {
+      await writeState(statePath, {
+        run_started_at: 1,
+        complexity_tier: 'S',
+        track: 'technical',
+        build: 'done',
+        build_review: 'skipped',
+      });
+
+      const evidence = (reason: string) =>
+        JSON.stringify({
+          schema: 1,
+          base: 'base',
+          // This bounded engine fixture deliberately has no Git repository:
+          // `currentTreeHash` is therefore the same indeterminate value on
+          // every dispatch. Reason text is deliberately not a budget key.
+          head: 'unavailable',
+          layer2: { applicable: false },
+          waivers: [],
+          tasks: [{ id: 't1', contract: 'src/x.ts#foo', gaps: [{ kind: 'orphan-export', message: reason }] }],
+        });
+      const satisfy = async (step: string) => {
+        if (step === 'build') {
+          await writeFile(
+            join(dir, '.pipeline/task-status.json'),
+            JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
+          );
+        } else if (step === 'wiring_check') {
+          await writeFile(join(dir, '.pipeline/wiring-evidence.json'), evidence('not used'));
+        } else if (step === 'finish') {
+          await writeFile(join(dir, '.pipeline/finish-choice'), 'keep');
+        }
+        return { success: true };
+      };
+      const makeConductor = (runner: StepRunner, events: ConductorEventEmitter) =>
+        new Conductor({
+          stateFilePath: statePath,
+          stepRunner: runner,
+          events,
+          projectRoot: dir,
+          verifyArtifacts: true,
+          mode: 'auto',
+          fromStep: 'wiring_check',
+          maxRetries: 1,
+          config: {
+            build_review: { enabled: false },
+            kickback_escalation: { enabled: false },
+          },
+          fullSuiteVerifier: {
+            ensure: async () => ({ status: 'REUSED', evidence: {} as never }),
+            inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+          },
+        } as never);
+
+      const firstReason = 'grader wording: export foo lacks a consumer';
+      await makeConductor(
+        {
+          run: async (step) => {
+            if (step === 'wiring_check') {
+              await writeFile(join(dir, '.pipeline/wiring-evidence.json'), evidence(firstReason));
+              return { success: true };
+            }
+            return satisfy(step);
+          },
+        },
+        new ConductorEventEmitter(),
+      ).run();
+
+      const secondReason = 'rephrased diagnosis: no reachable caller for foo';
+      const secondEvents = new ConductorEventEmitter();
+      const secondKickbacks: Array<{ count: number; evidence: string }> = [];
+      const secondHalts: string[] = [];
+      secondEvents.on('kickback', (event) => {
+        if (event.type === 'kickback' && event.from === 'wiring_check') {
+          secondKickbacks.push({ count: event.count, evidence: event.evidence ?? '' });
+        }
+      });
+      secondEvents.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') secondHalts.push(event.reason);
+      });
+      await makeConductor(
+        {
+          run: async (step) => {
+            if (step === 'wiring_check') {
+              await writeFile(join(dir, '.pipeline/wiring-evidence.json'), evidence(secondReason));
+              return { success: true };
+            }
+            return satisfy(step);
+          },
+        },
+        secondEvents,
+      ).run();
+
+      expect({ secondKickbacks, secondHalt: secondHalts[0] }).toEqual({
+        secondKickbacks: [{ count: 2, evidence: secondReason }],
+        secondHalt: expect.stringMatching(/wiring_check.*cap 2.*no reachable caller/i),
+      });
+    });
+  });
 });
