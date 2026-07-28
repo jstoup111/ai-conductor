@@ -1533,6 +1533,33 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
       expect(await readFile(join(dir, '.pipeline', 'build-step-active'), 'utf-8').catch(() => null)).toBeNull();
     });
 
+    it('does not arm the marker when a reported repair leaves every enforcement hook non-executable', async () => {
+      await writeTaskStatus();
+      await seedBuildState();
+      let buildCalls = 0;
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async () => { buildCalls++; return { success: true }; } },
+        events,
+        projectRoot: dir,
+        config: PAST_CUTOVER,
+        fromStep: 'build',
+        maxRetries: 1,
+        ensureSessionHooks: async () => {
+          const hooksDir = join(dir, '.pipeline', 'session-hooks');
+          await mkdir(hooksDir, { recursive: true });
+          for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
+            await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
+          }
+          return { repaired: ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'], failed: [] };
+        },
+      });
+
+      await conductor.run();
+
+      expect(buildCalls).toBe(0);
+    });
+
     it('arms the marker only after a genuine repair restores mutation-gate and its settings path', async () => {
       await writeTaskStatus();
       await seedBuildState();
@@ -1561,7 +1588,9 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
           const hooksDir = join(dir, '.pipeline', 'session-hooks');
           await mkdir(hooksDir, { recursive: true });
           for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
-            await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
+            const hookPath = join(hooksDir, hook);
+            await writeFile(hookPath, '#!/bin/sh\n', 'utf-8');
+            await chmod(hookPath, 0o755);
           }
           await mkdir(join(dir, '.claude'), { recursive: true });
           await writeFile(

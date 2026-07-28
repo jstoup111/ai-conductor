@@ -5,21 +5,11 @@
  * Plan:  .docs/plans/missing-session-hook-files-terminally-halt-a-build.md
  * ADR:   .docs/decisions/adr-2026-07-23-session-hook-repair-before-halt.md
  *
- * WHY THESE DRIVE `Conductor.run()` AND NOT `checkAttributionMachineryIntact`
- * (/writing-system-tests §3b, §3d):
+ * WHY THESE DRIVE `Conductor.run()`:
  *
- * This feature REPLACES a terminal-halt branch with a repair-then-recheck branch.
- * A unit test that calls `checkAttributionMachineryIntact()` directly passes even
- * if the production build seam never reaches the guard at all — which is exactly
- * the state of the tree today. `seedAndCheckAttributionMachinery` has **zero
- * non-test callers**: its build-seam call site was deleted by ce1c1cf17 (#972),
- * which replaced the `machineryIssue` block at the `writeBuildStepMarker` seam
- * with the protected-artifact-seal block. Call-site enumeration (§3d):
- *
- *   - src/conductor/src/engine/conductor.ts:843  — definition, exported
- *   - src/conductor/src/engine/conductor.ts:863  — definition, exported
- *   - (production call sites: NONE — see `git log -S seedAndCheckAttributionMachinery`)
- *   - test/engine/attribution-conductor-wiring.test.ts — direct-call unit tests only
+ * These acceptance specs use `Conductor.run()` because they prove the live
+ * production build seam: preflight repairs and rechecks hooks before arming
+ * `.pipeline/build-step-active` and dispatching the build.
  *
  * So every spec here asserts an OBSERVABLE ARTIFACT at the real entry point
  * (`Conductor.run()` on a build step with enforcement configured): the hook
@@ -351,6 +341,7 @@ describe('acceptance: session hooks self-heal at the build preflight (#896)', ()
 
     expect(observation.dispatched).toBe(false);
     expect(observation.markerArmed).toBe(false);
+    expect(await exists(join(dir, '.pipeline', 'build-step-active'))).toBe(false);
     const buildFailure = stepFailures.find((f) => f.step === 'build');
     expect(buildFailure).toBeDefined();
     expect(buildFailure!.error).toContain('mutation-gate.sh');

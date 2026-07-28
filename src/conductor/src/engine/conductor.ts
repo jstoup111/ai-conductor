@@ -933,7 +933,9 @@ export async function checkAttributionMachineryIntact(
 
   const missingHooks: string[] = [];
   for (const hook of expectedHooks) {
-    const ok = await accessFile(join(hooksDir, hook)).then(() => true).catch(() => false);
+    const ok = await stat(join(hooksDir, hook))
+      .then((entry) => entry.isFile() && (entry.mode & 0o111) !== 0)
+      .catch(() => false);
     if (!ok) missingHooks.push(hook);
   }
   if (missingHooks.length > 0) {
