@@ -159,7 +159,7 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 **Files likely touched:**
 - `src/conductor/src/execution/claude-provider.ts` — capability declaration
 
-**Wired-into:** `src/conductor/src/engine/provider-execution.ts#runProviderInvocation`
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#invokeProviderCandidate`
 **Dependencies:** Task 2
 
 ### Task 4: Delete Claude's `--resume` argv branch
@@ -200,7 +200,7 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 **Files likely touched:**
 - `src/conductor/src/engine/provider-session.ts` — `prepare()`
 
-**Wired-into:** `src/conductor/src/engine/provider-execution.ts#runProviderInvocation`
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#invokeProviderCandidate`
 **Dependencies:** Task 4
 
 ### Task 6: RED — concurrent-group branch retry must cold-start
@@ -280,7 +280,7 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 - `src/conductor/src/engine/step-runners.ts` — `run()` resume derivation
 - `src/conductor/src/execution/session.ts` — argv selection
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#StepRunner.run`
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#run`
 **Dependencies:** Task 8
 
 ### Task 10: RED — interactive recovery carries the failure context
@@ -367,8 +367,10 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 **Files likely touched:**
 - `src/conductor/test/engine/otel/resource.test.ts` (or nearest existing)
 - `src/conductor/test/acceptance/retry-cold-start-1071.acceptance.test.ts` — new
+- `src/conductor/src/engine/daemon-dispatch-preparation.ts`
+- `src/conductor/src/daemon-cli.ts`
 
-**Wired-into:** none
+**Wired-into:** `src/conductor/src/daemon-cli.ts#preparePipelineForDaemonDispatch`
 **Dependencies:** Task 1
 
 ### Task 14: Retire the vestigial resume bookkeeping
@@ -391,7 +393,7 @@ guard (T11, T12, T13) and every behavior change (T5, T7, T9) green first.
 - `src/conductor/src/engine/provider-session.ts`
 - `src/conductor/src/engine/provider-execution.ts`
 
-**Wired-into:** `src/conductor/src/engine/provider-execution.ts#runProviderInvocation`
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#invokeProviderCandidate`
 **Dependencies:** Task 5, Task 7, Task 9, Task 11, Task 12, Task 13
 
 ### Task 15: Invert the Claude half of the pinned assertions

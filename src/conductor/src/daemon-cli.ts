@@ -101,6 +101,7 @@ import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker
 import { readState, writeState, getStepStatus } from './engine/state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
+import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
 import { runTriage, fixSession, type GitRunner } from './engine/setup-triage.js';
 import {
   readBaseSha,
@@ -317,13 +318,6 @@ export function preseedStepStatuses(
       getStepDefinition(name).skippableForTiers.includes(resolvedTier) ? 'skipped' : 'done',
     ]),
   );
-}
-
-/** Clear provider-session markers before a daemon dispatch or re-dispatch. */
-export async function preparePipelineForDaemonDispatch(
-  pipelineDir: string,
-): Promise<void> {
-  await rm(join(pipelineDir, 'session-created'), { force: true });
 }
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always

@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { preparePipelineForDaemonDispatch } from '../../src/daemon-cli.js';
+import { preparePipelineForDaemonDispatch } from '../../src/engine/daemon-dispatch-preparation.js';
 
 describe('daemon dispatch pipeline preparation', () => {
   const tempDirs: string[] = [];
