@@ -169,7 +169,7 @@ describe('owner-gate PR write-back acceptance (Covers: FR-8, FR-10, FR-12)', () 
     const calls: string[][] = [];
     const gh: GhRunner = async (args) => {
       calls.push([...args]);
-      if (args[0] === 'pr' && args[1] === 'view' && args.includes('state,mergeable,statusCheckRollup,labels')) {
+      if (args[0] === 'pr' && args[1] === 'view' && args.some((a) => a.startsWith('state,mergeable,statusCheckRollup,labels'))) {
         return {
           stdout: JSON.stringify({ state: 'MERGED', mergeable: 'MERGEABLE', statusCheckRollup: [], labels: [] }),
         };

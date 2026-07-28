@@ -294,8 +294,18 @@ export async function sweepMergeableLabels({
         // autoresolve dispatch below. Collected unconditionally (cheap) but
         // only ever consulted when `autoresolve` is configured, so a disabled
         // config leaves the sweep's observable behavior unchanged (AC4).
+        //
+        // Draft PRs are never resolution candidates (see `isDraft` note on
+        // PrMergeState): a draft is an in-flight build's own PR, so dispatching
+        // autoresolve/CI-fix against it fights the running build. Labeling
+        // below is unaffected — a draft still gets its `mergeable`/`ci-failed`
+        // labels, which are informational only.
         if (state.mergeable === 'CONFLICTING') {
-          conflictingCandidates.push({ entry, state });
+          if (state.isDraft) {
+            log?.(`[mergeable-sweep] skipping resolve for ${entry.prUrl} (draft PR)`);
+          } else {
+            conflictingCandidates.push({ entry, state });
+          }
         }
 
         // FR-12: if the PR carries `needs-remediation`, ensure `mergeable` is absent.
@@ -374,8 +384,15 @@ export async function sweepMergeableLabels({
           // Collected unconditionally (cheap) but only ever consulted when `ciFix`
           // is configured, so a disabled config leaves the sweep's observable behavior
           // unchanged (AC4).
+          // Draft PRs are excluded here for the same reason as the
+          // CONFLICTING collection above — resolution only ever runs against
+          // non-draft (ready-for-review) PRs.
           if (state.checksOutcome === 'failed') {
-            failedCandidates.push({ entry, state });
+            if (state.isDraft) {
+              log?.(`[mergeable-sweep] skipping ci-fix for ${entry.prUrl} (draft PR)`);
+            } else {
+              failedCandidates.push({ entry, state });
+            }
           }
         }
 

@@ -48,6 +48,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   predates the current dispatch, treating it exactly like "no heartbeat yet" — never evidence of a
   stall. A genuine stall (a dispatch that pulses, then goes silent past the threshold) is still
   killed and still raises the same `mechanical`-class HALT.
+- The mergeable sweep no longer dispatches auto-resolution or CI fixes against draft PRs. `prMergeState`
+  now reads `isDraft` alongside `state`/`mergeable`/`labels`, and the sweep excludes draft PRs from both
+  the CONFLICTING (autoresolve) and failed-checks (ci-fix) candidate sets, logging
+  `skipping resolve|ci-fix for <url> (draft PR)` instead. Labeling is deliberately unchanged — a draft
+  still gets `mergeable` and `ci-failed`, which are informational only. Because this repo opens feature
+  PRs as drafts while the build is still running, resolution dispatch against a draft raced the build
+  that owned the branch; skipped drafts also no longer burn an attempt counter.
 - The test suite no longer fails a handful of real-binary tests on a cold checkout. Thirteen test
   files spawn `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is missing or dangling;
   `dist` is gitignored and there is no `pretest` hook, so nothing built it before the run and it
