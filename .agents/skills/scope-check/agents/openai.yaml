@@ -1,0 +1,4 @@
+interface:
+  display_name: "Scope Check"
+  short_description: "Decide audience, skill catalog, and provider agnosticism"
+  default_prompt: "Use $scope-check to decide whether a change is harness-repo-only or consumer-facing, which skill catalog a new skill belongs in, and whether the change is provider-agnostic."
