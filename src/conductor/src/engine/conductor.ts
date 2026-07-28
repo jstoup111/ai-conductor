@@ -903,8 +903,27 @@ export async function checkAttributionMachineryIntact(
     return null;
   }
 
+  // Filesystem-authoritative recheck of the reconstructed run state (the
+  // #1088 property, generalized from session hooks to task-status.json):
+  // `seedAndCheckAttributionMachinery` has already re-seeded this file, so
+  // reaching here with it absent/unusable means the REPAIR ITSELF could not
+  // land. Require a regular file (never a symlink — a redirected path would
+  // let attribution arm against state outside the worktree) whose contents
+  // parse as JSON carrying a `tasks` array. Mere existence is not enough: a
+  // truncated or half-written file passed the old `access` check and then read
+  // as zero rows everywhere downstream (#1102).
   const taskStatusPath = join(pipelineDir, 'task-status.json');
-  const taskStatusOk = await accessFile(taskStatusPath).then(() => true).catch(() => false);
+  const taskStatusOk = await lstat(taskStatusPath)
+    .then(async (entry) => {
+      if (!entry.isFile()) return false;
+      try {
+        const parsed = JSON.parse(await readFile(taskStatusPath, 'utf-8'));
+        return !!parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks);
+      } catch {
+        return false;
+      }
+    })
+    .catch(() => false);
   if (!taskStatusOk) {
     if (opts?.planResolvable === false) {
       return (
@@ -914,7 +933,8 @@ export async function checkAttributionMachineryIntact(
       );
     }
     return (
-      `Attribution machinery broken: .pipeline/task-status.json is missing.\n` +
+      `Attribution machinery broken: could not restore .pipeline/task-status.json ` +
+      `(missing, not a regular file, or not parseable JSON with a tasks array).\n` +
       `Build dispatch requires task-status.json to be seeded and the ` +
       `.pipeline/current-task stamp path to be writable before a build ` +
       `session can be attributed to a task.`

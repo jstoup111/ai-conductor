@@ -67,6 +67,30 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- A wiped or never-written `.pipeline/task-status.json` no longer costs a build its finished work.
+  `.pipeline/` is gitignored and lives inside the worktree, so removing or recreating a worktree
+  destroys it; the re-seed then rebuilt every plan task as `pending` and the build redid work whose
+  commits were already on the branch (#497), and a live build was observed mid-flight with all 16
+  tasks trailered but no `task-status.json` at all (#1102). When the file is missing, empty, or
+  unparseable, the re-seed now treats it as a reconstruction and restores each plan task carrying a
+  `Task: <id>` trailer on a commit on the branch as `completed`, stamped with that `commit` and
+  `restored_from: "task-trailer"`. This grants no new authority — `resolveTaskIds` already resolved
+  those same task ids from those same trailers for build-step routing
+  (adr-2026-07-23-trailer-union-build-step-routing), and `build_review` still re-judges the real diff
+  on every pass — it only lets row-only readers see what the union already saw. An *existing* file
+  with rows is never trailer-backfilled, so a row deliberately reverted to `pending` stays pending,
+  and a task with no trailered commit stays `pending` because nothing on the branch proves otherwise.
+- `task-status.json` is now written atomically for real. The write claimed "temp file + rename" but
+  wrote a throwaway file into `os.tmpdir()` and then wrote the target in place, so a crash or a full
+  disk could leave a truncated file that every downstream reader parsed as zero rows. It now writes a
+  same-directory temp file and `rename(2)`s it over the target, then re-reads the path and throws if
+  the rows did not land — a repair that cannot write fails loudly instead of reporting success
+  (the same filesystem-authoritative property PR #1088 established for session hooks).
+- The build preflight's `task-status.json` check no longer passes on mere existence. It now requires
+  a regular file (never a symlink, which could arm attribution against state outside the worktree)
+  whose contents parse as JSON carrying a `tasks` array, matching the executable/non-symlink recheck
+  #1088 added for session hooks. Its halt text changed from "is missing" to "could not restore
+  `.pipeline/task-status.json`", since by that point the repair has already been attempted.
 - Self-host builds no longer halt with `provider state changed during self-host execution` because an
   unrelated interactive Claude session edited a file. `~/.claude/file-history/` — where the CLI
   snapshots every file it edits, per session — was fingerprinted by the live boundary but written by

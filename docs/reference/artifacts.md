@@ -21,9 +21,11 @@ engine reads (resume probe) and excludes (self-host fingerprint) but never write
 
 > **Known limitation.** Removing a worktree directory destroys its `.pipeline/`, including
 > `task-status.json` and the `task-evidence.json` sidecar. The branch survives, so already-committed work
-> is safe, but the loop can no longer see that the work happened and reports a false `no_task_progress`
-> stall on a finished build. Park the feature before touching its git state, and recover the evidence
-> rather than letting the build redo finished tasks — see
+> is safe. Reconstructible run state — `task-status.json`, the session hooks, the git hooks — is rebuilt
+> mechanically at the next build entry, and completions proven by `Task:` trailers are restored with it
+> (see [Reconstruction](#reconstruction-what-self-heals-and-what-must-not)). Everything else, including
+> `conduct-state.json` and every gate verdict, is genuinely gone. Park the feature before touching its
+> git state, and recover the rest rather than letting the build redo finished tasks — see
 > [worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md). Tracked in
 > [#497](https://github.com/jstoup111/ai-conductor/issues/497).
 
@@ -191,9 +193,51 @@ worktree removal.
 | --- | --- | --- | --- | --- |
 | `conduct-state.json` | `ConductState` — per-step status plus `feature_desc`, `complexity_tier`, `track`, `bootstrap_mode`, `run_started_at`, `session_started_at`, `last_step`, `pr_url`, `worktree_dir`, `worktree_branch`, `feature_status`, `artifact_approvals`. 2-space JSON with a trailing newline | `state.ts` | Created on the first `saveStepStatus`; read-modify-write on every step transition. Missing ⇒ `{}`. **Empty or invalid ⇒ hard `corrupted` error**. A legacy `brainstorm` status is migrated forward onto `explore` + `prd` on every load | The feature restarts from step zero and every gate re-runs. `pr_url`, `worktree_branch`, and `session_started_at` are gone, so SHIP-tail freshness gates (which compare artifact mtimes to `session_started_at`) fail open |
 | `task-evidence.json` | `{ evidenceStamps: Record<string, EvidenceStamp>, noEvidenceAttempts, noEvidenceReasons?, migrationGrandfather, lastResolvedCount? }`; each stamp is `{ sha, form, citedShas?, verdictAnchor?, testEvidence? }` with `form` ∈ `commit`, `trailer`, `evidence:satisfied-by`, `semantic-verified` | `task-evidence.ts` | Read-modify-write per gate evaluation, written atomically via a same-directory temp file plus `rename(2)`. Missing or corrupt ⇒ empty state, logged, never throws | `lastResolvedCount` reads 0, so the progress delta degrades to "no progress" rather than crashing the tick; the no-evidence retry budget resets; completed tasks may be re-attempted |
-| `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1 | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation | Self-heals from the plan on the next evaluation |
+| `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1. A row restored from git evidence also carries `commit` and `restored_from: "task-trailer"` | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation and at the build preflight. Written atomically (same-directory temp plus `rename(2)`) and re-read afterwards — a reconstruction that does not land throws rather than reporting success | Self-heals from the plan on the next evaluation, **with completions intact**: see reconstruction below |
 | `engine-state.json` | `{ activePlanPath?: string, … }` | `task-seed.ts`, `conductor.ts` (atomic) | Written when the active plan is resolved | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing |
 | `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, treeHash, lastReason, priorVerdict, resolvedBefore }> }` | `kickback-ledger.ts` | Read-modify-write atomically (temp file + `rename(2)`) on every kickback-consuming gate check. A gate's `count` resets to 1 only when its tree hash or resolved-task count moved since the last entry; otherwise it survives daemon re-dispatch and increments toward `MAX_KICKBACKS_PER_GATE` (2). Cleared entirely on a fresh feature session | Missing, malformed, or version-mismatched ledgers fail open to an empty budget (never throw); a gate's cross-dispatch kickback count resets, so a HALT that should already have fired may take one more lap to trigger |
+
+### Reconstruction: what self-heals and what must not
+
+`.pipeline/` is gitignored and lives inside the worktree, so removing or recreating a worktree
+destroys all of it. Run state therefore splits in two, and the engine treats the halves oppositely.
+
+**Mechanically reconstructible — rebuilt at the point of use, never halted on.** Anything derivable
+from the plan, from git, or from constants in the source:
+
+| Artifact | Rebuilt from | Where |
+| --- | --- | --- |
+| `.pipeline/` itself | `mkdir -p` | `seedTaskStatus`, `writePhaseMarker` |
+| `task-status.json` | The plan's `### Task <id>` headings, plus `Task: <id>` commit trailers on the branch for completion | `task-seed.ts::seedTaskStatus`, called from the build completion predicate and the build preflight |
+| `session-hooks/*.sh` | Constants in `git-hook-assets.ts` | `worktree-prepare.ts::ensureSessionHooks`, called from the build preflight |
+| `git-hooks/*` | The same constants | `worktree-prepare.ts` |
+| `engine-state.json` | Plan-stem match, then a single plan on disk | `task-seed.ts` |
+| `task-evidence.json` | Empty state; counters reset | `task-evidence.ts` |
+
+When `task-status.json` is **missing, empty, or unparseable**, the re-seed treats it as a
+reconstruction and restores every plan task carrying a `Task: <id>` trailer on a commit on the
+branch as `status: "completed"`, stamped with that `commit` and `restored_from: "task-trailer"`.
+Tasks with no such trailer stay `pending`. This grants no new authority — `resolveTaskIds` already
+resolves those exact task ids from the same trailers for build-step routing
+(adr-2026-07-23-trailer-union-build-step-routing), and `build_review`'s completeness rubric still
+re-judges the real diff — it only stops a row-only reader from redoing finished, committed work. An
+**existing** file with rows is never trailer-backfilled, so a row deliberately reverted to `pending`
+stays that way.
+
+Both reconstructions are **filesystem-authoritative**: after repairing, the engine re-reads the path
+and halts if the repair itself could not land. A repair outcome is never evidence on its own.
+
+**Irreplaceable — absence stays meaningful and is never fabricated.** Nothing below is created by
+any repair path, because inventing one would let unearned work pass a gate or erase an operator's
+decision:
+
+`HALT`, `HALT.class`, `HALT.cleared`, `QUARANTINE`, `REKICK`, `DONE`, `halt-user-input-required`,
+`finish-choice`, `version-approval`, `conduct-state.json`, `gates/*.json`, `protected-artifact-seal.json`,
+and every verdict/evidence artifact in the two tables below (`build-review.json`,
+`test-suite-evidence.json`, `acceptance-specs-red.json`, `manual-test-results.md`, `prd-audit.md`,
+`architecture-review-as-built.md`, `wiring-evidence.json`, …). Losing one of these re-runs its step
+or restarts its phase; that cost is correct. `events.jsonl`, `otel.jsonl`, and the audit trail are
+append-only history — also never reconstructed, because a fabricated history is worse than none.
 
 ### Gate verdicts
 

@@ -1,7 +1,7 @@
 import * as fsPromises from 'node:fs/promises';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
-import { parsePlanTasks, canonicalTaskId, PlanTask } from './autoheal.js';
+import { randomBytes } from 'node:crypto';
+import { parsePlanTasks, canonicalTaskId, PlanTask, listCommitsWithTrailers } from './autoheal.js';
 import { createTaskEvidence } from './task-evidence.js';
 import { removeBuildStepMarker } from './attribution-enforcement.js';
 
@@ -91,6 +91,38 @@ function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRe
 }
 
 /**
+ * Canonical task ids proven complete by a `Task: <id>` trailer on a commit
+ * reachable on the current branch, mapped to the sha of the newest such
+ * commit.
+ *
+ * This is the SAME evidence the build-step routing predicate already folds in
+ * via `resolveTaskIds` (adr-2026-07-23-trailer-union-build-step-routing, #859)
+ * — reading it here grants no new authority, it only lets a RECONSTRUCTED
+ * `task-status.json` agree with the union that the engine already computes.
+ *
+ * Fail-soft by construction: any git error (non-repo directory, no commits,
+ * detached worktree) degrades to an empty map, so a reconstruction in a
+ * repo-less fixture still produces plain `pending` rows rather than throwing.
+ */
+async function trailerProvenCompletions(projectRoot: string): Promise<Map<string, string>> {
+  const proven = new Map<string, string>();
+  try {
+    // `listCommitsWithTrailers` returns newest-first (`git log` order), so the
+    // FIRST sha seen for an id is the newest commit carrying it.
+    for (const commit of await listCommitsWithTrailers(projectRoot)) {
+      for (const value of commit.trailers['Task'] ?? []) {
+        const canonical = canonicalTaskId(String(value).trim());
+        if (!canonical) continue;
+        if (!proven.has(canonical)) proven.set(canonical, commit.sha);
+      }
+    }
+  } catch {
+    // fail-soft — no trailer evidence available
+  }
+  return proven;
+}
+
+/**
  * Seed task-status.json from the plan at build entry.
  *
  * Acceptance criteria:
@@ -174,13 +206,23 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
 
     const planTasks = parsePlanTasks(planText);
 
-    // Load existing task-status.json
+    // Load existing task-status.json.
+    //
+    // `reconstructing` records that there was NO usable prior file — missing,
+    // empty, or unparseable. `.pipeline/` is gitignored and lives inside the
+    // worktree, so this is exactly the state left behind when a worktree is
+    // removed and recreated from its branch (CLAUDE.md "Daemon Operations
+    // Safety" rule 3, #497) or when the file never got written at all (#1102).
+    // In that state — and ONLY in that state — completions are re-derived from
+    // `Task:` commit trailers below, so already-finished work is not redone.
+    let reconstructing = true;
     let existingStatus: TaskStatusFile = { tasks: [] };
     try {
       const raw = await fsPromises.readFile(statusPath, 'utf-8');
       if (raw && raw.trim()) {
         try {
           existingStatus = JSON.parse(raw);
+          reconstructing = false;
           if (!existingStatus.tasks) {
             existingStatus.tasks = [];
           } else if (!Array.isArray(existingStatus.tasks)) {
@@ -202,6 +244,20 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       // File doesn't exist — start with empty
       existingStatus = { tasks: [] };
     }
+    // A file that parsed but carries no rows at all is materially the same
+    // wipe as a missing one (the #1102 shape: `.pipeline/` present, every
+    // other artifact present, no usable task rows). Treat it as a
+    // reconstruction so trailer-proven completions are restored.
+    if (!existingStatus.tasks || existingStatus.tasks.length === 0) {
+      reconstructing = true;
+    }
+
+    // Trailer-proven completions are read ONLY when reconstructing, so an
+    // ordinary re-seed keeps its existing (possibly deliberately-reverted)
+    // rows untouched and pays no git cost.
+    const provenCompletions = reconstructing
+      ? await trailerProvenCompletions(projectRoot)
+      : new Map<string, string>();
 
     // Load task evidence (sidecar). Task 14 (#773): no longer consulted to
     // restore/derive task-status.json rows (see the plan-task upsert loop
@@ -266,13 +322,37 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // Task doesn't exist in current status file. Task 14 (#773): the
         // evidence sidecar is no longer consulted to restore/derive rows —
         // task-status.json rows are the sole source of truth (Task 10);
-        // re-deriving a row FROM the evidence ledger is backwards. Always
-        // create as pending.
-        const newTask: TaskStatusRecord = {
-          id: taskId,
-          name: planTask.name,
-          status: 'pending',
-        };
+        // re-deriving a row FROM the evidence ledger is backwards.
+        //
+        // #1102 exception, and ONLY when `reconstructing` (no usable prior
+        // file): a task carrying a `Task:` trailer on a commit already on this
+        // branch is restored as `completed` rather than reset to `pending`, so
+        // a wiped/recreated worktree does not redo finished, committed work
+        // (CLAUDE.md "Daemon Operations Safety" rule 3, #497). This is a
+        // RESTORE, not a grant: `resolveTaskIds` already treats the same
+        // trailer as resolving the task for build-step routing
+        // (adr-2026-07-23, #859), and `build_review`'s completeness rubric
+        // still re-judges the real diff, so no unearned work can pass a gate
+        // through this row.
+        const provenSha = provenCompletions.get(canonicalId);
+        const newTask: TaskStatusRecord = provenSha
+          ? {
+              id: taskId,
+              name: planTask.name,
+              status: 'completed',
+              commit: provenSha,
+              restored_from: 'task-trailer',
+            }
+          : {
+              id: taskId,
+              name: planTask.name,
+              status: 'pending',
+            };
+        if (provenSha) {
+          console.warn(
+            `[task-seed] restored ${taskId} as completed from Task: trailer on ${provenSha.slice(0, 8)}`,
+          );
+        }
         taskMap.set(canonicalId, newTask);
       }
     }
@@ -292,15 +372,34 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
       tasks,
     };
 
-    // Atomic write: temp file + rename
-    const tempDir = await fsPromises.mkdtemp(join(tmpdir(), 'task-status-'));
+    // Atomic write: SAME-DIRECTORY temp file + rename(2). The temp file must
+    // share a filesystem with the target for `rename` to be atomic, so it goes
+    // next to `task-status.json` rather than in `os.tmpdir()`.
+    const serialized = JSON.stringify(output, null, 2) + '\n';
+    const tempFile = join(
+      pipelineDir,
+      `.task-status.json.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
+    );
     try {
-      const tempFile = join(tempDir, 'task-status.json');
-      const serialized = JSON.stringify(output, null, 2) + '\n';
       await fsPromises.writeFile(tempFile, serialized);
-      await fsPromises.writeFile(statusPath, serialized);
-    } finally {
-      await fsPromises.rm(tempDir, { recursive: true, force: true });
+      await fsPromises.rename(tempFile, statusPath);
+    } catch (err) {
+      await fsPromises.rm(tempFile, { force: true }).catch(() => {});
+      throw err;
+    }
+
+    // Re-read the filesystem after the repair (the #1088 property): a repair
+    // OUTCOME is never authority — only what is actually on disk is. If the
+    // reconstruction could not land (read-only `.pipeline/`, full disk, a
+    // directory where the file should be), fail LOUDLY here rather than let a
+    // build dispatch against state that silently isn't there.
+    const verified = await fsPromises.readFile(statusPath, 'utf-8');
+    const reread = JSON.parse(verified) as TaskStatusFile;
+    if (!Array.isArray(reread.tasks) || reread.tasks.length !== tasks.length) {
+      throw new Error(
+        `task-status.json did not persist: expected ${tasks.length} row(s) at ` +
+          `${statusPath}, re-read ${Array.isArray(reread.tasks) ? reread.tasks.length : 'a non-array'}`,
+      );
     }
 
     // Write task evidence
