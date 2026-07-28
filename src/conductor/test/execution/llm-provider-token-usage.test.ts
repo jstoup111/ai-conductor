@@ -28,15 +28,22 @@ describe('InvokeResult tokenUsage field', () => {
     expect(result.tokenUsage?.cacheCreation).toBeUndefined();
   });
 
-  it('InvokeResult with full tokenUsage including cache fields is valid', () => {
+  it('InvokeResult with full tokenUsage including cache and reasoning fields is valid', () => {
     const result: InvokeResult = {
       success: true,
       output: 'hello',
       exitCode: 0,
-      tokenUsage: { input: 200, output: 75, cacheRead: 50, cacheCreation: 10 },
+      tokenUsage: {
+        input: 200,
+        output: 75,
+        cacheRead: 50,
+        cacheCreation: 10,
+        reasoningOutput: 25,
+      },
     };
     expect(result.tokenUsage?.cacheRead).toBe(50);
     expect(result.tokenUsage?.cacheCreation).toBe(10);
+    expect(result.tokenUsage?.reasoningOutput).toBe(25);
   });
 
   it('TokenUsage interface has correct shape', () => {
