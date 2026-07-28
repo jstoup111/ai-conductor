@@ -67,6 +67,24 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Self-host builds no longer halt with `provider state changed during self-host execution` because an
+  unrelated interactive Claude session edited a file. `~/.claude/file-history/` — where the CLI
+  snapshots every file it edits, per session — was fingerprinted by the live boundary but written by
+  any concurrent session on the machine, so five builds halted on 2026-07-28 with fresh
+  `file-history/<session-uuid>/<hash>@vN` entries inside each halt window. `file-history` and
+  `paste-cache` are now excluded; both hold edited-file/paste content only, and the sandboxed build
+  writes its own under its throwaway `CLAUDE_CONFIG_DIR`, so no leak detection is traded away.
+  Config-like paths (`settings.json`, `CLAUDE.md`, `rules/`, `skills/`) stay fingerprinted.
+- The live-boundary halt reason now **names the differing paths** instead of only the surface. It
+  reports exact `N added, N removed, N changed` counts followed by up to eight kind-tagged paths and
+  `and N more`, so `daemon.log` says *what* changed rather than only *that* something did. Paths are
+  passed through `redactSafetyText` before being logged.
+- Codex's SQLite exclusions are matched by pattern (`*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`,
+  `*.sqlite-journal`) instead of enumerating `goals_1`/`logs_2`/`memories_1`/`state_5`. The trailing
+  digit is Codex's schema generation, so every bump or new store previously left an unexcluded file
+  churning through its WAL and halted every self-host build until the list was patched. The pattern
+  matches a **root-level basename only** — a nested lookalike such as `skills/state_9.sqlite-wal`
+  still trips the guard, and the live-checkout surface declares no patterns, so it is unaffected.
 - The vitest suite no longer leaks temp directories into the operator's real `/tmp`. Around 1,426
   `mkdtemp(join(tmpdir(), …))` call sites across ~398 test files, most with no cleanup, had left
   83,000+ entries in a 15G tmpfs — 73% of its inodes — until unrelated production processes started

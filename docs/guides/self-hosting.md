@@ -246,8 +246,22 @@ power. The list is explicit and provider-specific, selected by the provider the 
 
 | Provider | Excluded | Also excluded |
 | --- | --- | --- |
-| `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache` | the selected auth file, `.credentials.json` |
-| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and the `goals_1`, `logs_2`, `memories_1`, `state_5` sqlite files with their `-shm`/`-wal` companions | the selected auth file, `auth.json` |
+| `claude` | `history.jsonl`, `.last-cleanup`, `plugins/known_marketplaces.json`, `shell-snapshots`, `backups`, `sessions`, `session-env`, `projects`, `tasks`, `.last-update-result.json`, `stats-cache.json`, `mcp-needs-auth-cache.json`, `cache`, `file-history`, `paste-cache` | the selected auth file, `.credentials.json` |
+| `codex` | `history.jsonl`, `sessions`, `shell_snapshots`, `cache`, `plugins/cache`, `plugins/.remote-plugin-install-staging`, `mcp-oauth-locks`, `.tmp`, `tmp`, `packages/standalone`, `models_cache.json`, and any root-level `*.sqlite`, `*.sqlite-shm`, `*.sqlite-wal`, `*.sqlite-journal` | the selected auth file, `auth.json` |
+
+Two entries carry extra caveats:
+
+- **`file-history` (Claude).** The CLI snapshots every file it edits into
+  `file-history/<session-uuid>/`, so *any* concurrent interactive session editing a file used to trip
+  the guard. The sandboxed build writes its snapshots under its own throwaway `CLAUDE_CONFIG_DIR`, and
+  the subtree holds edited-file content only — never config, hooks, or credentials — so excluding it
+  costs no leak detection.
+- **Codex `*.sqlite*` (a pattern, not a list).** The trailing digit in `state_5.sqlite` is Codex's
+  schema generation. Enumerating the names meant every generation bump (`state_5` → `state_6`) or new
+  store left an unexcluded file churning through its `-wal`/`-shm`, halting every self-host build
+  until the list was patched. The `*` matches a **root-level basename only**: a nested lookalike such
+  as `skills/state_9.sqlite-wal` still trips the guard, and the live-checkout surface declares no
+  patterns at all, so a `*.sqlite-wal` in the harness checkout is still fingerprinted.
 
 Every entry is usage, log, or cache telemetry that any concurrent provider process writes whether or
 not a build is running. Config surfaces are deliberately **not** excluded: `settings.json` on Claude,
@@ -331,12 +345,16 @@ Both gates write `.pipeline/HALT` with a distinct first line and a shared resume
 or the build worktree is missing its `skills/` or `hooks/` directory. The sandbox fails closed rather
 than launching a dangling-link environment; a self-build cannot run without it.
 
-**A build halted the instant the daemon wrote a log line.** That is the live-boundary guard tripping
-on a path outside its exclusion lists. Check what changed during the run — an editor save or a
-generated file in the live checkout, a `git` operation outside `.git`, or a provider config file such
-as `~/.claude/settings.json` touched by another session. The step that was running when it tripped is
-recorded with its own real verdict, so a re-kick resumes after it rather than repeating it; fix or
-re-baseline whatever changed, then unpark.
+**`<surface> changed during self-host execution — N added, N removed, N changed: …`.** The
+live-boundary guard tripped on a path outside its exclusion lists. **The halt reason names the paths**
+— read it first rather than re-deriving the diff by hand. Each path is tagged `added`, `removed`, or
+`changed`; the list is capped at eight entries followed by `and N more`, and the counts are always
+exact. Typical causes are an editor save or a generated file in the live checkout, a `git` operation
+outside `.git`, or a provider config file such as `~/.claude/settings.json` touched by another
+session. If the named path is provider telemetry that no build would write, it belongs in the
+exclusion list above. The step that was running when it tripped is recorded with its own real verdict,
+so a re-kick resumes after it rather than repeating it; fix or re-baseline whatever changed, then
+unpark.
 
 **`daemon start` refuses with an install-drift message.** Run `bin/install --update` and retry. A
 stale install leaves newly added skills unregistered, and daemon-dispatched skills then fail

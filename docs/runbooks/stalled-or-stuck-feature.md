@@ -113,6 +113,27 @@ mechanism and `step_heartbeat_stall_minutes` in
 If a step is regularly this slow for legitimate reasons, raise the threshold rather than
 repeatedly clearing this halt by hand.
 
+#### Live-boundary violation (self-host only)
+
+If `.pipeline/HALT` reads `<live checkout|provider state> changed during self-host execution — N
+added, N removed, N changed: …`, the self-host live boundary detected a change to the harness
+checkout or to the operator's real `~/.claude`/`~/.codex` while a step was in flight. **The reason
+names the paths** — each tagged `added`, `removed`, or `changed`, capped at eight entries followed by
+`and N more`, with exact counts. Read them before investigating anything else.
+
+- A path under the live checkout is usually an editor save or a generated file. Stop editing the
+  harness checkout while a build runs; edit inside the feature worktree instead.
+- A provider-state path that is config-like (`settings.json`, `config.toml`, `hooks.json`) means an
+  unrelated interactive session changed operator config mid-build. That trip is deliberate and
+  fail-closed — those files stay fingerprinted precisely because a real leak would look identical.
+- A provider-state path that is pure telemetry or cache means the exclusion list needs a new entry;
+  see [self-hosting: provider-state
+  exclusions](../guides/self-hosting.md#provider-state-exclusions).
+
+This is a `mechanical`-class HALT, so the daemon's ordinary re-kick sweep clears it on the next
+base-branch advance. The step that was running keeps its own real verdict, so the re-kick resumes
+after it rather than repeating it.
+
 #### `halt_marker`
 
 The `pipeline` skill wrote `.pipeline/halt-user-input-required` — a genuine question that no
