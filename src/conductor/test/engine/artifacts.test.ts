@@ -105,6 +105,74 @@ describe('engine/artifacts', () => {
   }
 
   describe('STEP_ARTIFACT_GLOBS', () => {
+    it('derives the complete ordered compatibility map while retaining per-pattern scope', async () => {
+      const expected: Record<StepName, string[]> = {
+        bootstrap: [],
+        memory: [],
+        assess: ['.docs/decisions/technical-assessment-*.md'],
+        explore: [],
+        prd: ['.docs/specs/*.md'],
+        complexity: [],
+        stories: ['.docs/stories/**/*.md'],
+        conflict_check: ['.docs/conflicts/*.md'],
+        plan: ['.docs/plans/*.md'],
+        coherence_check: ['.docs/coherence/*.md'],
+        architecture_diagram: ['.docs/architecture/*.md'],
+        architecture_review: [
+          '.docs/decisions/architecture-review-*.md',
+          '.docs/decisions/adr-*.md',
+        ],
+        worktree: [],
+        acceptance_specs: [
+          'spec/acceptance/**/*',
+          'spec/requests/**/*',
+          'spec/system/**/*',
+          'test/acceptance/**/*',
+          'test/**/*',
+          'tests/**/*',
+          '__tests__/**/*',
+          '*.test.js',
+          '*.test.ts',
+          '*.test.jsx',
+          '*.test.tsx',
+          '*.spec.js',
+          '*.spec.ts',
+          '*.spec.jsx',
+          '*.spec.tsx',
+        ],
+        build: ['.pipeline/task-status.json'],
+        build_review: ['.pipeline/build-review.json'],
+        wiring_check: ['.pipeline/wiring-evidence.json'],
+        test_suite: ['.pipeline/test-suite-evidence.json'],
+        manual_test: ['.pipeline/manual-test-results.md'],
+        prd_audit: ['.pipeline/prd-audit.md'],
+        architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
+        retro: ['.docs/retros/*.md'],
+        rebase: [],
+        finish: [],
+        remediate: [],
+        attribution_verify: [],
+      };
+      const source = await readFile(join(__dirname, '../../src/engine/artifacts.ts'), 'utf8');
+
+      expect({
+        projection: STEP_ARTIFACT_GLOBS,
+        mixedScopes: STEP_ARTIFACT_CONTRACTS.architecture_review.map(
+          ({ pattern, scope }) => [pattern, scope],
+        ),
+        derivedProjection: /export const STEP_ARTIFACT_GLOBS[^=]*=\s*Object\.fromEntries/.test(
+          source,
+        ),
+      }).toEqual({
+        projection: expected,
+        mixedScopes: [
+          ['.docs/decisions/architecture-review-*.md', 'feature'],
+          ['.docs/decisions/adr-*.md', 'repository'],
+        ],
+        derivedProjection: true,
+      });
+    });
+
     it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {
       const violations: string[] = [];
 

@@ -122,12 +122,7 @@ export const STEP_ARTIFACT_CONTRACTS = {
     },
     {
       pattern: '.docs/decisions/adr-*.md',
-      scope: 'feature',
-      identity: {
-        strategy: 'normalized-stem',
-        stripDatePrefix: true,
-        stripPrefixes: ['adr'],
-      },
+      scope: 'repository',
     },
   ],
   worktree: [],
@@ -175,89 +170,23 @@ export const STEP_ARTIFACT_CONTRACTS = {
  * or a literal filename. Empty list = step produces no file artifacts; verification
  * is skipped.
  *
- * Single source of truth used by:
+ * Compatibility projection used by:
  *   - Post-step verification gate (stepHasArtifacts)
  *   - Artifact review prompt (findArtifactFiles)
  *   - Dashboard rendering (getArtifactStatus)
+ *
+ * STEP_ARTIFACT_CONTRACTS is the authored source of truth. Keep this projection
+ * until all legacy consumers have migrated to scoped artifact resolution.
  */
-export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
-  bootstrap: [],
-  memory: [],
-  assess: ['.docs/decisions/technical-assessment-*.md'],
-  // `explore` is advisory + ephemeral (notes → .pipeline/, decision → .memory/);
-  // it writes no committed .docs artifact, so it has no completion glob.
-  explore: [],
-  // `prd` writes the product-only design doc (product track only).
-  prd: ['.docs/specs/*.md'],
-  complexity: [],
-  stories: ['.docs/stories/**/*.md'],
-  conflict_check: ['.docs/conflicts/*.md'],
-  plan: ['.docs/plans/*.md'],
-  coherence_check: ['.docs/coherence/*.md'],
-  architecture_diagram: ['.docs/architecture/*.md'],
-  architecture_review: [
-    '.docs/decisions/architecture-review-*.md',
-    '.docs/decisions/adr-*.md',
-  ],
-  worktree: [],
-  // Acceptance/system specs land in stack-specific places. Cover the common
-  // conventions so the completion check doesn't false-fail on a non-Rails
-  // project (e.g. a Node app whose tests are `app.test.js` at the root). The
-  // patterns avoid recursing node_modules (root globs are non-recursive; the
-  // `**` ones are scoped to test dirs).
-  //
-  // A monorepo with several packages (e.g. separate `api/` and `frontend/`)
-  // puts specs under arbitrary package prefixes that no fixed root pattern can
-  // anticipate. Rather than guess, a project declares its own locations via the
-  // `acceptance_spec_globs` config key — those globs are appended here at
-  // check time (see checkStepCompletion). They may use a leading `*/` to match
-  // any immediate subdirectory without naming each package (matchGlob skips
-  // node_modules / dot-dirs when expanding `*/`, preserving the no-node_modules
-  // property above).
-  acceptance_specs: [
-    'spec/acceptance/**/*',
-    'spec/requests/**/*',
-    'spec/system/**/*',
-    'test/acceptance/**/*',
-    'test/**/*',
-    'tests/**/*',
-    '__tests__/**/*',
-    '*.test.js',
-    '*.test.ts',
-    '*.test.jsx',
-    '*.test.tsx',
-    '*.spec.js',
-    '*.spec.ts',
-    '*.spec.jsx',
-    '*.spec.tsx',
-  ],
-  build: ['.pipeline/task-status.json'],
-  build_review: ['.pipeline/build-review.json'],
-  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
-  // committed, same convention as build_review/manual_test above.
-  wiring_check: ['.pipeline/wiring-evidence.json'],
-  // Dashboard/artifact visibility only. The custom predicate below always
-  // re-inspects the content fingerprint; file presence cannot satisfy the gate.
-  test_suite: [FULL_SUITE_EVIDENCE_PATH],
-  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
-  // committed. These are regenerated every run; tracking them caused date-stamp
-  // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
-  // rebase. `.pipeline/` is already gitignored in consumer repos, so the gate
-  // still finds them on disk while git never sees them.
-  manual_test: ['.pipeline/manual-test-results.md'],
-  // SHIP-tail compliance gates (see CUSTOM_COMPLETION_PREDICATES below).
-  prd_audit: ['.pipeline/prd-audit.md'],
-  architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
-  retro: ['.docs/retros/*.md'],
-  // Engine-native; its verdict is computed from git state, not a file artifact.
-  rebase: [],
-  finish: [],
-  // Conductor reads .pipeline/remediation.json directly to route; not a gate artifact.
-  remediate: [],
-  // Attribution verification is an out-of-band audit step; verdict is computed,
-  // not a committed file artifact.
-  attribution_verify: [],
-};
+export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = Object.fromEntries(
+  (Object.entries(STEP_ARTIFACT_CONTRACTS) as [
+    StepName,
+    readonly ArtifactPatternContract[],
+  ][]).map(([step, contracts]) => [
+    step,
+    contracts.map(({ pattern }) => pattern),
+  ]),
+) as Record<StepName, string[]>;
 
 /**
  * True if `path` exists AND its mtime is at or after `sessionStartedAt`.
