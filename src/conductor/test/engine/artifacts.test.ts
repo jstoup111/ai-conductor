@@ -11,6 +11,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 import {
   readStaleHaltTitle as realReadStaleHaltTitle,
   readStaleHaltBanner as realReadStaleHaltBanner,
+  readFlooredBody as realReadFlooredBody,
 } from '../../src/engine/halt-pr-rehabilitation.js';
 
 // Spy target for the finish predicate's Phase 2 presentation check
@@ -23,6 +24,9 @@ const readStaleHaltTitleSpy = vi.fn<typeof realReadStaleHaltTitle>(async () => n
 // (readStaleHaltBanner, invoked with a gh runner). Default behavior returns
 // null (fail-open); tests override via mockImplementation to call the real logic.
 const readStaleHaltBannerSpy = vi.fn<typeof realReadStaleHaltBanner>(async () => null);
+// Spy target for the finish predicate's floored-placeholder body check. Default
+// null (fail-open); tests override to exercise the bounded kickback.
+const readFlooredBodySpy = vi.fn<typeof realReadFlooredBody>(async () => null);
 const evaluateShipmentEvidenceSpy = vi.fn(async (input: {
   slug: string;
   implementationPr: string;
@@ -40,6 +44,8 @@ vi.mock('../../src/engine/halt-pr-rehabilitation.js', () => ({
     readStaleHaltTitleSpy(...args),
   readStaleHaltBanner: (...args: Parameters<typeof realReadStaleHaltBanner>) =>
     readStaleHaltBannerSpy(...args),
+  readFlooredBody: (...args: Parameters<typeof realReadFlooredBody>) =>
+    readFlooredBodySpy(...args),
 }));
 vi.mock('../../src/engine/shipment-evidence.js', () => ({
   evaluateShipmentEvidence: (...args: Parameters<typeof evaluateShipmentEvidenceSpy>) =>
@@ -68,6 +74,7 @@ import {
   stampCode,
   BUILD_REVIEW_VERDICT,
   removeBuildReviewVerdict,
+  PR_BODY_REGEN_ATTEMPT_MARKER,
 } from '../../src/engine/artifacts.js';
 import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
@@ -78,8 +85,11 @@ describe('engine/artifacts', () => {
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'artifacts-test-'));
-    readStaleHaltTitleSpy.mockClear();
-    readStaleHaltBannerSpy.mockClear();
+    // mockReset (not mockClear) so a per-test mockImplementation cannot leak
+    // into the next test; restore the fail-open defaults afterwards.
+    readStaleHaltTitleSpy.mockReset().mockImplementation(async () => null);
+    readStaleHaltBannerSpy.mockReset().mockImplementation(async () => null);
+    readFlooredBodySpy.mockReset().mockImplementation(async () => null);
   });
 
   afterEach(async () => {
@@ -881,7 +891,7 @@ describe('engine/artifacts', () => {
       readStaleHaltTitleSpy.mockClear();
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/needs-remediation:/);
-      expect(result.reason).toMatch(/rewrite the reused halt PR/i);
+      expect(result.reason).toMatch(/run \/pr to author a real templated body/i);
     });
 
     it('Phase 2 presentation: passes when fakeGh returns a clean ready PR (through-the-gate clean title check)', async () => {
@@ -1145,7 +1155,7 @@ describe('engine/artifacts', () => {
     });
 
     describe('Task 8: order-gated repair invocation between phases', () => {
-      it('happy path: repair invoked exactly once after phase 1 passes, before phase 2 gh.prView', async () => {
+      it('happy path: repair invoked exactly once after phase 1 passes, AFTER the phase 2 presentation reads', async () => {
         const prUrl = 'https://github.com/foo/bar/pull/1';
         await createFile(FINISH_CHOICE_MARKER, 'pr');
         await createFile(
@@ -1156,6 +1166,10 @@ describe('engine/artifacts', () => {
         const callLog: string[] = [];
         const repairFinishPr = vi.fn(async () => {
           callLog.push('repair');
+        });
+        readStaleHaltTitleSpy.mockImplementation(async () => {
+          callLog.push('presentation-read');
+          return null;
         });
 
         const fakeGh = async (args: string[]) => {
@@ -1179,12 +1193,15 @@ describe('engine/artifacts', () => {
 
         expect(result).toEqual({ done: true });
         expect(repairFinishPr).toHaveBeenCalledTimes(1);
-        expect(repairFinishPr).toHaveBeenCalledWith(prUrl);
-        // Verify repair was called before gh.prView (order check)
+        expect(repairFinishPr).toHaveBeenCalledWith(prUrl, { mode: 'full' });
+        // Order check (inverted from the original Task 8 contract): the
+        // presentation is READ before any repair runs, so the deterministic
+        // floor can never mask a stale/placeholder body again.
         const repairIndex = callLog.indexOf('repair');
-        const ghIndex = callLog.indexOf('gh-prView');
-        expect(repairIndex).toBeLessThan(ghIndex);
+        const readIndex = callLog.indexOf('presentation-read');
+        expect(readIndex).toBeGreaterThanOrEqual(0);
         expect(repairIndex).toBeGreaterThanOrEqual(0);
+        expect(readIndex).toBeLessThan(repairIndex);
       });
 
       it('phase 1 miss: repair not invoked when pr_url missing', async () => {
@@ -1272,6 +1289,94 @@ describe('engine/artifacts', () => {
         expect(warningCall).toBeDefined();
 
         logSpy.mockRestore();
+      });
+
+      it('bounded kickback: a floored placeholder body refuses the FIRST pass (capture-only repair, marker recorded) and floors the SECOND', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/1';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+
+        const modes: Array<string | undefined> = [];
+        const repairFinishPr = vi.fn(
+          async (_url: string, opts?: { mode?: 'capture-only' | 'full' }) => {
+            modes.push(opts?.mode);
+          },
+        );
+
+        // Placeholder body: engine floor marker present, no /pr prose.
+        readFlooredBodySpy.mockImplementation(async (gh, cwd, url) => {
+          const { stdout } = await gh(['pr', 'view', url, '--json', 'body'], { cwd });
+          const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+          return body.includes('<!-- conductor:pr-body-floor -->')
+            ? '<!-- conductor:pr-body-floor -->'
+            : null;
+        });
+        const fakeGh = async (args: string[]) => ({
+          stdout: JSON.stringify({
+            title: 'feat: something',
+            isDraft: false,
+            body: '<!-- conductor:pr-body-floor -->\n\n## Summary\n\nsome-slug',
+          }),
+        });
+
+        const ctx = {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr,
+        };
+
+        const first = await checkStepCompletion(dir, 'finish', ctx);
+        expect(first.done).toBe(false);
+        expect(first.reason).toMatch(/engine-generated placeholder/i);
+        expect(first.reason).toMatch(/run \/pr to author a real templated body/i);
+        expect(modes).toEqual(['capture-only']);
+        // Durable one-shot marker recorded.
+        const marker = JSON.parse(
+          await readFile(join(dir, PR_BODY_REGEN_ATTEMPT_MARKER), 'utf-8'),
+        );
+        expect(marker.pr_url).toBe(prUrl);
+
+        // Second pass: budget exhausted → full repair (floor) and convergence.
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        const second = await checkStepCompletion(dir, 'finish', ctx);
+        warnSpy.mockRestore();
+        expect(second).toEqual({ done: true });
+        expect(modes).toEqual(['capture-only', 'full']);
+      });
+
+      it('bounded kickback: a marker recorded for a DIFFERENT pr_url does not spend this PR\'s budget', async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/2';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+        await createFile(
+          PR_BODY_REGEN_ATTEMPT_MARKER,
+          JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+        );
+
+        readStaleHaltTitleSpy.mockImplementation(async (gh, cwd, url) => {
+          const { stdout } = await gh(['pr', 'view', url, '--json', 'title'], { cwd });
+          const title = String((JSON.parse(stdout || '{}') as { title?: unknown }).title ?? '');
+          return title.startsWith('needs-remediation:') ? title : null;
+        });
+        const repairFinishPr = vi.fn(async () => {});
+        const fakeGh = async () => ({
+          stdout: JSON.stringify({
+            title: 'needs-remediation: broken',
+            isDraft: false,
+            body: 'anything',
+          }),
+        });
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr,
+        });
+
+        expect(result.done).toBe(false);
+        expect(repairFinishPr).toHaveBeenCalledWith(prUrl, { mode: 'capture-only' });
       });
 
       it('legacy mode: absent injectable, repair skipped, phase 2 runs as normal', async () => {

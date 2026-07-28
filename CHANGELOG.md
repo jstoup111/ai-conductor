@@ -66,6 +66,29 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   The protected-artifact halt now records the resolved count like every other build-step exit, so a
   dispatch that ended without forward progress earns no re-kick and the feature stays parked for a
   human, as intended. Detection of the artifact change itself is unchanged.
+- A reused halt PR no longer ships with a content-free, engine-generated body. Three merged PRs
+  (#1067, #1056, #1031) landed on `main` carrying only `## Summary / <slug> / _Rehabilitated from a
+  reused needs-remediation halt PR…_` — the engine's deterministic floor — because the finish gate
+  ran that floor BEFORE its presentation-staleness reads. The floor rewrote exactly the content
+  those reads look for, so the check could never fire and `/pr` was never forced to author real
+  prose. The order is now inverted: the gate reads the PR's presentation first and refuses with a
+  "run `/pr` to author a real templated body" reason. Convergence (the reason the floor was ordered
+  first) is preserved by a **bounded one-shot kickback** — the refusal is recorded durably in
+  `.pipeline/pr-body-regen-attempt.json`, keyed by `pr_url`, and if the body is still halt or
+  placeholder content on the next pass the floor runs as a genuine last resort. A body the engine
+  floored is now detectable on later passes via an invisible `<!-- conductor:pr-body-floor -->`
+  marker, so silently reusing a PR can no longer skip body regeneration.
+- The shipped PR body is now always the plain `/pr` template, whether the branch had a clean
+  first-pass finish or went through remediation. Halt history — original halt title, halt banner and
+  the `.pipeline/halt-user-input-required` reason — is posted as a PR **comment** (idempotent, via a
+  `<!-- conductor:halt-history -->` marker) instead of being narrated into the body, and the
+  "_Rehabilitated from a reused needs-remediation halt PR_" footnote is gone. The capture happens
+  before anything rewrites the presentation, so the narrative survives the rewrite.
+- The floor's test-evidence line no longer asserts completion that did not happen. It previously
+  emitted a CHECKED `- [x] 0/16 plan tasks completed with evidence-gated commits` on a build where
+  zero tasks were done — a false claim shipped to `main`. A zero-completion build now omits the
+  Test evidence section entirely, and the floor renders an unchecked `- [ ]` for any `0/N` line it
+  is nonetheless handed.
 - The test suite no longer fails a handful of real-binary tests on a cold checkout. Thirteen test
   files spawn `bin/conduct-ts`, which exits 1 when `src/conductor/dist` is missing or dangling;
   `dist` is gitignored and there is no `pretest` hook, so nothing built it before the run and it

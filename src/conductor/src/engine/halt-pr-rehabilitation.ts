@@ -25,6 +25,7 @@ import {
   cleanupHaltPresentation,
   readHaltPresentation,
   setReady,
+  comment,
   defaultSleep,
   HALT_PR_BANNER_SENTINEL,
   HALT_PR_BANNER_LINES,
@@ -281,6 +282,132 @@ export async function readStaleHaltBanner(
   }
 }
 
+/**
+ * Invisible marker stamped into an engine-floored PR body. Renders as nothing
+ * on GitHub, so the body still reads like a clean finish produced it, but it
+ * remains a deterministic signal that no `/pr`-authored prose was ever written
+ * for this PR.
+ */
+export const PR_BODY_FLOOR_MARKER = '<!-- conductor:pr-body-floor -->';
+
+/**
+ * Invisible marker identifying the single harness-authored halt-history
+ * comment on a rehabilitated PR (mirrors `NEEDS_REMEDIATION_MARKER`). Used to
+ * keep {@link postHaltHistoryComment} idempotent across finish attempts.
+ */
+export const HALT_HISTORY_COMMENT_MARKER = '<!-- conductor:halt-history -->';
+
+/**
+ * Fail-open presentation read analog of {@link readStaleHaltBanner}, but for
+ * the engine's own body floor. Returns {@link PR_BODY_FLOOR_MARKER} when a
+ * SUCCESSFUL read shows the recorded PR body is an engine-generated
+ * placeholder rather than a `/pr`-authored body; returns null both when the
+ * body is real AND on any gh read error (network never blocks a ship).
+ */
+export async function readFlooredBody(
+  gh: GhRunner,
+  cwd: string,
+  prUrl: string,
+  log?: (msg: string) => void,
+): Promise<string | null> {
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
+    const body = String((JSON.parse(stdout || '{}') as { body?: unknown }).body ?? '');
+    return body.includes(PR_BODY_FLOOR_MARKER) ? PR_BODY_FLOOR_MARKER : null;
+  } catch (err) {
+    log?.(`[halt-pr-rehab] floored-body read failed for ${prUrl} — fail-open: ${err}`);
+    return null;
+  }
+}
+
+export interface HaltHistoryCommentDeps {
+  gh: GhRunner;
+  cwd: string;
+  prUrl: string;
+  /** Halt reason text, e.g. the contents of `.pipeline/halt-user-input-required`. */
+  haltReason?: string | null;
+  log?: (msg: string) => void;
+}
+
+export type HaltHistoryCommentOutcome = 'not-halt-pr' | 'already-posted' | 'posted' | 'gh-unavailable';
+
+/**
+ * Preserve a reused halt PR's remediation narrative as a PR COMMENT.
+ *
+ * The shipped PR body is always the plain `/pr` template (no remediation
+ * prose, no rehabilitation footnote) — every recovery narrative lives here
+ * instead. Called before the body is rewritten (by `/pr` or by the floor), so
+ * the halt banner and halt title are captured while still observable.
+ *
+ * Idempotent via {@link HALT_HISTORY_COMMENT_MARKER}; never throws.
+ */
+export async function postHaltHistoryComment(
+  deps: HaltHistoryCommentDeps,
+): Promise<HaltHistoryCommentOutcome> {
+  const { gh, cwd, prUrl } = deps;
+  const log = deps.log ?? (() => {});
+
+  let view: PrViewState;
+  let existingComments: string[] = [];
+  try {
+    const { stdout } = await gh(
+      ['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body,comments'],
+      { cwd },
+    );
+    view = parsePrView(stdout);
+    try {
+      const raw = JSON.parse(stdout || '{}') as { comments?: unknown };
+      if (Array.isArray(raw.comments)) {
+        existingComments = raw.comments.map((c) => String((c as { body?: unknown } | null)?.body ?? ''));
+      }
+    } catch {
+      existingComments = [];
+    }
+  } catch (err) {
+    log(`[halt-pr-rehab] halt-history gh pr view failed for ${prUrl} — skipping: ${err}`);
+    return 'gh-unavailable';
+  }
+
+  const hasHaltTitle = view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX);
+  const hasHaltLabel = view.labels.includes(NEEDS_REMEDIATION_LABEL);
+  const body = view.body ?? '';
+  const hasHaltBanner = body.includes(HALT_PR_BANNER_SENTINEL);
+  if (!hasHaltTitle && !hasHaltLabel && !hasHaltBanner) return 'not-halt-pr';
+
+  if (existingComments.some((c) => c.includes(HALT_HISTORY_COMMENT_MARKER))) {
+    return 'already-posted';
+  }
+
+  const parts: string[] = [
+    HALT_HISTORY_COMMENT_MARKER,
+    '## Halt history',
+    '',
+    'This PR was reused from a `needs-remediation` halt PR. Its title and body have been ' +
+      'rewritten to the standard PR template; the remediation narrative is preserved here ' +
+      'rather than in the PR body.',
+  ];
+  if (hasHaltTitle) {
+    parts.push('', `**Original halt title:** \`${view.title}\``);
+  }
+  if (hasHaltLabel) {
+    parts.push('', `**Halt label at rehabilitation:** \`${NEEDS_REMEDIATION_LABEL}\``);
+  }
+  if (hasHaltBanner) {
+    const banner = body
+      .split('\n')
+      .filter((line) => (HALT_PR_BANNER_LINES as readonly string[]).includes(line))
+      .join('\n');
+    parts.push('', '**Original halt banner:**', '', '> ' + banner.split('\n').join('\n> '));
+  }
+  const haltReason = deps.haltReason?.trim();
+  if (haltReason) {
+    parts.push('', '**Halt reason (`.pipeline/halt-user-input-required`):**', '', '```', haltReason, '```');
+  }
+
+  await comment(gh, cwd, prUrl, parts.join('\n'), log);
+  return 'posted';
+}
+
 export type BodyFloorOutcome = 'not-halt-body' | 'floored' | 'partial';
 
 /**
@@ -342,12 +469,19 @@ export async function bodyFloor(
   let newBody = remainingBody;
   if (!remainingBody.includes('## Summary')) {
     const featureDesc = opts.featureDesc?.trim() || 'rehabilitated PR';
-    let floorBlock =
-      `## Summary\n\n${featureDesc}\n\n` +
-      '_Rehabilitated from a reused needs-remediation halt PR; halt history is preserved in the PR comments._';
+    // The floor never narrates remediation into the body: a shipped PR body
+    // must read exactly like a clean first-pass finish produced it. Halt
+    // history goes to a PR comment (postHaltHistoryComment). The only
+    // floor-specific content is an invisible HTML-comment marker, which lets
+    // the finish gate recognise an engine-authored placeholder on a later
+    // pass without any reader-visible residue.
+    let floorBlock = `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\n${featureDesc}`;
     const testEvidenceLine = opts.testEvidenceLine?.trim();
     if (testEvidenceLine) {
-      floorBlock += `\n\n## Test evidence\n\n- [x] ${testEvidenceLine}`;
+      // Never assert a checked box for work that is not complete: a
+      // zero-completion line ships as an explicitly unchecked item.
+      const box = /^0\s*\//.test(testEvidenceLine) ? '- [ ]' : '- [x]';
+      floorBlock += `\n\n## Test evidence\n\n${box} ${testEvidenceLine}`;
     }
     newBody = remainingBody ? `${floorBlock}\n\n${remainingBody}` : floorBlock;
   }
