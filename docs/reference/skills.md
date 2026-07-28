@@ -1,6 +1,6 @@
 # Skills
 
-The catalog of all 31 skills: 29 under `skills/` and 2 repository-local ones under `.agents/skills/`.
+The catalog of all 32 skills: 29 under `skills/` and 3 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -26,7 +26,7 @@ matches on when deciding to invoke the skill.
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
-`enforcement`, and `phase`. The two `.agents/skills/` entries are outside that check and declare only
+`enforcement`, and `phase`. The three `.agents/skills/` entries are outside that check and declare only
 `name` and `description`.
 
 ## Index
@@ -569,6 +569,24 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
 - **Gate role** — blocking. On `BLOCKED` the pass marker stays absent. Blocking conditions include
   unverifiable claims, unresolved contradictions in authoritative evidence, dangling-link removals, and
   changelog validation failures.
+
+### scope-check
+
+> Use before authoring any change to the ai-conductor harness repository, and before creating any new skill, to decide three things deterministically: whether the change is harness-repo-only or consumer-facing, whether a new skill belongs in the shipped `skills/` catalog or this repository's local `.agents/skills/` catalog, and whether the change is provider-agnostic. Produces a placement verdict and the registration steps that verdict requires.
+
+- **Frontmatter** — `name` and `description` only. No `enforcement`, `phase`, `standalone`, `requires`,
+  or `model`.
+- **Engine step** — none. Operator-invoked, before authoring. Symlinked from `.claude/skills/scope-check`
+  so both supported hosts discover the same file.
+- **Inputs** — the change under consideration, plus this repository's own boundaries: `HARNESS.md`
+  versus `AGENT_INSTRUCTIONS.md`, the two skill catalogs, and the registration gates in
+  `test/test_harness_integrity.sh` and `test/test_provider_skill_contracts.sh`.
+- **Outputs** — three verdicts (audience, catalog, provider) plus the registration list the verdicts
+  require. No repository file artifact.
+- **Gate role** — neither. Advisory, with no marker file and no HALT. Its value is that the
+  registration cost of the two catalogs differs sharply: a `skills/` addition must satisfy integrity
+  checks 2, 4, 5, 5a, and 5b plus the provider contract audit and installs globally, while an
+  `.agents/skills/` addition is outside all of them.
 
 ### write-tests
 

@@ -78,6 +78,17 @@ machinery exists.
 - **Tech-Context** (`tech-context/`) — Stack-specific knowledge loaded by bootstrap.
 - **Templates** (`templates/`) — Project scaffolding including `CLAUDE.md.template`.
 
+### Scope Decisions
+
+Before authoring any change to this repository, and before creating any new skill, the active host
+agent MUST read and follow [`.agents/skills/scope-check/SKILL.md`](.agents/skills/scope-check/SKILL.md).
+It settles three questions deterministically: whether the change is harness-repo-only or
+consumer-facing (`AGENT_INSTRUCTIONS.md` versus `HARNESS.md`), whether a new skill belongs in the
+shipped `skills/` catalog or this repository's local `.agents/skills/` one, and whether the change is
+provider-agnostic. This is repository-local authoring guidance. For consumer projects, which have a
+single skill catalog and no consumers of their own, the global harness authoring convention remains
+unchanged.
+
 ## Validation Rules (This Repo)
 
 **Every change to this harness repo MUST be validated before committing.** This is not optional.
