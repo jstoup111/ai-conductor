@@ -91,11 +91,35 @@ readable and greppable:
 [daemon] holding daemon lock (pid 12345) for /home/you/code/my-project
 [daemon][my-feature-254] ▶ start my-feature-254
 [daemon][my-feature-254] · ▶ build
+[daemon][my-feature-254] claude: done — 54 turns, 8m7s, $4.96
+[daemon][my-feature-254] Implemented the parser and committed.
+[daemon][my-feature-254] ·   build via claude (opus) ✓ — 54 turns, 8m7s, $4.96
 ```
 
 Filter one feature's narrative with `conduct-ts daemon logs | grep '\[<slug>\]'`. Untagged `[daemon]`
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
+
+### Provider attribution and result summaries
+
+Two line kinds tell you what a step actually did and which provider ran it — this matters because
+providers are routed per step (`llm_provider` top level plus per-step overrides; see
+[configuration](../reference/configuration.md)), so the provider executing a given step is not
+necessarily the repo default.
+
+- **`<provider>: done — <turns>, <duration>, <cost>`** followed by the agent's own prose is the
+  provider subprocess's captured result. Claude's `--print --output-format json` stdout and Codex's
+  `exec --json` stdout are machine envelopes; the daemon summarizes the telemetry and prints the
+  human-readable result text instead of teeing the raw single-line JSON blob. Output the daemon does
+  not recognize as a machine envelope — prose, stderr, crash traces — is still logged verbatim, so
+  no diagnostic detail is lost.
+- **`·   <step> via <provider> (<model>) ✓ — <turns>, <duration>, <cost>`** attributes the completed
+  dispatch. `grep ' via '` over the log answers "which provider ran this step" without inspecting
+  process argv. A provider skipped from a cached availability result dispatches no process and is
+  not logged; a fallback between providers still prints its own `⚠ PROVIDER FALLBACK` line.
+
+`daemon status` does not yet carry the provider for a step that is still in flight
+([#1081](https://github.com/jstoup111/ai-conductor/issues/1081)).
 
 To watch the session itself:
 
@@ -118,6 +142,39 @@ conduct-ts daemon connect --write --attach-into mywindow:1.0
 
 `<target>` is a tmux session, `session:window`, or `session:window.pane` string. This also works on
 `daemon start`.
+
+## Step heartbeat and the stall watchdog
+
+`daemon.log` only records step start/end — it never shows mid-step activity, so a step that's
+genuinely working and a step that's silently wedged look identical from the outside for however
+long the dispatch runs.
+
+While a step's provider (Claude or Codex) subprocess is running, the engine touches
+`.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
+boundary (throttled to at most once every few seconds — this is a liveness signal, not a transcript).
+The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) annotates
+each in-progress feature with the heartbeat's age when one exists:
+
+```text
+IN-PROGRESS (1)
+  • my-feature [M] @build (heartbeat 12s ago)
+```
+
+A feature with no `(heartbeat … ago)` suffix hasn't produced its first activity pulse yet (a step
+that just started) — that's distinct from a stale heartbeat, and is never rendered as if the step
+were stuck.
+
+If a step's heartbeat goes silent for longer than `step_heartbeat_stall_minutes` (default 20; see
+[configuration](../reference/configuration.md#step_heartbeat_stall_minutes)) plus a small fixed
+grace buffer, the stall watchdog kills the wedged subprocess itself and raises a `mechanical`-class
+HALT — the same HALT class the live-boundary deferral (#1070) uses — so the daemon's existing
+auto-requeue sweep picks the feature back up on its own, without an operator having to notice the
+hang and intervene by hand. Set `step_heartbeat_stall_minutes` to `0` or a negative number to opt a
+project out of the kill/HALT behavior entirely; the heartbeat file itself is still written and still
+shown by the dashboard either way.
+
+See [runbook: a feature looks stalled or stuck](../runbooks/stalled-or-stuck-feature.md) for how to
+triage a feature the watchdog hasn't (yet) caught.
 
 ## Pause and resume dispatch
 

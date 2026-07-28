@@ -12,6 +12,7 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -171,7 +172,7 @@ export class CodexProvider implements LLMProvider {
     const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
     const prompt = this.composePrompt(options);
 
-    const result = await execa(options.selfHost?.executable ?? this.executable, args, {
+    const subprocess = execa(options.selfHost?.executable ?? this.executable, args, {
       reject: false,
       input: prompt,
       stdout: 'pipe',
@@ -179,10 +180,31 @@ export class CodexProvider implements LLMProvider {
       cwd: options.cwd,
       env: this.invocationEnv(options, authentication),
     });
+    this.wireActivityWatchdog(subprocess, options);
+    const result = await subprocess;
 
     this.logDiagnostics(result, options.diagnosticLog);
 
     return this.classifyCompletion(result, true, authentication, true);
+  }
+
+  /**
+   * Wire the heartbeat/stall-watchdog seam on the LIVE subprocess, before it
+   * is awaited — attaching after resolution would miss every streamed event
+   * and hand the kill handle to the watchdog too late for a stall to ever be
+   * caught. Best-effort: never affects provider dispatch.
+   */
+  private wireActivityWatchdog(
+    subprocess: { kill: () => void; stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null },
+    options: Pick<InvokeOptions, 'onActivity' | 'onSpawn'>,
+  ): void {
+    try {
+      options.onSpawn?.({ kill: () => subprocess.kill() });
+      subprocess.stdout?.on('data', () => options.onActivity?.());
+      subprocess.stderr?.on('data', () => options.onActivity?.());
+    } catch {
+      // Watchdog wiring is best-effort; never affects provider dispatch.
+    }
   }
 
   /**
@@ -199,7 +221,7 @@ export class CodexProvider implements LLMProvider {
     }
 
     const authentication = this.authentication;
-    const result = await execa(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
+    const subprocess = execa(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
       reject: false,
       input: this.composePrompt(options),
       stdin: 'pipe',
@@ -208,6 +230,8 @@ export class CodexProvider implements LLMProvider {
       cwd: options.cwd,
       env: this.invocationEnv(options, authentication),
     });
+    this.wireActivityWatchdog(subprocess, options);
+    const result = await subprocess;
 
     this.logDiagnostics(result, options.diagnosticLog);
 
@@ -220,7 +244,11 @@ export class CodexProvider implements LLMProvider {
   ): void {
     if (!diagnosticLog) return;
     for (const output of [result.stdout, result.stderr]) {
-      if (typeof output === 'string' && output.length > 0) diagnosticLog(output);
+      // `exec --json` stdout is a JSONL machine stream. Summarize it for the
+      // operator-facing daemon log; unrecognized output passes through verbatim.
+      if (typeof output === 'string' && output.length > 0) {
+        diagnosticLog(summarizeProviderDiagnostic('codex', output));
+      }
     }
   }
 

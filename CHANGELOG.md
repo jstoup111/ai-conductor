@@ -37,6 +37,47 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   with no code change — which reads as flakiness but is an ordering dependency. `test/global-setup.ts`
   now builds the engine before the first test when `dist` does not resolve, and is a no-op when it
   does, so a warm checkout pays nothing.
+- Step-heartbeat liveness signal and stall watchdog: a running step's provider dispatch now
+  touches `.pipeline/step-heartbeat` on every observed Claude/Codex subprocess activity boundary
+  (throttled, fire-and-forget), and `daemon status` renders `(heartbeat Ns ago)` for any
+  IN-PROGRESS feature that has one — distinguishing "no heartbeat yet" from a genuinely stale one.
+  If a step's heartbeat goes silent past a configurable threshold (`step_heartbeat_stall_minutes`,
+  default 20, plus a small fixed grace buffer), the watchdog kills the wedged subprocess and raises
+  the same `mechanical`-class HALT `fix/defer-live-boundary-halt-to-next-dispatch` (#1070) uses, so
+  the daemon's existing auto-requeue path picks it up unchanged. Addresses a build step that ran
+  silently for 26+ minutes with no way to tell it apart from a hang short of manually sampling
+  process CPU ticks and file mtimes.
+### Changed
+
+- `.daemon/daemon.log` no longer tees a provider subprocess's raw result envelope. A completed
+  Claude (`--print --output-format json`) or Codex (`exec --json`) dispatch previously landed as a
+  single unreadable line mixing cost/usage telemetry, tool permission-denial records, and the
+  agent's own prose. It is now rendered as a summary headline plus that prose — e.g.
+  `claude: done — 54 turns, 8m7s, $4.96` followed by the result text. Output the daemon does not
+  recognize as a machine envelope (prose stdout, stderr, crash traces, unknown payload shapes) is
+  still logged verbatim, so no diagnostic detail is traded for readability.
+
+### Added
+
+- `.daemon/daemon.log` now attributes each completed provider dispatch to the provider and model
+  that ran it: `·   <step> via <provider> (<model>) ✓ — <turns>, <duration>, <cost>`. Because this
+  repo routes providers per step (`llm_provider` plus per-step overrides), the provider executing a
+  given step previously could not be read off the log at all — it required inspecting the
+  subprocess argv with `ps`. `grep ' via '` over the log now answers it. Attempts skipped from a
+  cached availability result dispatch no process and are not logged. `daemon status` still does not
+  carry the provider for a step that is in flight
+  ([#1081](https://github.com/jstoup111/ai-conductor/issues/1081)).
+### Fixed
+
+- The `intake-label-sync` Action no longer stamps default `priority: medium` / `size: M` labels
+  onto issues filed with `bin/intake-file`. It fired on every opened issue and read its bands from
+  `### Priority` / `### Size` issue-form headings, which a CLI-filed body does not have — so it
+  defaulted, and because label application is additive it *added* those defaults alongside the
+  labels `intake-file` had already applied, leaving issues with two contradictory bands (observed:
+  `size: S` + `size: M`, `priority: high` + `priority: medium`). The Action now detects a non-form
+  body structurally and skips it, since those issues are already labelled by the filer. Genuine
+  form submissions are unaffected, including ones that leave a dropdown blank — the heading, not
+  the value, decides.
 
 ### Removed
 

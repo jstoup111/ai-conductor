@@ -81,6 +81,39 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.processedCount).toBe(3);
   });
 
+  it('populates heartbeatAgeMs for an IN-PROGRESS worktree with a step-heartbeat file', async () => {
+    await makeStateful('ip1', { build: 'in_progress' });
+    const heartbeatTs = new Date(Date.now() - 45_000).toISOString();
+    await writeFile(
+      join(worktreeBase, 'ip1', '.pipeline', 'step-heartbeat'),
+      JSON.stringify({ step: 'build', ts: heartbeatTs }),
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    const entry = state.inProgress.find((p) => p.slug === 'ip1');
+    expect(entry?.heartbeatAgeMs).toBeGreaterThanOrEqual(45_000);
+    expect(entry?.heartbeatAgeMs).toBeLessThan(50_000);
+  });
+
+  it('leaves heartbeatAgeMs undefined when no step-heartbeat file exists (not "0s ago")', async () => {
+    await makeStateful('ip1', { build: 'in_progress' });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    const entry = state.inProgress.find((p) => p.slug === 'ip1');
+    expect(entry?.heartbeatAgeMs).toBeUndefined();
+  });
+
   it('enriches halted/in-progress with step, tier, and PR url from conduct-state', async () => {
     await makeHalted('h', 'prd-audit gap');
     await makeStateful('h', {
@@ -301,6 +334,31 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
     expect(out).toContain('PROCESSED (2)');
     expect(out).toContain('p1  → https://github.com/o/r/pull/3');
     expect(out).toContain('p2');
+  });
+
+  it('renders "Ns since last heartbeat" for an IN-PROGRESS entry with a heartbeat age', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [{ slug: 'ip1', step: 'build', heartbeatAgeMs: 45_000 }],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('ip1 @build (heartbeat 45s ago)');
+  });
+
+  it('renders no heartbeat annotation when heartbeatAgeMs is absent (no heartbeat yet)', () => {
+    const state: InheritedState = {
+      halted: [],
+      inProgress: [{ slug: 'ip1', step: 'build' }],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+    };
+    const out = renderDashboard(state);
+    expect(out).toContain('ip1 @build');
+    expect(out).not.toContain('heartbeat');
   });
 
   it('zero-state renders all four groups at 0', () => {

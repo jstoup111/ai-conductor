@@ -7,6 +7,7 @@ import type { ComplexityTier, StepStatus } from '../types/index.js';
 import type { BlockerVerdict, IssueRef } from './blocker-resolver.js';
 import type { PriorityBand, PriorityResolution } from './backlog-priority.js';
 import type { GatedItem } from './daemon-backlog.js';
+import { readStepHeartbeat, formatHeartbeatAge } from './step-heartbeat.js';
 
 // ── Startup inherited-state dashboard (ADR-013 / FR-1, FR-2, FR-3) ────────────
 //
@@ -45,6 +46,13 @@ export interface InProgressEntry {
   tier?: ComplexityTier;
   /** PR opened mid-flight (finish precedes the SHIP gates), if any. */
   prUrl?: string;
+  /**
+   * Age (ms) of `.pipeline/step-heartbeat` at scan time, if the worktree has
+   * one. `undefined` when no heartbeat file exists yet — distinct from a
+   * present-but-stale heartbeat, so a step that hasn't produced its first
+   * activity pulse never renders as "stalled" (see `step-heartbeat.ts`).
+   */
+  heartbeatAgeMs?: number;
 }
 
 export interface EligibleEntry {
@@ -313,6 +321,13 @@ export async function scanInheritedState(
         if (tier) entry.tier = tier;
         if (prUrl) entry.prUrl = prUrl;
       }
+      // Best-effort: a missing/malformed heartbeat file is "no heartbeat yet",
+      // never a scan failure — same tolerance as every other worktree read here.
+      const heartbeat = await readStepHeartbeat(wt);
+      if (heartbeat) {
+        const ageMs = Date.now() - Date.parse(heartbeat.ts);
+        if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
+      }
       inProgress.push(entry);
     } catch (err) {
       // A per-worktree fs error is isolated: skip it, keep scanning (FR-3).
@@ -393,6 +408,16 @@ function tierTag(tier?: ComplexityTier): string {
 /** `  → <url>` PR suffix, or empty when no PR is open. */
 function prSuffix(prUrl?: string): string {
   return prUrl ? `  → ${prUrl}` : '';
+}
+
+/**
+ * ` (heartbeat Ns ago)` suffix for an IN-PROGRESS row. Empty when no
+ * heartbeat file exists yet (a step that hasn't produced its first activity
+ * pulse) — that state is never rendered as if it were stale.
+ */
+function heartbeatSuffix(heartbeatAgeMs?: number): string {
+  if (heartbeatAgeMs === undefined) return '';
+  return ` (heartbeat ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
 }
 
 /** ` [${band}]` band tag, or empty when no band is assigned. */
@@ -493,7 +518,7 @@ export function renderDashboard(
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
   // GATED (FR-7/FR-11): specs (and repo-scoped conditions) held back by the

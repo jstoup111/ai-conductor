@@ -85,7 +85,7 @@ Ambient in GitHub Actions. Nothing sets these locally.
 
 | Variable | Read by | Effect | Missing |
 | --- | --- | --- | --- |
-| `GITHUB_EVENT_PATH` | the intake label-sync action | Path to the Actions event JSON. | Prints `[intake-label-sync] missing GITHUB_EVENT_PATH/GITHUB_TOKEN/GITHUB_REPOSITORY; skipping` and returns cleanly. A payload with no issue prints `event payload has no issue; skipping`. |
+| `GITHUB_EVENT_PATH` | the intake label-sync action | Path to the Actions event JSON. | Prints `[intake-label-sync] missing GITHUB_EVENT_PATH/GITHUB_TOKEN/GITHUB_REPOSITORY; skipping` and returns cleanly. A payload with no issue prints `event payload has no issue; skipping`. An issue whose body has no `### Priority` / `### Size` field headings (i.e. filed by `bin/intake-file`, not the issue form) prints `is not an issue-form submission (no Priority/Size field headings); skipping — labels are owned by the filer`. |
 | `GITHUB_REPOSITORY` | the intake label-sync action; `conduct-ts shipment-evidence reconcile` | The `owner/repo` slug. | Label sync skips cleanly. `shipment-evidence reconcile` **throws** `GITHUB_REPOSITORY is required for repair publication`. |
 | `GITHUB_TOKEN` | the intake label-sync action | Label-sync authentication. | Skips cleanly, as above. |
 

@@ -24,6 +24,14 @@ Filing from the GitHub web or mobile UI works too: the issue form at
 `.github/ISSUE_TEMPLATE/intake.yml` scaffolds the same shape. Anything filed with a bare
 `gh issue create` has to follow it by hand.
 
+The two routes are labelled by different owners, and only one of them defaults. A form submission
+arrives with no labels, so the `intake-label-sync` Action reads its Priority and Size fields and
+stamps them — falling back to `priority: medium` / `size: M` when a field is blank or unparsable.
+An issue filed with `bin/intake-file` is already labelled by the command itself, so the Action
+recognises it as a non-form body and skips it. Without that skip the Action's defaults would be
+*added* alongside the filer's choice rather than replacing it, leaving the issue carrying two
+contradictory bands.
+
 ## The shape
 
 Four sections. Three are required.
