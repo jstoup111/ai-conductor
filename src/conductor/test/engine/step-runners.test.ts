@@ -940,7 +940,7 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  it('marks a rejected interactive attempt created and resumes its session on same-step retry', async () => {
+  it('marks a rejected interactive attempt created without resuming it on same-step retry', async () => {
     const throwingInteractive = vi
       .fn<LLMProvider['invokeInteractive']>()
       .mockRejectedValueOnce(new Error('interactive process rejected'))
@@ -993,7 +993,7 @@ describe('DefaultStepRunner', () => {
       afterFailure: { id: 'retry-claude-session', created: true },
       retryInvocations: [
         { sessionId: 'retry-claude-session', resume: false },
-        { sessionId: 'retry-claude-session', resume: true },
+        { sessionId: 'retry-claude-session', resume: false },
       ],
       retriedActualProvider: 'claude',
     });
@@ -1225,12 +1225,12 @@ describe('DefaultStepRunner', () => {
         model: expect.any(String),
         effort: expect.any(String),
         cwd: '/wt/feature-x',
-        sessionId: 'shared-session',
+        sessionId: expect.any(String),
         resume: false,
         dangerouslySkipPermissions: false,
         interactive: true,
       },
-      differingInvocationFields: [],
+      differingInvocationFields: ['sessionId'],
     });
   });
 
@@ -1621,7 +1621,7 @@ describe('DefaultStepRunner', () => {
     );
   });
 
-  it('first step does not resume, subsequent steps do', async () => {
+  it('does not resume legacy scalar steps', async () => {
     const provider = createMockProvider();
     const runner = new DefaultStepRunner(provider, 'session-1', '/tmp/project');
 
@@ -1631,7 +1631,7 @@ describe('DefaultStepRunner', () => {
     const call1 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     const call2 = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[1][0] as InvokeOptions;
     expect(call1.resume).toBe(false);
-    expect(call2.resume).toBe(true);
+    expect(call2.resume).toBe(false);
   });
 
   // --- Feature 1: Step-scoped system prompts ---
@@ -1880,7 +1880,8 @@ describe('DefaultStepRunner', () => {
 
       const sessionIdPath = join(pipeDir, 'conduct-session-id');
       const content = await readFile(sessionIdPath, 'utf-8');
-      expect(content.trim()).toBe('my-session-id');
+      const invoked = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+      expect(content.trim()).toBe(invoked.sessionId);
     });
 
     it('does not write marker when step fails', async () => {
@@ -2510,7 +2511,7 @@ TIER: M`,
 
       // First run — creates session
       await runner.run('worktree', emptyState);
-      // Second run — would normally use resume (sessionStarted=true)
+      // Second run also cold-starts.
       await runner.run('memory', emptyState);
 
       // Reset and run again — should go back to resume=false. Use a
@@ -2521,7 +2522,7 @@ TIER: M`,
 
       const calls = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls;
       expect(calls[0][0].resume).toBe(false);  // first
-      expect(calls[1][0].resume).toBe(true);   // second
+      expect(calls[1][0].resume).toBe(false);  // second
       expect(calls[2][0].resume).toBe(false);  // post-reset
     });
   });

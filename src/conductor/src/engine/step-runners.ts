@@ -544,7 +544,9 @@ export class DefaultStepRunner implements StepRunner {
       this.sessionId = invocation.id;
       resume = invocation.resume;
     } else {
-      resume = this.sessionStarted;
+      const { v4: uuidv4 } = await import('uuid');
+      this.sessionId = uuidv4();
+      resume = false;
     }
     const autonomous = AUTONOMOUS_STEPS.has(step);
     const baseResolved = this.resolvedConfigFor(step, state.complexity_tier);

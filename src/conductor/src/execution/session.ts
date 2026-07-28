@@ -84,11 +84,7 @@ export class SessionManager {
       throw new Error('Must call getSessionId() before buildClaudeArgs()');
     }
 
-    if (this.created) {
-      args.push('--resume', this.sessionId);
-    } else {
-      args.push('--session-id', this.sessionId);
-    }
+    args.push('--session-id', this.sessionId);
 
     if (!options.interactive) {
       args.push('--dangerously-skip-permissions');
