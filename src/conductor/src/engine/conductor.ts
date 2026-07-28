@@ -153,6 +153,7 @@ import {
   readKickbackLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
+import { decideKickbackDisposition } from './kickback-policy.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -6360,6 +6361,21 @@ export class Conductor {
           const reason =
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
             `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
+          await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+          await writeState(this.stateFilePath, state).catch(() => {});
+          const prUrl = await this.surfaceRemediationPr(reason);
+          await this.events.emit({ type: 'loop_halt', reason, prUrl });
+          return 'halt';
+        }
+        const disposition = decideKickbackDisposition({
+          target,
+          steps,
+          daemon: this.daemon,
+        });
+        if (disposition.kind === 'halt') {
+          const reason =
+            `${disposition.reason}\n\nKickback evidence: ` +
+            `${v.kickback?.evidence ?? 'none provided'}`;
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           await writeState(this.stateFilePath, state).catch(() => {});
           const prUrl = await this.surfaceRemediationPr(reason);
