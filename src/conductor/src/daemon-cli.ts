@@ -69,7 +69,7 @@ import {
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { makeProductionGh } from './engine/tracker-client.js';
+import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
@@ -108,6 +108,7 @@ import {
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
+import { reconcileParkedFeatures } from './engine/park-reconciliation.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
@@ -1517,6 +1518,20 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         for (const slug of await listOperatorParkedSlugs(projectRoot)) {
           candidateSlugs.add(slug);
         }
+        const reconciliation = await reconcileParkedFeatures({
+          projectRoot,
+          getIssueState: createGithubTrackerClient(ownerGh).getIssueState,
+        });
+        const annotations = new Map(
+          reconciliation.entries.map(({ slug, classification }) => [
+            slug,
+            classification === 'orphan'
+              ? 'orphan'
+              : classification === 'merged'
+                ? 'merged-ready'
+                : undefined,
+          ] as const),
+        );
         const parked: ParkedEntry[] = [];
         for (const slug of candidateSlugs) {
           if (await isOperatorParked(projectRoot, slug, (err) =>
@@ -1540,7 +1555,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
               }
             }
 
-            parked.push({ slug, provenance: provenance || undefined, reason });
+            parked.push({
+              slug,
+              provenance: provenance || undefined,
+              reason,
+              annotation: annotations.get(slug),
+            });
           }
         }
         // Task 3: split the previously single tee'd call so the persisted

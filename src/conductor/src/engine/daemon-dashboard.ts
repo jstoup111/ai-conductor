@@ -85,6 +85,8 @@ export interface ParkedEntry {
   provenance?: 'auto' | 'operator';
   /** Reason for the auto-park (if available) */
   reason?: string;
+  /** Reconciliation status supplied by the daemon's parked-feature sweep. */
+  annotation?: 'orphan' | 'merged-ready';
 }
 
 export interface InheritedState {
@@ -509,7 +511,13 @@ export function renderDashboard(
   for (const entry of parkedSlugs) {
     const provenance = entry.provenance === 'auto' ? ' — auto-parked' : entry.provenance === 'operator' ? ' — operator' : '';
     const reason = entry.reason ? ` (${entry.reason})` : '';
-    lines.push(`  • ${entry.slug}${provenance}${reason}`);
+    const annotation =
+      entry.annotation === 'orphan'
+        ? ' — orphan — needs manual review'
+        : entry.annotation === 'merged-ready'
+          ? ' — merged — ready to reconcile'
+          : '';
+    lines.push(`  • ${entry.slug}${provenance}${reason}${annotation}`);
   }
 
   const halted = state.halted.filter((h) => !parkedSet.has(h.slug));
