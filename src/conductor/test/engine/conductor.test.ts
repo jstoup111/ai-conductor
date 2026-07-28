@@ -1965,7 +1965,7 @@ describe('engine/conductor', () => {
     // eventually stops the loop — a "gate selected N times without
     // satisfying" halt, not a product/plan gap. It must be classified
     // mechanical so the re-kick sweep keeps retrying it on base advance.
-    it('manual_test FAIL that exhausts the gate-loop kickback budget (no D2 no-op) HALTs mechanical', async () => {
+    it('manual_test FAIL exhausts its mechanical cap when the D2 kill-switch is disabled', async () => {
       await seedToManualTest();
       let buildAttempt = 0;
       const runner: StepRunner = {
@@ -2006,6 +2006,7 @@ describe('engine/conductor', () => {
         verifyArtifacts: true,
         maxRetries: 1,
         fromStep: 'manual_test',
+        config: { kickback_escalation: { enabled: false } },
       });
 
       await conductor.run();
