@@ -23,7 +23,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir, readFile, chmod } from 'fs/promises';
+import { mkdtemp, rm, writeFile, mkdir, readFile, chmod, stat } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -1308,6 +1308,105 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
    * protection still holds after Task 5's seeding change, plus a check that
    * enforcement-off scoping was untouched by that change.
    */
+
+  describe('session-hook preflight repair (#896)', () => {
+    async function writeTaskStatus(): Promise<void> {
+      await writeFile(
+        join(dir, '.pipeline', 'task-status.json'),
+        JSON.stringify({ tasks: [{ id: '1', status: 'pending' }] }),
+        'utf-8',
+      );
+    }
+
+    it('repairs missing enforcement hooks and returns intact', async () => {
+      await writeTaskStatus();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        const diagnostic = await checkAttributionMachineryIntact(dir);
+
+        expect(diagnostic).toBeNull();
+        await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+        await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+        await expect(readFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), 'utf-8')).resolves.toBeTruthy();
+        expect(warn.mock.calls.map(([message]) => message)).toEqual([
+          `[session-hooks] restored pre-dispatch.sh in ${dir}`,
+          `[session-hooks] restored post-dispatch.sh in ${dir}`,
+          `[session-hooks] restored mutation-gate.sh in ${dir}`,
+          `[session-hooks] restored docs-guard.sh in ${dir}`,
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('repairs only a missing post-dispatch hook', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await writeFile(join(hooksDir, 'pre-dispatch.sh'), '#!/bin/sh\n', 'utf-8');
+      await writeFile(join(hooksDir, 'mutation-gate.sh'), '#!/bin/sh\n', 'utf-8');
+
+      await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
+      await expect(readFile(join(hooksDir, 'post-dispatch.sh'), 'utf-8')).resolves.toBeTruthy();
+    });
+
+    it('is silent and does not rewrite healthy hook files', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh']) {
+        await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
+      }
+      const before = await Promise.all(
+        ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh'].map(
+          (hook) => stat(join(hooksDir, hook)).then((metadata) => metadata.mtimeMs),
+        ),
+      );
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+      try {
+        await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
+        expect(warn).not.toHaveBeenCalled();
+        await expect(Promise.all(
+          ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh'].map(
+            (hook) => stat(join(hooksDir, hook)).then((metadata) => metadata.mtimeMs),
+          ),
+        )).resolves.toEqual(before);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
+    it('reports a distinct repair failure when missing hooks remain unwritable', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      await chmod(hooksDir, 0o500);
+
+      try {
+        const diagnostic = await checkAttributionMachineryIntact(dir);
+        expect(diagnostic).toMatch(/could not restore/i);
+        expect(diagnostic).toContain('pre-dispatch.sh');
+        expect(diagnostic).not.toContain('missing expected script(s)');
+      } finally {
+        await chmod(hooksDir, 0o700);
+      }
+    });
+
+    it('repairs docs-guard without treating its absence as an enforcement failure', async () => {
+      await writeTaskStatus();
+      const hooksDir = join(dir, '.pipeline', 'session-hooks');
+      await mkdir(hooksDir, { recursive: true });
+      for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
+        await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
+      }
+
+      await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
+      await expect(readFile(join(hooksDir, 'docs-guard.sh'), 'utf-8')).resolves.toBeTruthy();
+    });
+
+  });
 
   it('(a) session-hooks missing → seedAndCheckAttributionMachinery still returns the session-hooks diagnostic unchanged', async () => {
     // task-status.json present (so the seed path is a no-op / not the thing
