@@ -786,6 +786,10 @@ and each consumer applies `?? false` / `?? 60` inline
 
 Disabling it never halts — the sweep simply behaves as it did before the feature existed.
 
+Draft PRs are never dispatched for auto-resolution. A CONFLICTING draft is logged as
+`skipping resolve for <url> (draft PR)` and left alone; its `mergeable` label handling is
+unchanged, and no attempt counter is burned.
+
 > **Known limitation.** `resolveMergeableAutoresolve` (`resolved-config.ts:597-604`) exists but has no
 > callers; the daemon reads the raw config directly. Nothing breaks, but the resolver is not the
 > authority the name implies. Tracked in
@@ -846,6 +850,11 @@ Normalization contract:
 
 Eligibility failures return `{ eligible: false, reason }` and skip — they never halt
 (`src/conductor/src/engine/ci-fix.ts:230-264`).
+
+Draft PRs are never dispatched to the CI fix loop. The sweep still labels them (`ci-failed`,
+`mergeable`) but logs `skipping ci-fix for <url> (draft PR)` instead of collecting them as
+candidates — a draft PR belongs to an in-flight build, and fixing its CI would fight the running
+build. Attempt counters are not burned for skipped drafts.
 
 > **Known limitation.** Setting `cooldownMinutes` — or any key besides `enabled` — replaces the whole
 > block with `{ enabled: true }` **silently**, discarding your `enabled` value with no warning
