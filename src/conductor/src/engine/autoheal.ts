@@ -144,7 +144,7 @@ export interface EvidenceRangeResult {
  *      (migration aid for repos/CI checkouts that never set origin/HEAD).
  *   3. null — resolution failed; caller must fail closed, never assume `main`.
  */
-async function resolveOriginRef(projectRoot: string): Promise<string | null> {
+export async function resolveOriginRef(projectRoot: string): Promise<string | null> {
   const defaultBranch = await originDefaultBranch(makeGitRunner(projectRoot));
   if (defaultBranch) {
     return `origin/${defaultBranch}`;
