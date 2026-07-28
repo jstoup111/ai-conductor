@@ -332,7 +332,7 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
       expectedEffort: 'medium',
     },
   ])(
-    'preserves the pre-feature $providerKey invocation, retry, session, and diagnostic fixture',
+    'starts every $providerKey invocation and retry from a fresh session',
     async ({ providerKey, policy, expectedModel, expectedEffort }) => {
       const execute = await loadExecuteProviderCandidates();
       const scripted = scriptedProvider([
@@ -365,10 +365,8 @@ describe('ST-927-1/ST-927-8 — scalar built-in compatibility', () => {
         { model: expectedModel, effort: expectedEffort },
       ]);
       expect(scripted.calls[0].resume).toBe(false);
-      expect(scripted.calls[1]).toMatchObject({
-        sessionId: scripted.calls[0].sessionId,
-        resume: providerKey === 'claude',
-      });
+      expect(scripted.calls[1].resume).toBe(false);
+      expect(scripted.calls[1].sessionId).not.toBe(scripted.calls[0].sessionId);
       expect(first).toMatchObject({
         success: false,
         output: `${providerKey} ordinary failure`,
@@ -761,8 +759,13 @@ describe('ST-927-4 and ST-927-5 — ordered availability fallback', () => {
     expect(calls).toEqual(['codex', 'claude']);
     expect(result.actualProvider).toBe('claude');
     expect(unconfigured.calls).toHaveLength(0);
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toMatch(/build_review.*codex.*codex missing.*claude/i);
+    const fallbackWarnings = warnings.filter((message) =>
+      /falling back/i.test(message),
+    );
+    expect(fallbackWarnings).toHaveLength(1);
+    expect(fallbackWarnings[0]).toMatch(
+      /build_review.*codex.*codex missing.*claude/i,
+    );
   });
 
   it('fails closed after complete provider exhaustion and reports every attempted provider and reason', async () => {
@@ -889,7 +892,9 @@ describe('ST-927-6 — failure-classification boundary', () => {
       expect(result.success).toBe(false);
       expect(codex.calls).toHaveLength(1);
       expect(claude.calls).toHaveLength(0);
-      expect(warnings).toEqual([]);
+      expect(warnings.filter((message) => /falling back/i.test(message))).toEqual(
+        [],
+      );
     }
   });
 });
@@ -925,7 +930,7 @@ describe('ST-927-7 — provider-local sessions and accounting', () => {
     expect(claude.calls).toHaveLength(0);
   });
 
-  it('starts fresh per step/provider, resumes only a same-step/provider retry, and attributes every attempt', async () => {
+  it('starts every step/provider attempt fresh and attributes every attempt', async () => {
     const execute = await loadExecuteProviderCandidates();
     const sessionStore = new Map<string, ProviderSessionScope>();
     const claude = scriptedProvider([
@@ -966,8 +971,8 @@ describe('ST-927-7 — provider-local sessions and accounting', () => {
     });
 
     expect(claude.calls[0].resume).toBe(false);
-    expect(claude.calls[1].resume).toBe(true);
-    expect(claude.calls[1].sessionId).toBe(claude.calls[0].sessionId);
+    expect(claude.calls[1].resume).toBe(false);
+    expect(claude.calls[1].sessionId).not.toBe(claude.calls[0].sessionId);
     expect(codex.calls.every(({ resume }) => resume === false)).toBe(true);
     expect(codex.calls[0].sessionId).not.toBe(claude.calls[0].sessionId);
     expect(retry.attempts[0]).toMatchObject({

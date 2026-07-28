@@ -333,14 +333,14 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
         provider: 'claude',
         model: 'haiku',
         effort: 'medium',
-        resume: true,
+        resume: false,
       },
       {
         step: 'memory',
         provider: 'claude',
         model: 'sonnet',
         effort: 'medium',
-        resume: true,
+        resume: false,
       },
       {
         step: 'memory',

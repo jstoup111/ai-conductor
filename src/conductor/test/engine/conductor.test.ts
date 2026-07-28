@@ -7959,7 +7959,9 @@ describe('engine/conductor', () => {
       await conductor.run();
 
       // runInteractive should have been called with the failed step
-      expect(runner.runInteractive).toHaveBeenCalledWith('explore');
+      expect(runner.runInteractive).toHaveBeenCalledWith('explore', {
+        reason: 'Previous attempt failed: explore failed. Finish the work now.',
+      });
       // Then the step should have been retried
       expect(exploreCalls).toBe(2);
     });
@@ -10654,7 +10656,10 @@ describe('build-step stall circuit breaker', () => {
     expect(stallEvents[0].reason).toBe('no_task_progress');
     expect(stallEvents[0].before).toBe(2);
     expect(stallEvents[0].after).toBe(2);
-    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    expect(runner.runInteractive).toHaveBeenCalledWith('build', {
+      reason:
+        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
+    });
   });
 
   it('triggers build_stall on the first retry when .pipeline/halt-user-input-required is present', async () => {
@@ -10689,7 +10694,10 @@ describe('build-step stall circuit breaker', () => {
 
     expect(stallEvents).toHaveLength(1);
     expect(stallEvents[0].reason).toBe('halt_marker');
-    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    expect(runner.runInteractive).toHaveBeenCalledWith('build', {
+      reason:
+        'Previous attempt did not satisfy the completion check: .pipeline/halt-user-input-required is present — pipeline halted; conductor will open a recovery REPL. Finish the work now.',
+    });
     // Marker cleared after acknowledgement.
     let markerStillThere = false;
     try {
@@ -10977,7 +10985,10 @@ describe('build-step stall circuit breaker', () => {
 
     // After the REPL the completion gate passed, so the step succeeded —
     // onRecovery should NOT have fired.
-    expect(runner.runInteractive).toHaveBeenCalledWith('build');
+    expect(runner.runInteractive).toHaveBeenCalledWith('build', {
+      reason:
+        'Previous attempt did not satisfy the completion check: 3/5 tasks pending/not completed: 3, 4, 5. Finish the work now.',
+    });
     expect(onRecovery).not.toHaveBeenCalledWith('build', expect.anything(), expect.anything());
   });
 
@@ -12767,7 +12778,10 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       await conductor.run();
 
       // The interactive stall handoff still fires — unchanged by the fix.
-      expect(runner.runInteractive).toHaveBeenCalledWith('build');
+      expect(runner.runInteractive).toHaveBeenCalledWith('build', {
+        reason:
+          'Previous attempt did not satisfy the completion check: 1/1 tasks pending/not completed: 1. Finish the work now.',
+      });
       // The daemon+auto-only /remediate dispatch never fires in interactive.
       expect(dispatched).not.toContain('remediate');
       // Auto-park is daemon-gated → interactive mode never parks.
