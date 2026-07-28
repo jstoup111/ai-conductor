@@ -421,6 +421,9 @@ export interface DaemonDeps {
    */
   reconcileHaltPrs?: () => Promise<void>;
 
+  /** Optional parked-feature reconciliation hook; best-effort on startup and idle ticks. */
+  reconcileParkedFeatures?: () => Promise<void>;
+
   /**
    * FR-14: sweep mergeable labels on startup (after reconciliation) and once per
    * idle poll tick. The caller binds projectRoot + log when wiring production
@@ -604,6 +607,11 @@ export async function runDaemon(
       await deps.reconcileHaltPrs?.();
     } catch (err) {
       log(`[daemon] reconcileHaltPrs error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    try {
+      await deps.reconcileParkedFeatures?.();
+    } catch (err) {
+      log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
       await deps.sweepMergeableLabels?.();
