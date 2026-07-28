@@ -2,6 +2,7 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   classifyShipmentAssociation,
+  type ShipmentAssociationResult,
 } from './shipment-association.js';
 import {
   evaluateShipmentEvidence,
@@ -12,6 +13,7 @@ import {
   planShipmentReconciliation,
   publishShipmentRepair,
   SHIPMENT_REPAIR_STATUS_CONTEXT,
+  type ShipmentRepairPublicationResult,
   type ShipmentRepairPublisher,
 } from './shipment-reconciliation.js';
 import {
@@ -134,29 +136,17 @@ export async function dispatchShipmentEvidence(
 
     const candidateCommit = (await runGit(['rev-parse', 'HEAD'], { cwd })).stdout.trim();
     if (cmd.kind === 'reconcile') {
-      const expectedRecord = await expectedReconciledRecord(cwd, association.slug, cmd.shipped);
-      const evidence = await evaluateAtCandidateHead(
-        cmd.pr,
-        cwd,
-        association.slug,
-        candidateCommit,
-        runGit,
-        runners.evaluateEvidence ?? evaluateShipmentEvidence,
-      );
-      const plan = planShipmentReconciliation({
-        implementationPr: { number: implementationPrNumber(cmd.pr), url: cmd.pr },
-        association,
-        evidence,
-        expectedRecord,
-      });
-      const result = await publishShipmentRepair(plan, makeProductionRepairPublisher({
+      const result = await publishRecordOnlyRepair({
         cwd,
         implementationPr: cmd.pr,
         slug: association.slug,
+        shipped: cmd.shipped,
+        candidateCommit,
+        association,
         runGh,
         runGit,
         evaluateEvidence: runners.evaluateEvidence ?? evaluateShipmentEvidence,
-      }));
+      });
       report(`shipped-record: ${result.kind}`);
       return result.kind === 'unresolved' ? 1 : 0;
     }
@@ -193,6 +183,166 @@ export async function dispatchShipmentEvidence(
     reportError(`shipped-record: ${error instanceof Error ? error.message : String(error)}`);
     return 1;
   }
+}
+
+/**
+ * The one record-only repair publication path. Both the `shipment-evidence
+ * reconcile` CLI verb and the reusable `requestRecordRepair` adapter below run
+ * exactly these steps, so the ST-916 guarantees (deterministic repair branch,
+ * canonical evidence at the repair head, human-reviewed PR, no auto-merge)
+ * cannot drift apart between the two callers.
+ */
+async function publishRecordOnlyRepair(input: {
+  cwd: string;
+  implementationPr: string;
+  slug: string;
+  shipped: string;
+  candidateCommit: string;
+  association: ShipmentAssociationResult;
+  runGh: GhRunner;
+  runGit: GitRunner;
+  evaluateEvidence: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
+  repo?: string;
+}): Promise<ShipmentRepairPublicationResult> {
+  const expectedRecord = await expectedReconciledRecord(input.cwd, input.slug, input.shipped);
+  const evidence = await evaluateAtCandidateHead(
+    input.implementationPr,
+    input.cwd,
+    input.slug,
+    input.candidateCommit,
+    input.runGit,
+    input.evaluateEvidence,
+  );
+  const plan = planShipmentReconciliation({
+    implementationPr: {
+      number: implementationPrNumber(input.implementationPr),
+      url: input.implementationPr,
+    },
+    association: input.association,
+    evidence,
+    expectedRecord,
+  });
+  return publishShipmentRepair(plan, makeProductionRepairPublisher({
+    cwd: input.cwd,
+    implementationPr: input.implementationPr,
+    slug: input.slug,
+    runGh: input.runGh,
+    runGit: input.runGit,
+    evaluateEvidence: input.evaluateEvidence,
+    repo: input.repo,
+  }));
+}
+
+export interface RecordRepairRequest {
+  slug: string;
+  prUrl: string;
+}
+
+export interface RecordRepairRequesterOptions {
+  /** Repository root the repair runs against (the daemon's project root). */
+  cwd: string;
+  runGh?: GhRunner;
+  runGit?: GitRunner;
+  listPlanStems?: (cwd: string) => Promise<string[]>;
+  evaluateEvidence?: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
+  log?: (message: string) => void;
+}
+
+/**
+ * Build the reusable production `requestRecordRepair` adapter that parked-feature
+ * reconciliation hands an ancestry-proven-merged slug whose `.docs/shipped/<slug>.md`
+ * never landed (adr-2026-07-27 Decision 4).
+ *
+ * It never invents identity: the slug must classify as the implementation
+ * association of the supplied merged PR, and the `shipped` date is read from the
+ * PR's own `mergedAt`. It never throws — record repair is a best-effort hand-off
+ * from a best-effort daemon sweep, and any failure must leave the park deferred
+ * (not crash the sweep, not authorise cleanup).
+ */
+export function makeRecordRepairRequester(
+  options: RecordRepairRequesterOptions,
+): (request: RecordRepairRequest) => Promise<void> {
+  return async ({ slug, prUrl }) => {
+    const log = options.log ?? (() => {});
+    try {
+      const runGh = options.runGh ?? makeProductionGh();
+      const runGit = options.runGit ?? makeProductionGit();
+      const evaluateEvidence = options.evaluateEvidence ?? evaluateShipmentEvidence;
+      const metadata = await readPullRequestEvidenceMetadata(runGh, options.cwd, prUrl);
+      if (metadata.url !== prUrl) {
+        log(`[shipped-record-repair] ${slug}: implementation PR binding mismatch for ${prUrl}`);
+        return;
+      }
+      const planStems = await (options.listPlanStems ?? listPlanStems)(options.cwd);
+      const association = classifyShipmentAssociation({
+        planStems,
+        pr: {
+          metadataPlanStems: extractPlanStems(metadata.body),
+          changedPaths: metadata.changedPaths,
+        },
+      });
+      if (association.kind !== 'implementation') {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} is ${association.classification}; no repair requested`);
+        return;
+      }
+      if (association.slug !== slug) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} associates with ${association.slug}; no repair requested`);
+        return;
+      }
+      const shipped = await readMergedDate(runGh, options.cwd, prUrl);
+      if (!shipped) {
+        log(`[shipped-record-repair] ${slug}: ${prUrl} has no merge date; no repair requested`);
+        return;
+      }
+      const candidateCommit = (await runGit(['rev-parse', 'HEAD'], { cwd: options.cwd })).stdout.trim();
+      const result = await publishRecordOnlyRepair({
+        cwd: options.cwd,
+        implementationPr: prUrl,
+        slug,
+        shipped,
+        candidateCommit,
+        association,
+        runGh,
+        runGit,
+        evaluateEvidence,
+        repo: await resolveRepairRepository(runGh, options.cwd),
+      });
+      log(
+        result.kind === 'repair-published'
+          ? `[shipped-record-repair] ${slug}: repair PR ${result.pullRequestUrl} (${result.status}) — human review required`
+          : `[shipped-record-repair] ${slug}: ${result.kind}${result.kind === 'unresolved' ? ` (${result.reason})` : ''}`,
+      );
+    } catch (error) {
+      log(`[shipped-record-repair] ${slug}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
+}
+
+/** The shipped date is the PR's own merge timestamp — never today's clock. */
+async function readMergedDate(
+  runGh: GhRunner,
+  cwd: string,
+  pullRequestUrl: string,
+): Promise<string | null> {
+  const { stdout } = await runGh(['pr', 'view', pullRequestUrl, '--json', 'mergedAt'], { cwd });
+  const mergedAt = (JSON.parse(stdout) as { mergedAt?: unknown }).mergedAt;
+  return typeof mergedAt === 'string' && /^\d{4}-\d{2}-\d{2}/.test(mergedAt)
+    ? mergedAt.slice(0, 'YYYY-MM-DD'.length)
+    : null;
+}
+
+/**
+ * `GITHUB_REPOSITORY` is set inside Actions but not in a long-running daemon,
+ * so fall back to the checkout's own `gh` repository identity.
+ */
+async function resolveRepairRepository(
+  runGh: GhRunner,
+  cwd: string,
+): Promise<string | undefined> {
+  if (process.env.GITHUB_REPOSITORY) return process.env.GITHUB_REPOSITORY;
+  const { stdout } = await runGh(['repo', 'view', '--json', 'nameWithOwner'], { cwd });
+  const nameWithOwner = (JSON.parse(stdout) as { nameWithOwner?: unknown }).nameWithOwner;
+  return typeof nameWithOwner === 'string' && nameWithOwner ? nameWithOwner : undefined;
 }
 
 async function expectedReconciledRecord(
@@ -245,8 +395,10 @@ function makeProductionRepairPublisher(input: {
   runGh: GhRunner;
   runGit: GitRunner;
   evaluateEvidence: NonNullable<ShipmentEvidenceRunners['evaluateEvidence']>;
+  /** Explicit `owner/name`; defaults to the Actions-provided environment. */
+  repo?: string;
 }): ShipmentRepairPublisher {
-  const repo = process.env.GITHUB_REPOSITORY;
+  const repo = input.repo ?? process.env.GITHUB_REPOSITORY;
   if (!repo) throw new Error('GITHUB_REPOSITORY is required for repair publication');
 
   return {
