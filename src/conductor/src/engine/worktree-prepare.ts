@@ -1,5 +1,5 @@
 import { execa } from 'execa';
-import { access, readFile, writeFile, mkdir, chmod, constants, rename } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants, rename, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import {
@@ -34,6 +34,11 @@ export class SetupFailureError extends Error {
  * stack-agnostic.
  */
 export const NAMESPACE_VAR = 'WORKTREE_NAMESPACE';
+
+export interface SessionHookRepairOutcome {
+  repaired: string[];
+  failed: Array<{ file: string; error: string }>;
+}
 
 /**
  * Make a freshly-created feature worktree ready to build, before the conductor's
@@ -149,7 +154,7 @@ async function excludeEngineArtifacts(
 async function wireSessionHookSettings(
   worktreePath: string,
   log?: (msg: string) => void,
-): Promise<void> {
+): Promise<{ file: string; error: string } | undefined> {
   try {
     const claudeDir = join(worktreePath, '.claude');
     await mkdir(claudeDir, { recursive: true });
@@ -225,9 +230,11 @@ async function wireSessionHookSettings(
 
     await writeFile(settingsPath, JSON.stringify(settings, null, 2), 'utf-8');
     log?.('session hook settings: wired into .claude/settings.local.json');
+    return undefined;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log?.(`session hook settings: skipped (${msg})`);
+    return { file: '.claude/settings.local.json', error: msg };
   }
 }
 
@@ -268,32 +275,74 @@ function replaceSessionHookEntry(
 async function writeSessionHooks(
   worktreePath: string,
   log?: (msg: string) => void,
-): Promise<void> {
+): Promise<SessionHookRepairOutcome> {
+  const assets = [
+    ['pre-dispatch.sh', PRE_DISPATCH_HOOK],
+    ['post-dispatch.sh', POST_DISPATCH_HOOK],
+    ['mutation-gate.sh', MUTATION_GATE_HOOK],
+    ['docs-guard.sh', DOCS_GUARD_HOOK],
+  ] as const;
+  const outcome: SessionHookRepairOutcome = { repaired: [], failed: [] };
+  const hooksDir = join(worktreePath, '.pipeline', 'session-hooks');
+
   try {
-    const hooksDir = join(worktreePath, '.pipeline', 'session-hooks');
     await mkdir(hooksDir, { recursive: true });
-
-    const preDispatchPath = join(hooksDir, 'pre-dispatch.sh');
-    await writeFile(preDispatchPath, PRE_DISPATCH_HOOK, 'utf-8');
-    await chmod(preDispatchPath, 0o755);
-
-    const postDispatchPath = join(hooksDir, 'post-dispatch.sh');
-    await writeFile(postDispatchPath, POST_DISPATCH_HOOK, 'utf-8');
-    await chmod(postDispatchPath, 0o755);
-
-    const mutationGatePath = join(hooksDir, 'mutation-gate.sh');
-    await writeFile(mutationGatePath, MUTATION_GATE_HOOK, 'utf-8');
-    await chmod(mutationGatePath, 0o755);
-
-    const docsGuardPath = join(hooksDir, 'docs-guard.sh');
-    await writeFile(docsGuardPath, DOCS_GUARD_HOOK, 'utf-8');
-    await chmod(docsGuardPath, 0o755);
-
-    log?.('session hooks: written to .pipeline/session-hooks/');
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log?.(`session hooks: skipped (${msg})`);
+    return {
+      repaired: [],
+      failed: assets.map(([file]) => ({ file, error: msg })),
+    };
   }
+
+  for (const [file, content] of assets) {
+    const path = join(hooksDir, file);
+    try {
+      const repaired = await sessionHookNeedsRepair(path, content);
+      await writeFile(path, content, 'utf-8');
+      await chmod(path, 0o755);
+      if (repaired) outcome.repaired.push(file);
+    } catch (err) {
+      outcome.failed.push({
+        file,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  if (outcome.failed.length > 0) {
+    log?.(`session hooks: skipped (${outcome.failed.map(({ error }) => error).join('; ')})`);
+  } else {
+    log?.('session hooks: written to .pipeline/session-hooks/');
+  }
+  return outcome;
+}
+
+async function sessionHookNeedsRepair(path: string, expectedContent: string): Promise<boolean> {
+  try {
+    const [content, metadata] = await Promise.all([readFile(path, 'utf-8'), stat(path)]);
+    return content !== expectedContent || (metadata.mode & 0o777) !== 0o755;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * Re-provision the session-hook scripts and their settings wiring without
+ * allowing a provisioning error to block the caller. The outcome identifies
+ * scripts that changed and every file that could not be restored.
+ */
+export async function ensureSessionHooks(
+  worktreeRoot: string,
+  log?: (msg: string) => void,
+): Promise<SessionHookRepairOutcome> {
+  const scripts = await writeSessionHooks(worktreeRoot, log);
+  const settingsFailure = await wireSessionHookSettings(worktreeRoot, log);
+  return {
+    repaired: scripts.repaired,
+    failed: settingsFailure ? [...scripts.failed, settingsFailure] : scripts.failed,
+  };
 }
 
 /**
