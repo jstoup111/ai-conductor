@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -102,6 +102,94 @@ describe('engine/daemon-park-cli', () => {
       } finally {
         await rm(outsideDir, { recursive: true, force: true });
       }
+    });
+  });
+
+  describe('reconcile-parked command detection', () => {
+    it('recognizes exactly one reconciliation slug and preserves usage errors for pre-boot dispatch', () => {
+      expect(detectDaemonParkCommand(['node', 'conduct', 'daemon', 'reconcile-parked', 'done'])).toEqual({
+        kind: 'reconcile-parked',
+        slug: 'done',
+      });
+      expect(detectDaemonParkCommand(['node', 'conduct', 'daemon', 'reconcile-parked'])).toMatchObject({
+        kind: 'reconcile-parked',
+      });
+      expect(detectDaemonParkCommand(['node', 'conduct', 'daemon', 'reconcile-parked', 'one', 'two'])).toMatchObject({
+        kind: 'reconcile-parked',
+      });
+    });
+  });
+
+  describe('dispatchDaemonPark reconcile-parked', () => {
+    it('prints guarded cleanup steps and succeeds independently of the auto-cleanup toggle', async () => {
+      const out: string[] = [];
+      const reconcileMergedPark = vi.fn().mockResolvedValue({
+        slug: 'merged',
+        steps: ['worktree-removed', 'branch-deleted', 'unparked'],
+      });
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reconcile-parked', slug: 'merged' },
+        { cwd: root, out: (line) => out.push(line), reconcileMergedPark },
+      );
+
+      expect({ code, calls: reconcileMergedPark.mock.calls, out }).toEqual({
+        code: 0,
+        // rem-adr-003: the verb always supplies the ST-916 record-repair
+        // hand-off, so the operator path reaches the same repair flow as the
+        // daemon sweep instead of deferring a record-missing park forever.
+        calls: [[{
+          projectRoot: root,
+          slug: 'merged',
+          log: expect.any(Function),
+          requestRecordRepair: expect.any(Function),
+        }]],
+        out: ["Reconciled 'merged': worktree-removed, branch-deleted, unparked"],
+      });
+    });
+
+    it('refuses a non-ancestor without offering a force path', async () => {
+      const out: string[] = [];
+      const reconcileMergedPark = vi.fn().mockResolvedValue({
+        slug: 'unmerged',
+        steps: [],
+        refusal: 'not-ancestor',
+      });
+
+      const code = await dispatchDaemonPark(
+        { kind: 'reconcile-parked', slug: 'unmerged' },
+        { cwd: root, out: (line) => out.push(line), reconcileMergedPark },
+      );
+
+      expect(code).toBe(1);
+      expect(out.join('\n')).toContain("Could not reconcile 'unmerged': not-ancestor");
+      expect(out.join('\n')).not.toMatch(/force/i);
+    });
+
+    it('rejects malformed and usage-error arguments without invoking the guarded helper', async () => {
+      const reconcileMergedPark = vi.fn();
+      const malformedOut: string[] = [];
+      const malformedCode = await dispatchDaemonPark(
+        { kind: 'reconcile-parked', slug: 'bad/slug' },
+        {
+          cwd: root,
+          out: (line) => malformedOut.push(line),
+          reconcileMergedPark,
+        },
+      );
+      const usageOut: string[] = [];
+      const usageCode = await dispatchDaemonPark(
+        { kind: 'reconcile-parked', invalidArgs: true },
+        { cwd: root, out: (line) => usageOut.push(line), reconcileMergedPark },
+      );
+
+      expect({ malformedCode, malformedOut, usageCode, usageOut, usageCalls: reconcileMergedPark.mock.calls }).toEqual({
+        malformedCode: 1,
+        malformedOut: ["Could not reconcile 'bad/slug': invalid-slug"],
+        usageCode: 1,
+        usageOut: ['Usage: conduct daemon reconcile-parked <slug>'],
+        usageCalls: [],
+      });
     });
   });
 

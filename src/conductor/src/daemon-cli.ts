@@ -69,7 +69,7 @@ import {
 import { makeIsProcessed } from './engine/shipped-record.js';
 import { localWorkSource, type WorkSource } from './engine/daemon-work-source.js';
 import { type GhRunner } from './engine/owner-gate/identity.js';
-import { makeProductionGh } from './engine/tracker-client.js';
+import { createGithubTrackerClient, makeProductionGh } from './engine/tracker-client.js';
 import { makeMachineOwnerResolver } from './engine/owner-gate/machine-identity.js';
 import { readSpecOwnerStamp } from './engine/owner-gate/provenance.js';
 import { firstAppearanceTime } from './engine/owner-gate/merge-time.js';
@@ -108,6 +108,8 @@ import {
   writePersistedBaseSha,
 } from './engine/daemon-sha.js';
 import { scanInheritedState, renderDashboard, type ParkedEntry } from './engine/daemon-dashboard.js';
+import { reconcileParkedFeatures, type ParkClassification } from './engine/park-reconciliation.js';
+import { makeRecordRepairRequester } from './engine/shipment-evidence-cli.js';
 import { writeGatedSnapshot } from './engine/gated-snapshot.js';
 import { announceGatedPr, announceGatedIssue } from './engine/gate-writeback.js';
 import {
@@ -548,6 +550,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // instead of re-logging every tick. A fresh daemon run always starts with a
   // fresh (empty) cache — in-memory only, never persisted across process restarts.
   const haltPrSweepCache = new Map<string, PrSweepOutcome>();
+  const parkedSweepCache = new Map<string, ParkClassification>();
+  const reconcileParkedAutoCleanup = config?.reconcile_parked_auto_cleanup ?? true;
 
   const log = createDaemonModeLogger({
     formatActivityLine: formatDaemonActivityLine,
@@ -1202,6 +1206,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   // the resolver returns `{ resolved: false }` and discovery builds NOTHING.
   // ADR-1 naming: `daemonOwner`, never a bare `owner`.
   const ownerGh: GhRunner = makeProductionGh();
+  const tracker = createGithubTrackerClient(ownerGh);
   const ownerGit = makeGitRunner(projectRoot);
 
   // Task 13: Construct ONE priority resolver per daemon run (process-local state,
@@ -1517,6 +1522,23 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         for (const slug of await listOperatorParkedSlugs(projectRoot)) {
           candidateSlugs.add(slug);
         }
+        const reconciliation = await reconcileParkedFeatures({
+          projectRoot,
+          getIssueState: tracker.getIssueState.bind(tracker),
+          // Rendering is observational. The daemon sweep below owns cleanup
+          // and is the sole consumer of the startup-resolved toggle.
+          autoCleanup: false,
+        });
+        const annotations = new Map(
+          reconciliation.entries.map(({ slug, classification }) => [
+            slug,
+            classification === 'orphan'
+              ? 'orphan'
+              : classification === 'merged'
+                ? 'merged-ready'
+                : undefined,
+          ] as const),
+        );
         const parked: ParkedEntry[] = [];
         for (const slug of candidateSlugs) {
           if (await isOperatorParked(projectRoot, slug, (err) =>
@@ -1540,7 +1562,12 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
               }
             }
 
-            parked.push({ slug, provenance: provenance || undefined, reason });
+            parked.push({
+              slug,
+              provenance: provenance || undefined,
+              reason,
+              annotation: annotations.get(slug),
+            });
           }
         }
         // Task 3: split the previously single tee'd call so the persisted
@@ -1586,6 +1613,24 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // (daemon.ts guards with ?.()), same failure mode as sweepMergeableLabels below.
       reconcileHaltPrs: async () => {
         await reconcileHaltPrs({ projectRoot, log, cache: haltPrSweepCache });
+      },
+      // adr-2026-07-27 Decisions 4 + 6: the sweep only converges if BOTH
+      // hand-off seams are supplied here. `requestRecordRepair` is the ST-916
+      // record-only repair-PR adapter (a merged park with no shipped record
+      // otherwise defers forever); `disposeHaltWatcher` is the daemon's own
+      // per-slug watcher disposer (cleanup otherwise leaves a watcher on a
+      // deleted worktree). Removing either silently reverts this sweep to a
+      // no-op fallback path — the same failure mode as the bindings above.
+      reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
+        await reconcileParkedFeatures({
+          projectRoot,
+          log,
+          cache: parkedSweepCache,
+          autoCleanup: reconcileParkedAutoCleanup,
+          getIssueState: tracker.getIssueState.bind(tracker),
+          requestRecordRepair: makeRecordRepairRequester({ cwd: projectRoot, log }),
+          disposeHaltWatcher,
+        });
       },
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all

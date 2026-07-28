@@ -324,6 +324,27 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
+  it('renders orphan and merged-ready PARKED annotations while unannotated entries keep their line', () => {
+    const out = renderDashboard({
+      halted: [{ slug: 'orphaned', reason: 'would otherwise halt' }],
+      inProgress: [],
+      eligible: [{ slug: 'merged' }],
+      processed: [],
+      processedCount: 0,
+      parked: [
+        { slug: 'orphaned', annotation: 'orphan' },
+        { slug: 'merged', annotation: 'merged-ready' },
+        { slug: 'plain' },
+      ],
+    });
+
+    expect(out).toContain(
+      'PARKED (3)\n  • merged — merged — ready to reconcile\n  • orphaned — orphan — needs manual review\n  • plain',
+    );
+    expect(out).toContain('HALTED (0)');
+    expect(out).toContain('ELIGIBLE (0)');
+  });
+
   it('renders four groups with counts and enriched member lines', () => {
     const state: InheritedState = {
       halted: [
