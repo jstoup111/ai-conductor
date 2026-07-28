@@ -174,9 +174,12 @@ describe('self-host live boundary: violations are enforced at the next dispatch'
       providerExecution,
       fullSuiteVerifier: fullSuiteVerifierStub(),
       sleepFn: vi.fn(async () => {}),
-      // This fixture isolates the live-boundary contract from daemon-owned
-      // build credentials. CI runners intentionally have no daemon token.
-      config: { harness_self_host: { build_auth: { mode: 'api-key' } } } as never,
+      // This fixture exercises a provider CLI fake, not daemon-token setup.
+      // API-key mode intentionally skips the daemon-token preflight, keeping
+      // the test's first observable boundary at candidate preparation.
+      config: {
+        harness_self_host: { build_auth: { mode: 'api-key' } },
+      } as never,
     });
 
     return { conductor, dispatches, emitted };
