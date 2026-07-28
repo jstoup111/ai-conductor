@@ -266,6 +266,8 @@ export function validateConfig(
     'kickback_escalation',
     // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
     'daemon_verbose',
+    // Removes parked feature worktrees after reconciliation by default.
+    'reconcile_parked_auto_cleanup',
     // Step-heartbeat stall watchdog threshold (step-heartbeat.ts).
     'step_heartbeat_stall_minutes',
   ]);
@@ -598,6 +600,16 @@ export function validateConfig(
   // Absent is allowed; the default-off behavior is applied at the wiring site.
   if (obj.daemon_verbose !== undefined && typeof obj.daemon_verbose !== 'boolean') {
     return errVal('daemon_verbose must be a boolean');
+  }
+
+  // reconcile_parked_auto_cleanup — parked feature worktree cleanup policy.
+  // Absent → enabled by default; malformed values are hard configuration errors.
+  if (obj.reconcile_parked_auto_cleanup !== undefined) {
+    if (typeof obj.reconcile_parked_auto_cleanup !== 'boolean') {
+      return errVal('reconcile_parked_auto_cleanup must be a boolean');
+    }
+  } else {
+    obj.reconcile_parked_auto_cleanup = true;
   }
 
   // mergeable_autoresolve

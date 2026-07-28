@@ -496,6 +496,11 @@ export interface HarnessConfig {
    */
   daemon_verbose?: boolean;
   /**
+   * Whether reconciliation removes parked feature worktrees automatically.
+   * Absent config resolves to `true` during validation.
+   */
+  reconcile_parked_auto_cleanup?: boolean;
+  /**
    * Attribution enforcement cutover (#505): the ISO-8601 instant on/after
    * which inline build-work attribution enforcement gates activate. Validated
    * at load time — a malformed (unparseable) value is REJECTED rather than
