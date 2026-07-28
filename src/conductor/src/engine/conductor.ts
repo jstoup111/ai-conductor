@@ -174,6 +174,7 @@ import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self
 import type { ChangedFile } from './self-host/release-gate.js';
 import type { GateVerdict } from './self-host/gate-halt.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
+import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
@@ -2165,9 +2166,28 @@ export class Conductor {
     }
     const result = await invoke();
     const notices = formatProviderCapabilityGapMessages(candidate.providerKey, verdict.diagnosticGaps);
-    return notices.length === 0
-      ? result
-      : { ...result, output: [...notices, result.output ?? ''].filter(Boolean).join('\n') };
+    const withNotices =
+      notices.length === 0
+        ? result
+        : { ...result, output: [...notices, result.output ?? ''].filter(Boolean).join('\n') };
+    // #1106: a dispatch that blames the environment for blocking `git push` or
+    // `gh` is checked against the dispatch the engine actually performed. Only
+    // the claude candidate is fenced (its self-host home is the one provisioned
+    // with the write-fence PreToolUse hook); the audit refutes nothing it cannot
+    // positively disprove. A refuted claim FAILS the attempt with the refutation
+    // as its reason, so the retry hint carries the disproof back to the agent
+    // instead of the fabricated blocker parking finished work.
+    const claimAudit = auditEnvironmentBlockerClaims(withNotices.output, {
+      provider: candidate.providerKey,
+      writeFenceInstalled: candidate.providerKey === 'claude',
+    });
+    if (claimAudit.message === null) return withNotices;
+    return {
+      ...withNotices,
+      success: false,
+      exitCode: withNotices.exitCode === 0 ? 1 : withNotices.exitCode,
+      output: [claimAudit.message, withNotices.output ?? ''].filter(Boolean).join('\n\n'),
+    };
   }
 
   /**

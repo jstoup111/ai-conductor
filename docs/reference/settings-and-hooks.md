@@ -252,6 +252,22 @@ written to the throwaway `CLAUDE_CONFIG_DIR`, and `mergeFenceIntoSettings()` app
 The fence takes no environment variables — only the two baked-in roots. See
 [self-hosting](../guides/self-hosting.md) for when it is provisioned.
 
+### What the fence does NOT block
+
+The fence has no rule for `git push`, `gh`, or any network operation, and the `claude` provider is
+dispatched with `--dangerously-skip-permissions`, no OS sandbox, and full environment inheritance.
+(`codex` is the sandboxed provider: unattended runs pass `sandbox_mode="workspace-write"`.)
+
+Because a claude self-build dispatch therefore cannot be fenced away from pushing or from `gh`, the
+engine refutes any dispatch output that says otherwise. `environment-claim-audit.ts` runs inside the
+self-host candidate-safety wrapper: when a line carries an environmental cause, a blocking assertion,
+**and** a named remote operation the generated fence provably cannot deny, the attempt is failed and
+the disproof becomes its retry reason, prefixed `ENVIRONMENT_CLAIM_REFUTED`. The deniable-operation
+set is derived from `generateFenceScript` itself, so teaching the fence a real `git push` rule
+retires the refutation automatically. Claims on a sandboxed or unrecognized provider are never
+refuted — the audit only rejects what the engine can positively disprove. See
+[stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md) for triage.
+
 ## Malformed settings.json
 
 Six writers touch a settings file, and each handles unparseable JSON differently.
