@@ -926,33 +926,20 @@ export async function checkAttributionMachineryIntact(
   // `.pipeline/current-task` and record dispatch attribution can never fire.
   const hooksDir = join(pipelineDir, 'session-hooks');
   const expectedHooks = ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'];
+  const repair = await (opts?.ensureHooks ?? ensureSessionHooks)(projectRoot);
+  for (const hook of repair.repaired) {
+    console.warn(`[session-hooks] restored ${hook} in ${projectRoot}`);
+  }
+
   const missingHooks: string[] = [];
   for (const hook of expectedHooks) {
     const ok = await accessFile(join(hooksDir, hook)).then(() => true).catch(() => false);
     if (!ok) missingHooks.push(hook);
   }
-  // docs-guard.sh is repaired with the session hooks but is not part of the
-  // enforcement set: its absence prompts best-effort repair and can never
-  // itself produce a diagnostic or block build dispatch.
-  const docsGuardMissing = await accessFile(join(hooksDir, 'docs-guard.sh')).then(() => false).catch(() => true);
-  if (missingHooks.length > 0 || docsGuardMissing) {
-    const repair = await (opts?.ensureHooks ?? ensureSessionHooks)(projectRoot);
-    for (const hook of repair.repaired) {
-      console.warn(`[session-hooks] restored ${hook} in ${projectRoot}`);
-    }
-
-    const remainingHooks: string[] = [];
-    for (const hook of expectedHooks) {
-      const ok = await accessFile(join(hooksDir, hook)).then(() => true).catch(() => false);
-      if (!ok) remainingHooks.push(hook);
-    }
-    if (remainingHooks.length === 0) {
-      return null;
-    }
-
+  if (missingHooks.length > 0) {
     return (
       `Attribution machinery broken: could not restore .pipeline/session-hooks/ ` +
-      `expected script(s): ${remainingHooks.join(', ')}.\n` +
+      `expected script(s): ${missingHooks.join(', ')}.\n` +
       `Build dispatch requires session hooks to be installed so a build ` +
       `session can be attributed to a task.`
     );

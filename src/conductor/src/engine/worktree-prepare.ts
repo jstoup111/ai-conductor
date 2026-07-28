@@ -299,9 +299,11 @@ async function writeSessionHooks(
     const path = join(hooksDir, file);
     try {
       const repaired = await sessionHookNeedsRepair(path, content);
-      await writeFile(path, content, 'utf-8');
-      await chmod(path, 0o755);
-      if (repaired) outcome.repaired.push(file);
+      if (repaired) {
+        await writeFile(path, content, 'utf-8');
+        await chmod(path, 0o755);
+        outcome.repaired.push(file);
+      }
     } catch (err) {
       outcome.failed.push({
         file,

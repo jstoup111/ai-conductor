@@ -44,6 +44,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import { ensureSessionHooks } from '../../src/engine/worktree-prepare.js';
 
 // Mock execa to return proper git responses
 vi.mock('execa', () => ({
@@ -1354,10 +1355,7 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
     it('is silent and does not rewrite healthy hook files', async () => {
       await writeTaskStatus();
       const hooksDir = join(dir, '.pipeline', 'session-hooks');
-      await mkdir(hooksDir, { recursive: true });
-      for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh']) {
-        await writeFile(join(hooksDir, hook), '#!/bin/sh\n', 'utf-8');
-      }
+      await ensureSessionHooks(dir);
       const before = await Promise.all(
         ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh', 'docs-guard.sh'].map(
           (hook) => stat(join(hooksDir, hook)).then((metadata) => metadata.mtimeMs),
@@ -1404,6 +1402,65 @@ describe('pre-dispatch attribution-machinery guard at the build seam (Task 5, #6
 
       await expect(checkAttributionMachineryIntact(dir)).resolves.toBeNull();
       await expect(readFile(join(hooksDir, 'docs-guard.sh'), 'utf-8')).resolves.toBeTruthy();
+    });
+
+    it('restores stripped settings entries while preserving operator settings', async () => {
+      await writeTaskStatus();
+      await ensureSessionHooks(dir);
+      const settingsPath = join(dir, '.claude', 'settings.local.json');
+      await writeFile(settingsPath, JSON.stringify({ permissions: { allow: ['Bash(git status)'] } }), 'utf-8');
+      let repairs = 0;
+
+      await expect(checkAttributionMachineryIntact(dir, {
+        ensureHooks: async (...args) => {
+          repairs++;
+          return ensureSessionHooks(...args);
+        },
+      })).resolves.toBeNull();
+
+      const settings = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      expect(repairs).toBe(1);
+      expect(settings.permissions).toEqual({ allow: ['Bash(git status)'] });
+      expect(settings.hooks.PreToolUse).toHaveLength(4);
+      expect(settings.hooks.PostToolUse).toHaveLength(1);
+    });
+
+    it('does not halt when the settings merge fails but scripts remain intact', async () => {
+      await writeTaskStatus();
+      await ensureSessionHooks(dir);
+      const claudeDir = join(dir, '.claude');
+      await chmod(claudeDir, 0o500);
+      let repairs = 0;
+
+      try {
+        await expect(checkAttributionMachineryIntact(dir, {
+          ensureHooks: async (...args) => {
+            repairs++;
+            return ensureSessionHooks(...args);
+          },
+        })).resolves.toBeNull();
+        expect(repairs).toBe(1);
+      } finally {
+        await chmod(claudeDir, 0o700);
+      }
+    });
+
+    it('leaves complete settings wiring unchanged after preflight repair', async () => {
+      await writeTaskStatus();
+      await ensureSessionHooks(dir);
+      const settingsPath = join(dir, '.claude', 'settings.local.json');
+      const before = JSON.parse(await readFile(settingsPath, 'utf-8'));
+      let repairs = 0;
+
+      await expect(checkAttributionMachineryIntact(dir, {
+        ensureHooks: async (...args) => {
+          repairs++;
+          return ensureSessionHooks(...args);
+        },
+      })).resolves.toBeNull();
+
+      expect(repairs).toBe(1);
+      expect(JSON.parse(await readFile(settingsPath, 'utf-8'))).toEqual(before);
     });
 
   });
