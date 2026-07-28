@@ -10,6 +10,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Added
+
+- Step-heartbeat liveness signal and stall watchdog: a running step's provider dispatch now
+  touches `.pipeline/step-heartbeat` on every observed Claude/Codex subprocess activity boundary
+  (throttled, fire-and-forget), and `daemon status` renders `(heartbeat Ns ago)` for any
+  IN-PROGRESS feature that has one — distinguishing "no heartbeat yet" from a genuinely stale one.
+  If a step's heartbeat goes silent past a configurable threshold (`step_heartbeat_stall_minutes`,
+  default 20, plus a small fixed grace buffer), the watchdog kills the wedged subprocess and raises
+  the same `mechanical`-class HALT `fix/defer-live-boundary-halt-to-next-dispatch` (#1070) uses, so
+  the daemon's existing auto-requeue path picks it up unchanged. Addresses a build step that ran
+  silently for 26+ minutes with no way to tell it apart from a hang short of manually sampling
+  process CPU ticks and file mtimes.
+
 ### Removed
 
 - `conduct-ts`'s `--output` and `--step <step>` CLI flags are gone. Neither did what its `--help`

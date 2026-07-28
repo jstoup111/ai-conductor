@@ -161,6 +161,113 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  describe('step-heartbeat / stall watchdog wiring', () => {
+    let projectDir: string;
+
+    beforeEach(async () => {
+      projectDir = await mkdtemp(join(tmpdir(), 'step-runner-heartbeat-'));
+    });
+    afterEach(async () => {
+      await rm(projectDir, { recursive: true, force: true });
+    });
+
+    it('touches .pipeline/step-heartbeat when the provider dispatch reports activity', async () => {
+      const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+        // Simulate a streamed provider event boundary firing onActivity.
+        (input.options as InvokeOptions & { onActivity?: () => void }).onActivity?.();
+        return {
+          success: true,
+          output: 'done',
+          exitCode: 0,
+          preferredProvider: 'claude',
+          actualProvider: 'claude',
+          attempts: [],
+        };
+      });
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+        providerExecution: {
+          configuredProviders: ['claude'],
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          sessions: new ProviderSessionStore(),
+          executor: providerExecutor,
+        },
+      });
+
+      await runner.run('build', emptyState);
+      // The activity pulse writes fire-and-forget; give the IO queue a tick.
+      await new Promise((r) => setTimeout(r, 20));
+
+      const raw = await readFile(join(projectDir, '.pipeline', 'step-heartbeat'), 'utf-8');
+      const heartbeat = JSON.parse(raw);
+      expect(heartbeat.step).toBe('build');
+      expect(Number.isFinite(Date.parse(heartbeat.ts))).toBe(true);
+    });
+
+    it('raises a mechanical HALT and reports failure when the stall watchdog fires', async () => {
+      // A dispatch that never settles on its own — the watchdog must be what
+      // resolves it, by killing the (fake) subprocess and writing the HALT.
+      const providerExecutor = vi.fn((input: ExecuteProviderCandidatesInput) => {
+        (input.options as InvokeOptions & { onSpawn?: (h: { kill: () => void }) => void }).onSpawn?.({
+          kill: () => {},
+        });
+        return new Promise<never>(() => {});
+      });
+      // Pre-seed a stale heartbeat so the watchdog's very first poll already
+      // sees it as past threshold+grace — avoids depending on real wall time.
+      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(projectDir, '.pipeline', 'step-heartbeat'),
+        JSON.stringify({ step: 'build', ts: new Date(Date.now() - 60 * 60_000).toISOString() }),
+        'utf-8',
+      );
+      const config: HarnessConfig = { step_heartbeat_stall_minutes: 1 };
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+        config,
+        heartbeatWatchdog: { pollIntervalMs: 5 },
+        providerExecution: {
+          configuredProviders: ['claude'],
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          sessions: new ProviderSessionStore(),
+          executor: providerExecutor as unknown as typeof executeProviderCandidates,
+        },
+      });
+
+      const result = await runner.run('build', emptyState);
+
+      expect(result.success).toBe(false);
+      const haltBody = await readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8');
+      expect(haltBody).toMatch(/heartbeat stalled/i);
+      const haltClass = await readFile(join(projectDir, '.pipeline', 'HALT.class'), 'utf-8');
+      expect(haltClass.trim()).toBe('mechanical');
+    });
+
+    it('does not wrap dispatch in the watchdog when step_heartbeat_stall_minutes <= 0 (opt-out)', async () => {
+      const providerExecutor = vi.fn(async () => ({
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'claude',
+        actualProvider: 'claude',
+        attempts: [],
+      }));
+      const config: HarnessConfig = { step_heartbeat_stall_minutes: 0 };
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+        config,
+        providerExecution: {
+          configuredProviders: ['claude'],
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          sessions: new ProviderSessionStore(),
+          executor: providerExecutor,
+        },
+      });
+
+      const result = await runner.run('build', emptyState);
+
+      expect(result.success).toBe(true);
+      await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
+    });
+  });
+
   it('reads self-host candidate hooks from the live context after construction', async () => {
     const executor = vi.fn(async (input: any) => {
       const candidate = { step: 'build', providerKey: 'codex', model: 'gpt', effort: 'medium' };

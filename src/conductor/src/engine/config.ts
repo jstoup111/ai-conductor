@@ -266,6 +266,8 @@ export function validateConfig(
     'kickback_escalation',
     // Default-off verbose skip logging in gate-writeback (daemon-suppress-other-owner-log-noise).
     'daemon_verbose',
+    // Step-heartbeat stall watchdog threshold (step-heartbeat.ts).
+    'step_heartbeat_stall_minutes',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -812,6 +814,27 @@ export function validateConfig(
   } else {
     // C1: absent or null → 300 without warning
     obj.engine_refresh_min_interval_seconds = 300;
+  }
+
+  // step_heartbeat_stall_minutes — stall threshold, in minutes, for the
+  // step-heartbeat watchdog (step-heartbeat.ts). Unlike
+  // engine_refresh_min_interval_seconds, 0 and negative values are a
+  // deliberate opt-out signal (never a fallback trigger) — only a non-finite
+  // or non-numeric value is invalid. Left unset here when absent; the
+  // resolver (resolveStepHeartbeatStallMinutes) applies the default (20).
+  if (
+    obj.step_heartbeat_stall_minutes !== undefined &&
+    obj.step_heartbeat_stall_minutes !== null
+  ) {
+    if (
+      typeof obj.step_heartbeat_stall_minutes !== 'number' ||
+      !Number.isFinite(obj.step_heartbeat_stall_minutes)
+    ) {
+      warnings.push(
+        `step_heartbeat_stall_minutes has invalid value ${JSON.stringify(obj.step_heartbeat_stall_minutes)}, falling back to the default (20).`,
+      );
+      delete obj.step_heartbeat_stall_minutes;
+    }
   }
 
   // mergeable_autoresolve — auto-resolve merge conflicts on open PRs.

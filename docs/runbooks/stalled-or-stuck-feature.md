@@ -86,6 +86,29 @@ In daemon mode the engine synthesizes a remediation prompt into
 rounds per gate. A zero-work stall never terminal-HALTs from that path; it falls through to the
 ordinary retry and park route.
 
+#### Step-heartbeat stall (the watchdog already caught it)
+
+If `.pipeline/HALT` reads `Step '<step>' heartbeat stalled: no provider activity in …`, the
+step-heartbeat stall watchdog already diagnosed and handled this one for you — no manual
+CPU/mtime sampling required. It killed the wedged Claude/Codex subprocess itself and wrote this
+`mechanical`-class HALT, so the daemon's ordinary re-kick sweep clears it on the next base-branch
+advance without operator action. Check the heartbeat file's last recorded step and age before
+clearing anything by hand:
+
+```bash
+cat .worktrees/<slug>/.pipeline/step-heartbeat
+```
+
+This differs from `no_task_progress`: that breaker only fires between whole build attempts and
+requires the retry budget to be in play; the heartbeat watchdog fires mid-dispatch, on any
+provider-aware step, purely from subprocess silence, and needs no retry to have happened yet. See
+[running the daemon: step heartbeat and the stall
+watchdog](../guides/running-the-daemon.md#step-heartbeat-and-the-stall-watchdog) for the
+mechanism and `step_heartbeat_stall_minutes` in
+[configuration](../reference/configuration.md#step_heartbeat_stall_minutes) for the threshold.
+If a step is regularly this slow for legitimate reasons, raise the threshold rather than
+repeatedly clearing this halt by hand.
+
 #### `halt_marker`
 
 The `pipeline` skill wrote `.pipeline/halt-user-input-required` — a genuine question that no

@@ -127,3 +127,51 @@ describe('engine_refresh_min_interval_seconds config field', () => {
     expect(result.warnings).toHaveLength(0);
   });
 });
+
+describe('step_heartbeat_stall_minutes config field', () => {
+  it('is a known top-level key (not rejected)', () => {
+    const result = validateConfig({ step_heartbeat_stall_minutes: 15 });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.step_heartbeat_stall_minutes).toBe(15);
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('is left unset when absent (resolver applies the default)', () => {
+    const result = validateConfig({});
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.step_heartbeat_stall_minutes).toBeUndefined();
+  });
+
+  it('preserves 0 and negative values as an opt-out signal, no warning', () => {
+    const zero = validateConfig({ step_heartbeat_stall_minutes: 0 });
+    expect(zero.ok).toBe(true);
+    if (!zero.ok) return;
+    expect(zero.config.step_heartbeat_stall_minutes).toBe(0);
+    expect(zero.warnings).toHaveLength(0);
+
+    const negative = validateConfig({ step_heartbeat_stall_minutes: -5 });
+    expect(negative.ok).toBe(true);
+    if (!negative.ok) return;
+    expect(negative.config.step_heartbeat_stall_minutes).toBe(-5);
+    expect(negative.warnings).toHaveLength(0);
+  });
+
+  it('drops a non-numeric value with a warning, leaving the resolver default to apply', () => {
+    const result = validateConfig({ step_heartbeat_stall_minutes: 'soon' });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.step_heartbeat_stall_minutes).toBeUndefined();
+    expect(result.warnings.length).toBeGreaterThan(0);
+    expect(result.warnings[0]).toMatch(/step_heartbeat_stall_minutes.*invalid/i);
+  });
+
+  it('drops a non-finite value (NaN/Infinity) with a warning', () => {
+    const nanResult = validateConfig({ step_heartbeat_stall_minutes: NaN });
+    expect(nanResult.ok).toBe(true);
+    if (!nanResult.ok) return;
+    expect(nanResult.config.step_heartbeat_stall_minutes).toBeUndefined();
+    expect(nanResult.warnings.length).toBeGreaterThan(0);
+  });
+});

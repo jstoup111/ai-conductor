@@ -461,16 +461,27 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
 export class ClaudeProvider implements LLMProvider {
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn'>,
   ) {
-    const { diagnosticLog, ...execaOptions } = options;
-    const result = await execa('claude', args, {
+    const { diagnosticLog, onActivity, onSpawn, ...execaOptions } = options;
+    const subprocess = execa('claude', args, {
       ...execaOptions,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
       stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
       stderr: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
     });
+    // Wire the heartbeat/stall-watchdog seam on the LIVE subprocess, before
+    // awaiting — attaching after resolution would miss every event and the
+    // kill handle would arrive too late for a stall to ever be caught.
+    try {
+      onSpawn?.({ kill: () => subprocess.kill() });
+      subprocess.stdout?.on('data', () => onActivity?.());
+      subprocess.stderr?.on('data', () => onActivity?.());
+    } catch {
+      // Watchdog wiring is best-effort; never affects provider dispatch.
+    }
+    const result = await subprocess;
     if (diagnosticLog) {
       for (const output of [result.stdout, result.stderr]) {
         if (typeof output === 'string' && output.length > 0) diagnosticLog(output);
@@ -510,6 +521,8 @@ export class ClaudeProvider implements LLMProvider {
           env: this.buildEnv(options),
           cwd: options.cwd,
           diagnosticLog: options.diagnosticLog,
+          onActivity: options.onActivity,
+          onSpawn: options.onSpawn,
         })
       : await this.runClaude(args, {
           reject: false,
@@ -517,6 +530,8 @@ export class ClaudeProvider implements LLMProvider {
           env: this.buildEnv(options),
           cwd: options.cwd,
           diagnosticLog: options.diagnosticLog,
+          onActivity: options.onActivity,
+          onSpawn: options.onSpawn,
         });
 
     return this.classifyCompletion(result, true);
@@ -556,6 +571,8 @@ export class ClaudeProvider implements LLMProvider {
       env: this.buildEnv(options),
       cwd: options.cwd,
       diagnosticLog: options.diagnosticLog,
+      onActivity: options.onActivity,
+      onSpawn: options.onSpawn,
     });
 
     return this.classifyCompletion(result, false);
