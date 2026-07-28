@@ -22,8 +22,8 @@ and directs the user to the correct next skill. It does NOT run skills internall
 - ST-006 Gate enforcement between steps
 - ST-007 Worktree isolation per feature
 - ST-008 Session management (historical single-session scope superseded by
-  #325: fresh per step, resume only within-step retries; #927 isolates that
-  scope by provider)
+  #325: fresh per step; #927 isolates scope by provider; #1071 extends cold
+  starts to every within-step retry)
 - ST-009 Recovery from step failure (retry, interactive fix, skip, go back, quit)
 - ST-010 Feature completion and cleanup
 - ST-011 Complexity assessment after brainstorm
