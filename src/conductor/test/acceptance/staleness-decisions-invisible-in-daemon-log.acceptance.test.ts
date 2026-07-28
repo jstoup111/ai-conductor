@@ -306,6 +306,52 @@ describe('Story 1: a preserve is reported as preserved_surface_miss, never as a 
     expect(outcomeOf(result)).toBe('rewritten');
   });
 
+  it('a genuinely fresh prd_audit ALIGNED report reports rewritten', async () => {
+    const s = await makeRepo();
+    await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    const artifact = await writeMdVerdict(
+      s.repo,
+      '.pipeline/prd-audit.md',
+      PRD_ALIGNED,
+      undefined,
+      PRD_AUDIT_CODE_STAMP,
+    );
+    const freshMtime = new Date(Date.now() + 5000);
+    await utimes(artifact, freshMtime, freshMtime);
+
+    const result = await checkStepCompletion(s.repo, 'prd_audit', ctxFor(s.repo));
+
+    expect({ done: result.done, outcome: outcomeOf(result) }).toEqual({
+      done: true,
+      outcome: 'rewritten',
+    });
+  });
+
+  it('a genuinely fresh architecture_review_as_built APPROVED report reports rewritten', async () => {
+    const s = await makeRepo();
+    await commit(s, { 'src/a.ts': 'a\n' }, 'init');
+    const artifact = await writeMdVerdict(
+      s.repo,
+      '.pipeline/architecture-review-as-built.md',
+      ARCH_APPROVED,
+      undefined,
+      ARCHITECTURE_REVIEW_AS_BUILT_CODE_STAMP,
+    );
+    const freshMtime = new Date(Date.now() + 5000);
+    await utimes(artifact, freshMtime, freshMtime);
+
+    const result = await checkStepCompletion(
+      s.repo,
+      'architecture_review_as_built',
+      ctxFor(s.repo),
+    );
+
+    expect({ done: result.done, outcome: outcomeOf(result) }).toEqual({
+      done: true,
+      outcome: 'rewritten',
+    });
+  });
+
   it('prd_audit preserve populates the facet instead of returning a bare done:true', async () => {
     const { s, baseline } = await featureRepo();
     await writeMdVerdict(s.repo, '.pipeline/prd-audit.md', PRD_ALIGNED, baseline, PRD_AUDIT_CODE_STAMP);

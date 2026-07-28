@@ -1040,7 +1040,7 @@ describe('engine/conductor', () => {
       }
     });
 
-    it('verdict_freshness event is emitted with fresh:false on stale reuse and fresh:true on rewrite', async () => {
+    it('verdict_freshness event identifies stale invalidation and rewritten verdict outcomes', async () => {
       await seedToBuildReview();
       await writeBuildReviewVerdict(Date.now() - 60_000);
 
@@ -1060,7 +1060,7 @@ describe('engine/conductor', () => {
         },
       };
 
-      const freshnessEvents: Array<{ fresh: boolean }> = [];
+      const freshnessEvents: Array<{ fresh: boolean; outcome?: string }> = [];
       events.on('verdict_freshness', (e) => {
         freshnessEvents.push(e as never);
       });
@@ -1078,9 +1078,10 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(freshnessEvents.length).toBe(2);
-      expect(freshnessEvents[0].fresh).toBe(false);
-      expect(freshnessEvents[1].fresh).toBe(true);
+      expect(freshnessEvents.map(({ fresh, outcome }) => ({ fresh, outcome }))).toEqual([
+        { fresh: false, outcome: 'stale_invalidated' },
+        { fresh: true, outcome: 'rewritten' },
+      ]);
 
       const result = await readState(statePath);
       expect(result.ok && result.value.build_review).toBe('done');

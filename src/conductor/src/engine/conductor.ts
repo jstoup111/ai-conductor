@@ -4331,11 +4331,7 @@ export class Conductor {
               await emitTracked({
                 type: 'verdict_freshness',
                 step: step.name,
-                artifact: completion.verdictFreshness.artifact,
-                fresh: completion.verdictFreshness.fresh,
-                floorSource: completion.verdictFreshness.floorSource,
-                mtimeMs: completion.verdictFreshness.mtimeMs,
-                floorMs: completion.verdictFreshness.floorMs,
+                ...completion.verdictFreshness,
               });
             }
             // Consumed for this attempt's completion check above — clear so

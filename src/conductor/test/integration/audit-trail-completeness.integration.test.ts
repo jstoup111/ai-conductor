@@ -178,6 +178,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     type: 'verdict_freshness',
     step: 'build_review',
     artifact: '.docs/build-review.md',
+    outcome: 'rewritten',
     fresh: true,
     floorSource: 'attempt',
   },

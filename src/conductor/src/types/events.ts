@@ -13,6 +13,21 @@ export type CredentialParkProgressDegradation =
   | 'credential-failure'
   | 'unrelated-diagnostic-degradation';
 
+export type VerdictFreshnessOutcome =
+  | 'rewritten'
+  | 'preserved_surface_miss'
+  | 'stale_invalidated';
+
+export type VerdictFreshnessClassification =
+  | {
+      outcome: 'rewritten' | 'preserved_surface_miss';
+      fresh: true;
+    }
+  | {
+      outcome: 'stale_invalidated';
+      fresh: false;
+    };
+
 /**
  * Extra state threaded into onRecovery so the UI can adapt its menu
  * without the engine dictating the layout.
@@ -146,7 +161,7 @@ export type ConductorEvent =
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
-  | {
+  | ({
       /**
        * Emitted after a verdict-consuming completion check
        * (architecture_review_as_built, prd_audit, build_review) runs, so the
@@ -157,11 +172,10 @@ export type ConductorEvent =
       type: 'verdict_freshness';
       step: StepName;
       artifact: string;
-      fresh: boolean;
       floorSource: 'attempt' | 'session';
       mtimeMs?: number;
       floorMs?: number;
-    }
+    } & VerdictFreshnessClassification)
   | {
       /**
        * Task 4 (build-review-grades-plan-vs-diff-against-a-stale-o):

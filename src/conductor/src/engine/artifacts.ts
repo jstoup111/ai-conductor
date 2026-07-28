@@ -2,6 +2,7 @@ import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs
 import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
+import type { VerdictFreshnessClassification } from '../types/events.js';
 import { slugify } from './worktree.js';
 import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
@@ -765,8 +766,7 @@ export interface CompletionResult {
     mtimeMs?: number;
     floorMs?: number;
     floorSource: 'attempt' | 'session';
-    fresh: boolean;
-  };
+  } & VerdictFreshnessClassification;
   /**
    * Route-signal facet for retry-classification (issue #646). 'named-route'
    * marks a fresh, parseable, non-passing verdict (a real reviewer decision
@@ -1937,7 +1937,19 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           const git = ctx.git ?? makeGitRunner(dir);
           const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'manual_test', marker.codeStamp);
           if (validity === 'preserve') {
-            return { done: true };
+            const floor = verdictFreshnessFloor(ctx);
+            const mtimeMs = await stat(file).then((s) => s.mtimeMs).catch(() => undefined);
+            return {
+              done: true,
+              verdictFreshness: {
+                artifact: file,
+                mtimeMs,
+                floorMs: floor,
+                floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+                outcome: 'preserved_surface_miss',
+                fresh: true,
+              },
+            };
           }
         }
       } catch {
@@ -2115,7 +2127,22 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                   break;
                 }
               }
-              if (stillClean) return { done: true };
+              if (stillClean) {
+                const artifact = preCheckFiles[0];
+                const mtimeMs = await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined);
+                const floor = verdictFreshnessFloor(ctx);
+                return {
+                  done: true,
+                  verdictFreshness: {
+                    artifact,
+                    mtimeMs,
+                    floorMs: floor,
+                    floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+                    outcome: 'preserved_surface_miss',
+                    fresh: true,
+                  },
+                };
+              }
             }
           }
         }
@@ -2149,7 +2176,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         done: false,
         reason:
           "prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
-        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
+        verdictFreshness: {
+          artifact: f,
+          mtimeMs,
+          floorMs: floor,
+          floorSource,
+          outcome: 'stale_invalidated',
+          fresh: false,
+        },
       };
     }
     for (const f of fresh) {
@@ -2168,7 +2202,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     await writePrdAuditCodeStamp(dir, ctx);
     return {
       done: true,
-      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+      verdictFreshness: {
+        artifact: passF,
+        mtimeMs: passMtimeMs,
+        floorMs: floor,
+        floorSource,
+        outcome: 'rewritten',
+        fresh: true,
+      },
     };
   },
 
@@ -2207,7 +2248,20 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               const content = await readFile(preCheckFiles[0], 'utf-8');
               const verdict = parseAsBuiltVerdict(content);
               if (verdict !== null && /^APPROVED\b/i.test(verdict)) {
-                return { done: true };
+                const artifact = preCheckFiles[0];
+                const mtimeMs = await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined);
+                const floor = verdictFreshnessFloor(ctx);
+                return {
+                  done: true,
+                  verdictFreshness: {
+                    artifact,
+                    mtimeMs,
+                    floorMs: floor,
+                    floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+                    outcome: 'preserved_surface_miss',
+                    fresh: true,
+                  },
+                };
               }
             }
           }
@@ -2239,7 +2293,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         done: false,
         reason:
           "as-built architecture review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
-        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
+        verdictFreshness: {
+          artifact: f,
+          mtimeMs,
+          floorMs: floor,
+          floorSource,
+          outcome: 'stale_invalidated',
+          fresh: false,
+        },
         routeClass: 'absent',
       };
     }
@@ -2269,7 +2330,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
     return {
       done: true,
-      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+      verdictFreshness: {
+        artifact: passF,
+        mtimeMs: passMtimeMs,
+        floorMs: floor,
+        floorSource,
+        outcome: 'rewritten',
+        fresh: true,
+      },
     };
   },
 
@@ -2305,7 +2373,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
             const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
             return {
               done: true,
-              verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+              verdictFreshness: {
+                artifact: path,
+                mtimeMs: passMtimeMs,
+                floorMs: floor,
+                floorSource,
+                outcome: 'preserved_surface_miss',
+                fresh: true,
+              },
             };
           }
         }
@@ -2326,7 +2401,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           ? "build-review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused"
           : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
         verdictFreshness: exists
-          ? { artifact: path, mtimeMs, floorMs: floor, floorSource, fresh: false }
+          ? {
+              artifact: path,
+              mtimeMs,
+              floorMs: floor,
+              floorSource,
+              outcome: 'stale_invalidated',
+              fresh: false,
+            }
           : undefined,
         routeClass: 'absent',
       };
@@ -2359,7 +2441,14 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
     return {
       done: true,
-      verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+      verdictFreshness: {
+        artifact: path,
+        mtimeMs: passMtimeMs,
+        floorMs: floor,
+        floorSource,
+        outcome: 'rewritten',
+        fresh: true,
+      },
     };
   },
 
@@ -3522,6 +3611,7 @@ export async function checkStepCompletion(
         mtimeMs,
         floorMs: floor,
         floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+        outcome: 'rewritten',
         fresh: true,
       },
     };
