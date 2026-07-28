@@ -1,4 +1,17 @@
+import { tmpdir } from 'node:os';
 import { defineConfig } from 'vitest/config';
+import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';
+
+// Tmpdir leak guard (#1112): point TMPDIR at ONE run-scoped root before vitest
+// constructs anything. `os.tmpdir()` reads TMPDIR at call time, so every
+// `mkdtemp(join(tmpdir(), …))` in the suite — the ~1,426 call sites, most of
+// which never clean up — lands inside that root, and test/global-setup.ts
+// deletes it wholesale at teardown. Installed here rather than in globalSetup
+// because vitest's own project tmpDir is computed between the two (see
+// ensureRunTmpRootSync). The forked workers inherit this env when the pool
+// spawns them; test/tmpdir-redirect-propagation.test.ts proves that from
+// inside a worker.
+ensureRunTmpRootSync(tmpdir());
 
 export default defineConfig({
   test: {

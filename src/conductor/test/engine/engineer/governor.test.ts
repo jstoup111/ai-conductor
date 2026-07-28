@@ -1,6 +1,6 @@
 // Test: governorReport — read-only governor report (Task 29, FR-9 happy + negative)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, writeFile, readFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createEngineerStoreReader } from '../../../src/engine/engineer-store.js';
@@ -81,7 +81,13 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  // No cleanup needed — temp dirs are isolated per test
+  // Isolation is not cleanup. This afterEach used to be an empty no-op with a
+  // comment saying none was needed, and it left ~20,000 governor-test-* dirs
+  // in the operator's real /tmp — enough, with its peers, to exhaust a 15G
+  // tmpfs and break unrelated production processes with ENOSPC (#1112). The
+  // run-scoped TMPDIR redirect in test/global-setup.ts now contains that class
+  // of leak suite-wide, but every fixture still removes what it created.
+  await rm(tmpDir, { recursive: true, force: true });
 });
 
 async function seedSignals(signals: EngineerSignal[], extraLines?: string[]): Promise<string> {
