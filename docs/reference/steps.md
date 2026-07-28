@@ -199,6 +199,14 @@ detail.
 Every predicate is fail-closed: missing, stale, malformed, or non-passing evidence leaves the gate
 unsatisfied. Durable verdicts are written to `.pipeline/gates/<step>.json`.
 
+A step the engine resolves by *skipping* never runs its predicate, but it still writes a verdict:
+`{"satisfied": true, "reason": "skipped: <cause>"}`. The `skipped: ` prefix marks a gate that was
+deliberately not run, so it is never mistaken for evidence that passed. This covers every skip —
+tier, track, bootstrap mode, upstream skip, `disable: true`, a false `when:`, the daemon's in-loop
+`retro` skip, and an advisory step auto-skipped after a failed completion check (whose reason carries
+the failure). It matters most for `retro`, which is advisory, tier-S-skippable, and skipped on every
+daemon run: it previously left no verdict at all. See [gates](../explanation/gates.md#what-a-gate-is).
+
 ## Starting from a step
 
 `--from <step>` sets the loop's starting index by a linear name lookup over the resolved step
