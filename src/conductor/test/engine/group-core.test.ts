@@ -258,7 +258,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
 
   const fakeState = {} as ConductState;
 
-  it("transports resume-capable provider retry attempt and disabled escalation without changing the branch session", async () => {
+  it("cold-starts a provider-session branch retry without changing the serial session", async () => {
     const providerExecutor = vi.fn(executeProviderCandidates);
     const invokeInteractive = vi
       .fn<LLMProvider["invokeInteractive"]>()
@@ -269,8 +269,9 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       invoke: vi.fn(),
       invokeInteractive,
     };
+    const sessionIds = ["manual-claude-attempt-1", "manual-claude-attempt-2"];
     const sessions = new ProviderSessionStore({
-      createSessionId: () => "manual-claude-session",
+      createSessionId: () => sessionIds.shift()!,
     });
     const runner = new DefaultStepRunner(
       provider,
@@ -330,8 +331,8 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         { attempt: 2, escalate: false },
       ],
       sessions: [
-        { sessionId: "manual-claude-session", resume: false },
-        { sessionId: "manual-claude-session", resume: true },
+        { sessionId: "manual-claude-attempt-1", resume: false },
+        { sessionId: "manual-claude-attempt-2", resume: false },
       ],
     });
   });
@@ -396,8 +397,9 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       const legacySession = new SessionManager(pipelineDir);
       const ids = [
         "serial-claude-session",
-        "manual-codex-session",
+        "manual-codex-attempt-1",
         "prd-claude-session",
+        "manual-codex-attempt-2",
         "architecture-codex-session",
       ][Symbol.iterator]();
       const sessions = new ProviderSessionStore({
@@ -571,7 +573,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         codexCalls: [
           {
             prompt: "$manual-test",
-            sessionId: "manual-codex-session",
+            sessionId: "manual-codex-attempt-1",
             resume: false,
             cwd: "/tmp/project",
             interactive: true,
@@ -581,7 +583,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           },
           {
             prompt: "$manual-test",
-            sessionId: "manual-codex-session",
+            sessionId: "manual-codex-attempt-2",
             resume: false,
             cwd: "/tmp/project",
             interactive: true,
@@ -668,22 +670,28 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     expect(runnerB.calls[0]!.opts?.resume).toBe(false);
   });
 
-  it("a branch retry reuses ITS session id (resume:true on retry, not a new session)", async () => {
+  it("cold-starts a scalar branch retry with a freshly minted session id", async () => {
     const runner = spyRunner([
       { success: false, output: "transient failure" },
       { success: true },
     ]);
     const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
+    const ids = ["manual-attempt-1", "manual-attempt-2"];
 
-    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+    const outcome = await runGroupBranch(
+      member,
+      fakeState,
+      { stepRunner: runner, mintSessionId: () => ids.shift()! },
+      3,
+    );
 
     expect(runner.calls).toHaveLength(2);
     const firstSessionId = runner.calls[0]!.opts?.sessionId;
     const secondSessionId = runner.calls[1]!.opts?.sessionId;
-    expect(firstSessionId).toBeTruthy();
-    expect(secondSessionId).toBe(firstSessionId);
+    expect(firstSessionId).toBe("manual-attempt-1");
+    expect(secondSessionId).toBe("manual-attempt-2");
     expect(runner.calls[0]!.opts?.resume).toBe(false);
-    expect(runner.calls[1]!.opts?.resume).toBe(true);
+    expect(runner.calls[1]!.opts?.resume).toBe(false);
     expect(classifyOutcome(outcome)).toBe("verdict:pass");
   });
 
