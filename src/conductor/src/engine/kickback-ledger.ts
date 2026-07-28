@@ -126,7 +126,10 @@ export function bumpKickbackGate(
     count: 0,
     treeHash: null,
     lastReason: '',
-    priorVerdict: false,
+    // `true` is the consumed/no-pending-baseline state. The conductor writes
+    // `false` only while a D2 kickback-to-build baseline is waiting to be
+    // checked, then clears it back to true after that single use.
+    priorVerdict: true,
     resolvedBefore: input.resolvedCount,
   };
   const madeProgress =

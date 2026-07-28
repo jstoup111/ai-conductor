@@ -145,7 +145,12 @@ import {
   resetRegradeCounter,
   type Disposition,
 } from './build-review-disposition.js';
-import { clearKickbackLedger } from './kickback-ledger.js';
+import {
+  bumpKickbackGateInLedger,
+  clearKickbackLedger,
+  readKickbackLedger,
+  writeKickbackLedger,
+} from './kickback-ledger.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -2389,9 +2394,6 @@ export class Conductor {
     // healings, so additional invocations are wasted git calls.
     const autoHealAttempted = new Set<StepName>();
 
-    // Per-gate count of kickback re-opens this feature, for the anti-ping-pong
-    // cap. Drives the gate-driven tail (see advanceTail).
-    const kickbackCounts = new Map<StepName, number>();
     // Task 6 (build-review-grades-plan-vs-diff-against-a-stale-o): the
     // merge-base a build_review dispatch actually graded against (set from
     // `result.baseFreshness` right after the step runs, read back much
@@ -2431,11 +2433,21 @@ export class Conductor {
     // verdict is unchanged, the loop HALTs instead of re-kicking toward
     // MAX_KICKBACKS_PER_GATE. Cleared once consulted (or once the gate
     // clears) so a later, unrelated kickback starts with a fresh baseline.
-    const kickbackToBuildContext = new Map<
-      StepName,
-      { priorVerdict: boolean; resolvedBefore: number; treeBefore: string | null }
-    >();
+    // Both the budget and this single-use baseline live in the durable ledger,
+    // so daemon re-dispatch cannot reset either loop guard.
     const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
+
+    const consumeKickbackBudget = async (gate: StepName, reason: string) => {
+      const [treeHash, resolvedCount] = await Promise.all([
+        currentTreeHash(this.projectRoot),
+        countResolvedTasks(this.projectRoot),
+      ]);
+      return bumpKickbackGateInLedger(this.projectRoot, gate, {
+        treeHash,
+        resolvedCount,
+        reason,
+      });
+    };
 
     /**
      * Records the pre-kickback baseline for `sourceGate` right before a
@@ -2448,10 +2460,20 @@ export class Conductor {
         currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
       ]);
-      kickbackToBuildContext.set(sourceGate, {
-        priorVerdict: false, // we only ever kick back to build on a failing gate
-        resolvedBefore,
-        treeBefore,
+      const ledger = await readKickbackLedger(this.projectRoot);
+      const existing = ledger.gates[sourceGate];
+      await writeKickbackLedger(this.projectRoot, {
+        ...ledger,
+        gates: {
+          ...ledger.gates,
+          [sourceGate]: {
+            count: existing?.count ?? 0,
+            treeHash: treeBefore,
+            lastReason: existing?.lastReason ?? '',
+            priorVerdict: false, // active D2 baseline: kickback began on a failing gate
+            resolvedBefore,
+          },
+        },
       });
     };
 
@@ -2464,15 +2486,24 @@ export class Conductor {
     const checkKickbackToBuildEscalation = async (
       sourceGate: StepName,
     ): Promise<ShouldEscalateKickbackResult & { kickbackOutcome?: string }> => {
-      const ctx = kickbackToBuildContext.get(sourceGate);
-      if (!ctx) return { halt: false };
-      kickbackToBuildContext.delete(sourceGate);
+      const ledger = await readKickbackLedger(this.projectRoot);
+      const ctx = ledger.gates[sourceGate];
+      if (!ctx || ctx.priorVerdict) return { halt: false };
+      // Consume the baseline before checking it. A later, unrelated failure
+      // must not reuse this one even if the current check throws or halts.
+      await writeKickbackLedger(this.projectRoot, {
+        ...ledger,
+        gates: {
+          ...ledger.gates,
+          [sourceGate]: { ...ctx, priorVerdict: true },
+        },
+      });
       const [treeAfter, resolvedAfter] = await Promise.all([
         currentTreeHash(this.projectRoot),
         countResolvedTasks(this.projectRoot),
       ]);
       const progress = classifyBuildProgress({
-        treeBefore: ctx.treeBefore,
+        treeBefore: ctx.treeHash,
         treeAfter,
         resolvedBefore: ctx.resolvedBefore,
         resolvedAfter,
@@ -2490,7 +2521,7 @@ export class Conductor {
       // 'kickback' event — the tree range + resolved-count delta is the
       // evidence that this cycle was productive, not a no-op.
       if (progress === 'did-work') {
-        const before = ctx.treeBefore ? ctx.treeBefore.slice(0, 7) : 'unknown';
+        const before = ctx.treeHash ? ctx.treeHash.slice(0, 7) : 'unknown';
         const after = treeAfter ? treeAfter.slice(0, 7) : 'unknown';
         const resolvedDelta = resolvedAfter - ctx.resolvedBefore;
         return {
@@ -5067,9 +5098,9 @@ export class Conductor {
               const evidence =
                 `full-suite verification failed (${fullSuiteFailure.reason}): ` +
                 `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
-              const count = (kickbackCounts.get('test_suite') ?? 0) + 1;
-              if (count <= MAX_KICKBACKS_PER_GATE) {
-                kickbackCounts.set('test_suite', count);
+              const kickback = await consumeKickbackBudget('test_suite', evidence);
+              const count = kickback.entry.count;
+              if (!kickback.exhausted) {
                 await emitTracked({
                   type: 'kickback',
                   from: 'test_suite',
@@ -5107,8 +5138,8 @@ export class Conductor {
             // build_review kickback (daemon only, Task 13): a FAIL verdict from
             // the objective grader between `build` and `manual_test` is an
             // implementation gap by definition — route back to BUILD with the
-            // grader's reasons as the retry hint. Uses the shared `kickbackCounts`
-            // map keyed by 'build_review' (the same anti-ping-pong mechanism the
+            // grader's reasons as the retry hint. Uses the durable kickback ledger
+            // keyed by 'build_review' (the same anti-ping-pong mechanism the
             // gate-driven tail uses for other gates), bounded by
             // MAX_KICKBACKS_PER_GATE like the other self-heal loops.
             if (this.daemon && step.name === 'build_review') {
@@ -5221,13 +5252,13 @@ export class Conductor {
                   process.off('SIGTERM', sigterm);
                   return;
                 }
-                const count = (kickbackCounts.get('build_review') ?? 0) + 1;
-                if (count <= MAX_KICKBACKS_PER_GATE) {
-                  kickbackCounts.set('build_review', count);
-                  const evidence =
+                const evidence =
                     failureDetails.length > 0
                       ? failureDetails.join('\n')
                       : 'grader returned FAIL without reasons';
+                const kickback = await consumeKickbackBudget('build_review', evidence);
+                const count = kickback.entry.count;
+                if (!kickback.exhausted) {
 
                   // #989: a build_review FAIL resolves a structured routing
                   // decision instead of assuming `build`. A completeness
@@ -5326,8 +5357,8 @@ export class Conductor {
             // evidence file at WIRING_EVIDENCE means newly-built code isn't
             // reachable/wired in yet — an implementation gap by definition,
             // same shape as a build_review FAIL. Route back to BUILD with the
-            // gap messages as the retry hint. Uses the shared `kickbackCounts`
-            // map keyed by 'wiring_check' (the same anti-ping-pong mechanism
+            // gap messages as the retry hint. Uses the durable kickback ledger
+            // keyed by 'wiring_check' (the same anti-ping-pong mechanism
             // the gate-driven tail uses for other gates), bounded by
             // MAX_KICKBACKS_PER_GATE like the other self-heal loops — kickback
             // only, never an unconditional HALT until the cap is exceeded.
@@ -5376,10 +5407,32 @@ export class Conductor {
                   .map((g) => g.message);
               }
               if (gapMessages.length > 0) {
-                const count = (kickbackCounts.get('wiring_check') ?? 0) + 1;
-                if (count <= MAX_KICKBACKS_PER_GATE) {
-                  kickbackCounts.set('wiring_check', count);
-                  const evidenceText = gapMessages.join('\n');
+                const evidenceText = gapMessages.join('\n');
+                const kickback = await consumeKickbackBudget('wiring_check', evidenceText);
+                const count = kickback.entry.count;
+                // The durable budget records the failing occurrence that just
+                // happened. Once it reaches the cap, surface that final
+                // kickback for observability but do not open another BUILD lap.
+                if (!kickback.exhausted && count >= MAX_KICKBACKS_PER_GATE) {
+                  await emitTracked({
+                    type: 'kickback',
+                    from: 'wiring_check',
+                    to: 'build',
+                    evidence: evidenceText,
+                    count,
+                  });
+                  const reason =
+                    `wiring_check gap unresolved after ${count - 1} build kickback(s) ` +
+                    `(cap ${MAX_KICKBACKS_PER_GATE}): ${gapMessages[0] ?? 'no reasons recorded'}`;
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  process.off('SIGTERM', sigterm);
+                  return;
+                }
+                if (!kickback.exhausted) {
                   await emitTracked({
                     type: 'kickback',
                     from: 'wiring_check',
@@ -6157,7 +6210,6 @@ export class Conductor {
             advance = await this.advanceTail(
               step,
               state,
-              kickbackCounts,
               stuckGate,
               steps,
               indexOf,
@@ -6296,7 +6348,7 @@ export class Conductor {
   /**
    * Shared kickback-verdict scan. Walks `topo.kickbackTargets` looking for a
    * gate that the given step re-opened (verdict is {satisfied:false,
-   * kickback.from === stepName}). Increments the shared `kickbackCounts`
+   * kickback.from === stepName}). Increments the durable kickback ledger
    * counter, emits the `kickback` event, and — when `navigate` is true —
    * re-opens the target gate via navigateBack (cascade-staling its
    * downstream). HALTs (writes the marker + surfaces a remediation PR) if a
@@ -6309,7 +6361,6 @@ export class Conductor {
   private async scanKickbackVerdicts(
     stepName: StepName,
     state: ConductState,
-    kickbackCounts: Map<StepName, number>,
     verdicts: Partial<Record<StepName, GateObjectiveVerdict>>,
     topo: GateTopology,
     steps: StepDefinition[],
@@ -6319,8 +6370,16 @@ export class Conductor {
     for (const target of topo.kickbackTargets) {
       const v = verdicts[target];
       if (v && v.satisfied === false && v.kickback?.from === stepName) {
-        const count = (kickbackCounts.get(target) ?? 0) + 1;
-        kickbackCounts.set(target, count);
+        const [treeHash, resolvedCount] = await Promise.all([
+          currentTreeHash(this.projectRoot),
+          countResolvedTasks(this.projectRoot),
+        ]);
+        const kickback = await bumpKickbackGateInLedger(this.projectRoot, target, {
+          treeHash,
+          resolvedCount,
+          reason: v.kickback?.evidence ?? '',
+        });
+        const count = kickback.entry.count;
         await this.events.emit({
           type: 'kickback',
           from: stepName,
@@ -6328,8 +6387,8 @@ export class Conductor {
           evidence: v.kickback?.evidence,
           count,
         });
-        if (count > MAX_KICKBACKS_PER_GATE) {
-          const reason = `kickback ping-pong: ${target} re-opened ${count} times (cap ${MAX_KICKBACKS_PER_GATE})`;
+        if (kickback.exhausted) {
+          const reason = `kickback ping-pong: ${target} re-opened ${count + 1} times (cap ${MAX_KICKBACKS_PER_GATE})`;
           await writeFile(
             join(this.projectRoot, LOOP_HALT_MARKER),
             reason + '\n',
@@ -6364,7 +6423,6 @@ export class Conductor {
   private async advanceTail(
     step: StepDefinition,
     state: ConductState,
-    kickbackCounts: Map<StepName, number>,
     stuckGate: Map<StepName, number>,
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
@@ -6540,7 +6598,6 @@ export class Conductor {
       const frontKickback = await this.scanKickbackVerdicts(
         step.name,
         state,
-        kickbackCounts,
         frontVerdicts,
         topo,
         steps,
@@ -6593,7 +6650,6 @@ export class Conductor {
     const kickbackVerdict = await this.scanKickbackVerdicts(
       step.name,
       state,
-      kickbackCounts,
       verdicts,
       topo,
       steps,
