@@ -13,15 +13,15 @@ Design decisions this file assumes (see `.docs/track/fresh-session-per-step.md`,
 `.memory/decisions/fresh-session-per-step-approach.md`):
 - Approach A — the opt-in `freshContextPerStep` flag is removed; the session reset that
   is currently gated on it (`conductor.ts:1114`) becomes unconditional.
-- Every within-step retry also starts a fresh session, recovering context from
-  committed artifacts and the full retry prompt.
+- Within-step retry-resume is preserved (the reset already fires once *before* the
+  `while (attempt…)` retry loop).
 - Interactive carve-out — if unconditional fresh breaks the inline `/conduct` design REPL,
   a shared session may be retained **for interactive REPL steps only**; autonomous /
   print-mode steps always get fresh sessions.
 
 > **Implemented resolution:** No interactive carve-out was introduced. The
-> unconditional reset applies in every mode, phase, and retry dispatch. No
-> provider resumes an earlier session.
+> unconditional step-boundary reset applies in every mode and phase. Only
+> retries within the current step resume its session.
 
 ---
 
@@ -97,33 +97,36 @@ leaving the flag false.
 
 ---
 
-## Story: Within-step retries start fresh
+## Story: Within-step retries resume the same session (not fresh)
 
-**Requirement:** A step's own internal retry attempts start in new sessions while retaining
-task continuity through committed artifacts and the full retry prompt.
+**Requirement:** A step's own internal retry attempts continue that step's session — a retry
+is a continuation of the same task, not a new step, so it must resume rather than reset.
 
-As the conductor, I want retries of a failing step to start clean so that prior dead-end
-reasoning cannot contaminate the next attempt while durable work and the failure reason remain
-available.
+As the conductor, I want retries of a failing step to reuse the step's session so that the
+retry sees the partial work/errors of the prior attempt and can finish the task, while the
+*step boundary* (not the retry) is the only place a fresh session is minted.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a step that fails its first attempt and is retried within its `maxRetries` budget, when
-  the second attempt is dispatched, then it uses a new session id and `resume: false`, with the
-  prior failure supplied in the full retry prompt.
+  the second attempt is dispatched, then it uses the *same* session id as the first attempt and
+  dispatches as a resume — the session is reset once at step entry, before the retry loop, and
+  not again between attempts.
 
 #### Negative Paths
 - Given a step on its second retry attempt, when the provider dispatch is inspected, then a
-  test FAILS if that attempt reuses a session id or requests resume.
+  test FAILS if that attempt started a fresh session (new id / create) — this guards the
+  retry-resume invariant against a regression where the boundary reset leaks into the retry loop.
 - Given a mid-step stale-session recovery (`sessionExpired`) fires, when the session is reset to
   recover, then the retry budget is not consumed by that reset (attempt is decremented), so the
   recovery reset is distinguishable from — and does not become — a per-attempt fresh start.
 
 ### Done When
-- [ ] A test runs a step through ≥2 attempts and asserts distinct session ids plus
-      `resume: false` across attempts.
-- [ ] A test asserts every retry dispatch mints a fresh identity.
+- [ ] A test runs a step through ≥2 attempts and asserts identical session id + resume dispatch
+      across attempts (retry-resume preserved).
+- [ ] A test asserts the boundary reset happens exactly once per step entry (before the retry
+      loop), not once per attempt.
 
 ---
 

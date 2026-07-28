@@ -13,7 +13,7 @@ sessions as durable across later steps. That contradicts the accepted and
 implemented fresh-session-per-step contract from issue #325:
 
 - every executed step begins with a fresh session;
-- every retry within the same step starts a fresh session;
+- a retry within the same step resumes that step's session;
 - stale-session recovery may replace that session without consuming retry
   budget; and
 - concurrent and one-shot auxiliary work remains isolated.
@@ -40,16 +40,20 @@ Crossing a normal conductor step boundary invalidates every provider session
 created for the prior step. This preserves #325 even when one step attempted
 multiple providers.
 
-### 2. Every retry starts a fresh session
+### 2. Retries resume only within the same step and provider
 
-A budget-consuming retry or non-consuming recovery retry creates a new session
-identity for every dispatch. This rule is unconditional across providers,
-fallback candidates, concurrent branches, and one-shot auxiliary work. A retry
-recovers context from committed artifacts and the full retry prompt rather than
-from conversation history.
+A budget-consuming retry or non-consuming recovery retry may resume the session
+created by the same provider for the current step. It may not resume:
 
-Stale-session recovery retains its existing non-consuming retry-budget behavior,
-but its replacement invocation is another cold start rather than a resume.
+- a different provider's session;
+- a session from an earlier step;
+- a concurrent branch's session; or
+- a one-shot auxiliary session.
+
+If a retry again reaches a fallback provider used earlier in the same step, it
+may resume that fallback provider's step-scoped session. Stale-session recovery
+replaces only that step-and-provider session and retains the existing
+non-consuming retry behavior.
 
 ### 3. Provider fallback starts provider-native context
 
@@ -63,16 +67,16 @@ boundary.
 
 Concurrent branches remain branch-, step-, and provider-local. Existing
 one-shot judgment, attribution, prelude, rebase, remediation, setup-fix,
-CI-fix, and recovery paths keep their fresh-session behavior. If they
-implement retries, every retry also starts fresh.
+CI-fix, and recovery paths keep their stricter fresh-session behavior unless
+they implement retries for the same logical step; any such retry may resume
+only its own step-and-provider session.
 
 ### 5. Persistence remains compatible without restoring cross-step context
 
 The existing scalar/single-provider path retains the accepted #325 behavior and
 compatible marker durability needed for retry and crash recovery. Persistence
-may correlate an invocation with its owning step and provider, but it never
-authorizes resume. A legacy marker must never cause any dispatch to resume an
-old conversation.
+must identify the owning step and provider before any resume. A legacy marker
+must never cause a new step or another provider to resume an old conversation.
 
 ## Preserved Decisions
 
@@ -95,8 +99,8 @@ All non-session decisions from
 
 - #927 composes with the already-shipped #325 context-isolation guarantee.
 - Mixed-provider fallback cannot leak conversation context across providers.
-- Retry context remains available through artifacts and the full retry prompt
-  without conversation accumulation.
+- Retry continuity remains available without permitting cross-step context
+  accumulation.
 - Session tests have an explicit key: step execution plus provider.
 
 ### Negative
@@ -113,7 +117,7 @@ All non-session decisions from
 - [ ] Model session state by step execution and provider.
 - [ ] Reset all provider session state at every executed step boundary.
 - [ ] Start a fresh session on the first attempt by each provider in a step.
-- [ ] Start every retry with a fresh session identity.
+- [ ] Resume only same-step, same-provider retries.
 - [ ] Preserve branch and auxiliary one-shot isolation.
-- [ ] Add mixed-provider boundary, cold-retry, fallback, stale-session, and
+- [ ] Add mixed-provider boundary, retry-resume, fallback, stale-session, and
       crash-recovery tests.
