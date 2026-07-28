@@ -67,6 +67,19 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- A skipped gate no longer ends the run with no verdict at all. `retro` is a verdict-bearing loop
+  gate that is skipped for tier S, skipped on every daemon run, and auto-skipped in auto mode when
+  its advisory completion check fails — but the only place a step's objective verdict was persisted
+  is the success tail, so every skip path resolved the step and moved on without writing
+  `.pipeline/gates/<step>.json`. The selector then fell back to the step's own status flag, i.e. the
+  self-report the verdict layer exists to distrust, and `retro` shipped resolved with no verdict
+  anywhere in the audit record. Every skip now writes
+  `{"satisfied": true, "reason": "skipped: <cause>"}`, with the cause naming the tier, track,
+  bootstrap mode, upstream skip, config disable, false `when:`, daemon `retro` handoff, or — for an
+  auto-skipped advisory step — the completion failure that caused it. Satisfaction is unchanged (the
+  selector already treated a skipped gate as satisfied) and no enforcement level changed; what
+  changes is that a skip is now recorded rather than absent, and the `skipped: ` prefix keeps it from
+  reading as passing evidence.
 - The `build_progress` / `build_no_progress` events — and the `▶ build <resolved>/<total>` line they
   render into `.daemon/daemon.log` — no longer report a permanently pinned `resolved: 0` while a
   build is committing task after task. The watcher counted `.pipeline/task-status.json` rows only,
