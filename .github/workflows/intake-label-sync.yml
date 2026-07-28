@@ -12,6 +12,13 @@ name: intake-label-sync
 # matching parseSizeLabel's exact-match rules (no partial/loose matches).
 # Unparsable/missing fields default to `priority: medium`, `size: M`.
 #
+# Source discrimination: this defaulting applies ONLY to issue-form
+# submissions, detected by the presence of the `### Priority` / `### Size`
+# field headings. An issue filed by `bin/intake-file` has a hand-authored
+# markdown body with no field headings and already carries the labels the
+# filer chose, so the apply script skips it entirely rather than stamping a
+# second, contradictory band over it.
+#
 # Dependency linking approach: rather than a special "blocking" GitHub
 # relationship (which requires GraphQL sub-issue APIs and org-level
 # features), we record each dependency as a `blocked_by:#N` label — a
@@ -24,10 +31,12 @@ name: intake-label-sync
 # always exits 0 — a label-apply failure (auth, rate limit, network) must
 # never fail this workflow or block any other CI/build workflow.
 #
-# Idempotency: re-editing an issue re-runs this workflow. The apply script
-# diffs the desired label set against the issue's current labels and calls
-# the "set labels" REST endpoint (a full replace) only when they differ, so
-# re-edits never duplicate labels and always reflect the latest field values.
+# Idempotency: re-editing an issue re-runs this workflow. Label application
+# is ADDITIVE (the REST add-labels endpoint, via addLabel in pr-labels.ts),
+# and adding a label an issue already carries is a server-side no-op — so
+# re-edits with unchanged fields never duplicate anything. Note the flip
+# side: because it adds rather than replaces, changing a field's value does
+# NOT retract the previously-applied band; both remain until one is removed.
 
 on:
   issues:

@@ -12,6 +12,7 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -243,7 +244,11 @@ export class CodexProvider implements LLMProvider {
   ): void {
     if (!diagnosticLog) return;
     for (const output of [result.stdout, result.stderr]) {
-      if (typeof output === 'string' && output.length > 0) diagnosticLog(output);
+      // `exec --json` stdout is a JSONL machine stream. Summarize it for the
+      // operator-facing daemon log; unrecognized output passes through verbatim.
+      if (typeof output === 'string' && output.length > 0) {
+        diagnosticLog(summarizeProviderDiagnostic('codex', output));
+      }
     }
   }
 

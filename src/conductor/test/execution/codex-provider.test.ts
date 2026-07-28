@@ -241,7 +241,10 @@ describe('CodexProvider', () => {
     await provider.invoke({ ...baseOptions, diagnosticLog: featureLog });
     await provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog });
 
-    expect(featureLog).toHaveBeenCalledWith(jsonlMessage('one-shot output'));
+    // A recognized JSONL machine stream reaches the daemon log as a readable
+    // summary; prose stdout and stderr still pass through verbatim so no
+    // diagnostic detail is traded away for readability.
+    expect(featureLog).toHaveBeenCalledWith('codex: done — 12→7 tok\none-shot output');
     expect(featureLog).toHaveBeenCalledWith('one-shot stderr');
     expect(featureLog).toHaveBeenCalledWith('automatic output');
     expect(featureLog).toHaveBeenCalledWith('automatic stderr');

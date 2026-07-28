@@ -16,7 +16,10 @@
 // from ci.yml per the task spec).
 import { readFileSync } from 'node:fs';
 import { makeProductionGh } from '../src/engine/pr-labels.js';
-import { syncIssueLabels } from '../src/engine/engineer/intake/label-sync.js';
+import {
+  syncIssueLabels,
+  isIssueFormSubmission,
+} from '../src/engine/engineer/intake/label-sync.js';
 
 /**
  * Extract the raw value submitted under a given issue-form field heading.
@@ -81,6 +84,19 @@ async function main(): Promise<void> {
   }
 
   const body: string = issue.body ?? '';
+
+  // Only issue-form submissions have fields to sync. An issue filed by
+  // bin/intake-file has no field headings and already carries the operator's
+  // chosen priority:/size: labels — defaulting over it would ADD a second,
+  // contradictory band (addLabel is additive).
+  if (!isIssueFormSubmission(body)) {
+    console.error(
+      `[intake-label-sync] issue #${issue.number} is not an issue-form submission ` +
+        '(no Priority/Size field headings); skipping — labels are owned by the filer',
+    );
+    return;
+  }
+
   const priority = extractField(body, 'Priority');
   const size = extractField(body, 'Size');
   const dependsOn = parseDependsOnField(body, repoSlug);
