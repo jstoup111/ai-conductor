@@ -35,6 +35,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   daemon build that produced them. A record written before stamping reports `engine=unknown` rather
   than omitting the field, keeping unattributed ships visible in the report instead of silently
   blending into the stamped ones.
+- The daemon now reconciles parked features automatically: on startup and every idle poll tick it
+  classifies each parked slug as merged, orphaned, or normal, annotates `conduct-ts daemon status`
+  accordingly, and — unless `reconcile_parked_auto_cleanup: false` — removes the worktree, deletes
+  the branch, and unparks any slug that is merged into `origin/main` and has a shipped record,
+  requesting an ST-916 record-repair PR first when the record is still missing. The new `conduct-ts
+  daemon reconcile-parked <slug>` verb runs the same guarded cleanup on demand for one slug
+  ({{IMPLEMENTATION_PR}}).
 
 ### Changed
 

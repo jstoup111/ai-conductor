@@ -233,6 +233,40 @@ Running either outside a conduct project prints `not inside a conduct project �
 > pipeline now runs under the inline subcommand.` before exiting 1 — a message unrelated to parking.
 > Always pass the slug. Tracked in [#1012](https://github.com/jstoup111/ai-conductor/issues/1012).
 
+### `daemon reconcile-parked`
+
+```bash
+conduct-ts daemon reconcile-parked <slug>
+```
+
+Runs the same guarded cleanup the daemon's own idle-tick sweep uses, on demand, for one parked
+feature. Like `park`/`unpark`, it validates its argument shape and resolves the main repo root
+before any other work, so it works from inside any worktree.
+
+A missing or malformed slug never reaches Git: no slug prints `Usage: conduct daemon
+reconcile-parked <slug>` and exits 1; a slug that fails `^[a-z0-9][a-z0-9-]*$` prints `Could not
+reconcile '<slug>': invalid-slug` and exits 1.
+
+For a valid slug, the command checks whether `feature/<slug>` is merged into `origin/main`. If it
+is not yet merged, or the check fails, it prints `Could not reconcile '<slug>': <reason>` and exits
+1, where `<reason>` is one of `not-ancestor`, `branch-missing`, or `ancestry-check-failed`. If it is
+merged but `.docs/shipped/<slug>.md` does not exist on `origin/main`, it requests an ST-916
+record-repair PR when a merged PR can be found, prints `Could not reconcile '<slug>':
+record-missing`, and exits 1 — the same deferral the daemon sweep applies until the shipped record
+lands. If a resume is in progress for the slug, it prints `Could not reconcile '<slug>':
+in-progress` and exits 1.
+
+Once merged, recorded, and not in progress, it removes `.worktrees/<slug>`, deletes
+`feature/<slug>`, and unparks the slug — the same three steps
+[park before you touch a feature's git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state)
+describes doing by hand. It prints `Reconciled '<slug>': worktree-removed, branch-deleted,
+unparked` and exits 0. A failure partway through prints `Could not reconcile '<slug>':
+worktree-remove-failed`, `branch-delete-failed`, or `unpark-failed` and exits 1, leaving whatever
+steps completed in place.
+
+See [park a feature before you touch its git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state)
+for the automatic sweep this verb shares its logic with.
+
 ### Daemon management verbs
 
 ```bash
