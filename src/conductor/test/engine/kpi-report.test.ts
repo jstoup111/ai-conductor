@@ -107,6 +107,38 @@ describe('parseCostBlock', () => {
 });
 
 describe('renderKpi', () => {
+  it('renders per-provider attribution and cache-related Cost fields', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/attributed.md'),
+      record('attributed', [
+        'input: 700', 'output: 80', 'cache_read: 15', 'cache_creation: 9', 'cost_usd: 0.05',
+        'dispatches: 3', 'retries: 1', 'halts: 0',
+        'unmetered: count: 1, duration_ms: 4200', 'cost_unmetered: count: 1',
+        'providers:',
+        '  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1, cost_unmetered: 0',
+        '  codex: input: 600, output: 60, cache_read: 5, cache_creation: 7, cost_usd: 0, dispatches: 2, cost_unmetered: 1',
+        '',
+      ].join('\n')),
+    );
+
+    const report = await renderKpi(root);
+
+    expect(report).toMatch(/cache_read=15.*cache_creation=9.*dispatches=3.*retries=1.*halts=0.*duration_ms=4200/);
+    expect(report).toMatch(/claude:.*tokens=120.*cost_usd=0\.05.*cost_unmetered=0.*dispatches=1/);
+    expect(report).toMatch(/codex:.*tokens=660.*cost_usd=unavailable.*cost_unmetered=1.*dispatches=2/);
+  });
+
+  it('renders legacy top-level totals without provider detail', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(join(root, '.docs/shipped/legacy.md'), record('legacy', COST_LINES));
+
+    const report = await renderKpi(root);
+
+    expect(report).toMatch(/legacy:.*input=1000.*output=200/);
+    expect(report).not.toMatch(/^\s+(?:-\s+)?(?:claude|codex):/m);
+  });
+
   it('keeps cost-unmetered feature tokens while excluding their cost', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(
