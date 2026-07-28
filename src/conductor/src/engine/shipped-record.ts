@@ -3,6 +3,7 @@ import { access, readFile, writeFile, mkdir } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
 import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
+import { versionIdFromEngineDir } from './engine-version-id.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -86,6 +87,13 @@ export interface ShippedRecordFields {
   specHash: string;
   pr?: string;
   shipped?: string;
+  /**
+   * Engine version id of the build that shipped this feature — the same value
+   * `conduct daemon status` prints as `version:<id>`. Omitted entirely when
+   * absent, so legacy records and non-ship writers (backfill proposals, repair
+   * writes) stay byte-identical to what they produced before.
+   */
+  engineVersion?: string;
 }
 
 /**
@@ -96,6 +104,8 @@ export interface ParsedShippedRecord {
   specHash: string;
   pr: string;
   shipped: string;
+  /** Absent on records written before engine-version stamping. */
+  engineVersion?: string;
 }
 
 /**
@@ -124,6 +134,13 @@ function todayIso(): string {
 export function renderShippedRecord(fields: ShippedRecordFields): string {
   const pr = fields.pr ?? DEFAULT_PR;
   const shipped = fields.shipped ?? todayIso();
+  // Emitted only when supplied: a record written without a resolvable engine
+  // version stays byte-identical to the pre-stamping format, so backfill
+  // proposals and repair writes are unaffected and legacy records still
+  // round-trip.
+  const engineVersion = fields.engineVersion
+    ? `engine_version: ${fields.engineVersion}\n`
+    : '';
 
   return (
     `---\n` +
@@ -131,8 +148,27 @@ export function renderShippedRecord(fields: ShippedRecordFields): string {
     `spec_hash: ${fields.specHash}\n` +
     `pr: ${pr}\n` +
     `shipped: ${shipped}\n` +
+    engineVersion +
     `---\n`
   );
+}
+
+/**
+ * Resolve the engine version id of the currently executing build from its own
+ * module directory, for stamping into a shipped record.
+ *
+ * `conduct shipped-record` is a fresh short-lived process with no pidfile to
+ * consult, so the version is derived the same way `daemon-lock.ts` derives
+ * `OWN_ENGINE_DIR`: from the running module's path, which is
+ * `<store>/dist-versions/<id>/engine` for a published build.
+ *
+ * NEVER throws and never touches the filesystem — `shipped-record-cli.ts` is
+ * degrade-never-block, and a version that cannot be resolved must not cost a
+ * feature its shipped record. An unpublished dev/tsx run embeds no version id
+ * and resolves to `dev`.
+ */
+export function resolveEngineVersion(engineDir: string): string {
+  return versionIdFromEngineDir(engineDir) ?? 'dev';
 }
 
 /**
@@ -206,7 +242,7 @@ export function parseShippedRecord(
     return { malformed: true };
   }
 
-  const { slug, spec_hash: specHash, pr, shipped } = fields;
+  const { slug, spec_hash: specHash, pr, shipped, engine_version: engineVersion } = fields;
   if (!slug || !specHash) {
     return { malformed: true };
   }
@@ -216,6 +252,9 @@ export function parseShippedRecord(
     specHash,
     pr: pr ?? DEFAULT_PR,
     shipped: shipped ?? todayIso(),
+    // Absent on pre-stamping records: left undefined rather than defaulted, so
+    // "shipped by an unknown build" stays distinguishable from `dev`.
+    ...(engineVersion ? { engineVersion } : {}),
   };
 }
 

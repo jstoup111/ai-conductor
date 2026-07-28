@@ -13,12 +13,14 @@
 // it must never fail an otherwise successful ship.
 
 import { readFile, readdir } from 'node:fs/promises';
-import { join, isAbsolute } from 'node:path';
+import { join, isAbsolute, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
+  resolveEngineVersion,
   writeShippedRecord,
 } from './shipped-record.js';
 import { computeCostRollup } from './cost-rollup.js';
@@ -115,20 +117,30 @@ export async function dispatchShippedRecord(
     // any reason, fall back to the plain frontmatter-only record (no Cost
     // block) rather than let the error propagate into the outer catch (which
     // would still exit 0, but would also skip the record entirely).
+    // Stamp the engine build that shipped this feature, so daemon-version KPIs
+    // can attribute each ship to a build. Resolved from this module's own path
+    // (a fresh `conduct shipped-record` process has no pidfile to read) and
+    // never throws — see resolveEngineVersion.
+    const engineVersion = resolveEngineVersion(dirname(fileURLToPath(import.meta.url)));
+    const fields = {
+      slug: identity.slug,
+      specHash: digest,
+      pr,
+      shipped: todayIso(),
+      engineVersion,
+    };
+
     let recordBody: string;
     try {
       const rollup = await computeCostRollup(cwd);
-      recordBody = renderShippedRecordWithCost(
-        { slug: identity.slug, specHash: digest, pr, shipped: todayIso() },
-        rollup,
-      );
+      recordBody = renderShippedRecordWithCost(fields, rollup);
     } catch (err) {
       console.error(
         `cost rollup failed — shipped record written without a Cost block for ${identity.slug}: ${
           err instanceof Error ? err.message : String(err)
         }`,
       );
-      recordBody = renderShippedRecord({ slug: identity.slug, specHash: digest, pr, shipped: todayIso() });
+      recordBody = renderShippedRecord(fields);
     }
     await writeShippedRecord(join(cwd, relPath), recordBody);
 

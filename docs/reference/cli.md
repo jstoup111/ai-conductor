@@ -435,6 +435,13 @@ It resolves the plan identity, hashes `.docs/plans/<slug>.md` and its stories fi
 when one can be computed, then `git add`s the file and commits it as `shipped record: <slug>` only when
 the staged content actually changed. Identical already-committed content produces no duplicate commit.
 
+The frontmatter also carries `engine_version`: the engine build id that shipped the feature — the same
+value `conduct-ts daemon status` prints as `version:<id>`. It is resolved from the running engine's own
+module path, so a published build records e.g. `20260727T234833Z-b5b34bb9f015` and an unpublished
+source checkout records `dev`. Resolution never throws and never blocks the record. Records written
+before this field existed simply omit the line, and `conduct-ts kpi` reports those as
+`engine=unknown`.
+
 Either flag missing prints the usage guide to stderr and exits 1.
 
 Every other failure exits **0** with one warning and no record written, so the exit code cannot be
@@ -452,6 +459,10 @@ conduct-ts kpi
 Read-only report over the cost blocks in committed `.docs/shipped/*.md` records. Accepts and ignores
 any trailing arguments. Always exits 0: a missing or empty `.docs/shipped` prints a friendly message
 rather than an error, and malformed records do not throw. Does not appear in `--help`.
+
+Each per-feature row carries `engine=<id>`, the engine build that shipped it, so ships can be
+attributed to a daemon build. A record written before engine-version stamping reports
+`engine=unknown` rather than omitting the field, keeping unattributed ships visible in the report.
 
 ## `conduct-ts memory setup`
 
