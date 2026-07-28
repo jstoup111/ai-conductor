@@ -518,8 +518,16 @@ describe('engine/finish-record-cli', () => {
     let scratchParent: string;
     let existingAbsDir: string;
     let passingRunners: FinishRecordRunners;
+    let previousAutoFinishEnv: string | undefined;
 
     beforeEach(async () => {
+      // Isolate from CONDUCT_DAEMON_AUTO_FINISH: when this suite runs inside an
+      // actual daemon/auto finish step, that marker is set for the whole process
+      // tree (see dispatchFinishRecord's comment) and would spuriously trip the
+      // choice=keep remote-check gate exercised in the dedicated describe block
+      // below, not here.
+      previousAutoFinishEnv = process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
       scratchParent = await mkdtemp(join(tmpdir(), 'finish-record-writes-'));
       existingAbsDir = await mkdtemp(join(scratchParent, 'pipeline-'));
       await writeFile(
@@ -550,6 +558,8 @@ describe('engine/finish-record-cli', () => {
     });
 
     afterEach(async () => {
+      if (previousAutoFinishEnv === undefined) delete process.env.CONDUCT_DAEMON_AUTO_FINISH;
+      else process.env.CONDUCT_DAEMON_AUTO_FINISH = previousAutoFinishEnv;
       vi.restoreAllMocks();
       await rm(scratchParent, { recursive: true, force: true });
     });
