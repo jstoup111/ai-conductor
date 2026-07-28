@@ -130,6 +130,14 @@ bounded by the `build_progress_halt` block. Defaults: enabled, `attempt_ceiling:
 "genuinely stuck" apart from "still progressing but out of runway". Key details are in
 [configuration](../reference/configuration.md).
 
+The `▶ build <resolved>/<total>` line counts a task as resolved when its `.pipeline/task-status.json`
+row reads `completed`/`skipped` **or** a commit on the branch carries its `Task: <id>` trailer — the
+same union the build completion gate routes on. Nothing writes those rows back mid-build except the
+`pipeline` skill's explicit `conduct task done`, so on a run where the agent only stamps trailers the
+rows stay `pending` and the trailers are what moves the number. A `resolved` count that does not
+advance while `commitCount` keeps ticking therefore means work is landing without task attribution —
+check the commit trailers before treating it as a stall.
+
 #### Rate limits
 
 A rate-limited dispatch emits `rate_limit` and waits — to the deadline parsed from the provider
