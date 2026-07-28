@@ -10,7 +10,7 @@ import type { ConductorEventEmitter } from '../ui/events.js';
  * is deliberately ignored — no handler is registered for it, so it neither
  * appends nor errors.
  */
-const SUBSCRIBED_EVENT_TYPES: Array<ConductorEvent['type']> = [
+export const SUBSCRIBED_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'gate_verdict',
   'step_retry',
   'kickback',

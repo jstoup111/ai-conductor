@@ -21,7 +21,7 @@ export class EventPersistError extends Error {
 /**
  * All ConductorEvent types — used to subscribe to every event kind.
  */
-const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
+export const ALL_EVENT_TYPES: Array<ConductorEvent['type']> = [
   'step_started',
   'step_completed',
   'step_failed',
