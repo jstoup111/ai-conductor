@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
+import type { GitRunner, GhRunner } from './pr-labels.js';
 
 const execFile = promisify(execFileCb);
 const SINGLE_SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -63,9 +64,7 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
   if (args[0] !== 'daemon') return null;
   const sub = args[1];
   if (sub === 'reconcile-parked') {
-    return args.length === 3 && args[2]
-      ? { kind: 'reconcile-parked', slug: args[2] }
-      : { kind: 'reconcile-parked', invalidArgs: true };
+    return args.length === 3 && args[2] ? { kind: 'reconcile-parked', slug: args[2] } : null;
   }
   if (sub !== 'park' && sub !== 'unpark') return null;
   const slug = args[2];
@@ -100,7 +99,11 @@ export interface DaemonParkDeps {
     projectRoot: string;
     slug: string;
     log: (line: string) => void;
+    runGit?: GitRunner;
+    runGh?: GhRunner;
   }) => Promise<ReconcileMergedParkOutcome>;
+  runGit?: GitRunner;
+  runGh?: GhRunner;
 }
 
 /**
@@ -145,7 +148,7 @@ export async function dispatchDaemonPark(
       const reconcile =
         deps.reconcileMergedPark ??
         (await import('./park-reconciliation.js')).reconcileMergedPark;
-      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out });
+      const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh });
       if (outcome.refusal) {
         out(`Could not reconcile '${slug}': ${outcome.refusal}`);
         return 1;

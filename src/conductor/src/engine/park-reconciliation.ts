@@ -83,7 +83,7 @@ export async function reconcileParkedFeatures(
     } catch (error) {
       if ((error as { code?: unknown }).code !== 1) {
         classification = 'unclassified';
-        opts.log?.(`[parked-reconciliation] ${slug} ancestry check unavailable; skipped`);
+        opts.log?.(`[parked-reconciliation] ${slug} origin/main ancestry check unavailable; skipped`);
       } else {
         const intake = await readFile(join(opts.projectRoot, '.docs', 'intake', `${slug}.md`), 'utf-8')
           .then((content) => content)
@@ -180,7 +180,7 @@ export async function reconcileMergedPark(
       .map((entry) => entry.trim())
       .filter(Boolean);
   } catch {
-    return { slug: opts.slug, steps: [], refusal: 'record-check-failed' };
+    shippedRecords = [];
   }
 
   if (!shippedRecords.includes(`${opts.slug}.md`)) {
