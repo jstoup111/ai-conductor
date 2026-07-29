@@ -492,7 +492,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       run_started_at: 1,
       build: 'done',
       build_review: 'done',
-    });
+    }, { allowPrUrlClear: true });
 
     const secondEvents = new ConductorEventEmitter();
     const secondKickbackCounts: number[] = [];
