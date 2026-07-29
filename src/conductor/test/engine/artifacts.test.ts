@@ -457,7 +457,20 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('returns actionable diagnostics without selecting foreign or ambiguous candidates', async () => {
+    it('selects one unrecognizable legacy feature artifact for an identified active feature', async () => {
+      await createFile('.docs/retros/legacy-singleton.md');
+
+      const result = await resolveArtifactFiles(dir, 'retro', {
+        featureIdentities: ['active-feature'],
+        changedPaths: new Set<string>(),
+      });
+
+      expect(result).toEqual({
+        files: [join(dir, '.docs/retros/legacy-singleton.md')],
+      });
+    });
+
+    it('accepts legacy singletons while diagnosing ambiguous or missing candidates', async () => {
       await createFile('.docs/plans/feature-a.md');
       await createFile('.docs/stories/feature-a.md');
       await createFile('.docs/stories/feature-c.md');
@@ -487,11 +500,7 @@ describe('engine/artifacts', () => {
         missing,
       }).toEqual({
         foreign: {
-          files: [],
-          diagnostic: {
-            code: 'foreign',
-            reason: 'plan has one artifact candidate that does not match active feature "feature-b"',
-          },
+          files: [join(dir, '.docs/plans/feature-a.md')],
         },
         ambiguous: {
           files: [],
@@ -502,19 +511,10 @@ describe('engine/artifacts', () => {
           },
         },
         outsidePattern: {
-          files: [],
-          diagnostic: {
-            code: 'foreign',
-            reason:
-              'conflict_check has one artifact candidate that does not match active feature "feature-b"',
-          },
+          files: [join(dir, '.docs/conflicts/foreign-conflict.md')],
         },
         normalizedForeign: {
-          files: [],
-          diagnostic: {
-            code: 'foreign',
-            reason: 'prd has one artifact candidate that does not match active feature "feature-b"',
-          },
+          files: [join(dir, '.docs/specs/2026-07-28-feature-a.md')],
         },
         missing: {
           files: [],
@@ -547,7 +547,7 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: scoped generic artifacts', () => {
-    it('rejects a foreign feature, accepts the current file, and surfaces resolver diagnostics', async () => {
+    it('accepts a legacy singleton and prefers the current file when it appears', async () => {
       await createFile('.docs/specs/feature-a.md');
       const context: CompletionContext = {
         featureDesc: 'feature-b',
@@ -562,10 +562,7 @@ describe('engine/artifacts', () => {
       const currentFeature = await checkStepCompletion(dir, 'prd', context);
 
       expect({ foreignOnly, currentFeature }).toEqual({
-        foreignOnly: {
-          done: false,
-          reason: 'prd has one artifact candidate that does not match active feature "feature-b"',
-        },
+        foreignOnly: { done: true },
         currentFeature: { done: true },
       });
     });

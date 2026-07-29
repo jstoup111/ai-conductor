@@ -490,11 +490,7 @@ export async function resolveArtifactFiles(
     if (associated.length > 0) {
       associated.forEach((file) => files.add(file));
       patternResults.push({ pattern: contract.pattern, files: associated });
-    } else if (
-      candidates.length === 1 &&
-      context.featureIdentities.length === 0 &&
-      context.changedPaths.size === 0
-    ) {
+    } else if (candidates.length === 1) {
       files.add(candidates[0]);
       patternResults.push({ pattern: contract.pattern, files: [candidates[0]] });
     } else {
