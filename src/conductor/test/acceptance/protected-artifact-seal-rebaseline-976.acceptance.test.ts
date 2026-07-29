@@ -840,7 +840,7 @@ describe('ST-976-4: rotations, refusals and halts are machine-distinguishable', 
   );
 
   it(
-    'negative: a malformed seal still throws `Protected-artifact seal is invalid`, exactly as today',
+    'negative: a malformed seal still throws `Protected artifact seal is invalid`, exactly as today',
     async () => {
       const scratch = await makeFeatureRepo();
       const { repo } = scratch;
@@ -853,7 +853,7 @@ describe('ST-976-4: rotations, refusals and halts are machine-distinguishable', 
 
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: FEATURE, baseBranch: 'main' }),
-      ).rejects.toThrow('Protected-artifact seal is invalid');
+      ).rejects.toThrow('Protected artifact seal is invalid');
     },
     30000,
   );
