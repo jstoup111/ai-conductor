@@ -257,6 +257,10 @@ function fingerprint(content: string | Buffer): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
+function optionalBuffersEqual(left: Buffer | undefined, right: Buffer | undefined): boolean {
+  return left === undefined ? right === undefined : right !== undefined && left.equals(right);
+}
+
 /**
  * Decides whether a rewritten history may rotate an immutable artifact seal.
  * A rotation is safe only when every workspace divergence is independently
@@ -288,7 +292,13 @@ export function evaluateProtectedArtifactSealRotation({
   ])]
     .filter((path) => {
       const workspace = workspaceArtifacts.get(path);
-      return workspace === undefined || sealed.get(path) !== fingerprint(workspace);
+      const sealedFingerprint = sealed.get(path);
+      const sealedDiffersFromWorkspace = workspace === undefined
+        ? sealedFingerprint !== undefined
+        : sealedFingerprint === undefined || sealedFingerprint !== fingerprint(workspace);
+      return sealedDiffersFromWorkspace
+        || !optionalBuffersEqual(workspace, headArtifacts.get(path))
+        || !optionalBuffersEqual(headArtifacts.get(path), baseTipArtifacts.get(path));
     })
     .sort(comparePaths);
 
@@ -724,7 +734,6 @@ interface ApplyPermittedProtectedArtifactSealRotationInput {
   seal: ProtectedArtifactSeal;
   headCommit: string;
   paths: string[];
-  inspection: ProtectedArtifactSealVerdict;
 }
 
 async function applyPermittedProtectedArtifactSealRotation(
@@ -733,10 +742,8 @@ async function applyPermittedProtectedArtifactSealRotation(
     seal,
     headCommit,
     paths,
-    inspection,
   }: ApplyPermittedProtectedArtifactSealRotationInput,
 ): Promise<ProtectedArtifactSealVerdict> {
-  if (paths.length === 0) return inspection;
   const rotated = await rotateProtectedArtifactSeal({
     projectRoot: options.projectRoot,
     seal,
@@ -786,7 +793,6 @@ async function verifyExistingProtectedArtifactSeal(
     seal,
     headCommit: context.headCommit,
     paths: rotation.paths,
-    inspection,
   });
 }
 
