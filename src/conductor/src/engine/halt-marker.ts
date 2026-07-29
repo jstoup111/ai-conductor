@@ -28,6 +28,9 @@ export type HaltClass =
   | 'mechanical'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS;
 
+/** Classification observed while reading a HALT sidecar. */
+export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
+
 /**
  * Write `.pipeline/HALT` under `projectRoot` with `body` as its contents,
  * creating `.pipeline/` if needed. Best-effort: mkdir/write failures are
@@ -70,14 +73,17 @@ export async function writeHaltMarker(
  * than throwing — callers (e.g. the daemon re-kick sweep) must never crash
  * on a HALT sidecar read.
  */
-export async function readHaltClass(worktreePath: string): Promise<HaltClass | 'unclassified'> {
+export async function readHaltClass(worktreePath: string): Promise<HaltDisposition> {
   try {
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
     if (
       contents === 'needs-human' ||
       contents === 'mechanical' ||
+      contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS
-    ) return contents;
+    ) {
+      return contents;
+    }
     return 'unclassified';
   } catch {
     return 'unclassified';

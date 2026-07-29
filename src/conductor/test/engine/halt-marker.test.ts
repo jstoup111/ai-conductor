@@ -14,6 +14,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 
 import { writeFile, rename, mkdir } from 'node:fs/promises';
 import { writeHaltMarker, readHaltClass, HALT_MARKER, HALT_CLASS_MARKER } from '../../src/engine/halt-marker';
+import type { HaltClass } from '../../src/engine/halt-marker';
 
 describe('writeHaltMarker', () => {
   let root: string;
@@ -105,6 +106,14 @@ describe('readHaltClass', () => {
     vi.restoreAllMocks();
   });
 
+  it('keeps the read disposition distinct from writable halt classes', () => {
+    if (false) {
+      // @ts-expect-error read dispositions include values that cannot be written
+      const haltClass: HaltClass = null as unknown as Awaited<ReturnType<typeof readHaltClass>>;
+      void haltClass;
+    }
+  });
+
   it('returns needs-human when HALT.class contains needs-human (with trailing whitespace)', async () => {
     root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
     await mkdir(join(root, '.pipeline'), { recursive: true });
@@ -121,6 +130,15 @@ describe('readHaltClass', () => {
     await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), '  mechanical  ', 'utf-8');
 
     await expect(readHaltClass(root)).resolves.toBe('mechanical');
+  });
+
+  it('returns legacy when HALT.class contains legacy', async () => {
+    root = await mkdtemp(join(tmpdir(), 'halt-marker-'));
+    await mkdir(join(root, '.pipeline'), { recursive: true });
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    await (actual.writeFile as any)(join(root, HALT_CLASS_MARKER), 'legacy', 'utf-8');
+
+    await expect(readHaltClass(root)).resolves.toBe('legacy');
   });
 
   it('returns unclassified when the file is absent', async () => {
