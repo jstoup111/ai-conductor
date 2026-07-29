@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -115,6 +115,7 @@ function realDeps(opts: {
   isProcessed: (slug: string) => Promise<boolean>;
   log: (m: string) => void;
   lastRekickSha?: Map<string, string>;
+  readHaltClass?: RekickSweepDeps['readHaltClass'];
 }): RekickSweepDeps {
   return {
     listHaltedWorktrees: () => listHaltedWorktrees(worktreeBase),
@@ -125,6 +126,7 @@ function realDeps(opts: {
     lastRekickSha: opts.lastRekickSha ?? new Map(),
     log: opts.log,
     isProcessed: opts.isProcessed,
+    readHaltClass: opts.readHaltClass,
   } as RekickSweepDeps;
 }
 
@@ -142,7 +144,8 @@ describe('rekick-shipped-skip acceptance (#205): rekickSweep never re-kicks an a
     const isProcessed = await makeIsProcessed(processedDir, gitTreeSource(repoDir, baseBranch));
 
     const log: string[] = [];
-    const deps = realDeps({ isProcessed, log: (m) => log.push(m) });
+    const readHaltClass = vi.fn(async () => 'mechanical' as const);
+    const deps = realDeps({ isProcessed, log: (m) => log.push(m), readHaltClass });
     const result = await rekickSweep(deps, SHA_1);
 
     expect(result.skipped).toContain('shipped-feat');
@@ -153,6 +156,8 @@ describe('rekick-shipped-skip acceptance (#205): rekickSweep never re-kicks an a
     // slug's HALT was actually cleared on disk.
     expect(await haltIsPresent('shipped-feat')).toBe(true);
     expect(await haltIsPresent('wip-feat')).toBe(false);
+    expect(readHaltClass).not.toHaveBeenCalledWith('shipped-feat');
+    expect(readHaltClass).toHaveBeenCalledWith('wip-feat');
 
     expect(log.some((l) => /shipped-feat/.test(l) && /already shipped/i.test(l))).toBe(true);
   });

@@ -42,6 +42,7 @@ import { Conductor } from '../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../src/engine/conductor.js';
 import { checkStepCompletion } from '../src/engine/artifacts.js';
 import type { WiringEvidence } from '../src/engine/artifacts.js';
+import { readHaltClass } from '../src/engine/halt-marker.js';
 
 function frontDone(): ConductState {
   return {
@@ -459,9 +460,11 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     expect({
       secondKickbackCounts,
       halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
+      haltClass: await readHaltClass(dir),
     }).toEqual({
       secondKickbackCounts: [],
       halt: expect.stringMatching(/wiring_check kickback-to-build no-op/i),
+      haltClass: 'needs-human',
     });
   });
 

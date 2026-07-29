@@ -302,6 +302,9 @@ describe('engine/conductor', () => {
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
         'durable shipment evidence: shipped-record-missing',
       );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe(
+        'mechanical',
+      );
       await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
@@ -935,6 +938,7 @@ describe('engine/conductor', () => {
     expect(halted).toBe(true); // loop_halt event emitted
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(halt).toMatch(/stories/);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
     // It HALTed, so it did not also mark the feature complete.
     const result = await readState(statePath);
     expect(result.ok && result.value.feature_status).toBeUndefined();
@@ -1365,11 +1369,28 @@ describe('engine/conductor', () => {
     expect(halted).toBe(true);
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(halt).toMatch(/kaboom in stories|conductor error/);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
 
     // State flushed: a step before the throw is recorded, feature NOT complete.
     const result = await readState(statePath);
     expect(result.ok && result.value.explore).toBe('done');
     expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  it('daemon terminal-marker guarantee classifies an unmarked gate exit as needs-human', async () => {
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      fromStep: 'stories',
+    });
+
+    await conductor.run();
+
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
   });
 
   describe('daemon prd-audit gap-aware halting', () => {
@@ -1381,9 +1402,13 @@ describe('engine/conductor', () => {
     async function seedToPrdAudit(): Promise<void> {
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      let reachedPrdAudit = false;
       for (const s of ALL_STEPS) {
-        if (s.name === 'prd_audit') break;
-        state[s.name] = 'done';
+        if (s.name === 'prd_audit') {
+          reachedPrdAudit = true;
+          continue;
+        }
+        state[s.name] = reachedPrdAudit ? 'skipped' : 'done';
       }
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
@@ -1401,9 +1426,11 @@ describe('engine/conductor', () => {
     function shipRunner(auditBody: string): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, currentState: ConductState) => {
           calls.push(step);
           if (step === 'build') {
+            currentState.manual_test = 'skipped';
+            currentState.architecture_review_as_built = 'skipped';
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(
               join(dir, '.pipeline/task-status.json'),
@@ -1422,6 +1449,7 @@ describe('engine/conductor', () => {
             });
           } else if (step === 'prd_audit') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await new Promise((resolve) => setTimeout(resolve, 5));
             await writeFile(
               join(dir, '.pipeline/prd-audit.md'),
               '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
@@ -1483,13 +1511,11 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it.skip('self-heals an impl-gap audit back to BUILD, then HALTs on the first no-op cycle (D2)', async () => {
+    it('exhausts prd-audit impl-gap self-healing and classifies the terminal halt as needs-human', async () => {
       await seedToPrdAudit();
-      // Perpetual impl-gap: every audit reports the same un-closed impl-gap,
-      // and the fake BUILD makes zero net progress (task-status.json is
-      // byte-identical each call, no repo to move HEAD) — D2 (#647) now
-      // HALTs on the first no-op kickback cycle instead of spending the
-      // self-heal budget re-kicking a build that provably isn't helping.
+      // Perpetual impl-gap: every audit reports the same un-closed impl-gap.
+      // Disable the independent D2 no-op escalation so this fixture reaches
+      // the terminal writer only after exhausting both bounded self-heals.
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
       const kickbacks: Array<{ from: string; to: string }> = [];
       events.on('kickback', (e) => {
@@ -1504,23 +1530,36 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         projectRoot: dir,
-        mode: 'default',
+        mode: 'auto',
         daemon: true,
         verifyArtifacts: true,
         fromStep: 'prd_audit',
+        maxRetries: 1,
+        config: {
+          kickback_escalation: { enabled: false },
+          retry_routing: { enabled: false },
+        },
       });
 
       await conductor.run();
 
-      // Routed back to BUILD (kickback prd_audit→build) exactly once, then
-      // the re-entered prd_audit's zero-progress + unchanged-verdict re-fail
-      // escalates to HALT (D2) instead of a second self-heal round.
-      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(1);
-      expect(calls.filter((s) => s === 'build').length).toBe(1);
-      // Exhausted budget → HALT (not an opaque crash).
-      expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/kickback-to-build no-op/);
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect({
+        prdAuditKickbacks: kickbacks.filter(
+          (k) => k.from === 'prd_audit' && k.to === 'build',
+        ).length,
+        buildCalls: calls.filter((s) => s === 'build').length,
+        halted,
+        halt,
+        haltClass,
+      }).toEqual({
+        prdAuditKickbacks: 2,
+        buildCalls: 2,
+        halted: true,
+        halt: expect.stringMatching(/prd-audit impl-gap unresolved/),
+        haltClass: 'needs-human',
+      });
     });
 
     it.skip('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
@@ -3523,6 +3562,8 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/finish halted: needs human DECIDE/);
       expect(halt).toMatch(/test:wallet-flows \(architectural-clarity/);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('needs-human');
     });
 
     it('as-built review failure routes via /remediate and HALTs on the first no-op kickback cycle (D2)', async () => {
@@ -5264,6 +5305,52 @@ describe('engine/conductor', () => {
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
     });
 
+    it('classifies a grouped authentication timeout as needs-human without changing its reason', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+          calls.push(step);
+          if (step === 'prd_audit') {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: {
+                provider: 'codex',
+                source: 'api-key',
+                state: 'unusable',
+              },
+            };
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect({
+        reason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+        calls,
+      }).toEqual({
+        reason:
+          'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
+          'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.\n',
+        haltClass: 'needs-human',
+        calls: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
+      });
+    });
+
     it('halts one denied Codex group member without rerunning its completed siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       const calls: StepName[] = [];
@@ -5310,6 +5397,8 @@ describe('engine/conductor', () => {
           ]),
         ),
         haltReasons,
+        haltBody: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
       }).toEqual({
         calls: { manual_test: 1, prd_audit: 1, architecture_review_as_built: 1 },
         haltReasons: [
@@ -5317,6 +5406,8 @@ describe('engine/conductor', () => {
             /Codex permission review denied[\s\S]*selected api-key source[\s\S]*re-scope[\s\S]*re-queue/i,
           ),
         ],
+        haltBody: haltReasons[0] + '\n',
+        haltClass: 'needs-human',
       });
     });
 
@@ -9366,6 +9457,96 @@ describe('engine/conductor', () => {
       vi.clearAllMocks();
     });
 
+    it('classifies an immediate operator OAuth preflight HALT as needs-human', async () => {
+      const { readOperatorCredentialsState } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
+      const credentialsPath = join(dir, '.credentials.json');
+      await writeFile(
+        credentialsPath,
+        JSON.stringify({ claudeAiOauth: { expiresAt: 1234 } }),
+        'utf-8',
+      );
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      });
+
+      const result = await (
+        conductor as unknown as {
+          preflightCredentialsCheck: (configDir: string) => Promise<StepRunResult | undefined>;
+        }
+      ).preflightCredentialsCheck(dir);
+
+      expect(result?.output).toContain('Operator OAuth token is expired');
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    });
+
+    it('classifies a timed-out operator OAuth preflight HALT as needs-human', async () => {
+      const { readOperatorCredentialsState, waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
+      const credentialsPath = join(dir, '.credentials.json');
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout',
+        credentialsPath,
+        credentialsState: 'expired',
+        expiresAt: '1234',
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
+      });
+
+      const result = await (
+        conductor as unknown as {
+          preflightCredentialsCheck: (configDir: string) => Promise<StepRunResult | undefined>;
+        }
+      ).preflightCredentialsCheck(dir);
+
+      expect(result?.output).toContain('Operator credentials expired and refresh timed out');
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    });
+
+    it('preserves an existing classified marker during operator OAuth preflight', async () => {
+      const { readOperatorCredentialsState } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/HALT'), 'specific prior reason\n', 'utf-8');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'mechanical', 'utf-8');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      });
+
+      await (
+        conductor as unknown as {
+          preflightCredentialsCheck: (configDir: string) => Promise<StepRunResult | undefined>;
+        }
+      ).preflightCredentialsCheck(dir);
+
+      expect({
+        reason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+      }).toEqual({
+        reason: 'specific prior reason\n',
+        haltClass: 'mechanical',
+      });
+    });
+
     it('parks on authFailure without burning retry budget', async () => {
       const { waitForCredentialsChange } = await import(
         '../../src/engine/self-host/operator-credentials.js'
@@ -9426,9 +9607,13 @@ describe('engine/conductor', () => {
       expect({
         calls: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length,
         haltReasons,
+        haltBody: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
       }).toEqual({
         calls: 1,
         haltReasons: [expect.stringMatching(/Codex permission review denied[\s\S]*cached-login/i)],
+        haltBody: haltReasons[0] + '\n',
+        haltClass: 'needs-human',
       });
     });
 
@@ -9522,6 +9707,7 @@ describe('engine/conductor', () => {
       expect(halt).toContain(String(expiresAt));
       // Verify it's NOT the generic "retries exhausted" reason
       expect(halt).not.toMatch(/retries exhausted/i);
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
     });
 
     // ── TR-4 Task 15: Auth HALT distinguishable from build-defect HALT ─────
@@ -12666,6 +12852,9 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       await seedToBuildStep('existing-halt-precedence-test');
 
       const SPECIFIC_HALT = 'auto-park: durable no-evidence threshold reached';
+      const SPECIFIC_CLASS = 'mechanical';
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/HALT.class'), SPECIFIC_CLASS);
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           if (step === 'build') {
@@ -12705,6 +12894,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       expect(halted).toBe(true);
       const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
       expect(haltContent.trim()).toBe(SPECIFIC_HALT);
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe(SPECIFIC_CLASS);
     });
 
     it('non-no_task_progress terminal exhaustion keeps the pre-existing generic fallback string (lastBuildStallReason never set)', async () => {

@@ -6,9 +6,9 @@
 // daemon token exists (in daemon-token mode). If missing or unreadable, write
 // a HALT marker with mint instructions. For api-key mode, skip the check.
 
-import { writeFile, access as accessFile, mkdir } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { HALT_MARKER } from '../halt-marker.js';
+import { access as accessFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { HALT_MARKER, writeHaltMarker } from '../halt-marker.js';
 import { readDaemonBuildToken } from './daemon-build-token.js';
 import { buildAuthRemediationMessage } from './build-auth-message.js';
 import type { StepRunResult } from '../conductor.js';
@@ -54,13 +54,7 @@ export async function preflightBuildAuthCheck(
   const haltPath = join(projectRoot, HALT_MARKER);
   const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
   if (!haltExists) {
-    // Ensure the .pipeline directory exists before writing the marker
-    await mkdir(dirname(haltPath), { recursive: true }).catch(() => {
-      // Best-effort directory creation
-    });
-    await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
-      // Best-effort HALT write; if it fails, still return the failure
-    });
+    await writeHaltMarker(projectRoot, haltReason + '\n', 'needs-human');
   }
 
   return {

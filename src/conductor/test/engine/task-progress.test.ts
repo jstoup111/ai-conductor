@@ -487,9 +487,11 @@ describe('task-progress', () => {
       await writeStallHalt(dir, '', detail);
 
       const written = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
       const firstLine = written.split('\n')[0];
       expect(firstLine).toBe(placeholder);
       expect(written).toContain(detail);
+      expect(haltClass).toBe('needs-human');
     });
 
     it('writeStallHalt writes whitespace-only marker as placeholder on first line', async () => {

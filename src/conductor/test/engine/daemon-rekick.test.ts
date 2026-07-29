@@ -48,7 +48,9 @@ function fakeDeps(opts: {
   isProcessed?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
-  readHaltClass?: (slug: string) => Promise<'needs-human' | 'mechanical' | 'unclassified'>;
+  readHaltClass?: (
+    slug: string,
+  ) => Promise<'needs-human' | 'mechanical' | 'legacy' | 'unclassified'>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -154,40 +156,33 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(last.get('x')).toBe(SHA_C);
   });
 
-  it('a needs-human-classified halt is skipped, not cleared, and never touches abort/clear/lastRekickSha', async () => {
-    const last = new Map<string, string>();
-    const { deps, trace } = fakeDeps({
-      halted: ['h'],
-      lastRekickSha: last,
-      readHaltClass: async () => 'needs-human',
-    });
-    const res = await rekickSweep(deps, SHA_B);
-    expect(res.skipped).toEqual(['h']);
-    expect(res.cleared).toEqual([]);
-    expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
-    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
-    expect(last.has('h')).toBe(false);
-    const logLine = trace.events.find(
-      (e) => e.startsWith('log:') && e.includes('h') && e.includes('needs-human'),
-    );
-    expect(logLine).toBeDefined();
-  });
+  it.each(['needs-human', 'unclassified'] as const)(
+    'a %s halt has no retry side effects across base advances',
+    async (disposition) => {
+      const last = new Map<string, string>();
+      const { deps, trace } = fakeDeps({
+        halted: ['h'],
+        lastRekickSha: last,
+        rebasing: new Set(['h']),
+        readHaltClass: async () => disposition,
+      });
 
-  it('a needs-human-classified halt is skipped again on a second sweep at a NEW sha (not just the FR-9 guard)', async () => {
-    const last = new Map<string, string>();
-    const { deps } = fakeDeps({
-      halted: ['h'],
-      lastRekickSha: last,
-      readHaltClass: async () => 'needs-human',
-    });
-    const res1 = await rekickSweep(deps, SHA_B);
-    expect(res1.skipped).toEqual(['h']);
-    expect(last.has('h')).toBe(false);
+      const first = await rekickSweep(deps, SHA_B);
+      const second = await rekickSweep(deps, SHA_C);
 
-    const res2 = await rekickSweep(deps, SHA_C);
-    expect(res2.skipped).toEqual(['h']);
-    expect(res2.cleared).toEqual([]);
-  });
+      expect(first).toEqual({ cleared: [], skipped: ['h'] });
+      expect(second).toEqual({ cleared: [], skipped: ['h'] });
+      expect(trace.events.some((e) => e.startsWith('hasRebaseInProgress:'))).toBe(false);
+      expect(trace.events.some((e) => e.startsWith('abort:'))).toBe(false);
+      expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+      expect(trace.cleared).toEqual(new Set());
+      expect(last.has('h')).toBe(false);
+      const logLine = trace.events.find(
+        (e) => e.startsWith('log:') && e.includes('h') && e.includes(disposition),
+      );
+      expect(logLine).toBeDefined();
+    },
+  );
 
   it('a mechanical-classified halt clears normally and the log line names the halt class', async () => {
     const last = new Map<string, string>();
@@ -206,20 +201,37 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(logLine).toBeDefined();
   });
 
-  it('an unclassified halt (readHaltClass resolves to unclassified) still clears and the log line names it unclassified', async () => {
-    const last = new Map<string, string>();
+  it('applies the four-way halt disposition matrix and logs each slug with its disposition', async () => {
+    const dispositionBySlug = new Map<
+      string,
+      'needs-human' | 'mechanical' | 'legacy' | 'unclassified'
+    >([
+      ['mechanical', 'mechanical'],
+      ['legacy', 'legacy'],
+      ['needs-human', 'needs-human'],
+      ['unclassified', 'unclassified'],
+    ]);
     const { deps, trace } = fakeDeps({
-      halted: ['u'],
-      lastRekickSha: last,
-      readHaltClass: async () => 'unclassified',
+      halted: [...dispositionBySlug.keys()],
+      readHaltClass: async (slug) => dispositionBySlug.get(slug)!,
     });
+
     const res = await rekickSweep(deps, SHA_B);
-    expect(res.cleared).toEqual(['u']);
-    expect(last.get('u')).toBe(SHA_B);
-    const logLine = trace.events.find(
-      (e) => e.startsWith('log:') && e.includes('u') && e.includes('unclassified'),
-    );
-    expect(logLine).toBeDefined();
+
+    expect({
+      cleared: res.cleared,
+      skipped: res.skipped,
+      logged: [...dispositionBySlug].map(([slug, disposition]) =>
+        trace.events.some(
+          (event) =>
+            event.startsWith('log:') && event.includes(slug) && event.includes(disposition),
+        ),
+      ),
+    }).toEqual({
+      cleared: ['mechanical', 'legacy'],
+      skipped: ['needs-human', 'unclassified'],
+      logged: [true, true, true, true],
+    });
   });
 
   it('no readHaltClass dep at all still clears the slug normally (backward-compat)', async () => {
@@ -262,6 +274,39 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     const logLine = trace.events.find((e) => e.startsWith('log:') && e.includes('operator-parked'));
     expect(logLine).toBeDefined();
   });
+
+  it('processed AND mechanical: processed check fires before classification', async () => {
+    const { deps, trace } = fakeDeps({
+      halted: ['shipped'],
+      isProcessed: async () => true,
+      readHaltClass: async () => 'mechanical',
+    });
+
+    const res = await rekickSweep(deps, SHA_B);
+
+    expect(res).toEqual({ cleared: [], skipped: ['shipped'] });
+    expect(trace.events.some((e) => e.startsWith('readHaltClass:'))).toBe(false);
+    expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+  });
+
+  it.each(['mechanical', 'legacy'] as const)(
+    'the once-per-SHA guard remains authoritative for %s halts',
+    async (disposition) => {
+      const last = new Map<string, string>([['retryable', SHA_B]]);
+      const { deps, trace } = fakeDeps({
+        halted: ['retryable'],
+        lastRekickSha: last,
+        readHaltClass: async () => disposition,
+      });
+
+      const res = await rekickSweep(deps, SHA_B);
+
+      expect(res).toEqual({ cleared: [], skipped: ['retryable'] });
+      expect(trace.events.some((e) => e.startsWith('hasRebaseInProgress:'))).toBe(false);
+      expect(trace.events.some((e) => e.startsWith('clear:'))).toBe(false);
+      expect(last.get('retryable')).toBe(SHA_B);
+    },
+  );
 
   it('a per-worktree clear error is isolated; the sweep continues', async () => {
     const { deps } = fakeDeps({ halted: ['a', 'bad', 'c'], clearFails: new Set(['bad']) });
@@ -594,6 +639,19 @@ describe('engine/daemon-rekick — real primitives (isolated repo)', () => {
 
     await expect(clearMarker(dir)).resolves.toBeUndefined();
     expect(await fileExists(join(p, 'HALT.class'))).toBe(false);
+  });
+
+  it('clearMarker tolerates an unreadable class sidecar and remains idempotent', async () => {
+    const p = join(dir, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(join(p, 'HALT'), 'mechanical retry\n', 'utf-8');
+    await mkdir(join(p, 'HALT.class'));
+
+    await expect(clearMarker(dir)).resolves.toBeUndefined();
+    await expect(clearMarker(dir)).resolves.toBeUndefined();
+
+    expect(await fileExists(join(p, 'HALT'))).toBe(false);
+    expect(await fileExists(join(p, 'REKICK'))).toBe(true);
   });
 });
 

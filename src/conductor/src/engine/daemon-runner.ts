@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
+import { readFile, rm } from 'node:fs/promises';
 import type { BacklogItem, FeatureOutcome } from './daemon.js';
 import type { LLMProvider } from '../execution/llm-provider.js';
 import type { ProviderExecutionContext } from './provider-execution.js';
@@ -30,6 +30,7 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
+import { writeHaltMarker } from './halt-marker.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -589,10 +590,15 @@ async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (
     `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
     `  2. rm .pipeline/HALT\n` +
     `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
-  await mkdir(join(worktree.path, '.pipeline'), { recursive: true }).catch((err) => {
-    if (log) log(`[daemon-runner] HALT mkdir error: ${err instanceof Error ? err.message : String(err)}`);
-  });
-  await writeFile(join(worktree.path, '.pipeline', 'HALT'), note, 'utf-8').catch((err) => {
+  await writeHaltMarker(worktree.path, note, 'needs-human');
+  await Promise.all([
+    readFile(join(worktree.path, '.pipeline', 'HALT'), 'utf-8'),
+    readFile(join(worktree.path, '.pipeline', 'HALT.class'), 'utf-8'),
+  ]).then(([body, haltClass]) => {
+    if (body !== note || haltClass !== 'needs-human') {
+      throw new Error('marker verification failed');
+    }
+  }).catch((err) => {
     if (log) log(`[daemon-runner] HALT write error: ${err instanceof Error ? err.message : String(err)}`);
   });
 }

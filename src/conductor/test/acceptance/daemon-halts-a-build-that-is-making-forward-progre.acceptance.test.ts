@@ -370,6 +370,7 @@ describe('S4: absolute attempt ceiling backstops slow-drip within a dispatch (ne
     expect(loopHaltEvents).toHaveLength(1);
     expect(loopHaltEvents[0].reason).toMatch(/progressing.*(hit|reached).{0,20}attempt ceiling/i);
     expect(loopHaltEvents[0].reason).not.toMatch(/tasks not completed/i);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
   });
 });
 

@@ -52,6 +52,20 @@ describe('self-host/build-auth-preflight — preflightBuildAuthCheck (Task 6, TR
       expect(haltContent).not.toContain('OAuth');
     });
 
+    it('classifies a missing daemon build token as needs-human without changing its reason', async () => {
+      const result = await preflightBuildAuthCheck('daemon-token', tokenPath, projectRoot);
+
+      expect({
+        output: result?.output,
+        reason: await readFile(join(projectRoot, HALT_MARKER), 'utf-8'),
+        haltClass: await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8'),
+      }).toEqual({
+        output: buildAuthRemediationMessage(tokenPath),
+        reason: buildAuthRemediationMessage(tokenPath) + '\n',
+        haltClass: 'needs-human',
+      });
+    });
+
     it('RED: daemon token in error state (unreadable) returns failure with HALT marker', async () => {
       // Setup: create a token file with no read permissions
       await writeFile(tokenPath, 'sk_test_token', 'utf-8');

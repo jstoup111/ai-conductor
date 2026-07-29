@@ -109,6 +109,7 @@ afterEach(async () => {
 function realDeps(opts: {
   isOperatorParked?: (slug: string) => Promise<boolean>;
   isProcessed?: (slug: string) => Promise<boolean>;
+  readHaltClass?: RekickSweepDeps['readHaltClass'];
   hasRebaseInProgress?: (slug: string) => Promise<boolean>;
   log: (m: string) => void;
   lastRekickSha?: Map<string, string>;
@@ -130,6 +131,7 @@ function realDeps(opts: {
     log: opts.log,
     isProcessed: opts.isProcessed,
     isOperatorParked: opts.isOperatorParked,
+    readHaltClass: opts.readHaltClass,
   } as RekickSweepDeps;
   return { deps, abortRebaseSpy, clearMarkerSpy };
 }
@@ -142,8 +144,10 @@ describe('operator-park rekick-sweep acceptance (FR-3/FR-5): a parked worktree i
     await parkMarker.writeOperatorPark(projectRoot, 'parked-feat');
 
     const log: string[] = [];
+    const readHaltClass = vi.fn(async () => 'mechanical' as const);
     const { deps, abortRebaseSpy, clearMarkerSpy } = realDeps({
       isOperatorParked: (slug) => parkMarker.isOperatorParked(projectRoot, slug),
+      readHaltClass,
       // Simulate a rebase paused mid-flight for this slug (RekickSweepDeps
       // already injects this primitive — no real git rebase state needed to
       // prove the parked check runs BEFORE the abort/clear chain).
@@ -160,6 +164,7 @@ describe('operator-park rekick-sweep acceptance (FR-3/FR-5): a parked worktree i
     expect(await sentinelIsPresent('parked-feat')).toBe(false);
     expect(abortRebaseSpy).not.toHaveBeenCalled();
     expect(clearMarkerSpy).not.toHaveBeenCalled();
+    expect(readHaltClass).not.toHaveBeenCalled();
     expect(log).toContain('re-kick parked-feat: skipped — operator-parked');
   });
 

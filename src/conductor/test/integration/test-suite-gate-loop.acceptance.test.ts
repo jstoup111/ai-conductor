@@ -281,6 +281,7 @@ describe('test_suite native gate loop', () => {
       const persisted = await readState(stateFilePath);
       const finalState = persisted.ok ? persisted.value : {};
       const haltMarker = await readFile(join(projectRoot, '.pipeline/HALT'), 'utf-8');
+      const haltClass = await readFile(join(projectRoot, '.pipeline/HALT.class'), 'utf-8');
       const routedEvidence =
         `full-suite verification failed (${reason}): ${message}\n` +
         'Evidence: .pipeline/test-suite-evidence.json';
@@ -294,6 +295,7 @@ describe('test_suite native gate loop', () => {
         buildRetryReasons,
         haltReason,
         haltMarker,
+        haltClass,
         finalGateState: finalState.test_suite,
         restagedDownstreamState: finalState.retro,
       }).toEqual({
@@ -312,6 +314,7 @@ describe('test_suite native gate loop', () => {
           `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,
         haltMarker:
           `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}\n`,
+        haltClass: 'mechanical',
         finalGateState: 'failed',
         restagedDownstreamState: 'stale',
       });

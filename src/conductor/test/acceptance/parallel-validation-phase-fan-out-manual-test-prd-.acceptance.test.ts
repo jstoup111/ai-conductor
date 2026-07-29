@@ -170,6 +170,24 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  async function seedPendingNoOpKickback(dir: string, gate: StepName): Promise<void> {
+    await writeFile(
+      join(dir, '.pipeline/kickback-ledger.json'),
+      JSON.stringify({
+        version: 1,
+        gates: {
+          [gate]: {
+            count: 1,
+            treeHash: null,
+            lastReason: 'prior validation kickback',
+            priorVerdict: false,
+            resolvedBefore: 1,
+          },
+        },
+      }),
+    );
+  }
+
   // ── A. concurrent dispatch under cap + wall-clock proof ──────────────────
   it('dispatches manual_test and prd_audit with overlapping execution windows instead of strictly serially (cap 2)', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'parvalid-overlap-'));
@@ -302,6 +320,136 @@ describe('parallel validation phase — cross-module acceptance flows (#469)', (
       // this is deliberately never written by the fake runner, so proving
       // it's absent proves the crash never got routed through /remediate.
       expect(calls).not.toContain('remediate');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies a validation-group no-verdict as needs-human', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-no-verdict-class-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath, {
+        architecture_review_as_built: 'done',
+        run_started_at: Date.now() - 1_000,
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            throw new Error('agent crashed before producing a verdict');
+          }
+          if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      await makeConductor(dir, statePath, runner, new ConductorEventEmitter()).run();
+
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies a manual-test kickback-to-build no-op as needs-human', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-mt-noop-class-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath, {
+        architecture_review_as_built: 'done',
+        run_started_at: Date.now() - 1_000,
+      });
+      await seedPendingNoOpKickback(dir, 'manual_test');
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_FAIL);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_PASS);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      await makeConductor(dir, statePath, runner, new ConductorEventEmitter()).run();
+
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies a validation-member kickback-to-build no-op as needs-human', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-member-noop-class-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath, {
+        architecture_review_as_built: 'done',
+        run_started_at: Date.now() - 1_000,
+      });
+      await seedPendingNoOpKickback(dir, 'prd_audit');
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+          } else if (step === 'remediate') {
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [
+                  {
+                    id: 'FR-2',
+                    disposition: 'build',
+                    category: null,
+                    rationale: 'repair the implementation gap',
+                    tasks: [{ id: 'r1', title: 'repair FR-2' }],
+                  },
+                ],
+              }),
+            );
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      await makeConductor(dir, statePath, runner, new ConductorEventEmitter()).run();
+
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('generic non-green fallback preserves an existing specific marker and class', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'parvalid-fallback-preserve-'));
+    const statePath = join(dir, 'conduct-state.json');
+    try {
+      await seedToValidators(dir, statePath, { architecture_review_as_built: 'done' });
+      await writeFile(join(dir, '.pipeline/HALT'), 'specific preflight halt');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'mechanical');
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName) => {
+          if (step === 'manual_test') {
+            await writeFile(join(dir, '.pipeline/manual-test-results.md'), MT_PASS);
+          } else if (step === 'prd_audit') {
+            await writeFile(join(dir, '.pipeline/prd-audit.md'), '# PRD Audit\n\n' + PRD_GAP);
+          }
+          return { success: true } as StepRunResult;
+        }),
+      };
+
+      await makeConductor(dir, statePath, runner, new ConductorEventEmitter()).run();
+
+      expect(
+        await Promise.all([
+          readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+          readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+        ]),
+      ).toEqual(['specific preflight halt', 'mechanical']);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

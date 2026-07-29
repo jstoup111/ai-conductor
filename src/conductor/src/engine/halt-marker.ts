@@ -7,7 +7,7 @@
 // change to how the marker is written or where it lives had to be mirrored across
 // all of them. Both the constant and the best-effort writer now live here.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 /** The park-for-human marker the daemon loop treats as a stop. */
@@ -28,6 +28,9 @@ export type HaltClass =
   | 'mechanical'
   | typeof PROTECTED_ARTIFACT_HALT_CLASS;
 
+/** Classification observed while reading a HALT sidecar. */
+export type HaltDisposition = HaltClass | 'legacy' | 'unclassified';
+
 /**
  * Write `.pipeline/HALT` under `projectRoot` with `body` as its contents,
  * creating `.pipeline/` if needed. Best-effort: mkdir/write failures are
@@ -35,20 +38,31 @@ export type HaltClass =
  * failed write must not crash the finish flow). The first non-empty line of
  * `body` is the reason the daemon dashboard surfaces.
  *
- * When `haltClass` is provided, also best-effort write `.pipeline/HALT.class`
- * with the class string, so callers (e.g. the daemon re-kick sweep) can tell
- * a needs-human HALT apart from a mechanical one without parsing `body`.
- * Omitting `haltClass` preserves legacy behavior — no sidecar is written.
+ * Also best-effort write `.pipeline/HALT.class` with the class string, so
+ * callers (e.g. the daemon re-kick sweep) can tell a needs-human HALT apart
+ * from a mechanical one without parsing `body`.
  */
 export async function writeHaltMarker(
   projectRoot: string,
   body: string,
-  haltClass?: HaltClass,
+  haltClass: HaltClass,
 ): Promise<void> {
+  const haltClassPath = join(projectRoot, HALT_CLASS_MARKER);
+  const haltClassTempPath = `${haltClassPath}.tmp`;
+
   await mkdir(join(projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-  await writeFile(join(projectRoot, HALT_MARKER), body, 'utf-8').catch(() => {});
-  if (haltClass !== undefined) {
-    await writeFile(join(projectRoot, HALT_CLASS_MARKER), haltClass, 'utf-8').catch(() => {});
+  try {
+    await unlink(haltClassPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return;
+  }
+
+  try {
+    await writeFile(join(projectRoot, HALT_MARKER), body, 'utf-8');
+    await writeFile(haltClassTempPath, haltClass, 'utf-8');
+    await rename(haltClassTempPath, haltClassPath);
+  } catch {
+    await unlink(haltClassTempPath).catch(() => {});
   }
 }
 
@@ -59,14 +73,17 @@ export async function writeHaltMarker(
  * than throwing — callers (e.g. the daemon re-kick sweep) must never crash
  * on a HALT sidecar read.
  */
-export async function readHaltClass(worktreePath: string): Promise<HaltClass | 'unclassified'> {
+export async function readHaltClass(worktreePath: string): Promise<HaltDisposition> {
   try {
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
     if (
       contents === 'needs-human' ||
       contents === 'mechanical' ||
+      contents === 'legacy' ||
       contents === PROTECTED_ARTIFACT_HALT_CLASS
-    ) return contents;
+    ) {
+      return contents;
+    }
     return 'unclassified';
   } catch {
     return 'unclassified';

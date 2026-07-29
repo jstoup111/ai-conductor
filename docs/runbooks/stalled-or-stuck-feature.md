@@ -32,15 +32,17 @@ cat .worktrees/<slug>/.pipeline/HALT.class
 `.pipeline/HALT` is a full stop for that feature: the daemon never advances, opens a PR, or
 merges past it. The first non-empty line of the body is the reason the dashboard surfaces.
 
-`.pipeline/HALT.class` classifies it. It is missing on halts written before the sidecar existed,
-and any unrecognized content reads as `unclassified`.
+`.pipeline/HALT.class` classifies it. Every HALT the daemon writes now carries one — the daemon
+stamps any HALT still missing a class at startup as `legacy`, once per feature, so the sidecar is
+never absent for long. Content the reader doesn't recognize still reads as `unclassified`.
 
 | Class | Meaning | Cleared by the re-kick sweep? |
 | --- | --- | --- |
 | `needs-human` | Only an operator can resolve it. | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
 | `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | Yes, on a base-branch advance; verification refuses again if the violation remains. |
-| *(absent / unrecognized)* | Treated as `unclassified`. | Yes, subject to the once-per-SHA guard. |
+| `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
+| *(absent / unrecognized)* | Treated as `unclassified`. | No — skipped on every sweep, same as `needs-human`. |
 
 A feature that errored rather than halted gets a diagnostic HALT written for it, so the daemon
 log's bare `error` line always has a body to read — **unless the failure happened before the

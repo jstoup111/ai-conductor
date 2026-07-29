@@ -471,14 +471,24 @@ On a genuine advance of the base branch SHA, the re-kick sweep runs over every h
 per feature:
 
 1. Skips it entirely if it is operator-parked, already shipped, or already re-kicked at this SHA.
-2. Aborts a paused rebase if one is mid-flight — a failed abort leaves the HALT marker intact rather
+2. Skips it, on every sweep regardless of SHA, if `.pipeline/HALT.class` reads `needs-human` or
+   `unclassified` — only `mechanical`, `legacy`, and `protected-artifact` are retryable. See the
+   classification table in
+   [stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md#1-read-the-halt-marker-first).
+3. Aborts a paused rebase if one is mid-flight — a failed abort leaves the HALT marker intact rather
    than half-clearing it.
-3. Renames `.pipeline/HALT` to `.pipeline/HALT.cleared`, preserving the reason.
-4. Drops a `.pipeline/REKICK` sentinel and records the triggering SHA.
+4. Renames `.pipeline/HALT` to `.pipeline/HALT.cleared`, preserving the reason.
+5. Drops a `.pipeline/REKICK` sentinel and records the triggering SHA.
 
 The sweep never dispatches directly; the cleared feature is re-dispatched on the next poll. That is
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
+
+Before any of this, the daemon runs a one-time startup migration (owned by whichever process holds
+the daemon lock) that stamps every pre-existing HALT still missing `.pipeline/HALT.class` as
+`legacy`, so a halt written before the sidecar existed is retryable like a `mechanical` one instead
+of silently stuck. A watermark at `.daemon/migrations/halt-classification-v1` makes this run exactly
+once; a lock loser never runs it and never touches worktrees.
 
 ### Post-rebase gate invalidation on resume
 

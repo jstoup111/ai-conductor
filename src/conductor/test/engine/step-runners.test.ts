@@ -236,6 +236,9 @@ describe('DefaultStepRunner', () => {
 
       const result = await runner.run('build', emptyState);
 
+      // Task 16 writer-classification inventory: the provider heartbeat
+      // watchdog is deliberately retryable and must retain its mechanical
+      // body/sidecar disposition.
       expect(result.success).toBe(false);
       const haltBody = await readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8');
       expect(haltBody).toMatch(/heartbeat stalled/i);

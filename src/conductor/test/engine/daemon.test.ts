@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import {
@@ -9,8 +9,13 @@ import {
   type DaemonDeps,
   type FeatureOutcome,
 } from '../../src/engine/daemon.js';
+import {
+  makeRunFeature,
+  type FeatureRunnerDeps,
+} from '../../src/engine/daemon-runner.js';
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
+import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 
 function items(n: number): BacklogItem[] {
   return Array.from({ length: n }, (_, i) => ({
@@ -112,6 +117,97 @@ describe('engine/daemon — runDaemon', () => {
     const res = await runDaemon(deps, { concurrency: 1, once: true });
     expect(res.processed[0].status).toBe('halted');
     expect(res.processed[0].reason).toBe('needs human');
+  });
+
+  it('classifies a daemon-runner terminal triage HALT without changing its diagnostic body', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'daemon-terminal-triage-'));
+    const diagnostic = 'working tree left dirty after setup';
+    try {
+      const runFeature = makeRunFeature({
+        createWorktree: async (slug) => ({ path: worktree, branch: `feat/${slug}` }),
+        prepareWorktree: async () => {
+          throw new SetupFailureError('setup failed', 'setup output');
+        },
+        runSetupTriage: async () => ({
+          kind: 'park',
+          outputTail: diagnostic,
+          contractOutcome: 'dirty-tree-uncleaned',
+        }),
+        runConductor: async () => {},
+        readOutcome: async () => ({ done: false, halted: false }),
+        teardownWorktree: async () => {},
+        markProcessed: async () => {},
+        daemon: true,
+        provider: {
+          invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+          invokeInteractive: async () => {},
+        },
+        project: 'test-project',
+        projectRoot: worktree,
+        runGh: async () => ({ stdout: '' }),
+        enrollWatch: async () => {},
+      } as FeatureRunnerDeps);
+
+      const outcome = await runFeature({ slug: 'f0' });
+      expect({
+        outcome,
+        haltBody: await readFile(join(worktree, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(worktree, '.pipeline/HALT.class'), 'utf-8'),
+      }).toEqual({
+        outcome: expect.objectContaining({ status: 'error', reason: diagnostic }),
+        haltBody:
+          `feature errored — parked for human inspection\n${diagnostic}\n` +
+          '\n──── Triage Evidence ────\n' +
+          `\nOutput tail:\n${diagnostic}\n` +
+          '\nNo quarantine ref exists (clean-HEAD case)\n' +
+          '\nContract outcome: dirty-tree-uncleaned\n' +
+          '\nResume procedure:\n' +
+          '  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n' +
+          '  2. rm .pipeline/HALT\n' +
+          '  3. Re-queue the feature (restart the daemon if it was excluded this run).\n',
+        haltClass: 'needs-human',
+      });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
+  });
+
+  it('logs a daemon terminal HALT write failure without replacing the original feature error', async () => {
+    const worktree = await mkdtemp(join(tmpdir(), 'daemon-terminal-write-failure-'));
+    const logs: string[] = [];
+    try {
+      await mkdir(join(worktree, '.pipeline'), { recursive: true });
+      await mkdir(join(worktree, '.pipeline', 'HALT.class'));
+      const runFeature = makeRunFeature({
+        createWorktree: async (slug) => ({ path: worktree, branch: `feat/${slug}` }),
+        runConductor: async () => {
+          throw new Error('original terminal failure');
+        },
+        readOutcome: async () => ({ done: false, halted: false }),
+        teardownWorktree: async () => {},
+        markProcessed: async () => {},
+        log: (message: string) => logs.push(message),
+        daemon: false,
+        project: 'test-project',
+        projectRoot: worktree,
+        runGh: async () => ({ stdout: '' }),
+        enrollWatch: async () => {},
+      } as FeatureRunnerDeps);
+
+      const outcome = await runFeature({ slug: 'f0' });
+
+      expect({ outcome, logs }).toEqual({
+        outcome: expect.objectContaining({
+          status: 'error',
+          reason: 'original terminal failure',
+        }),
+        logs: expect.arrayContaining([
+          expect.stringMatching(/HALT write error/),
+        ]),
+      });
+    } finally {
+      await rm(worktree, { recursive: true, force: true });
+    }
   });
 
   it('parks a halted feature: dispatched once, then skipped while HALT present', async () => {

@@ -8,7 +8,7 @@
  * `0`, mirroring the tolerant-read pattern in `task-evidence.ts`.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, writeFile, mkdir, readFile, access } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,6 +23,11 @@ import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { isOperatorParked, removeOperatorPark, __resetResolveCacheForTests } from '../../src/engine/park-marker.js';
 import { rekickSweep, type RekickSweepDeps } from '../../src/engine/daemon-rekick.js';
+import { Conductor } from '../test-conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { ALL_STEPS } from '../../src/engine/steps.js';
+import { writeState } from '../../src/engine/state.js';
+import type { ConductState } from '../../src/types/index.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -459,3 +464,44 @@ describe('engine/daemon-auto-park — Task 13 (#773): no-evidence counter park p
   });
 });
 
+describe('engine/daemon-auto-park — classified conductor halt', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'daemon-auto-park-class-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('classifies an empty or missing plan auto-park as needs-human', async () => {
+    const statePath = join(dir, 'conduct-state.json');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'L',
+      feature_desc: 'empty-plan-feature',
+      track: 'technical',
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'build') break;
+      state[step.name] = 'done';
+    }
+    await writeState(statePath, state as unknown as ConductState);
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+      fromStep: 'build',
+    });
+
+    await conductor.run();
+
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+  });
+});
