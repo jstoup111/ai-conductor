@@ -33,8 +33,14 @@ sequenceDiagram
             S->>G: cat-file -e origin/main:.docs/shipped/«slug».md
             alt record present at path
                 S->>W: teardownWorktree(keep=false)
-                S->>REG: prune entry (FR-13)
-                S->>L: reaped «slug» — reason: shipped-record-on-main
+                alt teardown succeeds
+                    S->>L: reaped «slug» — reason: shipped-record-on-main
+                    S->>REG: prune entry (FR-13)
+                else teardown rejects
+                    S->>L: error reaping PR: «error»
+                    S->>REG: prune entry (FR-13)
+                    Note over S,REG: terminal watch disposition — no later retry
+                end
             else record absent (or fetch failed)
                 S->>L: retained «slug» — reason: record-not-yet-on-main
                 Note over S,REG: entry kept — re-checked next pass (idempotent)
@@ -51,8 +57,20 @@ sequenceDiagram
 
     opt operator reclaims an abandoned worktree
         OP->>L: conduct daemon status (sees retained «slug»)
-        OP->>W: conduct daemon reclaim-worktree «slug»
-        Note over OP,W: single named slug, path printed before removal
+        OP->>S: conduct daemon reclaim-worktree «slug»
+        S->>S: validate exactly one slug
+        alt named worktree is absent
+            S->>OP: no retained worktree (success, no-op)
+        else named worktree exists
+            S->>S: detectAutoResume(root, slug)
+            alt resume kind is resume
+                S->>OP: refuse: in-progress
+            else target is quiescent
+                S->>L: print named worktree path
+                S->>W: removeWorktree(named path)
+                S->>OP: removed retained worktree
+            end
+        end
     end
 
     opt resume of a closed-unmerged feature
@@ -72,6 +90,12 @@ sequenceDiagram
   issue's "no worktree retained forever with no way to see or reclaim it" negative path.
 - Every branch of the decision emits a log line naming the driving condition, so an operator can
   distinguish a deliberate retention from a leak.
+- Once a MERGED entry's shipped record is present, its watch is pruned even if teardown rejects:
+  the rejection is caught and logged, and the sweep does not retry it later. Successful teardown
+  emits the `reaped` log before the same terminal prune.
+- Operator reclaim accepts one validated slug, treats an absent named worktree as a successful
+  no-op, and calls `detectAutoResume` before teardown. A target classified for resume is in progress
+  and is refused.
 - Post-ship **CI-fix** continues to cut `.worktrees/resolve-«slug»` from the branch tip and is
   unaffected by the retained feature worktree.
 - **Rebase resolution is NOT unaffected.** `isEligibleForResolve` Gate 6 (`autoresolve.ts:216-226`)
@@ -83,4 +107,5 @@ sequenceDiagram
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-29 | Added guarded single-slug reclaim and terminal reap-error path | Batch 2 as-built update |
 | 2026-07-29 | Initial generation | DECIDE for #1091 |
