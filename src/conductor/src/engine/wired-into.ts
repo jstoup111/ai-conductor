@@ -109,7 +109,9 @@ const INERT_UNTIL = /^none\s*\(\s*inert until\s+(.+?)\s*\)$/i;
 const ISSUE_REF = /^([^\s/]+)\/([^\s/#]+)#(\d+)$/;
 
 function classifyInertRef(text: string): InertRef {
-  const issueMatch = text.match(ISSUE_REF);
+  const normalized =
+    text.startsWith('`') && text.endsWith('`') ? text.slice(1, -1) : text;
+  const issueMatch = normalized.match(ISSUE_REF);
   if (issueMatch) {
     return {
       form: 'issue',
@@ -118,7 +120,7 @@ function classifyInertRef(text: string): InertRef {
       number: Number(issueMatch[3]),
     };
   }
-  return { form: 'path', path: text };
+  return { form: 'path', path: normalized };
 }
 
 /** One `path#symbol` entry, optionally wrapped in backticks. */

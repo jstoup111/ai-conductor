@@ -68,6 +68,20 @@ describe('parseWiredIntoLine', () => {
     });
   });
 
+  it('unwraps a Markdown code span around an inert path ref', () => {
+    expect(
+      parseWiredIntoLine(
+        '**Wired-into:** none (inert until `src/conductor/src/engine/mergeable-sweep.ts`)',
+      ),
+    ).toEqual({
+      kind: 'inert',
+      ref: {
+        form: 'path',
+        path: 'src/conductor/src/engine/mergeable-sweep.ts',
+      },
+    });
+  });
+
   it('parses free text that matches none of the accepted forms as malformed', () => {
     const result = parseWiredIntoLine('**Wired-into:** fix it later');
     expect(result.kind).toBe('malformed');
