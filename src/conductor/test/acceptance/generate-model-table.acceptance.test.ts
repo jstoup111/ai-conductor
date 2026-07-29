@@ -118,6 +118,40 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
 });
 
 describe('real binary provider-labelled contract drift', () => {
+  it('flushes the complete drift diagnostic before exiting', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'generate-model-table-diagnostic-flush-'));
+    const fixtureHarness = join(dir, 'HARNESS.md');
+    const staleRow =
+      '| stale | autonomous engine | stale | stale | stale | stale | stale row from a previous run |';
+    const largeDriftFixture = MARKED_FIXTURE.replace(staleRow, `${staleRow}\n`.repeat(5_000));
+    await writeFile(fixtureHarness, largeDriftFixture, 'utf8');
+
+    const result = spawnSync(
+      'bash',
+      [join(harnessRoot, 'bin', 'generate-model-table'), '--check'],
+      {
+        cwd: harnessRoot,
+        env: {
+          ...process.env,
+          GENERATE_MODEL_TABLE_HARNESS_MD: fixtureHarness,
+        },
+        encoding: 'utf8',
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    );
+    const output = `${result.stdout}${result.stderr}`;
+
+    expect({
+      status: result.status,
+      hasDiffHeader: /^--- a\/.*HARNESS\.md$/m.test(output),
+      hasRemediation: output.includes('Run `bin/generate-model-table`'),
+    }).toEqual({
+      status: 1,
+      hasDiffHeader: true,
+      hasRemediation: true,
+    });
+  });
+
   it(
     'reports a useful diff for every representative provider-labelled table mutation',
     async () => {

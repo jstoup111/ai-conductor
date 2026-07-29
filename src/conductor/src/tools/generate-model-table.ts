@@ -762,10 +762,10 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const harnessPath = process.env.GENERATE_MODEL_TABLE_HARNESS_MD ?? defaultHarnessMdPath();
   runGenerateModelTable(process.argv.slice(2), nodeIO, harnessPath)
     .then((code) => {
-      process.exit(code);
+      process.exitCode = code;
     })
     .catch((err) => {
       console.error('generate-model-table: fatal:', err instanceof Error ? err.message : err);
-      process.exit(EXIT_ERROR);
+      process.exitCode = EXIT_ERROR;
     });
 }
