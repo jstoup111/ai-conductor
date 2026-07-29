@@ -65,7 +65,10 @@ describe('daemon halt-class migration startup wiring', () => {
     const migrateSpy = vi
       .spyOn(haltMigrationModule, 'migrateLegacyHaltClasses')
       .mockImplementation(async () => {});
-    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async () => {});
+    const runDaemonSpy = vi.spyOn(daemonModule, 'runDaemon').mockResolvedValue({
+      processed: [],
+      stoppedReason: 'backlog_drained',
+    });
     const exitProcess = vi.fn();
 
     try {
