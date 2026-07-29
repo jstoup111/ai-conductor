@@ -69,6 +69,11 @@ export interface ProcessedEntry {
   prUrl?: string;
 }
 
+export interface RetainedWorktreeEntry {
+  slug: string;
+  reason: 'pr-open-awaiting-main';
+}
+
 /**
  * A spec held back by an unresolved dependency gate (FR-6). Carries the
  * closed `BlockerVerdict` union so the dashboard can render blockers, cycle
@@ -132,6 +137,8 @@ export interface InheritedState {
    * slug and are never filtered by precedence.
    */
   gated?: GatedItem[];
+  /** Feature worktrees retained after PR open until their branch lands on main. */
+  retainedWorktrees?: RetainedWorktreeEntry[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -277,6 +284,7 @@ export async function scanInheritedState(
   const halted: HaltedEntry[] = [];
   const haltedSlugs = new Set<string>();
   const inProgress: InProgressEntry[] = [];
+  const retainedWorktrees: RetainedWorktreeEntry[] = [];
 
   for (const slug of slugs) {
     try {
@@ -305,12 +313,21 @@ export async function scanInheritedState(
         continue;
       }
 
-      // PROCESSED wins over IN-PROGRESS: a shipped+stateful worktree is not
-      // "in progress" (precedence; FR-2 / story negative path).
-      if (processedSlugs.has(slug)) continue;
-
       const { present, state } = await loadWorktreeState(wt);
-      if (!present) continue; // no conduct-state → not in-progress
+      const isRetainedFeatureWorktree =
+        !slug.startsWith('resolve-') && !slug.startsWith('engineer-');
+      if (processedSlugs.has(slug)) {
+        if (isRetainedFeatureWorktree) {
+          retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
+        }
+        continue; // processed worktrees are retained, never in-progress
+      }
+      if (!present) {
+        if (isRetainedFeatureWorktree) {
+          retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
+        }
+        continue; // no conduct-state → not in-progress
+      }
 
       // Has state, no HALT, not processed → IN-PROGRESS. Malformed JSON still
       // appears, with step `unknown` and no enrichment (FR-3).
@@ -401,6 +418,7 @@ export async function scanInheritedState(
     waiting,
     gated,
     priorityResolution,
+    retainedWorktrees,
   };
 }
 
@@ -533,9 +551,20 @@ export function renderDashboard(
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
+  const retainedWorktrees = (state.retainedWorktrees ?? []).filter(
+    (entry) => !parkedSet.has(entry.slug),
+  );
+  const retainedWorktreeSet = new Set(retainedWorktrees.map((entry) => entry.slug));
+  if (retainedWorktrees.length > 0) {
+    lines.push(`RETAINED WORKTREES (${retainedWorktrees.length})`);
+    for (const entry of retainedWorktrees) {
+      lines.push(`  • ${entry.slug} — ${entry.reason}`);
+    }
+  }
+
   // GATED (FR-7/FR-11): specs (and repo-scoped conditions) held back by the
-  // OWNERSHIP gate. Precedence HALTED > PROCESSED > IN-PROGRESS > GATED >
-  // WAITING > ELIGIBLE — a `kind: 'spec'` slug already excluded upstream from
+  // OWNERSHIP gate. Precedence HALTED > IN-PROGRESS > RETAINED > GATED >
+  // WAITING > ELIGIBLE > PROCESSED — a `kind: 'spec'` slug already excluded upstream from
   // higher-precedence buckets is rendered here and then excluded below from
   // WAITING and ELIGIBLE. `kind: 'repo'` entries have no slug and render as
   // section-level warning lines. Omitted entirely when `gated` is absent or
@@ -544,7 +573,11 @@ export function renderDashboard(
   // rather than rendering a distinct failure line).
   const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
   const gated = (state.gated ?? []).filter(
-    (g) => g.kind !== 'spec' || (!parkedSet.has(g.slug) && !processedSlugsSet.has(g.slug)),
+    (g) =>
+      g.kind !== 'spec' ||
+      (!parkedSet.has(g.slug) &&
+        !retainedWorktreeSet.has(g.slug) &&
+        !processedSlugsSet.has(g.slug)),
   );
   const gatedSlugs = new Set(
     gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug),
@@ -557,7 +590,10 @@ export function renderDashboard(
   }
 
   const waiting = (state.waiting ?? []).filter(
-    (w) => !parkedSet.has(w.slug) && !gatedSlugs.has(w.slug),
+    (w) =>
+      !parkedSet.has(w.slug) &&
+      !retainedWorktreeSet.has(w.slug) &&
+      !gatedSlugs.has(w.slug),
   );
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
   if (waiting.length > 0) {
@@ -572,7 +608,11 @@ export function renderDashboard(
   // IN-PROGRESS > GATED > WAITING > ELIGIBLE) — filter it out of ELIGIBLE
   // rather than double-list it.
   const eligible = state.eligible.filter(
-    (e) => !waitingSlugs.has(e.slug) && !gatedSlugs.has(e.slug) && !parkedSet.has(e.slug),
+    (e) =>
+      !waitingSlugs.has(e.slug) &&
+      !gatedSlugs.has(e.slug) &&
+      !parkedSet.has(e.slug) &&
+      !retainedWorktreeSet.has(e.slug),
   );
   lines.push(`ELIGIBLE (${eligible.length})`);
 
@@ -591,7 +631,9 @@ export function renderDashboard(
   }
 
   if (opts?.includeCompleted) {
-    const processed = state.processed.filter((p) => !parkedSet.has(p.slug));
+    const processed = state.processed.filter(
+      (p) => !parkedSet.has(p.slug) && !retainedWorktreeSet.has(p.slug),
+    );
     lines.push(`PROCESSED (${processed.length})`);
     for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);
   }

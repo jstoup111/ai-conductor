@@ -321,6 +321,26 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     });
     expect(state.eligible).toEqual([]);
   });
+
+  it('renders retained worktrees from disk even when absent from the watch registry', async () => {
+    await mkdir(join(worktreeBase, 'capped-out'), { recursive: true });
+    await mkdir(join(worktreeBase, 'resolve-capped-out'), { recursive: true });
+    await mkdir(join(worktreeBase, 'engineer-capped-out'), { recursive: true });
+    await makeProcessed('capped-out');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+    const out = renderDashboard(state);
+
+    expect(
+      out
+        .split('\n')
+        .filter((line) => line.startsWith('RETAINED WORKTREES') || line.startsWith('  • ')),
+    ).toEqual(['RETAINED WORKTREES (1)', '  • capped-out — pr-open-awaiting-main']);
+  });
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
