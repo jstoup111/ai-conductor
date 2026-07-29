@@ -110,8 +110,6 @@ steps:
     llm_provider: claude
   coherence_check:
     llm_provider: claude
-  acceptance_specs:
-    llm_provider: claude
   build_review:
     llm_provider: claude
   prd_audit:
