@@ -153,6 +153,8 @@ export interface FeatureRunnerDeps {
    * Defaults to the production factory when absent.
    */
   runGh?: GhRunner;
+  /** Clear halt presentation after a verified ship. Injected in tests. */
+  cleanupHaltPresentation?: typeof cleanupHaltPresentation;
   /**
    * FR-9: enroll a shipped PR in the mergeable watch registry.
    * Defaults to the real enrollWatch; injected in tests to assert call order and
@@ -290,6 +292,7 @@ export function makeRunFeature(
   const gh = deps.runGh ?? makeProductionGh();
   const enroll = deps.enrollWatch ?? enrollWatchImpl;
   const sweep = deps.sweepMergeableLabels ?? sweepMergeableLabelsImpl;
+  const cleanup = deps.cleanupHaltPresentation ?? cleanupHaltPresentation;
 
   /** FR-14: best-effort sweep; never throws, never disrupts feature processing. */
   const maybeSweep = async (): Promise<void> => {
@@ -404,7 +407,7 @@ export function makeRunFeature(
           // enroll + teardown still run regardless.
           if (outcome.prUrl && deps.projectRoot) {
             try {
-              const cleanupResult = await cleanupHaltPresentation(
+              const cleanupResult = await cleanup(
                 gh,
                 deps.projectRoot,
                 outcome.prUrl,
@@ -435,6 +438,7 @@ export function makeRunFeature(
           }
 
           await deps.markProcessed(item.slug, outcome.prUrl);
+          featureLog(`[daemon-runner] worktree retained at ${worktree.path}`);
 
           // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
           // written here — `/finish` commits it on the IMPLEMENTATION branch

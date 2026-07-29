@@ -1663,6 +1663,54 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   describe('verified PR ship outcome', () => {
     const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 
+    it('keeps retention reporting ship-only and tolerates cleanup failure with an absent worktree', async () => {
+      const effects: string[] = [];
+      const logs: string[] = [];
+      const absentPath = join(tmpdir(), 'already-absent-feature-worktree');
+      await rm(absentPath, { recursive: true, force: true });
+      const featureDeps = {
+        ...deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr' as const,
+          prUrl: PR_URL,
+        }),
+        createWorktree: async () => ({ path: absentPath, branch: `feat/${ITEM.slug}` }),
+        cleanupHaltPresentation: async () => {
+          throw new Error('cleanup exploded');
+        },
+        enrollWatch: async () => {
+          effects.push('enrollWatch');
+        },
+        markProcessed: async () => {
+          effects.push('markProcessed');
+        },
+        log: (message: string) => logs.push(message),
+      };
+
+      const shipped = await makeRunFeature(featureDeps)(ITEM);
+      const haltedLogs: string[] = [];
+      const haltedDeps = deps({ done: false, halted: true, reason: 'paused' });
+      haltedDeps.log = (message: string) => haltedLogs.push(message);
+      const halted = await makeRunFeature(haltedDeps)(ITEM);
+
+      expect({
+        shippedStatus: shipped.status,
+        effects,
+        cleanupErrorLogged: logs.some(line => line.includes('clear-on-success error: cleanup exploded')),
+        retainedPathLogged: logs.some(line => line.includes(`worktree retained at ${absentPath}`)),
+        haltedStatus: halted.status,
+        haltedClaimsShipRetention: haltedLogs.some(line => line.includes('worktree retained at')),
+      }).toEqual({
+        shippedStatus: 'done',
+        effects: ['enrollWatch', 'markProcessed'],
+        cleanupErrorLogged: true,
+        retainedPathLogged: true,
+        haltedStatus: 'halted',
+        haltedClaimsShipRetention: false,
+      });
+    });
+
     it('retains the worktree after enrolling and marking a verified ship', async () => {
       const effects: string[] = [];
       const featureDeps = deps({
