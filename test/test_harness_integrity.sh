@@ -948,6 +948,31 @@ else
   assert "CLAUDE.md and AGENTS.md share canonical agent instructions" 1
 fi
 
+# ── 16. Canonical HALT writer totality ──────────────────────────────────────
+# All production creation of .pipeline/HALT must route through halt-marker.ts,
+# which writes the required disposition sidecar. The checker includes controlled
+# constant, multiline, alias-variable, and literal-path violations so a broken
+# scanner cannot make the repository audit pass vacuously.
+echo ""
+echo -e "${BOLD}16. Canonical HALT writer totality${NC}"
+
+halt_writer_check="${HARNESS_DIR}/test/check_halt_writers.sh"
+if [ -f "$halt_writer_check" ]; then
+  set +e
+  halt_writer_output=$(bash "$halt_writer_check" 2>&1)
+  halt_writer_exit=$?
+  set -e
+
+  if [ "$halt_writer_exit" -eq 0 ]; then
+    assert "test/check_halt_writers.sh — fixtures and production audit pass" 0
+  else
+    echo "$halt_writer_output" | sed 's/^/    /'
+    assert "test/check_halt_writers.sh — fixtures and production audit pass" 1
+  fi
+else
+  assert "test/check_halt_writers.sh exists" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
