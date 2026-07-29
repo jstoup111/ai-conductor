@@ -16,26 +16,28 @@ import { writeFile, rename, mkdir } from 'node:fs/promises';
 import { writeHaltMarker, readHaltClass, HALT_MARKER, HALT_CLASS_MARKER } from '../../src/engine/halt-marker';
 import type { HaltClass } from '../../src/engine/halt-marker';
 
+// These assertions are checked by `npm run typecheck:test`. They deliberately
+// live outside Vitest cases because they describe the TypeScript API contract,
+// not runtime behavior.
+// @ts-expect-error halt class is required
+const missingHaltClass: Parameters<typeof writeHaltMarker> = ['/tmp/root', 'reason'];
+// @ts-expect-error unclassified is a read-only fallback
+const unwritableFallback: Parameters<typeof writeHaltMarker> = ['/tmp/root', 'reason', 'unclassified'];
+type Assert<T extends true> = T;
+type ReadDispositionIsWiderThanHaltClass = Assert<
+  Awaited<ReturnType<typeof readHaltClass>> extends HaltClass ? false : true
+>;
+void missingHaltClass;
+void unwritableFallback;
+const readDispositionIsWiderThanHaltClass: ReadDispositionIsWiderThanHaltClass = true;
+void readDispositionIsWiderThanHaltClass;
+
 describe('writeHaltMarker', () => {
   let root: string;
 
   afterEach(async () => {
     if (root) await rm(root, { recursive: true, force: true });
     vi.restoreAllMocks();
-  });
-
-  it('requires typed callers to supply a halt class', () => {
-    if (false) {
-      // @ts-expect-error halt class is required
-      void writeHaltMarker('/tmp/root', 'reason');
-    }
-  });
-
-  it('does not let typed callers write the unclassified read fallback', () => {
-    if (false) {
-      // @ts-expect-error unclassified is a read-only fallback
-      void writeHaltMarker('/tmp/root', 'reason', 'unclassified');
-    }
   });
 
   it('writes HALT.class with the given halt class', async () => {
@@ -104,14 +106,6 @@ describe('readHaltClass', () => {
   afterEach(async () => {
     if (root) await rm(root, { recursive: true, force: true });
     vi.restoreAllMocks();
-  });
-
-  it('keeps the read disposition distinct from writable halt classes', () => {
-    if (false) {
-      // @ts-expect-error read dispositions include values that cannot be written
-      const haltClass: HaltClass = null as unknown as Awaited<ReturnType<typeof readHaltClass>>;
-      void haltClass;
-    }
   });
 
   it('returns needs-human when HALT.class contains needs-human (with trailing whitespace)', async () => {
