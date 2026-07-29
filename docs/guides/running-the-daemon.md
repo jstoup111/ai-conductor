@@ -359,6 +359,45 @@ See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for
 and refusal reasons. An `orphan` classification is never auto-reconciled — it needs an operator to
 decide whether to park it, delete it, or resume it manually.
 
+## Retained worktrees
+
+A feature's worktree is **not** removed when its implementation PR opens. The mergeable sweep
+tears it down only after the PR reaches `MERGED` or `CLOSED` *and* a `.docs/shipped/<slug>.md`
+record is proven present on `origin/main` — the same signal
+[parked-feature reconciliation](#parked-feature-reconciliation) uses to define "shipped". Until
+then the worktree is retained on disk, one sweep tick at a time:
+
+- **`MERGED`, record not yet on `origin/main`.** Logged as `retained <slug> — reason:
+  record-not-yet-on-main`, re-checked on the next tick. This is the normal window between merge and
+  the shipped-record commit landing.
+- **`CLOSED` without merging.** Logged as `retained <slug> (reclaimable) — reason:
+  pr-closed-unmerged`. The PR is pruned from the watch registry (there is nothing left to poll), but
+  the worktree itself is left behind for inspection or manual recovery — it is never deleted
+  automatically.
+- **Record proven present.** Logged as `reaped <slug> — reason: shipped-record-on-main`, and the
+  worktree is torn down. A teardown failure logs `reap failed <slug> (<prUrl>) — reason:
+  shipped-record-on-main — error: <detail>` and leaves the worktree in place; the sweep retries on
+  the next tick rather than throwing.
+
+`conduct-ts daemon status`'s startup dashboard groups every retained worktree under
+`RETAINED WORKTREES (<n>)`, each line reading `<slug> — <reason>` where `<reason>` is
+`pr-open-awaiting-main` (the common case above) or `pr-closed-unmerged` (a finished pipeline whose
+PR closed without merging — reclaimable). A parked slug is excluded from this section, same as
+every other dashboard group.
+
+To remove a single retained worktree by hand — a closed-unmerged one you've decided not to
+resume, or one you want gone before its shipped record lands — use
+[`daemon reclaim-worktree`](../reference/cli.md#daemon-reclaim-worktree):
+
+```bash
+conduct-ts daemon reclaim-worktree <slug>
+```
+
+It refuses a slug with a resume in progress, refuses anything but a single plain slug (no globs, no
+paths, no lists), and is a no-op when the worktree is already gone. It never touches the branch —
+only [`daemon reconcile-parked`](#parked-feature-reconciliation) and the automatic sweep above
+delete branches, and both do so only once ancestry proves the work landed on `origin/main`.
+
 ## Operator safety rules
 
 Each of these encodes a failure that has already corrupted daemon state.
