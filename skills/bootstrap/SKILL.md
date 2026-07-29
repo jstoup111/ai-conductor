@@ -54,6 +54,20 @@ never breaks the flow.
 **Worktree Compatibility:** All infrastructure must support parallel worktrees sharing
 a single set of Docker services. See Step 1c for the `.env` boundary pattern that enforces this.
 
+### 1b-i. Initialize Project Config
+
+For every bootstrap mode, confirm the project is a git repository before continuing:
+`git rev-parse --is-inside-work-tree`. If it is not, initialize it with `git init -b main`
+as described in Step 1b. Then invoke the deterministic, idempotent project-config writer:
+
+```bash
+conduct-ts config init
+```
+
+Never hand-author `.ai-conductor/config.yml` and never copy a config from the harness checkout.
+If the config already exists, the command preserves it byte-for-byte and succeeds. Surface any
+other non-zero exit before continuing.
+
 ### 1c. Generate Infrastructure Boundary Files
 
 Infrastructure splits into two layers:
@@ -454,6 +468,7 @@ a real failure and must be surfaced.
 ## Verification
 
 - [ ] Bootstrap mode correctly determined
+- [ ] Project config initialized via `conduct-ts config init` after git exists
 - [ ] Project type detected from file indicators
 - [ ] Tech-context loaded if matching stack found
 - [ ] Existing code analyzed with inventory presented (if existing project)

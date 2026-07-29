@@ -402,7 +402,11 @@ async function processIdea(
             // Give the new repo a git identity and initial commit.
             await execFile('git', ['config', 'user.email', 'engineer@conductor.local'], { cwd: path });
             await execFile('git', ['config', 'user.name', 'Engineer'], { cwd: path });
-            await execFile('git', ['add', 'CLAUDE.md', '.gitignore'], { cwd: path });
+            await execFile(
+              'git',
+              ['add', 'CLAUDE.md', '.gitignore', '.ai-conductor/config.yml'],
+              { cwd: path },
+            );
             await execFile(
               'git',
               ['commit', '-m', 'chore: engineer scaffold initial commit'],

@@ -93,7 +93,7 @@ function runCli(
       child.kill('SIGKILL');
       resolve({ code: null, timedOut: true, stdout, stderr });
     }, opts.timeoutMs ?? 4000);
-    child.on('exit', (code) => {
+    child.on('close', (code) => {
       clearTimeout(timer);
       resolve({ code, timedOut: false, stdout, stderr });
     });
@@ -154,6 +154,14 @@ describe('CLI dispatch surface (FR-3 / FR-6) — structural RED', () => {
       .commands.map((c) => c.name())
       .sort();
     expect(names).toContain('create');
+  });
+
+  it('the real CLI program exposes `config init`', async () => {
+    const { createProgram } = await import('../../src/index.js');
+    const configCommand = createProgram().commands.find((c) => c.name() === 'config');
+
+    expect(configCommand).toBeDefined();
+    expect(configCommand?.commands.map((c) => c.name())).toContain('init');
   });
 });
 
@@ -486,6 +494,72 @@ describe('conduct create — refuses to clobber (FR-7)', () => {
     // No orphan registry record for the refused project.
     const records = await readRegistryFile(registry);
     expect(records).toHaveLength(0);
+  });
+});
+
+describe('conduct config init — existing project config scaffold', () => {
+  let registry: string;
+
+  beforeEach(async () => {
+    sandbox = await mkdtemp(join(tmpdir(), 'reg-cli-config-init-'));
+    registry = join(sandbox, 'registry.json');
+  });
+  afterEach(async () => {
+    await rm(sandbox, { recursive: true, force: true });
+  });
+
+  it('writes the exact project template once and reports an idempotent second run', async () => {
+    const repo = join(sandbox, 'existing-repo');
+    await mkdir(repo);
+    await initRealRepo(repo);
+
+    const first = await runCli(['config', 'init'], { cwd: repo, registry });
+    expect(first.timedOut).toBe(false);
+    expect(first.code).toBe(0);
+
+    const configPath = join(repo, '.ai-conductor', 'config.yml');
+    const [createdConfig, template] = await Promise.all([
+      readFile(configPath, 'utf-8'),
+      readFile(PROJECT_CONFIG_TEMPLATE, 'utf-8'),
+    ]);
+    expect(createdConfig).toBe(template);
+
+    const second = await runCli(['config', 'init'], { cwd: repo, registry });
+    expect(second.timedOut).toBe(false);
+    expect(second.code).toBe(0);
+    expect(second.stdout + second.stderr).toMatch(/already exists/i);
+    expect(await readFile(configPath, 'utf-8')).toBe(createdConfig);
+  });
+
+  it('leaves an existing operator-edited config byte-identical', async () => {
+    const repo = join(sandbox, 'edited-repo');
+    await mkdir(repo);
+    await initRealRepo(repo);
+    await mkdir(join(repo, '.ai-conductor'));
+    const edited = 'harness_version: ">=0.99.0"\n# operator edit\n';
+    const configPath = join(repo, '.ai-conductor', 'config.yml');
+    await writeFile(configPath, edited, 'utf-8');
+
+    const result = await runCli(['config', 'init'], { cwd: repo, registry });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).toBe(0);
+    expect(await readFile(configPath, 'utf-8')).toBe(edited);
+  });
+
+  it('rejects a non-git directory without creating .ai-conductor', async () => {
+    const plainDir = join(sandbox, 'not-a-repo');
+    await mkdir(plainDir);
+
+    const result = await runCli(['config', 'init'], {
+      cwd: plainDir,
+      registry,
+    });
+
+    expect(result.timedOut).toBe(false);
+    expect(result.code).not.toBe(0);
+    expect(result.stdout + result.stderr).toMatch(/not a git repository/i);
+    expect(existsSync(join(plainDir, '.ai-conductor'))).toBe(false);
   });
 });
 

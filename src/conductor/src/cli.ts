@@ -128,6 +128,12 @@ export function createProgram(): Command {
     .command('create <name>')
     .description('Scaffold a new project (git init + skeleton CLAUDE.md + .gitignore) and register it')
     .option('--remote <url>', 'Add an origin remote (add-only, no push)');
+  const config = program
+    .command('config')
+    .description('Manage project-scoped harness configuration');
+  config
+    .command('init')
+    .description('Create .ai-conductor/config.yml from the project template if absent');
 
   // Engineer subcommands (Phase 9.3). NON-INTERACTIVE: dispatched by index.ts
   // (detectEngineerCommand) before the pipeline boots. Bare `engineer` launches the
