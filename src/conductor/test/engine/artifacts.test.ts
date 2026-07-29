@@ -1059,13 +1059,73 @@ describe('engine/artifacts', () => {
         'CHANGELOG.md',
         '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
       );
+      const git = vi.fn<NonNullable<CompletionContext['git']>>(async (args) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref --short HEAD') {
+          return { exitCode: 0, stdout: 'feature\n', stderr: '' };
+        }
+        if (command === 'remote') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (command === 'merge-base main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'show base-sha:CHANGELOG.md') {
+          return {
+            exitCode: 0,
+            stdout: '## [Unreleased]\n\nNo notable changes.\n',
+            stderr: '',
+          };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${command}` };
+      });
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => true,
+        git,
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/IMPLEMENTATION_PR/);
       expect(result.reason).toMatch(/finalize-changelog-pr/);
+    });
+
+    it('passes when finish-choice="pr" and every {{IMPLEMENTATION_PR}} token line is inherited from the merge-base', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      const staleTokenChangelog =
+        '## [Unreleased]\n\n- Earlier change ({{IMPLEMENTATION_PR}}).\n';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile('CHANGELOG.md', staleTokenChangelog);
+      const git = vi.fn<NonNullable<CompletionContext['git']>>(async (args) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref --short HEAD') {
+          return { exitCode: 0, stdout: 'feature\n', stderr: '' };
+        }
+        if (command === 'remote') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (command === 'merge-base main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'show base-sha:CHANGELOG.md') {
+          return { exitCode: 0, stdout: staleTokenChangelog, stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${command}` };
+      });
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        git,
+      });
+
+      expect(result).toEqual({ done: true });
     });
 
     it('passes when finish-choice="pr" and CHANGELOG.md has no unsubstituted token', async () => {

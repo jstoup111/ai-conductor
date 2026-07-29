@@ -2,7 +2,7 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { makeGitRunner, resolveFreshBase, type GitRunner } from './rebase.js';
 
-const IMPLEMENTATION_PR_TOKEN = '{{IMPLEMENTATION_PR}}';
+export const IMPLEMENTATION_PR_TOKEN = '{{IMPLEMENTATION_PR}}';
 
 export const FINALIZE_CHANGELOG_PR_USAGE =
   'Usage: conduct-ts finalize-changelog-pr --pr-url <canonical-github-pr-url>';
@@ -30,6 +30,22 @@ export interface ChangelogPrFinalizerRunners {
   writeFile: (path: string, contents: string) => Promise<void>;
   rename: (from: string, to: string) => Promise<void>;
   rm: (path: string) => Promise<void>;
+}
+
+export function unresolvedImplementationPrTokenLineIndexes(
+  changelog: string,
+  baseChangelogContent: string | null,
+): number[] {
+  const baseLines =
+    baseChangelogContent === null ? null : new Set(baseChangelogContent.split('\n'));
+  return changelog
+    .split('\n')
+    .map((line, index) => ({ line, index }))
+    .filter(
+      ({ line }) =>
+        line.includes(IMPLEMENTATION_PR_TOKEN) && (baseLines === null || !baseLines.has(line)),
+    )
+    .map(({ index }) => index);
 }
 
 export async function finalizeChangelogPr(
@@ -80,34 +96,29 @@ export async function finalizeChangelogPr(
   if (tokenCount === 0) return 'no-op';
 
   const replacement = `[implementation PR #${match[1]}](${prUrl})`;
-  let updatedChangelog: string;
+  const lines = changelog.split('\n');
+  const unresolvedLineIndexes = unresolvedImplementationPrTokenLineIndexes(
+    changelog,
+    baseChangelogContent ?? null,
+  );
+  const unresolvedTokenCount = unresolvedLineIndexes.reduce(
+    (count, index) => count + (lines[index].split(IMPLEMENTATION_PR_TOKEN).length - 1),
+    0,
+  );
 
-  if (tokenCount === 1) {
-    updatedChangelog = changelog.replace(IMPLEMENTATION_PR_TOKEN, replacement);
-  } else if (baseChangelogContent != null) {
-    const baseLines = new Set(baseChangelogContent.split('\n'));
-    const lines = changelog.split('\n');
-    const newTokenLineIndexes = lines
-      .map((line, index) => ({ line, index }))
-      .filter(({ line }) => line.includes(IMPLEMENTATION_PR_TOKEN) && !baseLines.has(line))
-      .map(({ index }) => index);
-
-    if (newTokenLineIndexes.length === 0) return 'no-op';
-
-    if (newTokenLineIndexes.length !== 1) {
-      throw new Error(
-        'multiple implementation PR tokens found: ' +
-          `${tokenCount} total, ${newTokenLineIndexes.length} not already present at the merge-base ` +
-          '(expected exactly 1 new token to finalize)',
-      );
-    }
-
-    const [targetIndex] = newTokenLineIndexes;
-    lines[targetIndex] = lines[targetIndex].replace(IMPLEMENTATION_PR_TOKEN, replacement);
-    updatedChangelog = lines.join('\n');
-  } else {
-    throw new Error('multiple implementation PR tokens found');
+  if (unresolvedTokenCount === 0) return 'no-op';
+  if (unresolvedTokenCount !== 1) {
+    throw new Error(
+      baseChangelogContent == null
+        ? 'multiple implementation PR tokens found'
+        : 'multiple implementation PR tokens found: ' +
+            `${tokenCount} total, ${unresolvedTokenCount} not already present at the merge-base ` +
+            '(expected exactly 1 new token to finalize)',
+    );
   }
+  const [targetIndex] = unresolvedLineIndexes;
+  lines[targetIndex] = lines[targetIndex].replace(IMPLEMENTATION_PR_TOKEN, replacement);
+  const updatedChangelog = lines.join('\n');
   const tempPath = `${changelogPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
 
   try {
@@ -127,7 +138,7 @@ export async function finalizeChangelogPr(
  * means `finalizeChangelogPr` falls back to its strict single-token
  * behavior — never a hard failure of the finalize command itself.
  */
-async function resolveBaseChangelogContent(git: GitRunner): Promise<string | null> {
+export async function resolveBaseChangelogContent(git: GitRunner): Promise<string | null> {
   try {
     const resolution = await resolveFreshBase(git);
     const mergeBase = await git(['merge-base', resolution.ref, 'HEAD']);
