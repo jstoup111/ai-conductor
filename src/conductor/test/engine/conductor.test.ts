@@ -8247,6 +8247,47 @@ describe('engine/conductor', () => {
       expect(updated['.docs/plans/a.md'].sha256).toBe(sha('plan'));
     });
 
+    it('reviews only the current feature artifact when another feature shares the step glob', async () => {
+      const featureA = 'neighbour-feature';
+      const featureB = 'current-feature';
+      await writeArtifact(`.docs/conflicts/${featureA}.md`, 'A');
+      const artifactB = await writeArtifact(`.docs/conflicts/${featureB}.md`, 'B');
+      await writeArtifact(`.docs/plans/${featureB}.md`, '# Current feature plan');
+      await writeArtifact('.pipeline/review-required-conflict_check', '1');
+
+      const state = Object.fromEntries(
+        ALL_STEPS
+          .filter(({ name }) => name !== 'conflict_check')
+          .map(({ name }) => [name, 'done']),
+      ) as ConductState;
+      state.feature_desc = featureB;
+      state.track = 'technical';
+      state.complexity_tier = 'M';
+      await writeState(statePath, state);
+
+      const reviewObserved = new Error('review observed sentinel');
+      let reviewedArtifacts: string[] = [];
+      const onReviewArtifacts = vi.fn(async (_step: StepName, files: string[]) => {
+        reviewedArtifacts = files;
+        throw reviewObserved;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        featureDesc: featureB,
+        resume: true,
+        fromStep: 'conflict_check',
+        onReviewArtifacts,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      expect(reviewedArtifacts).toEqual([artifactB]);
+    });
+
     it('review gate skips the prompt when every file is already approved', async () => {
       const planFile = await writeArtifact('.docs/plans/a.md', 'plan');
       const approvals = {
@@ -9971,11 +10012,11 @@ describe('engine/conductor', () => {
         await writeFile(join(dir, '.docs/decisions/technical-assessment-2026-04-16.md'), 'a');
       });
       await mkdir(join(dir, '.docs/specs'), { recursive: true });
-      await writeFile(join(dir, '.docs/specs/feature.md'), 'x');
-      await mkdir(join(dir, '.docs/stories/epic'), { recursive: true });
-      await writeFile(join(dir, '.docs/stories/epic/a.md'), 'x');
+      await writeFile(join(dir, '.docs/specs/p.md'), 'x');
+      await mkdir(join(dir, '.docs/stories'), { recursive: true });
+      await writeFile(join(dir, '.docs/stories/p.md'), 'x');
       await mkdir(join(dir, '.docs/conflicts'), { recursive: true });
-      await writeFile(join(dir, '.docs/conflicts/c.md'), 'x');
+      await writeFile(join(dir, '.docs/conflicts/p.md'), 'x');
       await mkdir(join(dir, '.docs/plans'), { recursive: true });
       await writeFile(join(dir, '.docs/plans/p.md'), 'x');
       await mkdir(join(dir, '.docs/coherence'), { recursive: true });
@@ -10061,9 +10102,9 @@ describe('engine/conductor', () => {
       const RETRO_SLUG = 'add-foo';
       const preFixtures: Array<[string, string]> = [
         ['.docs/decisions/technical-assessment-2026-04-16.md', 'test'],
-        ['.docs/specs/2026-04-16-feature.md', 'test'],
-        ['.docs/stories/epic-1/story-a.md', 'test'],
-        ['.docs/conflicts/2026-04-16-conflict.md', 'test'],
+        ['.docs/specs/2026-04-16-plan.md', 'test'],
+        ['.docs/stories/2026-04-16-plan.md', 'test'],
+        ['.docs/conflicts/2026-04-16-plan.md', 'test'],
         // Empty-is-done is removed (ADR): the build gate parses the plan and
         // requires every plan task resolved, so the fixture plan declares one
         // task whose pre-existing completed row is backed by a pre-seeded
@@ -10570,9 +10611,9 @@ describe('build-step stall circuit breaker', () => {
   async function seedAllArtifactsExceptTaskStatus(): Promise<void> {
     const artifacts: Array<[string, string]> = [
       ['.docs/decisions/technical-assessment-2026-04-18.md', 'x'],
-      ['.docs/specs/2026-04-18-feature.md', 'x'],
-      ['.docs/stories/epic-1/a.md', 'x'],
-      ['.docs/conflicts/2026-04-18.md', 'x'],
+      ['.docs/specs/2026-04-18-plan.md', 'x'],
+      ['.docs/stories/2026-04-18-plan.md', 'x'],
+      ['.docs/conflicts/2026-04-18-plan.md', 'x'],
       ['.docs/plans/2026-04-18-plan.md', 'x'],
       ['.docs/coherence/2026-04-18-plan.md', 'x'],
       ['.docs/architecture/arch.md', 'x'],
@@ -11267,9 +11308,9 @@ describe('engine/conductor: pipeline-exit false-completion regression', () => {
     // before reaching build.
     const preFixtures: Array<[string, string]> = [
       ['.docs/decisions/technical-assessment-2026-04-16.md', 'a'],
-      ['.docs/specs/2026-04-16-feature.md', 'a'],
-      ['.docs/stories/epic-1/story-a.md', 'a'],
-      ['.docs/conflicts/2026-04-16-conflict.md', 'a'],
+      ['.docs/specs/2026-04-16-plan.md', 'a'],
+      ['.docs/stories/2026-04-16-plan.md', 'a'],
+      ['.docs/conflicts/2026-04-16-plan.md', 'a'],
       ['.docs/plans/2026-04-16-plan.md', 'a'],
       ['.docs/coherence/2026-04-16-plan.md', 'a'],
       ['.docs/architecture/2026-04-16-arch.md', 'a'],

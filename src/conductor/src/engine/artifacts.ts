@@ -1,5 +1,5 @@
 import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
-import { basename, dirname, join, relative } from 'path';
+import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
@@ -30,50 +30,231 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 
+export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
+
+export type FeatureArtifactIdentityStrategy =
+  | { strategy: 'plan-stem' }
+  | {
+      strategy: 'normalized-stem';
+      stripDatePrefix?: boolean;
+      stripPrefixes?: readonly string[];
+    };
+
+export type ArtifactPatternContract =
+  | {
+      pattern: string;
+      scope: 'feature';
+      identity: FeatureArtifactIdentityStrategy;
+    }
+  | {
+      pattern: string;
+      scope: Exclude<ArtifactLifecycleScope, 'feature'>;
+      identity?: never;
+    };
+
+function artifactMatchesFeatureIdentity(
+  artifactPath: string,
+  featureIdentity: string,
+  strategy: FeatureArtifactIdentityStrategy,
+): boolean {
+  const artifactStem = basename(artifactPath, '.md');
+  const featureStem = basename(featureIdentity, '.md');
+  if (strategy.strategy === 'plan-stem') return artifactStem === featureStem;
+
+  const normalize = (stem: string): string => {
+    let normalized = stem.toLowerCase();
+    let previous: string;
+    do {
+      previous = normalized;
+      if (strategy.stripDatePrefix) {
+        normalized = normalized.replace(/^\d{4}-\d{2}-\d{2}-/, '');
+      }
+      for (const prefix of strategy.stripPrefixes ?? []) {
+        const normalizedPrefix = slugify(prefix);
+        if (normalizedPrefix && normalized.startsWith(`${normalizedPrefix}-`)) {
+          normalized = normalized.slice(normalizedPrefix.length + 1);
+        }
+      }
+    } while (normalized !== previous);
+    return slugify(normalized);
+  };
+
+  const normalizedArtifact = normalize(artifactStem);
+  const normalizedFeature = normalize(featureStem);
+  return normalizedArtifact.length > 0 && normalizedArtifact === normalizedFeature;
+}
+
+export interface ArtifactResolutionContext {
+  planPath?: string;
+  activePlanPath?: string;
+  featureDesc?: string;
+  featureIdentities: readonly string[];
+  changedPaths: ReadonlySet<string>;
+}
+
+export interface ArtifactResolutionResult {
+  files: string[];
+  diagnostic?: ArtifactResolutionDiagnostic;
+  patternResults?: ArtifactPatternResolution[];
+}
+
+export interface ArtifactResolutionDiagnostic {
+  code: 'missing' | 'ambiguous';
+  reason: string;
+}
+
+export interface ArtifactPatternResolution {
+  pattern: string;
+  files: string[];
+  diagnostic?: ArtifactResolutionDiagnostic;
+}
+
+export interface BuildArtifactResolutionContextOptions {
+  planPath?: string;
+  featureDesc?: string;
+  git?: GitRunner;
+}
+
+export async function buildArtifactResolutionContext(
+  projectRoot: string,
+  options: BuildArtifactResolutionContextOptions = {},
+): Promise<ArtifactResolutionContext> {
+  const absolutePath = (path: string): string => (isAbsolute(path) ? path : join(projectRoot, path));
+  let activePlanPath: string | undefined;
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8');
+    const state = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      activePlanPath = absolutePath(state.activePlanPath);
+    }
+  } catch {
+    // Engine state is optional; explicit identities remain authoritative.
+  }
+
+  const planPath = options.planPath ? absolutePath(options.planPath) : undefined;
+  const featureIdentities = [
+    planPath ? planStem(planPath) : undefined,
+    activePlanPath ? planStem(activePlanPath) : undefined,
+    options.featureDesc ? slugify(options.featureDesc) : undefined,
+  ].filter((identity): identity is string => Boolean(identity));
+  const uniqueFeatureIdentities = [...new Set(featureIdentities)];
+  const changedPaths = new Set<string>();
+
+  try {
+    const git = options.git ?? makeGitRunner(projectRoot);
+    const originHead = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    const baseRef = originHead.stdout.trim();
+    if (originHead.exitCode !== 0 || !baseRef.startsWith('refs/remotes/')) throw new Error();
+
+    const mergeBase = await git(['merge-base', baseRef.replace(/^refs\/remotes\//, ''), 'HEAD']);
+    const mergeBaseSha = mergeBase.stdout.trim();
+    if (mergeBase.exitCode !== 0 || !mergeBaseSha) throw new Error();
+
+    const results = await Promise.all([
+      git(['diff', '--name-only', `${mergeBaseSha}..HEAD`]),
+      git(['diff', '--name-only', 'HEAD']),
+      git(['ls-files', '--others', '--exclude-standard']),
+    ]);
+    if (results.some(({ exitCode }) => exitCode !== 0)) throw new Error();
+
+    for (const result of results) {
+      for (const rawPath of result.stdout.split(/\r?\n/)) {
+        const trimmed = rawPath.trim();
+        if (!trimmed) continue;
+        const repoPath = isAbsolute(trimmed) ? relative(projectRoot, trimmed) : trimmed;
+        const normalized = repoPath.replaceAll('\\', '/').replace(/^\.\//, '');
+        if (normalized && normalized !== '..' && !normalized.startsWith('../')) {
+          changedPaths.add(normalized);
+        }
+      }
+    }
+  } catch {
+    changedPaths.clear();
+  }
+
+  return {
+    planPath,
+    activePlanPath,
+    featureDesc: options.featureDesc,
+    featureIdentities: uniqueFeatureIdentities,
+    changedPaths,
+  };
+}
+
 /**
- * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
- * or a literal filename. Empty list = step produces no file artifacts; verification
- * is skipped.
+ * Lifecycle and identity policy for every built-in artifact pattern.
  *
- * Single source of truth used by:
- *   - Post-step verification gate (stepHasArtifacts)
- *   - Artifact review prompt (findArtifactFiles)
- *   - Dashboard rendering (getArtifactStatus)
+ * This is introduced alongside the legacy glob registry so existing consumers
+ * remain unchanged. The compatibility projection becomes derived in Task 2.
  */
-export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
+export const STEP_ARTIFACT_CONTRACTS = {
   bootstrap: [],
   memory: [],
-  assess: ['.docs/decisions/technical-assessment-*.md'],
-  // `explore` is advisory + ephemeral (notes → .pipeline/, decision → .memory/);
-  // it writes no committed .docs artifact, so it has no completion glob.
+  assess: [
+    {
+      pattern: '.docs/decisions/technical-assessment-*.md',
+      scope: 'repository',
+    },
+  ],
   explore: [],
-  // `prd` writes the product-only design doc (product track only).
-  prd: ['.docs/specs/*.md'],
+  prd: [
+    {
+      pattern: '.docs/specs/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
   complexity: [],
-  stories: ['.docs/stories/**/*.md'],
-  conflict_check: ['.docs/conflicts/*.md'],
-  plan: ['.docs/plans/*.md'],
-  coherence_check: ['.docs/coherence/*.md'],
-  architecture_diagram: ['.docs/architecture/*.md'],
+  stories: [
+    {
+      pattern: '.docs/stories/**/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
+  conflict_check: [
+    {
+      pattern: '.docs/conflicts/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
+  plan: [
+    {
+      pattern: '.docs/plans/*.md',
+      scope: 'feature',
+      identity: { strategy: 'plan-stem' },
+    },
+  ],
+  coherence_check: [
+    {
+      pattern: '.docs/coherence/*.md',
+      scope: 'feature',
+      identity: { strategy: 'plan-stem' },
+    },
+  ],
+  architecture_diagram: [
+    {
+      pattern: '.docs/architecture/*.md',
+      scope: 'repository',
+    },
+  ],
   architecture_review: [
-    '.docs/decisions/architecture-review-*.md',
-    '.docs/decisions/adr-*.md',
+    {
+      pattern: '.docs/decisions/architecture-review-*.md',
+      scope: 'feature',
+      identity: {
+        strategy: 'normalized-stem',
+        stripDatePrefix: true,
+        stripPrefixes: ['architecture-review'],
+      },
+    },
+    {
+      pattern: '.docs/decisions/adr-*.md',
+      scope: 'repository',
+    },
   ],
   worktree: [],
-  // Acceptance/system specs land in stack-specific places. Cover the common
-  // conventions so the completion check doesn't false-fail on a non-Rails
-  // project (e.g. a Node app whose tests are `app.test.js` at the root). The
-  // patterns avoid recursing node_modules (root globs are non-recursive; the
-  // `**` ones are scoped to test dirs).
-  //
-  // A monorepo with several packages (e.g. separate `api/` and `frontend/`)
-  // puts specs under arbitrary package prefixes that no fixed root pattern can
-  // anticipate. Rather than guess, a project declares its own locations via the
-  // `acceptance_spec_globs` config key — those globs are appended here at
-  // check time (see checkStepCompletion). They may use a leading `*/` to match
-  // any immediate subdirectory without naming each package (matchGlob skips
-  // node_modules / dot-dirs when expanding `*/`, preserving the no-node_modules
-  // property above).
   acceptance_specs: [
     'spec/acceptance/**/*',
     'spec/requests/**/*',
@@ -90,34 +271,51 @@ export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = {
     '*.spec.ts',
     '*.spec.jsx',
     '*.spec.tsx',
+  ].map((pattern) => ({ pattern, scope: 'repository' as const })),
+  build: [{ pattern: '.pipeline/task-status.json', scope: 'run' }],
+  build_review: [{ pattern: '.pipeline/build-review.json', scope: 'run' }],
+  wiring_check: [{ pattern: '.pipeline/wiring-evidence.json', scope: 'run' }],
+  test_suite: [{ pattern: FULL_SUITE_EVIDENCE_PATH, scope: 'run' }],
+  manual_test: [{ pattern: '.pipeline/manual-test-results.md', scope: 'run' }],
+  prd_audit: [{ pattern: '.pipeline/prd-audit.md', scope: 'run' }],
+  architecture_review_as_built: [
+    { pattern: '.pipeline/architecture-review-as-built.md', scope: 'run' },
   ],
-  build: ['.pipeline/task-status.json'],
-  build_review: ['.pipeline/build-review.json'],
-  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
-  // committed, same convention as build_review/manual_test above.
-  wiring_check: ['.pipeline/wiring-evidence.json'],
-  // Dashboard/artifact visibility only. The custom predicate below always
-  // re-inspects the content fingerprint; file presence cannot satisfy the gate.
-  test_suite: [FULL_SUITE_EVIDENCE_PATH],
-  // Run evidence (gitignored, stable filename, overwritten each run) — NOT
-  // committed. These are regenerated every run; tracking them caused date-stamp
-  // sprawl, rebase/merge conflicts, and dirty-tree HALTs at the finish-time
-  // rebase. `.pipeline/` is already gitignored in consumer repos, so the gate
-  // still finds them on disk while git never sees them.
-  manual_test: ['.pipeline/manual-test-results.md'],
-  // SHIP-tail compliance gates (see CUSTOM_COMPLETION_PREDICATES below).
-  prd_audit: ['.pipeline/prd-audit.md'],
-  architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
-  retro: ['.docs/retros/*.md'],
-  // Engine-native; its verdict is computed from git state, not a file artifact.
+  retro: [
+    {
+      pattern: '.docs/retros/*.md',
+      scope: 'feature',
+      identity: { strategy: 'normalized-stem', stripDatePrefix: true },
+    },
+  ],
   rebase: [],
   finish: [],
-  // Conductor reads .pipeline/remediation.json directly to route; not a gate artifact.
   remediate: [],
-  // Attribution verification is an out-of-band audit step; verdict is computed,
-  // not a committed file artifact.
   attribution_verify: [],
-};
+} satisfies Record<StepName, readonly ArtifactPatternContract[]>;
+
+/**
+ * Artifact glob patterns per step. Each pattern is `<dir>/*.md`, `<dir>/**\/*.md`,
+ * or a literal filename. Empty list = step produces no file artifacts; verification
+ * is skipped.
+ *
+ * Compatibility projection used by:
+ *   - Post-step verification gate (stepHasArtifacts)
+ *   - Artifact review prompt (findArtifactFiles)
+ *   - Dashboard rendering (getArtifactStatus)
+ *
+ * STEP_ARTIFACT_CONTRACTS is the authored source of truth. Keep this projection
+ * until all legacy consumers have migrated to scoped artifact resolution.
+ */
+export const STEP_ARTIFACT_GLOBS: Record<StepName, string[]> = Object.fromEntries(
+  (Object.entries(STEP_ARTIFACT_CONTRACTS) as [
+    StepName,
+    readonly ArtifactPatternContract[],
+  ][]).map(([step, contracts]) => [
+    step,
+    contracts.map(({ pattern }) => pattern),
+  ]),
+) as Record<StepName, string[]>;
 
 /**
  * True if `path` exists AND its mtime is at or after `sessionStartedAt`.
@@ -235,6 +433,85 @@ export async function findArtifactFiles(
     files.push(...(await matchGlob(dir, pattern)));
   }
   return files;
+}
+
+export async function resolveArtifactFiles(
+  dir: string,
+  step: StepName,
+  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'>,
+  extraGlobs: string[] = [],
+  includePatternResults = false,
+): Promise<ArtifactResolutionResult> {
+  const files = new Set<string>();
+  const patternResults: ArtifactPatternResolution[] = [];
+  let featureCandidateCount = 0;
+  let hasFeatureContract = false;
+  const activeIdentity = context.featureIdentities[0];
+  const identityLabel = activeIdentity
+    ? `active feature "${activeIdentity}"`
+    : 'the active feature (identity unavailable)';
+  const diagnosticFor = (candidateCount: number): ArtifactResolutionDiagnostic => {
+    if (candidateCount === 0) {
+      return {
+        code: 'missing',
+        reason: `${step} has no artifact candidates for ${identityLabel}`,
+      };
+    }
+    return {
+      code: 'ambiguous',
+      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}`,
+    };
+  };
+  for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+    const candidates = await matchGlob(dir, contract.pattern);
+    if (contract.scope !== 'feature') {
+      candidates.forEach((file) => files.add(file));
+      patternResults.push({ pattern: contract.pattern, files: candidates });
+      continue;
+    }
+
+    hasFeatureContract = true;
+    featureCandidateCount += candidates.length;
+    const associated = candidates.filter((file) => {
+      const repoPath = relative(dir, file).replaceAll('\\', '/');
+      return (
+        context.changedPaths.has(repoPath) ||
+        context.featureIdentities.some((identity) =>
+          artifactMatchesFeatureIdentity(file, identity, contract.identity),
+        )
+      );
+    });
+    if (associated.length > 0) {
+      associated.forEach((file) => files.add(file));
+      patternResults.push({ pattern: contract.pattern, files: associated });
+    } else if (candidates.length === 1) {
+      files.add(candidates[0]);
+      patternResults.push({ pattern: contract.pattern, files: [candidates[0]] });
+    } else {
+      patternResults.push({
+        pattern: contract.pattern,
+        files: [],
+        diagnostic: diagnosticFor(candidates.length),
+      });
+    }
+  }
+
+  for (const pattern of extraGlobs) {
+    const candidates = await matchGlob(dir, pattern);
+    for (const file of candidates) files.add(file);
+    patternResults.push({ pattern, files: candidates });
+  }
+  const resolvedFiles = [...files];
+  const withPatterns = (result: ArtifactResolutionResult): ArtifactResolutionResult =>
+    includePatternResults ? { ...result, patternResults } : result;
+  if (resolvedFiles.length > 0 || !hasFeatureContract) {
+    return withPatterns({ files: resolvedFiles });
+  }
+
+  return withPatterns({
+    files: [],
+    diagnostic: diagnosticFor(featureCandidateCount),
+  });
 }
 
 /**
@@ -573,6 +850,11 @@ export interface CompletionContext {
   attemptStartedAt?: number;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
+  /** Prepared once by callers that need feature-aware generic artifact resolution. */
+  artifactResolution?: Pick<
+    ArtifactResolutionContext,
+    'featureIdentities' | 'changedPaths'
+  >;
   /**
    * Resolved project config. The acceptance_specs gate reads
    * `config.acceptance_spec_globs` to extend its built-in artifact globs with
@@ -3249,11 +3531,18 @@ export async function checkStepCompletion(
   const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extra];
   if (patterns.length === 0) return { done: true };
 
-  const files = await findArtifactFiles(dir, step, extra);
-  if (files.length > 0) return { done: true };
+  const resolutionContext =
+    ctx.artifactResolution ??
+    (await buildArtifactResolutionContext(dir, {
+      planPath: ctx.planPath,
+      featureDesc: ctx.featureDesc,
+      git: ctx.git,
+    }));
+  const resolution = await resolveArtifactFiles(dir, step, resolutionContext, extra);
+  if (resolution.files.length > 0) return { done: true };
   return {
     done: false,
-    reason: `no files matching ${patterns.join(' or ')}`,
+    reason: resolution.diagnostic?.reason ?? `no files matching ${patterns.join(' or ')}`,
   };
 }
 
@@ -3265,26 +3554,30 @@ export interface ArtifactPatternStatus {
   pattern: string;
   files: string[]; // relative to `dir`
   satisfied: boolean;
+  diagnostic?: ArtifactResolutionResult['diagnostic'];
 }
 
 export async function getArtifactStatus(
   dir: string,
   step: StepName,
+  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'> = {
+    featureIdentities: [],
+    changedPaths: new Set(),
+  },
 ): Promise<ArtifactPatternStatus[]> {
   const patterns = STEP_ARTIFACT_GLOBS[step];
   if (!patterns || patterns.length === 0) return [];
 
-  const out: ArtifactPatternStatus[] = [];
-  for (const pattern of patterns) {
-    const matched = await matchGlob(dir, pattern);
-    const rel = matched.map((f) => relative(dir, f));
-    out.push({
+  const resolution = await resolveArtifactFiles(dir, step, context, [], true);
+  return (resolution.patternResults ?? []).map(({ pattern, files, diagnostic }) => {
+    const relativeFiles = files.map((file) => relative(dir, file));
+    return {
       pattern,
-      files: rel,
-      satisfied: rel.length > 0,
-    });
-  }
-  return out;
+      files: relativeFiles,
+      satisfied: relativeFiles.length > 0,
+      ...(diagnostic ? { diagnostic } : {}),
+    };
+  });
 }
 
 // --- Glob matcher (inlined — avoids extra dependency for a narrow use case) ---

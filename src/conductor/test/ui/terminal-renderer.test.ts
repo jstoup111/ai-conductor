@@ -206,5 +206,35 @@ describe('TerminalRenderer', () => {
         await rm(root, { recursive: true, force: true });
       }
     });
+
+    it('shows only the active feature plan when neighbouring plans make the glob ambiguous', async () => {
+      const { mkdtemp, mkdir, rm, writeFile } = await import('fs/promises');
+      const { tmpdir } = await import('os');
+      const { join } = await import('path');
+      const root = await mkdtemp(join(tmpdir(), 'renderer-artifact-scope-'));
+      const s = new CaptureStream();
+      try {
+        await mkdir(join(root, '.docs/plans'), { recursive: true });
+        await writeFile(join(root, '.docs/plans/feature-a.md'), '# Plan A\n');
+        await writeFile(join(root, '.docs/plans/feature-b.md'), '# Plan B\n');
+        const r2 = new TerminalRenderer({
+          stateFilePath: '/tmp/test-state.json',
+          featureDesc: 'feature-b',
+          steps: ALL_STEPS,
+          readStateFn: readStateMock,
+          projectRoot: root,
+          liveRegion: createLiveRegion({ stream: s, forceTTY: false }),
+        });
+
+        await r2.handle({ type: 'step_completed', step: 'plan', status: 'done' });
+
+        const planArtifactLines = s.output().split('\n')
+          .map((line) => line.trim())
+          .filter((line) => line.includes('.docs/plans/'));
+        expect(planArtifactLines).toEqual(['✓ .docs/plans/feature-b.md']);
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
   });
 });

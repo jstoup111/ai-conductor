@@ -5,7 +5,11 @@ import type { StateResult } from '../types/state.js';
 import { formatDashboardSnapshot } from './dashboard-text.js';
 import { buildDashboardSnapshot, type ArtifactsByStep } from './dashboard-snapshot.js';
 import type { DashboardSnapshot, ViewMode } from './types.js';
-import { getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
+import {
+  buildArtifactResolutionContext,
+  getArtifactStatus,
+  STEP_ARTIFACT_GLOBS,
+} from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 import { formatProgressDelta, displayBuildPosition } from '../engine/format-retry-line.js';
 
@@ -64,10 +68,11 @@ export function createRenderer(
   async function collectArtifacts(): Promise<ArtifactsByStep | undefined> {
     if (!projectRoot) return undefined;
     const out: ArtifactsByStep = {};
+    const context = await buildArtifactResolutionContext(projectRoot, { featureDesc });
     for (const step of steps) {
       const globs = STEP_ARTIFACT_GLOBS[step.name];
       if (!globs || globs.length === 0) continue;
-      out[step.name as StepName] = await getArtifactStatus(projectRoot, step.name);
+      out[step.name as StepName] = await getArtifactStatus(projectRoot, step.name, context);
     }
     return out;
   }

@@ -139,41 +139,72 @@ branch name to be resolvable — when it is not, the seal is fully protected.
 
 ## Step to artifact map
 
-`STEP_ARTIFACT_GLOBS` is the single source of truth for which step produces which file. It drives the
-post-step verification gate, the artifact review prompt, and dashboard rendering. Source-ordered; all 26
-step names appear.
+`STEP_ARTIFACT_CONTRACTS` (`src/conductor/src/engine/artifacts.ts`) is the hand-authored source of
+truth for which step produces which file, and the lifecycle scope each pattern belongs to.
+`STEP_ARTIFACT_GLOBS` is a mechanically-derived compatibility projection — pattern strings only, no
+scope — kept for callers that still need a plain glob list. Source-ordered; all 26 step names appear.
 
-| Step | Glob(s) |
-| --- | --- |
-| `bootstrap` | *(none)* |
-| `memory` | *(none)* |
-| `assess` | `.docs/decisions/technical-assessment-*.md` |
-| `explore` | *(none — advisory and ephemeral)* |
-| `prd` | `.docs/specs/*.md` |
-| `complexity` | *(none)* |
-| `stories` | `.docs/stories/**/*.md` |
-| `conflict_check` | `.docs/conflicts/*.md` |
-| `plan` | `.docs/plans/*.md` |
-| `coherence_check` | `.docs/coherence/*.md` |
-| `architecture_diagram` | `.docs/architecture/*.md` |
-| `architecture_review` | `.docs/decisions/architecture-review-*.md`, `.docs/decisions/adr-*.md` |
-| `worktree` | *(none)* |
-| `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares |
-| `build` | `.pipeline/task-status.json` |
-| `build_review` | `.pipeline/build-review.json` |
-| `wiring_check` | `.pipeline/wiring-evidence.json` |
-| `test_suite` | `.pipeline/test-suite-evidence.json` |
-| `manual_test` | `.pipeline/manual-test-results.md` |
-| `prd_audit` | `.pipeline/prd-audit.md` |
-| `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` |
-| `retro` | `.docs/retros/*.md` |
-| `rebase` | *(none — verdict computed from git state)* |
-| `finish` | *(none)* |
-| `remediate` | *(none — the engine reads `.pipeline/remediation.json` directly)* |
-| `attribution_verify` | *(none — computed, not a file)* |
+Every pattern declares one lifecycle scope:
+
+- **`feature`** — the output belongs to the active plan/feature and must be associated with it before
+  it counts. Scope is per-pattern, not per-step, so a step can pair a feature-primary report with a
+  broader supplemental pattern (e.g. `architecture_review`'s ADR glob) without the second pattern
+  being mislabeled feature-scoped.
+- **`repository`** — the declared corpus intentionally applies to the whole checkout; no feature
+  filtering is applied.
+- **`run`** — stable worktree-local `.pipeline` evidence, where the step's existing freshness or
+  custom predicate remains the sole authority.
+
+| Step | Glob(s) | Scope |
+| --- | --- | --- |
+| `bootstrap` | *(none)* | — |
+| `memory` | *(none)* | — |
+| `assess` | `.docs/decisions/technical-assessment-*.md` | repository |
+| `explore` | *(none — advisory and ephemeral)* | — |
+| `prd` | `.docs/specs/*.md` | feature |
+| `complexity` | *(none)* | — |
+| `stories` | `.docs/stories/**/*.md` | feature |
+| `conflict_check` | `.docs/conflicts/*.md` | feature |
+| `plan` | `.docs/plans/*.md` | feature |
+| `coherence_check` | `.docs/coherence/*.md` | feature |
+| `architecture_diagram` | `.docs/architecture/*.md` | repository |
+| `architecture_review` | `.docs/decisions/architecture-review-*.md` (feature), `.docs/decisions/adr-*.md` (repository) | mixed |
+| `worktree` | *(none)* | — |
+| `acceptance_specs` | 15 stack-convention test globs — `spec/acceptance/**/*`, `spec/requests/**/*`, `spec/system/**/*`, `test/acceptance/**/*`, `test/**/*`, `tests/**/*`, `__tests__/**/*`, and `*.{test,spec}.{js,ts,jsx,tsx}` — plus any `acceptance_spec_globs` the project declares | repository |
+| `build` | `.pipeline/task-status.json` | run |
+| `build_review` | `.pipeline/build-review.json` | run |
+| `wiring_check` | `.pipeline/wiring-evidence.json` | run |
+| `test_suite` | `.pipeline/test-suite-evidence.json` | run |
+| `manual_test` | `.pipeline/manual-test-results.md` | run |
+| `prd_audit` | `.pipeline/prd-audit.md` | run |
+| `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | run |
+| `retro` | `.docs/retros/*.md` | feature |
+| `rebase` | *(none — verdict computed from git state)* | — |
+| `finish` | *(none)* | — |
+| `remediate` | *(none — the engine reads `.pipeline/remediation.json` directly)* | — |
+| `attribution_verify` | *(none — computed, not a file)* | — |
 
 Totals: 9 steps write into `.docs/`, 7 write into `.pipeline/`, `acceptance_specs` matches project test
 sources, and 9 produce no file artifact at all.
+
+### Feature-scoped resolution
+
+`resolveArtifactFiles(dir, step, context)` is what generic completion (`checkStepCompletion`), the
+interactive artifact-review prompt, and dashboard status (`getArtifactStatus`, in both the terminal
+and create renderers) actually call — never `findArtifactFiles` directly. For each `feature`-scoped
+pattern it matches the raw glob, then narrows to the current feature by, in order: files in the
+worktree's changed/untracked set, files whose name matches the active plan/feature identity under the
+pattern's declared identity strategy (exact plan stem, or a normalized stem with date-prefix and
+step-name-prefix stripping), and — only when exactly one candidate remains after those checks fail to
+narrow it — a legacy singleton fallback. Several remaining candidates that cannot be associated with
+the current feature resolve to an **ambiguous** diagnostic (`done: false` with a reason naming the
+candidate count), never an alphabetical, newest-mtime, or first-match guess. `repository`- and
+`run`-scoped patterns are returned as-is, with `run` patterns still gated by their own custom
+completion predicate.
+
+`findArtifactFiles` remains the low-level, policy-free pattern expander — the raw repository-wide
+corpus for callers that explicitly want it, and the primitive `resolveArtifactFiles` builds on
+internally. See `adr-2026-07-28-feature-aware-artifact-resolution` for the full design rationale.
 
 The SHIP-tail verdict artifacts (`manual_test`, `prd_audit`, `architecture_review_as_built`,
 `build_review`, `wiring_check`, `test_suite`) live in gitignored `.pipeline/` deliberately. They are

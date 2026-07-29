@@ -95,6 +95,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Generic step completion, interactive artifact review, and dashboard status now resolve
+  feature-scoped artifacts (e.g. a plan or stories file) against the active feature's identity and
+  worktree changes instead of matching a step's declared glob directory-wide, so an unrelated
+  in-flight or historical feature's artifact can no longer satisfy, offer for approval, or render as
+  satisfied for a different feature's gate ([implementation PR #1138](https://github.com/jstoup111/ai-conductor/pull/1138)).
 - The self-host live-boundary guard's Claude provider-state exclusions now cover
   `plugins/marketplaces/**` (a marketplace's cached `marketplace.json`/`.gcs-sha`), the same
   CLI-refreshed-cache category as `plugins/known_marketplaces.json`. Previously an unrelated

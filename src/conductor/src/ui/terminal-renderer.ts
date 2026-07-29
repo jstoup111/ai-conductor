@@ -5,7 +5,11 @@ import type { StateResult } from '../types/state.js';
 import { formatDashboardSnapshot } from './dashboard-text.js';
 import { buildDashboardSnapshot, type ArtifactsByStep } from './dashboard-snapshot.js';
 import type { DashboardSnapshot, UIRenderer, ViewMode } from './types.js';
-import { getArtifactStatus, STEP_ARTIFACT_GLOBS } from '../engine/artifacts.js';
+import {
+  buildArtifactResolutionContext,
+  getArtifactStatus,
+  STEP_ARTIFACT_GLOBS,
+} from '../engine/artifacts.js';
 import { createLiveRegion, type LiveRegion } from './live-region.js';
 import { formatProgressDelta } from '../engine/format-retry-line.js';
 import { formatFeatureUsageTotal } from '../execution/provider-diagnostics.js';
@@ -81,10 +85,13 @@ export class TerminalRenderer implements UIRenderer {
   private async collectArtifacts(): Promise<ArtifactsByStep | undefined> {
     if (!this.projectRoot) return undefined;
     const out: ArtifactsByStep = {};
+    const context = await buildArtifactResolutionContext(this.projectRoot, {
+      featureDesc: this.featureDesc,
+    });
     for (const step of this.steps) {
       const globs = STEP_ARTIFACT_GLOBS[step.name];
       if (!globs || globs.length === 0) continue;
-      out[step.name as StepName] = await getArtifactStatus(this.projectRoot, step.name);
+      out[step.name as StepName] = await getArtifactStatus(this.projectRoot, step.name, context);
     }
     return out;
   }

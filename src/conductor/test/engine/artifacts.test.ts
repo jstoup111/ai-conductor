@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -53,7 +53,10 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
 }));
 
 import {
+  STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
+  buildArtifactResolutionContext,
+  resolveArtifactFiles,
   findArtifactFiles,
   stepHasArtifacts,
   getArtifactStatus,
@@ -76,7 +79,11 @@ import {
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
 } from '../../src/engine/artifacts.js';
-import type { CompletionResult, CompletionContext } from '../../src/engine/artifacts.js';
+import type {
+  CompletionResult,
+  CompletionContext,
+  ArtifactResolutionContext,
+} from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
@@ -104,6 +111,104 @@ describe('engine/artifacts', () => {
   }
 
   describe('STEP_ARTIFACT_GLOBS', () => {
+    it('derives the complete ordered compatibility map while retaining per-pattern scope', async () => {
+      const expected: Record<StepName, string[]> = {
+        bootstrap: [],
+        memory: [],
+        assess: ['.docs/decisions/technical-assessment-*.md'],
+        explore: [],
+        prd: ['.docs/specs/*.md'],
+        complexity: [],
+        stories: ['.docs/stories/**/*.md'],
+        conflict_check: ['.docs/conflicts/*.md'],
+        plan: ['.docs/plans/*.md'],
+        coherence_check: ['.docs/coherence/*.md'],
+        architecture_diagram: ['.docs/architecture/*.md'],
+        architecture_review: [
+          '.docs/decisions/architecture-review-*.md',
+          '.docs/decisions/adr-*.md',
+        ],
+        worktree: [],
+        acceptance_specs: [
+          'spec/acceptance/**/*',
+          'spec/requests/**/*',
+          'spec/system/**/*',
+          'test/acceptance/**/*',
+          'test/**/*',
+          'tests/**/*',
+          '__tests__/**/*',
+          '*.test.js',
+          '*.test.ts',
+          '*.test.jsx',
+          '*.test.tsx',
+          '*.spec.js',
+          '*.spec.ts',
+          '*.spec.jsx',
+          '*.spec.tsx',
+        ],
+        build: ['.pipeline/task-status.json'],
+        build_review: ['.pipeline/build-review.json'],
+        wiring_check: ['.pipeline/wiring-evidence.json'],
+        test_suite: ['.pipeline/test-suite-evidence.json'],
+        manual_test: ['.pipeline/manual-test-results.md'],
+        prd_audit: ['.pipeline/prd-audit.md'],
+        architecture_review_as_built: ['.pipeline/architecture-review-as-built.md'],
+        retro: ['.docs/retros/*.md'],
+        rebase: [],
+        finish: [],
+        remediate: [],
+        attribution_verify: [],
+      };
+      const source = await readFile(join(__dirname, '../../src/engine/artifacts.ts'), 'utf8');
+
+      expect({
+        projection: STEP_ARTIFACT_GLOBS,
+        mixedScopes: STEP_ARTIFACT_CONTRACTS.architecture_review.map(
+          ({ pattern, scope }) => [pattern, scope],
+        ),
+        derivedProjection: /export const STEP_ARTIFACT_GLOBS[^=]*=\s*Object\.fromEntries/.test(
+          source,
+        ),
+      }).toEqual({
+        projection: expected,
+        mixedScopes: [
+          ['.docs/decisions/architecture-review-*.md', 'feature'],
+          ['.docs/decisions/adr-*.md', 'repository'],
+        ],
+        derivedProjection: true,
+      });
+    });
+
+    it('declares lifecycle scope and feature identity for every built-in artifact pattern', () => {
+      const violations: string[] = [];
+
+      for (const step of Object.keys(STEP_ARTIFACT_GLOBS) as StepName[]) {
+        const patterns = STEP_ARTIFACT_GLOBS[step];
+        const contracts = STEP_ARTIFACT_CONTRACTS[step];
+        if (!contracts) {
+          violations.push(`${step}: missing step contract`);
+          continue;
+        }
+        if (contracts.length !== patterns.length) {
+          violations.push(`${step}: expected ${patterns.length} pattern contracts`);
+        }
+
+        for (const [index, contract] of contracts.entries()) {
+          if (contract.pattern !== patterns[index]) {
+            violations.push(`${step}[${index}]: pattern does not match legacy registry`);
+          }
+          if (!['feature', 'repository', 'run'].includes(contract.scope)) {
+            violations.push(`${step}[${index}]: missing lifecycle scope`);
+          }
+          if (contract.scope === 'feature' && !contract.identity) {
+            violations.push(`${step}[${index}]: missing feature identity strategy`);
+          }
+        }
+      }
+
+      expect(violations).toEqual([]);
+    });
+
     it('declares plan output in .docs/plans/', () => {
       expect(STEP_ARTIFACT_GLOBS.plan).toEqual(['.docs/plans/*.md']);
     });
@@ -119,6 +224,212 @@ describe('engine/artifacts', () => {
 
     it('declares manual_test results file', () => {
       expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.pipeline/manual-test-results.md']);
+    });
+  });
+
+  describe('buildArtifactResolutionContext', () => {
+    it('assembles ordered explicit identities and one local changed-path snapshot', async () => {
+      await createFile(
+        '.pipeline/engine-state.json',
+        JSON.stringify({ activePlanPath: '.docs/plans/engine-recorded.md' }),
+      );
+      const git = vi.fn(async (args: string[]) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return {
+            exitCode: 0,
+            stdout: 'refs/remotes/origin/main\n',
+            stderr: '',
+          };
+        }
+        if (command === 'merge-base origin/main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'diff --name-only base-sha..HEAD') {
+          return {
+            exitCode: 0,
+            stdout: './.docs/specs/committed.md\nsrc/outside-declared-patterns.ts\n',
+            stderr: '',
+          };
+        }
+        if (command === 'diff --name-only HEAD') {
+          return {
+            exitCode: 0,
+            stdout: '.docs/stories/modified.md\n',
+            stderr: '',
+          };
+        }
+        if (command === 'ls-files --others --exclude-standard') {
+          return {
+            exitCode: 0,
+            stdout: '.docs/plans/untracked.md\n',
+            stderr: '',
+          };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected: ${command}` };
+      });
+
+      const context = await buildArtifactResolutionContext(dir, {
+        planPath: '.docs/plans/explicit-plan.md',
+        featureDesc: 'Explicit Feature',
+        git,
+      });
+      const failedContext = await buildArtifactResolutionContext(dir, {
+        planPath: '.docs/plans/still-explicit.md',
+        featureDesc: 'Still Explicit',
+        git: async () => ({ exitCode: 1, stdout: '', stderr: 'indeterminate' }),
+      });
+
+      expect({
+        planPath: context.planPath,
+        activePlanPath: context.activePlanPath,
+        featureDesc: context.featureDesc,
+        featureIdentities: context.featureIdentities,
+        changedPaths: [...context.changedPaths],
+        gitCalls: git.mock.calls.map(([args]) => args),
+        failedContext: {
+          planPath: failedContext.planPath,
+          featureIdentities: failedContext.featureIdentities,
+          changedPaths: [...failedContext.changedPaths],
+        },
+      }).toEqual({
+        planPath: join(dir, '.docs/plans/explicit-plan.md'),
+        activePlanPath: join(dir, '.docs/plans/engine-recorded.md'),
+        featureDesc: 'Explicit Feature',
+        featureIdentities: ['explicit-plan', 'engine-recorded', 'explicit-feature'],
+        changedPaths: [
+          '.docs/specs/committed.md',
+          'src/outside-declared-patterns.ts',
+          '.docs/stories/modified.md',
+          '.docs/plans/untracked.md',
+        ],
+        gitCalls: [
+          ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+          ['merge-base', 'origin/main', 'HEAD'],
+          ['diff', '--name-only', 'base-sha..HEAD'],
+          ['diff', '--name-only', 'HEAD'],
+          ['ls-files', '--others', '--exclude-standard'],
+        ],
+        failedContext: {
+          planPath: join(dir, '.docs/plans/still-explicit.md'),
+          featureIdentities: ['still-explicit', 'engine-recorded'],
+          changedPaths: [],
+        },
+      });
+    });
+  });
+
+  describe('resolveArtifactFiles', () => {
+    it('selects associated feature files while preserving broad and raw corpora', async () => {
+      await createFile('.docs/specs/feature-a.md');
+      await createFile('.docs/specs/2026-07-28-feature-b.md');
+      await createFile('.docs/plans/feature-a.md');
+      await createFile('.docs/plans/feature-b.md');
+      await createFile('.docs/conflicts/foreign-conflict.md');
+      await createFile('.docs/conflicts/unconventional-current.md');
+      await createFile('.docs/retros/legacy-singleton.md');
+      await createFile('.docs/decisions/technical-assessment-one.md');
+      await createFile('.docs/decisions/technical-assessment-two.md');
+      await createFile('.pipeline/task-status.json', '{}');
+
+      const featureB: Pick<
+        ArtifactResolutionContext,
+        'featureIdentities' | 'changedPaths'
+      > = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set(),
+      };
+      const changedFeature = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set(['.docs/conflicts/unconventional-current.md']),
+      };
+      const unknownFeature = {
+        featureIdentities: ['unknown-feature'],
+        changedPaths: new Set<string>(),
+      };
+      const legacyContext = {
+        featureIdentities: [],
+        changedPaths: new Set<string>(),
+      };
+
+      const [prd, plan, changed, singleton, repository, run, raw] = await Promise.all([
+        resolveArtifactFiles(dir, 'prd', featureB),
+        resolveArtifactFiles(dir, 'plan', featureB),
+        resolveArtifactFiles(dir, 'conflict_check', changedFeature),
+        resolveArtifactFiles(dir, 'retro', legacyContext),
+        resolveArtifactFiles(dir, 'assess', unknownFeature),
+        resolveArtifactFiles(dir, 'build', unknownFeature),
+        findArtifactFiles(dir, 'prd'),
+      ]);
+
+      const relativeFiles = (files: readonly string[]) =>
+        files.map((file) => relative(dir, file).replaceAll('\\', '/')).sort();
+
+      expect({
+        prd: relativeFiles(prd.files),
+        plan: relativeFiles(plan.files),
+        changed: relativeFiles(changed.files),
+        singleton: relativeFiles(singleton.files),
+        repository: relativeFiles(repository.files),
+        run: relativeFiles(run.files),
+        raw: relativeFiles(raw),
+      }).toEqual({
+        prd: ['.docs/specs/2026-07-28-feature-b.md'],
+        plan: ['.docs/plans/feature-b.md'],
+        changed: ['.docs/conflicts/unconventional-current.md'],
+        singleton: ['.docs/retros/legacy-singleton.md'],
+        repository: [
+          '.docs/decisions/technical-assessment-one.md',
+          '.docs/decisions/technical-assessment-two.md',
+        ],
+        run: ['.pipeline/task-status.json'],
+        raw: ['.docs/specs/2026-07-28-feature-b.md', '.docs/specs/feature-a.md'],
+      });
+    });
+
+    it('selects one unrecognizable legacy feature artifact for an identified active feature', async () => {
+      await createFile('.docs/retros/legacy-singleton.md');
+
+      const result = await resolveArtifactFiles(dir, 'retro', {
+        featureIdentities: ['active-feature'],
+        changedPaths: new Set<string>(),
+      });
+
+      expect(result).toEqual({
+        files: [join(dir, '.docs/retros/legacy-singleton.md')],
+      });
+    });
+
+    it('diagnoses ambiguous or missing candidates', async () => {
+      await createFile('.docs/stories/feature-a.md');
+      await createFile('.docs/stories/feature-c.md');
+      const featureB = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      };
+
+      const [ambiguous, missing] = await Promise.all([
+        resolveArtifactFiles(dir, 'stories', featureB),
+        resolveArtifactFiles(dir, 'retro', featureB),
+      ]);
+
+      expect({ ambiguous, missing }).toEqual({
+        ambiguous: {
+          files: [],
+          diagnostic: {
+            code: 'ambiguous',
+            reason:
+              'stories has 2 artifact candidates and none can be associated with active feature "feature-b"',
+          },
+        },
+        missing: {
+          files: [],
+          diagnostic: {
+            code: 'missing',
+            reason: 'retro has no artifact candidates for active feature "feature-b"',
+          },
+        },
+      });
     });
   });
 
@@ -2552,6 +2863,44 @@ describe('engine/artifacts', () => {
   });
 
   describe('getArtifactStatus', () => {
+    it('shows only the active feature and keeps ambiguous corpora unsatisfied with diagnostics', async () => {
+      await createFile('.docs/specs/feature-a.md');
+      await createFile('.docs/specs/feature-b.md');
+      await createFile('.docs/plans/feature-a.md');
+      await createFile('.docs/plans/feature-c.md');
+      const featureB = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      };
+
+      const [scoped, ambiguous] = await Promise.all([
+        getArtifactStatus(dir, 'prd', featureB),
+        getArtifactStatus(dir, 'plan', featureB),
+      ]);
+
+      expect({ scoped, ambiguous }).toEqual({
+        scoped: [
+          {
+            pattern: '.docs/specs/*.md',
+            files: ['.docs/specs/feature-b.md'],
+            satisfied: true,
+          },
+        ],
+        ambiguous: [
+          {
+            pattern: '.docs/plans/*.md',
+            files: [],
+            satisfied: false,
+            diagnostic: {
+              code: 'ambiguous',
+              reason:
+                'plan has 2 artifact candidates and none can be associated with active feature "feature-b"',
+            },
+          },
+        ],
+      });
+    });
+
     it('returns [] for steps that produce no artifacts', async () => {
       expect(await getArtifactStatus(dir, 'complexity')).toEqual([]);
     });
