@@ -73,7 +73,7 @@ not represented as plan tasks.
 - `src/conductor/src/engine/shipped-record-on-main.ts` — new module
 - `src/conductor/test/engine/shipped-record-on-main.test.ts` — new test
 
-**Wired-into:** none (inert until src/conductor/src/engine/mergeable-sweep.ts)
+**Wired-into:** `src/conductor/src/engine/mergeable-sweep.ts#sweepMergeableLabels`
 **Dependencies:** none
 
 ### Task 2: Probe returns `absent` when the record is not on main
