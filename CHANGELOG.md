@@ -38,7 +38,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- Catch daemon claim-to-finish seam regressions in ordinary CI with a deterministic end-to-end fixture driven by a scripted provider fake ({{IMPLEMENTATION_PR}}).
+- Catch daemon claim-to-finish seam regressions in ordinary CI with a deterministic end-to-end fixture driven by a scripted provider fake ([implementation PR #1155](https://github.com/jstoup111/ai-conductor/pull/1155)).
 - Show verdict-freshness decisions in `daemon.log`, distinguishing rewritten evidence, preserved surface misses, and stale invalidations with step and artifact names ([implementation PR #1126](https://github.com/jstoup111/ai-conductor/pull/1126)).
 - Add cost-unmetered metering and per-provider attribution to committed Cost records and `conduct-ts kpi` output ([implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
 - Whole-feature usage total at `finish`: when a feature's `finish` step completes, the build logs
