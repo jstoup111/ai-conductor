@@ -18,7 +18,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const sourceRoot = path.resolve(process.argv[2]);
-const writerNames = new Set(['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync']);
+const canonicalWriterNames = new Set(['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync']);
 const allowedSuffix = path.join('engine', 'halt-marker.ts');
 let violations = 0;
 
@@ -66,31 +66,48 @@ function stringValues(expression) {
   return values;
 }
 
-function targetsCanonicalHalt(expression, aliases) {
-  if (/\bHALT_MARKER\b/.test(expression)) return true;
-  if (stringValues(expression).includes('.pipeline/HALT')) return true;
+function pathKind(expression, aliases) {
+  if (/\bHALT_MARKER\b/.test(expression)) return 'halt';
+  if (stringValues(expression).includes('.pipeline/HALT')) return 'halt';
 
   const values = stringValues(expression);
-  if (values.includes('.pipeline') && values.includes('HALT')) return true;
+  if (values.includes('.pipeline') && values.includes('HALT')) return 'halt';
 
-  for (const alias of aliases) {
-    if (new RegExp(`\\b${alias}\\b`).test(expression)) return true;
+  for (const [alias, kind] of aliases) {
+    if (!new RegExp(`\\b${alias}\\b`).test(expression)) continue;
+    if (kind === 'halt') return 'halt';
+    if (kind === 'pipeline' && values.includes('HALT')) return 'halt';
   }
-  return false;
+  if (values.includes('.pipeline')) return 'pipeline';
+  for (const [alias, kind] of aliases) {
+    if (kind === 'pipeline' && new RegExp(`\\b${alias}\\b`).test(expression)) return 'pipeline';
+  }
+  return null;
 }
 
 for (const file of sourceFiles(sourceRoot)) {
   if (file.endsWith(allowedSuffix)) continue;
   const source = fs.readFileSync(file, 'utf8');
-  const aliases = new Set();
+  const writerNames = new Set(canonicalWriterNames);
+  for (const imported of source.matchAll(
+    /\bimport\s*\{([^}]+)\}\s*from\s*['"](?:node:)?fs(?:\/promises)?['"]/gs,
+  )) {
+    for (const specifier of imported[1].split(',')) {
+      const match = specifier.trim().match(/^([A-Za-z_$][\w$]*)(?:\s+as\s+([A-Za-z_$][\w$]*))?$/);
+      if (match && canonicalWriterNames.has(match[1])) writerNames.add(match[2] ?? match[1]);
+    }
+  }
+
+  const aliases = new Map();
   const assignments = [...source.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;]+);/gs)];
 
   let changed = true;
   while (changed) {
     changed = false;
     for (const assignment of assignments) {
-      if (!aliases.has(assignment[1]) && targetsCanonicalHalt(assignment[2], aliases)) {
-        aliases.add(assignment[1]);
+      const kind = pathKind(assignment[2], aliases);
+      if (!aliases.has(assignment[1]) && kind !== null) {
+        aliases.set(assignment[1], kind);
         changed = true;
       }
     }
@@ -100,7 +117,7 @@ for (const file of sourceFiles(sourceRoot)) {
   for (const call of source.matchAll(calls)) {
     if (!writerNames.has(call[1])) continue;
     const openParen = call.index + call[0].lastIndexOf('(');
-    if (!targetsCanonicalHalt(firstArgument(source, openParen), aliases)) continue;
+    if (pathKind(firstArgument(source, openParen), aliases) !== 'halt') continue;
     const line = source.slice(0, call.index).split('\n').length;
     console.error(`${path.relative(sourceRoot, file)}:${line}: direct canonical HALT write`);
     violations += 1;
@@ -135,9 +152,16 @@ EOF
   cat > "${fixture_dir}/literal-path.ts" <<'EOF'
 writeFileSync(join(root, '.pipeline/HALT'), 'reason');
 EOF
+  cat > "${fixture_dir}/import-alias.ts" <<'EOF'
+import { writeFile as save } from 'node:fs/promises';
+const pipelineDir = join(root, '.pipeline');
+await save(join(pipelineDir, 'HALT'), 'reason');
+EOF
   cat > "${fixture_dir}/read-only.ts" <<'EOF'
-const target = join(root, '.pipeline/HALT');
-await readFile(target, 'utf8');
+import { readFile as load } from 'node:fs/promises';
+const pipelineDir = join(root, '.pipeline');
+const target = join(pipelineDir, 'HALT');
+await load(target, 'utf8');
 EOF
   cat > "${fixture_dir}/engine/halt-marker.ts" <<'EOF'
 await writeFile(join(root, HALT_MARKER), body);
@@ -152,7 +176,7 @@ EOF
     echo "check_halt_writers: violating fixture unexpectedly passed" >&2
     return 1
   fi
-  for expected in constant.ts multiline.ts alias-variable.ts literal-path.ts; do
+  for expected in constant.ts multiline.ts alias-variable.ts literal-path.ts import-alias.ts; do
     if ! grep -q "^${expected}:" <<< "$fixture_output"; then
       echo "check_halt_writers: fixture did not report ${expected}" >&2
       echo "$fixture_output" >&2
