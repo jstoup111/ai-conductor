@@ -402,6 +402,49 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(logs.some((line) => line.includes('reaped record-present'))).toBe(false);
   });
 
+  it('suppresses an unchanged retained disposition across passes and logs when it changes', async () => {
+    const retainedGh = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    }).gh;
+    const unknownGh = makeFakeGh({
+      [PR_URL]: new Error('temporary platform failure'),
+    }).gh;
+    const logs: string[] = [];
+    const log = (message: string) => logs.push(message);
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: retainedGh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: retainedGh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: unknownGh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+
+    expect({
+      unchangedRetainLines: logs.filter(
+        (line) => line === '[mergeable-sweep] retained test-feature — reason: record-not-yet-on-main',
+      ).length,
+      changedDispositionLines: logs.filter(
+        (line) => line === '[mergeable-sweep] disposition unknown test-feature — reason: pr-state-unknown',
+      ).length,
+    }).toEqual({
+      unchangedRetainLines: 1,
+      changedDispositionLines: 1,
+    });
+  });
+
   it('reaps a MERGED feature worktree when its shipped record is present on main', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];

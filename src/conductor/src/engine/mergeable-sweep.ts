@@ -84,6 +84,29 @@ const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
  */
 const MAX_WATCH_ENTRIES = 100;
 
+/** Retain/unknown outcome state scoped to the lifetime of one daemon logger. */
+const dispositionCaches = new WeakMap<
+  (msg: string) => void,
+  Map<string, string>
+>();
+
+function logDisposition(
+  log: ((msg: string) => void) | undefined,
+  slug: string,
+  disposition: string,
+  message: string,
+): void {
+  if (!log) return;
+  let cache = dispositionCaches.get(log);
+  if (!cache) {
+    cache = new Map<string, string>();
+    dispositionCaches.set(log, cache);
+  }
+  if (cache.get(slug) === disposition) return;
+  cache.set(slug, disposition);
+  log(message);
+}
+
 // ── Registry helpers ──────────────────────────────────────────────────────────
 
 /**
@@ -316,14 +339,20 @@ export async function sweepMergeableLabels({
               );
             }
           } else if (state.state === 'MERGED') {
-            log?.(
+            logDisposition(
+              log,
+              entry.slug,
+              `retained:record-not-yet-on-main:${shippedRecord}`,
               `[mergeable-sweep] retained ${entry.slug} — reason: record-not-yet-on-main${
                 shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
               }`,
             );
             survivors.push(entry);
           } else {
-            log?.(
+            logDisposition(
+              log,
+              entry.slug,
+              `retained:pr-closed-unmerged:${shippedRecord}`,
               `[mergeable-sweep] retained ${entry.slug} (reclaimable) — reason: pr-closed-unmerged${
                 shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
               }`,
@@ -344,7 +373,10 @@ export async function sweepMergeableLabels({
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
-          log?.(
+          logDisposition(
+            log,
+            entry.slug,
+            'unknown:pr-state-unknown',
             `[mergeable-sweep] disposition unknown ${entry.slug} — reason: pr-state-unknown`,
           );
           survivors.push(entry);
