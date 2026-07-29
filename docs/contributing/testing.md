@@ -240,7 +240,6 @@ gate on top. There is no `npm run smoke` — run each file directly.
 | File | Second gate | Command |
 | --- | --- | --- |
 | `test/smoke/autoresolve-smoke.test.ts` | Opt-in: `AUTORESOLVE_SMOKE_TEST=1` | `AUTORESOLVE_SMOKE_TEST=1 npx vitest run test/smoke/autoresolve-smoke.test.ts` |
-| `test/smoke/mutation-gate-probe.smoke.test.ts` | Opt-out: runs when the `claude` binary and auth are present unless `MUTATION_GATE_PROBE=0` | `npx vitest run test/smoke/mutation-gate-probe.smoke.test.ts` |
 | `test/smoke/finish-record.smoke.test.ts` | None | `npx vitest run test/smoke/finish-record.smoke.test.ts` |
 | `test/smoke/publish-interrupted.smoke.test.ts` | None | `npx vitest run test/smoke/publish-interrupted.smoke.test.ts` |
 | `test/smoke/surgical-finish-retry.smoke.test.ts` | None | `npx vitest run test/smoke/surgical-finish-retry.smoke.test.ts` |
@@ -259,10 +258,6 @@ gate on top. There is no `npm run smoke` — run each file directly.
 > and three are opt-out kill-switches (`MUTATION_GATE_PROBE`, `MODEL_UNAVAILABLE_SMOKE` /
 > `AUTH_FAILURE_SMOKE`, `BUILD_TOKEN_AUTH_SMOKE`), so there is no single rule for whether a smoke file
 > runs. Tracked in [#1021](https://github.com/jstoup111/ai-conductor/issues/1021).
-
-`mutation-gate-probe.smoke.test.ts` also carries a second `describe` deliberately placed outside its own
-`skipIf`, so every run reports whether the gated suite ran and why not. That block does not touch the
-real binary.
 
 ## Bash test scripts
 

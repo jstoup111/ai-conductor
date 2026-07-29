@@ -1,7 +1,7 @@
 /**
  * Session-lifecycle hook scripts embedded as engine assets
  *
- * Both hooks are written to .pipeline/session-hooks/ at worktree provisioning
+ * Hooks are written to .pipeline/session-hooks/ at worktree provisioning
  * and wired via settings.json hook entries. They use only bash and POSIX
  * tools — no dist references, no conduct-ts invocations. stdin is bounded
  * via `head -c` so a runaway payload can never hang or OOM the hook.
@@ -40,7 +40,7 @@ export const PRE_DISPATCH_HOOK = [
   '    // Malformed/unparseable payload — fail open: emit a diagnostic on',
   '    // stderr and nothing on stdout, so the caller falls through to the',
   '    // no-op tail (exit 0) rather than blocking the dispatch.',
-  '    process.stderr.write(',
+  '    require("fs").writeSync(2,',
   '      "pre-dispatch-hook: unparseable payload, passing through: " + String(err && err.message) + "\\n"',
   '    );',
   '  }',
@@ -54,15 +54,10 @@ export const PRE_DISPATCH_HOOK = [
   '  exit 0',
   'fi',
   '',
-  '# Grammar enforcement: line 1 MUST be exactly "Task: <id>" or "Task: none".',
-  '# Anything else — wrong case, missing space, multiple markers, trailing',
-  '# prose — blocks the dispatch with exit 2 and an instructive error so the',
-  '# caller can fix the prompt and retry.',
+  '# Attribution is telemetry only. A non-marker prompt produces no row update',
+  '# and must never block the dispatch.',
   'if ! [[ "$LINE1" =~ ^Task:\\ ([A-Za-z0-9._-]+|none)$ ]]; then',
-  '  echo "PRE dispatch hook: line 1 of the prompt must be exactly \\"Task: <id>\\" or \\"Task: none\\"." >&2',
-  '  echo "Got: ${LINE1}" >&2',
-  '  echo "Example: \\"Task: 7\\" or \\"Task: none\\"" >&2',
-  '  exit 2',
+  '  exit 0',
   'fi',
   '',
   '# Record a dispatch-count sentinel: every grammar-valid "Task: <id>" or',
@@ -72,7 +67,7 @@ export const PRE_DISPATCH_HOOK = [
   '# Idempotent/best-effort: created if absent, appended to otherwise; a',
   '# failure here (e.g. read-only fs) must never block the dispatch.',
   'mkdir -p .pipeline 2>/dev/null || true',
-  'echo "$LINE1" >> .pipeline/dispatch-count 2>/dev/null || true',
+  'printf \'%s\\n\' "$LINE1" | tee -a .pipeline/dispatch-count >/dev/null 2>&1 || true',
   '',
   '# Task: none — pass through without touching any pipeline state.',
   'if [ "$LINE1" = "Task: none" ]; then',
@@ -86,7 +81,7 @@ export const PRE_DISPATCH_HOOK = [
   '  TASK_ID="${BASH_REMATCH[1]}"',
   '  if [ "$TASK_ID" != "none" ]; then',
   '    node -e \'',
-  'const { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } = require("fs");',
+  'const { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync, writeSync } = require("fs");',
   'const { join } = require("path");',
   'const id = process.argv[1];',
   'const pipelineDir = join(process.cwd(), ".pipeline");',
@@ -94,7 +89,7 @@ export const PRE_DISPATCH_HOOK = [
   'const lockPath = join(pipelineDir, ".task-status.lock");',
   '',
   'const abstain = (reason) => {',
-  '  process.stderr.write(`pre-dispatch-hook: abstain — ${reason} (dispatch Task: ${id})\\n`);',
+  '  writeSync(2, `pre-dispatch-hook: abstain — ${reason} (dispatch Task: ${id})\\n`);',
   '  process.exit(0);',
   '};',
   '',
@@ -145,29 +140,6 @@ export const PRE_DISPATCH_HOOK = [
 ].join('\n');
 
 /**
- * PostToolUse-style dispatch hook. Task completion is determined by the
- * engine's task evidence, so ending one dispatch must not mutate sibling
- * telemetry or any workspace-global attribution marker.
- */
-export const POST_DISPATCH_HOOK = [
-  '#!/bin/bash',
-  'set -e',
-  '',
-  '# An explicit terminal-event owner may retire its supplied validated task',
-  '# telemetry through the engine. Post-dispatch is intentionally a no-op so',
-  '# it cannot mutate shared state or treat a dispatch return as completion.',
-  'exit 0',
-].join('\n');
-
-/** Attribution telemetry never decides mutation authorization. */
-export const MUTATION_GATE_HOOK = [
-  '#!/bin/bash',
-  'set -e',
-  '# Safety, artifact, and judgement boundaries own authorization.',
-  'exit 0',
-].join('\n');
-
-/**
  * PreToolUse phase-scoped .docs write-guard (#788). Wired with matcher
  * `Edit|Write|NotebookEdit`. Blocks mutation of spec/plan artifacts under
  * `.docs/` while a build phase is active, unless the phase marker's
@@ -179,8 +151,8 @@ export const MUTATION_GATE_HOOK = [
  * - Marker present + target path outside `.docs/` → exit 0 (Task 5 scope).
  * - Marker present + target under `.docs/` → block/allow logic added in
  *   Tasks 6-8; this task lands only the inert fast paths above.
- * - Unparseable payload → fail-open (exit 0), matching MUTATION_GATE_HOOK's
- *   degradation rule.
+ * - Unparseable payload → fail-open when the phase is inactive; active-phase
+ *   undeterminable writes fail closed.
  */
 export const DOCS_GUARD_HOOK = [
   '#!/bin/bash',
@@ -245,8 +217,8 @@ export const DOCS_GUARD_HOOK = [
   '# Normalize an absolute TARGET (as delivered by the real Claude Code host,',
   '# e.g. "$PWD/.docs/plans/x.md") to a repo-root-relative path so the',
   '# case-glob match below works for both absolute and relative inputs. The',
-  '# hook always runs with cwd set to the project root (same convention as',
-  '# MUTATION_GATE_HOOK), so stripping a literal "$PWD/" prefix is sufficient;',
+  '# hook always runs with cwd set to the project root, so stripping a literal',
+  '# "$PWD/" prefix is sufficient;',
   '# relative-path callers (e.g. unit tests) are left untouched.',
   'case "$TARGET" in',
   '  "$PWD"/*)',

@@ -5,7 +5,6 @@ import {
   readdir,
   access as accessFile,
   unlink as unlinkFile,
-  lstat,
   stat,
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
@@ -68,17 +67,11 @@ import {
   RETRY_ROUTING_DEFAULTS,
 } from './config.js';
 import {
-  isEnforcementConfigured,
-  writeBuildStepMarker,
-  removeBuildStepMarker,
-  detectZeroWorkProduct,
-  readDispatchCount,
   readDispatchAttribution,
   detectUnattributedDispatch,
   resolveAttributionAuditSamplePct,
-} from './attribution-enforcement.js';
+} from './attribution-telemetry.js';
 import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './phase-marker.js';
-import { ensureSessionHooks } from './worktree-prepare.js';
 import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
@@ -236,7 +229,7 @@ import {
   createTaskEvidence,
   type TaskEvidence,
 } from './task-evidence.js';
-import { seedTaskStatus, clearStaleMarker } from './task-seed.js';
+import { seedTaskStatus } from './task-seed.js';
 import { verifyMergedPrShipment, type VerifiedMergedPrResult } from './merged-pr-guard.js';
 import type { ShipmentEvidenceInput, ShipmentEvidenceResult } from './shipment-evidence.js';
 import {
@@ -711,11 +704,6 @@ export interface ConductorOptions {
    * from `contract.cwd`.
    */
   acceptanceRedExec?: (command: string, cwd: string) => Promise<unknown>;
-  /**
-   * Test seam for session-hook repair. Production uses ensureSessionHooks;
-   * tests can prove a reported repair never bypasses the filesystem recheck.
-   */
-  ensureSessionHooks?: typeof ensureSessionHooks;
   onCheckpoint?: (step: StepName) => Promise<CheckpointResponse>;
   onNavigate?: (steps: NavigableStep[]) => Promise<StepName | null>;
   onReviewArtifacts?: (step: StepName, files: string[]) => Promise<ArtifactReviewResult>;
@@ -839,136 +827,21 @@ function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean 
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
 }
 
-/**
- * Task 6 (#676): pre-dispatch attribution-machinery guard. When enforcement
- * is configured, the build step's dispatch depends on
- * `.pipeline/task-status.json`, `.pipeline/session-hooks/`, and the
- * `.pipeline/current-task` stamp path all being intact — that machinery is
- * what the enforcement/judge lanes attribute dispatched work against. Called
- * BEFORE dispatch (unlike Task 3's post-dispatch unattributed-dispatch
- * signal) so a broken machinery state never reaches an unattributable
- * dispatch. Returns a diagnostic naming the broken piece, or `null` when
- * intact.
- */
-/**
- * Seed `task-status.json` from the resolvable plan (if any), then run the
- * pre-dispatch attribution-machinery check (Task 2, #676 follow-up). A
- * fresh/legitimate dispatch where `.pipeline/task-status.json` simply
- * hasn't been seeded yet must not trip the guard — seed it here, right
- * before the check, rather than relying on some earlier step to have
- * already done so. Plan resolution failure (no plan found) is surfaced via
- * `checkAttributionMachineryIntact`'s `planResolvable: false` diagnostic
- * rather than treated as a seeding error.
- */
-export async function seedAndCheckAttributionMachinery(
+/** Seed best-effort task progress telemetry before every BUILD dispatch. */
+export async function seedBuildTaskTelemetry(
   projectRoot: string,
   featureDesc: string,
-  ensureHooks: typeof ensureSessionHooks = ensureSessionHooks,
-): Promise<string | null> {
+): Promise<void> {
   const planPath = await resolveFeaturePlanPath(projectRoot, featureDesc);
-  const planResolvable = typeof planPath === 'string' && planPath.length > 0;
-  if (planResolvable) {
-    try {
-      await seedTaskStatus(projectRoot, planPath as string);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return (
-        `Attribution machinery broken: failed to seed task-status.json from plan — ${message}.\n` +
-        `Check .pipeline/ is writable.`
-      );
-    }
+  if (!planPath) {
+    return;
   }
-  return checkAttributionMachineryIntact(projectRoot, { planResolvable, ensureHooks });
-}
-
-export async function checkAttributionMachineryIntact(
-  projectRoot: string,
-  opts?: { planResolvable?: boolean; ensureHooks?: typeof ensureSessionHooks },
-): Promise<string | null> {
-  const pipelineDir = join(projectRoot, '.pipeline');
-
-  // A project that hasn't reached `.pipeline/` initialization yet (e.g. a
-  // fresh conductor run whose earlier steps haven't created it) is not
-  // "broken" — there's nothing to attribute against yet. The guard only
-  // fires once `.pipeline/` exists but is missing the machinery a build
-  // dispatch depends on.
-  //
-  // #788: the phase-active marker (written for every BUILD/SHIP step, not
-  // just `build`) creates `.pipeline/` via `mkdirSync` ahead of any real
-  // init, but `removePhaseMarker` also removes the directory again if it
-  // ends up empty (see phase-marker.ts) — so a project this guard has never
-  // otherwise touched still presents as un-initialized here.
-  const pipelineDirExists = await accessFile(pipelineDir).then(() => true).catch(() => false);
-  if (!pipelineDirExists) {
-    return null;
+  try {
+    await seedTaskStatus(projectRoot, planPath);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`[task-telemetry] unable to seed task-status.json: ${message}`);
   }
-
-  // Filesystem-authoritative recheck of the reconstructed run state (the
-  // #1088 property, generalized from session hooks to task-status.json):
-  // `seedAndCheckAttributionMachinery` has already re-seeded this file, so
-  // reaching here with it absent/unusable means the REPAIR ITSELF could not
-  // land. Require a regular file (never a symlink — a redirected path would
-  // let attribution arm against state outside the worktree) whose contents
-  // parse as JSON carrying a `tasks` array. Mere existence is not enough: a
-  // truncated or half-written file passed the old `access` check and then read
-  // as zero rows everywhere downstream (#1102).
-  const taskStatusPath = join(pipelineDir, 'task-status.json');
-  const taskStatusOk = await lstat(taskStatusPath)
-    .then(async (entry) => {
-      if (!entry.isFile()) return false;
-      try {
-        const parsed = JSON.parse(await readFile(taskStatusPath, 'utf-8'));
-        return !!parsed && typeof parsed === 'object' && Array.isArray(parsed.tasks);
-      } catch {
-        return false;
-      }
-    })
-    .catch(() => false);
-  if (!taskStatusOk) {
-    if (opts?.planResolvable === false) {
-      return (
-        `Attribution machinery broken: plan could not be resolved — cannot ` +
-        `seed task-status.json.\n` +
-        `Check .docs/plans/ for an unambiguous plan artifact.`
-      );
-    }
-    return (
-      `Attribution machinery broken: could not restore .pipeline/task-status.json ` +
-      `(missing, not a regular file, or not parseable JSON with a tasks array).\n` +
-      `Build dispatch requires task-status.json to be seeded and the ` +
-      `.pipeline/current-task stamp path to be writable before a build ` +
-      `session can be attributed to a task.`
-    );
-  }
-
-  // Session hooks: the pre/post-dispatch and mutation-gate scripts provisioned
-  // by `writeSessionHooks()` at worktree setup (worktree-prepare.ts). If any
-  // expected script is missing, the PreToolUse/PostToolUse hooks that stamp
-  // `.pipeline/current-task` and record dispatch attribution can never fire.
-  const hooksDir = join(pipelineDir, 'session-hooks');
-  const expectedHooks = ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh'];
-  const repair = await (opts?.ensureHooks ?? ensureSessionHooks)(projectRoot);
-  for (const hook of repair.repaired) {
-    console.warn(`[session-hooks] restored ${hook} in ${projectRoot}`);
-  }
-
-  const missingHooks: string[] = [];
-  for (const hook of expectedHooks) {
-    const ok = await lstat(join(hooksDir, hook))
-      .then((entry) => entry.isFile() && (entry.mode & 0o111) !== 0)
-      .catch(() => false);
-    if (!ok) missingHooks.push(hook);
-  }
-  if (missingHooks.length > 0) {
-    return (
-      `Attribution machinery broken: could not restore .pipeline/session-hooks/ ` +
-      `expected script(s): ${missingHooks.join(', ')}.\n` +
-      `Build dispatch requires session hooks to be installed so a build ` +
-      `session can be attributed to a task.`
-    );
-  }
-
-  return null;
 }
 
 /**
@@ -1078,8 +951,6 @@ export class Conductor {
    * (Task 9). See `ConductorOptions.acceptanceRedExec`.
    */
   private acceptanceRedExec: (command: string, cwd: string) => Promise<unknown>;
-  /** Injectable only to prove repair reports cannot arm a missing hook gate. */
-  private ensureSessionHooks: typeof ensureSessionHooks;
 
   /**
    * Epoch ms captured immediately before the current dispatch's generic
@@ -1385,7 +1256,6 @@ export class Conductor {
         const { stdout } = await execFileAsync(command, { cwd, shell: true } as any);
         return stdout;
       });
-    this.ensureSessionHooks = opts.ensureSessionHooks ?? ensureSessionHooks;
     // Legacy maxRetries option: inject as defaults.max_retries on the config
     // so per-step resolution still works. Tests often pass this directly.
     if (opts.maxRetries !== undefined) {
@@ -2316,9 +2186,7 @@ export class Conductor {
     // once, before the loop touches anything, so the marker's own cleanup
     // (below) can tell "I created this directory, remove it again once
     // empty" from "this project already had a real `.pipeline/` — leave it
-    // alone" — otherwise an empty leftover `.pipeline/` makes an
-    // uninitialized project falsely present as initialized to unrelated
-    // `.pipeline/`-existence checks (e.g. checkAttributionMachineryIntact).
+    // alone".
     const pipelineDirPreexisted = existsSync(join(this.projectRoot, '.pipeline'));
     const cleanupEmptyPipelineDirIfNotPreexisting = () => {
       if (pipelineDirPreexisted) return;
@@ -3742,13 +3610,6 @@ export class Conductor {
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
 
-        // #505 TS-4: defensively clear a stale build-step-active marker at
-        // EVERY step entry (not just build steps), guarding against a marker
-        // left behind by a crashed prior session. A build step re-writes the
-        // marker fresh moments later (below); a non-build step simply leaves
-        // it cleared. Idempotent — no error if the marker is already absent.
-        clearStaleMarker(this.projectRoot);
-
         // Deterministic freshness guard — applied ONLY when re-entering a step
         // that previously FAILED (`failed`) or was REWORKED (kicked back →
         // `stale`), never on a clean first run. Such a step ran before, so a
@@ -3829,9 +3690,8 @@ export class Conductor {
         // `build_progress_halt.attempt_ceiling` so a progressing build isn't
         // halted just because the fixed retry budget ran out.
         let progressAttempts = 0;
-        // #505 TS-15: HEAD sha captured at build-step entry, compared against
-        // HEAD at step exit to detect a zero-work-product session (dispatched
-        // work that produced no new commits, or nothing dispatched at all).
+        // HEAD sha captured at build-step entry for per-attempt liveness
+        // telemetry and stall classification.
         const headShaBeforeBuild: string | null =
           step.name === 'build' ? await currentCommitSha(this.projectRoot) : null;
         // adr-2026-07-23-commit-movement-liveness-floor: per-attempt SHA
@@ -3980,17 +3840,12 @@ export class Conductor {
             stepModelPolicy,
           );
 
-          // Repair/recheck attribution machinery before any build marker arms.
-          // The recheck is filesystem-authoritative: a repair outcome alone
-          // can never authorize a build session to start.
-          const machineryIssue =
-            step.name === 'build' && isEnforcementConfigured(this.config)
-              ? await seedAndCheckAttributionMachinery(
-                  this.projectRoot,
-                  state.feature_desc ?? this.featureDesc ?? '',
-                  this.ensureSessionHooks,
-                )
-              : null;
+          if (step.name === 'build') {
+            await seedBuildTaskTelemetry(
+              this.projectRoot,
+              state.feature_desc ?? this.featureDesc ?? '',
+            );
+          }
 
           // Build-step-only watcher (Task 9, adr-2026-07-10-intra-step-build-progress-events):
           // started immediately before the build step's await and stopped in a
@@ -4015,13 +3870,6 @@ export class Conductor {
               : null;
           buildWatcher?.start();
 
-          // #505 TS-3: build-step-active marker. Written right before the
-          // build session spawns and removed in `finally` (guaranteed on
-          // both success and error paths) so a session hook firing mid-step
-          // can tell "dispatched build work is in flight" from unattributed
-          // session activity. Never written when enforcement isn't
-          // configured (absent/future cutover) — zero overhead for
-          // operators who haven't opted in.
           // Approved DECIDE artifacts are a durable BUILD/SHIP boundary. Verify
           // every attempt before writing phase markers or starting dispatch; a
           // resume therefore cannot accept a dirty workspace as a new baseline.
@@ -4059,18 +3907,11 @@ export class Conductor {
               }
             }
           }
-          const markerActive =
-            !protectedArtifactIssue && !machineryIssue && step.name === 'build' && isEnforcementConfigured(this.config);
-          if (markerActive) {
-            writeBuildStepMarker(this.projectRoot);
-          }
-
           // Task 4 (#788): phase-active marker, keyed off `step.phase`
           // (BUILD/SHIP) rather than an enumerated step-name list, so a
           // session-hook write-guard can distinguish "docs/spec artifacts
           // changed mid-BUILD/SHIP" from DECIDE-phase edits. Independent of
-          // the build-step-active marker above — written for every
-          // BUILD/SHIP step, not just `build`.
+          // written for every BUILD/SHIP step, not just `build`.
           if (step.phase === 'BUILD' || step.phase === 'SHIP') {
             writePhaseMarker(this.projectRoot, {
               step: step.name,
@@ -4080,14 +3921,12 @@ export class Conductor {
           }
 
           let result: StepRunResult;
-          if (protectedArtifactIssue || machineryIssue) {
+          if (protectedArtifactIssue) {
             buildWatcher?.stop();
-            const dispatchIssue = protectedArtifactIssue ?? machineryIssue!;
+            const dispatchIssue = protectedArtifactIssue;
             result = { success: false, output: dispatchIssue };
             // Write the HALT marker directly rather than relying solely on
-            // the generic "retries exhausted" flow below — that flow only
-            // fires in `mode === 'auto'` (daemon), but a broken attribution
-            // machinery is loud regardless of run mode. Gated on `attempt
+            // the generic "retries exhausted" flow below. Gated on `attempt
             // >= 2` — the SAME literal threshold the pre-existing stall
             // circuit breaker uses a few hundred lines below (search
             // `attempt >= 2 && resolvedTasksAfter <= resolvedTasksBefore`)
@@ -4157,12 +3996,8 @@ export class Conductor {
                           });
           } finally {
             buildWatcher?.stop();
-            if (markerActive) {
-              removeBuildStepMarker(this.projectRoot);
-            }
-            // Task 4 (#788): unconditional — independent of markerActive,
-            // since the phase-active marker is written for any BUILD/SHIP
-            // step, not gated on step.name === 'build'.
+            // Task 4 (#788): the phase-active marker is written for any
+            // BUILD/SHIP step, not gated on step.name === 'build'.
             removePhaseMarker(this.projectRoot);
             cleanupEmptyPipelineDirIfNotPreexisting();
             // currentAttemptStartedAt stays set through the completion check
@@ -4192,11 +4027,9 @@ export class Conductor {
             }
           }
 
-          // Task 3 (#671): unattributed-dispatch loud signal. Fires at the
-          // build dispatch seam itself — earlier than and distinct from
-          // detectZeroWorkProduct/the evidence gate — when this cycle's
-          // dispatch-count crosses the unattributed threshold.
-          if (step.name === 'build' && isEnforcementConfigured(this.config)) {
+          // Unattributed-dispatch telemetry is advisory and independent of
+          // the retired enforcement cutover.
+          if (step.name === 'build') {
             const attribution = await readDispatchAttribution(this.projectRoot);
             const unattributedResult = detectUnattributedDispatch(attribution);
             if (unattributedResult) {
@@ -4570,35 +4403,7 @@ export class Conductor {
               // the fixed `stepMaxRetries` budget.
               let progressBypassed = false;
               if (step.name === 'build') {
-                // #505 TS-15: zero-work-product detection. Runs before the
-                // stall circuit breaker below — a zero-work session is a
-                // distinct signal (kickback candidate, Task 16) from a
-                // stalled-but-dispatched session, though both can share the
-                // same halt-marker/completion gating.
                 const headShaAfterBuild = await currentCommitSha(this.projectRoot);
-                const dispatchCountThisStep = await readDispatchCount(this.projectRoot);
-                const isZeroWork = await detectZeroWorkProduct({
-                  projectRoot: this.projectRoot,
-                  config: this.config,
-                  headBefore: headShaBeforeBuild,
-                  headAfter: headShaAfterBuild,
-                });
-                if (isZeroWork) {
-                  await emitTracked({
-                    type: 'zero_work_product',
-                    step: step.name,
-                    dispatchCount: dispatchCountThisStep,
-                    headSha: headShaAfterBuild,
-                  });
-                  // #505 TS-16: corrective preamble for the next dispatch —
-                  // prepended (not replacing) so the completion-gate reason
-                  // from buildRetryHint above still reaches Claude too.
-                  retryHint =
-                    `Previous attempt made zero progress (no work was dispatched, or ` +
-                    `dispatched work produced no commits). Provide a single focused ` +
-                    `task and description. ${retryHint ?? ''}`.trim();
-                }
-
                 const resolvedTasksAfter = await countResolvedTasks(this.projectRoot);
                 // #505 TS: Capture retry task counts for step_retry emit (before resolvedTasksBefore is overwritten).
                 retryResolvedBefore = resolvedTasksBefore;

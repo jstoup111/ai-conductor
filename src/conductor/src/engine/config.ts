@@ -233,7 +233,7 @@ export function validateConfig(
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
-    // Attribution enforcement cutover (#505): gate activation instant.
+    // Deprecated compatibility input. Enforcement retired in #773.
     'attribution_enforcement_cutover',
     // Attribution judge cutover + audit sample pct (Task 11): semantic judgment gate.
     'attribution_judge_cutover',
@@ -675,11 +675,8 @@ export function validateConfig(
     }
   }
 
-  // attribution_enforcement_cutover — the instant on/after which inline
-  // build-work attribution enforcement gates activate (#505). Same contract
-  // as owner_gate_cutover: malformed values are a hard load-time error, never
-  // silently defaulted. Absent → enforcement disabled (see
-  // isAttributionEnforcementActive).
+  // Deprecated compatibility input: keep accepting the former ISO-8601 shape
+  // so existing consumer configs continue to load, but it has no effect.
   if (obj.attribution_enforcement_cutover !== undefined) {
     if (typeof obj.attribution_enforcement_cutover !== 'string') {
       return errVal('attribution_enforcement_cutover must be an ISO-8601 date string');
@@ -693,9 +690,8 @@ export function validateConfig(
   }
 
   // attribution_judge_cutover — the instant on/after which semantic
-  // attribution judgment gates activate (Task 11). Same contract as
-  // attribution_enforcement_cutover: malformed values are a hard load-time
-  // error. Absent → judgment disabled.
+  // attribution judgment gates activate (Task 11). Malformed values are a
+  // hard load-time error. Absent → judgment disabled.
   if (obj.attribution_judge_cutover !== undefined) {
     if (typeof obj.attribution_judge_cutover !== 'string') {
       return errVal('attribution_judge_cutover must be an ISO-8601 date string');
@@ -980,25 +976,8 @@ export function validateConfig(
 }
 
 /**
- * Whether inline build-work attribution enforcement is active right now
- * (#505). Mirrors the owner-gate cutover activation shape: a missing cutover
- * means enforcement is off; a cutover in the past (relative to `now`) turns
- * it on; a cutover in the future keeps it off until that instant passes.
- * The config value itself is validated (parseable ISO-8601) at load time by
- * `validateConfig`, so this function trusts a defined input to already
- * parse cleanly.
- */
-export function isAttributionEnforcementActive(
-  cutover: string | undefined,
-  now: Date = new Date(),
-): boolean {
-  if (cutover === undefined) return false;
-  return Date.parse(cutover) <= now.getTime();
-}
-
-/**
  * Whether semantic attribution judge cutover is active right now (Task 12).
- * Mirrors the enforcement cutover shape: absent cutover means judge is off;
+ * Absent cutover means judge is off;
  * cutover in the past (relative to `now`) turns it on; cutover in the future
  * keeps it off until that instant passes. The config value is validated at
  * load time, so this function trusts a defined input to parse cleanly.

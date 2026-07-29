@@ -95,6 +95,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- BUILD now seeds `.pipeline/task-status.json` before every dispatch, independent of the retired attribution cutover, so progress appears immediately. Attribution remains advisory: malformed or unavailable telemetry cannot halt work. Removed the dead build-step enforcement marker, machinery preflight, zero-work kickback, and no-op post-dispatch/mutation hooks.
+
 - Standard and Full `pipeline` builds now turn each dependency-safe, non-overlapping ready frontier
   into one real provider-native fan-out of up to three tasks. Claude Code issues multiple Agent tool
   dispatches in one response and Codex issues multiple `collaboration.spawn_agent` calls in one

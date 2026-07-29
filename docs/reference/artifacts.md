@@ -308,7 +308,6 @@ Existence is the signal. Alphabetized.
 | `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |
-| `build-step-active` | build step entry | Attribution scoping. A stale marker is cleared at every step entry, fail-open |
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
 | `current-task` | `conduct-ts task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
 | `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
@@ -328,7 +327,7 @@ To clear a halt safely, use the procedure in
 
 | Path | Contents | Notes |
 | --- | --- | --- |
-| `session-hooks/` | `pre-dispatch.sh`, `post-dispatch.sh`, `mutation-gate.sh`, `docs-guard.sh` | Written mode 0755 during worktree preparation; see [settings and hooks](settings-and-hooks.md) |
+| `session-hooks/` | `pre-dispatch.sh`, `docs-guard.sh` | Written mode 0755 during worktree preparation; retired no-op assets are removed; see [settings and hooks](settings-and-hooks.md) |
 | `git-hooks/` | `prepare-commit-msg`, `commit-msg` | Wired via the worktree-local `core.hooksPath` |
 | `events.jsonl` | The run event log | Append-only, no rotation — see below |
 | `audit-trail/events.jsonl` | A separate ledger with a different shape | See below |

@@ -6,7 +6,6 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
-import { retireTaskTelemetry } from '../../src/engine/task-attribution.js';
 
 // END-TO-END acceptance spec for #477 (Story 5: overlap guard clears the
 // stamp so #452's commit hooks abstain). This chains TWO independently
@@ -34,7 +33,6 @@ const execFileAsync = promisify(execFile);
 describe('integration/session-hooks-attribution (#477 Story 5)', () => {
   let dir: string;
   let preHookPath: string;
-  let postHookPath: string;
 
   async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
     try {
@@ -118,7 +116,6 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     await prepareWorktree(dir);
 
     preHookPath = join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
-    postHookPath = join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh');
 
     await seedTaskStatus(Array.from({ length: 12 }, (_, i) => ({ id: String(i + 1), status: 'pending' })));
   });
@@ -127,11 +124,9 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('provisions the session-hook scripts executably (prerequisite for the chained flow)', async () => {
+  it('provisions the active pre-dispatch telemetry hook executably', async () => {
     const preStat = await stat(preHookPath);
-    const postStat = await stat(postHookPath);
     expect(preStat.mode & 0o111).not.toBe(0);
-    expect(postStat.mode & 0o111).not.toBe(0);
   });
 
   it('records a single dispatch as task-local telemetry without creating a global stamp', async () => {
@@ -169,42 +164,6 @@ describe('integration/session-hooks-attribution (#477 Story 5)', () => {
     const status = await readTaskStatus();
     expect(status.tasks.find((task) => task.id === '7')?.status).toBe('in_progress');
     expect(status.tasks.find((task) => task.id === '9')?.status).toBe('in_progress');
-  });
-
-  it('leaves concurrent task telemetry intact when a dispatch completes', async () => {
-    await runHook(preHookPath, 'PreToolUse', 'Task: 7');
-    await runHook(preHookPath, 'PreToolUse', 'Task: 9');
-    expect(await currentTaskContent()).toBeNull();
-
-    const post = await runHook(postHookPath, 'PostToolUse', 'Task: 7');
-    expect(post.code).toBe(0);
-
-    expect(await currentTaskContent()).toBeNull();
-    const status = await readTaskStatus();
-    expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
-    expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
-  });
-
-  it('keeps terminal telemetry retirement task-local after the post-dispatch hook abstains', async () => {
-    await runHook(preHookPath, 'PreToolUse', 'Task: 7');
-    await runHook(preHookPath, 'PreToolUse', 'Task: 9');
-
-    const post = await runHook(postHookPath, 'PostToolUse', 'Task: 7');
-    expect(post.code).toBe(0);
-
-    expect(
-      retireTaskTelemetry(
-        [
-          { taskId: '7', context: { provider: 'claude' } },
-          { taskId: '9', context: { provider: 'codex' } },
-        ],
-        { taskId: '7', terminalReason: 'completed' },
-      ),
-    ).toEqual([{ taskId: '9', context: { provider: 'codex' } }]);
-
-    const status = await readTaskStatus();
-    expect(status.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
-    expect(status.tasks.find((t) => t.id === '9')?.status).toBe('in_progress');
   });
 
   it('does not create a global stamp after a telemetry write failure', async () => {

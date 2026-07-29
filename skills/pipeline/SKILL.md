@@ -150,45 +150,24 @@ dispatch, so the class fails fast. Pair it with the real-entry-point acceptance 
 `/writing-system-tests` (§3b): the acceptance test proves the new path runs; this grep proves
 the old one is gone.
 
-### Attribution enforcement (engine gate surfaces)
+### Attribution telemetry
 
-Task stamping (above) makes attribution *available*; attribution enforcement makes it
-*mandatory* once a project opts in via `attribution_enforcement_cutover` (project
-config, absent/future = off, past ISO-8601 instant = on, requires an engine restart
-to take effect — see the main README → "Attribution enforcement"). Like task
-stamping, both surfaces are engine machinery — nothing here is a new orchestrator
-step or instruction you must remember to run:
+Task stamping and `Task:` commit trailers are telemetry only. They help the engine
+display progress and diagnose unattributed dispatches, but they never authorize a
+mutation, reject a commit, decide task completion, halt a build, or park work. The
+fresh `build_review` plan-versus-diff judgment is the BUILD completion authority.
 
-- **Surface A — commit-msg gate.** While `.pipeline/build-step-active` is present
-  (written by the engine immediately before dispatching a build-work step, removed
-  immediately after), a commit lacking a `Task:` trailer is rejected at `git commit`
-  time with instructive stderr.
-- **Surface B — session mutation gate.** A `PreToolUse` hook wired to
-  `Edit|Write|NotebookEdit|Bash` blocks a direct file mutation or `git commit`
-  invocation made in the orchestrator session — i.e. outside a stamped subagent
-  dispatch — while a build step is active. The redirect message tells you to dispatch
-  the work through the selected host's available subagent facility with a `Task: <id>` (or
-  `Task: none`) line-1 marker; in Claude Code this facility is the Agent tool
-  instead of mutating files directly.
-
-**Three exemption surfaces (both gates abstain rather than reject):**
-
-1. **Merge commits** — a merge legitimately carries no `Task:` trailer.
-2. **Amend of a pre-enforcement commit** — amending a commit that predates
-   enforcement is never restamped or rejected.
-3. **Empty commit with a resolvable `Evidence: satisfied-by <sha>` trailer** — an
-   intentional evidence-only commit (no diff) is accepted when it names a resolvable
-   satisfying commit; an empty commit with neither a `Task:` trailer nor a resolvable
-   `Evidence:` trailer is rejected.
-
-When enforcement is off (the default), both surfaces pass through unchanged — this
-section describes dormant machinery, not a behavior change to existing projects.
+Before every BUILD dispatch, the engine best-effort seeds
+`.pipeline/task-status.json` from the selected plan. Missing or unwritable telemetry
+warns and continues; it is never a lifecycle gate. The retired
+`attribution_enforcement_cutover` config key remains accepted as a no-op so older
+consumer configs continue to load.
 
 **Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
 session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run
-`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse/PostToolUse session
-hooks stamp `in_progress` on dispatch and clear `.pipeline/current-task` on return, keyed off the
-dispatch prompt's line-1 `Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
+`conduct-ts task start/done` as part of normal per-task flow. The PreToolUse session
+hook stamps `in_progress` on dispatch, keyed off the dispatch prompt's line-1
+`Task: <id>` / `Task: none` marker (see Per-Task Execution above). The
 CLI verbs still exist for operator/recovery use (e.g. resetting a task after a crash), never as a
 step you invoke mid-pipeline. You report the subagent's result (PASS/FAIL) to inform the
 conductor's logging and audit trail.

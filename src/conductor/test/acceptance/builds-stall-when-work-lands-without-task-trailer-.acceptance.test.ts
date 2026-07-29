@@ -9,7 +9,6 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import * as projectPrelude from '../../src/engine/project-prelude.js';
-import * as attributionEnforcement from '../../src/engine/attribution-enforcement.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { buildProgressReKickDeps } from '../../src/daemon-cli.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
@@ -336,14 +335,6 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
       currentCommitShas.push(sha);
       return sha;
     });
-    const zeroWorkHeadBefores: Array<string | null> = [];
-    const detectZeroWorkProduct = vi
-      .spyOn(attributionEnforcement, 'detectZeroWorkProduct')
-      .mockImplementation(async ({ headBefore }) => {
-        zeroWorkHeadBefores.push(headBefore);
-        return false;
-      });
-
     let seq = 0;
     let calls = 0;
     const runner: StepRunner & { runInteractive: ReturnType<typeof vi.fn>; run: ReturnType<typeof vi.fn> } = {
@@ -364,14 +355,7 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
       await conductor.run();
     } finally {
       currentCommitSha.mockRestore();
-      detectZeroWorkProduct.mockRestore();
     }
-
-    // Zero-work-product telemetry keeps the build-entry baseline across
-    // retries, even though the liveness breaker below re-baselines per attempt.
-    const [headShaBeforeBuild] = currentCommitShas;
-    expect(zeroWorkHeadBefores.length).toBeGreaterThan(1);
-    expect(zeroWorkHeadBefores.every((headBefore) => headBefore === headShaBeforeBuild)).toBe(true);
 
     // Attempt 1 lands the only commit but the breaker only classifies from
     // attempt >= 2, so attempt 1 itself never gets checked (no

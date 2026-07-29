@@ -1,9 +1,8 @@
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 
-// #788: phase-active marker — mirrors attribution-enforcement.ts's
-// build-step-active marker pattern, but carries richer session-hook-visible
-// state (current step name, BUILD/SHIP phase, and an .docs allow-list) so a
+// #788: phase-active marker carries session-hook-visible state (current step
+// name, BUILD/SHIP phase, and an .docs allow-list) so a
 // write-guard hook can distinguish "docs/spec artifacts changed mid-BUILD"
 // (block) from "changed during DECIDE/SHIP, or via an explicitly allowed
 // prefix" (permit) without needing IPC into the running engine.

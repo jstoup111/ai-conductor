@@ -63,7 +63,7 @@ Flat `engine/` files cluster by filename prefix. Use the prefix to find the subs
 | `gate*` | `gates.ts`, `gate-verdicts.ts`, `gate-code-validity.ts`, `gate-invalidation.ts`, `gate-writeback.ts`, `gated-snapshot.ts` |
 | `build-review-*` | `build-review-prompt.ts`, `build-review-inputs.ts`, `build-review-disposition.ts` |
 | `shipment-*`, `shipped-*` | `shipment-evidence.ts`, `shipment-reconciliation.ts`, `shipped-record.ts`, `shipped-record-cli.ts` |
-| `attribution-*` | `attribution-audit.ts`, `attribution-enforcement.ts`, `attribution-verdict.ts`, `task-attribution.ts` |
+| `attribution-*` | `attribution-audit.ts`, `attribution-telemetry.ts`, `attribution-verdict.ts`, `task-attribution.ts` |
 | `provider-*`, model policy | `provider-runtime.ts`, `provider-execution.ts`, `provider-selection.ts`, `provider-session.ts`, `provider-model-policy.ts`, `model-availability.ts`, `model-table-metadata.ts` |
 | config | `config.ts`, `resolved-config.ts`, `user-config.ts` |
 | `full-suite-*` | `full-suite-executor.ts`, `full-suite-verifier.ts`, `full-suite-evidence.ts`, `full-suite-fingerprint.ts` |

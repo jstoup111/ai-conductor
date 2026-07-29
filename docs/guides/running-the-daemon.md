@@ -155,21 +155,6 @@ conduct-ts daemon connect --write --attach-into mywindow:1.0
 `<target>` is a tmux session, `session:window`, or `session:window.pane` string. This also works on
 `daemon start`.
 
-## Session-hook repair at build preflight
-
-Before an enforcement-configured build dispatch, the daemon restores missing session-hook scripts
-and re-merges their `.claude/settings.local.json` entries. A restored script emits a line such as
-`[session-hooks] restored mutation-gate.sh in <worktree>`; inspect recent repairs with:
-
-```bash
-conduct-ts daemon logs --lines 200 | grep '\[session-hooks\]'
-```
-
-One repair needs no operator action: do not park the feature or recreate
-`.pipeline/session-hooks/` by hand. A repair that repeats for the same feature points to a
-`.pipeline`-wipe defect, not a hook defect; investigate the state-loss path described in
-[worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md) and the related
-[#549](https://github.com/jstoup111/ai-conductor/issues/549) / [PR #770](https://github.com/jstoup111/ai-conductor/pull/770).
 If an enforcement script still cannot be restored, the build remains halted rather than dispatching
 without its attribution gate. The recheck after a repair is authoritative and strict: a script must
 exist as an executable regular file at the expected path, so a hook that restored non-executable or
