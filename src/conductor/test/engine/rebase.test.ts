@@ -25,6 +25,7 @@ import { classifyGateInvalidation } from '../../src/engine/gate-invalidation.js'
 import { readVerdict, writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results.
 function fakeGit(
@@ -1209,6 +1210,150 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
 
     expect(translateAfterRebase).toHaveBeenCalledTimes(1);
     expect(translateAfterRebase).toHaveBeenCalledWith(git, repo, onto, origHead, newHead);
+  }, 20000);
+
+  it('rotates the seal only after post-rebase translation succeeds', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    const { translateAfterRebase: realTranslateAfterRebase } = await import(
+      '../../src/engine/rebase-translate.js'
+    );
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(join(repo, 'a.ts'), 'a1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'feat: a1']);
+    const baselineCommit = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const originalSeal = await readFile(sealPath, 'utf8');
+    const originalSealValue = JSON.parse(originalSeal) as {
+      baselineCommit: string;
+      rebaselines: unknown[];
+    };
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(join(repo, 'unrelated.ts'), 'main1\n');
+    await g(['add', '.']);
+    await g(['commit', '-q', '-m', 'main: unrelated advance']);
+    await g(['checkout', '-q', 'feat']);
+
+    let sealObservedByTranslation: string | undefined;
+    const translateAfterRebase = vi.fn(async (...args: Parameters<typeof realTranslateAfterRebase>) => {
+      sealObservedByTranslation = await readFile(sealPath, 'utf8');
+      await realTranslateAfterRebase(...args);
+    });
+
+    await performRebase(makeGitRunner(repo), repo, 'main', {
+      translateAfterRebase,
+    });
+    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const finalSeal = JSON.parse(await readFile(sealPath, 'utf8')) as {
+      baselineCommit: string;
+      rebaselines: Array<{
+        fromCommit: string;
+        toCommit: string;
+        trigger: string;
+        paths: string[];
+      }>;
+    };
+
+    expect({
+      observedDuringTranslation: {
+        bytes: sealObservedByTranslation,
+        baselineCommit: sealObservedByTranslation
+          ? (JSON.parse(sealObservedByTranslation) as { baselineCommit: string }).baselineCommit
+          : undefined,
+      },
+      afterPerform: {
+        baselineCommit: finalSeal.baselineCommit,
+        rebaseline: finalSeal.rebaselines.at(-1),
+      },
+    }).toEqual({
+      observedDuringTranslation: {
+        bytes: originalSeal,
+        baselineCommit: originalSealValue.baselineCommit,
+      },
+      afterPerform: {
+        baselineCommit: newHead,
+        rebaseline: {
+          fromCommit: baselineCommit,
+          toCommit: newHead,
+          trigger: expect.any(String),
+          paths: [],
+        },
+      },
+    });
+  }, 20000);
+
+  it('translates and rotates the seal after auto-resolving a CHANGELOG-only conflict', async () => {
+    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
+    const { translateAfterRebase: realTranslateAfterRebase } = await import(
+      '../../src/engine/rebase-translate.js'
+    );
+
+    await writeFile(
+      join(repo, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n',
+    );
+    await g(['add', 'CHANGELOG.md']);
+    await g(['commit', '-q', '-m', 'changelog scaffold']);
+
+    await g(['checkout', '-q', '-b', 'feat']);
+    await writeFile(
+      join(repo, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature foo entry\n',
+    );
+    await g(['add', 'CHANGELOG.md']);
+    await g(['commit', '-q', '-m', 'feature changelog']);
+    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: origHead });
+
+    await g(['checkout', '-q', 'main']);
+    await writeFile(
+      join(repo, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Sibling bar entry\n',
+    );
+    await g(['add', 'CHANGELOG.md']);
+    await g(['commit', '-q', '-m', 'sibling changelog']);
+    const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    await g(['checkout', '-q', 'feat']);
+
+    const translateAfterRebase = vi.fn(realTranslateAfterRebase);
+    const git = makeGitRunner(repo);
+    const outcome = await performRebase(git, repo, 'main', { translateAfterRebase });
+    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
+    const finalSeal = JSON.parse(
+      await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
+    ) as {
+      baselineCommit: string;
+      rebaselines: Array<{
+        fromCommit: string;
+        toCommit: string;
+        trigger: string;
+        paths: string[];
+      }>;
+    };
+
+    expect({
+      outcome: outcome.kind,
+      translationCalls: translateAfterRebase.mock.calls,
+      seal: {
+        baselineCommit: finalSeal.baselineCommit,
+        rebaseline: finalSeal.rebaselines.at(-1),
+      },
+    }).toEqual({
+      outcome: 'changelog_resolved',
+      translationCalls: [[git, repo, onto, origHead, newHead]],
+      seal: {
+        baselineCommit: newHead,
+        rebaseline: {
+          fromCommit: origHead,
+          toCommit: newHead,
+          trigger: expect.any(String),
+          paths: [],
+        },
+      },
+    });
   }, 20000);
 
   it('does NOT invoke translateAfterRebase on a `noop` outcome (branch already current)', async () => {
