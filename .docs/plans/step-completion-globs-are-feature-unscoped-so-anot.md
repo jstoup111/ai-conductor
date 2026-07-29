@@ -117,7 +117,7 @@ configured freshness, repository/run scope, and historical singleton compatibili
 
 **Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/test/engine/artifacts.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/artifacts.ts#resolveArtifactFiles`, `src/conductor/src/ui/terminal-renderer.ts#TerminalRenderer.collectArtifacts`, `src/conductor/src/ui/create-renderer.ts#collectArtifacts`
+**Wired-into:** `src/conductor/src/engine/artifacts.ts#resolveArtifactFiles`, `src/conductor/src/ui/terminal-renderer.ts#buildArtifactResolutionContext`, `src/conductor/src/ui/create-renderer.ts#buildArtifactResolutionContext`
 
 **Dependencies:** Task 3
 
@@ -139,7 +139,7 @@ configured freshness, repository/run scope, and historical singleton compatibili
 
 **Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/test/engine/artifacts.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/artifacts.ts#checkStepCompletion`, `src/conductor/src/engine/conductor.ts#Conductor.run`, `src/conductor/src/engine/artifacts.ts#getArtifactStatus`
+**Wired-into:** `src/conductor/src/engine/artifacts.ts#checkStepCompletion`, `src/conductor/src/engine/conductor.ts#resolveArtifactFiles`, `src/conductor/src/engine/artifacts.ts#getArtifactStatus`
 
 **Dependencies:** Task 4
 
@@ -202,7 +202,7 @@ configured freshness, repository/run scope, and historical singleton compatibili
 
 **Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/conductor.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#resolveArtifactFiles`
 
 **Dependencies:** Task 7
 
@@ -222,7 +222,7 @@ configured freshness, repository/run scope, and historical singleton compatibili
 
 **Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/test/engine/artifacts.test.ts`
 
-**Wired-into:** `src/conductor/src/ui/terminal-renderer.ts#TerminalRenderer.collectArtifacts`, `src/conductor/src/ui/create-renderer.ts#collectArtifacts`
+**Wired-into:** `src/conductor/src/ui/terminal-renderer.ts#getArtifactStatus`, `src/conductor/src/ui/create-renderer.ts#getArtifactStatus`
 
 **Dependencies:** Task 6
 
@@ -242,7 +242,7 @@ configured freshness, repository/run scope, and historical singleton compatibili
 
 **Files:** `src/conductor/src/ui/terminal-renderer.ts`, `src/conductor/test/ui/terminal-renderer.test.ts`
 
-**Wired-into:** `src/conductor/src/ui/terminal-renderer.ts#TerminalRenderer.collectArtifacts`
+**Wired-into:** `src/conductor/src/ui/terminal-renderer.ts#buildArtifactResolutionContext`
 
 **Dependencies:** Task 4, Task 9
 
@@ -283,7 +283,7 @@ configured freshness, repository/run scope, and historical singleton compatibili
    `npm run lint`; verify GREEN together rather than only in isolation.
 5. Commit with message `test: enforce artifact resolver reachability` and trailer `Task: 12`.
 
-**Files:** `src/conductor/src/engine/artifacts.ts`, `src/conductor/src/engine/conductor.ts`, `src/conductor/src/ui/terminal-renderer.ts`, `src/conductor/src/ui/create-renderer.ts`, `src/conductor/test/engine/artifact-resolution-wiring.test.ts`, `src/conductor/test/engine/artifacts.test.ts`
+**Files:** `src/conductor/test/engine/artifact-resolution-wiring.test.ts`, `src/conductor/test/engine/artifacts.test.ts`
 
 **Wired-into:** none (no new production surface)
 

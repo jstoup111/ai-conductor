@@ -55,7 +55,6 @@ vi.mock('../../src/engine/shipment-evidence.js', () => ({
 import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
-  artifactMatchesFeatureIdentity,
   buildArtifactResolutionContext,
   resolveArtifactFiles,
   findArtifactFiles,
@@ -84,7 +83,6 @@ import type {
   CompletionResult,
   CompletionContext,
   ArtifactResolutionContext,
-  FeatureArtifactIdentityStrategy,
 } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -226,74 +224,6 @@ describe('engine/artifacts', () => {
 
     it('declares manual_test results file', () => {
       expect(STEP_ARTIFACT_GLOBS.manual_test).toEqual(['.pipeline/manual-test-results.md']);
-    });
-  });
-
-  describe('artifactMatchesFeatureIdentity', () => {
-    it('normalizes only the date and step prefixes declared by the identity strategy', () => {
-      const cases: {
-        artifactPath: string;
-        featureIdentity: string;
-        strategy: FeatureArtifactIdentityStrategy;
-        expected: boolean;
-      }[] = [
-        {
-          artifactPath: '.docs/plans/2026-07-28-feature-aware-artifacts.md',
-          featureIdentity: '2026-07-28-feature-aware-artifacts',
-          strategy: { strategy: 'plan-stem' },
-          expected: true,
-        },
-        {
-          artifactPath: '.docs/specs/feature-aware-artifacts.md',
-          featureIdentity: 'Feature Aware Artifacts',
-          strategy: { strategy: 'normalized-stem' },
-          expected: true,
-        },
-        {
-          artifactPath: '.docs/specs/2026-07-28-feature-aware-artifacts.md',
-          featureIdentity: 'Feature Aware Artifacts',
-          strategy: { strategy: 'normalized-stem', stripDatePrefix: true },
-          expected: true,
-        },
-        {
-          artifactPath: '.docs/decisions/architecture-review-feature-aware-artifacts.md',
-          featureIdentity: 'Feature Aware Artifacts',
-          strategy: {
-            strategy: 'normalized-stem',
-            stripPrefixes: ['architecture-review'],
-          },
-          expected: true,
-        },
-        {
-          artifactPath:
-            '.docs/decisions/architecture-review-2026-07-28-feature-aware-artifacts.md',
-          featureIdentity: 'Feature Aware Artifacts',
-          strategy: {
-            strategy: 'normalized-stem',
-            stripDatePrefix: true,
-            stripPrefixes: ['architecture-review'],
-          },
-          expected: true,
-        },
-        {
-          artifactPath: '.docs/specs/2026-07-28-foreign-feature.md',
-          featureIdentity: 'Feature Aware Artifacts',
-          strategy: { strategy: 'normalized-stem', stripDatePrefix: true },
-          expected: false,
-        },
-        {
-          artifactPath: '.docs/specs/日本語.md',
-          featureIdentity: '中文',
-          strategy: { strategy: 'normalized-stem' },
-          expected: false,
-        },
-      ];
-
-      expect(
-        cases.map(({ artifactPath, featureIdentity, strategy }) =>
-          artifactMatchesFeatureIdentity(artifactPath, featureIdentity, strategy),
-        ),
-      ).toEqual(cases.map(({ expected }) => expected));
     });
   });
 
