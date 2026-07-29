@@ -50,6 +50,13 @@ export interface LocalWorkSourceDeps {
    * skip itself is still correct).
    */
   repairProcessed?: DiscoverBacklogOpts['repairProcessed'];
+  /**
+   * Pre-merge shipped-record probe: true when `/finish` already committed
+   * `.docs/shipped/<slug>.md` on the feature's own branch (ship recorded,
+   * merge pending). Optional → absent means the pre-merge dedup is inactive
+   * and discovery behaves exactly as before.
+   */
+  shippedOnFeatureBranch?: DiscoverBacklogOpts['shippedOnFeatureBranch'];
   fastForwardRoot: (root: string, log: (m: string) => void) => Promise<unknown>;
   discoverBacklog: (
     root: string,
@@ -158,6 +165,9 @@ export function localWorkSource(deps: LocalWorkSourceDeps): WorkSource {
           markWarned: (slug) => deps.markWarned(slug),
           ...(resolver ? { resolver } : {}),
           ...(deps.repairProcessed ? { repairProcessed: deps.repairProcessed } : {}),
+          ...(deps.shippedOnFeatureBranch
+            ? { shippedOnFeatureBranch: deps.shippedOnFeatureBranch }
+            : {}),
           ...gateOpts,
         },
       );
