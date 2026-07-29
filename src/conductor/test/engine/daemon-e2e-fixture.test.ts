@@ -13,4 +13,12 @@ describe('daemon E2E fixture', () => {
 
     expect([...parsePlanTaskPaths(plan).keys()].sort()).toEqual(['1', 'T0']);
   });
+
+  it('excludes inline prose backticks from Task 1 corroboration paths', async () => {
+    const plan = await readFile(fixturePlanPath, 'utf-8');
+
+    expect([...parsePlanTaskPaths(plan).get('1')!]).toEqual([
+      'test/fixtures/daemon-e2e/touched.txt',
+    ]);
+  });
 });
