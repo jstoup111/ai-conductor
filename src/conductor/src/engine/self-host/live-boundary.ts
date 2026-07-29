@@ -91,6 +91,11 @@ const CLAUDE_PROVIDER_STATE_VOLATILE: readonly string[] = [
   'history.jsonl',                    // append-only prompt/response log for every session on the machine
   '.last-cleanup',                    // background cleanup job's last-run timestamp
   'plugins/known_marketplaces.json',  // marketplace list cache refreshed by CLI startup/polling
+  'plugins/marketplaces',             // per-marketplace catalog (marketplace.json, .gcs-sha) the
+                                       // CLI re-syncs on its own schedule — same cache-churn
+                                       // category as known_marketplaces.json above, not operator
+                                       // config; verified 2026-07-29 as the sole diff (2 changed,
+                                       // 0 added/removed) behind a false live-boundary halt
   'shell-snapshots',                  // per-session recorded shell env for the Bash tool
   'backups',                          // rolling `.claude.json.backup.*` snapshots the CLI writes on its own save cycle
   'sessions',                         // per-process session index files, one per running Claude process

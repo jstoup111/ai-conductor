@@ -165,6 +165,7 @@ describe('live self-host boundary', () => {
     await Promise.all([
       mkdir(live),
       mkdir(join(provider, 'plugins'), { recursive: true }),
+      mkdir(join(provider, 'plugins', 'marketplaces', 'claude-plugins-official', '.claude-plugin'), { recursive: true }),
       mkdir(join(provider, 'shell-snapshots'), { recursive: true }),
       mkdir(join(provider, 'backups'), { recursive: true }),
       mkdir(join(provider, 'sessions'), { recursive: true }),
@@ -176,6 +177,8 @@ describe('live self-host boundary', () => {
     await writeFile(join(provider, 'history.jsonl'), 'before');
     await writeFile(join(provider, '.last-cleanup'), 'before');
     await writeFile(join(provider, 'plugins', 'known_marketplaces.json'), 'before');
+    await writeFile(join(provider, 'plugins', 'marketplaces', 'claude-plugins-official', '.claude-plugin', 'marketplace.json'), 'before');
+    await writeFile(join(provider, 'plugins', 'marketplaces', 'claude-plugins-official', '.gcs-sha'), 'before');
     await writeFile(join(provider, 'shell-snapshots', 'a.sh'), 'before');
     await writeFile(join(provider, 'backups', '.claude.json.backup.1'), 'before');
     await writeFile(join(provider, 'sessions', '123.json'), 'before');
@@ -192,6 +195,8 @@ describe('live self-host boundary', () => {
     await writeFile(join(provider, 'history.jsonl'), 'after');
     await writeFile(join(provider, '.last-cleanup'), 'after');
     await writeFile(join(provider, 'plugins', 'known_marketplaces.json'), 'after');
+    await writeFile(join(provider, 'plugins', 'marketplaces', 'claude-plugins-official', '.claude-plugin', 'marketplace.json'), 'after');
+    await writeFile(join(provider, 'plugins', 'marketplaces', 'claude-plugins-official', '.gcs-sha'), 'after');
     await writeFile(join(provider, 'shell-snapshots', 'a.sh'), 'after');
     await writeFile(join(provider, 'shell-snapshots', 'b.sh'), 'new');
     await writeFile(join(provider, 'backups', '.claude.json.backup.2'), 'new');
