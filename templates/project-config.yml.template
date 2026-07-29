@@ -1,0 +1,19 @@
+# Project config — <repo>/.ai-conductor/config.yml
+
+harness_version: ">=0.99.0"
+
+# Required for the native pre-SHIP aggregate gate. Name one project-owned
+# command that composes every authoritative test suite.
+# test_suite:
+#   command: npm test
+#   working_directory: .
+#   timeout_seconds: 1800
+
+# --- Per-step overrides (optional) -------------------------------------------
+# steps:
+#   explore:
+#     model: haiku
+#     effort: low
+
+# complexity:
+#   default_tier: M

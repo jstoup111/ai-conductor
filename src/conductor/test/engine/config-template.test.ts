@@ -21,11 +21,13 @@ import { mkdtemp, mkdir, writeFile, rm, readFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { fileURLToPath } from 'url';
+import { load as loadYaml } from 'js-yaml';
 import { loadConfig } from '../../src/engine/config.js';
 
 const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
 const TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'ai-conductor-config.yml.template');
+const PROJECT_TEMPLATE_PATH = join(REPO_ROOT, 'templates', 'project-config.yml.template');
 const VERSION_PATH = join(REPO_ROOT, 'VERSION');
 
 /**
@@ -149,5 +151,48 @@ describe('templates/ai-conductor-config.yml.template (issue #1010)', () => {
     // The constraint must not require a not-yet-released major version;
     // the repo is locked pre-1.0 (see CLAUDE.md: "Version locked until v1").
     expect(constraint).not.toMatch(/>=\s*1\./);
+  });
+});
+
+describe('templates/project-config.yml.template', () => {
+  it('is a valid project seed without user or self-host configuration', async () => {
+    const raw = await readFile(PROJECT_TEMPLATE_PATH, 'utf8');
+    const authoredConfig = loadYaml(raw);
+    expect(authoredConfig).toBeTypeOf('object');
+    expect(authoredConfig).not.toBeNull();
+
+    const authoredKeys = Object.keys(authoredConfig as Record<string, unknown>);
+    expect(authoredKeys).not.toEqual(
+      expect.arrayContaining([
+        'conductor',
+        'markdown_viewer',
+        'harness_self_host',
+        'owner_gate_cutover',
+        'auto_restart_on_stale_engine',
+        'attribution_enforcement_cutover',
+        'attribution_judge_cutover',
+        'attribution_audit_sample_pct',
+        'wiring',
+        'manual_test',
+      ]),
+    );
+
+    const tmpDir = await mkdtemp(join(tmpdir(), 'project-config-template-test-'));
+
+    try {
+      await mkdir(join(tmpDir, '.ai-conductor'), { recursive: true });
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), raw, 'utf8');
+
+      const result = await loadConfig(tmpDir, '0.99.0');
+      if (!result.ok) {
+        throw new Error(
+          `Project template failed to load: [${result.error.type}] ${result.error.message}`,
+        );
+      }
+
+      expect(result.config.harness_version).toBe('>=0.99.0');
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
   });
 });
