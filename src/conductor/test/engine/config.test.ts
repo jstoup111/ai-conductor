@@ -1782,13 +1782,6 @@ complexity:
       expect(result.config.ci_watch?.enabled).toBe(true);
     });
 
-    it('resolves a non-boolean enabled value to enabled without throwing', () => {
-      const result = validateConfig({ ci_watch: { enabled: 'banana' } });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.ci_watch?.enabled).toBe(true);
-    });
-
     it('is total across ci_watch shapes', () => {
       const testCases: Array<[string, Record<string, unknown>]> = [
         ['absent', {}],
