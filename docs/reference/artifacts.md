@@ -114,15 +114,26 @@ Two independent mechanisms protect `.docs/` during a run.
 
 ```ts
 interface ProtectedArtifactSeal {
-  version: 1;
+  version: 2;
   baselineCommit: string;
   protectedArtifacts: { path: string; fingerprint: string }[];
+  rebaselines: {
+    fromCommit: string;
+    toCommit: string;
+    trigger: string;
+    paths: string[];
+  }[];
 }
 ```
 
-The seal is written once at first BUILD entry and is immutable thereafter, so it goes stale relative
-to the base branch as soon as another feature's pull request merges. Verification therefore tolerates
-two kinds of drift instead of halting on them:
+The seal is written at first BUILD entry. BUILD and SHIP agents cannot replace its baseline, but the
+engine rebaselines it after a proven history rewrite. A clean engine rebase rotates it after
+post-rebase evidence translation. Verification also rotates a seal stranded by an earlier rebase
+when its baseline is no longer an ancestor of `HEAD`. Both paths require every changed workspace
+artifact to equal the blob at `HEAD` and every `HEAD` blob to equal the base-branch tip. The engine
+records each rotation in `rebaselines` and logs the trigger, old and new commits, and paths.
+
+Verification also tolerates these cases without halting:
 
 - **Own-feature amendment** — a changed artifact whose filename stem names the current feature
   (a date prefix on either side is ignored). The engine logs a warning naming each amended path;
@@ -134,8 +145,10 @@ two kinds of drift instead of halting on them:
   branch already vouches for it.
 
 Everything else still halts BUILD/SHIP before dispatch: any content the base branch does not vouch
-for, any addition the base branch does not contain, and any deletion. Tolerance requires the base
-branch name to be resolvable — when it is not, the seal is fully protected.
+for, any addition the base branch does not contain, and any deletion the base branch still retains.
+Tolerance requires the base branch name and seal baseline to be resolvable — when either is not,
+the seal remains fully protected. Do not delete or hand-edit the seal to recover from a halt; follow the
+[stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md).
 
 ## Step to artifact map
 
@@ -335,7 +348,7 @@ Existence is the signal. Alphabetized.
 | `.task-status.lock` | `pre-dispatch.sh` (mkdir lock) | Serializes concurrent `task-status.json` row flips |
 | `DONE` | conductor on convergence | Paired with the `loop_converged` event |
 | `HALT` | `halt-marker.ts::writeHaltMarker`, best-effort — write failures are swallowed | The daemon treats it as a full stop: it never advances, opens a PR, or merges past it. The first non-empty body line is the reason the dashboard shows |
-| `HALT.class` | the same writer, when a class is supplied | `needs-human` or `mechanical`, so the re-kick sweep can triage without parsing the body. Missing or unrecognized reads as `unclassified` and never throws |
+| `HALT.class` | the same writer, when a class is supplied | `needs-human`, `mechanical`, or `protected-artifact`. The last identifies a genuine protected DECIDE-artifact violation; missing or unrecognized content reads as `unclassified` and never throws |
 | `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |

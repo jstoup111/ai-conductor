@@ -100,6 +100,22 @@ Filter one feature's narrative with `conduct-ts daemon logs | grep '\[<slug>\]'`
 lines are daemon-wide, not feature work. The exact shapes and the slug length bound are in
 [artifacts](../reference/artifacts.md#line-shapes).
 
+### Protected-artifact rebaselines
+
+The daemon distinguishes a stale pre-rebase seal from a genuine protected-artifact mutation:
+
+```text
+Protected artifact rebaseline: trigger=proactive-rebase fromCommit=<old> toCommit=<new> paths=<paths>
+Protected artifact rotation refused: condition=<condition> path=<path>
+```
+
+The first line is successful recovery: the engine proved the protected artifacts came from the
+base branch and rotated the seal. `defensive-history-rewrite` is the equivalent verification-time
+trigger for a seal stranded by an earlier rebase. The refusal line is a real guardrail failure;
+read its condition and path, then follow the
+[stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation).
+Never delete or rewrite `.pipeline/protected-artifact-seal.json` by hand.
+
 ### Provider attribution and result summaries
 
 Three line kinds tell you what a step actually did, which provider ran it, and what the feature
