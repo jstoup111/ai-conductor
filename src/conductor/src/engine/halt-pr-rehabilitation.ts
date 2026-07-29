@@ -122,7 +122,7 @@ export interface RetitleFloorResult {
   title: string;
 }
 
-function branchToFeatureDesc(branch: string): string {
+export function branchToFeatureDesc(branch: string): string {
   const withoutPrefix = branch.replace(/^[a-z]+\//i, '');
   return withoutPrefix.replace(/[-_]+/g, ' ').trim() || branch;
 }
