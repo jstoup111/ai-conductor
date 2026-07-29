@@ -273,7 +273,7 @@ export function createProgram(): Command {
     .description('Resume dispatch and re-kick for this feature');
   daemon
     .command('reclaim-worktree <slug>')
-    .description('Remove one named retained feature worktree');
+    .description('Remove exactly one named, quiescent retained feature worktree');
   // Management verbs — route to the tmux Supervisor port (detectDaemonSupervisorCommand),
   // dispatched in index.ts before the pipeline boots. Declared here ONLY so `--help`
   // documents them; commander never actually dispatches them.

@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
 import { removeWorktree } from './worktree-shared.js';
+import { detectAutoResume } from './auto-resume.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
 
@@ -52,7 +53,7 @@ export async function resolveMainRepoRoot(
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
   | { kind: 'unpark'; slug: string }
-  | { kind: 'reclaim-worktree'; slug: string }
+  | { kind: 'reclaim-worktree'; slug: string; invalidArgs?: true }
   | { kind: 'reconcile-parked'; slug?: string; invalidArgs?: true };
 
 /**
@@ -72,7 +73,13 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
   }
   if (sub === 'reclaim-worktree') {
     const slug = args[2];
-    return slug ? { kind: 'reclaim-worktree', slug } : null;
+    return slug
+      ? {
+          kind: 'reclaim-worktree',
+          slug,
+          ...(args.length === 3 ? {} : { invalidArgs: true as const }),
+        }
+      : null;
   }
   if (sub !== 'park' && sub !== 'unpark') return null;
   const slug = args[2];
@@ -115,6 +122,7 @@ export interface DaemonParkDeps {
   requestRecordRepair?: (request: { slug: string; prUrl: string }) => Promise<void>;
   runGit?: GitRunner;
   runGh?: GhRunner;
+  removeWorktree?: (repoRoot: string, worktreePath: string) => Promise<void>;
 }
 
 /**
@@ -186,13 +194,22 @@ export async function dispatchDaemonPark(
     }
 
     if (cmd.kind === 'reclaim-worktree') {
-      if (!SINGLE_SLUG.test(cmd.slug)) {
+      if (cmd.invalidArgs || !SINGLE_SLUG.test(cmd.slug)) {
         out(`Could not reclaim-worktree '${cmd.slug}': invalid-slug`);
         return 1;
       }
       const worktreePath = join(resolvedRoot, '.worktrees', cmd.slug);
+      if (!existsSync(worktreePath)) {
+        out(`No retained worktree to reclaim for '${cmd.slug}'.`);
+        return 0;
+      }
+      const resume = await detectAutoResume(resolvedRoot, cmd.slug);
+      if (resume.kind === 'resume') {
+        out(`Could not reclaim-worktree '${cmd.slug}': in-progress`);
+        return 1;
+      }
       out(`Reclaiming retained worktree: ${worktreePath}`);
-      await removeWorktree(resolvedRoot, worktreePath);
+      await (deps.removeWorktree ?? removeWorktree)(resolvedRoot, worktreePath);
       out(`Removed retained worktree '${cmd.slug}': ${worktreePath}`);
       return 0;
     }
