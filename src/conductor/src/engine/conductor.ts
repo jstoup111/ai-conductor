@@ -3092,16 +3092,7 @@ export class Conductor {
                   : undefined,
               );
               if (park.timedOut) {
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  park.haltReason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
+                await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
                 await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
@@ -4227,16 +4218,7 @@ export class Conductor {
             const park = await this.parkOnAuthFailure(result);
             if (park.timedOut) {
               // Task 14: Auth-park timeout → credentials-specific HALT.
-              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                () => {},
-              );
-              await writeFile(
-                join(this.projectRoot, LOOP_HALT_MARKER),
-                park.haltReason + '\n',
-                'utf-8',
-              ).catch(() => {
-                /* best-effort marker */
-              });
+              await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
               // Durable signals (HALT marker + state) are written BEFORE escalation
               // so the daemon can classify the outcome even if escalation throws (C1).
               await writeState(this.stateFilePath, state);

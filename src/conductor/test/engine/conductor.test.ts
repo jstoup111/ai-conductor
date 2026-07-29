@@ -5268,6 +5268,52 @@ describe('engine/conductor', () => {
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
     });
 
+    it('classifies a grouped authentication timeout as needs-human without changing its reason', async () => {
+      await writeState(statePath, VALIDATION_GROUP_PREREQS);
+      const calls: StepName[] = [];
+      const runner: StepRunner = {
+        run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+          calls.push(step);
+          if (step === 'prd_audit') {
+            return {
+              success: false,
+              authFailure: true,
+              actualProvider: 'codex',
+              authentication: {
+                provider: 'codex',
+                source: 'api-key',
+                state: 'unusable',
+              },
+            };
+          }
+          return { success: true };
+        }),
+      };
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        fromStep: 'manual_test',
+        mode: 'auto',
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      });
+
+      await conductor.run();
+
+      expect({
+        reason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+        calls,
+      }).toEqual({
+        reason:
+          'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
+          'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.\n',
+        haltClass: 'needs-human',
+        calls: ['manual_test', 'prd_audit', 'architecture_review_as_built'],
+      });
+    });
+
     it('halts one denied Codex group member without rerunning its completed siblings', async () => {
       await writeState(statePath, VALIDATION_GROUP_PREREQS);
       const calls: StepName[] = [];
@@ -9616,6 +9662,7 @@ describe('engine/conductor', () => {
       expect(halt).toContain(String(expiresAt));
       // Verify it's NOT the generic "retries exhausted" reason
       expect(halt).not.toMatch(/retries exhausted/i);
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
     });
 
     // ── TR-4 Task 15: Auth HALT distinguishable from build-defect HALT ─────
