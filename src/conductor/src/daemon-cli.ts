@@ -125,6 +125,7 @@ import {
   type RekickSweepDeps,
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
+import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
 import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
@@ -292,6 +293,34 @@ export interface DaemonModeOptions {
    * NEVER includes PROCESSED regardless of this flag.
    */
   showCompleted?: boolean;
+}
+
+interface HaltClassMigrationStartupDeps {
+  ensureWorktreeBase: (worktreeBase: string) => Promise<void>;
+  migrateHaltClasses: (
+    projectRoot: string,
+    worktreeBase: string,
+    log: (message: string) => void,
+  ) => Promise<void>;
+  log: (message: string) => void;
+}
+
+/**
+ * Establish the halt-class compatibility boundary only after daemon ownership.
+ * Returning null keeps lock-loser startup unable to mutate worktrees or begin
+ * any migration-dependent normal work.
+ */
+export async function runOwnedHaltClassMigration(
+  lock: object | null,
+  projectRoot: string,
+  deps: HaltClassMigrationStartupDeps,
+): Promise<string | null> {
+  if (lock === null) return null;
+
+  const worktreeBase = join(projectRoot, '.worktrees');
+  await deps.ensureWorktreeBase(worktreeBase);
+  await deps.migrateHaltClasses(projectRoot, worktreeBase, deps.log);
+  return worktreeBase;
 }
 
 // Front-half steps the daemon treats as already done — the human authored the
@@ -653,6 +682,13 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   Object.assign(process.env, selfGuardEnv());
   await ensureFresh();
 
+  const worktreeBase = await runOwnedHaltClassMigration(lock, projectRoot, {
+    ensureWorktreeBase: (path) => mkdir(path, { recursive: true }).then(() => undefined),
+    migrateHaltClasses: migrateLegacyHaltClasses,
+    log,
+  });
+  if (worktreeBase === null) return;
+
   // #561 (Story 1 + Story 3): SIGTERM must drain in-flight work before the
   // lock is released — force-exiting on SIGTERM (the old behavior) let a
   // second daemon race the pidfile while a conductor was still mid-write.
@@ -874,9 +910,6 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   if (memoryResolveCtx.warnings.length > 0) {
     for (const w of memoryResolveCtx.warnings) log(`WARNING: ${w}`);
   }
-
-  const worktreeBase = join(projectRoot, '.worktrees');
-  await mkdir(worktreeBase, { recursive: true });
 
   const runConductorInWorktree = async (
     wt: FeatureWorktree,
