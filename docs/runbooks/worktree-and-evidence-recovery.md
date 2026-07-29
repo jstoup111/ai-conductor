@@ -26,6 +26,13 @@ One or more of:
 - `conduct-ts inline` refuses with `Orphaned conductor state in <path>.`
 - The daemon repeatedly logs `[session-hooks] restored <script> in <worktree>` for one feature, or
   reports that it could not restore an enforcement script.
+- A step fails with `Cannot dispatch '<step>': its working directory <path> does not exist.` The
+  engine's dispatch preflight refused to launch a provider into a path that is gone, and halted the
+  run instead of retrying into it. Nothing was written back into the missing path — recreating
+  `.pipeline/` there would leave a stub that makes the next `git worktree add` fail 128. If the
+  worktree disappeared mid-run (a finish-time cleanup is the usual cause), check the branch for a
+  shipped record before recovering: a feature whose ship is already recorded needs the PR merged,
+  not a rebuilt worktree.
 
 ### Why losing the directory costs you
 

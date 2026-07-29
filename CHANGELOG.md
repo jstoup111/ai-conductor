@@ -101,6 +101,22 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- The halt-PR reconciliation sweep now clears a stale marking instead of treating it as conforming.
+  A marked PR whose head branch already carries the feature's shipped record is undrafted, unlabeled,
+  its body marker stripped, and its halt comment rewritten as resolved; previously the sweep checked
+  only shape (draft + labeled) and logged "already conforming, skipping" forever, so a PR whose halt
+  had been resolved stayed drafted and labeled until a human cleared it by hand. The check reads the
+  committed branch tree and refuses to derive a slug from any branch the daemon did not cut
+  ({{IMPLEMENTATION_PR}}).
+- The engine no longer dispatches a step into a working directory that no longer exists. The
+  dispatch preflight refuses before any provider is launched and halts the run with a reason naming
+  the path and the recovery rule, instead of surfacing an opaque provider `error_during_execution`
+  blob ("Path … does not exist"), burning the retry ladder, and kicking back into further dispatches
+  against the same absent path. Nothing is written back into the missing path ({{IMPLEMENTATION_PR}}).
+- Daemon discovery now dedups on a shipped record committed to a feature's own branch, not only on
+  the base branch. A feature whose `/finish` recorded the ship but whose run then reported failure is
+  no longer re-dispatched between the ship and the human merge — which previously re-ran `finish`
+  against the worktree that finished run had already torn down ({{IMPLEMENTATION_PR}}).
 - Generic step completion, interactive artifact review, and dashboard status now resolve
   feature-scoped artifacts (e.g. a plan or stories file) against the active feature's identity and
   worktree changes instead of matching a step's declared glob directory-wide, so an unrelated
