@@ -14,9 +14,10 @@
 //   `created`. A non-empty target writes NOTHING.
 
 import { execa } from 'execa';
-import { mkdir, writeFile, readdir } from 'fs/promises';
-import { existsSync } from 'fs';
+import { copyFile, mkdir, writeFile, readdir } from 'fs/promises';
+import { constants, existsSync, writeSync } from 'fs';
 import { join, basename, isAbsolute, resolve as resolvePath } from 'path';
+import { resolveHarnessRoot } from './install-freshness.js';
 import {
   resolveRegistryPath,
   upsertProject,
@@ -147,6 +148,64 @@ async function dirIsNonEmpty(dir: string): Promise<boolean> {
   }
 }
 
+export type ProjectConfigWriteOutcome = 'created' | 'already-exists';
+
+async function writeProjectConfig(
+  projectRoot: string,
+): Promise<ProjectConfigWriteOutcome> {
+  const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
+  if (existsSync(configPath)) return 'already-exists';
+
+  const harnessRoot = await resolveHarnessRoot();
+  if (harnessRoot === null) {
+    throw new Error('unable to resolve harness root for project config template');
+  }
+
+  const templatePath = join(
+    harnessRoot,
+    'templates',
+    'project-config.yml.template',
+  );
+  await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+  try {
+    await copyFile(templatePath, configPath, constants.COPYFILE_EXCL);
+    return 'created';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return 'already-exists';
+    }
+    throw error;
+  }
+}
+
+async function runConfigInit(projectRoot = process.cwd()): Promise<number> {
+  if (!(await isGitRepo(projectRoot))) {
+    writeSync(
+      process.stderr.fd,
+      `conduct config init: not a git repository: ${projectRoot}\n`,
+    );
+    return 1;
+  }
+
+  try {
+    const outcome = await writeProjectConfig(projectRoot);
+    const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
+    const message =
+      outcome === 'already-exists'
+        ? `Project config already exists: ${configPath}`
+        : `Created project config: ${configPath}`;
+    writeSync(process.stdout.fd, `${message}\n`);
+    return 0;
+  } catch (error) {
+    console.error(
+      `conduct config init: failed to write project config: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    return 1;
+  }
+}
+
 // `conduct create <name> [--remote url]` — returns the process exit code.
 export async function runCreate(
   name: string,
@@ -167,6 +226,7 @@ export async function runCreate(
     await execa('git', ['init', '-q', target]);
     await writeFile(join(target, 'CLAUDE.md'), skeletonClaudeMd(basename(target)), 'utf-8');
     await writeFile(join(target, '.gitignore'), GITIGNORE_SKELETON, 'utf-8');
+    await writeProjectConfig(target);
     if (opts.remote) {
       // add-only — NO push.
       await execa('git', ['-C', target, 'remote', 'add', 'origin', opts.remote]);
@@ -211,7 +271,8 @@ export async function runCreate(
 // matched handler invocation, or null when argv is a normal pipeline run.
 export type RegistryDispatch =
   | { kind: 'register'; path?: string }
-  | { kind: 'create'; name: string; remote?: string };
+  | { kind: 'create'; name: string; remote?: string }
+  | { kind: 'config-init' };
 
 export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
   // argv is process.argv: [node, entry, sub, ...]
@@ -239,12 +300,16 @@ export function detectRegistryCommand(argv: string[]): RegistryDispatch | null {
     if (name === undefined) return null;
     return { kind: 'create', name, remote };
   }
+  if (sub === 'config' && args[1] === 'init') {
+    return { kind: 'config-init' };
+  }
   return null;
 }
 
 // Read a record back (used by integration helpers/tests). Thin re-export shim.
 export async function dispatchRegistry(d: RegistryDispatch): Promise<number> {
   if (d.kind === 'register') return runRegister(d.path);
+  if (d.kind === 'config-init') return runConfigInit();
   return runCreate(d.name, { remote: d.remote });
 }
 

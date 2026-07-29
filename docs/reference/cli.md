@@ -389,9 +389,10 @@ repository, or the registry write fails. A rejected validation leaves the regist
 conduct-ts create <name> [--remote <url>]
 ```
 
-No-clobber scaffold: creates the directory, runs `git init -q`, writes a skeleton `CLAUDE.md` and a
-`.gitignore` containing `.pipeline/`, `.daemon/`, and `.worktrees/`, optionally adds the origin remote,
-and upserts the project with status `created`.
+No-clobber scaffold: creates the directory, runs `git init -q`, writes a skeleton `CLAUDE.md`, a
+`.gitignore` containing `.pipeline/`, `.daemon/`, and `.worktrees/`, and
+`.ai-conductor/config.yml` from `templates/project-config.yml.template`, optionally adds the origin
+remote, and upserts the project with status `created`.
 
 | Flag | Type | Default | Effect |
 | --- | --- | --- | --- |
@@ -400,6 +401,19 @@ and upserts the project with status `created`.
 Prints `Created <name> (<target>).` and exits 0. Exits 1 when the target directory is non-empty —
 writing nothing — or when the scaffold or registry write fails. Omitting `<name>` falls through to the
 inline refusal and exits 1.
+
+## `conduct-ts config init`
+
+```bash
+conduct-ts config init
+```
+
+Initializes the current Git repository's `.ai-conductor/config.yml` from
+`templates/project-config.yml.template`. A first run prints the created path and exits 0. If the
+file already exists, it reports that path, preserves the file byte-for-byte, and exits 0.
+
+The command exits 1 without writing when the current directory is not a Git repository or when the
+template cannot be resolved or written.
 
 ## `conduct-ts task`
 

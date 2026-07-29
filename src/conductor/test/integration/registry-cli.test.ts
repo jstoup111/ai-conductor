@@ -49,7 +49,6 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONDUCTOR_DIR = join(__dirname, '..', '..');
 const DIST_ENTRY = join(CONDUCTOR_DIR, 'dist', 'index.js');
-
 interface CliResult {
   code: number | null;
   timedOut: boolean;
@@ -84,7 +83,7 @@ function runCli(
       child.kill('SIGKILL');
       resolve({ code: null, timedOut: true, stdout, stderr });
     }, opts.timeoutMs ?? 4000);
-    child.on('exit', (code) => {
+    child.on('close', (code) => {
       clearTimeout(timer);
       resolve({ code, timedOut: false, stdout, stderr });
     });
@@ -145,6 +144,14 @@ describe('CLI dispatch surface (FR-3 / FR-6) — structural RED', () => {
       .commands.map((c) => c.name())
       .sort();
     expect(names).toContain('create');
+  });
+
+  it('the real CLI program exposes `config init`', async () => {
+    const { createProgram } = await import('../../src/index.js');
+    const configCommand = createProgram().commands.find((c) => c.name() === 'config');
+
+    expect(configCommand).toBeDefined();
+    expect(configCommand?.commands.map((c) => c.name())).toContain('init');
   });
 });
 
@@ -331,6 +338,10 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     expect(gitignore).toContain('.worktrees/');
     expect(gitignore).not.toContain('.serena/');
 
+    // The registry integration owns the scaffold-set boundary; acceptance
+    // coverage owns template bytes, loader validation, and leak exclusions.
+    expect(existsSync(join(proj, '.ai-conductor', 'config.yml'))).toBe(true);
+
     // A `created` record (status provenance).
     const records = await readRegistryFile(registry);
     expect(records).toHaveLength(1);
@@ -441,7 +452,6 @@ describe('conduct create — refuses to clobber (FR-7)', () => {
     );
     expect(existsSync(join(proj, '.git'))).toBe(false);
     expect(existsSync(join(proj, 'CLAUDE.md'))).toBe(false);
-
     // No orphan registry record for the refused project.
     const records = await readRegistryFile(registry);
     expect(records).toHaveLength(0);

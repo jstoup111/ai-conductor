@@ -43,9 +43,10 @@ Create or edit the project config:
 llm_provider: codex
 ```
 
-`bootstrap` does not generate this file. Copy
-`templates/ai-conductor-config.yml.template` from the harness checkout if the project has no config
-yet. Every key is documented in [../reference/configuration.md](../reference/configuration.md).
+`conduct-ts create <name>` includes this file for a new repository. In an existing Git repository,
+run `conduct-ts config init`; the command writes the project-safe template once and preserves an
+existing config byte-for-byte. Every key is documented in
+[../reference/configuration.md](../reference/configuration.md).
 
 **Observable outcome:** the next `conduct-ts inline` run dispatches steps to `codex` instead of
 `claude`. An unknown name fails fast at startup:

@@ -13,18 +13,22 @@ code that consumes it, and what a bad value does. Sections follow the loader's o
 | Legacy project dir | `<project>/.harness/config.yml` | `LEGACY_PROJECT_CONFIG_DIR`, `config.ts:96` |
 | Legacy user JSON | `~/.claude/ai-conductor.config.json` (flat camelCase) | `user-config.ts:15,87-106` |
 
-Both files use the same schema. `migrateLegacyProjectConfig()` renames `.harness/config.yml` to
+Both files use the same schema. Keep per-user state (`conductor:` and `markdown_viewer:`) in the
+user file. Keep self-host settings such as `harness_self_host`, `owner_gate_cutover`, and
+`auto_restart_on_stale_engine` in the harness checkout's project config, not in unrelated
+projects.
+
+`migrateLegacyProjectConfig()` renames `.harness/config.yml` to
 `.ai-conductor/config.yml` on every `loadConfig()` call; it is idempotent, no-ops when the new path
 already exists, and returns `false` silently on any failure without touching either file
 (`config.ts:112-123`, called at `:132`).
 
-No harness code path creates a project `.ai-conductor/config.yml`. `bin/install` and `bin/migrate` write
-only the user file.
-
-> **Known limitation.** The missing-file error reads `Config file not found: <path>. Run bin/migrate to
-> create it.` (`config.ts:144`), but `bin/migrate` only runs `bin/install --update` plus CHANGELOG
-> migration blocks — it never writes a project config. Create the file by hand. Tracked in
-> [#1020](https://github.com/jstoup111/ai-conductor/issues/1020).
+`conduct-ts create <name>` writes a new repository's project config from
+`templates/project-config.yml.template`. For an existing Git repository, run
+`conduct-ts config init`; it writes the same template when the file is absent, reports success
+without changing bytes when the file already exists, and refuses a non-Git directory. The missing-file
+error names this command as its remedy. `bin/install` and `bin/migrate` continue to write only the
+user file.
 
 ## Load order and precedence
 
@@ -1054,8 +1058,9 @@ markdown_viewer:
   mode: inline
 ```
 
-`templates/ai-conductor-config.yml.template` covers 8 of the 35 allow-listed top-level keys. The rest are
-documented only here.
+`templates/project-config.yml.template` is the project seed used by `conduct-ts create` and
+`conduct-ts config init`. `templates/ai-conductor-config.yml.template` remains the user-level
+reference. The remaining allow-listed keys are documented only here.
 
 ## See also
 

@@ -414,7 +414,8 @@ async function main(): Promise<void> {
   const registryCmd = detectRegistryCommand(process.argv);
   if (registryCmd) {
     const code = await dispatchRegistry(registryCmd);
-    process.exit(code);
+    process.exitCode = code;
+    return;
   }
 
   // Engineer subcommand (Phase 9.3) runs NON-INTERACTIVELY and exits — it routes
