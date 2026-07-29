@@ -150,7 +150,7 @@ async function dirIsNonEmpty(dir: string): Promise<boolean> {
 
 export type ProjectConfigWriteOutcome = 'created' | 'already-exists';
 
-export async function writeProjectConfig(
+async function writeProjectConfig(
   projectRoot: string,
 ): Promise<ProjectConfigWriteOutcome> {
   const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
@@ -178,7 +178,7 @@ export async function writeProjectConfig(
   }
 }
 
-export async function runConfigInit(projectRoot = process.cwd()): Promise<number> {
+async function runConfigInit(projectRoot = process.cwd()): Promise<number> {
   if (!(await isGitRepo(projectRoot))) {
     writeSync(
       process.stderr.fd,
