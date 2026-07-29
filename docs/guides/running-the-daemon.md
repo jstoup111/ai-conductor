@@ -442,6 +442,21 @@ carried-over verdict.
 `completed`; the durable record of finished work is the `Task:` trailer on each commit, which is why
 losing or re-seeding that file does not by itself re-open a finished build.
 
+### Halt-PR presentation is cleared when the halt resolves
+
+Escalating a halt marks the feature's PR: draft status, the `needs-remediation` label, a body
+marker, and a halt comment. Every poll, the halt-PR reconciliation sweep re-reads the open PRs and
+re-applies any of those facets that drifted off.
+
+The sweep also removes them. A marked PR whose head branch already carries the feature's shipped
+record (`.docs/shipped/<slug>.md`, committed by `/finish`) has shipped, so the sweep undrafts it,
+removes the label, strips the body marker, and rewrites the halt comment to say the halt resolved.
+Being draft-and-labeled is evidence that the marking was applied, never that the halt still stands —
+without the shipped-record check a resolved feature stays drafted and labeled until a human clears
+it by hand. The check is fail-closed in both directions: it reads the committed branch tree (so a
+torn-down worktree cannot hide the record), and it refuses to guess a slug for any branch the daemon
+did not cut, so a hand-authored PR is never touched.
+
 ### Kickback-cap halt
 
 The kickback budget is durable for each gate: it survives daemon re-dispatch while the feature's
@@ -464,6 +479,20 @@ lock before respawning.
 **The daemon keeps re-dispatching a feature you already shipped by hand.** You are missing the
 shipped record. Park it, then run `conduct-ts shipped-record`. See
 [shipped-record reconciliation](../runbooks/shipped-record-reconciliation.md).
+
+A feature the daemon itself finished is deduped from both sides: discovery skips it once the shipped
+record is on the base branch (post-merge) *and* once the record is committed on the feature's own
+branch (`feat/daemon-<slug>`, pre-merge). The pre-merge half exists because a finish that records the
+ship but then reports failure would otherwise leave a completed feature eligible for re-dispatch,
+re-running `finish` against a worktree the finished run already tore down.
+
+**A step fails with `Cannot dispatch '<step>': its working directory … does not exist`.** The
+feature's worktree was removed while the run was in flight. The engine refuses the dispatch before
+launching any provider, and the run halts immediately rather than retrying into the same absent path
+— previously this surfaced as an opaque provider `error_during_execution` blob and was retried and
+kicked back. Nothing is written back into the missing path: a stub there makes the next
+`git worktree add` fail 128. The branch holds the work; recover with
+[worktree and evidence recovery](../runbooks/worktree-and-evidence-recovery.md).
 
 **The daemon is alive but nothing moves.** Check for `.daemon/PAUSED`, a park marker under
 `.daemon/parked/`, and the `GATED:` section of `conduct-ts daemon status`. See
