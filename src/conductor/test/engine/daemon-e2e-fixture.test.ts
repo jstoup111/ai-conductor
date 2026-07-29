@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import {
   copyFile,
   mkdir,
@@ -44,13 +44,18 @@ async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
 
   const haltPath = join(worktreeDir, '.pipeline/HALT');
   const haltReason = await readFile(haltPath, 'utf-8').catch(() => null);
-  if (haltReason !== null) {
+  if (haltReason === null) {
+    console.error(`halt marker not found at ${haltPath}`);
+  } else {
     console.error(`halt marker at ${haltPath}`);
     console.error(haltReason);
   }
 
   const parkedDir = join(worktreeDir, '.daemon/parked');
   const parkedEntries = await readdir(parkedDir).catch(() => []);
+  if (parkedEntries.length === 0) {
+    console.error(`park markers not found in ${parkedDir}`);
+  }
   for (const entry of parkedEntries) {
     const markerPath = join(parkedDir, entry);
     const reason = await readFile(markerPath, 'utf-8').catch(() => null);
@@ -59,6 +64,13 @@ async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
       console.error(reason);
     }
   }
+}
+
+function createDaemonLogSink(worktreeDir: string): (message: string) => void {
+  const daemonDir = join(worktreeDir, '.daemon');
+  const logPath = join(daemonDir, 'daemon.log');
+  mkdirSync(daemonDir, { recursive: true });
+  return (message) => appendFileSync(logPath, `${message}\n`, 'utf-8');
 }
 
 function createFixtureAgentFake(
@@ -236,6 +248,7 @@ describe('daemon E2E fixture', () => {
             await conductor.run();
             return { slug: item.slug, status: 'done' };
           },
+          log: createDaemonLogSink(worktreeDir),
         },
         { concurrency: 1, once: true },
       );
@@ -257,6 +270,7 @@ describe('daemon E2E fixture', () => {
         done: existsSync(join(pipelineDir, 'DONE')),
         halt: existsSync(join(pipelineDir, 'HALT')),
         parked: existsSync(join(worktreeDir, `.daemon/parked/${slug}`)),
+        daemonLog: existsSync(join(worktreeDir, '.daemon/daemon.log')),
       }).toEqual({
         claimed: true,
         processed: [slug],
@@ -267,6 +281,7 @@ describe('daemon E2E fixture', () => {
         done: true,
         halt: false,
         parked: false,
+        daemonLog: true,
       });
     } catch (error) {
       await dumpPipelineDiagnostics(worktreeDir);
@@ -353,7 +368,17 @@ describe('daemon E2E fixture', () => {
         escalateBuildFailure: async () => ({}),
       });
 
-      await conductor.run();
+      const daemonResult = await runDaemon(
+        {
+          discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
+          runFeature: async (item) => {
+            await conductor.run();
+            return { slug: item.slug, status: 'halted' };
+          },
+          log: createDaemonLogSink(worktreeDir),
+        },
+        { concurrency: 1, once: true },
+      );
 
       const haltReason = await readFile(join(pipelineDir, 'HALT'), 'utf-8');
       const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
@@ -362,12 +387,16 @@ describe('daemon E2E fixture', () => {
 
       expect({
         commitBody: commitBody.trim(),
+        processed: daemonResult.processed.map((outcome) => outcome.slug),
         haltReason,
         done: existsSync(join(pipelineDir, 'DONE')),
+        daemonLog: existsSync(join(worktreeDir, '.daemon/daemon.log')),
       }).toEqual({
         commitBody: 'test: complete fixture task',
+        processed: [slug],
         haltReason: expect.stringMatching(/build.*completion|task 1|evidence/i),
         done: false,
+        daemonLog: true,
       });
     } catch (error) {
       await dumpPipelineDiagnostics(worktreeDir);
