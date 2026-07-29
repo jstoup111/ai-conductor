@@ -236,6 +236,7 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
 interface RunResult {
   dispatched: string[];
   events: CapturedEvent[];
+  logLines: string[];
 }
 
 /** Drives the SHIP-phase rebase step: a real `Conductor.run({ fromStep: 'rebase' })`, daemon mode. */
@@ -245,6 +246,7 @@ async function runRebaseStep(repo: string): Promise<RunResult> {
   const events = new ConductorEventEmitter();
   const seen = captureEvents(events);
   const dispatched: string[] = [];
+  const logLines: string[] = [];
   const runner: StepRunner = {
     run: async (step) => {
       dispatched.push(step);
@@ -256,6 +258,7 @@ async function runRebaseStep(repo: string): Promise<RunResult> {
     stepRunner: runner,
     events,
     projectRoot: repo,
+    log: (line: string) => logLines.push(line),
     daemon: true,
     mode: 'auto',
     fromStep: 'rebase',
@@ -263,7 +266,7 @@ async function runRebaseStep(repo: string): Promise<RunResult> {
     baseBranch: 'main',
   } as never);
   await conductor.run();
-  return { dispatched, events: seen };
+  return { dispatched, events: seen, logLines };
 }
 
 /**
@@ -276,6 +279,7 @@ async function runBuildStep(repo: string, maxRetries = 1): Promise<RunResult> {
   const events = new ConductorEventEmitter();
   const seen = captureEvents(events);
   const dispatched: string[] = [];
+  const logLines: string[] = [];
   const runner: StepRunner = {
     run: async (step) => {
       dispatched.push(step);
@@ -288,6 +292,7 @@ async function runBuildStep(repo: string, maxRetries = 1): Promise<RunResult> {
     stepRunner: runner,
     events,
     projectRoot: repo,
+    log: (line: string) => logLines.push(line),
     config: {} as never,
     fromStep: 'build',
     mode: 'default',
@@ -295,7 +300,7 @@ async function runBuildStep(repo: string, maxRetries = 1): Promise<RunResult> {
     baseBranch: 'main',
   } as never);
   await conductor.run();
-  return { dispatched, events: seen };
+  return { dispatched, events: seen, logLines };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -781,6 +786,67 @@ describe('ST-976-3: a feature-authored mutation still blocks across a rebase', (
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('ST-976-4: rotations, refusals and halts are machine-distinguishable', () => {
+  it(
+    'ST-976-4 proactive rebase rotation log carries the rebaseline marker, lineage commits, trigger, and changed path',
+    async () => {
+      const scratch = await makeFeatureRepo();
+      const fromCommit = await head(scratch);
+      await createProtectedArtifactSeal({
+        projectRoot: scratch.repo,
+        baselineCommit: fromCommit,
+      });
+      await advanceMain(scratch, { [CANARY_PATH]: 'guardrails v2\n', 'unrelated.ts': 'a\n' });
+
+      const { logLines } = await runRebaseStep(scratch.repo);
+      const toCommit = await head(scratch);
+      const rotationLine = logLines.find((line) => /protected artifact rebaseline/i.test(line));
+
+      expect({
+        marker: rotationLine,
+        hasTrigger: rotationLine?.includes('trigger=proactive-rebase'),
+        hasFromCommit: rotationLine?.includes(`fromCommit=${fromCommit}`),
+        hasToCommit: rotationLine?.includes(`toCommit=${toCommit}`),
+        hasChangedPath: rotationLine?.includes(CANARY_PATH),
+      }).toMatchObject({
+        marker: expect.stringMatching(/protected artifact rebaseline/i),
+        hasTrigger: true,
+        hasFromCommit: true,
+        hasToCommit: true,
+        hasChangedPath: true,
+      });
+    },
+    30000,
+  );
+
+  it(
+    'ST-976-4 feature-authored refusal log carries the rotation-refused marker, condition, and offending path',
+    async () => {
+      const scratch = await makeFeatureRepo();
+      const { repo, g } = scratch;
+      await writeRepoFile(repo, OTHER_PLAN, 'feature-authored edit\n');
+      await g(['add', '-A']);
+      await g(['commit', '-q', '-m', 'build: edit an approved plan']);
+      const strandedBaseline = (await g(['rev-parse', 'HEAD~1'])).stdout.trim();
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: strandedBaseline });
+      await advanceMain(scratch, { 'unrelated.ts': 'main1\n' });
+      await g(['rebase', '-q', 'origin/main']);
+
+      const { logLines } = await runBuildStep(repo, 2);
+      const refusalLine = logLines.find((line) => /rotation refused/i.test(line));
+
+      expect({
+        marker: refusalLine,
+        hasFeatureAuthoredCondition: /condition=.*feature-authored/i.test(refusalLine ?? ''),
+        hasOffendingPath: refusalLine?.includes(`path=${OTHER_PLAN}`),
+      }).toMatchObject({
+        marker: expect.stringMatching(/protected artifact rotation refused/i),
+        hasFeatureAuthoredCondition: true,
+        hasOffendingPath: true,
+      });
+    },
+    30000,
+  );
+
   it(
     'happy: the proactive (rebase-step) and defensive (verification) rotations record DIFFERENT triggers in both the event and the lineage entry',
     async () => {
