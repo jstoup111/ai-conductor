@@ -116,6 +116,8 @@ steps:
     llm_provider: claude
   architecture_review_as_built:
     llm_provider: claude
+  rebase:
+    llm_provider: claude
   finish:
     llm_provider: claude
   manual_test:

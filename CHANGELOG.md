@@ -73,13 +73,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
-- `acceptance_specs` and `rebase` no longer pin to Claude-only in this repo's `.ai-conductor/config.yml`;
-  both now use this project's default Codex/Claude round-robin (`llm_provider: [codex, claude]`),
-  trading a small amount of judgment-quality margin for usage headroom (operator-accepted risk,
-  including `rebase`'s known silent-drop failure mode on a mis-resolved merge conflict). All other
+- `acceptance_specs` no longer pins to Claude-only in this repo's `.ai-conductor/config.yml`; it now
+  uses this project's default Codex/Claude round-robin (`llm_provider: [codex, claude]`), trading a
+  small amount of judgment-quality margin for usage headroom (operator-accepted risk). All other
   pinned steps (`explore`, `prd`, `architecture_review`, `conflict_check`, `coherence_check`,
-  `build_review`, `prd_audit`, `architecture_review_as_built`, `finish`, `maintain-documentation`)
-  remain pinned to Claude.
+  `rebase`, `build_review`, `prd_audit`, `architecture_review_as_built`, `finish`,
+  `maintain-documentation`) remain pinned to Claude.
 - The `plan` step's Codex model is now `gpt-5.6-sol` (was `gpt-5.6-terra`) at every complexity
   tier. `CODEX_MODEL_POLICY.stepTierOverrides.plan.L`'s own `model: 'gpt-5.6-sol'` override
   becomes a no-op restating the new base model, but is left in place — its `effort: 'xhigh'` half
