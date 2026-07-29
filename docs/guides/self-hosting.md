@@ -238,8 +238,15 @@ directory basename is `node_modules`:
 | `node_modules` (at any depth) | Installed dependencies and tool caches, including Vitest's `.vite/vitest/results.json`; lookalike names such as `node_modules-notes` remain fingerprinted |
 
 None of these is harness source. The guard does not broadly honor `.gitignore`, so everything it
-exists to protect stays fingerprinted:
-adding, modifying, or deleting a tracked source file under the live checkout still trips it.
+exists to protect stays fingerprinted. When the manifest changes, the engine asks Git to classify
+every differing live-checkout path. A modification or deletion that Git reports for an
+already-tracked file is treated as concurrent operator work and does not halt the build. Any
+untracked path, unexpected Git status, or failed Git classification still halts the build.
+
+Git identifies tracked state, not the process that wrote the file. The accepted residual gap is
+that a sandbox escape which modifies an already-tracked file is indistinguishable from an operator
+edit and is therefore not detected by this guard. Untracked-file and provider-state detection
+remain fail-closed.
 
 ### Provider-state exclusions
 
@@ -274,8 +281,10 @@ from an unrelated interactive session editing the same file. The accepted cost i
 session changing `settings.json` — or `config.toml`/`hooks.json` on Codex — during a build HALTs that
 build even though the build did nothing wrong.
 
-The practical consequence: **do not edit the harness checkout or your provider config while a
-self-host build is running.** Edit inside the feature worktree, or park the feature first.
+The practical consequence: editing or deleting an already-tracked harness file is safe while a
+self-host build runs. **Do not create untracked files in the live harness checkout or edit your
+provider config during the build.** Use the feature worktree for new files, or park the feature
+first.
 
 ## The engine republish loop
 
@@ -352,12 +361,13 @@ than launching a dangling-link environment; a self-build cannot run without it.
 live-boundary guard tripped on a path outside its exclusion lists. **The halt reason names the paths**
 — read it first rather than re-deriving the diff by hand. Each path is tagged `added`, `removed`, or
 `changed`; the list is capped at eight entries followed by `and N more`, and the counts are always
-exact. Typical causes are an editor save or a generated file in the live checkout, a `git` operation
-outside `.git`, or a provider config file such as `~/.claude/settings.json` touched by another
-session. If the named path is provider telemetry that no build would write, it belongs in the
-exclusion list above. The step that was running when it tripped is recorded with its own real verdict,
-so a re-kick resumes after it rather than repeating it; fix or re-baseline whatever changed, then
-unpark.
+exact. Typical causes are a generated untracked file in the live checkout, a `git` operation outside
+`.git`, or an editor save to a provider config file such as `~/.claude/settings.json` from another
+session. An ordinary edit or deletion of an already-tracked live-checkout file is classified by Git
+and does not produce this halt. If the named path is provider telemetry that no build would write,
+it belongs in the exclusion list above. The step that was running when it tripped is recorded with
+its own real verdict, so a re-kick resumes after it rather than repeating it; fix or re-baseline
+whatever changed, then unpark.
 
 **`daemon start` refuses with an install-drift message.** Run `bin/install --update` and retry. A
 stale install leaves newly added skills unregistered, and daemon-dispatched skills then fail
