@@ -1,5 +1,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Writable } from 'node:stream';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createRenderer } from '../../src/ui/create-renderer.js';
 import { createLiveRegion } from '../../src/ui/live-region.js';
 import type { ConductorEvent, ConductState } from '../../src/types/index.js';
@@ -167,7 +170,7 @@ describe('createRenderer', () => {
         await writeFile(join(root, '.docs/plans/2026-04-16-thing.md'), 'plan');
         const r2 = createRenderer({
           stateFilePath: '/tmp/test-state.json',
-          featureDesc: 'Add login',
+          featureDesc: '2026-04-16-thing',
           steps: ALL_STEPS,
           readStateFn: readStateMock,
           projectRoot: root,
@@ -175,6 +178,75 @@ describe('createRenderer', () => {
         });
         await r2({ type: 'step_completed', step: 'plan', status: 'done' });
         expect(s.output()).toContain('✓ .docs/plans/2026-04-16-thing.md');
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ['feature-a', '.docs/conflicts/feature-a.md', '.docs/conflicts/feature-b.md'],
+      ['feature-b', '.docs/conflicts/feature-b.md', '.docs/conflicts/feature-a.md'],
+    ])(
+      'shows only %s artifacts when neighbouring feature artifacts share the dashboard corpus',
+      async (featureDesc, expectedArtifact, foreignArtifact) => {
+        const root = await mkdtemp(join(tmpdir(), 'renderer-artifact-scope-'));
+        const s = new CaptureStream();
+        try {
+          await mkdir(join(root, '.docs/conflicts'), { recursive: true });
+          await writeFile(join(root, '.docs/conflicts/feature-a.md'), 'feature A');
+          await writeFile(join(root, '.docs/conflicts/feature-b.md'), 'feature B');
+          const scopedState: ConductState = {
+            feature_desc: featureDesc,
+            conflict_check: 'done',
+          };
+          const r2 = createRenderer({
+            stateFilePath: join(root, 'conduct-state.json'),
+            featureDesc,
+            steps: ALL_STEPS,
+            readStateFn: async () => ({ ok: true, value: scopedState }),
+            projectRoot: root,
+            liveRegion: createLiveRegion({ stream: s, forceTTY: false }),
+          });
+
+          await r2({ type: 'step_completed', step: 'conflict_check', status: 'done' });
+
+          expect({
+            expected: s.output().includes(expectedArtifact),
+            foreign: s.output().includes(foreignArtifact),
+          }).toEqual({ expected: true, foreign: false });
+        } finally {
+          await rm(root, { recursive: true, force: true });
+        }
+      },
+    );
+
+    it('renders an ambiguous foreign artifact corpus as unsatisfied', async () => {
+      const root = await mkdtemp(join(tmpdir(), 'renderer-artifact-ambiguous-'));
+      const s = new CaptureStream();
+      try {
+        await mkdir(join(root, '.docs/conflicts'), { recursive: true });
+        await writeFile(join(root, '.docs/conflicts/feature-a.md'), 'feature A');
+        await writeFile(join(root, '.docs/conflicts/feature-c.md'), 'feature C');
+        const scopedState: ConductState = {
+          feature_desc: 'feature-b',
+          conflict_check: 'done',
+        };
+        const r2 = createRenderer({
+          stateFilePath: join(root, 'conduct-state.json'),
+          featureDesc: 'feature-b',
+          steps: ALL_STEPS,
+          readStateFn: async () => ({ ok: true, value: scopedState }),
+          projectRoot: root,
+          liveRegion: createLiveRegion({ stream: s, forceTTY: false }),
+        });
+
+        await r2({ type: 'step_completed', step: 'conflict_check', status: 'done' });
+
+        expect({
+          missing: s.output().includes('.docs/conflicts/*.md — missing'),
+          featureA: s.output().includes('.docs/conflicts/feature-a.md'),
+          featureC: s.output().includes('.docs/conflicts/feature-c.md'),
+        }).toEqual({ missing: true, featureA: false, featureC: false });
       } finally {
         await rm(root, { recursive: true, force: true });
       }
