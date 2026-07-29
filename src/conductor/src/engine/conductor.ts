@@ -5256,16 +5256,7 @@ export class Conductor {
                 const escalation = await checkKickbackToBuildEscalation('build_review');
                 if (escalation.halt) {
                   const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
-                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                    () => {},
-                  );
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {
-                    /* best-effort marker */
-                  });
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -5427,16 +5418,7 @@ export class Conductor {
                 const escalation = await checkKickbackToBuildEscalation('wiring_check');
                 if (escalation.halt) {
                   const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
-                  await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                    () => {},
-                  );
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {
-                    /* best-effort marker */
-                  });
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -5586,16 +5568,7 @@ export class Conductor {
               const prdAuditEscalation = await checkKickbackToBuildEscalation('prd_audit');
               if (prdAuditEscalation.halt) {
                 const reason = `prd_audit kickback-to-build no-op: ${prdAuditEscalation.reason}`;
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  reason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -5746,16 +5719,7 @@ export class Conductor {
                 const reason =
                   `${finishGate ? 'finish' : 'as-built architecture review'} ` +
                   `kickback-to-build no-op: ${gateEscalation.reason}`;
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  reason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
