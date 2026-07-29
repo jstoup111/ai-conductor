@@ -198,7 +198,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Keep rebased features moving by safely rebaselining protected-artifact seals inherited from the base branch while classifying and logging genuine DECIDE-artifact violations ([issue #976](https://github.com/jstoup111/ai-conductor/issues/976); [implementation PR #1121](https://github.com/jstoup111/ai-conductor/pull/1121)).
 
 - BUILD now seeds `.pipeline/task-status.json` before every dispatch, independent of the retired attribution cutover, so progress appears immediately. Attribution remains advisory: malformed or unavailable telemetry cannot halt work. Removed the dead build-step enforcement marker, machinery preflight, zero-work kickback, and no-op post-dispatch/mutation hooks.
-
+- Preserve originating GitHub issue assignees throughout the engineer lifecycle so completion write-back cannot change feature ownership ({{IMPLEMENTATION_PR}}).
 - Standard and Full `pipeline` builds now turn each dependency-safe, non-overlapping ready frontier
   into one real provider-native fan-out of up to three tasks. Claude Code issues multiple Agent tool
   dispatches in one response and Codex issues multiple `collaboration.spawn_agent` calls in one
