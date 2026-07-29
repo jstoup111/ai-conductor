@@ -602,7 +602,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 ### Fixed
 
-- Keep build dispatches running by restoring and wiring missing session hooks at preflight, while requiring every restored hook to be an executable regular file that is not a symlink before attribution enforcement is armed ([#896](https://github.com/jstoup111/ai-conductor/issues/896); {{IMPLEMENTATION_PR}}).
+- Keep build dispatches running by restoring and wiring missing session hooks at preflight, while requiring every restored hook to be an executable regular file that is not a symlink before attribution enforcement is armed ([#896](https://github.com/jstoup111/ai-conductor/issues/896); [implementation PR #1142](https://github.com/jstoup111/ai-conductor/pull/1142)).
 
 - Self-host `provider-home` provisioning no longer symlinks the throwaway
   `CODEX_HOME`/`CLAUDE_CONFIG_DIR`'s `skills` (and Codex's `.agents/skills`) directly to
