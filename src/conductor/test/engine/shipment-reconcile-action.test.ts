@@ -53,6 +53,35 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
     });
   });
 
+  it('rejects when shipment reconciliation fails', async () => {
+    const dispatchShipmentEvidence = vi.fn(async () => 1);
+    const modulePath = ['../../src/engine', 'shipment-reconcile-action.js'].join('/');
+    const loaded = await import(modulePath) as {
+      runShipmentReconcileAction: (
+        input: {
+          github: object;
+          context: {
+            repo: { owner: string; repo: string };
+            payload: { pull_request: { number: number; html_url: string; merged_at: string } };
+          };
+          core: { info(message: string): void; error(message: string): void };
+          workspace: string;
+        },
+        deps: { dispatchShipmentEvidence: typeof dispatchShipmentEvidence },
+      ) => Promise<unknown>;
+    };
+
+    await expect(loaded.runShipmentReconcileAction({
+      github: {},
+      context: {
+        repo: { owner: 'acme', repo: 'conductor' },
+        payload: { pull_request: { number: 916, html_url: 'https://github.com/acme/conductor/pull/916', merged_at: '2026-07-29T14:25:30Z' } },
+      },
+      core: { info: vi.fn(), error: vi.fn() },
+      workspace: '/repo',
+    }, { dispatchShipmentEvidence })).rejects.toThrow('shipment reconciliation failed');
+  });
+
   it('translates every post-merge gh argv shape through the semantic adapter', async () => {
     const semanticCalls: Array<{ operation: string; input: unknown }> = [];
     const adapter = {

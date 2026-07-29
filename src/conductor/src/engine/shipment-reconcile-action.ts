@@ -286,7 +286,7 @@ export async function runShipmentReconcileAction(
     implementationPullRequest: { url: pullRequest.html_url, number: pullRequest.number },
   });
 
-  return (deps.dispatchShipmentEvidence ?? dispatchShipmentEvidence)(
+  const exitCode = await (deps.dispatchShipmentEvidence ?? dispatchShipmentEvidence)(
     { kind: 'reconcile', pr: pullRequest.html_url, shipped: pullRequest.merged_at.slice(0, 10) },
     input.workspace,
     {
@@ -295,4 +295,10 @@ export async function runShipmentReconcileAction(
       reportError: (message) => input.core.error(message),
     },
   );
+
+  if (exitCode !== 0) {
+    throw new Error(`shipment reconciliation failed with exit code ${exitCode}`);
+  }
+
+  return 0;
 }
