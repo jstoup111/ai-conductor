@@ -362,18 +362,34 @@ describe('rewriteWatch', () => {
 // ── Task 13: sweep decision tree ──────────────────────────────────────────────
 
 describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned', () => {
-  it('prunes a MERGED PR from the registry', async () => {
+  it('routes a MERGED PR through the shipped-record gate path', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const logs: string[] = [];
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(await readWatch(tmpDir)).toHaveLength(0);
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      teardownWorktree: async () => undefined,
+    });
+    expect(logs).toContain(`[mergeable-sweep] merged ${PR_URL} entering shipped-record gate`);
   });
 
-  it('prunes a CLOSED PR from the registry', async () => {
+  it('prunes a CLOSED PR without tearing down its retained worktree', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('CLOSED', 'UNKNOWN', [], []) });
+    let teardownCalls = 0;
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(await readWatch(tmpDir)).toHaveLength(0);
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      teardownWorktree: async () => {
+        teardownCalls += 1;
+      },
+    });
+    expect({ survivors: await readWatch(tmpDir), teardownCalls }).toEqual({
+      survivors: [],
+      teardownCalls: 0,
+    });
   });
 
   it('prunes a not-found / gone PR (simulated as CLOSED) from the registry', async () => {
@@ -395,9 +411,19 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     const { gh } = makeFakeGh({
       [PR_URL]: err,
     });
+    let teardownCalls = 0;
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(await readWatch(tmpDir)).toHaveLength(0);
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      teardownWorktree: async () => {
+        teardownCalls += 1;
+      },
+    });
+    expect({ survivors: await readWatch(tmpDir), teardownCalls }).toEqual({
+      survivors: [],
+      teardownCalls: 0,
+    });
   });
 
   it('prunes on a structured GraphQL not-found signal in stderr with a non-zero exit code', async () => {

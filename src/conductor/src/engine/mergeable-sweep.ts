@@ -8,7 +8,7 @@
  *   - rewriteWatch   — overwrite the file; swallow write failures (C3).
  *
  * sweepMergeableLabels — for each tracked PR:
- *   1. MERGED / CLOSED → prune (FR-13).
+ *   1. MERGED → enter the shipped-record gate path; CLOSED / NOTFOUND → prune (FR-13).
  *   2. UNKNOWN state (read error) → log + skip (FR-15).
  *   3. labels includes `needs-remediation` → ensure `mergeable` absent (FR-12).
  *   4. isMergeable → add `mergeable` if not already present (FR-10, C2).
@@ -31,6 +31,7 @@ import {
   type PrMergeState,
 } from './pr-labels.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { FeatureWorktree } from './daemon-runner.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -234,6 +235,12 @@ export interface SweepOpts {
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
+  /**
+   * Optional worktree teardown seam for the MERGED shipped-record gate.
+   * The gate authorizes calls beginning in Task 8; CLOSED and NOTFOUND never
+   * use this dependency.
+   */
+  teardownWorktree?: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -267,14 +274,18 @@ export async function sweepMergeableLabels({
       try {
         const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
 
-        // FR-13: MERGED / CLOSED / NOTFOUND → prune from registry.
-        // NOTFOUND means the PR is genuinely gone (404 / deleted); prune it so
-        // the watch registry does not grow without bound.
-        if (
-          state.state === 'MERGED' ||
-          state.state === 'CLOSED' ||
-          state.state === 'NOTFOUND'
-        ) {
+        // MERGED has a distinct disposition: it enters the shipped-record gate
+        // path. Task 8 adds the record probe and the authorized teardown call;
+        // until then, preserve the existing registry-prune behavior.
+        if (state.state === 'MERGED') {
+          log?.(`[mergeable-sweep] merged ${entry.prUrl} entering shipped-record gate`);
+          continue; // not added to survivors
+        }
+
+        // FR-13: CLOSED / NOTFOUND → prune the registry entry while retaining
+        // the worktree. NOTFOUND means the PR is genuinely gone (404 /
+        // deleted); pruning prevents unbounded registry growth.
+        if (state.state === 'CLOSED' || state.state === 'NOTFOUND') {
           log?.(`[mergeable-sweep] pruning ${entry.prUrl} (state: ${state.state})`);
           continue; // not added to survivors
         }
