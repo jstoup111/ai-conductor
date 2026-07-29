@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -117,8 +116,8 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
   );
 });
 
-describe('real binary provider-labelled contract drift', () => {
-  it('flushes the complete drift diagnostic before exiting', async () => {
+describe('public CLI provider-labelled contract drift', () => {
+  it('returns the complete drift diagnostic', async () => {
     dir = await mkdtemp(join(tmpdir(), 'generate-model-table-diagnostic-flush-'));
     const fixtureHarness = join(dir, 'HARNESS.md');
     const staleRow =
@@ -126,23 +125,11 @@ describe('real binary provider-labelled contract drift', () => {
     const largeDriftFixture = MARKED_FIXTURE.replace(staleRow, `${staleRow}\n`.repeat(5_000));
     await writeFile(fixtureHarness, largeDriftFixture, 'utf8');
 
-    const result = spawnSync(
-      'bash',
-      [join(harnessRoot, 'bin', 'generate-model-table'), '--check'],
-      {
-        cwd: harnessRoot,
-        env: {
-          ...process.env,
-          GENERATE_MODEL_TABLE_HARNESS_MD: fixtureHarness,
-        },
-        encoding: 'utf8',
-        maxBuffer: 10 * 1024 * 1024,
-      },
-    );
-    const output = `${result.stdout}${result.stderr}`;
+    const result = await runCli({ harnessMdPath: fixtureHarness, mode: 'check' });
+    const output = result.message ?? '';
 
     expect({
-      status: result.status,
+      status: result.exitCode,
       hasDiffHeader: /^--- a\/.*HARNESS\.md$/m.test(output),
       hasRemediation: output.includes('Run `bin/generate-model-table`'),
     }).toEqual({
@@ -277,23 +264,12 @@ describe('real binary provider-labelled contract drift', () => {
       const results = [];
       for (const { category, document, removed, restored } of mutations) {
         await writeFile(fixtureHarness, document, 'utf8');
-        const result = spawnSync(
-          'bash',
-          [join(harnessRoot, 'bin', 'generate-model-table'), '--check'],
-          {
-            cwd: harnessRoot,
-            env: {
-              ...process.env,
-              GENERATE_MODEL_TABLE_HARNESS_MD: fixtureHarness,
-            },
-            encoding: 'utf8',
-          },
-        );
-        const output = `${result.stdout}${result.stderr}`;
+        const result = await runCli({ harnessMdPath: fixtureHarness, mode: 'check' });
+        const output = result.message ?? '';
         results.push({
           category,
           seeded: document !== committed,
-          driftExit: result.status === 1,
+          driftExit: result.exitCode === 1,
           unifiedDiff:
             /^--- a\/.*HARNESS\.md$/m.test(output) && /^\+\+\+ b\/.*HARNESS\.md$/m.test(output),
           usefulDatum:
