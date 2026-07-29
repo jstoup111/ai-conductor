@@ -11,7 +11,11 @@ import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { HALT_MARKER, writeHaltMarker } from './halt-marker.js';
+import {
+  HALT_MARKER,
+  PROTECTED_ARTIFACT_HALT_CLASS,
+  writeHaltMarker,
+} from './halt-marker.js';
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type {
   AuthenticationReadiness,
@@ -4016,7 +4020,11 @@ export class Conductor {
             // here. Retryable per existing step-retry semantics, not a
             // bypass of them.
             if (attempt >= 2) {
-              await writeHaltMarker(this.projectRoot, dispatchIssue);
+              await writeHaltMarker(
+                this.projectRoot,
+                dispatchIssue,
+                PROTECTED_ARTIFACT_HALT_CLASS,
+              );
             }
             // T7 invariant: EVERY build-step exit path records
             // `lastResolvedCount`. This exit short-circuits before any build

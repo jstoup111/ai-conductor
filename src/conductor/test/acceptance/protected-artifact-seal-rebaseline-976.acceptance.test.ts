@@ -59,7 +59,12 @@ import {
   verifyProtectedArtifactSeal,
   PROTECTED_ARTIFACT_SEAL_PATH,
 } from '../../src/engine/protected-artifact-seal.js';
-import { HALT_CLASS_MARKER, HALT_MARKER, readHaltClass } from '../../src/engine/halt-marker.js';
+import {
+  HALT_CLASS_MARKER,
+  HALT_MARKER,
+  PROTECTED_ARTIFACT_HALT_CLASS,
+  readHaltClass,
+} from '../../src/engine/halt-marker.js';
 
 const execFile = promisify(execFileCb);
 
@@ -616,6 +621,29 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('ST-976-3: a feature-authored mutation still blocks across a rebase', () => {
+  it(
+    'classifies a genuine feature-authored protected-artifact violation',
+    async () => {
+      const scratch = await makeFeatureRepo();
+      const { repo, g } = scratch;
+      await writeRepoFile(repo, OTHER_PLAN, 'feature-authored edit\n');
+      await g(['add', '-A']);
+      await g(['commit', '-q', '-m', 'build: edit an approved plan']);
+      const strandedBaseline = (await g(['rev-parse', 'HEAD~1'])).stdout.trim();
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: strandedBaseline });
+      await advanceMain(scratch, { 'unrelated.ts': 'main1\n' });
+      await g(['rebase', '-q', 'origin/main']);
+
+      await runBuildStep(repo, 2);
+
+      expect([PROTECTED_ARTIFACT_HALT_CLASS, await readHaltClass(repo)]).toEqual([
+        'protected-artifact',
+        'protected-artifact',
+      ]);
+    },
+    30000,
+  );
+
   it(
     'happy: a committed edit to a DECIDE artifact refuses rotation after a rebase, naming the path and identifying it as feature-authored',
     async () => {
