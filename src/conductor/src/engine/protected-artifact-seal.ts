@@ -44,7 +44,6 @@ export interface ProtectedArtifactSeal {
 
 export interface EvaluateProtectedArtifactSealRotationInput {
   seal: ProtectedArtifactSeal;
-  headCommit: string;
   baselineAncestry: 'ancestor' | 'non-ancestor' | 'unresolvable';
   workspaceArtifacts: ReadonlyMap<string, Buffer>;
   headArtifacts: ReadonlyMap<string, Buffer>;
@@ -453,7 +452,6 @@ export async function evaluateProtectedArtifactSealRotationInRepository({
   }
   return evaluateProtectedArtifactSealRotation({
     seal,
-    headCommit,
     baselineAncestry,
     workspaceArtifacts: workspace.artifacts,
     headArtifacts,
@@ -642,76 +640,7 @@ export async function verifyProtectedArtifactSeal(
   options: VerifyProtectedArtifactSealOptions,
 ): Promise<ProtectedArtifactSealVerdict> {
   const existing = await readExistingSeal(join(options.projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
-  if (existing) {
-    const inspection = await inspectSeal(
-      options.projectRoot,
-      existing,
-      options.featureDesc,
-      options.baseBranch,
-    );
-    if (!options.baseBranch) return inspection;
-
-    const head = await execa(
-      'git',
-      ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
-      { cwd: options.projectRoot, reject: false },
-    ).catch(() => undefined);
-    if (!head || head.exitCode !== 0 || head.stdout.length === 0) {
-      await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: 'head-unresolvable' });
-      return { ok: false, reason: 'Protected artifact seal HEAD is unresolvable' };
-    }
-
-    const baseTipRef = await resolveBaseTipRef(options.projectRoot, options.baseBranch);
-    if (!baseTipRef) {
-      await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: 'base-tip-unresolved' });
-      return inspection;
-    }
-    const rotation = await evaluateProtectedArtifactSealRotationInRepository({
-      projectRoot: options.projectRoot,
-      seal: existing,
-      headCommit: head.stdout,
-      baseTipRef,
-    });
-    if (!rotation.permitted) {
-      if (rotation.condition !== 'same-history-ancestor') {
-        await emitRotationRefusal(options.onRebaseline, rotation);
-      }
-      if (rotation.condition === 'same-history-ancestor' || rotation.condition === 'base-tip-unresolved') {
-        return inspection;
-      }
-      if (
-        rotation.condition === 'workspace-differs-from-head'
-        && !inspection.ok
-        && inspection.reason.startsWith('Indeterminate protected artifact target')
-      ) {
-        return inspection;
-      }
-      if (rotation.condition === 'baseline-unresolvable') {
-        return {
-          ok: false,
-          reason: `Protected artifact seal baseline is unresolvable: ${existing.baselineCommit}`,
-        };
-      }
-      if (rotation.condition === 'head-unresolvable') {
-        return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${head.stdout}` };
-      }
-      return {
-        ok: false,
-        reason: `Feature-authored protected artifact change cannot rotate seal: ${rotation.path}`,
-      };
-    }
-    if (rotation.paths.length === 0) return inspection;
-
-    const seal = await rotateProtectedArtifactSeal({
-      projectRoot: options.projectRoot,
-      seal: existing,
-      toCommit: head.stdout,
-      trigger: 'defensive-history-rewrite',
-      paths: rotation.paths,
-      onRebaseline: options.onRebaseline,
-    });
-    return { ok: true, seal, selfAmendments: [] };
-  }
+  if (existing) return verifyExistingProtectedArtifactSeal(options, existing);
   if (!options.baselineCommit) {
     return { ok: false, reason: 'Protected artifact seal is missing' };
   }
@@ -721,6 +650,144 @@ export async function verifyProtectedArtifactSeal(
     options.featureDesc,
     options.baseBranch,
   );
+}
+
+type ProtectedArtifactSealRotationContext =
+  | { resolved: false; condition: 'head-unresolvable' | 'base-tip-unresolved' }
+  | { resolved: true; headCommit: string; baseTipRef: string };
+
+async function resolveProtectedArtifactSealRotationContext(
+  projectRoot: string,
+  baseBranch: string,
+): Promise<ProtectedArtifactSealRotationContext> {
+  const head = await execa(
+    'git',
+    ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+    { cwd: projectRoot, reject: false },
+  ).catch(() => undefined);
+  if (!head || head.exitCode !== 0 || head.stdout.length === 0) {
+    return { resolved: false, condition: 'head-unresolvable' };
+  }
+  const baseTipRef = await resolveBaseTipRef(projectRoot, baseBranch);
+  return baseTipRef
+    ? { resolved: true, headCommit: head.stdout, baseTipRef }
+    : { resolved: false, condition: 'base-tip-unresolved' };
+}
+
+function rotationRefusalVerdict(
+  rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+  inspection: ProtectedArtifactSealVerdict,
+  seal: ProtectedArtifactSeal,
+  headCommit: string,
+): ProtectedArtifactSealVerdict {
+  if (rotationRefusalPreservesInspection(rotation, inspection)) return inspection;
+  if (rotation.condition === 'baseline-unresolvable') {
+    return {
+      ok: false,
+      reason: `Protected artifact seal baseline is unresolvable: ${seal.baselineCommit}`,
+    };
+  }
+  if (rotation.condition === 'head-unresolvable') {
+    return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}` };
+  }
+  if (!('path' in rotation)) return inspection;
+  return {
+    ok: false,
+    reason: `Feature-authored protected artifact change cannot rotate seal: ${rotation.path}`,
+  };
+}
+
+function rotationRefusalPreservesInspection(
+  rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+  inspection: ProtectedArtifactSealVerdict,
+): boolean {
+  return rotation.condition === 'same-history-ancestor'
+    || rotation.condition === 'base-tip-unresolved'
+    || (
+      rotation.condition === 'workspace-differs-from-head'
+      && !inspection.ok
+      && inspection.reason.startsWith('Indeterminate protected artifact target')
+    );
+}
+
+async function reportRotationRefusal(
+  observer: ProtectedArtifactSealRebaselineObserver | undefined,
+  rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+): Promise<void> {
+  if (rotation.condition !== 'same-history-ancestor') {
+    await emitRotationRefusal(observer, rotation);
+  }
+}
+
+interface ApplyPermittedProtectedArtifactSealRotationInput {
+  options: VerifyProtectedArtifactSealOptions;
+  seal: ProtectedArtifactSeal;
+  headCommit: string;
+  paths: string[];
+  inspection: ProtectedArtifactSealVerdict;
+}
+
+async function applyPermittedProtectedArtifactSealRotation(
+  {
+    options,
+    seal,
+    headCommit,
+    paths,
+    inspection,
+  }: ApplyPermittedProtectedArtifactSealRotationInput,
+): Promise<ProtectedArtifactSealVerdict> {
+  if (paths.length === 0) return inspection;
+  const rotated = await rotateProtectedArtifactSeal({
+    projectRoot: options.projectRoot,
+    seal,
+    toCommit: headCommit,
+    trigger: 'defensive-history-rewrite',
+    paths,
+    onRebaseline: options.onRebaseline,
+  });
+  return { ok: true, seal: rotated, selfAmendments: [] };
+}
+
+async function verifyExistingProtectedArtifactSeal(
+  options: VerifyProtectedArtifactSealOptions,
+  seal: ProtectedArtifactSeal,
+): Promise<ProtectedArtifactSealVerdict> {
+  const inspection = await inspectSeal(
+    options.projectRoot,
+    seal,
+    options.featureDesc,
+    options.baseBranch,
+  );
+  if (!options.baseBranch) return inspection;
+
+  const context = await resolveProtectedArtifactSealRotationContext(
+    options.projectRoot,
+    options.baseBranch,
+  );
+  if (!context.resolved) {
+    await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: context.condition });
+    return context.condition === 'head-unresolvable'
+      ? { ok: false, reason: 'Protected artifact seal HEAD is unresolvable' }
+      : inspection;
+  }
+
+  const rotation = await evaluateProtectedArtifactSealRotationInRepository({
+    projectRoot: options.projectRoot,
+    seal,
+    headCommit: context.headCommit,
+    baseTipRef: context.baseTipRef,
+  });
+  if (!rotation.permitted) {
+    await reportRotationRefusal(options.onRebaseline, rotation);
+    return rotationRefusalVerdict(rotation, inspection, seal, context.headCommit);
+  }
+  return applyPermittedProtectedArtifactSealRotation({
+    options,
+    seal,
+    headCommit: context.headCommit,
+    paths: rotation.paths,
+    inspection,
+  });
 }
 
 /**

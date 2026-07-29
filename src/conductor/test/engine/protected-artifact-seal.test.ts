@@ -146,7 +146,6 @@ describe('evaluateProtectedArtifactSealRotation', () => {
 
     const result = evaluateProtectedArtifactSealRotation({
       seal,
-      headCommit: 'rebased-head',
       baselineAncestry: 'non-ancestor',
       workspaceArtifacts: new Map([[addedPath, addedBytes]]),
       headArtifacts: new Map([[addedPath, addedBytes]]),
@@ -173,7 +172,6 @@ describe('evaluateProtectedArtifactSealRotation', () => {
     };
     const input = {
       seal,
-      headCommit: 'rebased-head',
       baselineAncestry: 'non-ancestor' as const,
       workspaceArtifacts: new Map([[path, workspaceBytes]]),
       headArtifacts: new Map([[path, workspaceBytes]]),
