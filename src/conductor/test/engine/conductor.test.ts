@@ -5360,6 +5360,8 @@ describe('engine/conductor', () => {
           ]),
         ),
         haltReasons,
+        haltBody: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
       }).toEqual({
         calls: { manual_test: 1, prd_audit: 1, architecture_review_as_built: 1 },
         haltReasons: [
@@ -5367,6 +5369,8 @@ describe('engine/conductor', () => {
             /Codex permission review denied[\s\S]*selected api-key source[\s\S]*re-scope[\s\S]*re-queue/i,
           ),
         ],
+        haltBody: haltReasons[0] + '\n',
+        haltClass: 'needs-human',
       });
     });
 
@@ -9566,9 +9570,13 @@ describe('engine/conductor', () => {
       expect({
         calls: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length,
         haltReasons,
+        haltBody: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
       }).toEqual({
         calls: 1,
         haltReasons: [expect.stringMatching(/Codex permission review denied[\s\S]*cached-login/i)],
+        haltBody: haltReasons[0] + '\n',
+        haltClass: 'needs-human',
       });
     });
 

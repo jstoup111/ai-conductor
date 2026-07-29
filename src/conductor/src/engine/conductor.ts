@@ -3129,11 +3129,7 @@ export class Conductor {
                 '.\n' +
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
-              await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-              await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), haltReason + '\n', 'utf-8')
-                .catch(() => {
-                  /* best-effort marker */
-                });
+              await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(haltReason);
               await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
@@ -4267,11 +4263,7 @@ export class Conductor {
               '.\n' +
               'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
               (detail ? `\nProvider detail: ${detail}` : '');
-            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-            await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), haltReason + '\n', 'utf-8')
-              .catch(() => {
-                /* best-effort marker */
-              });
+            await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
             await writeState(this.stateFilePath, state);
             const prUrl = await this.surfaceRemediationPr(haltReason);
             await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
