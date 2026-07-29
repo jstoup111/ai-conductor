@@ -622,7 +622,66 @@ export async function verifyProtectedArtifactSeal(
 ): Promise<ProtectedArtifactSealVerdict> {
   const existing = await readExistingSeal(join(options.projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
   if (existing) {
-    return inspectSeal(options.projectRoot, existing, options.featureDesc, options.baseBranch);
+    const inspection = await inspectSeal(
+      options.projectRoot,
+      existing,
+      options.featureDesc,
+      options.baseBranch,
+    );
+    if (!options.baseBranch) return inspection;
+
+    const head = await execa(
+      'git',
+      ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+      { cwd: options.projectRoot, reject: false },
+    ).catch(() => undefined);
+    if (!head || head.exitCode !== 0 || head.stdout.length === 0) {
+      return { ok: false, reason: 'Protected artifact seal HEAD is unresolvable' };
+    }
+
+    const baseTipRef = await resolveBaseTipRef(options.projectRoot, options.baseBranch);
+    if (!baseTipRef) return inspection;
+    const rotation = await evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: options.projectRoot,
+      seal: existing,
+      headCommit: head.stdout,
+      baseTipRef,
+    });
+    if (!rotation.permitted) {
+      if (rotation.condition === 'same-history-ancestor' || rotation.condition === 'base-tip-unresolved') {
+        return inspection;
+      }
+      if (
+        rotation.condition === 'workspace-differs-from-head'
+        && !inspection.ok
+        && inspection.reason.startsWith('Indeterminate protected artifact target')
+      ) {
+        return inspection;
+      }
+      if (rotation.condition === 'baseline-unresolvable') {
+        return {
+          ok: false,
+          reason: `Protected artifact seal baseline is unresolvable: ${existing.baselineCommit}`,
+        };
+      }
+      if (rotation.condition === 'head-unresolvable') {
+        return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${head.stdout}` };
+      }
+      return {
+        ok: false,
+        reason: `Feature-authored protected artifact change cannot rotate seal: ${rotation.path}`,
+      };
+    }
+    if (rotation.paths.length === 0) return inspection;
+
+    const seal = await rotateProtectedArtifactSeal({
+      projectRoot: options.projectRoot,
+      seal: existing,
+      toCommit: head.stdout,
+      trigger: 'defensive-history-rewrite',
+      paths: rotation.paths,
+    });
+    return { ok: true, seal, selfAmendments: [] };
   }
   if (!options.baselineCommit) {
     return { ok: false, reason: 'Protected artifact seal is missing' };

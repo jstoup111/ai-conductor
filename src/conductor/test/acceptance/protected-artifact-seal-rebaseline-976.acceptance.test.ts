@@ -438,6 +438,15 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
       const { repo, g } = scratch;
       const strandedBaseline = await head(scratch);
       await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: strandedBaseline });
+      const currentSeal = await readSeal(repo);
+      await writeFile(
+        join(repo, PROTECTED_ARTIFACT_SEAL_PATH),
+        `${JSON.stringify({
+          version: 1,
+          baselineCommit: currentSeal.baselineCommit,
+          protectedArtifacts: currentSeal.protectedArtifacts,
+        }, null, 2)}\n`,
+      );
       const v1Seal = await readSeal(repo);
       expect(v1Seal.version).toBe(1); // the pre-change on-disk shape, upgraded below
 
