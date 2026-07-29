@@ -1,6 +1,6 @@
 import { execFile as execFileCallback } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
@@ -11,6 +11,7 @@ import {
   evaluateProtectedArtifactSealRotation,
   evaluateProtectedArtifactSealRotationInRepository,
   isActiveStepArtifactException,
+  rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
 
@@ -219,6 +220,125 @@ describe('evaluateProtectedArtifactSealRotation', () => {
       headCommit: await git(repo, ['rev-parse', 'HEAD']),
       baseTipRef: 'main',
     })).resolves.toEqual({ permitted: false, condition: 'baseline-unresolvable' });
+  });
+});
+
+describe('rotateProtectedArtifactSeal', () => {
+  it('atomically persists the toCommit snapshot while preserving and appending rebaseline lineage', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [{
+        fromCommit: 'earlier-baseline',
+        toCommit: baselineCommit,
+        trigger: 'earlier-history-rewrite',
+        paths: ['.docs/plans/earlier.md'],
+      }],
+    };
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(seal, null, 2)}\n`);
+    await writeProjectFile(repo, '.docs/plans/feature.md', 'rebased plan\n');
+    await git(repo, ['add', '.docs/plans/feature.md']);
+    await git(repo, ['commit', '-q', '-m', 'rebase inherited plan']);
+    const toCommit = await git(repo, ['rev-parse', 'HEAD']);
+
+    const rotated = await rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit,
+      trigger: 'history-rewrite',
+      paths: ['.docs/plans/feature.md'],
+    });
+    const persisted = JSON.parse(
+      await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
+    );
+
+    expect({
+      rotated,
+      persisted,
+      sealDirectoryEntries: await readdir(join(repo, '.pipeline')),
+    }).toEqual({
+      rotated: {
+        version: 2,
+        baselineCommit: toCommit,
+        protectedArtifacts: [{
+          path: '.docs/plans/feature.md',
+          fingerprint: `sha256:${createHash('sha256').update('rebased plan\n').digest('hex')}`,
+        }],
+        rebaselines: [
+          seal.rebaselines[0],
+          {
+            fromCommit: baselineCommit,
+            toCommit,
+            trigger: 'history-rewrite',
+            paths: ['.docs/plans/feature.md'],
+          },
+        ],
+      },
+      persisted: rotated,
+      sealDirectoryEntries: ['protected-artifact-seal.json'],
+    });
+  });
+
+  it('removes the temporary seal and preserves the destination when atomic rename fails', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const seal = {
+      version: 2 as const,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const originalBytes = `${JSON.stringify(seal, null, 2)}\n`;
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, originalBytes);
+    const protocol: string[] = [];
+
+    const rejection = await rotateProtectedArtifactSeal({
+      projectRoot: repo,
+      seal,
+      toCommit: baselineCommit,
+      trigger: 'history-rewrite',
+      paths: ['.docs/plans/feature.md'],
+      fileOperations: {
+        writeFile: async (...args: Parameters<typeof writeFile>) => {
+          protocol.push(args[0] === sealPath ? 'write-destination' : 'write-temp');
+          await writeFile(...args);
+        },
+        rename: async (...args: Parameters<typeof rename>) => {
+          await readFile(args[0]);
+          protocol.push('rename');
+          throw new Error('injected rename failure');
+        },
+        rm: async (...args: Parameters<typeof rm>) => {
+          protocol.push(args[0] === sealPath ? 'rm-destination' : 'rm-temp');
+          await rm(...args);
+        },
+      },
+    }).then(() => 'resolved', (error: Error) => error.message);
+
+    expect({
+      protocol,
+      rejection,
+      persistedBytes: await readFile(sealPath, 'utf8'),
+      sealDirectoryEntries: await readdir(join(repo, '.pipeline')),
+    }).toEqual({
+      protocol: ['write-temp', 'rename', 'rm-temp'],
+      rejection: 'injected rename failure',
+      persistedBytes: originalBytes,
+      sealDirectoryEntries: ['protected-artifact-seal.json'],
+    });
   });
 });
 

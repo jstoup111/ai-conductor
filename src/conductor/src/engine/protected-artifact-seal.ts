@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
 import { resolveDocsAllowlist } from './phase-marker.js';
@@ -82,6 +82,21 @@ export interface CreateProtectedArtifactSealOptions {
   projectRoot: string;
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
   baselineCommit: string;
+}
+
+export interface ProtectedArtifactSealFileOperations {
+  writeFile(path: string, content: string): Promise<unknown>;
+  rename(from: string, to: string): Promise<unknown>;
+  rm(path: string, options: { force: true }): Promise<unknown>;
+}
+
+export interface RotateProtectedArtifactSealOptions {
+  projectRoot: string;
+  seal: ProtectedArtifactSeal;
+  toCommit: string;
+  trigger: string;
+  paths: string[];
+  fileOperations?: ProtectedArtifactSealFileOperations;
 }
 
 export interface VerifyProtectedArtifactSealOptions {
@@ -642,5 +657,40 @@ export async function createProtectedArtifactSeal(
     const concurrentSeal = await readExistingSeal(sealPath);
     if (!concurrentSeal) throw error;
     return concurrentSeal;
+  }
+}
+
+export async function rotateProtectedArtifactSeal({
+  projectRoot,
+  seal,
+  toCommit,
+  trigger,
+  paths,
+  fileOperations = { writeFile, rename, rm },
+}: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  const recomputed = await createSeal({ projectRoot, baselineCommit: toCommit });
+  const rotated: ProtectedArtifactSeal = {
+    ...recomputed,
+    rebaselines: [
+      ...seal.rebaselines,
+      { fromCommit: seal.baselineCommit, toCommit, trigger, paths },
+    ],
+  };
+  const sealPath = join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH);
+  const temporaryPath = join(dirname(sealPath), `.${basename(sealPath)}.${randomUUID()}.tmp`);
+
+  await mkdir(dirname(sealPath), { recursive: true });
+  let operationFailed = false;
+  try {
+    await fileOperations.writeFile(temporaryPath, `${JSON.stringify(rotated, null, 2)}\n`);
+    await fileOperations.rename(temporaryPath, sealPath);
+    return rotated;
+  } catch (error) {
+    operationFailed = true;
+    throw error;
+  } finally {
+    await fileOperations.rm(temporaryPath, { force: true }).catch((error: unknown) => {
+      if (!operationFailed) throw error;
+    });
   }
 }
