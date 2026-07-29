@@ -101,6 +101,27 @@ describe('live self-host boundary', () => {
     } finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('fails closed when Git classification cannot inspect the live checkout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-git-failure-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await rm(join(live, '.git'), { recursive: true });
+    await writeFile(join(live, 'README.md'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('changed README.md'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts a feature-worktree mutation while live checkout and unrelated provider state remain identical', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-'));
     const live = join(root, 'live'); const worktree = join(root, 'worktree'); const provider = join(root, 'provider');
