@@ -32,6 +32,23 @@ export interface ChangelogPrFinalizerRunners {
   rm: (path: string) => Promise<void>;
 }
 
+export function branchNewImplementationPrTokenLineIndexes(
+  changelog: string,
+  baseChangelogContent: string | null,
+): number[] | null {
+  const tokenLines = changelog
+    .split('\n')
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.includes(IMPLEMENTATION_PR_TOKEN));
+  if (tokenLines.length === 0) return [];
+  if (baseChangelogContent === null) return null;
+
+  const baseLines = new Set(baseChangelogContent.split('\n'));
+  return tokenLines
+    .filter(({ line }) => !baseLines.has(line))
+    .map(({ index }) => index);
+}
+
 export async function finalizeChangelogPr(
   changelogPath: string,
   prUrl: string,
@@ -84,15 +101,10 @@ export async function finalizeChangelogPr(
   const replacement = `[implementation PR #${match[1]}](${prUrl})`;
   let updatedChangelog: string;
 
-  if (tokenCount === 1) {
-    updatedChangelog = changelog.replace(IMPLEMENTATION_PR_TOKEN, replacement);
-  } else if (baseChangelogContent != null) {
-    const baseLines = new Set(baseChangelogContent.split('\n'));
+  if (baseChangelogContent != null) {
     const lines = changelog.split('\n');
-    const newTokenLineIndexes = lines
-      .map((line, index) => ({ line, index }))
-      .filter(({ line }) => line.includes(IMPLEMENTATION_PR_TOKEN) && !baseLines.has(line))
-      .map(({ index }) => index);
+    const newTokenLineIndexes =
+      branchNewImplementationPrTokenLineIndexes(changelog, baseChangelogContent) ?? [];
 
     // Every token line this branch introduced belongs to this PR, so all of
     // them take this PR's link — a PR may legitimately ship more than one
@@ -105,6 +117,8 @@ export async function finalizeChangelogPr(
       lines[index] = lines[index].replaceAll(IMPLEMENTATION_PR_TOKEN, replacement);
     }
     updatedChangelog = lines.join('\n');
+  } else if (tokenCount === 1) {
+    updatedChangelog = changelog.replace(IMPLEMENTATION_PR_TOKEN, replacement);
   } else {
     throw new Error('multiple implementation PR tokens found');
   }
@@ -127,7 +141,7 @@ export async function finalizeChangelogPr(
  * means `finalizeChangelogPr` falls back to its strict single-token
  * behavior — never a hard failure of the finalize command itself.
  */
-async function resolveBaseChangelogContent(git: GitRunner): Promise<string | null> {
+export async function resolveBaseChangelogContent(git: GitRunner): Promise<string | null> {
   try {
     const resolution = await resolveFreshBase(git);
     const mergeBase = await git(['merge-base', resolution.ref, 'HEAD']);

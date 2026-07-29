@@ -33,6 +33,10 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
+import {
+  branchNewImplementationPrTokenLineIndexes,
+  resolveBaseChangelogContent,
+} from './changelog-pr-finalizer-cli.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -2680,7 +2684,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       if (choice === 'pr') {
         try {
           const changelog = await readFile(join(dir, 'CHANGELOG.md'), 'utf-8');
-          if (changelog.includes('{{IMPLEMENTATION_PR}}')) {
+          const branchNewTokenLines = branchNewImplementationPrTokenLineIndexes(
+            changelog,
+            await resolveBaseChangelogContent(ctx.git ?? makeGitRunner(dir)),
+          );
+          if (branchNewTokenLines === null || branchNewTokenLines.length > 0) {
             return {
               done: false,
               reason: `CHANGELOG.md still contains an unsubstituted {{IMPLEMENTATION_PR}} token — run 'conduct-ts finalize-changelog-pr --pr-url ${prUrl}', commit, and push before finish can complete`,
