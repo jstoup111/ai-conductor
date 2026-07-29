@@ -25,7 +25,10 @@ const fixtureTouchedPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/touched.txt', import.meta.url),
 );
 
-function createFixtureAgentFake(worktreeDir: string) {
+function createFixtureAgentFake(
+  worktreeDir: string,
+  fixtureOptions: { omitTaskTrailer?: boolean } = {},
+) {
   return createCodexProviderFake((options) => {
     if (options.prompt.includes('.pipeline/build-review.json')) {
       mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
@@ -76,11 +79,15 @@ function createFixtureAgentFake(worktreeDir: string) {
     mkdirSync(join(worktreeDir, 'test/fixtures/daemon-e2e'), { recursive: true });
     writeFileSync(join(worktreeDir, touchedPath), `fixture task ${taskId}\n`, 'utf-8');
     execFileSync('git', ['add', touchedPath], { cwd: worktreeDir });
-    execFileSync(
-      'git',
-      ['commit', '-m', 'test: complete fixture task', '-m', `Task: ${taskId}`],
-      { cwd: worktreeDir },
-    );
+    try {
+      execFileSync('git', ['diff', '--cached', '--quiet'], { cwd: worktreeDir });
+    } catch {
+      const commitArgs = ['commit', '-m', 'test: complete fixture task'];
+      if (!fixtureOptions.omitTaskTrailer) {
+        commitArgs.push('-m', `Task: ${taskId}`);
+      }
+      execFileSync('git', commitArgs, { cwd: worktreeDir });
+    }
 
     return {
       success: true,
@@ -294,6 +301,104 @@ describe('daemon E2E fixture', () => {
         done: true,
         halt: false,
         parked: false,
+      });
+    } finally {
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('halts when the fixture commit omits its Task 1 evidence trailer', async () => {
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-no-evidence-'));
+    const slug = 'daemon-e2e-fixture';
+    const pipelineDir = join(worktreeDir, '.pipeline');
+    const statePath = join(pipelineDir, 'conduct-state.json');
+    const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
+
+    try {
+      await initTestRepo(worktreeDir);
+      await mkdir(join(worktreeDir, '.docs/plans'), { recursive: true });
+      await mkdir(join(worktreeDir, '.docs/stories'), { recursive: true });
+      await mkdir(join(worktreeDir, 'test/fixtures/daemon-e2e'), {
+        recursive: true,
+      });
+      await copyFile(fixturePlanPath, planPath);
+      await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
+      await copyFile(
+        fixtureTouchedPath,
+        join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'),
+      );
+      await execa('git', ['add', '-A'], { cwd: worktreeDir });
+      await execa(
+        'git',
+        ['commit', '-m', 'test: seed daemon E2E fixture', '-m', 'Task: T0'],
+        { cwd: worktreeDir },
+      );
+      await execa('git', ['checkout', '-b', 'feature/daemon-e2e-no-evidence'], {
+        cwd: worktreeDir,
+      });
+
+      await mkdir(pipelineDir, { recursive: true });
+      await writeFile(
+        statePath,
+        JSON.stringify({
+          worktree: 'done',
+          memory: 'done',
+          explore: 'done',
+          complexity: 'done',
+          complexity_tier: 'S',
+          track: 'technical',
+          stories: 'done',
+          conflict_check: 'done',
+          plan: 'done',
+          coherence_check: 'done',
+          architecture_diagram: 'done',
+          architecture_review: 'done',
+          acceptance_specs: 'done',
+        }),
+      );
+
+      const fake = createFixtureAgentFake(worktreeDir, {
+        omitTaskTrailer: true,
+      });
+      const runner = new DefaultStepRunner(
+        fake.provider,
+        'fixture-no-evidence-session',
+        worktreeDir,
+        {
+          featureDesc: slug,
+          pipelineDir,
+          planPath,
+          providerKey: 'codex',
+        },
+      );
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot: worktreeDir,
+        fromStep: 'build',
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        maxRetries: 1,
+        escalateBuildFailure: async () => ({}),
+      });
+
+      await conductor.run();
+
+      const haltReason = await readFile(join(pipelineDir, 'HALT'), 'utf-8');
+      const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
+        cwd: worktreeDir,
+      });
+
+      expect({
+        commitBody: commitBody.trim(),
+        haltReason,
+        done: existsSync(join(pipelineDir, 'DONE')),
+      }).toEqual({
+        commitBody: 'test: complete fixture task',
+        haltReason: expect.stringMatching(/build.*completion|task 1|evidence/i),
+        done: false,
       });
     } finally {
       await rm(worktreeDir, { recursive: true, force: true });
