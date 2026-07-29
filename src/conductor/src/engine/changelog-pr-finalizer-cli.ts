@@ -92,6 +92,8 @@ export async function finalizeChangelogPr(
       .filter(({ line }) => line.includes(IMPLEMENTATION_PR_TOKEN) && !baseLines.has(line))
       .map(({ index }) => index);
 
+    if (newTokenLineIndexes.length === 0) return 'no-op';
+
     if (newTokenLineIndexes.length !== 1) {
       throw new Error(
         'multiple implementation PR tokens found: ' +

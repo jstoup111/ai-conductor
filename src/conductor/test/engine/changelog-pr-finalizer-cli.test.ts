@@ -257,6 +257,40 @@ describe('finalizeChangelogPr', () => {
     });
   });
 
+  it('returns no-op when every token line already existed at the merge-base', async () => {
+    const changelogPath = '/repo/CHANGELOG.md';
+    const original =
+      '## [Unreleased]\n\n' +
+      '- Add widgets (already shipped; {{IMPLEMENTATION_PR}}).\n' +
+      '- Add gears (already shipped; {{IMPLEMENTATION_PR}}).\n';
+    // Both token lines are stale carry-overs from the merge-base — this branch
+    // introduced no new changelog entry of its own, so there is nothing to
+    // finalize. This must not be treated as ambiguity.
+    const baseChangelogContent = original;
+    const files = new Map([[changelogPath, original]]);
+    const writeFile = vi.fn<ChangelogPrFinalizerRunners['writeFile']>();
+    const rename = vi.fn<ChangelogPrFinalizerRunners['rename']>();
+
+    const state = await finalizeChangelogPr(
+      changelogPath,
+      'https://github.com/octo/widgets/pull/456',
+      {
+        readFile: vi.fn(async (path: string) => files.get(path) ?? ''),
+        writeFile,
+        rename,
+        rm: vi.fn(),
+      },
+      baseChangelogContent,
+    );
+
+    expect({ state, changelog: files.get(changelogPath), writes: writeFile.mock.calls, renames: rename.mock.calls }).toEqual({
+      state: 'no-op',
+      changelog: original,
+      writes: [],
+      renames: [],
+    });
+  });
+
   it('still refuses when more than one token line is new relative to the merge-base', async () => {
     const changelogPath = '/repo/CHANGELOG.md';
     const original =

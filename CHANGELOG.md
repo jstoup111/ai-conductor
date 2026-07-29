@@ -101,6 +101,11 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- `finalize-changelog-pr` now treats a merge-base with multiple pre-existing, never-finalized
+  `{{IMPLEMENTATION_PR}}` tokens and zero new ones from this branch as a no-op, instead of hard-failing
+  with "multiple implementation PR tokens found". Previously any branch merging onto a base that
+  already carried more than one stale token — even when the branch itself added no changelog entry —
+  could never finish, since the finalizer only accepted exactly one new token line ({{IMPLEMENTATION_PR}}).
 - The halt-PR reconciliation sweep now clears a stale marking instead of treating it as conforming.
   A marked PR whose head branch already carries the feature's shipped record is undrafted, unlabeled,
   its body marker stripped, and its halt comment rewritten as resolved; previously the sweep checked
