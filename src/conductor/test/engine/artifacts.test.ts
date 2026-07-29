@@ -56,6 +56,7 @@ import {
   STEP_ARTIFACT_CONTRACTS,
   STEP_ARTIFACT_GLOBS,
   artifactMatchesFeatureIdentity,
+  buildArtifactResolutionContext,
   findArtifactFiles,
   stepHasArtifacts,
   getArtifactStatus,
@@ -291,6 +292,98 @@ describe('engine/artifacts', () => {
           artifactMatchesFeatureIdentity(artifactPath, featureIdentity, strategy),
         ),
       ).toEqual(cases.map(({ expected }) => expected));
+    });
+  });
+
+  describe('buildArtifactResolutionContext', () => {
+    it('assembles ordered explicit identities and one local changed-path snapshot', async () => {
+      await createFile(
+        '.pipeline/engine-state.json',
+        JSON.stringify({ activePlanPath: '.docs/plans/engine-recorded.md' }),
+      );
+      const git = vi.fn(async (args: string[]) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return {
+            exitCode: 0,
+            stdout: 'refs/remotes/origin/main\n',
+            stderr: '',
+          };
+        }
+        if (command === 'merge-base origin/main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'diff --name-only base-sha..HEAD') {
+          return {
+            exitCode: 0,
+            stdout: './.docs/specs/committed.md\nsrc/outside-declared-patterns.ts\n',
+            stderr: '',
+          };
+        }
+        if (command === 'diff --name-only HEAD') {
+          return {
+            exitCode: 0,
+            stdout: '.docs/stories/modified.md\n',
+            stderr: '',
+          };
+        }
+        if (command === 'ls-files --others --exclude-standard') {
+          return {
+            exitCode: 0,
+            stdout: '.docs/plans/untracked.md\n',
+            stderr: '',
+          };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected: ${command}` };
+      });
+
+      const context = await buildArtifactResolutionContext(dir, {
+        planPath: '.docs/plans/explicit-plan.md',
+        featureDesc: 'Explicit Feature',
+        git,
+      });
+      const failedContext = await buildArtifactResolutionContext(dir, {
+        planPath: '.docs/plans/still-explicit.md',
+        featureDesc: 'Still Explicit',
+        git: async () => ({ exitCode: 1, stdout: '', stderr: 'indeterminate' }),
+      });
+
+      expect({
+        planPath: context.planPath,
+        activePlanPath: context.activePlanPath,
+        featureDesc: context.featureDesc,
+        featureIdentities: context.featureIdentities,
+        changedPaths: [...context.changedPaths],
+        gitCalls: git.mock.calls.map(([args]) => args),
+        failedContext: {
+          planPath: failedContext.planPath,
+          featureIdentities: failedContext.featureIdentities,
+          changedPaths: [...failedContext.changedPaths],
+        },
+      }).toEqual({
+        planPath: join(dir, '.docs/plans/explicit-plan.md'),
+        activePlanPath: join(dir, '.docs/plans/engine-recorded.md'),
+        featureDesc: 'Explicit Feature',
+        featureIdentities: ['explicit-plan', 'engine-recorded', 'explicit-feature'],
+        changedPaths: [
+          '.docs/specs/committed.md',
+          'src/outside-declared-patterns.ts',
+          '.docs/stories/modified.md',
+          '.docs/plans/untracked.md',
+        ],
+        gitCalls: [
+          ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+          ['merge-base', 'origin/main', 'HEAD'],
+          ['diff', '--name-only', 'base-sha..HEAD'],
+          ['diff', '--name-only', 'HEAD'],
+          ['ls-files', '--others', '--exclude-standard'],
+        ],
+        failedContext: {
+          planPath: join(dir, '.docs/plans/still-explicit.md'),
+          featureIdentities: ['still-explicit', 'engine-recorded'],
+          changedPaths: [],
+        },
+      });
     });
   });
 

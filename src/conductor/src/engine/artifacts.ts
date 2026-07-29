@@ -1,5 +1,5 @@
 import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
-import { basename, dirname, join, relative } from 'path';
+import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import { slugify } from './worktree.js';
@@ -82,6 +82,86 @@ export function artifactMatchesFeatureIdentity(
   const normalizedArtifact = normalize(artifactStem);
   const normalizedFeature = normalize(featureStem);
   return normalizedArtifact.length > 0 && normalizedArtifact === normalizedFeature;
+}
+
+export interface ArtifactResolutionContext {
+  planPath?: string;
+  activePlanPath?: string;
+  featureDesc?: string;
+  featureIdentities: readonly string[];
+  changedPaths: ReadonlySet<string>;
+}
+
+export interface BuildArtifactResolutionContextOptions {
+  planPath?: string;
+  featureDesc?: string;
+  git?: GitRunner;
+}
+
+export async function buildArtifactResolutionContext(
+  projectRoot: string,
+  options: BuildArtifactResolutionContextOptions = {},
+): Promise<ArtifactResolutionContext> {
+  const absolutePath = (path: string): string => (isAbsolute(path) ? path : join(projectRoot, path));
+  let activePlanPath: string | undefined;
+  try {
+    const raw = await readFile(join(projectRoot, '.pipeline', 'engine-state.json'), 'utf8');
+    const state = JSON.parse(raw) as Record<string, unknown>;
+    if (typeof state.activePlanPath === 'string' && state.activePlanPath.trim()) {
+      activePlanPath = absolutePath(state.activePlanPath);
+    }
+  } catch {
+    // Engine state is optional; explicit identities remain authoritative.
+  }
+
+  const planPath = options.planPath ? absolutePath(options.planPath) : undefined;
+  const featureIdentities = [
+    planPath ? planStem(planPath) : undefined,
+    activePlanPath ? planStem(activePlanPath) : undefined,
+    options.featureDesc ? slugify(options.featureDesc) : undefined,
+  ].filter((identity): identity is string => Boolean(identity));
+  const uniqueFeatureIdentities = [...new Set(featureIdentities)];
+  const changedPaths = new Set<string>();
+
+  try {
+    const git = options.git ?? makeGitRunner(projectRoot);
+    const originHead = await git(['symbolic-ref', 'refs/remotes/origin/HEAD']);
+    const baseRef = originHead.stdout.trim();
+    if (originHead.exitCode !== 0 || !baseRef.startsWith('refs/remotes/')) throw new Error();
+
+    const mergeBase = await git(['merge-base', baseRef.replace(/^refs\/remotes\//, ''), 'HEAD']);
+    const mergeBaseSha = mergeBase.stdout.trim();
+    if (mergeBase.exitCode !== 0 || !mergeBaseSha) throw new Error();
+
+    const results = await Promise.all([
+      git(['diff', '--name-only', `${mergeBaseSha}..HEAD`]),
+      git(['diff', '--name-only', 'HEAD']),
+      git(['ls-files', '--others', '--exclude-standard']),
+    ]);
+    if (results.some(({ exitCode }) => exitCode !== 0)) throw new Error();
+
+    for (const result of results) {
+      for (const rawPath of result.stdout.split(/\r?\n/)) {
+        const trimmed = rawPath.trim();
+        if (!trimmed) continue;
+        const repoPath = isAbsolute(trimmed) ? relative(projectRoot, trimmed) : trimmed;
+        const normalized = repoPath.replaceAll('\\', '/').replace(/^\.\//, '');
+        if (normalized && normalized !== '..' && !normalized.startsWith('../')) {
+          changedPaths.add(normalized);
+        }
+      }
+    }
+  } catch {
+    changedPaths.clear();
+  }
+
+  return {
+    planPath,
+    activePlanPath,
+    featureDesc: options.featureDesc,
+    featureIdentities: uniqueFeatureIdentities,
+    changedPaths,
+  };
 }
 
 /**
