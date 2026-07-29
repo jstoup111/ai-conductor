@@ -15,6 +15,7 @@ import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { writeOperatorPark, removeOperatorPark, isOperatorParked } from './park-marker.js';
 import { resetNoEvidenceAttempts } from './task-evidence.js';
+import { removeWorktree } from './worktree-shared.js';
 import type { ReconcileMergedParkOutcome } from './park-reconciliation.js';
 import type { GitRunner, GhRunner } from './pr-labels.js';
 
@@ -51,6 +52,7 @@ export async function resolveMainRepoRoot(
 export type DaemonParkDispatch =
   | { kind: 'park'; slug: string }
   | { kind: 'unpark'; slug: string }
+  | { kind: 'reclaim-worktree'; slug: string }
   | { kind: 'reconcile-parked'; slug?: string; invalidArgs?: true };
 
 /**
@@ -67,6 +69,10 @@ export function detectDaemonParkCommand(argv: string[]): DaemonParkDispatch | nu
     return args.length === 3 && args[2]
       ? { kind: 'reconcile-parked', slug: args[2] }
       : { kind: 'reconcile-parked', invalidArgs: true };
+  }
+  if (sub === 'reclaim-worktree') {
+    const slug = args[2];
+    return slug ? { kind: 'reclaim-worktree', slug } : null;
   }
   if (sub !== 'park' && sub !== 'unpark') return null;
   const slug = args[2];
@@ -176,6 +182,18 @@ export async function dispatchDaemonPark(
         return 1;
       }
       out(`Reconciled '${slug}': ${outcome.steps.join(', ')}`);
+      return 0;
+    }
+
+    if (cmd.kind === 'reclaim-worktree') {
+      if (!SINGLE_SLUG.test(cmd.slug)) {
+        out(`Could not reclaim-worktree '${cmd.slug}': invalid-slug`);
+        return 1;
+      }
+      const worktreePath = join(resolvedRoot, '.worktrees', cmd.slug);
+      out(`Reclaiming retained worktree: ${worktreePath}`);
+      await removeWorktree(resolvedRoot, worktreePath);
+      out(`Removed retained worktree '${cmd.slug}': ${worktreePath}`);
       return 0;
     }
 
