@@ -1634,6 +1634,39 @@ describe('engine/daemon-backlog — shipped-record dedup (Story 3/Task 4)', () =
     expect(backlog.map((b) => b.slug)).toEqual(['not-shipped']);
   });
 
+  it('a candidate whose ship is recorded on its own (unmerged) feature branch is not re-dispatched', async () => {
+    // `/finish` commits `.docs/shipped/<slug>.md` on the FEATURE branch; the
+    // base-branch record only appears once a human merges. Between those two
+    // moments the feature is complete, and re-dispatching it re-runs `finish`
+    // against a worktree the finished run already tore down.
+    await writeSpec('finished-awaiting-merge');
+    const logs: string[] = [];
+    const { items: backlog } = await discoverBacklog(dir, async () => false, (m) => logs.push(m), {
+      treeSource: fsSource(dir), // nothing under .docs/shipped on the base branch
+      shippedOnFeatureBranch: async (slug) => slug === 'finished-awaiting-merge',
+    });
+    expect(backlog).toEqual([]);
+    expect(logs.join('\n')).toMatch(/finished-awaiting-merge.*shipped dedup/i);
+    expect(logs.join('\n')).toMatch(/awaiting the human merge/i);
+  });
+
+  it('the feature-branch probe never blocks a candidate it cannot prove shipped', async () => {
+    await writeSpec('still-building');
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+      shippedOnFeatureBranch: async () => false,
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['still-building']);
+  });
+
+  it('discovery is unchanged when no feature-branch probe is wired', async () => {
+    await writeSpec('no-probe');
+    const { items: backlog } = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsSource(dir),
+    });
+    expect(backlog.map((b) => b.slug)).toEqual(['no-probe']);
+  });
+
   it('repairProcessed throwing still skips the candidate, logs the error, and discovery continues', async () => {
     await writeSpec('repair-fails');
     await writeShipped('repair-fails');

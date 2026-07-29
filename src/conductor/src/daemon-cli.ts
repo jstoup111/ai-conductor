@@ -1273,6 +1273,25 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // ADR Decisions 2b/2c: a shipped-record skip repairs the local ledger
       // cache so later polls take the fast path (record → marker backfill).
       repairProcessed: (slug, record) => repairProcessed(projectRoot, slug, record),
+      // Pre-merge shipped dedup: a feature whose `/finish` already committed
+      // `.docs/shipped/<slug>.md` onto its own branch has shipped and is only
+      // waiting on the human merge. Read from the committed branch tree (local
+      // ref first, then its remote-tracking ref) so a torn-down worktree cannot
+      // hide the record. Any git failure resolves false — dedup never invents a
+      // skip it cannot prove.
+      shippedOnFeatureBranch: async (slug) => {
+        const relPath = `.docs/shipped/${slug}.md`;
+        const branch = `feat/daemon-${slug}`;
+        for (const ref of [branch, `origin/${branch}`]) {
+          try {
+            await execFile('git', ['cat-file', '-e', `${ref}:${relPath}`], { cwd: projectRoot });
+            return true;
+          } catch {
+            /* ref or path absent — try the next ref */
+          }
+        }
+        return false;
+      },
       fastForwardRoot,
       discoverBacklog,
       resolveDaemonOwner: makeMachineOwnerResolver(ownerGh, projectRoot),

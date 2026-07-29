@@ -408,6 +408,14 @@ export interface StepRunResult {
   authFailure?: boolean;
   /** A provider's automatic permission review denied the requested action. */
   permissionDenied?: boolean;
+  /**
+   * Set by the runner's dispatch preflight when the step's working directory
+   * (the feature worktree) no longer exists. Terminal for this run: no provider
+   * was launched, retrying cannot recreate the path, and every later step would
+   * fail the same way. The conductor halts with this classified reason instead
+   * of burning the retry ladder on an opaque provider error.
+   */
+  worktreeMissing?: boolean;
   /** Provider-owned, sanitized authentication readiness for this dispatch. */
   authentication?: AuthenticationReadiness;
   /**
@@ -1889,6 +1897,33 @@ export class Conductor {
     this.pendingLiveBoundaryHalt = undefined;
     await writeHaltMarker(this.projectRoot, `${reason}\n`, 'mechanical').catch(() => {});
     return reason;
+  }
+
+  /**
+   * Classified dispatch refusal for a run whose working directory is gone —
+   * the feature worktree was torn down while the loop was still in flight
+   * (`/finish`'s own cleanup is the usual cause). Returns undefined on the
+   * ordinary path; the whole check is one `access()` per dispatch.
+   *
+   * Deliberately reports rather than repairs: recreating the directory here
+   * would leave a non-worktree stub that makes the next `git worktree add`
+   * fail 128 (#681). The branch is the source of truth.
+   */
+  private async missingWorktreeResult(step: StepName): Promise<StepRunResult | undefined> {
+    const present = await accessFile(this.projectRoot).then(
+      () => true,
+      () => false,
+    );
+    if (present) return undefined;
+    return {
+      success: false,
+      worktreeMissing: true,
+      output:
+        `Cannot dispatch '${step}': its working directory ${this.projectRoot} does not exist. ` +
+        'The feature worktree was removed while the run was in flight. The BRANCH is the ' +
+        'source of truth — recreate the worktree from it and recover the .pipeline evidence ' +
+        'before resuming, so completed work is not redone.',
+    };
   }
 
   /** Read a file's text, or null when it does not exist (gate readText seam). */
@@ -3978,8 +4013,16 @@ export class Conductor {
               // require the verdict artifact to postdate THIS attempt.
               this.currentAttemptStartedAt = Date.now();
             }
+            // Dispatch preflight: a step whose working directory no longer
+            // exists can never succeed. Without this the provider is launched
+            // anyway and returns an opaque `error_during_execution` blob naming
+            // the path ("Path \"…/.worktrees/<slug>\" does not exist"), which
+            // reads to an operator like worktree corruption and is then retried
+            // and kicked back into further dispatches against the same absent
+            // path. Classify it here, before any provider call.
             result =
-              step.name === 'complexity'
+              (await this.missingWorktreeResult(step.name)) ??
+              (step.name === 'complexity'
                 ? await this.runComplexityStep(state)
                 : step.name === 'worktree'
                   ? await this.runWorktreeStep(state)
@@ -3995,7 +4038,7 @@ export class Conductor {
                             escalate: resolved.escalate,
                             modelOverride: esc.model,
                             effortOverride: esc.effort,
-                          });
+                          }));
           } finally {
             buildWatcher?.stop();
             // Task 4 (#788): the phase-active marker is written for any
@@ -4141,6 +4184,24 @@ export class Conductor {
             // retry without decrementing attempt (budget intact).
             attempt--;
             continue;
+          }
+
+          // A missing worktree is terminal for this run. The runner refused to
+          // dispatch because the working directory is gone; retrying, escalating
+          // the model, or kicking back to an earlier step all re-dispatch into
+          // the same absent path. Nothing is written into the missing directory —
+          // recreating `.pipeline/` there would leave a non-worktree stub that
+          // makes the next `git worktree add` fail 128 (#681).
+          if (result.worktreeMissing) {
+            const haltReason =
+              result.output?.trim() ||
+              `Cannot dispatch '${step.name}': the feature worktree no longer exists.`;
+            // No remediation-PR surfacing: that path runs git/gh from the very
+            // directory that is missing.
+            await emitTracked({ type: 'loop_halt', reason: haltReason });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           // Permission review denial is terminal for this run. Retrying or

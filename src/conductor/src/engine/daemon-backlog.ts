@@ -488,6 +488,19 @@ export interface DiscoverBacklogOpts {
    * skip (correctness of the skip never depends on the repair succeeding).
    */
   repairProcessed?: (slug: string, record: ReturnType<typeof parseShippedRecord>) => Promise<void>;
+  /**
+   * Pre-merge half of the shipped-work dedup. The base-branch check above only
+   * fires once the human MERGES the implementation PR; between `/finish`
+   * committing `.docs/shipped/<slug>.md` on the feature branch and that merge,
+   * the feature is durably shipped but invisible to dedup. If the run that
+   * finished it did not also reach `markProcessed` (e.g. the finish dispatch
+   * reported failure after the ship was recorded), the daemon re-dispatches a
+   * completed feature — re-running `finish` against a torn-down worktree. This
+   * hook answers "is the ship already recorded on the feature's own branch?".
+   * Optional; when unset, behavior is unchanged. Errors are caught by the
+   * caller-side implementation, which must resolve false rather than throw.
+   */
+  shippedOnFeatureBranch?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -835,6 +848,21 @@ export async function discoverBacklog(
       await warnOnce(
         slug,
         `skip ${slug}: shipped dedup — implementation already merged (base-branch shipped record found); not re-dispatching.`,
+      );
+      continue;
+    }
+
+    // Pre-merge shipped dedup: `/finish` already committed this feature's
+    // shipped record onto its own branch, so the implementation is complete and
+    // waiting on a human merge. Re-dispatching here re-runs `finish` on a
+    // feature whose worktree the finished run already tore down, which surfaces
+    // as an opaque "path does not exist" provider error and loops. Runs AFTER
+    // the base-branch dedup (a merged feature reports as merged, not pending).
+    if (await opts.shippedOnFeatureBranch?.(slug)) {
+      await warnOnce(
+        slug,
+        `skip ${slug}: shipped dedup — finish already recorded the ship on this feature's ` +
+          'branch; awaiting the human merge, not re-dispatching.',
       );
       continue;
     }
