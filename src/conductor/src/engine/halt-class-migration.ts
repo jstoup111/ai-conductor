@@ -30,6 +30,18 @@ async function stampLegacy(worktreePath: string): Promise<void> {
   }
 }
 
+function errorCode(error: unknown): string {
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && typeof error.code === 'string'
+  ) {
+    return error.code;
+  }
+  return 'UNKNOWN';
+}
+
 /**
  * Stamp live HALTs created before total classification as legacy exactly once.
  *
@@ -59,8 +71,14 @@ export async function migrateLegacyHaltClasses(
     const worktreePath = join(worktreeBase, entry.name);
     if (!(await exists(join(worktreePath, HALT_MARKER)))) continue;
     if ((await readHaltClass(worktreePath)) !== 'unclassified') continue;
-    await stampLegacy(worktreePath);
-    log(`[halt-class-migration] stamped ${entry.name} as legacy`);
+    try {
+      await stampLegacy(worktreePath);
+      log(`[halt-class-migration] stamped ${entry.name} as legacy`);
+    } catch (error) {
+      log(
+        `[halt-class-migration] failed to stamp ${entry.name} as legacy (${errorCode(error)}); left unclassified`,
+      );
+    }
   }
 
   await mkdir(migrationDirectory, { recursive: true });

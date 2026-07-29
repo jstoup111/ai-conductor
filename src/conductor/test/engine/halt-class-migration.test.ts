@@ -77,4 +77,118 @@ describe('migrateLegacyHaltClasses', () => {
       bareAfterSecondRun: 'legacy',
     });
   });
+
+  it('retries an interrupted scan idempotently before publishing the watermark', async () => {
+    const projectRoot = await makeRoot();
+    const worktreeBase = join(projectRoot, '.worktrees');
+    await writeLiveHalt(worktreeBase, 'already-stamped', 'legacy');
+    await writeLiveHalt(worktreeBase, 'not-yet-stamped');
+
+    const logs: string[] = [];
+    await migrateLegacyHaltClasses(projectRoot, worktreeBase, (line) => logs.push(line));
+
+    expect({
+      alreadyStamped: await readFile(
+        join(worktreeBase, 'already-stamped', '.pipeline', 'HALT.class'),
+        'utf-8',
+      ),
+      newlyStamped: await readFile(
+        join(worktreeBase, 'not-yet-stamped', '.pipeline', 'HALT.class'),
+        'utf-8',
+      ),
+      watermark: await readFile(
+        join(projectRoot, '.daemon', 'migrations', 'halt-classification-v1'),
+        'utf-8',
+      ),
+      logs,
+    }).toEqual({
+      alreadyStamped: 'legacy',
+      newlyStamped: 'legacy',
+      watermark: 'complete\n',
+      logs: [
+        '[halt-class-migration] stamped not-yet-stamped as legacy',
+        '[halt-class-migration] completed halt-classification-v1',
+      ],
+    });
+  });
+
+  it('isolates and logs an individual stamp failure while leaving that slug unclassified', async () => {
+    const projectRoot = await makeRoot();
+    const worktreeBase = join(projectRoot, '.worktrees');
+    await writeLiveHalt(worktreeBase, 'blocked');
+    await mkdir(join(worktreeBase, 'blocked', '.pipeline', 'HALT.class.tmp'));
+    await writeLiveHalt(worktreeBase, 'stampable');
+
+    const logs: string[] = [];
+    await migrateLegacyHaltClasses(projectRoot, worktreeBase, (line) => logs.push(line));
+
+    expect({
+      blockedEntries: await readdir(join(worktreeBase, 'blocked', '.pipeline')),
+      stampableClass: await readFile(
+        join(worktreeBase, 'stampable', '.pipeline', 'HALT.class'),
+        'utf-8',
+      ),
+      watermark: await readFile(
+        join(projectRoot, '.daemon', 'migrations', 'halt-classification-v1'),
+        'utf-8',
+      ),
+      logs,
+    }).toEqual({
+      blockedEntries: ['HALT', 'HALT.class.tmp'],
+      stampableClass: 'legacy',
+      watermark: 'complete\n',
+      logs: [
+        '[halt-class-migration] failed to stamp blocked as legacy (EISDIR); left unclassified',
+        '[halt-class-migration] stamped stampable as legacy',
+        '[halt-class-migration] completed halt-classification-v1',
+      ],
+    });
+  });
+
+  it('replaces malformed pre-boundary class content with legacy', async () => {
+    const projectRoot = await makeRoot();
+    const worktreeBase = join(projectRoot, '.worktrees');
+    await writeLiveHalt(worktreeBase, 'malformed', 'not-a-class\n');
+
+    const logs: string[] = [];
+    await migrateLegacyHaltClasses(projectRoot, worktreeBase, (line) => logs.push(line));
+
+    expect({
+      haltClass: await readFile(
+        join(worktreeBase, 'malformed', '.pipeline', 'HALT.class'),
+        'utf-8',
+      ),
+      logs,
+    }).toEqual({
+      haltClass: 'legacy',
+      logs: [
+        '[halt-class-migration] stamped malformed as legacy',
+        '[halt-class-migration] completed halt-classification-v1',
+      ],
+    });
+  });
+
+  it('does not reclassify a bare marker created after the watermark', async () => {
+    const projectRoot = await makeRoot();
+    const worktreeBase = join(projectRoot, '.worktrees');
+    const migrationDirectory = join(projectRoot, '.daemon', 'migrations');
+    await mkdir(migrationDirectory, { recursive: true });
+    await writeFile(
+      join(migrationDirectory, 'halt-classification-v1'),
+      'complete\n',
+      'utf-8',
+    );
+    await writeLiveHalt(worktreeBase, 'post-boundary');
+
+    const logs: string[] = [];
+    await migrateLegacyHaltClasses(projectRoot, worktreeBase, (line) => logs.push(line));
+
+    expect({
+      pipelineEntries: await readdir(join(worktreeBase, 'post-boundary', '.pipeline')),
+      logs,
+    }).toEqual({
+      pipelineEntries: ['HALT'],
+      logs: [],
+    });
+  });
 });
