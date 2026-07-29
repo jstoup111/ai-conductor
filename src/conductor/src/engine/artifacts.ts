@@ -2,6 +2,10 @@ import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs
 import { basename, dirname, isAbsolute, join, relative } from 'path';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
+import type {
+  VerdictFreshnessClassification,
+  VerdictFreshnessOutcome,
+} from '../types/events.js';
 import { slugify } from './worktree.js';
 import { parseWorkRef, formatWorkRef } from './engineer/source-ref.js';
 import type { GhRunner } from './pr-labels.js';
@@ -765,8 +769,7 @@ export interface CompletionResult {
     mtimeMs?: number;
     floorMs?: number;
     floorSource: 'attempt' | 'session';
-    fresh: boolean;
-  };
+  } & VerdictFreshnessClassification;
   /**
    * Route-signal facet for retry-classification (issue #646). 'named-route'
    * marks a fresh, parseable, non-passing verdict (a real reviewer decision
@@ -775,6 +778,24 @@ export interface CompletionResult {
    * `done:true` and on predicates that don't classify.
    */
   routeClass?: 'named-route' | 'absent';
+}
+
+async function verdictFreshnessFor(
+  artifact: string,
+  ctx: CompletionContext,
+  outcome: VerdictFreshnessOutcome,
+): Promise<NonNullable<CompletionResult['verdictFreshness']>> {
+  const classification: VerdictFreshnessClassification =
+    outcome === 'stale_invalidated'
+      ? { outcome, fresh: false }
+      : { outcome, fresh: true };
+  return {
+    artifact,
+    mtimeMs: await stat(artifact).then((s) => s.mtimeMs).catch(() => undefined),
+    floorMs: verdictFreshnessFloor(ctx),
+    floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+    ...classification,
+  };
 }
 
 /**
@@ -1937,7 +1958,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           const git = ctx.git ?? makeGitRunner(dir);
           const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'manual_test', marker.codeStamp);
           if (validity === 'preserve') {
-            return { done: true };
+            return {
+              done: true,
+              verdictFreshness: await verdictFreshnessFor(file, ctx, 'preserved_surface_miss'),
+            };
           }
         }
       } catch {
@@ -2115,7 +2139,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
                   break;
                 }
               }
-              if (stillClean) return { done: true };
+              if (stillClean) {
+                const artifact = preCheckFiles[0];
+                return {
+                  done: true,
+                  verdictFreshness: await verdictFreshnessFor(artifact, ctx, 'preserved_surface_miss'),
+                };
+              }
             }
           }
         }
@@ -2135,21 +2165,18 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
     // sessionStartedAt when no per-attempt floor is present); a stale audit
     // left over from a prior feature — or a prior attempt whose session
     // failed to rewrite the verdict — must not satisfy the gate.
-    const floor = verdictFreshnessFloor(ctx);
     const cmpFloor = verdictFreshnessComparand(ctx);
-    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
       if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
     }
     if (fresh.length === 0) {
       const f = files[0];
-      const mtimeMs = await stat(f).then((s) => s.mtimeMs).catch(() => undefined);
       return {
         done: false,
         reason:
           "prd-audit verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
-        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
+        verdictFreshness: await verdictFreshnessFor(f, ctx, 'stale_invalidated'),
       };
     }
     for (const f of fresh) {
@@ -2164,11 +2191,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
     const passF = fresh[0];
-    const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
     await writePrdAuditCodeStamp(dir, ctx);
     return {
       done: true,
-      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+      verdictFreshness,
     };
   },
 
@@ -2207,7 +2234,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
               const content = await readFile(preCheckFiles[0], 'utf-8');
               const verdict = parseAsBuiltVerdict(content);
               if (verdict !== null && /^APPROVED\b/i.test(verdict)) {
-                return { done: true };
+                const artifact = preCheckFiles[0];
+                return {
+                  done: true,
+                  verdictFreshness: await verdictFreshnessFor(artifact, ctx, 'preserved_surface_miss'),
+                };
               }
             }
           }
@@ -2225,21 +2256,18 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         routeClass: 'absent',
       };
     }
-    const floor = verdictFreshnessFloor(ctx);
     const cmpFloor = verdictFreshnessComparand(ctx);
-    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
     const fresh: string[] = [];
     for (const f of files) {
       if (await fileIsFreshSinceSession(f, cmpFloor)) fresh.push(f);
     }
     if (fresh.length === 0) {
       const f = files[0];
-      const mtimeMs = await stat(f).then((s) => s.mtimeMs).catch(() => undefined);
       return {
         done: false,
         reason:
           "as-built architecture review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused",
-        verdictFreshness: { artifact: f, mtimeMs, floorMs: floor, floorSource, fresh: false },
+        verdictFreshness: await verdictFreshnessFor(f, ctx, 'stale_invalidated'),
         routeClass: 'absent',
       };
     }
@@ -2265,11 +2293,11 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       }
     }
     const passF = fresh[0];
-    const passMtimeMs = await stat(passF).then((s) => s.mtimeMs).catch(() => undefined);
+    const verdictFreshness = await verdictFreshnessFor(passF, ctx, 'rewritten');
     await writeArchitectureReviewAsBuiltCodeStamp(dir, ctx);
     return {
       done: true,
-      verdictFreshness: { artifact: passF, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+      verdictFreshness,
     };
   },
 
@@ -2280,9 +2308,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
   // reasons so the kickback message tells `build` what to fix.
   build_review: async (dir, ctx): Promise<CompletionResult> => {
     const path = join(dir, BUILD_REVIEW_VERDICT);
-    const floor = verdictFreshnessFloor(ctx);
     const cmpFloor = verdictFreshnessComparand(ctx);
-    const floorSource: 'attempt' | 'session' = ctx.attemptStartedAt !== undefined ? 'attempt' : 'session';
 
     // gate-code-validity-on-redispatch (#817): before falling into the
     // mtime-freshness check below, see if a stamped PASS verdict can be
@@ -2302,10 +2328,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           const git = ctx.git ?? makeGitRunner(dir);
           const validity = await gateVerdictStillValid({ projectRoot: dir, git }, 'build_review', preCheck.codeStamp);
           if (validity === 'preserve') {
-            const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
             return {
               done: true,
-              verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+              verdictFreshness: await verdictFreshnessFor(path, ctx, 'preserved_surface_miss'),
             };
           }
         }
@@ -2326,7 +2351,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           ? "build-review verdict was not rewritten by this judging session (mtime predates the review dispatch) — scoring 'no fresh verdict'; a prior session's verdict is never reused"
           : `no build-review verdict at ${BUILD_REVIEW_VERDICT} — the build_review grader must run and record a PASS/FAIL verdict`,
         verdictFreshness: exists
-          ? { artifact: path, mtimeMs, floorMs: floor, floorSource, fresh: false }
+          ? await verdictFreshnessFor(path, ctx, 'stale_invalidated')
           : undefined,
         routeClass: 'absent',
       };
@@ -2356,10 +2381,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         routeClass: 'named-route',
       };
     }
-    const passMtimeMs = await stat(path).then((s) => s.mtimeMs).catch(() => undefined);
     return {
       done: true,
-      verdictFreshness: { artifact: path, mtimeMs: passMtimeMs, floorMs: floor, floorSource, fresh: true },
+      verdictFreshness: await verdictFreshnessFor(path, ctx, 'rewritten'),
     };
   },
 
@@ -3522,6 +3546,7 @@ export async function checkStepCompletion(
         mtimeMs,
         floorMs: floor,
         floorSource: ctx.attemptStartedAt !== undefined ? 'attempt' : 'session',
+        outcome: 'rewritten',
         fresh: true,
       },
     };

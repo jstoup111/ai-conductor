@@ -1,11 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import chalk from 'chalk';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 // daemon-cli transitively imports the provider layer (execa); stub it so this
 // pure-formatting test doesn't pull a live process dependency.
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
 // eslint-disable-next-line no-control-regex
@@ -204,6 +208,19 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
     // \bKICKBACK\b matches only the kickback line, not the back line.
     expect(kickbackLine).toMatch(/\bKICKBACK\b/);
     expect(backLine).not.toMatch(/\bKICKBACK\b/);
+  });
+
+  it('handles every event type declared renderable by the sink registry', () => {
+    const here = dirname(fileURLToPath(import.meta.url));
+    const source = readFileSync(join(here, '../../src/daemon-cli.ts'), 'utf8');
+    const functionStart = source.indexOf('function renderDaemonEventUnsafe(');
+    const functionEnd = source.indexOf('\n}\n', functionStart);
+    const functionSource = source.slice(functionStart, functionEnd);
+    const handledTypes = new Set(
+      [...functionSource.matchAll(/case '([^']+)'/g)].map((match) => match[1]),
+    );
+
+    expect(new Set(renderedEventTypes())).toEqual(handledTypes);
   });
 
   it('renders build_review_base as a dim freshness summary', () => {
