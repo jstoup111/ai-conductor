@@ -91,7 +91,7 @@ As a harness operator, I want the completion gate, interactive artifact review, 
 ### Done When
 
 - [ ] Completion, conductor review, terminal renderer, and create renderer tests assert the same scoped paths for the same feature context.
-- [ ] A negative review test proves a foreign artifact is never presented for approval.
+- [ ] A negative review test proves an ambiguous multi-file foreign corpus is never presented for approval.
 - [ ] A dashboard regression test proves ambiguity cannot render as satisfied.
 - [ ] Production call-site assertions cover all three generic consumer paths.
 
