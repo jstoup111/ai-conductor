@@ -444,7 +444,6 @@ export function makeRunFeature(
           // If the finish flow failed to write it, dedup degrades to the
           // `.daemon/processed/` ledger marker written above.
 
-          await deps.teardownWorktree(worktree, false);
           featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
           // FR-14: sweep mergeable labels after feature completes.
           await maybeSweep();
