@@ -275,7 +275,7 @@ function diffManifests(before: readonly Entry[], after: readonly Entry[]): {
  * Git cannot identify the writer, so a sandbox escape that rewrites a tracked
  * file is indistinguishable from an operator edit and receives the same result.
  */
-export async function classifyLiveCheckoutDiff(
+async function classifyLiveCheckoutDiff(
   root: string,
   paths: readonly string[],
 ): Promise<Map<string, 'operator-edit' | 'unexplained'>> {
