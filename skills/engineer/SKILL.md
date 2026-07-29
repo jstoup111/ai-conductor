@@ -67,6 +67,7 @@ The idea can arrive from **three** sources — resolve them in this order:
    idea and prints JSON. On `{ "kind": "claim", "text": "...", "sourceRef": "owner/repo#N" }`, use
    `text` as the idea and **carry `sourceRef`** — you'll pass it back in steps 3–5 so the originating
    issue gets commented + labelled. On `{ "kind": "claim", "empty": true }`, fall through.
+   **The originating GitHub issue's assignees MUST remain unchanged throughout claim, land, handoff, verification, and cleanup; the engineer loop MUST NOT add, remove, or change assignees.**
 2. **Launch argument / chat.** If the launch prompt already carried an idea (`conduct-ts engineer
    "<idea>"` or `--idea "<idea>"`), use it. Otherwise take the operator's raw idea from the chat.
 

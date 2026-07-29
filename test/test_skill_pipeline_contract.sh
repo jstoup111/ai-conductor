@@ -13,6 +13,7 @@ SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
+ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
 AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
 CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
@@ -52,6 +53,12 @@ if [ ! -f "$FINISH_SKILL_FILE" ]; then
   exit 1
 fi
 pass "skills/finish/SKILL.md exists"
+
+if grep -qF "The originating GitHub issue's assignees MUST remain unchanged throughout claim, land, handoff, verification, and cleanup; the engineer loop MUST NOT add, remove, or change assignees." "$ENGINEER_SKILL_FILE"; then
+  pass "engineer preserves originating GitHub issue assignees throughout its lifecycle"
+else
+  fail "engineer must preserve originating GitHub issue assignees throughout claim, land, handoff, verification, and cleanup without adding, removing, or changing them"
+fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2
