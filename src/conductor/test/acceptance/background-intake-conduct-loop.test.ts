@@ -40,8 +40,11 @@ import { describe, it, expect, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RUN_TMP_ROOT_ENV } from '../tmpdir-leak-guard.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const runTmpRoot = process.env[RUN_TMP_ROOT_ENV];
+if (!runTmpRoot) throw new Error(`${RUN_TMP_ROOT_ENV} must be set by vitest.config.ts`);
 const INTAKE_LOOP_MOD = '../../src/engine/engineer/intake/intake-loop.js';
 const NOTIFIER_MOD = '../../src/engine/engineer/intake/notifier.js';
 const INTAKE_LOOP_SRC = join(here, '..', '..', 'src', 'engine', 'engineer', 'intake', 'intake-loop.ts');
@@ -725,7 +728,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
         now: () => new Date('2026-06-30T00:00:00.000Z'),
         log: () => {},
         printErr: () => {},
-        engineerDir: '/tmp/does-not-matter-for-this-test',
+        engineerDir: join(runTmpRoot, 'does-not-matter-for-this-test'),
       },
     );
 
@@ -772,7 +775,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
         now: () => new Date('2026-06-30T00:00:00.000Z'),
         log: () => {},
         printErr: () => {},
-        engineerDir: '/tmp/test-push-notification-wiring',
+        engineerDir: join(runTmpRoot, 'test-push-notification-wiring'),
       },
     );
 
