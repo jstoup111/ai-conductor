@@ -141,7 +141,7 @@ export async function loadConfig(
       ok: false,
       error: {
         type: 'missing',
-        message: `Config file not found: ${configPath}. Run bin/migrate to create it.`,
+        message: `Config file not found: ${configPath}. Run conduct-ts config init to create it.`,
       },
     };
   }

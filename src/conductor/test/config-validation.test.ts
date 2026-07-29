@@ -1,6 +1,48 @@
 import { describe, it, expect } from 'vitest';
-import { validateConfig } from '../src/engine/config.js';
+import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
+import { loadConfig, validateConfig } from '../src/engine/config.js';
 import type { HarnessConfig } from '../src/types/config.js';
+
+describe('project config load errors', () => {
+  it.each([
+    {
+      name: 'missing config names the config init remedy',
+      contents: undefined,
+      expectedType: 'missing',
+    },
+    {
+      name: 'malformed YAML remains a parse error',
+      contents: 'steps:\n  explore: [\n',
+      expectedType: 'parse_error',
+    },
+  ])('$name', async ({ contents, expectedType }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'config-load-error-'));
+    try {
+      if (contents !== undefined) {
+        await mkdir(join(projectRoot, '.ai-conductor'));
+        await writeFile(
+          join(projectRoot, '.ai-conductor', 'config.yml'),
+          contents,
+          'utf-8',
+        );
+      }
+
+      const result = await loadConfig(projectRoot);
+
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.error.type).toBe(expectedType);
+      if (expectedType === 'missing') {
+        expect.soft(result.error.message).toContain('conduct-ts config init');
+        expect.soft(result.error.message).not.toContain('bin/migrate');
+      }
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('LLM provider selection config types', () => {
   it('types scalar and ordered run selections plus an explicit step selection', () => {
