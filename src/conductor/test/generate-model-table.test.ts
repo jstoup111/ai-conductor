@@ -313,26 +313,22 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     }
   });
 
-  it('labels every non-engine row as Claude interactive without invented effort or Codex values', () => {
-    expect(
-      buildExtraRows().map(
-        ({ name, executionPath, claudeEffort, codexModel, codexEffort }) => ({
-          name,
-          executionPath,
-          claudeEffort,
-          codexModel,
-          codexEffort,
-        }),
-      ),
-    ).toEqual(
-      buildExtraRows().map(({ name }) => ({
-        name,
-        executionPath: 'Claude interactive',
-        claudeEffort: '',
-        codexModel: '',
-        codexEffort: '',
-      })),
-    );
+  it('renders supported-host interactive rows with Codex inheritance semantics', () => {
+    const violations = buildExtraRows().flatMap((row) => {
+      const describesCodexInheritance = (value: string): boolean =>
+        /\bCodex\b/.test(value) &&
+        /\binherit(?:s|ed|ance|ing)?\b/i.test(value) &&
+        /(?:\bsession\b|\bspawned-agent\b)/.test(value) &&
+        !/\b(?:haiku|sonnet|opus|fable)\b/i.test(value);
+      const hasSupportedHostContract =
+        row.executionPath === 'supported-host interactive' &&
+        describesCodexInheritance(row.codexModel) &&
+        describesCodexInheritance(row.codexEffort);
+
+      return hasSupportedHostContract ? [] : [row.name];
+    });
+
+    expect(violations).toEqual([]);
   });
 
   it('maps display names: snake_case -> kebab-case, build -> pipeline, worktree -> worktree-manager, acceptance_specs -> writing-system-tests', () => {
