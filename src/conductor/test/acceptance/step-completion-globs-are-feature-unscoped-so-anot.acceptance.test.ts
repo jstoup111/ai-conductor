@@ -41,23 +41,13 @@
  * one shared directory, then drive completion / interactive review / dashboard
  * status and assert they agree on the CURRENT feature's files.
  *
- * PRE-IMPLEMENTATION STATE (why this is RED for the right reason)
- * --------------------------------------------------------------
- * These specs deliberately import ONLY symbols that exist today
- * (`checkStepCompletion`, `getArtifactStatus`, `findArtifactFiles`,
- * `Conductor`, `TerminalRenderer`, `createRenderer`). Importing the
- * not-yet-authored `resolveArtifactFiles` / `STEP_ARTIFACT_CONTRACTS` would
- * ERROR the file at collection — a silent no-op, not RED. The forward-looking
- * third `context` parameter of `getArtifactStatus` is applied through a local
- * signature cast (the same forward-looking-injectable technique used by
- * test/acceptance/acceptance-specs-red-evidence.acceptance.test.ts), so today's
- * two-parameter implementation still runs and simply ignores the feature
- * identity — producing the unscoped result the assertions reject.
- *
- * Cases marked `[RED]` fail today because the live path is feature-unscoped.
- * Cases marked `[GUARD]` pass today and must never flip: they pin the
- * intentionally broad repository/run scopes and the stronger custom predicates
- * that TS-993-4 forbids this fix from weakening.
+ * AS-BUILT REGRESSION STATE
+ * -------------------------
+ * The specs exercise the production feature-aware entry points with prepared
+ * `ArtifactResolutionContext` values. Cases marked `[REGRESSION]` pin behavior
+ * introduced by this feature; `[GUARD]` cases pin intentionally broad
+ * repository/run scopes and stronger custom predicates that TS-993-4 forbids
+ * this fix from weakening.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -67,9 +57,6 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { Writable } from 'node:stream';
 
-vi.mock('execa', () => ({
-  execa: vi.fn(() => Promise.resolve({ stdout: '', stderr: '', exitCode: 0 })),
-}));
 vi.mock('../../src/engine/self-host/operator-credentials.js', () => ({
   readOperatorCredentialsState: vi.fn().mockResolvedValue('fresh'),
   waitForCredentialsChange: vi.fn(),
@@ -86,9 +73,11 @@ vi.mock('../../src/engine/rebase.js', async () => {
 
 import {
   checkStepCompletion,
+  buildArtifactResolutionContext,
   findArtifactFiles,
   getArtifactStatus,
   type ArtifactPatternStatus,
+  type ArtifactResolutionContext,
   type CompletionContext,
 } from '../../src/engine/artifacts.js';
 import { Conductor } from '../../src/engine/conductor.js';
@@ -114,23 +103,19 @@ const B_CONFLICT = `${CONFLICT_DIR}/${FEATURE_B}.md`;
 const C_CONFLICT = `${CONFLICT_DIR}/${FEATURE_C}.md`;
 
 const DECISIONS_DIR = '.docs/decisions';
-const A_ADR = `${DECISIONS_DIR}/adr-2026-01-09-${FEATURE_A}.md`;
-const B_ADR = `${DECISIONS_DIR}/adr-2026-07-28-${FEATURE_B}.md`;
+const A_ARCHITECTURE_REVIEW =
+  `${DECISIONS_DIR}/architecture-review-2026-01-09-${FEATURE_A}.md`;
+const B_ARCHITECTURE_REVIEW =
+  `${DECISIONS_DIR}/architecture-review-2026-07-28-${FEATURE_B}.md`;
 
-/**
- * Forward-looking signature for `getArtifactStatus` (plan Task 9): the resolver
- * context becomes its third parameter, and each pattern record gains an
- * optional `diagnostic` explaining an unsatisfied FEATURE-scoped pattern.
- * Today's implementation takes two parameters and ignores the third, so every
- * assertion below still executes — and fails on the unscoped result.
- */
-type ScopedArtifactStatus = ArtifactPatternStatus & { diagnostic?: string };
-type ScopedGetArtifactStatus = (
-  dir: string,
-  step: StepName,
-  context?: { featureDesc?: string; planPath?: string; projectRoot?: string },
-) => Promise<ScopedArtifactStatus[]>;
-const scopedGetArtifactStatus = getArtifactStatus as unknown as ScopedGetArtifactStatus;
+type ScopedArtifactStatus = ArtifactPatternStatus;
+
+function resolutionContextFor(featureIdentity: string): ArtifactResolutionContext {
+  return {
+    featureIdentities: [featureIdentity],
+    changedPaths: new Set(),
+  };
+}
 
 async function seed(dir: string, relPath: string, body: string): Promise<void> {
   const full = join(dir, relPath);
@@ -169,14 +154,15 @@ describe('#993 call site 1 — checkStepCompletion resolves the CURRENT feature 
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('[RED] TS-993-2 N1: a neighbouring feature\'s conflict report cannot complete this feature\'s step', async () => {
-    // Only A has landed a conflict report. B has authored nothing.
+  it('[REGRESSION] TS-993-2 N1: an ambiguous foreign conflict corpus cannot complete this feature\'s step', async () => {
+    // A and C have conflict reports. B has authored nothing.
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
+    await seed(dir, C_CONFLICT, '# Conflicts for feature C\n');
 
     const result = await checkStepCompletion(dir, 'conflict_check', ctxFor(dir, FEATURE_B));
 
     expect(result.done).toBe(false);
-    // The diagnostic must name the missing/foreign feature evidence, not just
+    // The diagnostic must name the ambiguous feature evidence, not just
     // report a generic "no files matching <glob>" — an operator reading it has
     // to know a FOREIGN artifact was present and rejected.
     expect(result.reason ?? '').toContain(FEATURE_B);
@@ -191,7 +177,7 @@ describe('#993 call site 1 — checkStepCompletion resolves the CURRENT feature 
     expect(result.done).toBe(true);
   });
 
-  it('[RED] TS-993-2 N2: several foreign candidates fail closed and are never chosen alphabetically or by mtime', async () => {
+  it('[REGRESSION] TS-993-2 N2: several foreign candidates fail closed and are never chosen alphabetically or by mtime', async () => {
     // `A_CONFLICT` sorts first and `C_CONFLICT` is the newest on disk — the two
     // orderings a naive resolver would fall back to. Neither belongs to B.
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
@@ -202,7 +188,7 @@ describe('#993 call site 1 — checkStepCompletion resolves the CURRENT feature 
     const result = await checkStepCompletion(dir, 'conflict_check', ctxFor(dir, FEATURE_B));
 
     expect(result.done).toBe(false);
-    expect(result.reason ?? '').toMatch(/ambiguous|cannot be associated|no .*artifact/i);
+    expect(result.reason ?? '').toMatch(/ambiguous|none can be associated|no .*artifact/i);
   });
 
   it('[GUARD] TS-993-2 H4: a legacy singleton with an unrecognisable name stays recognised', async () => {
@@ -215,10 +201,15 @@ describe('#993 call site 1 — checkStepCompletion resolves the CURRENT feature 
     expect(result.done).toBe(true);
   });
 
-  it('[RED] TS-993-2 N4: a historical dated filename that normalises to ANOTHER plan stays foreign', async () => {
-    // `architecture_review` declares dated/prefixed ADR names. A's dated ADR
-    // normalises to A, not B — it must not satisfy B.
-    await seed(dir, A_ADR, '# ADR for feature A\n');
+  it('[REGRESSION] TS-993-2 N4: historical dated filenames for other plans stay ambiguous', async () => {
+    // `architecture_review` declares dated/prefixed review names. A's and C's
+    // dated reviews normalize away from B, so the corpus must not satisfy B.
+    await seed(dir, A_ARCHITECTURE_REVIEW, '# Architecture review for feature A\n');
+    await seed(
+      dir,
+      `${DECISIONS_DIR}/architecture-review-2026-06-15-${FEATURE_C}.md`,
+      '# Architecture review for feature C\n',
+    );
 
     const result = await checkStepCompletion(
       dir,
@@ -230,9 +221,9 @@ describe('#993 call site 1 — checkStepCompletion resolves the CURRENT feature 
     expect(result.reason ?? '').toContain(FEATURE_B);
   });
 
-  it('[GUARD] TS-993-2 H3: this feature\'s own dated ADR is recognised without a manifest', async () => {
-    await seed(dir, A_ADR, '# ADR for feature A\n');
-    await seed(dir, B_ADR, '# ADR for feature B\n');
+  it('[GUARD] TS-993-2 H3: this feature\'s own dated architecture review is recognised without a manifest', async () => {
+    await seed(dir, A_ARCHITECTURE_REVIEW, '# Architecture review for feature A\n');
+    await seed(dir, B_ARCHITECTURE_REVIEW, '# Architecture review for feature B\n');
 
     const result = await checkStepCompletion(
       dir,
@@ -402,7 +393,7 @@ describe('#993 call site 2 — interactive artifact review never presents a neig
       .map((p) => relative(dir, p));
   }
 
-  it('[RED] TS-993-3 H1: the review prompt receives only the current feature\'s report', async () => {
+  it('[REGRESSION] TS-993-3 H1: the review prompt receives only the current feature\'s report', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
     await seed(dir, B_CONFLICT, '# Conflicts for feature B\n');
 
@@ -425,8 +416,9 @@ describe('#993 call site 2 — interactive artifact review never presents a neig
     expect(reviewed).not.toContain(A_CONFLICT);
   });
 
-  it('[RED] TS-993-3 N1: a foreign artifact is never offered for approval when this feature authored nothing', async () => {
+  it('[REGRESSION] TS-993-3 N1: ambiguous foreign artifacts are never offered for approval when this feature authored nothing', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
+    await seed(dir, C_CONFLICT, '# Conflicts for feature C\n');
 
     const onReviewArtifacts = vi.fn().mockResolvedValue('approved' as const);
     const conductor = new Conductor({
@@ -442,7 +434,7 @@ describe('#993 call site 2 — interactive artifact review never presents a neig
 
     await conductor.run();
 
-    expect(reviewedPathsFor(onReviewArtifacts.mock.calls)).not.toContain(A_CONFLICT);
+    expect(reviewedPathsFor(onReviewArtifacts.mock.calls)).toEqual([]);
   });
 });
 
@@ -481,28 +473,30 @@ describe('#993 call site 3 — dashboard status shows the current feature\'s fil
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('[RED] TS-993-3 H1: getArtifactStatus lists only the current feature\'s file', async () => {
+  it('[REGRESSION] TS-993-3 H1: getArtifactStatus lists only the current feature\'s file', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
     await seed(dir, B_CONFLICT, '# Conflicts for feature B\n');
 
-    const records = await scopedGetArtifactStatus(dir, 'conflict_check', {
-      featureDesc: FEATURE_B,
-      projectRoot: dir,
-    });
+    const records = await getArtifactStatus(
+      dir,
+      'conflict_check',
+      resolutionContextFor(FEATURE_B),
+    );
     const status = statusFor(records, CONFLICT_PATTERN);
 
     expect(status.satisfied).toBe(true);
     expect(status.files).toEqual([B_CONFLICT]);
   });
 
-  it('[RED] TS-993-3 N2: an ambiguous feature corpus renders unsatisfied, never a checkmark backed by a neighbour', async () => {
+  it('[REGRESSION] TS-993-3 N2: an ambiguous feature corpus renders unsatisfied, never a checkmark backed by a neighbour', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
     await seed(dir, C_CONFLICT, '# Conflicts for feature C\n');
 
-    const records = await scopedGetArtifactStatus(dir, 'conflict_check', {
-      featureDesc: FEATURE_B,
-      projectRoot: dir,
-    });
+    const records = await getArtifactStatus(
+      dir,
+      'conflict_check',
+      resolutionContextFor(FEATURE_B),
+    );
     const status = statusFor(records, CONFLICT_PATTERN);
 
     expect(status.satisfied).toBe(false);
@@ -522,7 +516,7 @@ describe('#993 call site 3 — dashboard status shows the current feature\'s fil
     expect(all.sort()).toEqual([A_CONFLICT, B_CONFLICT].sort());
   });
 
-  it('[RED] TS-993-3 H2: the terminal dashboard renders the current feature\'s file and not the neighbour\'s', async () => {
+  it('[REGRESSION] TS-993-3 H2: the terminal dashboard renders the current feature\'s file and not the neighbour\'s', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
     await seed(dir, B_CONFLICT, '# Conflicts for feature B\n');
 
@@ -543,7 +537,7 @@ describe('#993 call site 3 — dashboard status shows the current feature\'s fil
     expect(output).not.toContain(A_CONFLICT);
   });
 
-  it('[RED] TS-993-3 H2: the create dashboard renders the current feature\'s file and not the neighbour\'s', async () => {
+  it('[REGRESSION] TS-993-3 H2: the create dashboard renders the current feature\'s file and not the neighbour\'s', async () => {
     await seed(dir, A_CONFLICT, '# Conflicts for feature A\n');
     await seed(dir, B_CONFLICT, '# Conflicts for feature B\n');
 
@@ -612,11 +606,12 @@ describe('#993 TS-993-2 H2 — the feature\'s own worktree changes attribute its
     await rm(root, { recursive: true, force: true });
   });
 
-  it('[RED] recognises the untracked in-worktree artifact and rejects the historical one despite its newer mtime', async () => {
-    const records = await scopedGetArtifactStatus(repo, 'conflict_check', {
+  it('[REGRESSION] recognises the untracked in-worktree artifact and rejects the historical one despite its newer mtime', async () => {
+    const resolutionContext = await buildArtifactResolutionContext(repo, {
+      planPath: join(repo, `.docs/plans/${FEATURE_B}.md`),
       featureDesc: FEATURE_B,
-      projectRoot: repo,
     });
+    const records = await getArtifactStatus(repo, 'conflict_check', resolutionContext);
     const status = statusFor(records, '.docs/conflicts/*.md');
 
     expect(status.files).toEqual([`${CONFLICT_DIR}/report.md`]);

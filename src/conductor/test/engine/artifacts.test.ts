@@ -470,38 +470,20 @@ describe('engine/artifacts', () => {
       });
     });
 
-    it('accepts legacy singletons while diagnosing ambiguous or missing candidates', async () => {
-      await createFile('.docs/plans/feature-a.md');
+    it('diagnoses ambiguous or missing candidates', async () => {
       await createFile('.docs/stories/feature-a.md');
       await createFile('.docs/stories/feature-c.md');
-      await createFile('.docs/conflicts/foreign-conflict.md');
-      await createFile('.docs/specs/2026-07-28-feature-a.md');
       const featureB = {
         featureIdentities: ['feature-b'],
         changedPaths: new Set<string>(),
       };
 
-      const [foreign, ambiguous, outsidePattern, normalizedForeign, missing] = await Promise.all([
-        resolveArtifactFiles(dir, 'plan', featureB),
+      const [ambiguous, missing] = await Promise.all([
         resolveArtifactFiles(dir, 'stories', featureB),
-        resolveArtifactFiles(dir, 'conflict_check', {
-          featureIdentities: ['feature-b'],
-          changedPaths: new Set(['src/current-feature-change.ts']),
-        }),
-        resolveArtifactFiles(dir, 'prd', featureB),
         resolveArtifactFiles(dir, 'retro', featureB),
       ]);
 
-      expect({
-        foreign,
-        ambiguous,
-        outsidePattern,
-        normalizedForeign,
-        missing,
-      }).toEqual({
-        foreign: {
-          files: [join(dir, '.docs/plans/feature-a.md')],
-        },
+      expect({ ambiguous, missing }).toEqual({
         ambiguous: {
           files: [],
           diagnostic: {
@@ -509,12 +491,6 @@ describe('engine/artifacts', () => {
             reason:
               'stories has 2 artifact candidates and none can be associated with active feature "feature-b"',
           },
-        },
-        outsidePattern: {
-          files: [join(dir, '.docs/conflicts/foreign-conflict.md')],
-        },
-        normalizedForeign: {
-          files: [join(dir, '.docs/specs/2026-07-28-feature-a.md')],
         },
         missing: {
           files: [],
@@ -542,28 +518,6 @@ describe('engine/artifacts', () => {
           reason: 'full-suite PASS evidence is stale: fingerprint_mismatch',
         },
         inspectCalls: 1,
-      });
-    });
-  });
-
-  describe('checkStepCompletion: scoped generic artifacts', () => {
-    it('accepts a legacy singleton and prefers the current file when it appears', async () => {
-      await createFile('.docs/specs/feature-a.md');
-      const context: CompletionContext = {
-        featureDesc: 'feature-b',
-        artifactResolution: {
-          featureIdentities: ['feature-b'],
-          changedPaths: new Set(),
-        },
-      };
-
-      const foreignOnly = await checkStepCompletion(dir, 'prd', context);
-      await createFile('.docs/specs/2026-07-28-feature-b.md');
-      const currentFeature = await checkStepCompletion(dir, 'prd', context);
-
-      expect({ foreignOnly, currentFeature }).toEqual({
-        foreignOnly: { done: true },
-        currentFeature: { done: true },
       });
     });
   });

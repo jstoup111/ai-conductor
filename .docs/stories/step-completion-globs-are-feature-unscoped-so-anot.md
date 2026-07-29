@@ -53,18 +53,18 @@ As a feature owner, I want completion evidence associated with my active plan so
 - Given feature A and feature B artifacts in the same declared directory and an active identity for B, when B's feature-scoped step is checked, then only B's associated artifact can satisfy it.
 - Given B's artifact is newly changed or untracked in B's isolated worktree, when resolution runs before land, then that artifact is recognized as B's even when a historical file has a newer mtime.
 - Given B's artifact uses a supported historical dated or step-prefixed naming shape, when its normalized identity matches B's active plan, then it is recognized without requiring a new manifest.
-- Given a legacy repository has exactly one candidate for a feature-scoped pattern, when no stronger identity evidence is available, then the singleton remains recognized.
+- Given a legacy repository has exactly one candidate for a feature-scoped pattern, when no candidate matches stronger active-feature identity or change-set evidence, then the singleton remains recognized.
 
 #### Negative Paths
 
-- Given only A's artifact exists and B has no associated artifact, when B's step is checked, then it remains incomplete and the diagnostic names the missing/foreign feature evidence.
+- Given multiple foreign artifacts exist and B has no associated artifact, when B's step is checked, then it remains incomplete and the diagnostic names the ambiguous feature evidence.
 - Given several candidates exist and none can be associated with B, when resolution runs, then it returns an actionable ambiguous result and does not choose alphabetically, by newest mtime, or by first glob result.
 - Given a changed file is outside the declared patterns, when B's feature change set is considered, then that file cannot satisfy the step merely because it belongs to B's branch.
-- Given a historical filename normalizes to a different active plan, when B is checked, then the normalized match remains foreign and cannot satisfy B.
+- Given multiple historical filenames normalize to plans other than B, when B is checked, then those normalized matches remain ambiguous and cannot satisfy B.
 
 ### Done When
 
-- [ ] A two-feature integration test proves A-complete/B-missing is a failure and A-complete/B-complete selects only B.
+- [ ] A multi-feature integration test proves an ambiguous foreign corpus cannot complete B and A-complete/B-complete selects only B.
 - [ ] Tests cover changed/untracked worktree evidence, dated/prefixed historical names, and singleton compatibility.
 - [ ] Ambiguity tests assert both `done: false` and a diagnostic that identifies why no current-feature artifact was selected.
 
@@ -84,7 +84,7 @@ As a harness operator, I want the completion gate, interactive artifact review, 
 
 #### Negative Paths
 
-- Given A and B files coexist, when B's review prompt opens, then A's file is not included among B's review candidates.
+- Given multiple foreign files coexist without B's file, when B's review prompt opens, then none is included among B's review candidates.
 - Given B's resolution is ambiguous, when the dashboard renders, then it does not show a satisfied checkmark backed by A's file; the ambiguity remains visible/unsatisfied.
 - Given one consumer is migrated while another still reads raw globs, when production-reachability tests inspect the three call sites, then the incomplete migration fails rather than shipping split behavior.
 

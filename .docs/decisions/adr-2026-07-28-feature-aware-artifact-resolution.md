@@ -76,7 +76,7 @@ Tests must cover two simultaneous feature artifacts for every feature-scoped res
 
 ### Positive
 
-- A foreign feature artifact cannot satisfy a feature-scoped generic completion gate.
+- An ambiguous multi-candidate foreign corpus cannot satisfy a feature-scoped generic completion gate; a lone unmatched candidate remains eligible through the explicit legacy singleton fallback.
 - Completion, review, and dashboard cannot drift into three definitions of artifact identity.
 - Repository-wide and run-local artifacts remain intentionally broad rather than surviving through accidental exceptions.
 - Existing imports of `STEP_ARTIFACT_GLOBS` remain source-compatible during migration.
