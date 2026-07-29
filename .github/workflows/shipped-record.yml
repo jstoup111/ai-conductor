@@ -50,4 +50,8 @@ jobs:
         working-directory: src/conductor
       - run: npm run build
         working-directory: src/conductor
-      - run: node src/conductor/dist/index.js shipment-evidence reconcile --pr "${{ github.event.pull_request.html_url }}" --shipped "${{ github.event.pull_request.merged_at }}"
+      - uses: actions/github-script@v9
+        with:
+          script: |
+            const { runShipmentReconcileAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            await runShipmentReconcileAction({ github, context, core, workspace: process.env.GITHUB_WORKSPACE });
