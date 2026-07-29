@@ -480,20 +480,27 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(logs).toContain(`[mergeable-sweep] merged ${PR_URL} entering shipped-record gate`);
   });
 
-  it('prunes a CLOSED PR without tearing down its retained worktree', async () => {
+  it('reaps a CLOSED feature worktree when its shipped record is present on main', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('CLOSED', 'UNKNOWN', [], []) });
-    let teardownCalls = 0;
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
     await enrollWatch(tmpDir, entry());
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
-      teardownWorktree: async () => {
-        teardownCalls += 1;
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: async (worktree, keep) => {
+        teardownCalls.push({ ...worktree, keep });
       },
     });
     expect({ survivors: await readWatch(tmpDir), teardownCalls }).toEqual({
       survivors: [],
-      teardownCalls: 0,
+      teardownCalls: [
+        {
+          path: join('/fake/repo', '.worktrees', 'test-feature'),
+          branch: 'feat/daemon-test-feature',
+          keep: false,
+        },
+      ],
     });
   });
 
@@ -824,10 +831,12 @@ describe('sweepMergeableLabels — FR-11: non-mergeable PR → remove mergeable 
 });
 
 describe('sweepMergeableLabels — FR-15: per-PR failure → skip, continue others, no throw', () => {
-  it('logs and skips an entry when prMergeState returns UNKNOWN (gh runner error)', async () => {
+  it('keeps UNKNOWN without probing or teardown and continues processing', async () => {
     // Runner throws for PR_URL → prMergeState returns sentinel (state='UNKNOWN') → skip.
     // PR_URL_2 is fine → should be processed (addLabel called).
     const logs: string[] = [];
+    let probeCalls = 0;
+    let teardownCalls = 0;
     const { gh, addLabelCalls } = makeFakeGh({
       [PR_URL]: new Error('network timeout'),
       [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
@@ -835,13 +844,33 @@ describe('sweepMergeableLabels — FR-15: per-PR failure → skip, continue othe
     await enrollWatch(tmpDir, entry(PR_URL));
     await enrollWatch(tmpDir, entry(PR_URL_2));
     await expect(
-      sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) }),
+      sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: gh,
+        log: (m) => logs.push(m),
+        shippedRecordProbe: async () => {
+          probeCalls += 1;
+          return 'present';
+        },
+        teardownWorktree: async () => {
+          teardownCalls += 1;
+        },
+      }),
     ).resolves.toBeUndefined();
-    // PR_URL is still in the registry (skipped, not pruned).
     const remaining = await readWatch(tmpDir);
-    expect(remaining.some((e) => e.prUrl === PR_URL)).toBe(true);
-    // PR_URL_2 was processed and got the mergeable label.
-    expect(addLabelCalls.some((c) => c.prUrl === PR_URL_2 && c.label === 'mergeable')).toBe(true);
+    expect({
+      unknownRetained: remaining.some((e) => e.prUrl === PR_URL),
+      probeCalls,
+      teardownCalls,
+      nextEntryProcessed: addLabelCalls.some(
+        (call) => call.prUrl === PR_URL_2 && call.label === 'mergeable',
+      ),
+    }).toEqual({
+      unknownRetained: true,
+      probeCalls: 0,
+      teardownCalls: 0,
+      nextEntryProcessed: true,
+    });
   });
 
   it('does not throw when the sweep encounters an unexpected error', async () => {

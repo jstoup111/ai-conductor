@@ -238,9 +238,8 @@ export interface SweepOpts {
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
   /**
-   * Optional worktree teardown seam for the MERGED shipped-record gate.
-   * The gate authorizes calls beginning in Task 8; CLOSED and NOTFOUND never
-   * use this dependency.
+   * Optional worktree teardown seam for the shipped-record gate.
+   * MERGED and CLOSED may use this dependency; NOTFOUND never does.
    */
   teardownWorktree?: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
   /** Probe whether the feature's shipped record is present on origin/main. */
@@ -291,10 +290,12 @@ export async function sweepMergeableLabels({
       try {
         const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
 
-        // MERGED has a distinct disposition: only a shipped record proven
-        // present on origin/main authorizes feature-worktree teardown.
-        if (state.state === 'MERGED') {
-          log?.(`[mergeable-sweep] merged ${entry.prUrl} entering shipped-record gate`);
+        // MERGED and CLOSED may both represent a completed merge: only a
+        // shipped record proven present authorizes feature-worktree teardown.
+        if (state.state === 'MERGED' || state.state === 'CLOSED') {
+          log?.(
+            `[mergeable-sweep] ${state.state.toLowerCase()} ${entry.prUrl} entering shipped-record gate`,
+          );
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
             try {
@@ -308,16 +309,16 @@ export async function sweepMergeableLabels({
             } catch (err) {
               log?.(`[mergeable-sweep] error reaping ${entry.prUrl}: ${err}`);
             }
-          } else {
+          } else if (state.state === 'MERGED') {
             survivors.push(entry);
           }
           continue;
         }
 
-        // FR-13: CLOSED / NOTFOUND → prune the registry entry while retaining
-        // the worktree. NOTFOUND means the PR is genuinely gone (404 /
-        // deleted); pruning prevents unbounded registry growth.
-        if (state.state === 'CLOSED' || state.state === 'NOTFOUND') {
+        // FR-13: NOTFOUND → prune the registry entry while retaining the
+        // worktree. It means the PR is genuinely gone (404 / deleted);
+        // pruning prevents unbounded registry growth.
+        if (state.state === 'NOTFOUND') {
           log?.(`[mergeable-sweep] pruning ${entry.prUrl} (state: ${state.state})`);
           continue; // not added to survivors
         }
