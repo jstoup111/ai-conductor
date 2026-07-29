@@ -32,13 +32,20 @@ function requireFn(mod: Record<string, unknown>, name: string): (...args: any[])
 }
 
 let repoPath: string;
+let engineerCwd: string;
+let originalCwd: string;
 
 beforeEach(async () => {
+  originalCwd = process.cwd();
   repoPath = await mkdtemp(join(tmpdir(), 'daemon-cwd-'));
+  engineerCwd = await mkdtemp(join(tmpdir(), 'engineer-cwd-'));
+  process.chdir(engineerCwd);
 });
 
 afterEach(async () => {
+  process.chdir(originalCwd);
   await rm(repoPath, { recursive: true, force: true });
+  await rm(engineerCwd, { recursive: true, force: true });
 });
 
 describe('daemon cwd binding: spawned daemon targets repoPath, not engineer cwd (FR-22)', () => {
