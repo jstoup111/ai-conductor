@@ -154,8 +154,8 @@ function makeFakeGh(
 const PR_URL = 'https://github.com/foo/bar/pull/42';
 const PR_URL_2 = 'https://github.com/foo/bar/pull/43';
 
-function entry(prUrl = PR_URL): WatchEntry {
-  return { prUrl, slug: 'test-feature', repoCwd: '/fake/repo', resolveAttempts: 0, ciFixAttempts: 0 };
+function entry(prUrl = PR_URL, slug = 'test-feature'): WatchEntry {
+  return { prUrl, slug, repoCwd: '/fake/repo', resolveAttempts: 0, ciFixAttempts: 0 };
 }
 
 // ── Temp dir lifecycle ────────────────────────────────────────────────────────
@@ -362,6 +362,46 @@ describe('rewriteWatch', () => {
 // ── Task 13: sweep decision tree ──────────────────────────────────────────────
 
 describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned', () => {
+  it('logs every terminal or retained disposition with a greppable reason without claiming a failed reap', async () => {
+    const scenarios = [
+      { url: PR_URL, slug: 'record-present', state: 'MERGED', probe: 'present' },
+      { url: PR_URL_2, slug: 'record-absent', state: 'MERGED', probe: 'absent' },
+      { url: 'https://github.com/x/y/pull/3', slug: 'closed-unmerged', state: 'CLOSED', probe: 'absent' },
+      { url: 'https://github.com/x/y/pull/4', slug: 'state-unknown', state: 'UNKNOWN', probe: 'absent' },
+    ] as const;
+    const { gh } = makeFakeGh(
+      Object.fromEntries(
+        scenarios.map(({ url, state }) => [
+          url,
+          state === 'UNKNOWN' ? new Error('temporary platform failure') : prViewJson(state),
+        ]),
+      ),
+    );
+    const logs: string[] = [];
+    for (const scenario of scenarios) {
+      await enrollWatch(tmpDir, entry(scenario.url, scenario.slug));
+    }
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async (_repoCwd, slug) =>
+        scenarios.find((scenario) => scenario.slug === slug)?.probe ?? 'indeterminate',
+      teardownWorktree: async () => {
+        throw new Error('worktree path is busy');
+      },
+    });
+
+    expect(logs).toEqual(expect.arrayContaining([
+      `[mergeable-sweep] reap failed record-present (${PR_URL}) — reason: shipped-record-on-main — error: worktree path is busy`,
+      `[mergeable-sweep] retained record-absent — reason: record-not-yet-on-main`,
+      `[mergeable-sweep] retained closed-unmerged (reclaimable) — reason: pr-closed-unmerged`,
+      `[mergeable-sweep] disposition unknown state-unknown — reason: pr-state-unknown`,
+    ]));
+    expect(logs.some((line) => line.includes('reaped record-present'))).toBe(false);
+  });
+
   it('reaps a MERGED feature worktree when its shipped record is present on main', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];

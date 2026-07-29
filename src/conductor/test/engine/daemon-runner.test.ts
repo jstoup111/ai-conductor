@@ -1699,6 +1699,9 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         effects,
         cleanupErrorLogged: logs.some(line => line.includes('clear-on-success error: cleanup exploded')),
         retainedPathLogged: logs.some(line => line.includes(`worktree retained at ${absentPath}`)),
+        retainedReasonLogged: logs.includes(
+          `[daemon-runner] retained ${ITEM.slug} — reason: pr-open-awaiting-main`,
+        ),
         haltedStatus: halted.status,
         haltedClaimsShipRetention: haltedLogs.some(line => line.includes('worktree retained at')),
       }).toEqual({
@@ -1706,6 +1709,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         effects: ['enrollWatch', 'markProcessed'],
         cleanupErrorLogged: true,
         retainedPathLogged: true,
+        retainedReasonLogged: true,
         haltedStatus: 'halted',
         haltedClaimsShipRetention: false,
       });

@@ -439,6 +439,7 @@ export function makeRunFeature(
 
           await deps.markProcessed(item.slug, outcome.prUrl);
           featureLog(`[daemon-runner] worktree retained at ${worktree.path}`);
+          featureLog(`[daemon-runner] retained ${item.slug} — reason: pr-open-awaiting-main`);
 
           // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
           // written here — `/finish` commits it on the IMPLEMENTATION branch

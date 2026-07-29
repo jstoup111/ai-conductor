@@ -8,7 +8,7 @@
  *   - rewriteWatch   — overwrite the file; swallow write failures (C3).
  *
  * sweepMergeableLabels — for each tracked PR:
- *   1. MERGED → enter the shipped-record gate path; CLOSED / NOTFOUND → prune (FR-13).
+ *   1. MERGED / CLOSED → enter the shipped-record gate path; NOTFOUND → prune (FR-13).
  *   2. UNKNOWN state (read error) → log + skip (FR-15).
  *   3. labels includes `needs-remediation` → ensure `mergeable` absent (FR-12).
  *   4. isMergeable → add `mergeable` if not already present (FR-10, C2).
@@ -306,11 +306,28 @@ export async function sweepMergeableLabels({
                 },
                 false,
               );
+              log?.(
+                `[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`,
+              );
             } catch (err) {
-              log?.(`[mergeable-sweep] error reaping ${entry.prUrl}: ${err}`);
+              const detail = err instanceof Error ? err.message : String(err);
+              log?.(
+                `[mergeable-sweep] reap failed ${entry.slug} (${entry.prUrl}) — reason: shipped-record-on-main — error: ${detail}`,
+              );
             }
           } else if (state.state === 'MERGED') {
+            log?.(
+              `[mergeable-sweep] retained ${entry.slug} — reason: record-not-yet-on-main${
+                shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
+              }`,
+            );
             survivors.push(entry);
+          } else {
+            log?.(
+              `[mergeable-sweep] retained ${entry.slug} (reclaimable) — reason: pr-closed-unmerged${
+                shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
+              }`,
+            );
           }
           continue;
         }
@@ -327,6 +344,9 @@ export async function sweepMergeableLabels({
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
+          log?.(
+            `[mergeable-sweep] disposition unknown ${entry.slug} — reason: pr-state-unknown`,
+          );
           survivors.push(entry);
           continue;
         }
