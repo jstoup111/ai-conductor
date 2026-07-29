@@ -99,7 +99,7 @@ export interface ArtifactResolutionResult {
 }
 
 export interface ArtifactResolutionDiagnostic {
-  code: 'missing' | 'foreign' | 'ambiguous';
+  code: 'missing' | 'ambiguous';
   reason: string;
 }
 
@@ -455,12 +455,6 @@ export async function resolveArtifactFiles(
       return {
         code: 'missing',
         reason: `${step} has no artifact candidates for ${identityLabel}`,
-      };
-    }
-    if (candidateCount === 1) {
-      return {
-        code: 'foreign',
-        reason: `${step} has one artifact candidate that does not match ${identityLabel}`,
       };
     }
     return {
