@@ -242,6 +242,7 @@ import {
   postHaltHistoryComment,
 } from './halt-pr-rehabilitation.js';
 import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
+import { openShipDraftPr } from './ship-draft-pr.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
@@ -944,6 +945,12 @@ export class Conductor {
   private git: GitRunner;
   /** gh CLI runner for merged-PR guard (kickback/rebase entry checks, ADR-2026-07-09). */
   private runGh: GhRunner;
+  /**
+   * One-shot latch for the SHIP-phase-entry draft PR (`openShipDraftPr`). The
+   * publisher itself is idempotent, but the latch keeps the whole SHIP phase to
+   * a single push + `gh pr view` rather than repeating them at every SHIP step.
+   */
+  private shipDraftPrAttempted = false;
   /** Strict merged-history verifier; injection is limited to hermetic tests. */
   private verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
   /** Strict finish verifier; production defaults to evaluateShipmentEvidence. */
@@ -2814,6 +2821,39 @@ export class Conductor {
             process.off('SIGTERM', sigterm);
             return;
           }
+        }
+
+        // SHIP-phase entry: open the implementation PR as a DRAFT.
+        //
+        // Every skip has been evaluated, so this is the first SHIP step that
+        // will actually execute — i.e. the start of the ship phase. Publishing
+        // here (rather than at `finish`) means the PR number exists for the
+        // whole SHIP tail: `conduct-ts finalize-changelog-pr` can substitute
+        // the `{{IMPLEMENTATION_PR}}` CHANGELOG token during the phase instead
+        // of only inside the finish turn, which is what used to leave stale
+        // tokens behind and cycle the feature back through SHIP.
+        //
+        // The PR stays a DRAFT until `finish` flips it (ensureShipReady, run
+        // from repairFinishPr and verified by the finish ship-readiness gate in
+        // artifacts.ts). A draft cannot be merged and is skipped by
+        // mergeable-sweep's autoresolve/ci-fix candidates, so nothing acts on
+        // the feature before finish. Self-host builds are NOT exempt: the
+        // release/VERSION gates still run before finish, so they still gate the
+        // ready-for-review flip — see
+        // adr-2026-07-29-ship-start-draft-pr-supersedes-self-host-precedence.
+        //
+        // Advisory: openShipDraftPr never throws and a failure only logs.
+        if (step.phase === 'SHIP' && !this.shipDraftPrAttempted) {
+          this.shipDraftPrAttempted = true;
+          await openShipDraftPr({
+            gh: this.gh,
+            git: this.git,
+            cwd: this.projectRoot,
+            branch: state.worktree_branch,
+            baseBranch: this.baseBranch,
+            featureDesc: state.feature_desc,
+            log: this.log ?? console.warn,
+          });
         }
 
         // Execute parallel group (T15 — Promise.all fan-out)
