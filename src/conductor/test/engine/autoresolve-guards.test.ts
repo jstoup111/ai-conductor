@@ -27,7 +27,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -142,6 +142,65 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
       ok: false,
       guard: 'rebaseStateActive',
       reason: expect.any(String),
+    });
+  });
+
+  it('logs that a CONFLICTING PR is skipped because its retained build worktree exists, without changing worktrees', async () => {
+    const slug = 'retained-feature';
+    const worktreesRoot = join(repo, '.worktrees');
+    const retainedWorktree = join(worktreesRoot, slug);
+    await mkdir(retainedWorktree, { recursive: true });
+    await writeFile(join(retainedWorktree, 'pipeline-evidence'), 'preserve me\n');
+    const before = await readdir(worktreesRoot, { recursive: true });
+    const logs: string[] = [];
+    const queriedPaths: string[] = [];
+
+    const autoresolve = await import('../../src/engine/autoresolve.js');
+    const result = await autoresolve.isEligibleForResolve(
+      {
+        prUrl: 'https://github.com/example/repo/pull/42',
+        slug,
+        repoCwd: repo,
+        resolveAttempts: 0,
+        lastResolveAt: undefined,
+      },
+      {
+        state: 'CONFLICTING',
+        mergeable: 'CONFLICTING',
+        hasFailingOrPendingChecks: false,
+        labels: [],
+        checksOutcome: 'none',
+      },
+      { mergeable_autoresolve: { enabled: true, cooldownMinutes: 60 } },
+      new Date('2026-01-15T12:00:00Z'),
+      {
+        worktreeExists: async (path: string) => {
+          queriedPaths.push(path);
+          return path === `.worktrees/${slug}`;
+        },
+      },
+      (message: string) => logs.push(message),
+    );
+
+    expect({
+      result,
+      logs,
+      queriedPaths,
+      worktrees: await readdir(worktreesRoot, { recursive: true }),
+    }).toEqual({
+      result: {
+        eligible: false,
+        reason: expect.stringMatching(
+          /retained build worktree.*\.worktrees\/retained-feature/i,
+        ),
+      },
+      logs: [
+        expect.stringMatching(
+          /skipped\(.*retained build worktree.*\.worktrees\/retained-feature.*\)/i,
+        ),
+      ],
+      queriedPaths: ['.worktrees/retained-feature'],
+      worktrees: before,
     });
   });
 });
