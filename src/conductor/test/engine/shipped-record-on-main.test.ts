@@ -23,6 +23,34 @@ afterEach(async () => {
 });
 
 describe('shippedRecordOnMain', () => {
+  it('returns absent when origin/main has no shipped record', async () => {
+    const slug = 'not-shipped';
+    const calls: string[][] = [];
+    const run: GitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'cat-file') {
+        throw Object.assign(new Error('git cat-file exited with code 128'), {
+          code: 128,
+          stdout: '',
+          stderr: `fatal: path '.docs/shipped/${slug}.md' does not exist in 'origin/main'`,
+        });
+      }
+      return { stdout: '', stderr: '' };
+    };
+    const module = await import('../../src/engine/shipped-record-on-main.js').catch(() => undefined);
+    const result = module
+      ? await module.shippedRecordOnMain('/repo', slug, run)
+      : 'missing-export';
+
+    expect({ result, calls }).toEqual({
+      result: 'absent',
+      calls: [
+        ['fetch', 'origin', 'main'],
+        ['cat-file', '-e', `origin/main:.docs/shipped/${slug}.md`],
+      ],
+    });
+  });
+
   it('finds a shipped record on origin/main after squash merge even though feature ancestry is absent', async () => {
     const root = await mkdtemp(join(tmpdir(), 'shipped-record-squash-'));
     roots.push(root);
