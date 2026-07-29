@@ -52,7 +52,7 @@ function errorCode(error: unknown): string {
 export async function migrateLegacyHaltClasses(
   projectRoot: string,
   worktreeBase: string,
-  log: (message: string) => void,
+  log: (message: string) => void = () => {},
 ): Promise<void> {
   const migrationDirectory = join(projectRoot, '.daemon', 'migrations');
   const watermark = join(migrationDirectory, MIGRATION_NAME);
