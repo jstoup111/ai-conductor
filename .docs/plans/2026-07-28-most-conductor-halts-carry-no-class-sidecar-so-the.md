@@ -82,7 +82,7 @@ create a new `needs-human` marker only when no specific marker already exists.
 
 **Files:** `src/conductor/src/engine/halt-marker.ts`, `src/conductor/test/engine/halt-marker.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`, `src/conductor/src/engine/step-runners.ts#dispatchProviderWithWatchdog`, `src/conductor/src/engine/rebase.ts#writeHalt`, `src/conductor/src/engine/self-host/gate-halt.ts#writeSelfHostHalt`
+**Wired-into:** `src/conductor/src/index.ts#main`, `src/conductor/src/daemon-cli.ts#runDaemonMode`, `src/conductor/src/engine/step-runners.ts#dispatchProviderWithWatchdog`, `src/conductor/src/engine/rebase.ts#writeHalt`, `src/conductor/src/engine/self-host/gate-halt.ts#writeSelfHostHalt`
 
 **Dependencies:** none
 

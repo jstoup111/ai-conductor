@@ -314,8 +314,16 @@ interface HaltClassMigrationStartupDeps {
  * Establish the halt-class compatibility boundary only after daemon ownership.
  * Returning null keeps lock-loser startup unable to mutate worktrees or begin
  * any migration-dependent normal work.
+ *
+ * Not exported: the only production caller is `runDaemonMode` in this same
+ * file (via the `opts.runHaltClassMigration ?? runOwnedHaltClassMigration`
+ * DI-seam default just below), and its unit tests drive it through that seam
+ * (`runDaemonMode({ runHaltClassMigration: ... })`) rather than importing it
+ * directly — an exported-but-only-test-imported symbol otherwise trips the
+ * wiring-reachability gate's orphan backstop even though the seam is
+ * genuinely wired (see wiring-probe.ts's `orphanBackstop`).
  */
-export async function runOwnedHaltClassMigration(
+async function runOwnedHaltClassMigration(
   lock: object | null,
   projectRoot: string,
   deps: HaltClassMigrationStartupDeps,
