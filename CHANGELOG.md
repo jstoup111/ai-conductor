@@ -118,7 +118,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   background marketplace sync tripped the guard and halted an in-flight self-host build with
   "provider state changed during self-host execution".
 
-- `conduct-ts finalize-changelog-pr` no longer refuses (or, if hand-worked-around, misattributes) forever when a stale, never-finalized implementation placeholder is already sitting on the merge-base from an earlier PR whose finish never ran the finalizer. It now reads `CHANGELOG.md` at the branch's merge-base and only replaces the token-bearing line that is new relative to that base, leaving any pre-existing stale token untouched; ambiguity still hard-fails when more than one new token line is found ([implementation PR #1142](https://github.com/jstoup111/ai-conductor/pull/1142)).
+- `conduct-ts finalize-changelog-pr` no longer refuses (or, if hand-worked-around, misattributes) forever when a stale, never-finalized `{{IMPLEMENTATION_PR}}` token is already sitting on the merge-base from an earlier PR whose finish never ran the finalizer. It now reads `CHANGELOG.md` at the branch's merge-base and only replaces the token-bearing line that is new relative to that base, leaving any pre-existing stale token untouched; ambiguity still hard-fails when more than one new token line is found ({{IMPLEMENTATION_PR}}).
 
 - BUILD now seeds `.pipeline/task-status.json` before every dispatch, independent of the retired attribution cutover, so progress appears immediately. Attribution remains advisory: malformed or unavailable telemetry cannot halt work. Removed the dead build-step enforcement marker, machinery preflight, zero-work kickback, and no-op post-dispatch/mutation hooks.
 
@@ -364,13 +364,6 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   correct, functional way to start a run at a specific step; it is unchanged. `docs/reference/cli.md`
   and `docs/reference/steps.md` already documented both flags as non-functional — that documentation
   is now removed along with the flags ([#1013](https://github.com/jstoup111/ai-conductor/issues/1013)).
-- The generated model-selection table's 22 interactive-skill rows now describe both supported
-  hosts instead of Claude alone: `executionPath` reads `supported-host interactive`, and each row
-  carries a fixed Codex model/effort inheritance placeholder alongside its existing Claude
-  model/effort pin, so the table and `docs/reference/models.md` no longer imply Codex has no
-  interactive dispatch path. Skill `model:` frontmatter pins remain Claude-scoped; Codex policy
-  values still do not participate in pin comparison ([implementation PR #1142](https://github.com/jstoup111/ai-conductor/pull/1142)).
-- `conduct-ts finalize-changelog-pr` no longer refuses (or, if hand-worked-around, misattributes) forever when a stale, never-finalized implementation placeholder is already sitting on the merge-base from an earlier PR whose finish never ran the finalizer. It now reads `CHANGELOG.md` at the branch's merge-base and only replaces the token-bearing line that is new relative to that base, leaving any pre-existing stale token untouched; ambiguity still hard-fails when more than one new token line is found ([implementation PR #1142](https://github.com/jstoup111/ai-conductor/pull/1142)).
 
 ## Migration
 
@@ -602,7 +595,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 ### Fixed
 
-- Keep build dispatches running by restoring and wiring missing session hooks at preflight, while requiring every restored hook to be an executable regular file that is not a symlink before attribution enforcement is armed ([#896](https://github.com/jstoup111/ai-conductor/issues/896); [implementation PR #1088](https://github.com/jstoup111/ai-conductor/pull/1088)).
+- Keep build dispatches running by restoring and wiring missing session hooks at preflight, while requiring every restored hook to be an executable regular file that is not a symlink before attribution enforcement is armed ([#896](https://github.com/jstoup111/ai-conductor/issues/896); {{IMPLEMENTATION_PR}}).
 
 - Self-host `provider-home` provisioning no longer symlinks the throwaway
   `CODEX_HOME`/`CLAUDE_CONFIG_DIR`'s `skills` (and Codex's `.agents/skills`) directly to
