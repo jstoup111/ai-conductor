@@ -52,6 +52,20 @@ This presents as flakiness — a cold worktree fails a handful of real-binary te
 afterwards is green with no code change. If you see that pattern, check whether `dist` resolves
 before assuming a race in the code under test.
 
+### Deterministic daemon end-to-end fixture
+
+`test/engine/daemon-e2e-fixture.test.ts` drives a committed fixture from
+`test/fixtures/daemon-e2e/` through the real daemon claim, Conductor build,
+evidence, completion-gate, and local finish path. A scripted provider fake is
+the only external boundary; it makes real local Git commits while the internal
+pipeline remains production code. The negative case proves missing task
+evidence halts instead of completing.
+
+This test runs in ordinary CI without a separate workflow job.
+`vitest.config.ts` includes `test/**/*.test.ts` and excludes only smoke paths
+and `*.smoke.test.ts` names, so the existing `conductor` job's `npm test`
+invocation runs it and reports through `ci-gate`.
+
 ## Linters
 
 Three linters run in CI, each scoped to what `tsc` and `bash -n` cannot tell you.
