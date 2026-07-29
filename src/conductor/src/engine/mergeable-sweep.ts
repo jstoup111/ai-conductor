@@ -90,21 +90,30 @@ const dispositionCaches = new WeakMap<
   Map<string, string>
 >();
 
-function logDisposition(
+function recordDisposition(
   log: ((msg: string) => void) | undefined,
-  slug: string,
+  entry: WatchEntry,
   disposition: string,
-  message: string,
-): void {
-  if (!log) return;
+): boolean {
+  if (!log) return false;
   let cache = dispositionCaches.get(log);
   if (!cache) {
     cache = new Map<string, string>();
     dispositionCaches.set(log, cache);
   }
-  if (cache.get(slug) === disposition) return;
-  cache.set(slug, disposition);
-  log(message);
+  const entryIdentity = `${entry.repoCwd}\0${entry.prUrl}\0${entry.slug}`;
+  if (cache.get(entryIdentity) === disposition) return false;
+  cache.set(entryIdentity, disposition);
+  return true;
+}
+
+function logDisposition(
+  log: ((msg: string) => void) | undefined,
+  entry: WatchEntry,
+  disposition: string,
+  message: string,
+): void {
+  if (recordDisposition(log, entry, disposition)) log?.(message);
 }
 
 // ── Registry helpers ──────────────────────────────────────────────────────────
@@ -341,7 +350,7 @@ export async function sweepMergeableLabels({
           } else if (state.state === 'MERGED') {
             logDisposition(
               log,
-              entry.slug,
+              entry,
               `retained:record-not-yet-on-main:${shippedRecord}`,
               `[mergeable-sweep] retained ${entry.slug} — reason: record-not-yet-on-main${
                 shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
@@ -351,7 +360,7 @@ export async function sweepMergeableLabels({
           } else {
             logDisposition(
               log,
-              entry.slug,
+              entry,
               `retained:pr-closed-unmerged:${shippedRecord}`,
               `[mergeable-sweep] retained ${entry.slug} (reclaimable) — reason: pr-closed-unmerged${
                 shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
@@ -365,6 +374,7 @@ export async function sweepMergeableLabels({
         // worktree. It means the PR is genuinely gone (404 / deleted);
         // pruning prevents unbounded registry growth.
         if (state.state === 'NOTFOUND') {
+          recordDisposition(log, entry, 'notfound');
           log?.(`[mergeable-sweep] pruning ${entry.prUrl} (state: ${state.state})`);
           continue; // not added to survivors
         }
@@ -375,7 +385,7 @@ export async function sweepMergeableLabels({
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
           logDisposition(
             log,
-            entry.slug,
+            entry,
             'unknown:pr-state-unknown',
             `[mergeable-sweep] disposition unknown ${entry.slug} — reason: pr-state-unknown`,
           );
@@ -384,6 +394,7 @@ export async function sweepMergeableLabels({
         }
 
         // Entry is live — keep it in the registry.
+        recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
 
         // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass

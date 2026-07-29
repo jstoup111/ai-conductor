@@ -362,11 +362,9 @@ describe('rewriteWatch', () => {
 // ── Task 13: sweep decision tree ──────────────────────────────────────────────
 
 describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned', () => {
-  it('logs every terminal or retained disposition with a greppable reason without claiming a failed reap', async () => {
+  it('logs failed-reap and unknown boundaries without claiming a failed reap succeeded', async () => {
     const scenarios = [
       { url: PR_URL, slug: 'record-present', state: 'MERGED', probe: 'present' },
-      { url: PR_URL_2, slug: 'record-absent', state: 'MERGED', probe: 'absent' },
-      { url: 'https://github.com/x/y/pull/3', slug: 'closed-unmerged', state: 'CLOSED', probe: 'absent' },
       { url: 'https://github.com/x/y/pull/4', slug: 'state-unknown', state: 'UNKNOWN', probe: 'absent' },
     ] as const;
     const { gh } = makeFakeGh(
@@ -395,8 +393,6 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
 
     expect(logs).toEqual(expect.arrayContaining([
       `[mergeable-sweep] reap failed record-present (${PR_URL}) — reason: shipped-record-on-main — error: worktree path is busy`,
-      `[mergeable-sweep] retained record-absent — reason: record-not-yet-on-main`,
-      `[mergeable-sweep] retained closed-unmerged (reclaimable) — reason: pr-closed-unmerged`,
       `[mergeable-sweep] disposition unknown state-unknown — reason: pr-state-unknown`,
     ]));
     expect(logs.some((line) => line.includes('reaped record-present'))).toBe(false);
@@ -443,6 +439,59 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
       unchangedRetainLines: 1,
       changedDispositionLines: 1,
     });
+  });
+
+  it('logs a retained disposition again after the same entry transitions through OPEN', async () => {
+    const retainedGh = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    }).gh;
+    const openGh = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    }).gh;
+    const logs: string[] = [];
+    const log = (message: string) => logs.push(message);
+    await enrollWatch(tmpDir, entry());
+
+    for (const runGh of [retainedGh, openGh, retainedGh]) {
+      await sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh,
+        log,
+        shippedRecordProbe: async () => 'absent',
+      });
+    }
+
+    expect(logs.filter(
+      (line) => line === '[mergeable-sweep] retained test-feature — reason: record-not-yet-on-main',
+    )).toHaveLength(2);
+  });
+
+  it('does not suppress distinct retained entries that share a slug', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    });
+    const logs: string[] = [];
+    const log = (message: string) => logs.push(message);
+    await enrollWatch(tmpDir, {
+      ...entry(PR_URL, 'shared-slug'),
+      repoCwd: '/fake/repo-a',
+    });
+    await enrollWatch(tmpDir, {
+      ...entry(PR_URL_2, 'shared-slug'),
+      repoCwd: '/fake/repo-b',
+    });
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+
+    expect(logs.filter(
+      (line) => line === '[mergeable-sweep] retained shared-slug — reason: record-not-yet-on-main',
+    )).toHaveLength(2);
   });
 
   it('reaps a MERGED feature worktree when its shipped record is present on main', async () => {
