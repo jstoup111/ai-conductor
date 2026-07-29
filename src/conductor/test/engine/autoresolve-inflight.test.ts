@@ -17,7 +17,7 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -93,6 +93,28 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
     worktreeExists: async (_path: string): Promise<boolean> => false,
   };
 
+  async function retainFeatureWorktree(slug: string): Promise<{
+    path: string;
+    pipelineMarker: string;
+  }> {
+    const path = join(dir, '.worktrees', slug);
+    const pipelineMarker = join(path, '.pipeline', 'task-evidence');
+    await g(['update-ref', `refs/remotes/origin/feat/${slug}`, `feat/${slug}`]);
+    await g(['worktree', 'add', path, `feat/${slug}`]);
+    await mkdir(join(path, '.pipeline'), { recursive: true });
+    await writeFile(pipelineMarker, 'retained evidence\n');
+    return { path, pipelineMarker };
+  }
+
+  async function pathExists(path: string): Promise<boolean> {
+    try {
+      await access(path);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   it('reports not in flight before any resolution starts', () => {
     expect(isResolutionInFlight()).toBe(false);
   });
@@ -145,5 +167,90 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
 
     const elig = await isEligibleForResolve(entryA, prState, cfg, new Date(), fs);
     expect(elig.eligible).toBe(true);
+  });
+
+  it('provisions and tears down the resolve worktree without changing the retained feature worktree', async () => {
+    const retained = await retainFeatureWorktree('pr-1');
+    let resolvePathDuringRun = '';
+
+    await withResolveWorktree(
+      'pr-1',
+      'origin/feat/pr-1',
+      dir,
+      async (resolvePath) => {
+        resolvePathDuringRun = resolvePath;
+      },
+      async () => {},
+    );
+
+    expect({
+      resolvePathDuringRun,
+      resolveStillExists: await pathExists(resolvePathDuringRun),
+      retainedStillExists: await pathExists(retained.path),
+      retainedEvidence: await readFile(retained.pipelineMarker, 'utf8'),
+    }).toEqual({
+      resolvePathDuringRun: join(dir, '.worktrees', 'resolve-pr-1'),
+      resolveStillExists: false,
+      retainedStillExists: true,
+      retainedEvidence: 'retained evidence\n',
+    });
+  });
+
+  it('does not remove the retained feature worktree when resolve preparation fails', async () => {
+    const retained = await retainFeatureWorktree('pr-1');
+    const resolvePath = join(dir, '.worktrees', 'resolve-pr-1');
+
+    await expect(
+      withResolveWorktree(
+        'pr-1',
+        'origin/feat/pr-1',
+        dir,
+        async () => undefined,
+        async () => {
+          throw new Error('prepare failed');
+        },
+      ),
+    ).rejects.toThrow('prepare failed');
+
+    expect({
+      resolveStillExists: await pathExists(resolvePath),
+      retainedStillExists: await pathExists(retained.path),
+      retainedEvidence: await readFile(retained.pipelineMarker, 'utf8'),
+    }).toEqual({
+      resolveStillExists: false,
+      retainedStillExists: true,
+      retainedEvidence: 'retained evidence\n',
+    });
+  });
+
+  it('force-recreates a stale resolve path without touching the retained feature worktree', async () => {
+    const retained = await retainFeatureWorktree('pr-1');
+    const staleResolvePath = join(dir, '.worktrees', 'resolve-pr-1');
+    const staleMarker = join(staleResolvePath, 'stale-marker');
+    await mkdir(staleResolvePath, { recursive: true });
+    await writeFile(staleMarker, 'stale\n');
+    let staleMarkerPresentDuringRun = true;
+
+    await withResolveWorktree(
+      'pr-1',
+      'origin/feat/pr-1',
+      dir,
+      async () => {
+        staleMarkerPresentDuringRun = await pathExists(staleMarker);
+      },
+      async () => {},
+    );
+
+    expect({
+      staleMarkerPresentDuringRun,
+      resolveStillExists: await pathExists(staleResolvePath),
+      retainedStillExists: await pathExists(retained.path),
+      retainedEvidence: await readFile(retained.pipelineMarker, 'utf8'),
+    }).toEqual({
+      staleMarkerPresentDuringRun: false,
+      resolveStillExists: false,
+      retainedStillExists: true,
+      retainedEvidence: 'retained evidence\n',
+    });
   });
 });
