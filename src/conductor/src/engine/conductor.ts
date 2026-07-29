@@ -2603,12 +2603,7 @@ export class Conductor {
       const manualTestEscalation = await checkKickbackToBuildEscalation('manual_test');
       if (manualTestEscalation.halt) {
         const reason = `manual_test kickback-to-build no-op: ${manualTestEscalation.reason}`;
-        await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-        await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
-          () => {
-            /* best-effort marker */
-          },
-        );
+        await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
         await writeState(this.stateFilePath, state);
         const prUrl = await this.surfaceRemediationPr(reason);
         await this.events.emit({ type: 'loop_halt', reason, prUrl });
@@ -3206,10 +3201,7 @@ export class Conductor {
               const haltReason =
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
-              const haltPath = join(this.projectRoot, HALT_MARKER);
-              await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
-                // Best-effort HALT write; if it fails, still fail the step below.
-              });
+              await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               state[step.name] = 'failed';
               await saveStepStatus(this.stateFilePath, step.name, 'failed');
               await writeState(this.stateFilePath, state);
@@ -3467,16 +3459,7 @@ export class Conductor {
                   const gapEscalation = await checkKickbackToBuildEscalation(gapName);
                   if (gapEscalation.halt) {
                     const reason = `${gapName} kickback-to-build no-op: ${gapEscalation.reason}`;
-                    await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                      () => {},
-                    );
-                    await writeFile(
-                      join(this.projectRoot, LOOP_HALT_MARKER),
-                      reason + '\n',
-                      'utf-8',
-                    ).catch(() => {
-                      /* best-effort marker */
-                    });
+                    await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                     await writeState(this.stateFilePath, state);
                     const prUrl = await this.surfaceRemediationPr(reason);
                     await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -3599,14 +3582,9 @@ export class Conductor {
             state[step.name] = 'failed';
             await saveStepStatus(this.stateFilePath, step.name, 'failed');
             await writeState(this.stateFilePath, state);
-            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-            await writeFile(
-              join(this.projectRoot, LOOP_HALT_MARKER),
-              groupHaltReason + '\n',
-              'utf-8',
-            ).catch(() => {
-              /* best-effort marker */
-            });
+            if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
+              await writeHaltMarker(this.projectRoot, groupHaltReason + '\n', 'needs-human');
+            }
             await emitTracked({
               type: 'step_failed',
               step: step.name,
