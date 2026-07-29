@@ -234,10 +234,11 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
     const modulePath = ['../../src/engine', 'shipment-reconcile-action.js'].join('/');
     const loaded = await import(modulePath).catch(() => null) as null | {
       createShipmentReconcileGithubAdapter?: (input: { owner: string; repo: string; client: typeof client }) => {
-        getImplementationPullRequest(input: { pullNumber: number }): Promise<unknown>;
+        getPullRequestMetadata(input: { pullNumber: number }): Promise<unknown>;
         listImplementationPullRequestFiles(input: { pullNumber: number }): Promise<unknown>;
         getRepairBranch(input: { branch: string }): Promise<unknown>;
-        findOrCreateRepairPullRequest(input: { branch: string; base: string; title: string; body: string }): Promise<unknown>;
+        listRepairPullRequests(input: { branch: string; base: string; state: 'open'; limit: number }): Promise<unknown>;
+        createRepairPullRequest(input: { branch: string; base: string; title: string; body: string }): Promise<unknown>;
         getPullRequestHead(input: { pullNumber: number }): Promise<unknown>;
         postCommitStatus(input: { sha: string; state: string; context: string; description: string }): Promise<unknown>;
       };
@@ -247,10 +248,11 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
     if (loaded?.createShipmentReconcileGithubAdapter) {
       const adapter = loaded.createShipmentReconcileGithubAdapter({ owner: 'acme', repo: 'conductor', client });
       outputs = {
-        implementation: await adapter.getImplementationPullRequest({ pullNumber: 916 }),
+        metadata: await adapter.getPullRequestMetadata({ pullNumber: 916 }),
         files: await adapter.listImplementationPullRequestFiles({ pullNumber: 916 }),
         branch: await adapter.getRepairBranch({ branch: 'shipment-repair/916/durable-shipped-records' }),
-        repairPullRequest: await adapter.findOrCreateRepairPullRequest({ branch: 'shipment-repair/916/durable-shipped-records', base: 'main', title: 'Repair shipment record', body: 'Record-only repair for #916' }),
+        repairPullRequests: await adapter.listRepairPullRequests({ branch: 'shipment-repair/916/durable-shipped-records', base: 'main', state: 'open', limit: 1 }),
+        repairPullRequest: await adapter.createRepairPullRequest({ branch: 'shipment-repair/916/durable-shipped-records', base: 'main', title: 'Repair shipment record', body: 'Record-only repair for #916' }),
         repairHead: await adapter.getPullRequestHead({ pullNumber: 1000 }),
         status: await adapter.postCommitStatus({ sha: 'repair-head', state: 'success', context: 'shipped-record', description: 'durable shipment evidence valid on repair head' }),
       };
@@ -258,9 +260,10 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
 
     expect({ outputs, calls }).toEqual({
       outputs: {
-        implementation: { number: 916, url: 'https://github.com/acme/conductor/pull/916', merged: true, mergeCommitSha: 'merged-sha', headSha: 'implementation-head' },
+        metadata: { url: 'https://github.com/acme/conductor/pull/916', body: '', headSha: 'implementation-head' },
         files: [{ path: '.docs/plans/durable-shipped-records.md', status: 'added' }, { path: 'src/conductor/index.ts', status: 'modified' }],
         branch: { name: 'shipment-repair/916/durable-shipped-records', headSha: 'repair-head' },
+        repairPullRequests: [],
         repairPullRequest: { number: 1000, url: 'https://github.com/acme/conductor/pull/1000' },
         repairHead: 'repair-head',
         status: { state: 'success', context: 'shipped-record' },

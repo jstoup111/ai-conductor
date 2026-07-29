@@ -11,8 +11,6 @@ interface GithubClient {
         number: number;
         html_url: string;
         body?: string | null;
-        merged: boolean;
-        merge_commit_sha: string | null;
         head: { sha: string };
       }>>;
       listFiles(input: {
@@ -109,17 +107,6 @@ export function createShipmentReconcileGithubAdapter(input: {
       return { url: data.html_url, body: data.body ?? '', headSha: data.head.sha };
     },
 
-    async getImplementationPullRequest({ pullNumber }: { pullNumber: number }) {
-      const { data } = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-      return {
-        number: data.number,
-        url: data.html_url,
-        merged: data.merged,
-        mergeCommitSha: data.merge_commit_sha,
-        headSha: data.head.sha,
-      };
-    },
-
     async listImplementationPullRequestFiles({ pullNumber }: { pullNumber: number }) {
       const request = { owner, repo, pull_number: pullNumber, per_page: 100 as const };
       const files = client.paginate
@@ -136,21 +123,6 @@ export function createShipmentReconcileGithubAdapter(input: {
     listRepairPullRequests,
 
     createRepairPullRequest,
-
-    async findOrCreateRepairPullRequest({
-      branch,
-      base,
-      title,
-      body,
-    }: {
-      branch: string;
-      base: string;
-      title: string;
-      body: string;
-    }) {
-      const existing = await listRepairPullRequests({ branch, base, state: 'open', limit: 1 });
-      return existing[0] ?? createRepairPullRequest({ branch, base, title, body });
-    },
 
     async getPullRequestHead({ pullNumber }: { pullNumber: number }) {
       const { data } = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
