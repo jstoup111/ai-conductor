@@ -5299,7 +5299,7 @@ export class Conductor {
                     if (outcome.kind === 'halt') {
                       const reason =
                         `build_review completeness FAIL needs a human: ${outcome.detail}`;
-                      await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
+                      await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                       await writeState(this.stateFilePath, state);
                       const prUrl = await this.surfaceRemediationPr(reason);
                       await emitTracked({ type: 'loop_halt', reason, prUrl });

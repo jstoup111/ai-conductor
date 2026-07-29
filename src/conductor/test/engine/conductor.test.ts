@@ -302,6 +302,9 @@ describe('engine/conductor', () => {
       await expect(readFile(join(dir, '.pipeline', 'HALT'), 'utf-8')).resolves.toContain(
         'durable shipment evidence: shipped-record-missing',
       );
+      await expect(readFile(join(dir, '.pipeline', 'HALT.class'), 'utf-8')).resolves.toBe(
+        'mechanical',
+      );
       await expect(readFile(join(dir, '.pipeline', 'DONE'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(readFile(join(dir, '.pipeline', 'finish-choice'), 'utf-8')).rejects.toMatchObject({ code: 'ENOENT' });
     });
@@ -1399,9 +1402,13 @@ describe('engine/conductor', () => {
     async function seedToPrdAudit(): Promise<void> {
       const res = await readState(statePath);
       const state = (res.ok ? res.value : {}) as Record<string, unknown>;
+      let reachedPrdAudit = false;
       for (const s of ALL_STEPS) {
-        if (s.name === 'prd_audit') break;
-        state[s.name] = 'done';
+        if (s.name === 'prd_audit') {
+          reachedPrdAudit = true;
+          continue;
+        }
+        state[s.name] = reachedPrdAudit ? 'skipped' : 'done';
       }
       state.complexity_tier = 'L';
       state.feature_desc = 'feat';
@@ -1419,9 +1426,11 @@ describe('engine/conductor', () => {
     function shipRunner(auditBody: string): { runner: StepRunner; calls: StepName[] } {
       const calls: StepName[] = [];
       const runner: StepRunner = {
-        run: vi.fn(async (step: StepName) => {
+        run: vi.fn(async (step: StepName, currentState: ConductState) => {
           calls.push(step);
           if (step === 'build') {
+            currentState.manual_test = 'skipped';
+            currentState.architecture_review_as_built = 'skipped';
             await mkdir(join(dir, '.pipeline'), { recursive: true });
             await writeFile(
               join(dir, '.pipeline/task-status.json'),
@@ -1440,6 +1449,7 @@ describe('engine/conductor', () => {
             });
           } else if (step === 'prd_audit') {
             await mkdir(join(dir, '.pipeline'), { recursive: true });
+            await new Promise((resolve) => setTimeout(resolve, 5));
             await writeFile(
               join(dir, '.pipeline/prd-audit.md'),
               '# PRD Audit\n\n' + AUDIT_HEADER + auditBody,
@@ -1501,13 +1511,11 @@ describe('engine/conductor', () => {
       return { runner, calls };
     }
 
-    it.skip('self-heals an impl-gap audit back to BUILD, then HALTs on the first no-op cycle (D2)', async () => {
+    it('exhausts prd-audit impl-gap self-healing and classifies the terminal halt as needs-human', async () => {
       await seedToPrdAudit();
-      // Perpetual impl-gap: every audit reports the same un-closed impl-gap,
-      // and the fake BUILD makes zero net progress (task-status.json is
-      // byte-identical each call, no repo to move HEAD) — D2 (#647) now
-      // HALTs on the first no-op kickback cycle instead of spending the
-      // self-heal budget re-kicking a build that provably isn't helping.
+      // Perpetual impl-gap: every audit reports the same un-closed impl-gap.
+      // Disable the independent D2 no-op escalation so this fixture reaches
+      // the terminal writer only after exhausting both bounded self-heals.
       const { runner, calls } = shipRunner('| FR-2 | MISSING | impl-gap | x | no |\n');
       const kickbacks: Array<{ from: string; to: string }> = [];
       events.on('kickback', (e) => {
@@ -1522,25 +1530,36 @@ describe('engine/conductor', () => {
         stepRunner: runner,
         events,
         projectRoot: dir,
-        mode: 'default',
+        mode: 'auto',
         daemon: true,
         verifyArtifacts: true,
         fromStep: 'prd_audit',
+        maxRetries: 1,
+        config: {
+          kickback_escalation: { enabled: false },
+          retry_routing: { enabled: false },
+        },
       });
 
       await conductor.run();
 
-      // Routed back to BUILD (kickback prd_audit→build) exactly once, then
-      // the re-entered prd_audit's zero-progress + unchanged-verdict re-fail
-      // escalates to HALT (D2) instead of a second self-heal round.
-      expect(kickbacks.filter((k) => k.from === 'prd_audit' && k.to === 'build').length).toBe(1);
-      expect(calls.filter((s) => s === 'build').length).toBe(1);
-      // Exhausted budget → HALT (not an opaque crash).
-      expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/kickback-to-build no-op/);
       const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
-      expect(haltClass).toBe('needs-human');
+      expect({
+        prdAuditKickbacks: kickbacks.filter(
+          (k) => k.from === 'prd_audit' && k.to === 'build',
+        ).length,
+        buildCalls: calls.filter((s) => s === 'build').length,
+        halted,
+        halt,
+        haltClass,
+      }).toEqual({
+        prdAuditKickbacks: 2,
+        buildCalls: 2,
+        halted: true,
+        halt: expect.stringMatching(/prd-audit impl-gap unresolved/),
+        haltClass: 'needs-human',
+      });
     });
 
     it.skip('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {

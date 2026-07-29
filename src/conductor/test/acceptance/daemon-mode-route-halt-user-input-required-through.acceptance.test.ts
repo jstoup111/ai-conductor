@@ -530,6 +530,9 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       const halt = await readHaltFile(dir);
       expect(halt).not.toBeNull();
       expect(halt).toContain(QUESTION_3);
+      await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe(
+        'mechanical',
+      );
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

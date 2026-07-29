@@ -207,4 +207,48 @@ describe('engine/conductor — build_review fails closed when the grader dispatc
     const finalState = finalResult.ok ? finalResult.value : ({} as ConductState);
     expect((finalState as Record<string, unknown>).build_review).not.toBe('done');
   });
+
+  it('classifies a completeness-only human remediation outcome as needs-human', async () => {
+    await seedToBuildReview();
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName): Promise<StepRunResult> => {
+        if (step === 'build_review') {
+          await mkdir(join(dir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(dir, '.pipeline/build-review.json'),
+            JSON.stringify({
+              verdict: 'FAIL',
+              reasons: ['the approved plan requires an operator decision'],
+              rubric: { tautology: false, scope: false, rootCause: false, completeness: true },
+            }),
+          );
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build_review',
+      verifyArtifacts: true,
+      mode: 'auto',
+      daemon: true,
+    });
+    (
+      conductor as unknown as {
+        planRemediation: () => Promise<{ kind: 'halt'; detail: string }>;
+      }
+    ).planRemediation = async () => ({
+      kind: 'halt',
+      detail: 'operator must resolve the plan boundary',
+    });
+
+    await conductor.run();
+
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).resolves.toBe(
+      'needs-human',
+    );
+  });
 });
