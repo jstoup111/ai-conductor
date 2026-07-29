@@ -334,9 +334,12 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
   it('rejects incomplete and cross-provider interactive metadata with row and field details', () => {
     const canonical = buildExtraRows()[0]!;
     const invalidCases = [
+      { field: 'executionPath', value: 'Claude interactive' },
       { field: 'codexModel', value: '' },
       { field: 'codexEffort', value: '' },
       { field: 'codexModel', value: 'sonnet' },
+      { field: 'codexModel', value: 'gpt-5.6-sol' },
+      { field: 'codexEffort', value: 'high' },
     ] as const;
 
     const messages = invalidCases.map(({ field, value }) => {
