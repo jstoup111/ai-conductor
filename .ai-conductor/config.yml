@@ -110,15 +110,11 @@ steps:
     llm_provider: claude
   coherence_check:
     llm_provider: claude
-  acceptance_specs:
-    llm_provider: claude
   build_review:
     llm_provider: claude
   prd_audit:
     llm_provider: claude
   architecture_review_as_built:
-    llm_provider: claude
-  rebase:
     llm_provider: claude
   finish:
     llm_provider: claude
