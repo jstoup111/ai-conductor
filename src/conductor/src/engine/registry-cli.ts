@@ -14,9 +14,10 @@
 //   `created`. A non-empty target writes NOTHING.
 
 import { execa } from 'execa';
-import { mkdir, writeFile, readdir } from 'fs/promises';
+import { mkdir, writeFile, readdir, readFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join, basename, isAbsolute, resolve as resolvePath } from 'path';
+import { resolveHarnessRoot } from './install-freshness.js';
 import {
   resolveRegistryPath,
   upsertProject,
@@ -147,6 +148,35 @@ async function dirIsNonEmpty(dir: string): Promise<boolean> {
   }
 }
 
+export type ProjectConfigWriteOutcome = 'created' | 'already-exists';
+
+export async function writeProjectConfig(
+  projectRoot: string,
+): Promise<ProjectConfigWriteOutcome> {
+  const configPath = join(projectRoot, '.ai-conductor', 'config.yml');
+  if (existsSync(configPath)) return 'already-exists';
+
+  const harnessRoot = await resolveHarnessRoot();
+  if (harnessRoot === null) {
+    throw new Error('unable to resolve harness root for project config template');
+  }
+
+  const template = await readFile(
+    join(harnessRoot, 'templates', 'project-config.yml.template'),
+    'utf-8',
+  );
+  await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+  try {
+    await writeFile(configPath, template, { encoding: 'utf-8', flag: 'wx' });
+    return 'created';
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+      return 'already-exists';
+    }
+    throw error;
+  }
+}
+
 // `conduct create <name> [--remote url]` — returns the process exit code.
 export async function runCreate(
   name: string,
@@ -167,6 +197,7 @@ export async function runCreate(
     await execa('git', ['init', '-q', target]);
     await writeFile(join(target, 'CLAUDE.md'), skeletonClaudeMd(basename(target)), 'utf-8');
     await writeFile(join(target, '.gitignore'), GITIGNORE_SKELETON, 'utf-8');
+    await writeProjectConfig(target);
     if (opts.remote) {
       // add-only — NO push.
       await execa('git', ['-C', target, 'remote', 'add', 'origin', opts.remote]);

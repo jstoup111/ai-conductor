@@ -14,6 +14,8 @@ import { tmpdir } from 'os';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
+import { load as loadYaml } from 'js-yaml';
+import { loadConfig } from '../../src/engine/config.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for the NOT-YET-BUILT conduct-ts `register` / `create`
@@ -49,6 +51,13 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONDUCTOR_DIR = join(__dirname, '..', '..');
 const DIST_ENTRY = join(CONDUCTOR_DIR, 'dist', 'index.js');
+const PROJECT_CONFIG_TEMPLATE = join(
+  CONDUCTOR_DIR,
+  '..',
+  '..',
+  'templates',
+  'project-config.yml.template',
+);
 
 interface CliResult {
   code: number | null;
@@ -331,6 +340,37 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     expect(gitignore).toContain('.worktrees/');
     expect(gitignore).not.toContain('.serena/');
 
+    const projectConfigPath = join(proj, '.ai-conductor', 'config.yml');
+    const [projectConfigRaw, templateRaw] = await Promise.all([
+      readFile(projectConfigPath, 'utf-8'),
+      readFile(PROJECT_CONFIG_TEMPLATE, 'utf-8'),
+    ]);
+    expect(projectConfigRaw).toBe(templateRaw);
+
+    const configResult = await loadConfig(proj, '0.99.0');
+    if (!configResult.ok) {
+      throw new Error(
+        `Scaffolded project config failed to load: [${configResult.error.type}] ${configResult.error.message}`,
+      );
+    }
+
+    const authoredConfig = loadYaml(projectConfigRaw) as Record<string, unknown>;
+    expect(Object.keys(authoredConfig)).not.toEqual(
+      expect.arrayContaining([
+        'conductor',
+        'markdown_viewer',
+        'harness_self_host',
+        'owner_gate_cutover',
+        'auto_restart_on_stale_engine',
+        'attribution_enforcement_cutover',
+        'attribution_judge_cutover',
+        'attribution_audit_sample_pct',
+        'wiring',
+        'manual_test',
+      ]),
+    );
+    expect(authoredConfig).not.toHaveProperty('steps.manual_test.disable');
+
     // A `created` record (status provenance).
     const records = await readRegistryFile(registry);
     expect(records).toHaveLength(1);
@@ -441,6 +481,7 @@ describe('conduct create — refuses to clobber (FR-7)', () => {
     );
     expect(existsSync(join(proj, '.git'))).toBe(false);
     expect(existsSync(join(proj, 'CLAUDE.md'))).toBe(false);
+    expect(existsSync(join(proj, '.ai-conductor'))).toBe(false);
 
     // No orphan registry record for the refused project.
     const records = await readRegistryFile(registry);
