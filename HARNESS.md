@@ -295,6 +295,15 @@ or a status line is waste.
 
 ### BUILD Phase (tdd, pipeline, debugging, writing-system-tests, code-review)
 
+**Pipeline task fan-out:** Standard and Full pipeline runs derive a ready frontier from completed
+dependencies and non-overlapping likely-touched files, then dispatch up to three independent tasks
+concurrently in one host-native fan-out operation and join them before shared verification.
+Claude Code emits multiple Agent tool dispatches in one response; Codex emits multiple
+`collaboration.spawn_agent` calls in one response. Dependent or overlapping-file tasks wait for a
+later frontier, and Conservative remains sequential. If the selected provider cannot perform native
+fan-out, Standard and Full stop with the provider, missing capability, and recovery action named;
+they never silently serialize.
+
 **Intermediate test execution policy:** Ordinary TDD RED/GREEN runs the scoped union of affected tests.
 Debugging and conduct progression use the same policy. Pipeline batch boundaries,
 parallel joins, and evaluators use pipeline's existing named `BATCH_AFFECTED_TESTS`

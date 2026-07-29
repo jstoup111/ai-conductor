@@ -472,9 +472,30 @@ Track all state in `.pipeline/`: `config.yaml` (autonomy level, project refs), `
 
 ### Parallel Execution (Standard and Full Autonomy)
 
-When tasks within a batch have no file-level dependencies on each other, dispatch them
-in parallel through the selected host's available subagent facility. This does NOT require worktrees — parallel agents work
-in the same directory on non-overlapping files.
+Standard and Full autonomy MUST schedule work by **ready frontier**, not by walking the plan one
+task at a time. At pipeline start and after every join, build the ready frontier from pending tasks
+whose declared dependencies are completed, then exclude any pair with overlapping likely-touched
+files. Dependent or overlapping-file tasks stay sequential and move to the next frontier after the
+earlier task completes. Conservative autonomy remains sequential and does not require fan-out.
+
+When a Standard or Full ready frontier contains two or more independent tasks, use one host-native
+fan-out operation to dispatch up to 3 independent tasks concurrently. Do not emit one dispatch,
+wait for it, and then emit the next. The provider-specific seams are explicit:
+
+- Claude Code performs one response containing multiple Agent tool dispatches, one per selected
+  task, then waits for all dispatched agents to return.
+- Codex performs one response containing multiple `collaboration.spawn_agent` calls, one per
+  selected task, then waits for all dispatched agents to return with `collaboration.wait_agent`.
+
+Before the first Standard or Full fan-out, verify that the selected host exposes its native
+concurrent-dispatch facility. If native fan-out is unavailable or unsupported, fail closed before
+task mutation: report the selected provider, the missing fan-out capability, and the recovery action
+(use a supported host or explicitly restart in Conservative autonomy). Never silently serialize a
+Standard or Full frontier.
+
+Parallel agents may share the same directory only when their file sets are non-overlapping. Full
+autonomy may instead isolate those same independent tasks in separate worktrees, but worktree
+isolation does not make dependent or overlapping-file tasks eligible for the same frontier.
 
 **When to parallelize:**
 - Tasks touch different files (check `**Files likely touched:**` in the plan)
@@ -482,23 +503,25 @@ in the same directory on non-overlapping files.
 - Tasks follow the same pattern (e.g., "add validation to Model X" for 5 models)
 
 **How to parallelize:**
-1. Read the plan and identify tasks with no mutual dependencies
-2. Group independent tasks into parallel batches (max 3 concurrent agents)
-3. Dispatch each task through the selected host's available subagent facility in a single message
+1. Build the ready frontier from dependency and likely-touched-file metadata
+2. Select at most 3 mutually independent tasks
+3. Dispatch all selected tasks in one host-native fan-out operation
 4. Each agent receives: the task description, the test directory, the source directory
-5. Wait for all agents to complete
+5. Wait for every concurrent dispatch to complete before verification
 6. Compute `BATCH_AFFECTED_TESTS` from every task's scoped affected-test set and run that union
    once to verify no conflicts; use the full-suite fallback only if the union is indeterminate
 7. If tests fail: identify the conflict, fix sequentially, re-run
 
 **Worktree-based parallelism (Full autonomy only):**
-For tasks that touch overlapping files or need full isolation:
+For mutually independent tasks that need stronger isolation:
 - In Claude Code, dispatch the `worktree-manager` agent with `model="haiku"` to create parallel
   worktrees under `.worktrees/`; other supported hosts use the native equivalent with the same
   isolated-worktree responsibility.
 - Each worktree gets its own task batch
 - After completion, merge results back sequentially
 - The worktree-manager handles merge order, conflict resolution, and post-merge testing
+- Never place dependent or overlapping-file tasks in the same ready frontier; defer them even when
+  separate worktrees could be created.
 
 **Conservative autonomy:** All tasks run sequentially. No parallel execution.
 

@@ -95,6 +95,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Standard and Full `pipeline` builds now turn each dependency-safe, non-overlapping ready frontier
+  into one real provider-native fan-out of up to three tasks. Claude Code issues multiple Agent tool
+  dispatches in one response and Codex issues multiple `collaboration.spawn_agent` calls in one
+  response, then both join before shared verification. Dependent or overlapping-file tasks remain
+  sequential; Conservative is unchanged. A host without native fan-out now fails closed with an
+  actionable capability diagnostic instead of silently running Standard or Full task-by-task.
 - A wiped or never-written `.pipeline/task-status.json` no longer costs a build its finished work.
   `.pipeline/` is gitignored and lives inside the worktree, so removing or recreating a worktree
   destroys it; the re-seed then rebuilt every plan task as `pending` and the build redid work whose
