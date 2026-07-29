@@ -348,7 +348,7 @@ Existence is the signal. Alphabetized.
 | `.task-status.lock` | `pre-dispatch.sh` (mkdir lock) | Serializes concurrent `task-status.json` row flips |
 | `DONE` | conductor on convergence | Paired with the `loop_converged` event |
 | `HALT` | `halt-marker.ts::writeHaltMarker`, best-effort — write failures are swallowed | The daemon treats it as a full stop: it never advances, opens a PR, or merges past it. The first non-empty body line is the reason the dashboard shows |
-| `HALT.class` | the same writer, when a class is supplied | `needs-human`, `mechanical`, or `protected-artifact`. The last identifies a genuine protected DECIDE-artifact violation; missing or unrecognized content reads as `unclassified` and never throws |
+| `HALT.class` | the same writer, always, plus the daemon's startup migration for halts predating it | `needs-human`, `mechanical`, `legacy`, or `protected-artifact`. `protected-artifact` identifies a genuine protected DECIDE-artifact violation; `legacy` is stamped once by the daemon's startup migration for a HALT it finds still unclassified; missing or unrecognized content reads as `unclassified` and never throws. Written atomically (temp file plus rename) after removing any stale sidecar, so a reader never observes a class from a prior HALT paired with a newer body |
 | `HALT.cleared` | the re-kick sweep | Records halt lifecycle closure; pairs with the `halt_cleared` event |
 | `QUARANTINE` | setup triage | The feature is quarantined from dispatch |
 | `REKICK` | the re-kick sweep | Body is literally `rekick` |
@@ -394,7 +394,7 @@ To clear a halt safely, use the procedure in
 
 ## `.daemon/`
 
-Daemon-scoped state at the main checkout root. Gitignored. Thirteen paths.
+Daemon-scoped state at the main checkout root. Gitignored. Fourteen paths.
 
 | Path | Contents | Notes |
 | --- | --- | --- |
@@ -408,6 +408,7 @@ Daemon-scoped state at the main checkout root. Gitignored. Thirteen paths.
 | `gated.json` | Owner-gate snapshot | — |
 | `last-base-sha` | Fast-forward tracking | — |
 | `mergeable-watch.jsonl` | Append-only mergeable sweep ledger | — |
+| `migrations/halt-classification-v1` | `complete\n` once written | One-time watermark. The daemon stamps any pre-existing HALT still missing `.pipeline/HALT.class` as `legacy` before touching worktrees, then writes this file so the sweep never repeats. A lock loser never runs it |
 | `parked/<slug>` | Per-slug operator park | Resolved against the **main** repo root via `git rev-parse --git-common-dir`, so a worktree and its main checkout share one park namespace |
 | `processed/<slug>` | `{"status":"shipped","prUrl":…}` | Legacy plain-text `shipped` still parses |
 | `warned/<slug>` | Per-slug warn-once record | — |
