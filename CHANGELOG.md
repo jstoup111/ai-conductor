@@ -105,7 +105,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   implementation-PR-link tokens and zero new ones from this branch as a no-op, instead of hard-failing
   with "multiple implementation PR tokens found". Previously any branch merging onto a base that
   already carried more than one stale token — even when the branch itself added no changelog entry —
-  could never finish, since the finalizer only accepted exactly one new token line ({{IMPLEMENTATION_PR}}).
+  could never finish, since the finalizer only accepted exactly one new token line ([implementation PR #1074](https://github.com/jstoup111/ai-conductor/pull/1074)).
 - The halt-PR reconciliation sweep now clears a stale marking instead of treating it as conforming.
   A marked PR whose head branch already carries the feature's shipped record is undrafted, unlabeled,
   its body marker stripped, and its halt comment rewritten as resolved; previously the sweep checked
