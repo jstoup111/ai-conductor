@@ -935,6 +935,7 @@ describe('engine/conductor', () => {
     expect(halted).toBe(true); // loop_halt event emitted
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(halt).toMatch(/stories/);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
     // It HALTed, so it did not also mark the feature complete.
     const result = await readState(statePath);
     expect(result.ok && result.value.feature_status).toBeUndefined();
@@ -1365,11 +1366,28 @@ describe('engine/conductor', () => {
     expect(halted).toBe(true);
     const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
     expect(halt).toMatch(/kaboom in stories|conductor error/);
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
 
     // State flushed: a step before the throw is recorded, feature NOT complete.
     const result = await readState(statePath);
     expect(result.ok && result.value.explore).toBe('done');
     expect(result.ok && result.value.feature_status).toBeUndefined();
+  });
+
+  it('daemon terminal-marker guarantee classifies an unmarked gate exit as needs-human', async () => {
+    const runner: StepRunner = { run: vi.fn().mockResolvedValue({ success: true }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      daemon: true,
+      fromStep: 'stories',
+    });
+
+    await conductor.run();
+
+    expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
   });
 
   describe('daemon prd-audit gap-aware halting', () => {
@@ -12815,6 +12833,9 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       await seedToBuildStep('existing-halt-precedence-test');
 
       const SPECIFIC_HALT = 'auto-park: durable no-evidence threshold reached';
+      const SPECIFIC_CLASS = 'mechanical';
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/HALT.class'), SPECIFIC_CLASS);
       const runner: StepRunner = {
         run: vi.fn(async (step: StepName) => {
           if (step === 'build') {
@@ -12854,6 +12875,7 @@ describe('stall remediation gated to daemon halt_marker only (Task 11)', () => {
       expect(halted).toBe(true);
       const haltContent = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
       expect(haltContent.trim()).toBe(SPECIFIC_HALT);
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe(SPECIFIC_CLASS);
     });
 
     it('non-no_task_progress terminal exhaustion keeps the pre-existing generic fallback string (lastBuildStallReason never set)', async () => {

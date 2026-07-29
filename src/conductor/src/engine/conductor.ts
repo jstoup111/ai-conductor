@@ -5841,16 +5841,9 @@ export class Conductor {
                       : unchangedInputNote
                         ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
                         : `step '${step.name}' failed in auto mode (retries exhausted)`;
-            await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-              () => {},
-            );
-            await writeFile(
-              join(this.projectRoot, LOOP_HALT_MARKER),
-              reason + '\n',
-              'utf-8',
-            ).catch(() => {
-              /* best-effort marker */
-            });
+            if (!existingHalt || existingHalt.trim().length === 0) {
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+            }
             // Durable signals (HALT marker + state) are written BEFORE escalation
             // so the daemon can classify the outcome even if escalation throws (C1).
             await writeState(this.stateFilePath, state);
@@ -6243,11 +6236,10 @@ export class Conductor {
       // retryable) instead of "loop ended without DONE or HALT marker" (error
       // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
       const reason = `conductor error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`;
-      await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
       await writeState(this.stateFilePath, state).catch(() => {});
-      await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
-        () => {},
-      );
+      if (!(await this.markerExists(LOOP_HALT_MARKER))) {
+        await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+      }
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
     } finally {
@@ -6290,10 +6282,7 @@ export class Conductor {
           reason =
             'loop exited without a terminal verdict — diagnostics assembly failed; parking for inspection';
         }
-        await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(() => {});
-        await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8').catch(
-          () => {},
-        );
+        await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
         const prUrl = await this.surfaceRemediationPr(reason);
         await this.events.emit({ type: 'loop_halt', reason, prUrl });
       }
@@ -6668,7 +6657,7 @@ export class Conductor {
     if (sel > MAX_GATE_SELECTIONS) {
       const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
       await writeState(this.stateFilePath, state).catch(() => {});
-      await writeFile(join(this.projectRoot, LOOP_HALT_MARKER), reason + '\n', 'utf-8');
+      await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
       return 'halt';
