@@ -36,6 +36,21 @@ export interface BuildReviewInputs {
   fresh: boolean;
 }
 
+/**
+ * Repo-relative prefixes the ENGINE authors, never the build agent: the
+ * finish-stamped shipped record and the per-feature pipeline state. They are
+ * excluded from the graded diff because grading them against the plan is
+ * incoherent — no plan task can ever describe harness machinery output, so
+ * their presence reads to the Scope rubric as unplanned work and kicks the
+ * build back over a file the builder did not write (observed on
+ * `build-review-ci-watch-partial-block-1002`, whose engine-stamped
+ * `.docs/shipped/<slug>.md` was cited as an out-of-scope finding).
+ *
+ * Deliberately narrow: only paths written by engine code paths belong here.
+ * Anything an agent can author stays in the graded diff.
+ */
+export const MACHINERY_AUTHORED_PATHS: readonly string[] = ['.docs/shipped/', '.pipeline/'];
+
 /** Raised when the default branch's merge-base with HEAD cannot be computed. */
 export class MergeBaseError extends Error {
   constructor(message: string, readonly ref: string) {
@@ -80,7 +95,13 @@ export async function assembleBuildReviewInputs(
     );
   }
 
-  const diffResult = await git(['diff', `${mergeBaseSha}..HEAD`]);
+  const diffResult = await git([
+    'diff',
+    `${mergeBaseSha}..HEAD`,
+    '--',
+    '.',
+    ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+  ]);
   if (diffResult.exitCode !== 0) {
     throw new MergeBaseError(
       `git diff ${mergeBaseSha}..HEAD failed: ${diffResult.stderr || 'unknown error'}`,

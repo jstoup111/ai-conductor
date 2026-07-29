@@ -101,6 +101,16 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- A `build_review` **scope** FAIL now routes to remediation instead of straight back to `build`, and
+  the graded diff no longer includes paths the engine itself authors. A scope FAIL says the diff
+  contains work the plan does not describe — a plan-level judgement, since the answer may be "amend
+  the plan" rather than "delete the code". Routed to `build`, an unsupervised builder's only lever
+  was deletion: on `build-review-ci-watch-partial-block-1002` that removed 249 lines of a legitimate
+  engine repair the branch needed to finish. Remediation may still choose `build`, but the removal
+  becomes a recorded decision rather than a silent one. Separately, `.docs/shipped/` and `.pipeline/`
+  are excluded from the graded diff: no plan task can describe harness machinery output, so grading
+  the engine-stamped shipped record produced a scope finding the builder could never legitimately
+  act on ({{IMPLEMENTATION_PR}}).
 - The halt-PR reconciliation sweep now clears a stale marking instead of treating it as conforming.
   A marked PR whose head branch already carries the feature's shipped record is undrafted, unlabeled,
   its body marker stripped, and its halt comment rewritten as resolved; previously the sweep checked

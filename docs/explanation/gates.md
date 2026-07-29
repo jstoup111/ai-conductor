@@ -150,7 +150,7 @@ re-opened it, and the evidence. Four steps opt in as kickback targets — `prd`,
 `stories`, `plan` — so the furthest back the loop can throw work is the spec. Kickbacks per gate are capped;
 past the cap the run halts instead of cycling.
 
-**Remediation** is what a blocking SHIP audit — or a `build_review` completeness failure — does when the
+**Remediation** is what a blocking SHIP audit — or a `build_review` completeness or scope failure — does when the
 fix is not obvious. It classifies each gap and routes it to the earliest step that can close it — build,
 acceptance specs, architecture review, or plan — all of which sit before the gate that found it. Two gap
 categories cannot be routed and halt for a human instead: architectural clarity and product scope. Neither
@@ -169,13 +169,19 @@ extra prompt.
 | Failing rubric item | Routes to | Why |
 | --- | --- | --- |
 | `completeness` — the rubric flag, or any completeness finding | remediation | The diff does not cover everything the plan describes, which usually means the plan task is under-decomposed rather than the diff being sloppy. Kicking that back to `build` produces a different legitimate finding every lap until the cap halts the run |
-| `tautology`, `scope`, `rootCause` | `build` | Local diff defects the builder can fix in place |
+| `scope` — the rubric flag, or any scope finding | remediation | The mirror image: the diff contains work the plan does not describe. Either the plan should be amended to cover it or the work does not belong — a plan-level judgement. Routed to `build`, the builder's only lever is to delete whatever was flagged, which has already removed a legitimate engine repair from a branch |
+| `tautology`, `rootCause` | `build` | Local diff defects the builder can fix in place |
 
 On the remediation path the planner picks the target per gap, the kickback event records *that* step rather
-than `build`, and a gap that needs a human halts instead of routing.
+than `build`, and a gap that needs a human halts instead of routing. Remediation may still choose `build`
+for a scope gap — the difference is that the deletion becomes a recorded plan-level decision.
 
-Two paths fail open to `build`, preserving the older behavior exactly: a FAIL carrying no completeness
-signal at all, and a remediation plan with no usable dispositions. Kickback counting is untouched — a
+The graded diff excludes paths the **engine** authors rather than the builder — `.docs/shipped/` and
+`.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
+finding the builder cannot legitimately act on.
+
+Two paths fail open to `build`, preserving the older behavior exactly: a FAIL carrying neither a
+completeness nor a scope signal, and a remediation plan with no usable dispositions. Kickback counting is untouched — a
 remediation-routed FAIL counts against the per-gate cap like any other.
 
 Not every gate reruns on retry. For the three judged SHIP gates, a genuine fresh non-passing decision routes
