@@ -168,7 +168,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   "provider state changed during self-host execution".
 
 - `conduct-ts finalize-changelog-pr` no longer refuses (or, if hand-worked-around, misattributes) forever when a stale, never-finalized `{{IMPLEMENTATION_PR}}` token is already sitting on the merge-base from an earlier PR whose finish never ran the finalizer. It now reads `CHANGELOG.md` at the branch's merge-base and only replaces the token-bearing line that is new relative to that base, leaving any pre-existing stale token untouched; ambiguity still hard-fails when more than one new token line is found ([implementation PR #1143](https://github.com/jstoup111/ai-conductor/pull/1143)).
-- Keep rebased features moving by safely rebaselining protected-artifact seals inherited from the base branch while classifying and logging genuine DECIDE-artifact violations ([issue #976](https://github.com/jstoup111/ai-conductor/issues/976); {{IMPLEMENTATION_PR}}).
+- Keep rebased features moving by safely rebaselining protected-artifact seals inherited from the base branch while classifying and logging genuine DECIDE-artifact violations ([issue #976](https://github.com/jstoup111/ai-conductor/issues/976); [implementation PR #1121](https://github.com/jstoup111/ai-conductor/pull/1121)).
 
 - BUILD now seeds `.pipeline/task-status.json` before every dispatch, independent of the retired attribution cutover, so progress appears immediately. Attribution remains advisory: malformed or unavailable telemetry cannot halt work. Removed the dead build-step enforcement marker, machinery preflight, zero-work kickback, and no-op post-dispatch/mutation hooks.
 
