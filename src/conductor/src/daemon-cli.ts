@@ -268,6 +268,11 @@ export interface DaemonModeOptions {
    */
   ensureFresh?: () => Promise<void>;
   /**
+   * Startup migration boundary (tests inject an ordering probe). Production
+   * uses runOwnedHaltClassMigration.
+   */
+  runHaltClassMigration?: typeof runOwnedHaltClassMigration;
+  /**
    * Task T28: callback to fire when a restart marker is queued and the daemon
    * reaches idle boundary. Injected from supervisor-cli or bare-run handler.
    * Must handle async failures gracefully: a throw is logged and retried at
@@ -682,7 +687,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
   Object.assign(process.env, selfGuardEnv());
   await ensureFresh();
 
-  const worktreeBase = await runOwnedHaltClassMigration(lock, projectRoot, {
+  const runHaltClassMigration = opts.runHaltClassMigration ?? runOwnedHaltClassMigration;
+  const worktreeBase = await runHaltClassMigration(lock, projectRoot, {
     ensureWorktreeBase: (path) => mkdir(path, { recursive: true }).then(() => undefined),
     migrateHaltClasses: migrateLegacyHaltClasses,
     log,

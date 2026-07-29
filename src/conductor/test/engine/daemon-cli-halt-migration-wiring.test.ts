@@ -1,6 +1,8 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
-import { runOwnedHaltClassMigration } from '../../src/daemon-cli.js';
+import { runDaemonMode, runOwnedHaltClassMigration } from '../../src/daemon-cli.js';
 
 describe('daemon halt-class migration startup wiring', () => {
   it('creates the worktree base and migrates after ownership, before normal work', async () => {
@@ -42,15 +44,41 @@ describe('daemon halt-class migration startup wiring', () => {
   });
 
   it('wires migration before discovery and re-kick setup in runDaemonMode', async () => {
-    const source = await readFile(new URL('../../src/daemon-cli.ts', import.meta.url), 'utf8');
-    const runDaemonMode = source.slice(source.indexOf('export async function runDaemonMode'));
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-migration-order-'));
+    const calls: string[] = [];
+    const lock = {
+      pid: process.pid,
+      uuid: 'migration-order',
+      owned: true,
+      release: vi.fn(async () => {}),
+      releaseSync: vi.fn(),
+    };
+    const lockModule = await import('../../src/engine/daemon-lock.js');
+    const daemonModule = await import('../../src/engine/daemon.js');
+    vi.spyOn(lockModule, 'holdLock').mockResolvedValue(lock);
+    vi.spyOn(daemonModule, 'runDaemon').mockImplementation(async () => {
+      calls.push('normal-work');
+      throw new Error('__stop_after_startup_wiring__');
+    });
 
-    const migration = runDaemonMode.indexOf('await runOwnedHaltClassMigration(');
-    const discovery = runDaemonMode.indexOf('const workSource =');
-    const reKick = runDaemonMode.indexOf('const rekickDeps: RekickSweepDeps');
+    try {
+      await expect(
+        runDaemonMode({
+          projectRoot,
+          concurrency: 1,
+          baseBranch: 'main',
+          ensureFresh: async () => {},
+          runHaltClassMigration: async () => {
+            calls.push('migration');
+            return join(projectRoot, '.worktrees');
+          },
+        }),
+      ).rejects.toThrow('__stop_after_startup_wiring__');
 
-    expect(migration).toBeGreaterThan(-1);
-    expect(discovery).toBeGreaterThan(migration);
-    expect(reKick).toBeGreaterThan(migration);
+      expect(calls).toEqual(['migration', 'normal-work']);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+      vi.restoreAllMocks();
+    }
   });
 });
