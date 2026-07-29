@@ -9,6 +9,7 @@
 
 # Node / TypeScript conductor build artifacts
 node_modules/
+.vite/
 src/conductor/dist
 src/conductor/dist-versions/
 # publish-engine stages the built engine into a `.engine-staging-<rand>/` temp dir
