@@ -342,6 +342,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Gate role** — blocking. Evaluator dispatch at each batch boundary is mandatory; a missing or empty
   `review.json` halts and re-dispatches. `BLOCK` halts and escalates; `REQUEST_CHANGES` triggers rework
   against a three-cycle budget. Two consecutive zero-completion attempts trip a circuit breaker.
+- **Fan-out** — Standard and Full derive a ready frontier from completed dependencies and
+  non-overlapping file sets, then launch up to three tasks in one provider-native concurrent
+  dispatch and join before verification. Claude Code uses multiple Agent tool calls in one response;
+  Codex uses multiple `collaboration.spawn_agent` calls in one response. Conservative, dependent
+  tasks, and overlapping-file tasks stay sequential. A selected host without native fan-out stops
+  with an actionable capability diagnostic instead of silently serializing Standard or Full.
 - **Dispatches** — `agents/evaluator.md`, `agents/generator.md`, `agents/worktree-manager.md`.
 
 ### tdd

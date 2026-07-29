@@ -160,6 +160,33 @@ require_pattern 'pipeline scopes session-hook mechanics to Claude Code' \
 require_pattern 'pipeline scopes its Claude model selection' \
   'Claude.{0,120}model|model.{0,120}Claude' \
   "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline builds a ready frontier for Standard and Full autonomy' \
+  '(Standard|Full).{0,120}ready frontier|ready frontier.{0,120}(Standard|Full)' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline uses one host-native fan-out operation for a ready frontier' \
+  '(one|single) host-native fan-out operation' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline caps a fan-out at three independent tasks' \
+  '(up to|at most|max(imum)?)[[:space:]]+3.{0,80}independent tasks|independent tasks.{0,80}(up to|at most|max(imum)?)[[:space:]]+3' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline gives Claude Code one-response multi-Agent fan-out mechanics' \
+  'Claude Code.{0,180}(one|single) response.{0,180}multiple Agent tool dispatches|multiple Agent tool dispatches.{0,180}(one|single) response.{0,180}Claude Code' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline gives Codex one-response collaboration spawn fan-out mechanics' \
+  'Codex.{0,180}(one|single) response.{0,180}multiple `?collaboration\.spawn_agent|multiple `?collaboration\.spawn_agent.{0,180}(one|single) response.{0,180}Codex' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline joins every concurrent dispatch before verification' \
+  '(wait|join).{0,120}(all|every).{0,120}(dispatch|agent)|(all|every).{0,120}(dispatch|agent).{0,120}(wait|join)' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline fails closed when selected host lacks native fan-out' \
+  '(fan-out|concurrent dispatch).{0,180}(unavailable|unsupported).{0,180}(fail closed|stop|halt)|(fail closed|stop|halt).{0,180}(fan-out|concurrent dispatch).{0,180}(unavailable|unsupported)' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline keeps Conservative autonomy sequential' \
+  'Conservative.{0,120}sequential|sequential.{0,120}Conservative' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
+require_pattern 'pipeline defers dependent or overlapping-file tasks to a later frontier' \
+  '(dependent|overlapping-file|overlapping file).{0,180}(next|later) frontier|(next|later) frontier.{0,180}(dependent|overlapping-file|overlapping file)' \
+  "$HARNESS_DIR/skills/pipeline/SKILL.md"
 require_pattern 'TDD scopes its Claude model selection' \
   'Claude.{0,120}model|model.{0,120}Claude' \
   "$HARNESS_DIR/skills/tdd/SKILL.md"
