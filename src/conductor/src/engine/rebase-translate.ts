@@ -7,6 +7,7 @@ import {
   createProtectedArtifactSeal,
   PROTECTED_ARTIFACT_SEAL_PATH,
   rotateProtectedArtifactSeal,
+  type ProtectedArtifactSealRebaselineObserver,
 } from './protected-artifact-seal.js';
 
 // Task 3 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
@@ -423,6 +424,7 @@ export async function translateAfterRebase(
   origHead: string,
   head: string,
   events?: ConductorEventEmitter,
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver,
 ): Promise<void> {
   const { map, residue } = await buildRewriteMap(git, onto, origHead, head);
 
@@ -469,6 +471,9 @@ export async function translateAfterRebase(
       toCommit: head,
       trigger: 'proactive-rebase',
       paths,
+      onRebaseline: onRebaseline ?? (events
+        ? (event) => events.emit(event)
+        : undefined),
     });
   }
 

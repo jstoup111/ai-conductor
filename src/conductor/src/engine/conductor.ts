@@ -79,6 +79,7 @@ import { removePhaseMarker, writePhaseMarker, resolveDocsAllowlist } from './pha
 import {
   createProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
+  type ProtectedArtifactSealRebaselineEvent,
 } from './protected-artifact-seal.js';
 import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js';
 import { runSpotAudit } from './attribution-audit.js';
@@ -898,6 +899,7 @@ export class Conductor {
   private validationConcurrency: number;
   private projectRoot: string;
   private log?: (message: string) => void;
+  private readonly surfacedRebaselineRefusals = new Set<string>();
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   private featureDesc?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -1300,6 +1302,27 @@ export class Conductor {
     this.shipmentEvidence = opts.shipmentEvidence;
     this.rateLimitEpisode = opts.rateLimitEpisode;
     this.registerAbortController = opts.registerAbortController;
+  }
+
+  private async surfaceProtectedArtifactRebaseline(
+    event: ProtectedArtifactSealRebaselineEvent,
+  ): Promise<void> {
+    if (event.type === 'protected_artifact_rebaseline_refused') {
+      const key = `${event.verdictCondition}\0${event.path ?? ''}`;
+      if (this.surfacedRebaselineRefusals.has(key)) return;
+      this.surfacedRebaselineRefusals.add(key);
+    }
+    await this.events.emit(event);
+    if (!this.log) return;
+    if (event.type === 'protected_artifact_rebaseline') {
+      this.log(
+        `Protected artifact rebaseline: trigger=${event.trigger} fromCommit=${event.fromCommit} toCommit=${event.toCommit} paths=${event.paths.join(',')}`,
+      );
+    } else {
+      this.log(
+        `Protected artifact rotation refused: condition=${event.condition}${event.path ? ` path=${event.path}` : ''}`,
+      );
+    }
   }
 
   /**
@@ -3971,6 +3994,7 @@ export class Conductor {
                 // already-merged PR, picked up by this feature's rebase — while
                 // still halting on any in-worktree mutation.
                 baseBranch: this.baseBranch,
+                onRebaseline: (event) => this.surfaceProtectedArtifactRebaseline(event),
               });
               if (!sealVerdict.ok) {
                 protectedArtifactIssue = sealVerdict.reason;
@@ -6971,7 +6995,15 @@ export class Conductor {
     ): Promise<void> =>
       this.stepRunner.translateAfterRebase
         ? this.stepRunner.translateAfterRebase(g, projectRoot, onto, origHead, head)
-        : defaultTranslateAfterRebase(g, projectRoot, onto, origHead, head, this.events);
+        : defaultTranslateAfterRebase(
+            g,
+            projectRoot,
+            onto,
+            origHead,
+            head,
+            this.events,
+            (event) => this.surfaceProtectedArtifactRebaseline(event),
+          );
 
     let outcome: RebaseOutcome;
     try {

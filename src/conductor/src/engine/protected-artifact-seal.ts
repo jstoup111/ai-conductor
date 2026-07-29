@@ -67,6 +67,25 @@ export type ProtectedArtifactSealRotationVerdict =
   | { permitted: false; condition: 'workspace-differs-from-head'; path: string }
   | { permitted: false; condition: 'head-differs-from-base'; path: string };
 
+export type ProtectedArtifactSealRebaselineEvent =
+  | {
+      type: 'protected_artifact_rebaseline';
+      trigger: string;
+      fromCommit: string;
+      toCommit: string;
+      paths: string[];
+    }
+  | {
+      type: 'protected_artifact_rebaseline_refused';
+      condition: string;
+      verdictCondition: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>['condition'];
+      path?: string;
+    };
+
+export type ProtectedArtifactSealRebaselineObserver = (
+  event: ProtectedArtifactSealRebaselineEvent,
+) => void | Promise<void>;
+
 /**
  * An in-scope amendment to the current feature's own sealed DECIDE artifact.
  * The seal remains immutable; this records the observed divergence for the
@@ -97,6 +116,7 @@ export interface RotateProtectedArtifactSealOptions {
   trigger: string;
   paths: string[];
   fileOperations?: ProtectedArtifactSealFileOperations;
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
 export interface VerifyProtectedArtifactSealOptions {
@@ -117,6 +137,7 @@ export interface VerifyProtectedArtifactSealOptions {
    * (fully protected, prior behavior).
    */
   baseBranch?: string;
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
 export type ProtectedArtifactSealVerdict =
@@ -636,11 +657,15 @@ export async function verifyProtectedArtifactSeal(
       { cwd: options.projectRoot, reject: false },
     ).catch(() => undefined);
     if (!head || head.exitCode !== 0 || head.stdout.length === 0) {
+      await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: 'head-unresolvable' });
       return { ok: false, reason: 'Protected artifact seal HEAD is unresolvable' };
     }
 
     const baseTipRef = await resolveBaseTipRef(options.projectRoot, options.baseBranch);
-    if (!baseTipRef) return inspection;
+    if (!baseTipRef) {
+      await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: 'base-tip-unresolved' });
+      return inspection;
+    }
     const rotation = await evaluateProtectedArtifactSealRotationInRepository({
       projectRoot: options.projectRoot,
       seal: existing,
@@ -648,6 +673,9 @@ export async function verifyProtectedArtifactSeal(
       baseTipRef,
     });
     if (!rotation.permitted) {
+      if (rotation.condition !== 'same-history-ancestor') {
+        await emitRotationRefusal(options.onRebaseline, rotation);
+      }
       if (rotation.condition === 'same-history-ancestor' || rotation.condition === 'base-tip-unresolved') {
         return inspection;
       }
@@ -680,6 +708,7 @@ export async function verifyProtectedArtifactSeal(
       toCommit: head.stdout,
       trigger: 'defensive-history-rewrite',
       paths: rotation.paths,
+      onRebaseline: options.onRebaseline,
     });
     return { ok: true, seal, selfAmendments: [] };
   }
@@ -726,6 +755,7 @@ export async function rotateProtectedArtifactSeal({
   trigger,
   paths,
   fileOperations = { writeFile, rename, rm },
+  onRebaseline,
 }: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
   const recomputed = await createSeal({ projectRoot, baselineCommit: toCommit });
   const rotated: ProtectedArtifactSeal = {
@@ -743,6 +773,13 @@ export async function rotateProtectedArtifactSeal({
   try {
     await fileOperations.writeFile(temporaryPath, `${JSON.stringify(rotated, null, 2)}\n`);
     await fileOperations.rename(temporaryPath, sealPath);
+    await notifyRebaselineObserver(onRebaseline, {
+      type: 'protected_artifact_rebaseline',
+      trigger,
+      fromCommit: seal.baselineCommit,
+      toCommit,
+      paths,
+    });
     return rotated;
   } catch (error) {
     operationFailed = true;
@@ -751,5 +788,30 @@ export async function rotateProtectedArtifactSeal({
     await fileOperations.rm(temporaryPath, { force: true }).catch((error: unknown) => {
       if (!operationFailed) throw error;
     });
+  }
+}
+
+async function emitRotationRefusal(
+  observer: ProtectedArtifactSealRebaselineObserver | undefined,
+  verdict: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+): Promise<void> {
+  const featureAuthored =
+    verdict.condition === 'workspace-differs-from-head' || verdict.condition === 'head-differs-from-base';
+  await notifyRebaselineObserver(observer, {
+    type: 'protected_artifact_rebaseline_refused',
+    condition: featureAuthored ? `feature-authored:${verdict.condition}` : verdict.condition,
+    verdictCondition: verdict.condition,
+    ...('path' in verdict ? { path: verdict.path } : {}),
+  });
+}
+
+async function notifyRebaselineObserver(
+  observer: ProtectedArtifactSealRebaselineObserver | undefined,
+  event: ProtectedArtifactSealRebaselineEvent,
+): Promise<void> {
+  try {
+    await observer?.(event);
+  } catch {
+    // Telemetry is best-effort and must never alter rotation or refusal policy.
   }
 }

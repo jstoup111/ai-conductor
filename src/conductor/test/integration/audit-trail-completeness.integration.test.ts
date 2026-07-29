@@ -74,6 +74,8 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   credentials_park_progress: 'not-audited-by-design',
   feature_complete: 'not-audited-by-design',
   dashboard_refresh: 'not-audited-by-design',
+  protected_artifact_rebaseline: 'not-audited-by-design',
+  protected_artifact_rebaseline_refused: 'not-audited-by-design',
   auto_heal: 'not-audited-by-design',
   verdict_freshness: 'friction-mapped',
   build_review_base: 'not-audited-by-design',
@@ -173,6 +175,19 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   },
   feature_complete: { type: 'feature_complete' },
   dashboard_refresh: { type: 'dashboard_refresh' },
+  protected_artifact_rebaseline: {
+    type: 'protected_artifact_rebaseline',
+    trigger: 'defensive-history-rewrite',
+    fromCommit: 'abc123',
+    toCommit: 'def456',
+    paths: ['.docs/plans/feature.md'],
+  },
+  protected_artifact_rebaseline_refused: {
+    type: 'protected_artifact_rebaseline_refused',
+    condition: 'feature-authored:head-differs-from-base',
+    verdictCondition: 'head-differs-from-base',
+    path: '.docs/plans/feature.md',
+  },
   auto_heal: { type: 'auto_heal', step: 'build', healed: 1, skipped: 0 },
   verdict_freshness: {
     type: 'verdict_freshness',
