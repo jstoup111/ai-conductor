@@ -625,9 +625,8 @@ describe('#993 TS-993-2 H2 — the feature\'s own worktree changes attribute its
       planPath: join(repo, `.docs/plans/${FEATURE_B}.md`),
     });
 
-    // Today the gate passes for the WRONG reason (the historical file matches
-    // the glob). After the fix it must pass because B's own untracked report
-    // was attributed to B — proven by the companion status assertion above.
+    // The gate passes because B's own untracked report was attributed to B,
+    // as proven by the companion status assertion above.
     expect(result.done).toBe(true);
   });
 });

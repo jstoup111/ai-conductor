@@ -7,6 +7,14 @@ behavioral overlap, state conflict, resource contention, and sequencing conflict
 new stories are complementary: TS-993-1 defines the contract, TS-993-2 defines resolution,
 TS-993-3 migrates generic consumers, and TS-993-4 preserves stronger existing behavior.
 
+## Resolved conflict re-check
+
+One blocking story-phrasing conflict was found after the singleton policy was clarified:
+TS-993-3's Done When said a foreign artifact was never presented for approval, which
+contradicted TS-993-2's approved legacy singleton fallback. Commit `94a862067` qualified
+that criterion to the ambiguous multi-file foreign corpus. The full five-type re-check
+then passed clean with zero blocking or degrading conflicts (99% confidence).
+
 ## Relevant adjacent work
 
 | Existing work | Interaction | Verdict | Confidence |
@@ -50,4 +58,3 @@ the shared feature-aware resolver together.
 No new-story pair asserts incompatible behavior or ownership. The only sequencing requirement is
 implementation order: contract declaration before resolver, resolver before consumer migration,
 with the preservation suite spanning all tasks. No conflict resolution or ADR amendment is needed.
-
