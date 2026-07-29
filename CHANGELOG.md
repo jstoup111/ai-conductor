@@ -79,6 +79,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   pinned steps (`explore`, `prd`, `architecture_review`, `conflict_check`, `coherence_check`,
   `rebase`, `build_review`, `prd_audit`, `architecture_review_as_built`, `finish`,
   `maintain-documentation`) remain pinned to Claude.
+- The generated model-selection table's 22 interactive-skill rows now describe both supported
+  hosts instead of Claude alone: `executionPath` reads `supported-host interactive`, and each row
+  carries a fixed Codex model/effort inheritance placeholder alongside its existing Claude
+  model/effort pin, so the table and `docs/reference/models.md` no longer imply Codex has no
+  interactive dispatch path. Skill `model:` frontmatter pins remain Claude-scoped; Codex policy
+  values still do not participate in pin comparison ([implementation PR #1142](https://github.com/jstoup111/ai-conductor/pull/1142)).
 - The `plan` step's Codex model is now `gpt-5.6-sol` (was `gpt-5.6-terra`) at every complexity
   tier. `CODEX_MODEL_POLICY.stepTierOverrides.plan.L`'s own `model: 'gpt-5.6-sol'` override
   becomes a no-op restating the new base model, but is left in place — its `effort: 'xhigh'` half
