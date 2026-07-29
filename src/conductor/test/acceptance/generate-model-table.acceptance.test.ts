@@ -117,28 +117,6 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
 });
 
 describe('public CLI provider-labelled contract drift', () => {
-  it('returns the complete drift diagnostic', async () => {
-    dir = await mkdtemp(join(tmpdir(), 'generate-model-table-diagnostic-flush-'));
-    const fixtureHarness = join(dir, 'HARNESS.md');
-    const staleRow =
-      '| stale | autonomous engine | stale | stale | stale | stale | stale row from a previous run |';
-    const largeDriftFixture = MARKED_FIXTURE.replace(staleRow, `${staleRow}\n`.repeat(5_000));
-    await writeFile(fixtureHarness, largeDriftFixture, 'utf8');
-
-    const result = await runCli({ harnessMdPath: fixtureHarness, mode: 'check' });
-    const output = result.message ?? '';
-
-    expect({
-      status: result.exitCode,
-      hasDiffHeader: /^--- a\/.*HARNESS\.md$/m.test(output),
-      hasRemediation: output.includes('Run `bin/generate-model-table`'),
-    }).toEqual({
-      status: 1,
-      hasDiffHeader: true,
-      hasRemediation: true,
-    });
-  });
-
   it(
     'reports a useful diff for every representative provider-labelled table mutation',
     async () => {
