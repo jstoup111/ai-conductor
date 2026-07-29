@@ -22,8 +22,27 @@ matches on when deciding to invoke the skill.
 | `enforcement` | yes for `skills/*` | Declared strictness: `advisory`, `gating`, or `structural`. **Advisory only.** The engine's step definition decides real skippability — see [Known limitations](#known-limitations) |
 | `phase` | yes for `skills/*` | `understand`, `decide`, `build`, `ship`, or `all` |
 | `standalone` | no | Whether an operator can run the skill on its own. Absent means non-standalone |
+| `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. `bin/install` still symlinks it into both user-space catalogs (`~/.claude/skills`, `~/.agents/skills`), so the operator has it on either provider; the engine suppresses it per dispatch instead. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`. See [operator-only suppression coverage](#operator-only-suppression-coverage) for what each provider actually enforces |
 | `requires` | no | Prerequisite skills or artifact paths |
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
+
+### Operator-only suppression coverage
+
+`operator_only: true` is enforced per dispatch, not at install time — the operator keeps the skill on
+both providers. Coverage is not uniform, and the gap is load-bearing enough to state plainly:
+
+| | Claude | Codex |
+| --- | --- | --- |
+| **Self-host build** | `skillOverrides` in the worktree's `.claude/settings.local.json` | the skill is pruned from the throwaway `CODEX_HOME` skills copy — no artifact to load |
+| **Any other repo** | `skillOverrides`, same as above | **not mechanically suppressed** |
+
+The bottom-right cell is a real gap. Codex discovers skills by listing `~/.agents/skills` and honors
+no per-session override, and the isolated-home path that would let the engine prune that view is
+gated to self-host builds (`isSelfBuild()`, `conductor.ts`) precisely so other repos stay
+byte-for-byte unchanged. In that cell the only guard is the skill's own refusal check on
+`.pipeline/phase-active` — prompt-level, which this repo's design principle is rightly skeptical of.
+Closing it properly means the engine owning the entry point rather than shipping a loadable skill at
+all; that is [#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
 `enforcement`, and `phase`. The three `.agents/skills/` entries are outside that check and declare only
@@ -38,6 +57,7 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `assess` | gating | understand | sonnet | `assess` (out-of-band) | Advisory |
 | `conduct` | gating | all | — | `worktree` (0), `complexity` (3) | Blocking via `worktree` (structural) |
 | `verify-claims` | gating | all | — | none | Blocking, inside the calling skill |
+| `daemon-triage` | advisory | all | — | none (operator-only) | None — read-only diagnosis; recovery only on per-action operator approval |
 | `architecture-diagram` | gating | all | sonnet | `architecture_diagram` (5) | Advisory as a step; blocking at land time |
 | `explore` | advisory | decide | — | `explore` (2) | Advisory |
 | `prd` | gating | decide | — | `prd` (4) | Blocking |
@@ -98,6 +118,31 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   assumption ledger as its body.
 - **Gate role** — blocking. Verdict `CLEAR` proceeds; `ASSUMPTIONS_PENDING` blocks. Interactive runs
   wait for operator approval; autonomous runs HALT and never guess a likely value.
+
+### daemon-triage
+
+> Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why.
+
+- **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `operator_only: true`,
+  `requires: [verify-claims]`, no model pin.
+- **Engine step** — none, by design. It is never dispatched. `operator_only: true` suppresses it for
+  step sessions (see [Frontmatter fields](#frontmatter-fields)), and the skill itself refuses to run
+  when `.pipeline/phase-active` is present — a step that triages itself reads its own in-flight state
+  as evidence of failure.
+- **Inputs** — read-only evidence only: `conduct-ts daemon status`, `.daemon/daemon.log`, and the
+  feature's `.pipeline/` state (`HALT` + `HALT.class`, `events.jsonl`, `task-status.json`,
+  `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.
+- **Outputs** — a triage report at `.daemon/triage/<slug>-<timestamp>.md`. Deliberately **not** under
+  `.pipeline/` — triage output is not feature evidence and must never be read as such by a gate.
+- **Gate role** — none. Diagnosis is unconditionally read-only; gathering evidence never changes the
+  state being measured. It may then carry out recovery, but **every** mutation — clearing a halt,
+  park/unpark, editing `.pipeline/`, any writing git command — is presented with its blast radius and
+  individually approved by the operator first. Approval is per-action and never standing consent, and
+  it never relaxes the safety rails (an approved delete is still enumerated explicitly). Deliberately
+  conservative while classification accuracy is being established.
+- **Runbooks** — reached via `skills/daemon-triage/runbooks`, a symlink to `docs/runbooks/`. The
+  symlink is what makes the reference resolve correctly in a consumer repo, where the harness's
+  `docs/` tree is not present but the skill directory itself is symlinked in by `bin/install`.
 
 ### architecture-diagram
 

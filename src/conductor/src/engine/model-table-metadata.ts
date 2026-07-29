@@ -211,6 +211,15 @@ export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
     why: 'Artifact checking and status reporting — mechanical.',
   },
   {
+    name: 'daemon-triage',
+    executionPath: 'Claude interactive',
+    claudeModel: 'sonnet',
+    claudeEffort: '',
+    codexModel: '',
+    codexEffort: '',
+    why: "Operator-invoked, read-only triage. Routing determinism lives in the skill's signal table, not the model; the model gathers evidence and matches rows.",
+  },
+  {
     name: 'pr',
     executionPath: 'Claude interactive',
     claudeModel: 'sonnet',

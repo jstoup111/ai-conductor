@@ -42,6 +42,34 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   requesting an ST-916 record-repair PR first when the record is still missing. The new `conduct-ts
   daemon reconcile-parked <slug>` verb runs the same guarded cleanup on demand for one slug
   ([implementation PR #1063](https://github.com/jstoup111/ai-conductor/pull/1063)).
+- New `daemon-triage` skill: an operator's entry point when the daemon has a feature wedged. It
+  gathers read-only evidence (daemon status, the feature's `HALT` + class, stall events, heartbeat,
+  task rows vs. actual `Task:`-trailered commits, gate verdicts), classifies the failure against a
+  deterministic signal table, and names exactly one runbook — rather than leaving the operator to
+  guess which of five applies. Diagnosis is unconditionally read-only; it may then carry out the
+  recovery, but **every** mutation — clearing a halt, park/unpark, editing `.pipeline/`, any writing
+  git command — is presented with its blast radius and individually approved by the operator first.
+  Approval is per-action, never standing consent, and never relaxes the safety rails: an approved
+  delete is still enumerated explicitly and confirmed against that list. Two
+  of its table rows exist specifically to stop confident wrong moves: a pinned resolved-count with
+  HEAD advancing is telemetry desync, not a stalled build, and a stale heartbeat belongs to whichever
+  step wrote it. Reports land in `.daemon/triage/`, never `.pipeline/`, so no gate can mistake triage
+  output for feature evidence. Runbooks resolve through a `runbooks` symlink inside the skill
+  directory, which is what makes the reference correct in a consumer repo that has no `docs/` tree.
+- New `operator_only: true` SKILL.md frontmatter field for skills an operator invokes from outside a
+  run. `bin/install` symlinks every skill to user scope, so a dispatched step would otherwise see
+  them; the engine now writes a `skillOverrides: { <skill>: 'off' }` entry into each worktree's
+  `.claude/settings.local.json` at dispatch, merge-preserving any operator-authored overrides
+  already there. Integrity check 5d fails on drift in either direction between the frontmatter flag
+  and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`, so the suppression list cannot silently rot.
+  Codex needs a different mechanism — it discovers skills by listing a directory and honors no
+  per-session override — so on a self-host build the skill is pruned from the throwaway `CODEX_HOME`
+  skills copy instead, which is stronger than an override: neither provider has an artifact to load.
+  The operator keeps the skill on both providers, since `bin/install` still symlinks it into
+  `~/.claude/skills` and `~/.agents/skills`. Coverage is documented per provider in
+  `docs/reference/skills.md`, including the one cell that is **not** mechanically enforced — Codex in
+  a non-self-host repo, where the isolated-home path is deliberately not taken — which relies on the
+  skill's own `.pipeline/phase-active` refusal until the engine owns the entry point.
 
 ### Changed
 

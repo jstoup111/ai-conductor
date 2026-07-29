@@ -5,6 +5,9 @@ failure, or runs a stale engine — for one repo or across the fleet. For operat
 [the hard safety rule](#hard-safety-rule-read-this-before-deleting-anything) before you delete
 anything.
 
+> **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
+> read-only, classifies the failure, and routes to the one runbook that owns it.
+
 ## Symptom
 
 | What you see | Section |

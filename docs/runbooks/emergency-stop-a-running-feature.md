@@ -3,6 +3,9 @@
 Stop one feature — or the whole daemon — mid-flight without corrupting state. For operators
 who need to halt work already in progress and then touch git state safely.
 
+> **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
+> read-only, classifies the failure, and routes to the one runbook that owns it.
+
 The order is not negotiable: **park, then stop, then touch git.** Every step below states what
 it changes on disk and how to confirm it landed.
 
