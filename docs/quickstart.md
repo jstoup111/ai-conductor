@@ -104,15 +104,16 @@ conduct-ts register
 You should see `Registered <name> (<absolute-path>).` The record lands in
 `~/.ai-conductor/registry.json` with `status: registered`; nothing is written into the project.
 
-To scaffold a new repository instead, `conduct-ts create <name>` runs `git init` and writes exactly
-a skeleton `CLAUDE.md` and a `.gitignore` before registering it. Both commands are detailed in
+To scaffold a new repository instead, `conduct-ts create <name>` runs `git init` and writes a
+skeleton `CLAUDE.md`, a `.gitignore`, and a project-safe `.ai-conductor/config.yml` before
+registering it. Both commands are detailed in
 [reference/cli.md](reference/cli.md).
 
 ## Bootstrap the project
 
-`register` and `create` write no harness artifacts. `bootstrap` does — it detects the stack and
-generates the project's instruction files, `.docs/` tree, and memory store. It is a skill, not a
-CLI command, so run it inside a host session:
+`register` writes no project artifacts. `create` writes the minimal scaffold described above.
+`bootstrap` detects the stack and generates the remaining project instruction files, `.docs/`
+tree, and memory store. It is a skill, not a CLI command, so run it inside a host session:
 
 ```bash
 claude
@@ -127,9 +128,10 @@ Then, in-session:
 Under Codex the same skill is invoked as `$bootstrap`. You should end with `CLAUDE.md` (and/or
 `AGENTS.md`) referencing the harness, plus a populated `.docs/` directory.
 
-`bootstrap` does **not** create `.ai-conductor/config.yml`. Copy
-`templates/ai-conductor-config.yml.template` from the harness checkout when you need project
-config — see [reference/configuration.md](reference/configuration.md).
+For an existing Git repository, `bootstrap` runs the idempotent `conduct-ts config init` primitive.
+You can also run that command directly before bootstrap. It creates
+`.ai-conductor/config.yml` from the project-safe template and preserves an existing file
+byte-for-byte. See [reference/configuration.md](reference/configuration.md).
 
 ## Run your first feature
 
