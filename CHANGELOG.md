@@ -39,7 +39,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- Add deterministic project-config scaffolding for new and existing Git repositories without copying user or self-host settings into project scope ({{IMPLEMENTATION_PR}}).
+- Add deterministic project-config scaffolding for new and existing Git repositories without copying user or self-host settings into project scope ([implementation PR #1169](https://github.com/jstoup111/ai-conductor/pull/1169)).
 - Catch daemon claim-to-finish seam regressions in ordinary CI with a deterministic end-to-end fixture driven by a scripted provider fake ([implementation PR #1155](https://github.com/jstoup111/ai-conductor/pull/1155)).
 - Show verdict-freshness decisions in `daemon.log`, distinguishing rewritten evidence, preserved surface misses, and stale invalidations with step and artifact names ([implementation PR #1126](https://github.com/jstoup111/ai-conductor/pull/1126)).
 - Add cost-unmetered metering and per-provider attribution to committed Cost records and `conduct-ts kpi` output ([implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
