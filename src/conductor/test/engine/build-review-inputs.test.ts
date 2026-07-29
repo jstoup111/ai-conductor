@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 
 import {
   assembleBuildReviewInputs,
+  MACHINERY_AUTHORED_PATHS,
   MergeBaseError,
 } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
@@ -97,6 +98,37 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.trackingRefSha).toBe('abc1234');
       expect(result.remoteHeadSha).toBe('abc1234');
       expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
+    });
+
+    // Machinery-authored paths are engine output, not agent work. Grading them
+    // against the plan produces scope FAILs no plan can ever satisfy (observed
+    // on build-review-ci-watch-partial-block-1002, whose engine-stamped
+    // `.docs/shipped/<slug>.md` was cited as unplanned work).
+    it('excludes machinery-authored paths from the graded diff', async () => {
+      const { git, calls } = fakeGit([
+        ...freshProbeScript,
+        { match: ['merge-base', 'origin/main', 'HEAD'], result: { exitCode: 0, stdout: 'abc1234\n' } },
+        { match: ['diff', 'abc1234..HEAD'], result: { exitCode: 0, stdout: 'diff --git a/x b/x\n' } },
+      ]);
+
+      await assembleBuildReviewInputs(git, planPath);
+
+      const diffCall = calls.find((c) => c[0] === 'diff');
+      expect(diffCall).toBeDefined();
+      expect(diffCall).toEqual([
+        'diff',
+        'abc1234..HEAD',
+        '--',
+        '.',
+        ...MACHINERY_AUTHORED_PATHS.map((p) => `:(exclude)${p}`),
+      ]);
+    });
+
+    it('names exactly the engine-authored surfaces as machinery paths', () => {
+      expect([...MACHINERY_AUTHORED_PATHS].sort()).toEqual([
+        '.docs/shipped/',
+        '.pipeline/',
+      ]);
     });
 
     it('stale base: fetches, recomputes merge-base against the refreshed ref, fresh=false', async () => {

@@ -299,10 +299,34 @@ describe('engine/build-review-disposition — buildReviewFailRoute', () => {
 
   it.each([
     ['tautology', { tautology: true, scope: false, rootCause: false, completeness: false }],
-    ['scope', { tautology: false, scope: true, rootCause: false, completeness: false }],
     ['rootCause', { tautology: false, scope: false, rootCause: true, completeness: false }],
   ])('routes a %s FAIL to build (unchanged common path)', (_name, rubric) => {
     expect(buildReviewFailRoute({ verdict: 'FAIL', rubric })).toBe('build');
+  });
+
+  // A scope FAIL says the diff contains work the plan does not describe. That
+  // is a PLAN-implicating judgement — either the plan should cover the work or
+  // the work should not be there — and routing it straight back to `build`
+  // makes an unsupervised builder delete code to satisfy the gate (observed on
+  // build-review-ci-watch-partial-block-1002, commit 0bf9d809b, −249 lines).
+  // Remediation can amend the plan instead; it may still route to build.
+  it('routes a scope-only FAIL to remediate rather than straight to build', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'FAIL',
+        rubric: { tautology: false, scope: true, rootCause: false, completeness: false },
+      }),
+    ).toBe('remediate');
+  });
+
+  it('routes a scope FAIL carried only in findings to remediate', () => {
+    expect(
+      buildReviewFailRoute({
+        verdict: 'FAIL',
+        rubric: { tautology: false, rootCause: false, completeness: false },
+        findings: { scope: ['CHANGELOG.md gains a second [Unreleased] entry'] },
+      }),
+    ).toBe('remediate');
   });
 
   it('routes a FAIL with no rubric detail to build (fail-open to today’s behavior)', () => {
