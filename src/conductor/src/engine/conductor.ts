@@ -4585,11 +4585,7 @@ export class Conductor {
                     await freshEvidence.write();
                   }
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
-                  await writeFile(
-                    join(this.projectRoot, LOOP_HALT_MARKER),
-                    reason + '\n',
-                    'utf-8',
-                  ).catch(() => {});
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   state[step.name] = 'failed';
                   await writeState(this.stateFilePath, state);
                   await emitTracked({ type: 'loop_halt', reason });
@@ -4672,11 +4668,7 @@ export class Conductor {
                     const reason =
                       `auto-parked: empty/missing plan` +
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
-                    await writeFile(
-                      join(this.projectRoot, LOOP_HALT_MARKER),
-                      reason + '\n',
-                      'utf-8',
-                    ).catch(() => {});
+                    await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                     state[step.name] = 'failed';
                     await writeState(this.stateFilePath, state);
                     await emitTracked({ type: 'loop_halt', reason });
