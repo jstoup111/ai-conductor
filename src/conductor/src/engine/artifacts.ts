@@ -837,6 +837,11 @@ export interface CompletionContext {
   attemptStartedAt?: number;
   /** Used by the retro predicate to prefer slug-matched filenames. */
   featureDesc?: string;
+  /** Prepared once by callers that need feature-aware generic artifact resolution. */
+  artifactResolution?: Pick<
+    ArtifactResolutionContext,
+    'featureIdentities' | 'changedPaths'
+  >;
   /**
    * Resolved project config. The acceptance_specs gate reads
    * `config.acceptance_spec_globs` to extend its built-in artifact globs with
@@ -3513,11 +3518,18 @@ export async function checkStepCompletion(
   const patterns = [...(STEP_ARTIFACT_GLOBS[step] ?? []), ...extra];
   if (patterns.length === 0) return { done: true };
 
-  const files = await findArtifactFiles(dir, step, extra);
-  if (files.length > 0) return { done: true };
+  const resolutionContext =
+    ctx.artifactResolution ??
+    (await buildArtifactResolutionContext(dir, {
+      planPath: ctx.planPath,
+      featureDesc: ctx.featureDesc,
+      git: ctx.git,
+    }));
+  const resolution = await resolveArtifactFiles(dir, step, resolutionContext, extra);
+  if (resolution.files.length > 0) return { done: true };
   return {
     done: false,
-    reason: `no files matching ${patterns.join(' or ')}`,
+    reason: resolution.diagnostic?.reason ?? `no files matching ${patterns.join(' or ')}`,
   };
 }
 

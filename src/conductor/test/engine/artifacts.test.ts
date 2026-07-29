@@ -546,6 +546,31 @@ describe('engine/artifacts', () => {
     });
   });
 
+  describe('checkStepCompletion: scoped generic artifacts', () => {
+    it('rejects a foreign feature, accepts the current file, and surfaces resolver diagnostics', async () => {
+      await createFile('.docs/specs/feature-a.md');
+      const context: CompletionContext = {
+        featureDesc: 'feature-b',
+        artifactResolution: {
+          featureIdentities: ['feature-b'],
+          changedPaths: new Set(),
+        },
+      };
+
+      const foreignOnly = await checkStepCompletion(dir, 'prd', context);
+      await createFile('.docs/specs/2026-07-28-feature-b.md');
+      const currentFeature = await checkStepCompletion(dir, 'prd', context);
+
+      expect({ foreignOnly, currentFeature }).toEqual({
+        foreignOnly: {
+          done: false,
+          reason: 'prd has one artifact candidate that does not match active feature "feature-b"',
+        },
+        currentFeature: { done: true },
+      });
+    });
+  });
+
   describe('findArtifactFiles', () => {
     it('returns [] when the step produces no artifacts', async () => {
       expect(await findArtifactFiles(dir, 'complexity')).toEqual([]);
