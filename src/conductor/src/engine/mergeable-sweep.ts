@@ -331,7 +331,10 @@ export async function sweepMergeableLabels({
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
             try {
-              await teardownWorktree?.(
+              if (!teardownWorktree) {
+                throw new Error('worktree teardown dependency unavailable');
+              }
+              await teardownWorktree(
                 {
                   path: join(entry.repoCwd, '.worktrees', entry.slug),
                   branch: `feat/daemon-${entry.slug}`,

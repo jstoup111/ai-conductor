@@ -398,6 +398,31 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(logs.some((line) => line.includes('reaped record-present'))).toBe(false);
   });
 
+  it('does not claim a shipped-record-present worktree was reaped when teardown is omitted', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const logs: string[] = [];
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async () => 'present',
+    });
+
+    expect({
+      failure: logs.includes(
+        `[mergeable-sweep] reap failed test-feature (${PR_URL}) — reason: shipped-record-on-main — error: worktree teardown dependency unavailable`,
+      ),
+      falseSuccess: logs.some((line) => line.includes('reaped test-feature')),
+      survivors: await readWatch(tmpDir),
+    }).toEqual({
+      failure: true,
+      falseSuccess: false,
+      survivors: [],
+    });
+  });
+
   it('suppresses an unchanged retained disposition across passes and logs when it changes', async () => {
     const retainedGh = makeFakeGh({
       [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
@@ -497,11 +522,13 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
   it('reaps a MERGED feature worktree when its shipped record is present on main', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    const logs: string[] = [];
     await enrollWatch(tmpDir, entry());
 
     await sweepMergeableLabels({
       projectRoot: tmpDir,
       runGh: gh,
+      log: (message) => logs.push(message),
       shippedRecordProbe: async () => 'present',
       teardownWorktree: async (worktree, keep) => {
         teardownCalls.push({ ...worktree, keep });
@@ -515,6 +542,9 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
         keep: false,
       },
     ]);
+    expect(logs).toContain(
+      '[mergeable-sweep] reaped test-feature — reason: shipped-record-on-main',
+    );
     expect(await readWatch(tmpDir)).toEqual([]);
   });
 
@@ -639,8 +669,17 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
   it('prunes a not-found / gone PR (simulated as CLOSED) from the registry', async () => {
     // When `gh pr view` returns CLOSED it means the PR is gone; same as deleted.
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('CLOSED') });
+    const logs: string[] = [];
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async () => 'absent',
+    });
+    expect(logs).toContain(
+      '[mergeable-sweep] retained test-feature (reclaimable) — reason: pr-closed-unmerged',
+    );
     expect(await readWatch(tmpDir)).toHaveLength(0);
   });
 

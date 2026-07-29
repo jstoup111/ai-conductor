@@ -1700,6 +1700,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         await sweepMergeableLabels({
           projectRoot,
           log,
+          teardownWorktree: deps.teardownWorktree,
           // Task 17: dispatch autoresolve for the first eligible CONFLICTING
           // PR after the label pass, gated on `mergeable_autoresolve.enabled`
           // so a disabled/absent config leaves the sweep unchanged (AC4).

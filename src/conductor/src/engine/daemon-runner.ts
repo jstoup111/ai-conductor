@@ -298,7 +298,12 @@ export function makeRunFeature(
   const maybeSweep = async (): Promise<void> => {
     if (!deps.projectRoot) return;
     try {
-      await sweep({ projectRoot: deps.projectRoot, log, runGh: deps.runGh });
+      await sweep({
+        projectRoot: deps.projectRoot,
+        log,
+        runGh: deps.runGh,
+        teardownWorktree: deps.teardownWorktree,
+      });
     } catch (err) {
       log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
     }
