@@ -23,6 +23,34 @@ afterEach(async () => {
 });
 
 describe('shippedRecordOnMain', () => {
+  it('returns indeterminate when fetch or an ambiguous cat-file lookup fails', async () => {
+    const module = await import('../../src/engine/shipped-record-on-main.js').catch(() => undefined);
+    const failures: GitRunner[] = [
+      async () => {
+        throw new Error('fetch transport failed');
+      },
+      async (args) => {
+        if (args[0] === 'cat-file') {
+          throw Object.assign(new Error('git cat-file exited with code 128'), {
+            code: 128,
+            stdout: '',
+            stderr: "fatal: invalid object name 'origin/main'",
+          });
+        }
+        return { stdout: '', stderr: '' };
+      },
+    ];
+    const results = module
+      ? await Promise.all(
+          failures.map((run) =>
+            module.shippedRecordOnMain('/repo', 'uncertain', run).catch(() => 'threw'),
+          ),
+        )
+      : ['missing-export', 'missing-export'];
+
+    expect(results).toEqual(['indeterminate', 'indeterminate']);
+  });
+
   it('returns absent when origin/main has no shipped record', async () => {
     const slug = 'not-shipped';
     const calls: string[][] = [];

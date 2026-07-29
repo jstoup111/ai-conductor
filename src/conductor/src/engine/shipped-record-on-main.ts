@@ -7,8 +7,12 @@ export async function shippedRecordOnMain(
   repoCwd: string,
   slug: string,
   git: GitRunner,
-): Promise<'present' | 'absent'> {
-  await git(['fetch', 'origin', 'main'], { cwd: repoCwd });
+): Promise<'present' | 'absent' | 'indeterminate'> {
+  try {
+    await git(['fetch', 'origin', 'main'], { cwd: repoCwd });
+  } catch {
+    return 'indeterminate';
+  }
   try {
     await git(
       ['cat-file', '-e', `origin/main:.docs/shipped/${slug}.md`],
@@ -29,7 +33,7 @@ export async function shippedRecordOnMain(
     ) {
       return 'absent';
     }
-    throw error;
+    return 'indeterminate';
   }
   return 'present';
 }
