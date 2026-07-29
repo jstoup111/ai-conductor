@@ -319,7 +319,7 @@ export async function clearMarker(worktreePath: string): Promise<void> {
   await rm(halt, { force: true });
   // Best-effort: the classification sidecar is stale once the HALT it
   // classified is cleared. Absent is fine — no-op-safe.
-  await rm(join(worktreePath, HALT_CLASS_MARKER), { force: true });
+  await rm(join(worktreePath, HALT_CLASS_MARKER), { recursive: true, force: true });
   await writeFile(join(worktreePath, REKICK_SENTINEL), `rekick\n`, 'utf-8');
 }
 
