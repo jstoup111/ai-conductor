@@ -24,9 +24,10 @@ graph TD
 
     subgraph sweep["mergeable-sweep.ts — sweepMergeableLabels, per entry"]
         ST["prMergeState(gh, repoCwd, prUrl)"]
-        TERM{"terminal state?"}
-        MERGED["MERGED → reap gate"]
-        CLOSEDU["CLOSED unmerged / NOTFOUND<br/>→ RETAIN + mark reclaimable"]
+        TERM{"PR state?"}
+        PROBE["MERGED / CLOSED<br/>→ shipped-record probe"]
+        UNKNOWN["UNKNOWN → keep watch<br/>no probe or teardown; continue"]
+        NOTFOUND["NOTFOUND → prune watch<br/>RETAIN reclaimable worktree"]
     end
 
     subgraph gate["Shipped-record-on-main gate (new module)"]
@@ -62,14 +63,17 @@ graph TD
     SFR --> CHP --> ENR --> MP --> RETAIN --> RLOG
     ENR --> WE
     WE --> ST --> TERM
-    TERM -->|MERGED| MERGED
-    TERM -->|"CLOSED unmerged / NOTFOUND"| CLOSEDU
-    MERGED --> FETCH --> CAT --> DEC
+    TERM -->|"MERGED / CLOSED"| PROBE
+    TERM -->|UNKNOWN| UNKNOWN
+    TERM -->|NOTFOUND| NOTFOUND
+    TERM -->|OPEN| LIVE["keep watch; existing label flow continues"]
+    PROBE --> FETCH --> CAT --> DEC
     DEC -->|yes| TD --> TDR
     TDR -->|success| RLOG2 --> PR
     TDR -->|failure| ERR --> PR
-    DEC -->|"no — record not on main yet"| RETAIN2["retain; re-check next sweep"]
-    CLOSEDU --> DASH
+    DEC -->|"no / indeterminate + MERGED"| RETAIN2["retain worktree + watch;<br/>re-check next sweep"]
+    DEC -->|"no / indeterminate + CLOSED"| CLOSEDNOPROOF["prune watch;<br/>RETAIN reclaimable worktree"] --> DASH
+    NOTFOUND --> DASH
     DASH --> CLI --> VALID --> EXISTS
     EXISTS -->|no| NOOP
     EXISTS -->|yes| QUIET --> ACTIVE
@@ -90,13 +94,15 @@ graph TD
   (verified 2026-07-29 against squash-merged PR #1138; this is the #1114 trap). `mergedAt` is a
   GitHub assertion about PR state, not about the content of the tree the daemon builds from, so it
   is not the gate either.
-- **CLOSED unmerged is separated from MERGED.** Today `mergeable-sweep.ts` prunes both identically
-  (FR-13). Under this design only MERGED enters the reap gate; CLOSED-unmerged and NOTFOUND retain
-  the worktree and become operator-reclaimable, because a rejected PR is exactly the case where the
-  evidence is still needed.
-- **MERGED watches are terminal once the record is present.** Successful teardown logs `reaped`;
-  teardown rejection is caught and logged, but either outcome prunes the watch, so a failed reap is
-  not retried by a later sweep. A missing record still retains the watch for the next pass.
+- **MERGED and CLOSED both probe for a shipped record.** A present record proves shipment despite
+  GitHub's state spelling, so either state reaps and prunes. Without proof, MERGED retains its watch
+  for another pass while CLOSED prunes the watch and retains a reclaimable worktree.
+- **UNKNOWN and NOTFOUND remain distinct.** UNKNOWN is transient: it keeps the watch, performs no
+  shipped-record probe or teardown, and continues the sweep. NOTFOUND is terminal for tracking: it
+  prunes the watch while retaining the reclaimable worktree.
+- **A present-record watch is terminal.** Successful teardown logs `reaped`; teardown rejection is
+  caught and logged, but either outcome prunes the watch, so a failed reap is not retried by a later
+  sweep. This preserves the Batch 2 failure disposition for both MERGED and CLOSED.
 - **Reclaim is explicitly single-slug and quiescence-gated.** Per this repo's Daemon Operations
   Safety rule 1, no globbed or computed delete set: the command validates one slug, no-ops when that
   named worktree is absent, and calls `detectAutoResume` before teardown. A resumable/in-progress
@@ -113,5 +119,6 @@ graph TD
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-29 | Added CLOSED shipped-record probe and explicit UNKNOWN / NOTFOUND dispositions | Batch 3 as-built update |
 | 2026-07-29 | Added reclaim validation/quiescence guard and terminal reap-error disposition | Batch 2 as-built update |
 | 2026-07-29 | Initial generation | DECIDE for #1091 |
