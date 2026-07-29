@@ -90,7 +90,7 @@ by mandatory negative-path tests carried as conditions.
 | ADR | Open Q / FR | Decision |
 |---|---|---|
 | **015** | Q1 / FR-3,4,8 | `memory_provider` plugin kind; default=built-in local; non-default=agent-queried MCP; harness resolve-and-expose only. |
-| **016** | Q6 / FR-1,2 | `memory_provider` field in the **harness config YAML** (`.ai-conductor/config.yml`), **guaranteed present in every project** (bootstrap seeds it); total resolver; bad/unavailable → `local`. *(revised)* |
+| **016** | Q6 / FR-1,2 | `memory_provider` field in the **harness config YAML** (`.ai-conductor/config.yml`); total resolver; absent or unavailable provider → `local`. *(revised)* |
 | **017** | Q3 / FR-5,9,10 | Canonical `~/.ai-conductor/memory/<key>/harness/`; `.memory/` → symlink; branch-independent; file-per-entry. |
 | **018** | Q2 / FR-6,7,8 | **`conduct memory add <provider> \| remove \| status`** (verb is `add`, not `adopt`); idempotent via `claude mcp get` + targeted config write; creds non-committed. *(revised)* |
 | **019** | Q5 / FR-4,9 | **A memory-guidance skill per provider (default included); harness selects the skill matching the installed/active provider**; missing skill → safe degradation to `local`. *(revised)* |
