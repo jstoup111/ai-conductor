@@ -54,7 +54,7 @@ const SLUG = 'deferred-reap';
 type RecordPresence = 'present' | 'absent' | 'indeterminate';
 
 type ReapAwareSweepOpts = SweepOpts & {
-  shippedRecordOnMain?: (
+  shippedRecordProbe?: (
     repoCwd: string,
     slug: string,
   ) => Promise<RecordPresence>;
@@ -212,7 +212,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
       ).toBe(true);
     }
     expect(await readWatch(projectRoot)).toEqual([
-      { prUrl: PR_URL, slug: SLUG, repoCwd: projectRoot },
+      { prUrl: PR_URL, slug: SLUG, repoCwd: projectRoot, resolveAttempts: 0, ciFixAttempts: 0 },
     ]);
     expect(await exists(join(projectRoot, '.daemon', 'processed', SLUG))).toBe(true);
     expect(logs.join('\n')).toContain(`retained ${SLUG}`);
@@ -230,7 +230,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
       projectRoot,
       runGh: ghForStates({ [PR_URL]: 'MERGED' }),
       log: (line) => logs.push(line),
-      shippedRecordOnMain: async () => 'present',
+      shippedRecordProbe: async () => 'present',
       teardownWorktree: async (featureWorktree, keep) => {
         expect(keep).toBe(false);
         teardownCalls.push(featureWorktree.path);
@@ -267,7 +267,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
       projectRoot,
       runGh: ghForStates(states),
       log: (line) => logs.push(line),
-      shippedRecordOnMain: async (_repoCwd, slug) => (
+      shippedRecordProbe: async (_repoCwd, slug) => (
         slug === 'record-absent'
           ? 'absent'
           : slug === 'fetch-indeterminate'
@@ -300,7 +300,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
       projectRoot,
       runGh: ghForStates({ [PR_URL]: 'CLOSED' }),
       log: (line) => logs.push(line),
-      shippedRecordOnMain: async () => 'absent',
+      shippedRecordProbe: async () => 'absent',
       teardownWorktree: async (featureWorktree) => {
         await rm(featureWorktree.path, { recursive: true, force: true });
       },
@@ -320,7 +320,7 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
       discover: async () => [],
     });
     const dashboard = renderDashboard(state);
-    expect(dashboard).toMatch(/RETAINED(?:-WORKTREES)? \(1\)/);
+    expect(dashboard).toMatch(/RETAINED WORKTREES \(1\)/);
     expect(dashboard).toContain(SLUG);
     expect(dashboard).toContain('pr-closed-unmerged');
   });

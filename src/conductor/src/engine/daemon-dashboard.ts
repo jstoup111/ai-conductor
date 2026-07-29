@@ -71,7 +71,15 @@ export interface ProcessedEntry {
 
 export interface RetainedWorktreeEntry {
   slug: string;
-  reason: 'pr-open-awaiting-main';
+  /**
+   * `pr-open-awaiting-main` — a verified ship whose PR has not yet merged to
+   * `origin/main` (the `.daemon/processed/` ledger names it).
+   * `pr-closed-unmerged` — the PR closed without merging, but the worktree's
+   * pipeline had already reached a completed run (`.pipeline/DONE` present)
+   * before that happened, so the stale `.pipeline/HALT` left behind is not a
+   * live block — it is surfaced as reclaimable (Story S3/S5).
+   */
+  reason: 'pr-open-awaiting-main' | 'pr-closed-unmerged';
 }
 
 /**
@@ -158,6 +166,19 @@ export interface ScanInheritedStateDeps {
   >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
+}
+
+/** The completed-run marker; mirrors the private constant in conductor.ts. */
+const DONE_MARKER = '.pipeline/DONE';
+
+/** `true` when `path` exists (any type), tolerant of missing/unreadable paths. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await readFile(path, 'utf-8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** List immediate subdirectory names of `dir`; `[]` when `dir` is absent. */
@@ -296,7 +317,15 @@ export async function scanInheritedState(
       } catch {
         haltContent = null; // no live HALT marker
       }
-      if (haltContent !== null) {
+      // A HALT marker alongside a `.pipeline/DONE` marker is never a live
+      // block in production: the false-ship path always removes DONE before
+      // writing a real HALT (daemon-runner.ts). So this combination only
+      // occurs when a fully-finished pipeline's PR was later closed unmerged
+      // — treat it as reclaimable, not as an operator-blocking halt
+      // (Story S3/S5), rather than the ordinary halted case below.
+      const donePresent = haltContent !== null && (await pathExists(join(wt, DONE_MARKER)));
+
+      if (haltContent !== null && !donePresent) {
         // HALTED wins over every other group, even with a conduct-state present.
         // A halted worktree is KEPT for the human, so its conduct-state is still
         // on disk — mine it for the step reached, tier, and any PR already open.
@@ -327,6 +356,15 @@ export async function scanInheritedState(
           retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
         }
         continue; // no conduct-state → not in-progress
+      }
+      if (donePresent) {
+        // Finished pipeline, stale HALT, not (yet) in the processed ledger —
+        // a closed-unmerged feature the sweep pruned from the watch registry
+        // but left retained on disk for reclaim.
+        if (isRetainedFeatureWorktree) {
+          retainedWorktrees.push({ slug, reason: 'pr-closed-unmerged' });
+        }
+        continue;
       }
 
       // Has state, no HALT, not processed → IN-PROGRESS. Malformed JSON still
