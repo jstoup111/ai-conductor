@@ -43,8 +43,12 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  *                    exact directory basename is excluded; lookalikes remain
  *                    fingerprinted, and `.gitignore` is deliberately not used.
  * None of these is harness SOURCE, so everything the guard exists to protect
- * stays fingerprinted: adding, modifying or deleting a tracked source file
- * under the live checkout still trips it.
+ * stays fingerprinted. After a mismatch, tracked Git modifications/deletions
+ * (`M`/`D`) on this surface are treated as operator edits and do not halt;
+ * untracked paths and indeterminate/failed Git classification still halt
+ * fail-closed. Git cannot identify the writer, so an escaped process rewriting
+ * already-tracked content is indistinguishable from an operator edit and is
+ * the accepted residual gap in this guard.
  */
 const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
