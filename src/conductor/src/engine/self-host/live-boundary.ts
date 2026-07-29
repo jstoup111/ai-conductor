@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
+import { execFile as execFileCb } from 'node:child_process';
 import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
+import { promisify } from 'node:util';
 import { redactSafetyText } from '../safety-diagnostics.js';
+
+const execFile = promisify(execFileCb);
 
 interface Surface {
   root: string;
@@ -263,6 +267,34 @@ function diffManifests(before: readonly Entry[], after: readonly Entry[]): {
 }
 
 /**
+ * Distinguishes tracked working-tree edits from unexplained live-checkout drift.
+ * Git cannot identify the writer, so a sandbox escape that rewrites a tracked
+ * file is indistinguishable from an operator edit and receives the same result.
+ */
+export async function classifyLiveCheckoutDiff(
+  root: string,
+  paths: readonly string[],
+): Promise<Map<string, 'operator-edit' | 'unexplained'>> {
+  const classifications = new Map<string, 'operator-edit' | 'unexplained'>(
+    paths.map(path => [path, 'unexplained']),
+  );
+  try {
+    const { stdout } = await execFile('git', ['-C', root, 'status', '--porcelain=v1', '-z', '--', ...paths]);
+    for (const record of stdout.split('\0').filter(Boolean)) {
+      if (record.length < 4 || record[2] !== ' ') continue;
+      const status = record.slice(0, 2);
+      const path = record.slice(3);
+      if (classifications.has(path) && ['M ', ' M', 'MM', 'D ', ' D'].includes(status)) {
+        classifications.set(path, 'operator-edit');
+      }
+    }
+  } catch {
+    // Fail closed: every requested path remains unexplained.
+  }
+  return classifications;
+}
+
+/**
  * A bounded, redacted, kind-tagged rendering of a manifest diff.
  *
  * Bounded because this string lands in `daemon.log`: a diff of a few thousand
@@ -296,6 +328,11 @@ export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promis
     );
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
+      if (surface.label === 'live checkout') {
+        const paths = [...diff.added, ...diff.removed, ...diff.changed];
+        const classifications = await classifyLiveCheckoutDiff(surface.root, paths);
+        if (paths.every(path => classifications.get(path) === 'operator-edit')) continue;
+      }
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };
     }
   }

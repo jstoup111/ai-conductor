@@ -2,9 +2,29 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
+const execFileAsync = promisify(execFile);
+
 describe('live self-host boundary', () => {
+  it('accepts an operator edit to a tracked live-checkout file during the build', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-edit-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'README.md'), 'after');
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts a feature-worktree mutation while live checkout and unrelated provider state remain identical', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-'));
     const live = join(root, 'live'); const worktree = join(root, 'worktree'); const provider = join(root, 'provider');
