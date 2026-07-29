@@ -8,6 +8,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createProtectedArtifactSeal,
   classifyMutationTarget,
+  evaluateProtectedArtifactSealRotation,
+  evaluateProtectedArtifactSealRotationInRepository,
   isActiveStepArtifactException,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
@@ -122,6 +124,101 @@ describe('createProtectedArtifactSeal', () => {
       normalized: { ...v1Seal, version: 2, rebaselines: [] },
       invalid: 'Protected artifact seal is invalid',
     });
+  });
+});
+
+describe('evaluateProtectedArtifactSealRotation', () => {
+  it('permits a non-ancestor rotation when every workspace and HEAD path is inherited from the base tip', () => {
+    const deletedPath = '.docs/plans/deleted.md';
+    const addedPath = '.docs/plans/added.md';
+    const deletedBytes = Buffer.from('approved plan\n');
+    const addedBytes = Buffer.from('base-added plan\n');
+    const seal = {
+      version: 2 as const,
+      baselineCommit: 'sealed-head',
+      protectedArtifacts: [{
+        path: deletedPath,
+        fingerprint: `sha256:${createHash('sha256').update(deletedBytes).digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+
+    const result = evaluateProtectedArtifactSealRotation({
+      seal,
+      headCommit: 'rebased-head',
+      baselineAncestry: 'non-ancestor',
+      workspaceArtifacts: new Map([[addedPath, addedBytes]]),
+      headArtifacts: new Map([[addedPath, addedBytes]]),
+      baseTipArtifacts: new Map([[addedPath, addedBytes]]),
+    });
+
+    expect(result).toEqual({ permitted: true, paths: [addedPath, deletedPath] });
+  });
+
+  it('refuses each unresolved or unexplained rotation condition with its failing path', () => {
+    const path = '.docs/plans/changed.md';
+    const sealedBytes = Buffer.from('sealed\n');
+    const workspaceBytes = Buffer.from('workspace\n');
+    const headBytes = Buffer.from('head\n');
+    const baseBytes = Buffer.from('base\n');
+    const seal = {
+      version: 2 as const,
+      baselineCommit: 'sealed-head',
+      protectedArtifacts: [{
+        path,
+        fingerprint: `sha256:${createHash('sha256').update(sealedBytes).digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+    const input = {
+      seal,
+      headCommit: 'rebased-head',
+      baselineAncestry: 'non-ancestor' as const,
+      workspaceArtifacts: new Map([[path, workspaceBytes]]),
+      headArtifacts: new Map([[path, workspaceBytes]]),
+      baseTipArtifacts: new Map([[path, workspaceBytes]]),
+    };
+
+    expect([
+      evaluateProtectedArtifactSealRotation({ ...input, baselineAncestry: 'unresolvable' }),
+      evaluateProtectedArtifactSealRotation({ ...input, baselineAncestry: 'ancestor' }),
+      evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: undefined }),
+      evaluateProtectedArtifactSealRotation({ ...input, headArtifacts: new Map([[path, headBytes]]) }),
+      evaluateProtectedArtifactSealRotation({ ...input, baseTipArtifacts: new Map([[path, baseBytes]]) }),
+      evaluateProtectedArtifactSealRotation({
+        ...input,
+        workspaceArtifacts: new Map(),
+        headArtifacts: new Map([[path, headBytes]]),
+        baseTipArtifacts: new Map([[path, headBytes]]),
+      }),
+    ]).toEqual([
+      { permitted: false, condition: 'baseline-unresolvable' },
+      { permitted: false, condition: 'same-history-ancestor' },
+      { permitted: false, condition: 'base-tip-unresolved' },
+      { permitted: false, condition: 'workspace-differs-from-head', path },
+      { permitted: false, condition: 'head-differs-from-base', path },
+      { permitted: false, condition: 'workspace-differs-from-head', path },
+    ]);
+  });
+
+  it('fails closed distinctly when the sealed baseline object cannot resolve', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const seal = {
+      version: 2 as const,
+      baselineCommit: 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef',
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+      rebaselines: [],
+    };
+
+    await expect(evaluateProtectedArtifactSealRotationInRepository({
+      projectRoot: repo,
+      seal,
+      headCommit: await git(repo, ['rev-parse', 'HEAD']),
+      baseTipRef: 'main',
+    })).resolves.toEqual({ permitted: false, condition: 'baseline-unresolvable' });
   });
 });
 
