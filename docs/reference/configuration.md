@@ -78,7 +78,7 @@ Validation is fail-closed at the top level: an unrecognized key is a hard load e
 
 Only five sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
 (`:708`), `auto_restart_on_stale_engine` (`:778`), `engine_refresh_min_interval_seconds` (`:807`), and
-the `build_review` and `ci_watch` normalizers (`:52,875-890,905-924`).
+the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
@@ -801,7 +801,7 @@ unchanged, and no attempt counter is burned.
 ## build_review
 
 The judgement gate at the `build` → downstream seam. The block is normalized in place; the resolved value
-is written back (`config.ts:867-895`).
+is written back (`config.ts:898-927`).
 
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
@@ -817,7 +817,7 @@ Normalization contract:
 | Non-object | `{ enabled: true }` plus one warning |
 | Unknown or invalid inner key | That key is omitted and warned by name; valid sibling keys are preserved |
 
-Malformed input fails **open** to enabled by design — `config.ts:867-895` states the rule as never
+Malformed input fails **open** to enabled by design — `config.ts:898-927` states the rule as never
 silently opting a project out of the replacement authority.
 
 `build_review` is a gating built-in with no `configDisableAllowed`
@@ -831,7 +831,7 @@ per-task floor telemetry (`step-runners.ts:1569-1584`).
 ## ci_watch
 
 Post-merge CI watch and fix loop. Normalized in place; the resolved value is written back
-(`config.ts:898-929`).
+(`config.ts:929-961`).
 
 | Key | Type | Default | Status |
 | --- | --- | --- | --- |
