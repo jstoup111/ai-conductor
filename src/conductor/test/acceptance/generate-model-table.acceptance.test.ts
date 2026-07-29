@@ -77,6 +77,9 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
       expect(afterWrite).toContain(
         '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
       );
+      expect(afterWrite).toMatch(
+        /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,
+      );
       // The stale placeholder row must be gone — real regeneration happened.
       expect(afterWrite).not.toContain('stale row from a previous run');
       // Prose outside the markers is byte-identical.
@@ -142,7 +145,8 @@ describe('real binary provider-labelled contract drift', () => {
           line.split('|').length === 9,
       );
       const autonomousRows = rows.filter((row) => cells(row)[1] === 'autonomous engine');
-      const interactiveRow = rows.find((row) => cells(row)[1] === 'Claude interactive') ?? '';
+      const interactiveRow =
+        rows.find((row) => cells(row)[1] === 'supported-host interactive') ?? '';
       const autonomousRowWith = (column: number): string =>
         autonomousRows.find((row) => Boolean(cells(row)[column])) ?? '';
       const changedCellRow = (row: string, column: number, suffix: string): string => {
@@ -184,6 +188,12 @@ describe('real binary provider-labelled contract drift', () => {
           category: 'interactive execution/provider label',
           document: replaceCell(interactiveRow, 1, '-drift'),
           removed: changedCellRow(interactiveRow, 1, '-drift'),
+          restored: interactiveRow,
+        },
+        {
+          category: 'interactive Codex model inheritance',
+          document: replaceCell(interactiveRow, 4, '-drift'),
+          removed: changedCellRow(interactiveRow, 4, '-drift'),
           restored: interactiveRow,
         },
         {
