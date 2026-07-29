@@ -160,6 +160,38 @@ without its attribution gate. The recheck after a repair is authoritative and st
 exist as an executable regular file at the expected path, so a hook that restored non-executable or
 that resolves through a symlink still counts as not restored and halts the build rather than arming.
 
+## When the implementation PR is opened
+
+The implementation PR is opened as a **draft** when the feature enters the SHIP phase — before the
+first SHIP step is dispatched — not at `finish`. The engine pushes the feature branch (a plain
+push; it never forces) and opens one draft PR against the discovered base branch, with a
+placeholder title and body.
+
+This exists so the PR *number* is available for the whole ship tail. `conduct-ts
+finalize-changelog-pr` can substitute the `{{IMPLEMENTATION_PR}}` CHANGELOG token during the phase
+instead of only inside the finish turn; previously a missed substitution left a literal token that
+the finish completion gate refused, cycling the feature back through SHIP.
+
+What the draft window does and does not mean:
+
+- **Nothing merges it.** A draft PR cannot be merged, and the mergeable sweep excludes drafts from
+  its autoresolve and CI-fix candidates, so no remediation runs against an in-flight build's own PR.
+- **`finish` flips it ready.** The finish step authors the real title and body and marks the PR
+  ready for review; the finish completion gate then re-reads the PR and refuses to converge while it
+  is still a draft. `/finish` still commits `.docs/shipped/<slug>.md` on the implementation branch
+  before the final push — that is unchanged.
+- **The placeholder body is deliberately marked as one.** It carries the engine's body-floor marker,
+  so if `finish` somehow fails to author a real body the existing finish gate kicks back for one
+  rather than shipping the placeholder.
+- **It is advisory.** If the push is rejected or `gh` is unauthenticated, the engine logs one loud
+  `[ship-draft-pr]` line and the build continues; only the finish-time publish is load-bearing.
+- **It is idempotent.** Re-entering SHIP after a kickback, resume, or rework reuses the open PR — it
+  never opens a second one and never re-drafts a PR that finish already marked ready.
+- **Self-host builds are included.** The VERSION-approval and release-artifact gates still run
+  before `finish`, so they still gate the flip to ready-for-review — the draft simply exists earlier.
+
+There is no configuration for this; the timing is fixed.
+
 ## Step heartbeat and the stall watchdog
 
 `daemon.log` only records step start/end — it never shows mid-step activity, so a step that's

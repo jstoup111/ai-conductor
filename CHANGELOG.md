@@ -10,6 +10,28 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Changed
+
+- The implementation PR is now opened as a **draft** at the start of the SHIP phase — before the
+  first SHIP step is dispatched — instead of at `finish`. The engine plain-pushes the feature branch
+  (never a force) and opens one draft PR against the discovered base. This makes the PR number
+  available for the whole ship tail, so `conduct-ts finalize-changelog-pr` can substitute the
+  `{{IMPLEMENTATION_PR}}` CHANGELOG token during the phase rather than only inside the finish turn;
+  a missed substitution previously left a literal token that the finish completion gate refused,
+  cycling the feature back through SHIP. `finish` is unchanged in contract: it authors the real
+  title and body, commits `.docs/shipped/<slug>.md` on the implementation branch before the final
+  push, and flips the PR ready-for-review (the existing `ensureShipReady` flip, still verified by
+  the finish ship-readiness gate). The placeholder body carries the engine body-floor marker, so a
+  finish that failed to author a real body is kicked back rather than shipped. Publishing is
+  advisory — a rejected push or an unauthenticated `gh` logs one loud `[ship-draft-pr]` line and the
+  build continues — and idempotent, so a kickback, resume, or rework never opens a second PR and
+  never re-drafts a PR finish already marked ready. A draft cannot be merged and is excluded from
+  the mergeable sweep's autoresolve/CI-fix candidates, so no remediation acts on an in-flight
+  build's own PR. Self-host builds are included: the VERSION-approval and release-artifact gates
+  still run before `finish`, so they still gate the flip to ready-for-review
+  ([adr-2026-07-29-ship-start-draft-pr](.docs/decisions/adr-2026-07-29-ship-start-draft-pr.md)).
+  There is no configuration key — the timing is fixed.
+
 ### Added
 
 - Add cost-unmetered metering and per-provider attribution to committed Cost records and `conduct-ts kpi` output ([implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
