@@ -362,6 +362,30 @@ describe('rewriteWatch', () => {
 // ── Task 13: sweep decision tree ──────────────────────────────────────────────
 
 describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned', () => {
+  it('reaps a MERGED feature worktree when its shipped record is present on main', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: async (worktree, keep) => {
+        teardownCalls.push({ ...worktree, keep });
+      },
+    });
+
+    expect(teardownCalls).toEqual([
+      {
+        path: join('/fake/repo', '.worktrees', 'test-feature'),
+        branch: 'feat/daemon-test-feature',
+        keep: false,
+      },
+    ]);
+    expect(await readWatch(tmpDir)).toEqual([]);
+  });
+
   it('routes a MERGED PR through the shipped-record gate path', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const logs: string[] = [];

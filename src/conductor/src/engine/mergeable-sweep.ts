@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import {
   GhRunner,
   makeProductionGh,
+  makeProductionGit,
   ensureLabel,
   addLabel,
   removeLabel,
@@ -32,6 +33,7 @@ import {
 } from './pr-labels.js';
 import type { ConductorEvent } from '../types/events.js';
 import type { FeatureWorktree } from './daemon-runner.js';
+import { shippedRecordOnMain } from './shipped-record-on-main.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -241,6 +243,11 @@ export interface SweepOpts {
    * use this dependency.
    */
   teardownWorktree?: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
+  /** Probe whether the feature's shipped record is present on origin/main. */
+  shippedRecordProbe?: (
+    repoCwd: string,
+    slug: string,
+  ) => Promise<'present' | 'absent' | 'indeterminate'>;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -255,9 +262,19 @@ export async function sweepMergeableLabels({
   runGh,
   autoresolve,
   ciFix,
+  teardownWorktree,
+  shippedRecordProbe,
   onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
+  const git = makeProductionGit();
+  const probe =
+    shippedRecordProbe ??
+    ((repoCwd: string, slug: string) =>
+      shippedRecordOnMain(repoCwd, slug, async (args, opts) => ({
+        ...(await git(args, opts)),
+        stderr: '',
+      })));
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
@@ -274,11 +291,19 @@ export async function sweepMergeableLabels({
       try {
         const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
 
-        // MERGED has a distinct disposition: it enters the shipped-record gate
-        // path. Task 8 adds the record probe and the authorized teardown call;
-        // until then, preserve the existing registry-prune behavior.
+        // MERGED has a distinct disposition: only a shipped record proven
+        // present on origin/main authorizes feature-worktree teardown.
         if (state.state === 'MERGED') {
           log?.(`[mergeable-sweep] merged ${entry.prUrl} entering shipped-record gate`);
+          if ((await probe(entry.repoCwd, entry.slug)) === 'present') {
+            await teardownWorktree?.(
+              {
+                path: join(entry.repoCwd, '.worktrees', entry.slug),
+                branch: `feat/daemon-${entry.slug}`,
+              },
+              false,
+            );
+          }
           continue; // not added to survivors
         }
 
