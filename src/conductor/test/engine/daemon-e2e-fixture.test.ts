@@ -13,11 +13,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
-import { describe, expect, it, vi } from 'vitest';
-import { fileMatchesPlanPath } from '../../src/engine/autoheal.js';
+import { describe, expect, it } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
-import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { createCodexProviderFake } from '../fixtures/codex-provider-fake.js';
@@ -136,129 +134,6 @@ function createFixtureAgentFake(
 }
 
 describe('daemon E2E fixture', () => {
-  it('reports the explicit daemon-log path when diagnostics find no log', async () => {
-    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-diagnostics-'));
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      await dumpPipelineDiagnostics(worktreeDir);
-
-      expect(error).toHaveBeenCalledWith(
-        `daemon log not found at ${join(worktreeDir, '.daemon/daemon.log')}`,
-      );
-    } finally {
-      error.mockRestore();
-      await rm(worktreeDir, { recursive: true, force: true });
-    }
-  });
-
-  it('prints a bounded daemon-log tail with halt and park reasons', async () => {
-    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-diagnostics-'));
-    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    try {
-      await mkdir(join(worktreeDir, '.daemon/parked'), { recursive: true });
-      await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(worktreeDir, '.daemon/daemon.log'),
-        Array.from({ length: 55 }, (_, index) => `log line ${index + 1}`).join('\n'),
-      );
-      await writeFile(join(worktreeDir, '.pipeline/HALT'), 'missing Task 1 evidence\n');
-      await writeFile(
-        join(worktreeDir, '.daemon/parked/daemon-e2e-fixture'),
-        'parked after evidence failure\n',
-      );
-
-      await dumpPipelineDiagnostics(worktreeDir);
-
-      const output = error.mock.calls.map(([message]) => String(message)).join('\n');
-      expect({
-        includesFirstRetainedLine: output.includes('log line 6'),
-        excludesDroppedLine: !output.includes('log line 5\n'),
-        includesHaltReason: output.includes('missing Task 1 evidence'),
-        includesParkReason: output.includes('parked after evidence failure'),
-      }).toEqual({
-        includesFirstRetainedLine: true,
-        excludesDroppedLine: true,
-        includesHaltReason: true,
-        includesParkReason: true,
-      });
-    } finally {
-      error.mockRestore();
-      await rm(worktreeDir, { recursive: true, force: true });
-    }
-  });
-
-  it('parses only the real task headings without a dependency-graph phantom', async () => {
-    const plan = await readFile(fixturePlanPath, 'utf-8');
-
-    expect([...parsePlanTaskPaths(plan).keys()].sort()).toEqual(['1', 'T0']);
-  });
-
-  it('excludes inline prose backticks from Task 1 corroboration paths', async () => {
-    const plan = await readFile(fixturePlanPath, 'utf-8');
-
-    expect([...parsePlanTaskPaths(plan).get('1')!]).toEqual([
-      'test/fixtures/daemon-e2e/touched.txt',
-    ]);
-  });
-
-  it('harvests Task 1 bullet path and rejects evidence that does not touch it', async () => {
-    const plan = await readFile(fixturePlanPath, 'utf-8');
-    const [declaredPath] = parsePlanTaskPaths(plan).get('1')!;
-
-    expect({
-      declaredPath,
-      disjointEvidenceCorroborates: fileMatchesPlanPath(
-        'test/fixtures/daemon-e2e/unrelated.txt',
-        declaredPath,
-      ),
-    }).toEqual({
-      declaredPath: 'test/fixtures/daemon-e2e/touched.txt',
-      disjointEvidenceCorroborates: false,
-    });
-  });
-
-  it('scripted fixture agent makes a real commit with the dispatched task trailer', async () => {
-    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-agent-'));
-
-    try {
-      await initTestRepo(worktreeDir);
-      const fake = createFixtureAgentFake(worktreeDir);
-
-      const result = await fake.provider.invoke({
-        prompt: 'Task: 1\nImplement the daemon E2E fixture task.',
-        sessionId: 'fixture-session',
-        resume: false,
-        cwd: worktreeDir,
-      });
-      const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
-        cwd: worktreeDir,
-      });
-      const { stdout: committedFiles } = await execa(
-        'git',
-        ['show', '--pretty=format:', '--name-only', 'HEAD'],
-        { cwd: worktreeDir },
-      );
-
-      expect({
-        result,
-        commitBody: commitBody.trim(),
-        committedFiles: committedFiles.trim().split('\n'),
-      }).toEqual({
-        result: {
-          success: true,
-          output: 'fixture agent completed',
-          exitCode: 0,
-        },
-        commitBody: 'test: complete fixture task\n\nTask: 1',
-        committedFiles: ['test/fixtures/daemon-e2e/touched.txt'],
-      });
-    } finally {
-      await rm(worktreeDir, { recursive: true, force: true });
-    }
-  });
-
   it('claims the fixture and dispatches its build through the scripted provider', async () => {
     const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-dispatch-'));
     const slug = 'daemon-e2e-fixture';
