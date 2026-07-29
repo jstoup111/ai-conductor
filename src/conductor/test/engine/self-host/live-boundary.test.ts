@@ -63,6 +63,29 @@ describe('live self-host boundary', () => {
     finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('rejects mixed tracked edits and untracked live-checkout additions with the untracked path named', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-mixed-edits-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await Promise.all([
+      writeFile(join(live, 'README.md'), 'after'),
+      writeFile(join(live, 'untracked.txt'), 'unexplained'),
+    ]);
+    try {
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('added untracked.txt'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts a feature-worktree mutation while live checkout and unrelated provider state remain identical', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-'));
     const live = join(root, 'live'); const worktree = join(root, 'worktree'); const provider = join(root, 'provider');
