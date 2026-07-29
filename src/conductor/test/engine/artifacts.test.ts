@@ -2982,6 +2982,44 @@ describe('engine/artifacts', () => {
   });
 
   describe('getArtifactStatus', () => {
+    it('shows only the active feature and keeps ambiguous corpora unsatisfied with diagnostics', async () => {
+      await createFile('.docs/specs/feature-a.md');
+      await createFile('.docs/specs/feature-b.md');
+      await createFile('.docs/plans/feature-a.md');
+      await createFile('.docs/plans/feature-c.md');
+      const featureB = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      };
+
+      const [scoped, ambiguous] = await Promise.all([
+        getArtifactStatus(dir, 'prd', featureB),
+        getArtifactStatus(dir, 'plan', featureB),
+      ]);
+
+      expect({ scoped, ambiguous }).toEqual({
+        scoped: [
+          {
+            pattern: '.docs/specs/*.md',
+            files: ['.docs/specs/feature-b.md'],
+            satisfied: true,
+          },
+        ],
+        ambiguous: [
+          {
+            pattern: '.docs/plans/*.md',
+            files: [],
+            satisfied: false,
+            diagnostic: {
+              code: 'ambiguous',
+              reason:
+                'plan has 2 artifact candidates and none can be associated with active feature "feature-b"',
+            },
+          },
+        ],
+      });
+    });
+
     it('returns [] for steps that produce no artifacts', async () => {
       expect(await getArtifactStatus(dir, 'complexity')).toEqual([]);
     });

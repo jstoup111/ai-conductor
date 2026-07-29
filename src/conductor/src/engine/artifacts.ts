@@ -94,10 +94,19 @@ export interface ArtifactResolutionContext {
 
 export interface ArtifactResolutionResult {
   files: string[];
-  diagnostic?: {
-    code: 'missing' | 'foreign' | 'ambiguous';
-    reason: string;
-  };
+  diagnostic?: ArtifactResolutionDiagnostic;
+  patternResults?: ArtifactPatternResolution[];
+}
+
+export interface ArtifactResolutionDiagnostic {
+  code: 'missing' | 'foreign' | 'ambiguous';
+  reason: string;
+}
+
+export interface ArtifactPatternResolution {
+  pattern: string;
+  files: string[];
+  diagnostic?: ArtifactResolutionDiagnostic;
 }
 
 export interface BuildArtifactResolutionContextOptions {
@@ -431,14 +440,39 @@ export async function resolveArtifactFiles(
   step: StepName,
   context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'>,
   extraGlobs: string[] = [],
+  includePatternResults = false,
 ): Promise<ArtifactResolutionResult> {
   const files = new Set<string>();
+  const patternResults: ArtifactPatternResolution[] = [];
   let featureCandidateCount = 0;
   let hasFeatureContract = false;
+  const activeIdentity = context.featureIdentities[0];
+  const identityLabel = activeIdentity
+    ? `active feature "${activeIdentity}"`
+    : 'the active feature (identity unavailable)';
+  const diagnosticFor = (candidateCount: number): ArtifactResolutionDiagnostic => {
+    if (candidateCount === 0) {
+      return {
+        code: 'missing',
+        reason: `${step} has no artifact candidates for ${identityLabel}`,
+      };
+    }
+    if (candidateCount === 1) {
+      return {
+        code: 'foreign',
+        reason: `${step} has one artifact candidate that does not match ${identityLabel}`,
+      };
+    }
+    return {
+      code: 'ambiguous',
+      reason: `${step} has ${candidateCount} artifact candidates and none can be associated with ${identityLabel}`,
+    };
+  };
   for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
     const candidates = await matchGlob(dir, contract.pattern);
     if (contract.scope !== 'feature') {
       candidates.forEach((file) => files.add(file));
+      patternResults.push({ pattern: contract.pattern, files: candidates });
       continue;
     }
 
@@ -455,50 +489,39 @@ export async function resolveArtifactFiles(
     });
     if (associated.length > 0) {
       associated.forEach((file) => files.add(file));
+      patternResults.push({ pattern: contract.pattern, files: associated });
     } else if (
       candidates.length === 1 &&
       context.featureIdentities.length === 0 &&
       context.changedPaths.size === 0
     ) {
       files.add(candidates[0]);
+      patternResults.push({ pattern: contract.pattern, files: [candidates[0]] });
+    } else {
+      patternResults.push({
+        pattern: contract.pattern,
+        files: [],
+        diagnostic: diagnosticFor(candidates.length),
+      });
     }
   }
 
   for (const pattern of extraGlobs) {
-    for (const file of await matchGlob(dir, pattern)) files.add(file);
+    const candidates = await matchGlob(dir, pattern);
+    for (const file of candidates) files.add(file);
+    patternResults.push({ pattern, files: candidates });
   }
   const resolvedFiles = [...files];
-  if (resolvedFiles.length > 0 || !hasFeatureContract) return { files: resolvedFiles };
+  const withPatterns = (result: ArtifactResolutionResult): ArtifactResolutionResult =>
+    includePatternResults ? { ...result, patternResults } : result;
+  if (resolvedFiles.length > 0 || !hasFeatureContract) {
+    return withPatterns({ files: resolvedFiles });
+  }
 
-  const activeIdentity = context.featureIdentities[0];
-  const identityLabel = activeIdentity
-    ? `active feature "${activeIdentity}"`
-    : 'the active feature (identity unavailable)';
-  if (featureCandidateCount === 0) {
-    return {
-      files: [],
-      diagnostic: {
-        code: 'missing',
-        reason: `${step} has no artifact candidates for ${identityLabel}`,
-      },
-    };
-  }
-  if (featureCandidateCount === 1) {
-    return {
-      files: [],
-      diagnostic: {
-        code: 'foreign',
-        reason: `${step} has one artifact candidate that does not match ${identityLabel}`,
-      },
-    };
-  }
-  return {
+  return withPatterns({
     files: [],
-    diagnostic: {
-      code: 'ambiguous',
-      reason: `${step} has ${featureCandidateCount} artifact candidates and none can be associated with ${identityLabel}`,
-    },
-  };
+    diagnostic: diagnosticFor(featureCandidateCount),
+  });
 }
 
 /**
@@ -3541,26 +3564,30 @@ export interface ArtifactPatternStatus {
   pattern: string;
   files: string[]; // relative to `dir`
   satisfied: boolean;
+  diagnostic?: ArtifactResolutionResult['diagnostic'];
 }
 
 export async function getArtifactStatus(
   dir: string,
   step: StepName,
+  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'> = {
+    featureIdentities: [],
+    changedPaths: new Set(),
+  },
 ): Promise<ArtifactPatternStatus[]> {
   const patterns = STEP_ARTIFACT_GLOBS[step];
   if (!patterns || patterns.length === 0) return [];
 
-  const out: ArtifactPatternStatus[] = [];
-  for (const pattern of patterns) {
-    const matched = await matchGlob(dir, pattern);
-    const rel = matched.map((f) => relative(dir, f));
-    out.push({
+  const resolution = await resolveArtifactFiles(dir, step, context, [], true);
+  return (resolution.patternResults ?? []).map(({ pattern, files, diagnostic }) => {
+    const relativeFiles = files.map((file) => relative(dir, file));
+    return {
       pattern,
-      files: rel,
-      satisfied: rel.length > 0,
-    });
-  }
-  return out;
+      files: relativeFiles,
+      satisfied: relativeFiles.length > 0,
+      ...(diagnostic ? { diagnostic } : {}),
+    };
+  });
 }
 
 // --- Glob matcher (inlined — avoids extra dependency for a narrow use case) ---
