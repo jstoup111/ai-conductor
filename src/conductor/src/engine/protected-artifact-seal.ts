@@ -28,10 +28,18 @@ export interface ProtectedArtifactFingerprint {
   fingerprint: string;
 }
 
+export interface ProtectedArtifactRebaseline {
+  fromCommit: string;
+  toCommit: string;
+  trigger: string;
+  paths: string[];
+}
+
 export interface ProtectedArtifactSeal {
-  version: 1;
+  version: 2;
   baselineCommit: string;
   protectedArtifacts: ProtectedArtifactFingerprint[];
+  rebaselines: ProtectedArtifactRebaseline[];
 }
 
 /**
@@ -190,19 +198,41 @@ function fingerprint(content: string): string {
 }
 
 function parseSeal(serialized: string): ProtectedArtifactSeal {
-  const value = JSON.parse(serialized) as Partial<ProtectedArtifactSeal>;
-  if (
-    value.version !== 1 ||
-    typeof value.baselineCommit !== 'string' ||
-    !Array.isArray(value.protectedArtifacts) ||
-    !value.protectedArtifacts.every(
-      (artifact) =>
-        typeof artifact?.path === 'string' && typeof artifact?.fingerprint === 'string',
-    )
-  ) {
-    throw new Error('Protected-artifact seal is invalid');
+  try {
+    const value = JSON.parse(serialized) as Record<string, unknown>;
+    const validArtifacts =
+      Array.isArray(value.protectedArtifacts) &&
+      value.protectedArtifacts.every(
+        (artifact) =>
+          typeof artifact?.path === 'string' && typeof artifact?.fingerprint === 'string',
+      );
+    const validRebaselines =
+      value.version === 2 &&
+      Array.isArray(value.rebaselines) &&
+      value.rebaselines.every(
+        (entry) =>
+          typeof entry?.fromCommit === 'string' &&
+          typeof entry?.toCommit === 'string' &&
+          typeof entry?.trigger === 'string' &&
+          Array.isArray(entry?.paths) &&
+          entry.paths.every((path: unknown) => typeof path === 'string'),
+      );
+    if (
+      (value.version !== 1 && !validRebaselines) ||
+      typeof value.baselineCommit !== 'string' ||
+      !validArtifacts
+    ) {
+      throw new Error();
+    }
+    return {
+      version: 2,
+      baselineCommit: value.baselineCommit,
+      protectedArtifacts: value.protectedArtifacts as ProtectedArtifactFingerprint[],
+      rebaselines: value.version === 1 ? [] : value.rebaselines as ProtectedArtifactRebaseline[],
+    };
+  } catch {
+    throw new Error('Protected artifact seal is invalid');
   }
-  return value as ProtectedArtifactSeal;
 }
 
 async function readExistingSeal(path: string): Promise<ProtectedArtifactSeal | undefined> {
@@ -246,7 +276,7 @@ async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<
       fingerprint: fingerprint(await contentAtCommit(options.projectRoot, options.baselineCommit, path)),
     })),
   );
-  return { version: 1, baselineCommit: options.baselineCommit, protectedArtifacts };
+  return { version: 2, baselineCommit: options.baselineCommit, protectedArtifacts, rebaselines: [] };
 }
 
 async function workspaceProtectedPaths(projectRoot: string, directory: string): Promise<string[]> {

@@ -59,7 +59,7 @@ describe('createProtectedArtifactSeal', () => {
     const seal = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
 
     expect(seal).toEqual({
-      version: 1,
+      version: 2,
       baselineCommit,
       protectedArtifacts: [
         {
@@ -79,6 +79,7 @@ describe('createProtectedArtifactSeal', () => {
           fingerprint: `sha256:${createHash('sha256').update('approved stories\n').digest('hex')}`,
         },
       ],
+      rebaselines: [],
     });
     await expect(readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8')).resolves.toBe(
       `${JSON.stringify(seal, null, 2)}\n`,
@@ -96,6 +97,31 @@ describe('createProtectedArtifactSeal', () => {
     await expect(
       createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: await git(repo, ['rev-parse', 'HEAD']) }),
     ).resolves.toEqual(original);
+  });
+
+  it('normalizes v1 seals to v2 in memory while preserving the invalid-seal error contract', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+    const v1Seal = {
+      version: 1,
+      baselineCommit,
+      protectedArtifacts: [{
+        path: '.docs/plans/feature.md',
+        fingerprint: `sha256:${createHash('sha256').update('approved plan\n').digest('hex')}`,
+      }],
+    };
+    await mkdir(dirname(sealPath), { recursive: true });
+    await writeFile(sealPath, `${JSON.stringify(v1Seal)}\n`);
+    const normalized = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    await writeFile(sealPath, '{"version":1}\n');
+    const invalid = await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit })
+      .then(() => 'resolved', (error: Error) => error.message);
+
+    expect({ normalized, invalid }).toEqual({
+      normalized: { ...v1Seal, version: 2, rebaselines: [] },
+      invalid: 'Protected artifact seal is invalid',
+    });
   });
 });
 
@@ -509,6 +535,16 @@ describe('verifyProtectedArtifactSeal', () => {
         initial: { '.docs/plans/other-feature.md': 'approved plan\n' },
         baseAdvance: { '.docs/plans/other-feature.md': 'amended by its owner\n' },
       });
+      const sealPath = join(repo, '.pipeline/protected-artifact-seal.json');
+      const current = await readSeal(repo);
+      await writeFile(
+        sealPath,
+        `${JSON.stringify({
+          version: 1,
+          baselineCommit: current.baselineCommit,
+          protectedArtifacts: current.protectedArtifacts,
+        }, null, 2)}\n`,
+      );
       expect((await readSeal(repo)).version).toBe(1);
 
       await verifyProtectedArtifactSeal({
