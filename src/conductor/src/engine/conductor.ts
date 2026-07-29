@@ -4782,15 +4782,9 @@ export class Conductor {
                       // this block — it falls through to the existing
                       // retry/auto-park path.
                       if (!isZeroWorkStall) {
-                        const haltContent = effectiveQuestion + '\n\nremediation dispatch failed: ' + String(err);
-                        await mkdir(join(this.projectRoot, '.pipeline'), {
-                          recursive: true,
-                        }).catch(() => {});
-                        await writeFile(
-                          join(this.projectRoot, LOOP_HALT_MARKER),
-                          haltContent + '\n',
-                          'utf-8',
-                        ).catch(() => {
+                        const detail = 'remediation dispatch failed: ' + String(err);
+                        const haltContent = effectiveQuestion + '\n\n' + detail;
+                        await writeStallHalt(this.projectRoot, effectiveQuestion, detail).catch(() => {
                           /* best-effort marker */
                         });
                         await writeState(this.stateFilePath, state);
@@ -4838,14 +4832,7 @@ export class Conductor {
                           `misrouted to '${outcome.target}': build stall answers must be ` +
                           `disposition='build', not routed elsewhere.`;
                         const haltContent = effectiveQuestion + '\n\n' + detail;
-                        await mkdir(join(this.projectRoot, '.pipeline'), {
-                          recursive: true,
-                        }).catch(() => {});
-                        await writeFile(
-                          join(this.projectRoot, LOOP_HALT_MARKER),
-                          haltContent + '\n',
-                          'utf-8',
-                        ).catch(() => {
+                        await writeStallHalt(this.projectRoot, effectiveQuestion, detail).catch(() => {
                           /* best-effort marker */
                         });
                         await writeState(this.stateFilePath, state);
@@ -4867,13 +4854,10 @@ export class Conductor {
                       // retry/auto-park path.
                       if (!isZeroWorkStall) {
                         const haltContent = effectiveQuestion + '\n\n' + outcome.detail;
-                        await mkdir(join(this.projectRoot, '.pipeline'), {
-                          recursive: true,
-                        }).catch(() => {});
-                        await writeFile(
-                          join(this.projectRoot, LOOP_HALT_MARKER),
-                          haltContent + '\n',
-                          'utf-8',
+                        await writeStallHalt(
+                          this.projectRoot,
+                          effectiveQuestion,
+                          outcome.detail,
                         ).catch(() => {
                           /* best-effort marker */
                         });
@@ -4893,18 +4877,11 @@ export class Conductor {
                       // this block — it falls through to the existing
                       // retry/auto-park path.
                       if (!isZeroWorkStall) {
-                        const haltContent =
-                          effectiveQuestion +
-                          '\n\nremediation produced no valid dispositions ' +
+                        const detail =
+                          'remediation produced no valid dispositions ' +
                           '(check .pipeline/remediation.json: malformed JSON, stale file, or all dispositions dropped by validation)';
-                        await mkdir(join(this.projectRoot, '.pipeline'), {
-                          recursive: true,
-                        }).catch(() => {});
-                        await writeFile(
-                          join(this.projectRoot, LOOP_HALT_MARKER),
-                          haltContent + '\n',
-                          'utf-8',
-                        ).catch(() => {
+                        const haltContent = effectiveQuestion + '\n\n' + detail;
+                        await writeStallHalt(this.projectRoot, effectiveQuestion, detail).catch(() => {
                           /* best-effort marker */
                         });
                         await writeState(this.stateFilePath, state);

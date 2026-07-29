@@ -1,6 +1,7 @@
 import { readFile, unlink, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { listCommitsWithTrailers, canonicalTaskId } from './autoheal.js';
+import { writeHaltMarker } from './halt-marker.js';
 
 /**
  * Count of distinct plan task-ids that are "resolved" — i.e. either already
@@ -283,6 +284,5 @@ export async function writeStallHalt(
 
   const haltContent = [effectiveQuestion, detail].filter(Boolean).join('\n\n');
 
-  const haltPath = join(pipelineDir, 'HALT');
-  await writeFile(haltPath, haltContent + '\n', 'utf-8');
+  await writeHaltMarker(projectRoot, haltContent + '\n', 'needs-human');
 }

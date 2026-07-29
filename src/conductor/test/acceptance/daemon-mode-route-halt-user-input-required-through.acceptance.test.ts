@@ -282,6 +282,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       const halt = await readHaltFile(dir);
       expect(halt).not.toBeNull();
       expect(halt).toContain(QUESTION_1);
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
 
       // No navigateBack to `plan` from inside the build loop — build was
       // never re-dispatched with a resume hint.
@@ -338,6 +339,7 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
       expect(halt).not.toBeNull();
       const nonEmptyLines = (halt as string).split('\n').filter((l) => l.trim().length > 0);
       expect(nonEmptyLines[0]).toBe(QUESTION_1);
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
       expect(halt).toContain('product-scope');
       expect(halt).toContain('Choice of auth provider is a product decision.');
       // Not the generic retries-exhausted writer.
@@ -413,7 +415,9 @@ describe('daemon stall remediation — cross-module acceptance flows', () => {
         expect(halted).toBe(true);
         const halt = await readHaltFile(dir);
         expect(halt).not.toBeNull();
-        expect(halt).toContain(QUESTION_1);
+        const nonEmptyLines = (halt as string).split('\n').filter((l) => l.trim().length > 0);
+        expect(nonEmptyLines[0]).toBe(QUESTION_1);
+        expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
         expect(halt).not.toMatch(/^\s*$/);
       } finally {
         await rm(dir, { recursive: true, force: true });
