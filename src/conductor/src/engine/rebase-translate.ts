@@ -1,8 +1,14 @@
-import { readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, rename, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { GitRunner } from './rebase.js';
 import type { ConductorEventEmitter } from '../ui/events.js';
 import { rekeyMemoAfterRebase } from './attribution-lane.js';
+import {
+  createProtectedArtifactSeal,
+  PROTECTED_ARTIFACT_SEAL_PATH,
+  rotateProtectedArtifactSeal,
+  type ProtectedArtifactSealRebaselineObserver,
+} from './protected-artifact-seal.js';
 
 // Task 3 of .docs/plans/rebase-orphans-every-sha-anchored-evidence-citatio.md
 //
@@ -418,11 +424,58 @@ export async function translateAfterRebase(
   origHead: string,
   head: string,
   events?: ConductorEventEmitter,
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver,
 ): Promise<void> {
   const { map, residue } = await buildRewriteMap(git, onto, origHead, head);
 
   await persistRewriteMap(projectRoot, map);
   await applyMapToStores(projectRoot, map);
+
+  // Rotate an existing immutable seal only after the rewrite map and its
+  // file-backed consumers have translated successfully. Missing seals are a
+  // legacy no-op; createProtectedArtifactSeal only normalizes the seal already
+  // proven to exist and therefore cannot establish a new post-rebase baseline.
+  let sealExists = true;
+  try {
+    await access(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      sealExists = false;
+    } else {
+      throw error;
+    }
+  }
+  if (sealExists) {
+    const seal = await createProtectedArtifactSeal({
+      projectRoot,
+      baselineCommit: origHead,
+    });
+    const changed = await git([
+      'diff',
+      '--name-only',
+      origHead,
+      head,
+      '--',
+      '.docs/architecture',
+      '.docs/plans',
+      '.docs/specs',
+      '.docs/stories',
+    ]);
+    const paths = changed.exitCode === 0
+      ? [...new Set(changed.stdout.split('\n').map((path) => path.trim()).filter(Boolean))]
+          .sort((left, right) => Buffer.compare(Buffer.from(left), Buffer.from(right)))
+      : [];
+    await rotateProtectedArtifactSeal({
+      projectRoot,
+      seal,
+      toCommit: head,
+      trigger: 'proactive-rebase',
+      paths,
+      onRebaseline: onRebaseline ?? (events
+        ? (event) => events.emit(event)
+        : undefined),
+    });
+  }
 
   // Best-effort memo re-key (Story 4 / Task 7): skip entirely when the memo
   // has no entry for the pending-task residue derived here, or when a judged

@@ -78,6 +78,8 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_stale_mirage_regrade',
   'auto_park_contradiction',
   'verdict_freshness',
+  'protected_artifact_rebaseline',
+  'protected_artifact_rebaseline_refused',
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
@@ -92,8 +94,8 @@ const deliberatelyNotPersisted = {
 void deliberatelyNotPersisted;
 
 describe('event sink subscriptions', () => {
-  it('is total over all 60 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(60);
+  it('is total over all 62 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(62);
   });
 
   it('routes verdict_freshness to every sink', () => {
@@ -110,6 +112,11 @@ describe('event sink subscriptions', () => {
     expect(new Set(persisted)).toEqual(new Set([
       ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
       'verdict_freshness',
+      // Seal-rebaseline decisions are durable telemetry: the record of which
+      // inherited seals were rebaselined (and which were refused as genuine
+      // DECIDE-artifact violations) has to outlive the run that made it.
+      'protected_artifact_rebaseline',
+      'protected_artifact_rebaseline_refused',
     ]));
     expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
   });

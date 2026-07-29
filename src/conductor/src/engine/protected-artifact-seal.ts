@@ -1,5 +1,5 @@
-import { createHash } from 'node:crypto';
-import { lstat, mkdir, readdir, readFile, realpath, writeFile } from 'node:fs/promises';
+import { createHash, randomUUID } from 'node:crypto';
+import { lstat, mkdir, readdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { execa } from 'execa';
 import { resolveDocsAllowlist } from './phase-marker.js';
@@ -28,11 +28,62 @@ export interface ProtectedArtifactFingerprint {
   fingerprint: string;
 }
 
+export interface ProtectedArtifactRebaseline {
+  fromCommit: string;
+  toCommit: string;
+  trigger: string;
+  paths: string[];
+}
+
 export interface ProtectedArtifactSeal {
-  version: 1;
+  version: 2;
   baselineCommit: string;
   protectedArtifacts: ProtectedArtifactFingerprint[];
+  rebaselines: ProtectedArtifactRebaseline[];
 }
+
+export interface EvaluateProtectedArtifactSealRotationInput {
+  seal: ProtectedArtifactSeal;
+  baselineAncestry: 'ancestor' | 'non-ancestor' | 'unresolvable';
+  workspaceArtifacts: ReadonlyMap<string, Buffer>;
+  headArtifacts: ReadonlyMap<string, Buffer>;
+  baseTipArtifacts?: ReadonlyMap<string, Buffer>;
+}
+
+export interface EvaluateProtectedArtifactSealRotationInRepositoryInput {
+  projectRoot: string;
+  seal: ProtectedArtifactSeal;
+  headCommit: string;
+  baseTipRef?: string;
+}
+
+export type ProtectedArtifactSealRotationVerdict =
+  | { permitted: true; paths: string[] }
+  | { permitted: false; condition: 'baseline-unresolvable' }
+  | { permitted: false; condition: 'same-history-ancestor' }
+  | { permitted: false; condition: 'head-unresolvable' }
+  | { permitted: false; condition: 'base-tip-unresolved' }
+  | { permitted: false; condition: 'workspace-differs-from-head'; path: string }
+  | { permitted: false; condition: 'head-differs-from-base'; path: string };
+
+export type ProtectedArtifactSealRebaselineEvent =
+  | {
+      type: 'protected_artifact_rebaseline';
+      trigger: string;
+      fromCommit: string;
+      toCommit: string;
+      paths: string[];
+    }
+  | {
+      type: 'protected_artifact_rebaseline_refused';
+      condition: string;
+      verdictCondition: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>['condition'];
+      path?: string;
+    };
+
+export type ProtectedArtifactSealRebaselineObserver = (
+  event: ProtectedArtifactSealRebaselineEvent,
+) => void | Promise<void>;
 
 /**
  * An in-scope amendment to the current feature's own sealed DECIDE artifact.
@@ -49,6 +100,22 @@ export interface CreateProtectedArtifactSealOptions {
   projectRoot: string;
   /** Approved commit whose DECIDE artifacts must remain authoritative. */
   baselineCommit: string;
+}
+
+export interface ProtectedArtifactSealFileOperations {
+  writeFile(path: string, content: string): Promise<unknown>;
+  rename(from: string, to: string): Promise<unknown>;
+  rm(path: string, options: { force: true }): Promise<unknown>;
+}
+
+export interface RotateProtectedArtifactSealOptions {
+  projectRoot: string;
+  seal: ProtectedArtifactSeal;
+  toCommit: string;
+  trigger: string;
+  paths: string[];
+  fileOperations?: ProtectedArtifactSealFileOperations;
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
 export interface VerifyProtectedArtifactSealOptions {
@@ -69,6 +136,7 @@ export interface VerifyProtectedArtifactSealOptions {
    * (fully protected, prior behavior).
    */
   baseBranch?: string;
+  onRebaseline?: ProtectedArtifactSealRebaselineObserver;
 }
 
 export type ProtectedArtifactSealVerdict =
@@ -185,24 +253,106 @@ function comparePaths(left: string, right: string): number {
   return Buffer.compare(Buffer.from(left), Buffer.from(right));
 }
 
-function fingerprint(content: string): string {
+function fingerprint(content: string | Buffer): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
 }
 
-function parseSeal(serialized: string): ProtectedArtifactSeal {
-  const value = JSON.parse(serialized) as Partial<ProtectedArtifactSeal>;
-  if (
-    value.version !== 1 ||
-    typeof value.baselineCommit !== 'string' ||
-    !Array.isArray(value.protectedArtifacts) ||
-    !value.protectedArtifacts.every(
-      (artifact) =>
-        typeof artifact?.path === 'string' && typeof artifact?.fingerprint === 'string',
-    )
-  ) {
-    throw new Error('Protected-artifact seal is invalid');
+function optionalBuffersEqual(left: Buffer | undefined, right: Buffer | undefined): boolean {
+  return left === undefined ? right === undefined : right !== undefined && left.equals(right);
+}
+
+/**
+ * Decides whether a rewritten history may rotate an immutable artifact seal.
+ * A rotation is safe only when every workspace divergence is independently
+ * vouched for by both the rewritten HEAD and the current base tip.
+ */
+export function evaluateProtectedArtifactSealRotation({
+  seal,
+  baselineAncestry,
+  workspaceArtifacts,
+  headArtifacts,
+  baseTipArtifacts,
+}: EvaluateProtectedArtifactSealRotationInput): ProtectedArtifactSealRotationVerdict {
+  if (baselineAncestry === 'unresolvable') {
+    return { permitted: false, condition: 'baseline-unresolvable' };
   }
-  return value as ProtectedArtifactSeal;
+  if (baselineAncestry === 'ancestor') {
+    return { permitted: false, condition: 'same-history-ancestor' };
+  }
+  if (!baseTipArtifacts) {
+    return { permitted: false, condition: 'base-tip-unresolved' };
+  }
+
+  const sealed = new Map(seal.protectedArtifacts.map(({ path, fingerprint }) => [path, fingerprint]));
+  const paths = [...new Set([
+    ...sealed.keys(),
+    ...workspaceArtifacts.keys(),
+    ...headArtifacts.keys(),
+    ...baseTipArtifacts.keys(),
+  ])]
+    .filter((path) => {
+      const workspace = workspaceArtifacts.get(path);
+      const sealedFingerprint = sealed.get(path);
+      const sealedDiffersFromWorkspace = workspace === undefined
+        ? sealedFingerprint !== undefined
+        : sealedFingerprint === undefined || sealedFingerprint !== fingerprint(workspace);
+      return sealedDiffersFromWorkspace
+        || !optionalBuffersEqual(workspace, headArtifacts.get(path))
+        || !optionalBuffersEqual(headArtifacts.get(path), baseTipArtifacts.get(path));
+    })
+    .sort(comparePaths);
+
+  for (const path of paths) {
+    const workspace = workspaceArtifacts.get(path);
+    const head = headArtifacts.get(path);
+    if (workspace === undefined ? head !== undefined : head === undefined || !workspace.equals(head)) {
+      return { permitted: false, condition: 'workspace-differs-from-head', path };
+    }
+    const base = baseTipArtifacts.get(path);
+    if (head === undefined ? base !== undefined : base === undefined || !head.equals(base)) {
+      return { permitted: false, condition: 'head-differs-from-base', path };
+    }
+  }
+
+  return { permitted: true, paths };
+}
+
+function parseSeal(serialized: string): ProtectedArtifactSeal {
+  try {
+    const value = JSON.parse(serialized) as Record<string, unknown>;
+    const validArtifacts =
+      Array.isArray(value.protectedArtifacts) &&
+      value.protectedArtifacts.every(
+        (artifact) =>
+          typeof artifact?.path === 'string' && typeof artifact?.fingerprint === 'string',
+      );
+    const validRebaselines =
+      value.version === 2 &&
+      Array.isArray(value.rebaselines) &&
+      value.rebaselines.every(
+        (entry) =>
+          typeof entry?.fromCommit === 'string' &&
+          typeof entry?.toCommit === 'string' &&
+          typeof entry?.trigger === 'string' &&
+          Array.isArray(entry?.paths) &&
+          entry.paths.every((path: unknown) => typeof path === 'string'),
+      );
+    if (
+      (value.version !== 1 && !validRebaselines) ||
+      typeof value.baselineCommit !== 'string' ||
+      !validArtifacts
+    ) {
+      throw new Error();
+    }
+    return {
+      version: 2,
+      baselineCommit: value.baselineCommit,
+      protectedArtifacts: value.protectedArtifacts as ProtectedArtifactFingerprint[],
+      rebaselines: value.version === 1 ? [] : value.rebaselines as ProtectedArtifactRebaseline[],
+    };
+  } catch {
+    throw new Error('Protected artifact seal is invalid');
+  }
 }
 
 async function readExistingSeal(path: string): Promise<ProtectedArtifactSeal | undefined> {
@@ -238,6 +388,87 @@ async function contentAtCommit(
   return result.stdout;
 }
 
+async function protectedArtifactsAtCommit(
+  projectRoot: string,
+  commit: string,
+): Promise<Map<string, Buffer>> {
+  const paths = await committedProtectedPaths(projectRoot, commit);
+  return new Map(await Promise.all(paths.map(async (path) => [
+    path,
+    Buffer.from(await contentAtCommit(projectRoot, commit, path)),
+  ] as const)));
+}
+
+async function workspaceProtectedArtifacts(
+  projectRoot: string,
+): Promise<{ artifacts: Map<string, Buffer>; unresolvedPath?: string }> {
+  const discovered = await Promise.all(PROTECTED_ARTIFACT_DIRECTORIES.map(async (directory) => {
+    const paths = await workspaceProtectedPaths(projectRoot, directory).catch(() => undefined);
+    return paths === undefined ? { paths: [], unresolvedPath: directory } : { paths };
+  }));
+  const unresolvedDirectory = discovered.find(({ unresolvedPath }) => unresolvedPath);
+  if (unresolvedDirectory?.unresolvedPath) {
+    return { artifacts: new Map(), unresolvedPath: unresolvedDirectory.unresolvedPath };
+  }
+  const paths = discovered.flatMap(({ paths }) => paths);
+  const artifacts = await Promise.all(paths.map(async (path) => {
+    const content = await readContainedProtectedArtifact(projectRoot, path).catch(() => undefined);
+    return content === undefined ? undefined : [path, Buffer.from(content)] as const;
+  }));
+  const unresolvedIndex = artifacts.findIndex((artifact) => artifact === undefined);
+  return {
+    artifacts: new Map(artifacts.filter((artifact) => artifact !== undefined)),
+    ...(unresolvedIndex === -1 ? {} : { unresolvedPath: paths[unresolvedIndex] }),
+  };
+}
+
+export async function evaluateProtectedArtifactSealRotationInRepository({
+  projectRoot,
+  seal,
+  headCommit,
+  baseTipRef,
+}: EvaluateProtectedArtifactSealRotationInRepositoryInput): Promise<ProtectedArtifactSealRotationVerdict> {
+  const ancestry = await execa(
+    'git',
+    ['merge-base', '--is-ancestor', seal.baselineCommit, headCommit],
+    { cwd: projectRoot, reject: false },
+  ).catch(() => undefined);
+  const baselineAncestry =
+    ancestry?.exitCode === 0 ? 'ancestor'
+      : ancestry?.exitCode === 1 ? 'non-ancestor'
+        : 'unresolvable';
+  if (baselineAncestry === 'unresolvable') {
+    return { permitted: false, condition: 'baseline-unresolvable' };
+  }
+  if (!baseTipRef) {
+    return { permitted: false, condition: 'base-tip-unresolved' };
+  }
+
+  const workspace = await workspaceProtectedArtifacts(projectRoot);
+  if (workspace.unresolvedPath) {
+    return {
+      permitted: false,
+      condition: 'workspace-differs-from-head',
+      path: workspace.unresolvedPath,
+    };
+  }
+  const headArtifacts = await protectedArtifactsAtCommit(projectRoot, headCommit).catch(() => undefined);
+  if (!headArtifacts) {
+    return { permitted: false, condition: 'head-unresolvable' };
+  }
+  const baseTipArtifacts = await protectedArtifactsAtCommit(projectRoot, baseTipRef).catch(() => undefined);
+  if (!baseTipArtifacts) {
+    return { permitted: false, condition: 'base-tip-unresolved' };
+  }
+  return evaluateProtectedArtifactSealRotation({
+    seal,
+    baselineAncestry,
+    workspaceArtifacts: workspace.artifacts,
+    headArtifacts,
+    baseTipArtifacts,
+  });
+}
+
 async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
   const paths = await committedProtectedPaths(options.projectRoot, options.baselineCommit);
   const protectedArtifacts = await Promise.all(
@@ -246,7 +477,7 @@ async function createSeal(options: CreateProtectedArtifactSealOptions): Promise<
       fingerprint: fingerprint(await contentAtCommit(options.projectRoot, options.baselineCommit, path)),
     })),
   );
-  return { version: 1, baselineCommit: options.baselineCommit, protectedArtifacts };
+  return { version: 2, baselineCommit: options.baselineCommit, protectedArtifacts, rebaselines: [] };
 }
 
 async function workspaceProtectedPaths(projectRoot: string, directory: string): Promise<string[]> {
@@ -419,9 +650,7 @@ export async function verifyProtectedArtifactSeal(
   options: VerifyProtectedArtifactSealOptions,
 ): Promise<ProtectedArtifactSealVerdict> {
   const existing = await readExistingSeal(join(options.projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
-  if (existing) {
-    return inspectSeal(options.projectRoot, existing, options.featureDesc, options.baseBranch);
-  }
+  if (existing) return verifyExistingProtectedArtifactSeal(options, existing);
   if (!options.baselineCommit) {
     return { ok: false, reason: 'Protected artifact seal is missing' };
   }
@@ -431,6 +660,140 @@ export async function verifyProtectedArtifactSeal(
     options.featureDesc,
     options.baseBranch,
   );
+}
+
+type ProtectedArtifactSealRotationContext =
+  | { resolved: false; condition: 'head-unresolvable' | 'base-tip-unresolved' }
+  | { resolved: true; headCommit: string; baseTipRef: string };
+
+async function resolveProtectedArtifactSealRotationContext(
+  projectRoot: string,
+  baseBranch: string,
+): Promise<ProtectedArtifactSealRotationContext> {
+  const head = await execa(
+    'git',
+    ['rev-parse', '--verify', '--quiet', 'HEAD^{commit}'],
+    { cwd: projectRoot, reject: false },
+  ).catch(() => undefined);
+  if (!head || head.exitCode !== 0 || head.stdout.length === 0) {
+    return { resolved: false, condition: 'head-unresolvable' };
+  }
+  const baseTipRef = await resolveBaseTipRef(projectRoot, baseBranch);
+  return baseTipRef
+    ? { resolved: true, headCommit: head.stdout, baseTipRef }
+    : { resolved: false, condition: 'base-tip-unresolved' };
+}
+
+function rotationRefusalVerdict(
+  rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+  inspection: ProtectedArtifactSealVerdict,
+  seal: ProtectedArtifactSeal,
+  headCommit: string,
+): ProtectedArtifactSealVerdict {
+  if (rotationRefusalPreservesInspection(rotation, inspection)) return inspection;
+  if (rotation.condition === 'baseline-unresolvable') {
+    return {
+      ok: false,
+      reason: `Protected artifact seal baseline is unresolvable: ${seal.baselineCommit}`,
+    };
+  }
+  if (rotation.condition === 'head-unresolvable') {
+    return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}` };
+  }
+  if (!('path' in rotation)) return inspection;
+  return {
+    ok: false,
+    reason: `Feature-authored protected artifact change cannot rotate seal: ${rotation.path}`,
+  };
+}
+
+function rotationRefusalPreservesInspection(
+  rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+  inspection: ProtectedArtifactSealVerdict,
+): boolean {
+  return rotation.condition === 'same-history-ancestor'
+    || rotation.condition === 'base-tip-unresolved'
+    || (
+      rotation.condition === 'workspace-differs-from-head'
+      && !inspection.ok
+      && inspection.reason.startsWith('Indeterminate protected artifact target')
+    );
+}
+
+async function reportRotationRefusal(
+  observer: ProtectedArtifactSealRebaselineObserver | undefined,
+  rotation: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+): Promise<void> {
+  if (rotation.condition !== 'same-history-ancestor') {
+    await emitRotationRefusal(observer, rotation);
+  }
+}
+
+interface ApplyPermittedProtectedArtifactSealRotationInput {
+  options: VerifyProtectedArtifactSealOptions;
+  seal: ProtectedArtifactSeal;
+  headCommit: string;
+  paths: string[];
+}
+
+async function applyPermittedProtectedArtifactSealRotation(
+  {
+    options,
+    seal,
+    headCommit,
+    paths,
+  }: ApplyPermittedProtectedArtifactSealRotationInput,
+): Promise<ProtectedArtifactSealVerdict> {
+  const rotated = await rotateProtectedArtifactSeal({
+    projectRoot: options.projectRoot,
+    seal,
+    toCommit: headCommit,
+    trigger: 'defensive-history-rewrite',
+    paths,
+    onRebaseline: options.onRebaseline,
+  });
+  return { ok: true, seal: rotated, selfAmendments: [] };
+}
+
+async function verifyExistingProtectedArtifactSeal(
+  options: VerifyProtectedArtifactSealOptions,
+  seal: ProtectedArtifactSeal,
+): Promise<ProtectedArtifactSealVerdict> {
+  const inspection = await inspectSeal(
+    options.projectRoot,
+    seal,
+    options.featureDesc,
+    options.baseBranch,
+  );
+  if (!options.baseBranch) return inspection;
+
+  const context = await resolveProtectedArtifactSealRotationContext(
+    options.projectRoot,
+    options.baseBranch,
+  );
+  if (!context.resolved) {
+    await emitRotationRefusal(options.onRebaseline, { permitted: false, condition: context.condition });
+    return context.condition === 'head-unresolvable'
+      ? { ok: false, reason: 'Protected artifact seal HEAD is unresolvable' }
+      : inspection;
+  }
+
+  const rotation = await evaluateProtectedArtifactSealRotationInRepository({
+    projectRoot: options.projectRoot,
+    seal,
+    headCommit: context.headCommit,
+    baseTipRef: context.baseTipRef,
+  });
+  if (!rotation.permitted) {
+    await reportRotationRefusal(options.onRebaseline, rotation);
+    return rotationRefusalVerdict(rotation, inspection, seal, context.headCommit);
+  }
+  return applyPermittedProtectedArtifactSealRotation({
+    options,
+    seal,
+    headCommit: context.headCommit,
+    paths: rotation.paths,
+  });
 }
 
 /**
@@ -455,5 +818,73 @@ export async function createProtectedArtifactSeal(
     const concurrentSeal = await readExistingSeal(sealPath);
     if (!concurrentSeal) throw error;
     return concurrentSeal;
+  }
+}
+
+export async function rotateProtectedArtifactSeal({
+  projectRoot,
+  seal,
+  toCommit,
+  trigger,
+  paths,
+  fileOperations = { writeFile, rename, rm },
+  onRebaseline,
+}: RotateProtectedArtifactSealOptions): Promise<ProtectedArtifactSeal> {
+  const recomputed = await createSeal({ projectRoot, baselineCommit: toCommit });
+  const rotated: ProtectedArtifactSeal = {
+    ...recomputed,
+    rebaselines: [
+      ...seal.rebaselines,
+      { fromCommit: seal.baselineCommit, toCommit, trigger, paths },
+    ],
+  };
+  const sealPath = join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH);
+  const temporaryPath = join(dirname(sealPath), `.${basename(sealPath)}.${randomUUID()}.tmp`);
+
+  await mkdir(dirname(sealPath), { recursive: true });
+  let operationFailed = false;
+  try {
+    await fileOperations.writeFile(temporaryPath, `${JSON.stringify(rotated, null, 2)}\n`);
+    await fileOperations.rename(temporaryPath, sealPath);
+    await notifyRebaselineObserver(onRebaseline, {
+      type: 'protected_artifact_rebaseline',
+      trigger,
+      fromCommit: seal.baselineCommit,
+      toCommit,
+      paths,
+    });
+    return rotated;
+  } catch (error) {
+    operationFailed = true;
+    throw error;
+  } finally {
+    await fileOperations.rm(temporaryPath, { force: true }).catch((error: unknown) => {
+      if (!operationFailed) throw error;
+    });
+  }
+}
+
+async function emitRotationRefusal(
+  observer: ProtectedArtifactSealRebaselineObserver | undefined,
+  verdict: Exclude<ProtectedArtifactSealRotationVerdict, { permitted: true }>,
+): Promise<void> {
+  const featureAuthored =
+    verdict.condition === 'workspace-differs-from-head' || verdict.condition === 'head-differs-from-base';
+  await notifyRebaselineObserver(observer, {
+    type: 'protected_artifact_rebaseline_refused',
+    condition: featureAuthored ? `feature-authored:${verdict.condition}` : verdict.condition,
+    verdictCondition: verdict.condition,
+    ...('path' in verdict ? { path: verdict.path } : {}),
+  });
+}
+
+async function notifyRebaselineObserver(
+  observer: ProtectedArtifactSealRebaselineObserver | undefined,
+  event: ProtectedArtifactSealRebaselineEvent,
+): Promise<void> {
+  try {
+    await observer?.(event);
+  } catch {
+    // Telemetry is best-effort and must never alter rotation or refusal policy.
   }
 }

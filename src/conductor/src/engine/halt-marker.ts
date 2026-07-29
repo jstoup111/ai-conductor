@@ -16,11 +16,17 @@ export const HALT_MARKER = '.pipeline/HALT';
 /** Machine-readable sidecar classifying why a HALT was raised. */
 export const HALT_CLASS_MARKER = '.pipeline/HALT.class';
 
+/** HALT class for a feature-authored protected-artifact violation. */
+export const PROTECTED_ARTIFACT_HALT_CLASS = 'protected-artifact';
+
 /**
  * Classification of a HALT: `needs-human` marks are those only an operator
  * can resolve; `mechanical` marks are those the daemon may safely re-kick.
  */
-export type HaltClass = 'needs-human' | 'mechanical';
+export type HaltClass =
+  | 'needs-human'
+  | 'mechanical'
+  | typeof PROTECTED_ARTIFACT_HALT_CLASS;
 
 /**
  * Write `.pipeline/HALT` under `projectRoot` with `body` as its contents,
@@ -56,7 +62,11 @@ export async function writeHaltMarker(
 export async function readHaltClass(worktreePath: string): Promise<HaltClass | 'unclassified'> {
   try {
     const contents = (await readFile(join(worktreePath, HALT_CLASS_MARKER), 'utf-8')).trim();
-    if (contents === 'needs-human' || contents === 'mechanical') return contents;
+    if (
+      contents === 'needs-human' ||
+      contents === 'mechanical' ||
+      contents === PROTECTED_ARTIFACT_HALT_CLASS
+    ) return contents;
     return 'unclassified';
   } catch {
     return 'unclassified';

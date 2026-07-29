@@ -2094,6 +2094,29 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       );
       break;
     }
+    case 'protected_artifact_rebaseline': {
+      // An inherited seal was rebaselined onto the feature's own base — routine
+      // bookkeeping on a rebased feature, so it stays dim.
+      const from = event.fromCommit.slice(0, 12);
+      const to = event.toCommit.slice(0, 12);
+      log(
+        `${dot} ${chalk.dim(
+          `seal rebaselined ${from}..${to} (${event.trigger}) — ${event.paths.length} path(s)`,
+        )}`,
+      );
+      break;
+    }
+    case 'protected_artifact_rebaseline_refused': {
+      // Rebaselining was refused: the seal difference is the feature's own work,
+      // i.e. a genuine DECIDE-artifact change. Operator-relevant, so not dim.
+      const path = event.path ? ` ${event.path}` : '';
+      log(
+        `${dot} ${chalk.yellow(
+          `seal rebaseline refused${path} — ${event.verdictCondition} (${event.condition})`,
+        )}`,
+      );
+      break;
+    }
     case 'build_progress': {
       // Plain heartbeat line (adr-2026-07-10-intra-step-build-progress-events):
       // step, N/total, current task, feature slug. No warning coloring —

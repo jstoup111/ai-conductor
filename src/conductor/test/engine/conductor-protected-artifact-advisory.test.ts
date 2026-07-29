@@ -27,7 +27,7 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
     vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
       ok: true,
-      seal: { version: 1, baselineCommit: 'approved-commit', protectedArtifacts: [] },
+      seal: { version: 2, baselineCommit: 'approved-commit', protectedArtifacts: [], rebaselines: [] },
       selfAmendments: [
         {
           path: '.docs/architecture/feature.md',
@@ -42,9 +42,10 @@ describe('conductor protected-artifact self-amendment advisory', () => {
       ],
     });
     const createSeal = vi.spyOn(protectedArtifactSeal, 'createProtectedArtifactSeal').mockResolvedValue({
-      version: 1,
+      version: 2,
       baselineCommit: 'approved-commit',
       protectedArtifacts: [],
+      rebaselines: [],
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const dispatchedSteps: string[] = [];
@@ -92,13 +93,14 @@ describe('conductor protected-artifact self-amendment advisory', () => {
     vi.spyOn(projectPrelude, 'currentCommitSha').mockResolvedValue('approved-commit');
     vi.spyOn(protectedArtifactSeal, 'verifyProtectedArtifactSeal').mockResolvedValue({
       ok: true,
-      seal: { version: 1, baselineCommit: 'approved-commit', protectedArtifacts: [] },
+      seal: { version: 2, baselineCommit: 'approved-commit', protectedArtifacts: [], rebaselines: [] },
       selfAmendments: [],
     });
     vi.spyOn(protectedArtifactSeal, 'createProtectedArtifactSeal').mockResolvedValue({
-      version: 1,
+      version: 2,
       baselineCommit: 'approved-commit',
       protectedArtifacts: [],
+      rebaselines: [],
     });
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const dispatchedSteps: string[] = [];

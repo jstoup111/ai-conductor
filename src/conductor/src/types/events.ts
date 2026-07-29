@@ -160,6 +160,25 @@ export type ConductorEvent =
     }
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
+  | {
+      type: 'protected_artifact_rebaseline';
+      trigger: string;
+      fromCommit: string;
+      toCommit: string;
+      paths: string[];
+    }
+  | {
+      type: 'protected_artifact_rebaseline_refused';
+      condition: string;
+      verdictCondition:
+        | 'baseline-unresolvable'
+        | 'same-history-ancestor'
+        | 'head-unresolvable'
+        | 'base-tip-unresolved'
+        | 'workspace-differs-from-head'
+        | 'head-differs-from-base';
+      path?: string;
+    }
   | { type: 'auto_heal'; step: StepName; healed: number; skipped: number }
   | ({
       /**

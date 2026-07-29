@@ -39,6 +39,7 @@ and any unrecognized content reads as `unclassified`.
 | --- | --- | --- |
 | `needs-human` | Only an operator can resolve it. | No — skipped on every sweep. |
 | `mechanical` | The daemon may safely retry it. | Yes, on a base-branch advance. |
+| `protected-artifact` | BUILD or SHIP found a genuine protected DECIDE-artifact violation. | Yes, on a base-branch advance; verification refuses again if the violation remains. |
 | *(absent / unrecognized)* | Treated as `unclassified`. | Yes, subject to the once-per-SHA guard. |
 
 A feature that errored rather than halted gets a diagnostic HALT written for it, so the daemon
@@ -324,6 +325,22 @@ never modifies `task-status.json`.
    rm -f .worktrees/<slug>/.pipeline/halt-user-input-required
    ```
 3. Clear the halt (next section).
+
+### The halt is a protected-artifact violation
+
+Do not delete or edit `.pipeline/protected-artifact-seal.json`. The engine rebaselines a stale seal
+automatically after a clean engine rebase, or during verification when it proves that every changed
+artifact is byte-identical to the base-branch tip.
+
+1. Read the refusal in `.daemon/daemon.log`:
+   ```bash
+   conduct-ts daemon logs | grep 'Protected artifact rotation refused'
+   ```
+2. Inspect the named path. Revert an unauthorized BUILD/SHIP edit to the committed DECIDE content,
+   or resolve the reported baseline/base-tip lookup failure. A safe inherited base-branch change
+   needs no manual seal repair; the next sanctioned rebase or verification rotates it.
+3. Clear `HALT` and `HALT.class` using the next procedure. If the cause remains, verification
+   refuses again before dispatch.
 
 ### Clear a halt and let the feature resume
 

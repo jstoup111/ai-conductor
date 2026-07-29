@@ -14,6 +14,10 @@ import {
   isRuntimeSourcePath,
 } from './gate-invalidation.js';
 import type { ProviderAttributionMetadata } from './provider-execution.js';
+import {
+  PROTECTED_ARTIFACT_SEAL_PATH,
+  verifyProtectedArtifactSeal,
+} from './protected-artifact-seal.js';
 
 // ── Engine-native `rebase` loopGate (Phase 9.0) ──────────────────────────────
 //
@@ -583,12 +587,32 @@ export async function performRebase(
     return { kind: 'noop' };
   }
 
+  // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
+  // authority first so a stale or tampered seal fails before history changes.
+  // Repositories predating seals retain the legacy rebase behavior.
+  try {
+    await access(join(projectRoot, PROTECTED_ARTIFACT_SEAL_PATH));
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot,
+      baseBranch: base.branch,
+    });
+    if (!verdict.ok) throw new Error(verdict.reason);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
   // Snapshot the pre-rebase tree + the feature's CHANGELOG additions BEFORE the
   // rebase moves HEAD, so we can (a) classify changed paths and (b) re-append
   // the feature's [Unreleased] lines if CHANGELOG conflicts.
   const preTree = (await git(['rev-parse', 'HEAD'])).stdout.trim();
   const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
   const featureAdditions = await captureFeatureChangelog(git, mergeBase || base.ref);
+  const translateCompletedRebase = async (): Promise<void> => {
+    if (!opts?.translateAfterRebase) return;
+    const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
+    const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
+    await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head);
+  };
 
   // `--autostash`: a daemon build/lint step can leave uncommitted changes in the
   // worktree (e.g. a formatter dropping an unused import without committing).
@@ -605,11 +629,7 @@ export async function performRebase(
     // calls it `changed` or `noop` — a docs/config-only rebase still orphans
     // any evidence citation pinned to the pre-rebase shas. Translate
     // unconditionally on any real rebase, not gated on that heuristic.
-    if (opts?.translateAfterRebase) {
-      const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
-      const head = (await git(['rev-parse', 'HEAD'])).stdout.trim();
-      await opts.translateAfterRebase(git, projectRoot, ontoSha, preTree, head);
-    }
+    await translateCompletedRebase();
     return outcome;
   }
 
@@ -632,7 +652,10 @@ export async function performRebase(
       projectRoot,
       featureAdditions,
     );
-    if (resolved) return { kind: 'changelog_resolved' };
+    if (resolved) {
+      await translateCompletedRebase();
+      return { kind: 'changelog_resolved' };
+    }
     // Could not safely resolve (conflict outside [Unreleased]) → HALT.
     return {
       kind: 'conflict_halt',
