@@ -1,6 +1,31 @@
+import { readFile } from 'node:fs/promises';
 import { describe, expect, it, vi } from 'vitest';
 
 describe('shipment reconciliation GitHub Actions adapter', () => {
+  it('wires merged-PR reconciliation through the built GitHub Actions adapter', async () => {
+    const repositoryRoot = new URL('../../../../', import.meta.url);
+    const [workflow, index] = await Promise.all([
+      readFile(new URL('.github/workflows/shipped-record.yml', repositoryRoot), 'utf8'),
+      readFile(new URL('src/conductor/src/index.ts', repositoryRoot), 'utf8'),
+    ]);
+
+    expect({
+      usesGithubScriptV9: /uses:\s*actions\/github-script@v9/.test(workflow),
+      importsBuiltEngine: /import\(\s*`\$\{process\.env\.GITHUB_WORKSPACE\}\/src\/conductor\/dist\/index\.js`\s*\)/.test(workflow),
+      invokesInjectedAction: /runShipmentReconcileAction\(\s*\{\s*github\s*,\s*context\s*,\s*core\s*,\s*workspace\s*:\s*process\.env\.GITHUB_WORKSPACE\s*}\s*\)/s.test(workflow),
+      omitsGhToken: !/GH_TOKEN/.test(workflow),
+      omitsDirectReconcileCli: !/shipment-evidence\s+reconcile/.test(workflow),
+      reexportsAction: /export\s*\{\s*runShipmentReconcileAction\s*}\s*from\s*['"]\.\/engine\/shipment-reconcile-action\.js['"]/.test(index),
+    }).toEqual({
+      usesGithubScriptV9: true,
+      importsBuiltEngine: true,
+      invokesInjectedAction: true,
+      omitsGhToken: true,
+      omitsDirectReconcileCli: true,
+      reexportsAction: true,
+    });
+  });
+
   it('dispatches merged pull request shipment evidence with the authenticated Actions client', async () => {
     const info = vi.fn();
     const error = vi.fn();
