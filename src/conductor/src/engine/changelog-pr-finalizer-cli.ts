@@ -46,8 +46,10 @@ export async function finalizeChangelogPr(
    * never-finalized token can already exist on the base branch (an earlier
    * PR's finish never ran this finalizer) — without this, its presence makes
    * every later PR's finalize ambiguous forever. When provided, ambiguity is
-   * resolved by only replacing token-bearing lines that are NOT already
-   * present verbatim in the base — i.e. lines this branch itself introduced.
+   * resolved by replacing every token-bearing line that is NOT already
+   * present verbatim in the base — i.e. all the lines this branch itself
+   * introduced, however many entries it ships. Without it, several tokens
+   * stay a hard failure rather than risk misattributing a base entry.
    */
   baseChangelogContent?: string | null,
 ): Promise<ChangelogPrFinalizationState> {
@@ -92,16 +94,16 @@ export async function finalizeChangelogPr(
       .filter(({ line }) => line.includes(IMPLEMENTATION_PR_TOKEN) && !baseLines.has(line))
       .map(({ index }) => index);
 
-    if (newTokenLineIndexes.length !== 1) {
-      throw new Error(
-        'multiple implementation PR tokens found: ' +
-          `${tokenCount} total, ${newTokenLineIndexes.length} not already present at the merge-base ` +
-          '(expected exactly 1 new token to finalize)',
-      );
-    }
+    // Every token line this branch introduced belongs to this PR, so all of
+    // them take this PR's link — a PR may legitimately ship more than one
+    // changelog entry. Nothing new means there is nothing of this branch's to
+    // finalize: the remaining tokens are the base's, and substituting one
+    // would misattribute another PR's entry to this one.
+    if (newTokenLineIndexes.length === 0) return 'no-op';
 
-    const [targetIndex] = newTokenLineIndexes;
-    lines[targetIndex] = lines[targetIndex].replace(IMPLEMENTATION_PR_TOKEN, replacement);
+    for (const index of newTokenLineIndexes) {
+      lines[index] = lines[index].replaceAll(IMPLEMENTATION_PR_TOKEN, replacement);
+    }
     updatedChangelog = lines.join('\n');
   } else {
     throw new Error('multiple implementation PR tokens found');
