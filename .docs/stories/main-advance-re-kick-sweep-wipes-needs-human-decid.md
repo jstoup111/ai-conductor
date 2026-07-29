@@ -15,9 +15,10 @@ Pinned decisions (from `.memory/decisions/halt-class-survives-rekick.md`):
   machinery — never inferred by parsing halt prose in the sweep.
 - Classes: `needs-human` (operator action required; survives sweeps) and
   `mechanical` (transient: build stall, gate-loop budget; re-kicked on advance).
-- Absent, unreadable, or unrecognized class → treated as `mechanical`
-  (re-kick), logged as `unclassified` — preserves current behavior for legacy
-  markers; all needs-human writer sites are migrated in this same change.
+- A pre-boundary classless marker is stamped `legacy` by the one-time #1077
+  compatibility migration and retains the historical re-kick behavior. Absent,
+  unreadable, or unrecognized class state after that boundary is logged as
+  `unclassified` and retained for operator action.
 - A needs-human halt is released when the operator removes the HALT marker
   (the documented resume procedure) or parks/unparks explicitly; there is no
   auto-expiry.
@@ -49,9 +50,9 @@ cycles are burned re-reaching the same halt.
 #### Negative Paths
 - Given a worktree whose halt-class record exists but is unreadable or carries
   an unrecognized value, when the sweep runs at a new SHA, then the sweep
-  treats the halt as unclassified, re-kicks it per current behavior, and logs
-  the slug with class `unclassified` and the read failure — it never throws or
-  aborts the sweep for other slugs.
+  treats the halt as unclassified, retains it without retry side effects, and
+  logs the slug with class `unclassified` and the read failure — it never
+  throws or aborts the sweep for other slugs.
 - Given a worktree that is BOTH operator-parked and needs-human halted, when
   the sweep runs, then the operator-park skip still wins (checked first,
   unchanged) and the log records the park skip, not a class decision.
@@ -63,8 +64,8 @@ cycles are burned re-reaching the same halt.
       class `needs-human`, and the skip.
 - [ ] A unit test asserts the same worktree is still skipped at a second,
       different SHA (survival across multiple advances).
-- [ ] A unit test asserts an unreadable/unrecognized class record falls back to
-      re-kick with an `unclassified` log line and does not throw.
+- [ ] A unit test asserts an unreadable/unrecognized class record is retained
+      with an `unclassified` log line and does not throw.
 - [ ] A unit test asserts operator-park is still checked before any class read.
 
 ## Story: Mechanical halts still re-kick on base advance
@@ -83,9 +84,9 @@ is not lost.
   satisfying"), when the sweep runs at a new base SHA, then the marker is
   cleared to `.pipeline/HALT.cleared` (reason preserved), the REKICK sentinel
   is written, and the log line includes the slug, the class, and the re-kick.
-- Given a legacy live HALT with no class record (written before this change),
-  when the sweep runs at a new SHA, then it is re-kicked exactly as today and
-  logged as `unclassified`.
+- Given a pre-boundary live HALT stamped `legacy` by the compatibility
+  migration, when the sweep runs at a new SHA, then it is re-kicked exactly as
+  before classification and logged as `legacy`.
 
 #### Negative Paths
 - Given a mechanical halt already re-kicked at SHA X, when the sweep runs again
@@ -99,7 +100,8 @@ is not lost.
 ### Done When
 - [ ] A unit test drives `rekickSweep` with a mechanical-classified halt and
       asserts clear + sentinel + a log line carrying class `mechanical`.
-- [ ] A unit test asserts a class-less halt re-kicks unchanged and logs
+- [ ] A unit test asserts a migrated `legacy` halt re-kicks unchanged and logs
+      `legacy`, while a post-boundary classless halt is retained as
       `unclassified`.
 - [ ] A unit test asserts the per-SHA guard still applies to classified halts.
 - [ ] A unit test asserts clearing a marker also removes its class record.
@@ -124,15 +126,15 @@ survival never depends on prose wording or sweep-side text matching.
   `needs-human` class is persisted alongside the marker via the shared
   halt-marker machinery (no per-site ad-hoc spelling of the class path).
 - Given the build-stall and gate-loop-budget halt sites, when they write their
-  HALT, then the persisted class is `mechanical` (or absent, which the sweep
-  already treats as mechanical) — their re-kick behavior is unchanged.
+  HALT, then the persisted class is explicitly `mechanical` — their re-kick
+  behavior is unchanged.
 
 #### Negative Paths
 - Given a needs-human halt site whose class write fails (fs error), when the
   halt fires, then the HALT marker itself is still written best-effort exactly
   as today (a halt is a signal, never itself a hard failure), the failure does
-  not crash the finish/halt flow, and the resulting class-less halt degrades to
-  today's re-kick behavior rather than blocking.
+  not crash the finish/halt flow, and the resulting classless halt fails closed
+  as `unclassified` rather than being automatically retried.
 
 ### Done When
 - [ ] The shared halt-marker machinery exposes a classified write, and every
@@ -142,6 +144,6 @@ survival never depends on prose wording or sweep-side text matching.
       `writeHalt`, `writeSelfHostHalt`) asserts the persisted class is
       `needs-human`.
 - [ ] A unit test asserts a failed class write still leaves the HALT marker
-      written and throws nothing.
+      written, throws nothing, and cannot auto-re-kick as an unclassified halt.
 - [ ] `docs/daemon-operations.md` documents the halt classes, the sweep's
       skip/re-kick rules, and the release procedure for a needs-human halt.
