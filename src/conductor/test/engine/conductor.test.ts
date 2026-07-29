@@ -1521,6 +1521,8 @@ describe('engine/conductor', () => {
       expect(halted).toBe(true);
       const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
       expect(halt).toMatch(/kickback-to-build no-op/);
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('needs-human');
     });
 
     it.skip('hands the BUILD agent the failing FRs (kickback retryReason) — self-heal is not blind', async () => {
@@ -3523,6 +3525,8 @@ describe('engine/conductor', () => {
       expect(halt).toMatch(/finish halted: needs human DECIDE/);
       expect(halt).toMatch(/test:wallet-flows \(architectural-clarity/);
       expect(calls.filter((s) => s === 'build')).toHaveLength(0);
+      const haltClass = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
+      expect(haltClass).toBe('needs-human');
     });
 
     it('as-built review failure routes via /remediate and HALTs on the first no-op kickback cycle (D2)', async () => {

@@ -5796,11 +5796,10 @@ export class Conductor {
                 cls.kind === 'impl-only'
                   ? `prd-audit impl-gap unresolved after ${prdAuditSelfHeals} build attempt(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${cls.summary}`
                   : `prd-audit halted: product/plan gap needs human DECIDE — ${cls.summary}`;
-              // Only the un-ALIGNED-FR (product/plan gap) branch is a
-              // needs-human halt — the impl-only branch is a different
-              // funnel (self-heal budget exhausted), classified elsewhere.
-              const haltClass = cls.kind === 'impl-only' ? undefined : 'needs-human';
-              await writeHaltMarker(this.projectRoot, reason + '\n', haltClass);
+              // Both terminal branches now require an operator: product/plan
+              // gaps need DECIDE input, while an implementation gap reaches
+              // this writer only after autonomous self-healing is exhausted.
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -5922,16 +5921,7 @@ export class Conductor {
                     kickback_outcome: outcome.kickbackOutcome,
                   });
                 }
-                await mkdir(join(this.projectRoot, '.pipeline'), { recursive: true }).catch(
-                  () => {},
-                );
-                await writeFile(
-                  join(this.projectRoot, LOOP_HALT_MARKER),
-                  reason + '\n',
-                  'utf-8',
-                ).catch(() => {
-                  /* best-effort marker */
-                });
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
