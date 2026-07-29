@@ -62,13 +62,46 @@ function migrateState(state: ConductState): ConductState {
   return migrated;
 }
 
+export interface WriteStateOptions {
+  /**
+   * Permit a write that drops a previously-recorded `pr_url`. Only the
+   * deliberate "throw this feature's state away" paths (`conduct-ts --reset`,
+   * the interactive start-over prompt) set this. Every other caller keeps the
+   * default (false), which carries a recorded `pr_url` forward.
+   */
+  allowPrUrlClear?: boolean;
+}
+
 /**
  * Write conduct-state.json with 2-space indent and trailing newline
  * (matches bash format for backward compat).
+ *
+ * `pr_url` is sticky. conduct-state.json has more than one writer: the
+ * conductor loads `state` once per run and rewrites the whole file from that
+ * in-memory object on every transition, while `conduct-ts finish-record
+ * --choice pr --pr-url ...` records the PR from a separate process mid-run.
+ * The conductor only re-reads `pr_url` on the finish step's success path, so a
+ * finish that creates the PR and then fails its completion check left the next
+ * whole-object write to wipe the recorded URL — which in turn made the SHIP
+ * freshness gates and the daemon's re-dispatch/resume decisions act as if no
+ * PR existed. Merging the persisted value back in on write removes that lost
+ * update at the seam, for every caller, with no network lookup: the value is
+ * only ever dropped when a caller explicitly asks for it.
  */
-export async function writeState(path: string, state: ConductState): Promise<void> {
+export async function writeState(
+  path: string,
+  state: ConductState,
+  options: WriteStateOptions = {},
+): Promise<void> {
+  let toWrite = state;
+  if (!options.allowPrUrlClear && !state.pr_url) {
+    const existing = await readState(path);
+    if (existing.ok && existing.value.pr_url) {
+      toWrite = { ...state, pr_url: existing.value.pr_url };
+    }
+  }
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  await writeFile(path, JSON.stringify(toWrite, null, 2) + '\n', 'utf-8');
 }
 
 /**
