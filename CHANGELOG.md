@@ -13,7 +13,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Fixed
 
 - A recorded `pr_url` is no longer wiped from `.pipeline/conduct-state.json`. The conductor loads state once per run and rewrites the whole file on every transition, while `conduct-ts finish-record --choice pr` records the PR from a separate process; a `finish` step that opened the PR and then failed its completion check had its URL clobbered by the next write, so SHIP freshness gates and the daemon's re-dispatch/resume decisions acted as if no PR existed. `writeState` now carries a persisted `pr_url` forward, and only the deliberate clears (`--reset`, the interactive start-over prompt) drop it ({{IMPLEMENTATION_PR}}).
-- Keep self-host builds running when concurrent operator work from [issue #1115](https://github.com/jstoup111/ai-conductor/issues/1115) modifies or deletes only tracked live-checkout files, while untracked paths and provider-state drift still halt ({{IMPLEMENTATION_PR}}).
+- Keep self-host builds running when concurrent operator work from [issue #1115](https://github.com/jstoup111/ai-conductor/issues/1115) modifies or deletes only tracked live-checkout files, while untracked paths and provider-state drift still halt ([implementation PR #1164](https://github.com/jstoup111/ai-conductor/pull/1164)).
 - Stop self-host live-boundary halts when test tooling writes cache files beneath any `node_modules` directory ([implementation PR #1158](https://github.com/jstoup111/ai-conductor/pull/1158)).
 
 ### Changed
