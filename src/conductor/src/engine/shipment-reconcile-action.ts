@@ -104,7 +104,7 @@ export function createShipmentReconcileGithubAdapter(input: {
   return {
     async getPullRequestMetadata({ pullNumber }: { pullNumber: number }) {
       const { data } = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-      return { url: data.html_url, body: data.body ?? '', headSha: data.head.sha };
+      return { number: data.number, url: data.html_url, body: data.body ?? '', headSha: data.head.sha };
     },
 
     async listImplementationPullRequestFiles({ pullNumber }: { pullNumber: number }) {
@@ -127,7 +127,7 @@ export function createShipmentReconcileGithubAdapter(input: {
 
     async getPullRequestHead({ pullNumber }: { pullNumber: number }) {
       const { data } = await client.rest.pulls.get({ owner, repo, pull_number: pullNumber });
-      return data.head.sha;
+      return { number: data.number, url: data.html_url, headSha: data.head.sha };
     },
 
     async postCommitStatus({
@@ -163,6 +163,17 @@ export function createShipmentReconcileGhRunner(input: {
 }) {
   const pullNumbersByUrl = new Map([[input.implementationPullRequest.url, input.implementationPullRequest.number]]);
   const json = (value: unknown) => ({ stdout: JSON.stringify(value ?? {}) });
+  const assertPullRequestIdentity = (
+    actual: { number: number; url: string },
+    expected: { number: number; url: string },
+  ) => {
+    if (actual.number !== expected.number || actual.url !== expected.url) {
+      throw new Error(
+        `shipment reconcile gh runner: pull request identity mismatch for ${expected.url} ` +
+        `(expected #${expected.number}, received #${actual.number} at ${actual.url})`,
+      );
+    }
+  };
 
   const run = async (args: string[], _opts: { cwd: string }): Promise<{ stdout: string }> => {
     const [command, action, target, jsonFlag, fields] = args;
@@ -175,6 +186,7 @@ export function createShipmentReconcileGhRunner(input: {
           input.adapter.getPullRequestMetadata({ pullNumber }),
           input.adapter.listImplementationPullRequestFiles({ pullNumber }),
         ]);
+        assertPullRequestIdentity(metadata, { number: pullNumber, url: target });
         return json({
           url: metadata.url,
           body: metadata.body,
@@ -183,8 +195,9 @@ export function createShipmentReconcileGhRunner(input: {
         });
       }
       if (fields === 'url,headRefOid') {
-        const headRefOid = await input.adapter.getPullRequestHead({ pullNumber });
-        return json({ url: target, headRefOid });
+        const pullRequest = await input.adapter.getPullRequestHead({ pullNumber });
+        assertPullRequestIdentity(pullRequest, { number: pullNumber, url: target });
+        return json({ url: pullRequest.url, headRefOid: pullRequest.headSha });
       }
     }
 

@@ -112,7 +112,7 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
     const adapter = {
       getPullRequestMetadata: vi.fn(async (input: unknown) => {
         semanticCalls.push({ operation: 'getPullRequestMetadata', input });
-        return { url: 'https://github.com/acme/conductor/pull/916', body: 'Implementation body', headSha: 'implementation-head' };
+        return { number: 916, url: 'https://github.com/acme/conductor/pull/916', body: 'Implementation body', headSha: 'implementation-head' };
       }),
       listImplementationPullRequestFiles: vi.fn(async (input: unknown) => {
         semanticCalls.push({ operation: 'listImplementationPullRequestFiles', input });
@@ -132,7 +132,7 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
       }),
       getPullRequestHead: vi.fn(async (input: unknown) => {
         semanticCalls.push({ operation: 'getPullRequestHead', input });
-        return 'repair-head';
+        return { number: 1000, url: 'https://github.com/acme/conductor/pull/1000', headSha: 'repair-head' };
       }),
       postCommitStatus: vi.fn(async (input: unknown) => {
         semanticCalls.push({ operation: 'postCommitStatus', input });
@@ -236,6 +236,56 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
     });
   });
 
+  it('rejects pull request responses that do not match the requested URL-number binding', async () => {
+    const implementationUrl = 'https://github.com/acme/conductor/pull/916';
+    const repairUrl = 'https://github.com/acme/conductor/pull/1000';
+    const modulePath = ['../../src/engine', 'shipment-reconcile-action.js'].join('/');
+    const loaded = await import(modulePath) as {
+      createShipmentReconcileGhRunner: (input: {
+        adapter: object;
+        repository: string;
+        implementationPullRequest: { url: string; number: number };
+      }) => (args: string[], options: { cwd: string }) => Promise<{ stdout: string }>;
+    };
+    const implementationRunner = loaded.createShipmentReconcileGhRunner({
+      adapter: {
+        getPullRequestMetadata: vi.fn(async () => ({
+          number: 917,
+          url: implementationUrl,
+          body: 'Implementation body',
+          headSha: 'implementation-head',
+        })),
+        listImplementationPullRequestFiles: vi.fn(async () => []),
+      },
+      repository: 'acme/conductor',
+      implementationPullRequest: { url: implementationUrl, number: 916 },
+    });
+    const repairRunner = loaded.createShipmentReconcileGhRunner({
+      adapter: {
+        listRepairPullRequests: vi.fn(async () => [{ number: 1000, url: repairUrl }]),
+        getPullRequestHead: vi.fn(async () => ({
+          number: 1000,
+          url: 'https://github.com/acme/conductor/pull/1001',
+          headSha: 'repair-head',
+        })),
+      },
+      repository: 'acme/conductor',
+      implementationPullRequest: { url: implementationUrl, number: 916 },
+    });
+    const branch = 'shipment-repair/916/durable-shipped-records';
+    const results = await Promise.allSettled([
+      implementationRunner(['pr', 'view', implementationUrl, '--json', 'url,body,files,headRefOid'], { cwd: '/repo' }),
+      (async () => {
+        await repairRunner([
+          'pr', 'list', '--head', branch, '--base', 'main', '--state', 'open', '--json', 'url', '--limit', '1',
+        ], { cwd: '/repo' });
+        return repairRunner(['pr', 'view', repairUrl, '--json', 'url,headRefOid'], { cwd: '/repo' });
+      })(),
+    ]);
+
+    expect(results.map(({ status }) => status)).toEqual(['rejected', 'rejected']);
+  });
+
   it('translates the complete reconciliation operation surface through the supplied authenticated client', async () => {
     const calls: Array<{ operation: string; input: unknown }> = [];
     const client = {
@@ -306,12 +356,12 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
 
     expect({ outputs, calls }).toEqual({
       outputs: {
-        metadata: { url: 'https://github.com/acme/conductor/pull/916', body: '', headSha: 'implementation-head' },
+        metadata: { number: 916, url: 'https://github.com/acme/conductor/pull/916', body: '', headSha: 'implementation-head' },
         files: [{ path: '.docs/plans/durable-shipped-records.md', status: 'added' }, { path: 'src/conductor/index.ts', status: 'modified' }],
         branch: { name: 'shipment-repair/916/durable-shipped-records', headSha: 'repair-head' },
         repairPullRequests: [],
         repairPullRequest: { number: 1000, url: 'https://github.com/acme/conductor/pull/1000' },
-        repairHead: 'repair-head',
+        repairHead: { number: 1000, url: 'https://github.com/acme/conductor/pull/1000', headSha: 'repair-head' },
         status: { state: 'success', context: 'shipped-record' },
       },
       calls: [
