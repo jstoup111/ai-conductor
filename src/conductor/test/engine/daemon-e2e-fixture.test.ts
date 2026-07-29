@@ -1,11 +1,19 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { fileMatchesPlanPath } from '../../src/engine/autoheal.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
@@ -24,6 +32,36 @@ const fixtureStoriesPath = fileURLToPath(
 const fixtureTouchedPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/touched.txt', import.meta.url),
 );
+
+async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
+  const logPath = join(worktreeDir, '.daemon/daemon.log');
+  const daemonLog = await readFile(logPath, 'utf-8').catch(() => null);
+
+  if (daemonLog === null) {
+    console.error(`daemon log not found at ${logPath}`);
+  } else {
+    console.error(`daemon log tail from ${logPath}`);
+    console.error(daemonLog.split('\n').slice(-50).join('\n'));
+  }
+
+  const haltPath = join(worktreeDir, '.pipeline/HALT');
+  const haltReason = await readFile(haltPath, 'utf-8').catch(() => null);
+  if (haltReason !== null) {
+    console.error(`halt marker at ${haltPath}`);
+    console.error(haltReason);
+  }
+
+  const parkedDir = join(worktreeDir, '.daemon/parked');
+  const parkedEntries = await readdir(parkedDir).catch(() => []);
+  for (const entry of parkedEntries) {
+    const markerPath = join(parkedDir, entry);
+    const reason = await readFile(markerPath, 'utf-8').catch(() => null);
+    if (reason !== null) {
+      console.error(`park marker at ${markerPath}`);
+      console.error(reason);
+    }
+  }
+}
 
 function createFixtureAgentFake(
   worktreeDir: string,
@@ -98,6 +136,59 @@ function createFixtureAgentFake(
 }
 
 describe('daemon E2E fixture', () => {
+  it('reports the explicit daemon-log path when diagnostics find no log', async () => {
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-diagnostics-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await dumpPipelineDiagnostics(worktreeDir);
+
+      expect(error).toHaveBeenCalledWith(
+        `daemon log not found at ${join(worktreeDir, '.daemon/daemon.log')}`,
+      );
+    } finally {
+      error.mockRestore();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  });
+
+  it('prints a bounded daemon-log tail with halt and park reasons', async () => {
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-diagnostics-'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      await mkdir(join(worktreeDir, '.daemon/parked'), { recursive: true });
+      await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+      await writeFile(
+        join(worktreeDir, '.daemon/daemon.log'),
+        Array.from({ length: 55 }, (_, index) => `log line ${index + 1}`).join('\n'),
+      );
+      await writeFile(join(worktreeDir, '.pipeline/HALT'), 'missing Task 1 evidence\n');
+      await writeFile(
+        join(worktreeDir, '.daemon/parked/daemon-e2e-fixture'),
+        'parked after evidence failure\n',
+      );
+
+      await dumpPipelineDiagnostics(worktreeDir);
+
+      const output = error.mock.calls.map(([message]) => String(message)).join('\n');
+      expect({
+        includesFirstRetainedLine: output.includes('log line 6'),
+        excludesDroppedLine: !output.includes('log line 5\n'),
+        includesHaltReason: output.includes('missing Task 1 evidence'),
+        includesParkReason: output.includes('parked after evidence failure'),
+      }).toEqual({
+        includesFirstRetainedLine: true,
+        excludesDroppedLine: true,
+        includesHaltReason: true,
+        includesParkReason: true,
+      });
+    } finally {
+      error.mockRestore();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  });
+
   it('parses only the real task headings without a dependency-graph phantom', async () => {
     const plan = await readFile(fixturePlanPath, 'utf-8');
 
@@ -302,6 +393,9 @@ describe('daemon E2E fixture', () => {
         halt: false,
         parked: false,
       });
+    } catch (error) {
+      await dumpPipelineDiagnostics(worktreeDir);
+      throw error;
     } finally {
       await rm(worktreeDir, { recursive: true, force: true });
     }
@@ -400,6 +494,9 @@ describe('daemon E2E fixture', () => {
         haltReason: expect.stringMatching(/build.*completion|task 1|evidence/i),
         done: false,
       });
+    } catch (error) {
+      await dumpPipelineDiagnostics(worktreeDir);
+      throw error;
     } finally {
       await rm(worktreeDir, { recursive: true, force: true });
     }
