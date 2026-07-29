@@ -8247,6 +8247,47 @@ describe('engine/conductor', () => {
       expect(updated['.docs/plans/a.md'].sha256).toBe(sha('plan'));
     });
 
+    it('reviews only the current feature artifact when another feature shares the step glob', async () => {
+      const featureA = 'neighbour-feature';
+      const featureB = 'current-feature';
+      await writeArtifact(`.docs/conflicts/${featureA}.md`, 'A');
+      const artifactB = await writeArtifact(`.docs/conflicts/${featureB}.md`, 'B');
+      await writeArtifact(`.docs/plans/${featureB}.md`, '# Current feature plan');
+      await writeArtifact('.pipeline/review-required-conflict_check', '1');
+
+      const state = Object.fromEntries(
+        ALL_STEPS
+          .filter(({ name }) => name !== 'conflict_check')
+          .map(({ name }) => [name, 'done']),
+      ) as ConductState;
+      state.feature_desc = featureB;
+      state.track = 'technical';
+      state.complexity_tier = 'M';
+      await writeState(statePath, state);
+
+      const reviewObserved = new Error('review observed sentinel');
+      let reviewedArtifacts: string[] = [];
+      const onReviewArtifacts = vi.fn(async (_step: StepName, files: string[]) => {
+        reviewedArtifacts = files;
+        throw reviewObserved;
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        featureDesc: featureB,
+        resume: true,
+        fromStep: 'conflict_check',
+        onReviewArtifacts,
+        maxRetries: 1,
+      });
+
+      await conductor.run();
+
+      expect(reviewedArtifacts).toEqual([artifactB]);
+    });
+
     it('review gate skips the prompt when every file is already approved', async () => {
       const planFile = await writeArtifact('.docs/plans/a.md', 'plan');
       const approvals = {

@@ -100,7 +100,9 @@ import {
 import type { StepGroup } from '../types/index.js';
 import { checkGate } from './gates.js';
 import {
+  buildArtifactResolutionContext,
   findArtifactFiles as findArtifactFilesForStep,
+  resolveArtifactFiles,
   extraArtifactGlobs,
   resolveFeaturePlanPath,
   STEP_ARTIFACT_GLOBS,
@@ -5932,7 +5934,20 @@ export class Conductor {
           //                  found issues worth human attention)
           // Approved (path + sha256 match) files skip re-prompting across runs.
           if (stepHasCompletionCheck(step.name, this.config) && this.mode !== 'auto') {
-            const allFiles = await findArtifactFilesForStep(this.projectRoot, step.name);
+            const completionContext = await this.completionCtx(state);
+            const artifactResolution =
+              completionContext.artifactResolution ??
+              (await buildArtifactResolutionContext(this.projectRoot, {
+                planPath: completionContext.planPath,
+                featureDesc: completionContext.featureDesc,
+                git: completionContext.git,
+              }));
+            const { files: allFiles } = await resolveArtifactFiles(
+              this.projectRoot,
+              step.name,
+              artifactResolution,
+              extraArtifactGlobs(step.name, this.config),
+            );
             if (allFiles.length > 0) {
               const unapproved = await filterUnapprovedArtifacts(
                 allFiles,
