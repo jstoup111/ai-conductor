@@ -1,5 +1,6 @@
 import { readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { makeGitRunner, resolveFreshBase, type GitRunner } from './rebase.js';
 
 const IMPLEMENTATION_PR_TOKEN = '{{IMPLEMENTATION_PR}}';
 
@@ -40,6 +41,15 @@ export async function finalizeChangelogPr(
     rename,
     rm: (path) => rm(path, { force: true }).then(() => undefined),
   },
+  /**
+   * CHANGELOG.md contents at this branch's merge-base, when known. A stale,
+   * never-finalized token can already exist on the base branch (an earlier
+   * PR's finish never ran this finalizer) — without this, its presence makes
+   * every later PR's finalize ambiguous forever. When provided, ambiguity is
+   * resolved by only replacing token-bearing lines that are NOT already
+   * present verbatim in the base — i.e. lines this branch itself introduced.
+   */
+  baseChangelogContent?: string | null,
 ): Promise<ChangelogPrFinalizationState> {
   let parsedPrUrl: URL;
   try {
@@ -68,10 +78,34 @@ export async function finalizeChangelogPr(
   const changelog = await runners.readFile(changelogPath);
   const tokenCount = changelog.split(IMPLEMENTATION_PR_TOKEN).length - 1;
   if (tokenCount === 0) return 'no-op';
-  if (tokenCount > 1) throw new Error('multiple implementation PR tokens found');
 
   const replacement = `[implementation PR #${match[1]}](${prUrl})`;
-  const updatedChangelog = changelog.replace(IMPLEMENTATION_PR_TOKEN, replacement);
+  let updatedChangelog: string;
+
+  if (tokenCount === 1) {
+    updatedChangelog = changelog.replace(IMPLEMENTATION_PR_TOKEN, replacement);
+  } else if (baseChangelogContent != null) {
+    const baseLines = new Set(baseChangelogContent.split('\n'));
+    const lines = changelog.split('\n');
+    const newTokenLineIndexes = lines
+      .map((line, index) => ({ line, index }))
+      .filter(({ line }) => line.includes(IMPLEMENTATION_PR_TOKEN) && !baseLines.has(line))
+      .map(({ index }) => index);
+
+    if (newTokenLineIndexes.length !== 1) {
+      throw new Error(
+        'multiple implementation PR tokens found: ' +
+          `${tokenCount} total, ${newTokenLineIndexes.length} not already present at the merge-base ` +
+          '(expected exactly 1 new token to finalize)',
+      );
+    }
+
+    const [targetIndex] = newTokenLineIndexes;
+    lines[targetIndex] = lines[targetIndex].replace(IMPLEMENTATION_PR_TOKEN, replacement);
+    updatedChangelog = lines.join('\n');
+  } else {
+    throw new Error('multiple implementation PR tokens found');
+  }
   const tempPath = `${changelogPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
 
   try {
@@ -84,10 +118,33 @@ export async function finalizeChangelogPr(
   return 'changed';
 }
 
+/**
+ * CHANGELOG.md contents at this branch's merge-base with the discovered
+ * default branch, or `null` if the base/file can't be resolved (no remote,
+ * detached HEAD, file didn't exist at that commit, etc). A `null` here just
+ * means `finalizeChangelogPr` falls back to its strict single-token
+ * behavior — never a hard failure of the finalize command itself.
+ */
+async function resolveBaseChangelogContent(git: GitRunner): Promise<string | null> {
+  try {
+    const resolution = await resolveFreshBase(git);
+    const mergeBase = await git(['merge-base', resolution.ref, 'HEAD']);
+    const mergeBaseSha = mergeBase.stdout.trim();
+    if (mergeBase.exitCode !== 0 || !mergeBaseSha) return null;
+
+    const show = await git(['show', `${mergeBaseSha}:CHANGELOG.md`]);
+    if (show.exitCode !== 0) return null;
+    return show.stdout;
+  } catch {
+    return null;
+  }
+}
+
 export async function dispatchFinalizeChangelogPr(
   command: ChangelogPrFinalizerDispatch,
   cwd: string,
   runners?: ChangelogPrFinalizerRunners,
+  git: GitRunner = makeGitRunner(cwd),
 ): Promise<number> {
   if (command.kind === 'guide') {
     console.error(FINALIZE_CHANGELOG_PR_USAGE);
@@ -95,7 +152,19 @@ export async function dispatchFinalizeChangelogPr(
   }
 
   try {
-    await finalizeChangelogPr(join(cwd, 'CHANGELOG.md'), command.prUrl, runners);
+    const baseChangelogContent = await resolveBaseChangelogContent(git);
+    const defaultRunners: ChangelogPrFinalizerRunners = {
+      readFile: (path) => readFile(path, 'utf-8'),
+      writeFile: (path, contents) => writeFile(path, contents, 'utf-8'),
+      rename,
+      rm: (path) => rm(path, { force: true }).then(() => undefined),
+    };
+    await finalizeChangelogPr(
+      join(cwd, 'CHANGELOG.md'),
+      command.prUrl,
+      runners ?? defaultRunners,
+      baseChangelogContent,
+    );
     return 0;
   } catch (error) {
     console.error(

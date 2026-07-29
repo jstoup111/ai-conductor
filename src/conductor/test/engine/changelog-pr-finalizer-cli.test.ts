@@ -217,6 +217,77 @@ describe('finalizeChangelogPr', () => {
     });
   });
 
+  it('replaces only the token line absent from the merge-base, ignoring a stale pre-existing token', async () => {
+    const changelogPath = '/repo/CHANGELOG.md';
+    const original =
+      '## [Unreleased]\n\n' +
+      '- Add widgets ({{IMPLEMENTATION_PR}}).\n' +
+      '- Add gears (already shipped; {{IMPLEMENTATION_PR}}).\n';
+    // The "gears" line's token is already unresolved on the merge-base — an
+    // earlier PR's finish never ran the finalizer. It must be left alone.
+    const baseChangelogContent =
+      '## [Unreleased]\n\n- Add gears (already shipped; {{IMPLEMENTATION_PR}}).\n';
+    const files = new Map([[changelogPath, original]]);
+    const writeFile = vi.fn<ChangelogPrFinalizerRunners['writeFile']>(async (path, contents) => {
+      files.set(path, contents);
+    });
+    const rename = vi.fn<ChangelogPrFinalizerRunners['rename']>(async (from, to) => {
+      files.set(to, files.get(from) ?? '');
+      files.delete(from);
+    });
+
+    const state = await finalizeChangelogPr(
+      changelogPath,
+      'https://github.com/octo/widgets/pull/456',
+      {
+        readFile: vi.fn(async (path: string) => files.get(path) ?? ''),
+        writeFile,
+        rename,
+        rm: vi.fn(),
+      },
+      baseChangelogContent,
+    );
+
+    expect({ state, changelog: files.get(changelogPath) }).toEqual({
+      state: 'changed',
+      changelog:
+        '## [Unreleased]\n\n' +
+        '- Add widgets ([implementation PR #456](https://github.com/octo/widgets/pull/456)).\n' +
+        '- Add gears (already shipped; {{IMPLEMENTATION_PR}}).\n',
+    });
+  });
+
+  it('still refuses when more than one token line is new relative to the merge-base', async () => {
+    const changelogPath = '/repo/CHANGELOG.md';
+    const original =
+      '## [Unreleased]\n\n' +
+      '- Add widgets ({{IMPLEMENTATION_PR}}).\n' +
+      '- Add gears ({{IMPLEMENTATION_PR}}).\n';
+    const baseChangelogContent = '## [Unreleased]\n\nNo notable changes.\n';
+    const files = new Map([[changelogPath, original]]);
+    let error: unknown;
+
+    try {
+      await finalizeChangelogPr(
+        changelogPath,
+        'https://github.com/octo/widgets/pull/456',
+        {
+          readFile: vi.fn(async (path: string) => files.get(path) ?? ''),
+          writeFile: vi.fn(),
+          rename: vi.fn(),
+          rm: vi.fn(),
+        },
+        baseChangelogContent,
+      );
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain('multiple implementation PR tokens found');
+    expect(files.get(changelogPath)).toEqual(original);
+  });
+
   it('refuses non-canonical PR URL forms before reading or changing the changelog', async () => {
     const changelogPath = '/repo/CHANGELOG.md';
     const changelog = '## [Unreleased]\n\n- Add widget support ({{IMPLEMENTATION_PR}}).\n';
