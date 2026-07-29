@@ -19,21 +19,30 @@
  *   3. End condition: finish completes (the runner writes `.pipeline/finish-choice`
  *      and a pr_url), so the run reaches its terminal state without a kickback.
  *   4. Required evidence: every step before `finish` pre-resolved in
- *      conduct-state.json; the SHIP tail seeded skipped; `verifyArtifacts: false`,
- *      so the mocked runner's success is the authority.
+ *      conduct-state.json; the SHIP tail seeded skipped. Usage-only cases use
+ *      `verifyArtifacts: false`; the failed-final-push case uses the production
+ *      artifact gate plus a real local upstream tracking ref.
  *
- * No EventPersister is wired here, so the seeded `.pipeline/events.jsonl` is
- * the whole authority for what the feature spent — which makes the expected
- * sums exact rather than dependent on how many events this fixture happens to
- * emit.
+ * Usage-only cases do not wire an EventPersister, so their seeded
+ * `.pipeline/events.jsonl` is the whole authority for what the feature spent.
+ * Refresh cases wire the real persister so the expected shipped Cost includes
+ * the finish event at the same boundary production uses.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
+import {
+  detectShippedRecordCommand,
+  dispatchShippedRecord,
+} from '../../src/engine/shipped-record-cli.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -41,13 +50,11 @@ import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent, ConductState, StepName } from '../../src/types/index.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 
-// daemon-cli transitively imports the provider layer (execa); this suite never
-// dispatches a real provider, so stub it rather than pull a live process
-// dependency in for one rendering assertion.
-vi.mock('execa', () => ({ execa: vi.fn() }));
+const execFile = promisify(execFileCb);
 
 let dir: string;
 let statePath: string;
+let remoteDir: string | undefined;
 
 const fakeGit: GitRunner = async (args) =>
   args.includes('--symbolic-full-name')
@@ -134,6 +141,120 @@ async function runToFinish(): Promise<ConductorEvent[]> {
   return totals;
 }
 
+async function git(args: string[]): Promise<string> {
+  const { stdout } = await execFile('git', args, { cwd: dir });
+  return stdout.trim();
+}
+
+const realGit: GitRunner = async (args, options) => {
+  const { stdout } = await execFile('git', args, { cwd: options.cwd });
+  return { stdout: String(stdout) };
+};
+
+async function seedPushedTrackingBranch(): Promise<string> {
+  remoteDir = await mkdtemp(join(tmpdir(), 'feature-usage-remote-'));
+  await execFile('git', ['init', '--bare', '-q', '-b', 'main', remoteDir], { cwd: dir });
+  await git(['remote', 'add', 'origin', remoteDir]);
+  await git(['push', '-q', '-u', 'origin', 'main']);
+  return git(['rev-parse', 'HEAD']);
+}
+
+async function seedCommittedShippedRecord(): Promise<void> {
+  await git(['init', '-q', '-b', 'main']);
+  await git(['config', 'user.email', 'test@example.com']);
+  await git(['config', 'user.name', 'Test']);
+  await mkdir(join(dir, '.docs/plans'), { recursive: true });
+  await mkdir(join(dir, '.docs/stories'), { recursive: true });
+  await writeFile(join(dir, 'README.md'), 'seed\n');
+  await writeFile(join(dir, '.docs/plans/feat.md'), '# Plan\n');
+  await writeFile(join(dir, '.docs/stories/feat.md'), '# Stories\n**Status:** Accepted\n');
+  await git(['add', 'README.md', '.docs']);
+  await git(['commit', '-q', '-m', 'merge spec: feat']);
+  await createProtectedArtifactSeal({
+    projectRoot: dir,
+    baselineCommit: await git(['rev-parse', 'HEAD']),
+  });
+  await seedEventLog([
+    {
+      type: 'step_completed',
+      step: 'build',
+      status: 'done',
+      tokenUsage: { input: 10, output: 1, costUsd: 0.01 },
+    },
+  ]);
+
+  const command = detectShippedRecordCommand([
+    'node',
+    'conduct',
+    'shipped-record',
+    '--slug',
+    'feat',
+    '--pr',
+    'https://github.com/org/repo/pull/1',
+  ]);
+  if (!command || command.kind !== 'write') throw new Error('valid shipped-record command rejected');
+  await dispatchShippedRecord(command, dir);
+}
+
+function meteredShippingRunner(onFinishDispatch: () => void = () => {}): StepRunner {
+  return {
+    run: vi.fn(async (step: StepName) => {
+      if (step === 'finish') {
+        onFinishDispatch();
+        await writeFile(join(dir, '.pipeline/finish-choice'), 'pr\n');
+        const current = await readState(statePath);
+        const state = (current.ok ? current.value : {}) as ConductState;
+        state.pr_url = 'https://github.com/org/repo/pull/1';
+        await writeState(statePath, state);
+        await writeState(join(dir, '.pipeline/conduct-state.json'), state);
+      }
+      return {
+        success: true,
+        preferredProvider: 'claude',
+        actualProvider: 'claude',
+        tokenUsage: { input: 40, output: 4, costUsd: 0.04 },
+      };
+    }),
+  };
+}
+
+async function runMeteredFinish(
+  events: ConductorEventEmitter,
+  runner: StepRunner,
+  gitRunner: GitRunner,
+  verifyArtifacts = false,
+): Promise<void> {
+  const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+  persister.start();
+  const conductor = new Conductor({
+    stateFilePath: statePath,
+    stepRunner: runner,
+    events,
+    projectRoot: dir,
+    mode: 'auto',
+    daemon: true,
+    verifyArtifacts,
+    fromStep: 'finish',
+    maxRetries: 1,
+    escalateBuildFailure: async () => ({}),
+    git: gitRunner,
+    gh: async () => ({ stdout: '{}' }),
+    shipmentEvidence: async (input) => ({
+      kind: 'valid',
+      slug: input.slug,
+      pr: input.implementationPr,
+      recordPath: `.docs/shipped/${input.slug}.md`,
+      hash: 'fixture-hash',
+      commit: input.candidateCommit,
+    }),
+  });
+  try {
+    await conductor.run();
+  } finally {
+    persister.stop();
+  }
+}
+
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'feature-usage-total-'));
   statePath = join(dir, 'conduct-state.json');
@@ -142,6 +263,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await rm(dir, { recursive: true, force: true });
+  if (remoteDir) await rm(remoteDir, { recursive: true, force: true });
 });
 
 describe('acceptance: finish logs the whole-feature usage total', () => {
@@ -234,5 +356,193 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
 
     const res = await readState(statePath);
     expect(res.ok && res.value.finish).toBe('done');
+  });
+
+  it('commits a refreshed Cost block after finish token usage is persisted', async () => {
+    await seedCommittedShippedRecord();
+    const events = new ConductorEventEmitter();
+    await runMeteredFinish(events, meteredShippingRunner(), fakeGit);
+
+    const committedRecord = await git(['show', 'HEAD:.docs/shipped/feat.md']);
+    expect(committedRecord).toMatch(/## Cost\ninput: 50\n/);
+  });
+
+  it('attempts one push and still completes finish when that push throws', async () => {
+    await seedCommittedShippedRecord();
+    const pushedHead = await seedPushedTrackingBranch();
+    let pushAttempts = 0;
+    let finishDispatches = 0;
+    let loopHalts = 0;
+    const events = new ConductorEventEmitter();
+    events.on('loop_halt', () => {
+      loopHalts += 1;
+    });
+    const failingPushGit: GitRunner = async (args, options) => {
+      if (args[0] === 'push') {
+        pushAttempts += 1;
+        throw new Error('injected push failure');
+      }
+      return realGit(args, options);
+    };
+
+    await runMeteredFinish(
+      events,
+      meteredShippingRunner(() => {
+        finishDispatches += 1;
+      }),
+      failingPushGit,
+      true,
+    );
+    const finalState = await readState(statePath);
+    const localHead = await git(['rev-parse', 'HEAD']);
+    const upstreamHead = await git(['rev-parse', 'refs/remotes/origin/main']);
+
+    expect({
+      pushAttempts,
+      finishDispatches,
+      loopHalts,
+      finishStatus: finalState.ok ? finalState.value.finish : undefined,
+      localHead,
+      upstreamHead,
+    }).toEqual({
+      pushAttempts: 1,
+      finishDispatches: 1,
+      loopHalts: 0,
+      finishStatus: 'done',
+      localHead: pushedHead,
+      upstreamHead: pushedHead,
+    });
+  });
+
+  it('adopts an upstream descendant with the identical post-refresh tree after the final push fails', async () => {
+    await seedCommittedShippedRecord();
+    await seedPushedTrackingBranch();
+    let pushAttempts = 0;
+    let finishDispatches = 0;
+    let loopHalts = 0;
+    let upstreamDescendant = '';
+    let postRefreshTree = '';
+    let upstreamTree = '';
+    const events = new ConductorEventEmitter();
+    events.on('loop_halt', () => {
+      loopHalts += 1;
+    });
+    const racingPushGit: GitRunner = async (args, options) => {
+      if (args[0] === 'push') {
+        pushAttempts += 1;
+        const postRefreshHead = await git(['rev-parse', 'HEAD']);
+        postRefreshTree = await git(['rev-parse', `${postRefreshHead}^{tree}`]);
+        upstreamDescendant = await git([
+          'commit-tree',
+          postRefreshTree,
+          '-p',
+          postRefreshHead,
+          '-m',
+          'metadata-only upstream advance',
+        ]);
+        await git(['update-ref', 'refs/remotes/origin/main', upstreamDescendant]);
+        upstreamTree = await git(['rev-parse', `${upstreamDescendant}^{tree}`]);
+        throw new Error('injected push race');
+      }
+      return realGit(args, options);
+    };
+
+    await runMeteredFinish(
+      events,
+      meteredShippingRunner(() => {
+        finishDispatches += 1;
+      }),
+      racingPushGit,
+      true,
+    );
+    const finalState = await readState(statePath);
+    const localHead = await git(['rev-parse', 'HEAD']);
+    const upstreamHead = await git(['rev-parse', 'refs/remotes/origin/main']);
+
+    expect({
+      pushAttempts,
+      finishDispatches,
+      loopHalts,
+      finishStatus: finalState.ok ? finalState.value.finish : undefined,
+      localHead,
+      upstreamHead,
+      upstreamTreeMatches: upstreamTree === postRefreshTree,
+    }).toEqual({
+      pushAttempts: 1,
+      finishDispatches: 1,
+      loopHalts: 0,
+      finishStatus: 'done',
+      localHead: upstreamDescendant,
+      upstreamHead: upstreamDescendant,
+      upstreamTreeMatches: true,
+    });
+  });
+
+  it('does not adopt an upstream descendant with arbitrary source changes after the final push fails', async () => {
+    await seedCommittedShippedRecord();
+    const pushedHead = await seedPushedTrackingBranch();
+    let pushAttempts = 0;
+    let finishDispatches = 0;
+    let loopHalts = 0;
+    let upstreamDescendant = '';
+    let postRefreshTree = '';
+    let upstreamTree = '';
+    const events = new ConductorEventEmitter();
+    events.on('loop_halt', () => {
+      loopHalts += 1;
+    });
+    const racingPushGit: GitRunner = async (args, options) => {
+      if (args[0] === 'push') {
+        pushAttempts += 1;
+        const postRefreshHead = await git(['rev-parse', 'HEAD']);
+        postRefreshTree = await git(['rev-parse', `${postRefreshHead}^{tree}`]);
+        await mkdir(join(dir, 'src'), { recursive: true });
+        await writeFile(join(dir, 'src/concurrent-upstream.ts'), 'export const unsafe = true;\n');
+        await git(['add', 'src/concurrent-upstream.ts']);
+        upstreamTree = await git(['write-tree']);
+        await git(['reset', '--hard', postRefreshHead]);
+        upstreamDescendant = await git([
+          'commit-tree',
+          upstreamTree,
+          '-p',
+          postRefreshHead,
+          '-m',
+          'concurrent upstream advance',
+        ]);
+        await git(['update-ref', 'refs/remotes/origin/main', upstreamDescendant]);
+        throw new Error('injected push race');
+      }
+      return realGit(args, options);
+    };
+
+    await runMeteredFinish(
+      events,
+      meteredShippingRunner(() => {
+        finishDispatches += 1;
+      }),
+      racingPushGit,
+      true,
+    );
+    const finalState = await readState(statePath);
+    const localHead = await git(['rev-parse', 'HEAD']);
+    const upstreamHead = await git(['rev-parse', 'refs/remotes/origin/main']);
+
+    expect({
+      pushAttempts,
+      finishDispatches,
+      loopHalts,
+      finishStatus: finalState.ok ? finalState.value.finish : undefined,
+      localHead,
+      upstreamHead,
+      upstreamTreeDiffers: upstreamTree !== postRefreshTree,
+    }).toEqual({
+      pushAttempts: 1,
+      finishDispatches: 1,
+      loopHalts: 0,
+      finishStatus: 'done',
+      localHead: pushedHead,
+      upstreamHead: upstreamDescendant,
+      upstreamTreeDiffers: true,
+    });
   });
 });
