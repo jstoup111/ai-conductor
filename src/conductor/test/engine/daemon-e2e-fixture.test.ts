@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -27,6 +27,39 @@ const fixtureTouchedPath = fileURLToPath(
 
 function createFixtureAgentFake(worktreeDir: string) {
   return createCodexProviderFake((options) => {
+    if (options.prompt.includes('.pipeline/build-review.json')) {
+      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
+      writeFileSync(
+        join(worktreeDir, '.pipeline/build-review.json'),
+        JSON.stringify({
+          verdict: 'PASS',
+          reasons: [],
+          rubric: {
+            tautology: true,
+            scope: true,
+            rootCause: true,
+            completeness: true,
+          },
+        }),
+        'utf-8',
+      );
+      return {
+        success: true,
+        output: 'fixture build review passed',
+        exitCode: 0,
+      };
+    }
+
+    if (options.prompt.includes('$finish')) {
+      mkdirSync(join(worktreeDir, '.pipeline'), { recursive: true });
+      writeFileSync(join(worktreeDir, '.pipeline/finish-choice'), 'keep\n', 'utf-8');
+      return {
+        success: true,
+        output: 'fixture finish recorded local keep',
+        exitCode: 0,
+      };
+    }
+
     const explicitTaskId =
       options.prompt.match(/^Task:\s*([A-Za-z0-9._-]+)$/m)?.[1];
     const taskId =
@@ -154,6 +187,9 @@ describe('daemon E2E fixture', () => {
         ['commit', '-m', 'test: seed daemon E2E fixture', '-m', 'Task: T0'],
         { cwd: worktreeDir },
       );
+      await execa('git', ['checkout', '-b', 'feature/daemon-e2e-fixture'], {
+        cwd: worktreeDir,
+      });
 
       await mkdir(pipelineDir, { recursive: true });
       await writeFile(
@@ -164,6 +200,7 @@ describe('daemon E2E fixture', () => {
           explore: 'done',
           complexity: 'done',
           complexity_tier: 'S',
+          track: 'technical',
           stories: 'done',
           conflict_check: 'done',
           plan: 'done',
@@ -190,10 +227,13 @@ describe('daemon E2E fixture', () => {
 
       // Bounded Conductor fixture:
       // 1. First runnable step: build (all prior steps are pre-resolved).
-      // 2. Expected dispatches: build only.
-      // 3. Terminal condition: the post-build checkpoint returns "quit".
+      // 2. Expected dispatches: build, build_review, and finish; wiring,
+      //    test_suite, tier/track-skipped validators, and rebase stay native.
+      // 3. Terminal condition: finish records the local keep equivalent and
+      //    the daemon Conductor writes DONE.
       // 4. Required artifacts: authoritative plan/stories plus the T0 baseline
-      //    commit; build completion is proven by Task 1's real commit and state.
+      //    commit, Task 1's real commit, a fresh build-review verdict, aggregate
+      //    verifier evidence, and the fresh finish-choice marker.
       const daemonResult = await runDaemon(
         {
           discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
@@ -205,8 +245,20 @@ describe('daemon E2E fixture', () => {
               events: new ConductorEventEmitter(),
               projectRoot: worktreeDir,
               fromStep: 'build',
+              mode: 'auto',
+              daemon: true,
               verifyArtifacts: false,
-              onCheckpoint: async () => 'quit',
+              fullSuiteVerifier: {
+                ensure: async () => ({
+                  status: 'REUSED',
+                  evidence: {} as never,
+                }),
+                inspect: async () => ({
+                  status: 'CURRENT',
+                  evidence: {} as never,
+                }),
+              },
+              escalateBuildFailure: async () => ({}),
             });
             await conductor.run();
             return { slug: item.slug, status: 'done' };
@@ -216,6 +268,7 @@ describe('daemon E2E fixture', () => {
       );
       const state = JSON.parse(await readFile(statePath, 'utf-8')) as {
         build?: string;
+        finish?: string;
       };
       const { stdout: commitBody } = await execa('git', ['log', '-1', '--format=%B'], {
         cwd: worktreeDir,
@@ -226,13 +279,21 @@ describe('daemon E2E fixture', () => {
         processed: daemonResult.processed.map((outcome) => outcome.slug),
         providerCalls: fake.calls.length,
         build: state.build,
+        finish: state.finish,
         commitBody: commitBody.trim(),
+        done: existsSync(join(pipelineDir, 'DONE')),
+        halt: existsSync(join(pipelineDir, 'HALT')),
+        parked: existsSync(join(worktreeDir, `.daemon/parked/${slug}`)),
       }).toEqual({
         claimed: true,
         processed: [slug],
-        providerCalls: 1,
+        providerCalls: 3,
         build: 'done',
+        finish: 'done',
         commitBody: 'test: complete fixture task\n\nTask: 1',
+        done: true,
+        halt: false,
+        parked: false,
       });
     } finally {
       await rm(worktreeDir, { recursive: true, force: true });
