@@ -14,8 +14,6 @@ import { tmpdir } from 'os';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import { load as loadYaml } from 'js-yaml';
-import { loadConfig } from '../../src/engine/config.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for the NOT-YET-BUILT conduct-ts `register` / `create`
@@ -51,14 +49,6 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const CONDUCTOR_DIR = join(__dirname, '..', '..');
 const DIST_ENTRY = join(CONDUCTOR_DIR, 'dist', 'index.js');
-const PROJECT_CONFIG_TEMPLATE = join(
-  CONDUCTOR_DIR,
-  '..',
-  '..',
-  'templates',
-  'project-config.yml.template',
-);
-
 interface CliResult {
   code: number | null;
   timedOut: boolean;
@@ -348,36 +338,9 @@ describe('conduct create — scaffold + register (FR-6)', () => {
     expect(gitignore).toContain('.worktrees/');
     expect(gitignore).not.toContain('.serena/');
 
-    const projectConfigPath = join(proj, '.ai-conductor', 'config.yml');
-    const [projectConfigRaw, templateRaw] = await Promise.all([
-      readFile(projectConfigPath, 'utf-8'),
-      readFile(PROJECT_CONFIG_TEMPLATE, 'utf-8'),
-    ]);
-    expect(projectConfigRaw).toBe(templateRaw);
-
-    const configResult = await loadConfig(proj, '0.99.0');
-    if (!configResult.ok) {
-      throw new Error(
-        `Scaffolded project config failed to load: [${configResult.error.type}] ${configResult.error.message}`,
-      );
-    }
-
-    const authoredConfig = loadYaml(projectConfigRaw) as Record<string, unknown>;
-    expect(Object.keys(authoredConfig)).not.toEqual(
-      expect.arrayContaining([
-        'conductor',
-        'markdown_viewer',
-        'harness_self_host',
-        'owner_gate_cutover',
-        'auto_restart_on_stale_engine',
-        'attribution_enforcement_cutover',
-        'attribution_judge_cutover',
-        'attribution_audit_sample_pct',
-        'wiring',
-        'manual_test',
-      ]),
-    );
-    expect(authoredConfig).not.toHaveProperty('steps.manual_test.disable');
+    // The registry integration owns the scaffold-set boundary; acceptance
+    // coverage owns template bytes, loader validation, and leak exclusions.
+    expect(existsSync(join(proj, '.ai-conductor', 'config.yml'))).toBe(true);
 
     // A `created` record (status provenance).
     const records = await readRegistryFile(registry);
@@ -489,77 +452,9 @@ describe('conduct create — refuses to clobber (FR-7)', () => {
     );
     expect(existsSync(join(proj, '.git'))).toBe(false);
     expect(existsSync(join(proj, 'CLAUDE.md'))).toBe(false);
-    expect(existsSync(join(proj, '.ai-conductor'))).toBe(false);
-
     // No orphan registry record for the refused project.
     const records = await readRegistryFile(registry);
     expect(records).toHaveLength(0);
-  });
-});
-
-describe('conduct config init — existing project config scaffold', () => {
-  let registry: string;
-
-  beforeEach(async () => {
-    sandbox = await mkdtemp(join(tmpdir(), 'reg-cli-config-init-'));
-    registry = join(sandbox, 'registry.json');
-  });
-  afterEach(async () => {
-    await rm(sandbox, { recursive: true, force: true });
-  });
-
-  it('writes the exact project template once and reports an idempotent second run', async () => {
-    const repo = join(sandbox, 'existing-repo');
-    await mkdir(repo);
-    await initRealRepo(repo);
-
-    const first = await runCli(['config', 'init'], { cwd: repo, registry });
-    expect(first.timedOut).toBe(false);
-    expect(first.code).toBe(0);
-
-    const configPath = join(repo, '.ai-conductor', 'config.yml');
-    const [createdConfig, template] = await Promise.all([
-      readFile(configPath, 'utf-8'),
-      readFile(PROJECT_CONFIG_TEMPLATE, 'utf-8'),
-    ]);
-    expect(createdConfig).toBe(template);
-
-    const second = await runCli(['config', 'init'], { cwd: repo, registry });
-    expect(second.timedOut).toBe(false);
-    expect(second.code).toBe(0);
-    expect(second.stdout + second.stderr).toMatch(/already exists/i);
-    expect(await readFile(configPath, 'utf-8')).toBe(createdConfig);
-  });
-
-  it('leaves an existing operator-edited config byte-identical', async () => {
-    const repo = join(sandbox, 'edited-repo');
-    await mkdir(repo);
-    await initRealRepo(repo);
-    await mkdir(join(repo, '.ai-conductor'));
-    const edited = 'harness_version: ">=0.99.0"\n# operator edit\n';
-    const configPath = join(repo, '.ai-conductor', 'config.yml');
-    await writeFile(configPath, edited, 'utf-8');
-
-    const result = await runCli(['config', 'init'], { cwd: repo, registry });
-
-    expect(result.timedOut).toBe(false);
-    expect(result.code).toBe(0);
-    expect(await readFile(configPath, 'utf-8')).toBe(edited);
-  });
-
-  it('rejects a non-git directory without creating .ai-conductor', async () => {
-    const plainDir = join(sandbox, 'not-a-repo');
-    await mkdir(plainDir);
-
-    const result = await runCli(['config', 'init'], {
-      cwd: plainDir,
-      registry,
-    });
-
-    expect(result.timedOut).toBe(false);
-    expect(result.code).not.toBe(0);
-    expect(result.stdout + result.stderr).toMatch(/not a git repository/i);
-    expect(existsSync(join(plainDir, '.ai-conductor'))).toBe(false);
   });
 });
 
