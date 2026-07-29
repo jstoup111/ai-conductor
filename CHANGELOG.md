@@ -117,6 +117,12 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   the base branch. A feature whose `/finish` recorded the ship but whose run then reported failure is
   no longer re-dispatched between the ship and the human merge — which previously re-ran `finish`
   against the worktree that finished run had already torn down ([implementation PR #1146](https://github.com/jstoup111/ai-conductor/pull/1146)).
+- `conduct-ts finalize-changelog-pr` now substitutes every `{{IMPLEMENTATION_PR}}` token line this
+  branch introduced relative to its merge-base, so a PR that ships more than one changelog entry
+  finalizes all of them instead of hard-failing and leaking literal placeholders onto the base
+  branch. Tokens already present at the merge-base are still never touched — when none of the
+  tokens are new the command is a no-op — and several tokens with an unresolvable merge-base remain
+  a refusal rather than a guess ({{IMPLEMENTATION_PR}}).
 - Generic step completion, interactive artifact review, and dashboard status now resolve
   feature-scoped artifacts (e.g. a plan or stories file) against the active feature's identity and
   worktree changes instead of matching a step's declared glob directory-wide, so an unrelated
