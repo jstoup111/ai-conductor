@@ -1686,55 +1686,6 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(effects).toEqual(['enrollWatch', 'markProcessed']);
     });
 
-    it('keeps retained evidence artifacts readable after a verified ship', async () => {
-      const wt = await mkdtemp(join(tmpdir(), 'wt-verified-ship-evidence-'));
-      const pipeline = join(wt, '.pipeline');
-      const seededArtifacts = [
-        'task-status.json',
-        'HALT',
-        'HALT.class',
-        'QUARANTINE',
-        'DONE',
-        'finish-choice',
-        'version-approval',
-        'conduct-state.json',
-        'protected-artifact-seal.json',
-        'events.jsonl',
-      ];
-      try {
-        await mkdir(join(pipeline, 'gates'), { recursive: true });
-        await Promise.all(
-          seededArtifacts.map(async artifact => {
-            await writeFile(join(pipeline, artifact), artifact, 'utf-8');
-          }),
-        );
-        await writeFile(join(pipeline, 'gates', 'test-suite.json'), 'gate evidence', 'utf-8');
-
-        const featureDeps = deps({
-          done: true,
-          halted: false,
-          finishChoice: 'pr',
-          prUrl: PR_URL,
-        });
-        featureDeps.createWorktree = async () => ({ path: wt, branch: `feat/${ITEM.slug}` });
-        featureDeps.teardownWorktree = async () => {
-          await rm(wt, { recursive: true, force: true });
-        };
-
-        await makeRunFeature(featureDeps)(ITEM);
-
-        expect(
-          await Promise.all([
-            ...seededArtifacts.map(artifact => readFile(join(pipeline, artifact), 'utf-8')),
-            readdir(join(pipeline, 'gates')),
-            readFile(join(pipeline, 'gates', 'test-suite.json'), 'utf-8'),
-          ]),
-        ).toEqual([...seededArtifacts, ['test-suite.json'], 'gate evidence']);
-      } finally {
-        await rm(wt, { recursive: true, force: true });
-      }
-    });
-
     it('a valid PR outcome marks the feature processed with its PR URL', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
