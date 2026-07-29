@@ -206,33 +206,36 @@ Valid levels are `low`, `medium`, `high`, `xhigh`, `max`. Not every model suppor
 
 The engine policies cover autonomous dispatch. Skills invoked interactively — through the Skill tool, or
 dispatched by another skill rather than by the engine — are documented as 22 extra rows in
-`EXTRA_MODEL_TABLE_ROWS` (`src/conductor/src/engine/model-table-metadata.ts:126-330`). All 22 carry
-`executionPath: 'Claude interactive'` and no Codex values; interactive pins are Claude-scoped.
+`EXTRA_MODEL_TABLE_ROWS` (`src/conductor/src/engine/model-table-metadata.ts:138-284`). All 22 carry
+`executionPath: 'supported-host interactive'`: a Claude model/effort pin plus a fixed Codex
+model/effort inheritance placeholder (`inherits model/effort from the Codex session or spawned-agent
+configuration`), since interactive dispatch on the Codex host has no per-skill policy table to pin
+against. Skill pins themselves remain Claude-scoped — see [Skill pins](#skill-pins) below.
 
-| Skill or agent | Claude model |
-| --- | --- |
-| `verify-claims` | inherits caller |
-| `domain-reviewer` | sonnet (<50-line diff), opus (≥50-line diff) |
-| `evaluator` | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) |
-| `code-review` | opus |
-| `debugging` | fable |
-| `simplify` | sonnet |
-| `engineer` | fable |
-| `intake` | inherits caller |
-| `conduct` | haiku |
-| `pr` | sonnet |
-| `tdd-red` | sonnet |
-| `tdd-green` | sonnet |
-| `cto-security` | opus |
-| `cto-data-integrity` | opus |
-| `cto-dependencies` | sonnet |
-| `cto-architecture` | opus |
-| `cto-duplication` | sonnet |
-| `cto-testing` | sonnet |
-| `cto-infrastructure` | sonnet |
-| `cto-observability` | sonnet |
-| `cto-devex` | sonnet |
-| `cto-orchestrator` | opus |
+| Skill or agent | Claude model | Codex model |
+| --- | --- | --- |
+| `verify-claims` | inherits caller | inherits Codex session/spawned-agent config |
+| `domain-reviewer` | sonnet (<50-line diff), opus (≥50-line diff) | inherits Codex session/spawned-agent config |
+| `evaluator` | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) | inherits Codex session/spawned-agent config |
+| `code-review` | opus | inherits Codex session/spawned-agent config |
+| `debugging` | fable | inherits Codex session/spawned-agent config |
+| `simplify` | sonnet | inherits Codex session/spawned-agent config |
+| `engineer` | fable | inherits Codex session/spawned-agent config |
+| `intake` | inherits caller | inherits Codex session/spawned-agent config |
+| `conduct` | haiku | inherits Codex session/spawned-agent config |
+| `pr` | sonnet | inherits Codex session/spawned-agent config |
+| `tdd-red` | sonnet | inherits Codex session/spawned-agent config |
+| `tdd-green` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-security` | opus | inherits Codex session/spawned-agent config |
+| `cto-data-integrity` | opus | inherits Codex session/spawned-agent config |
+| `cto-dependencies` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-architecture` | opus | inherits Codex session/spawned-agent config |
+| `cto-duplication` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-testing` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-infrastructure` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-observability` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-devex` | sonnet | inherits Codex session/spawned-agent config |
+| `cto-orchestrator` | opus | inherits Codex session/spawned-agent config |
 
 `writing-system-tests` is deliberately absent from this list: it is the display name of the
 `acceptance_specs` engine step, not a standalone row (`model-table-metadata.ts:106-110`). Adding it would
