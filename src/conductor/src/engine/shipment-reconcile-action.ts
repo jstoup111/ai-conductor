@@ -1,3 +1,5 @@
+import { dispatchShipmentEvidence } from './shipment-evidence-cli.js';
+
 interface GithubResponse<T> {
   data: T;
 }
@@ -258,4 +260,39 @@ export function createShipmentReconcileGhRunner(input: {
   };
 
   return run;
+}
+
+export async function runShipmentReconcileAction(
+  input: {
+    github: GithubClient;
+    context: {
+      repo: { owner: string; repo: string };
+      payload: {
+        pull_request: { number: number; html_url: string; merged_at: string };
+      };
+    };
+    core: { info(message: string): void; error(message: string): void };
+    workspace: string;
+  },
+  deps: { dispatchShipmentEvidence?: typeof dispatchShipmentEvidence } = {},
+): Promise<number> {
+  const pullRequest = input.context.payload.pull_request;
+  const adapter = createShipmentReconcileGithubAdapter({
+    ...input.context.repo,
+    client: input.github,
+  });
+  const runGh = createShipmentReconcileGhRunner({
+    adapter,
+    implementationPullRequest: { url: pullRequest.html_url, number: pullRequest.number },
+  });
+
+  return (deps.dispatchShipmentEvidence ?? dispatchShipmentEvidence)(
+    { kind: 'reconcile', pr: pullRequest.html_url, shipped: pullRequest.merged_at.slice(0, 10) },
+    input.workspace,
+    {
+      runGh,
+      report: (message) => input.core.info(message),
+      reportError: (message) => input.core.error(message),
+    },
+  );
 }

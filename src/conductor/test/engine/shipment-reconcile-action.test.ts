@@ -1,6 +1,58 @@
 import { describe, expect, it, vi } from 'vitest';
 
 describe('shipment reconciliation GitHub Actions adapter', () => {
+  it('dispatches merged pull request shipment evidence with the authenticated Actions client', async () => {
+    const info = vi.fn();
+    const error = vi.fn();
+    const dispatches: unknown[] = [];
+    const dispatchShipmentEvidence = vi.fn(async (command: unknown, cwd: string, runners: { runGh: unknown; report(message: string): void }) => {
+      dispatches.push({ command, cwd, runGh: typeof runners.runGh });
+      runners.report('reconciled');
+      return 0;
+    });
+    const modulePath = ['../../src/engine', 'shipment-reconcile-action.js'].join('/');
+    const loaded = await import(modulePath).catch(() => null) as null | {
+      runShipmentReconcileAction?: (
+        input: {
+          github: object;
+          context: {
+            repo: { owner: string; repo: string };
+            payload: { pull_request: { number: number; html_url: string; merged_at: string } };
+          };
+          core: { info(message: string): void; error(message: string): void };
+          workspace: string;
+        },
+        deps: { dispatchShipmentEvidence: typeof dispatchShipmentEvidence },
+      ) => Promise<unknown>;
+    };
+
+    await loaded?.runShipmentReconcileAction?.({
+      github: {},
+      context: {
+        repo: { owner: 'acme', repo: 'conductor' },
+        payload: {
+          pull_request: {
+            number: 916,
+            html_url: 'https://github.com/acme/conductor/pull/916',
+            merged_at: '2026-07-29T14:25:30Z',
+          },
+        },
+      },
+      core: { info, error },
+      workspace: '/repo',
+    }, { dispatchShipmentEvidence });
+
+    expect({ dispatches, info: info.mock.calls, error: error.mock.calls }).toEqual({
+      dispatches: [{
+        command: { kind: 'reconcile', pr: 'https://github.com/acme/conductor/pull/916', shipped: '2026-07-29' },
+        cwd: '/repo',
+        runGh: 'function',
+      }],
+      info: [['reconciled']],
+      error: [],
+    });
+  });
+
   it('translates every post-merge gh argv shape through the semantic adapter', async () => {
     const semanticCalls: Array<{ operation: string; input: unknown }> = [];
     const adapter = {
