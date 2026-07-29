@@ -197,6 +197,10 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
   it('translates the complete reconciliation operation surface through the supplied authenticated client', async () => {
     const calls: Array<{ operation: string; input: unknown }> = [];
     const client = {
+      paginate: vi.fn(async (_operation: unknown, input: unknown) => {
+        calls.push({ operation: 'paginate', input });
+        return [{ filename: '.docs/plans/durable-shipped-records.md', status: 'added' }, { filename: 'src/conductor/index.ts', status: 'modified' }];
+      }),
       rest: {
         pulls: {
           get: vi.fn(async (input: unknown) => {
@@ -270,7 +274,7 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
       },
       calls: [
         { operation: 'pulls.get', input: { owner: 'acme', repo: 'conductor', pull_number: 916 } },
-        { operation: 'pulls.listFiles', input: { owner: 'acme', repo: 'conductor', pull_number: 916, per_page: 100 } },
+        { operation: 'paginate', input: { owner: 'acme', repo: 'conductor', pull_number: 916, per_page: 100 } },
         { operation: 'repos.getBranch', input: { owner: 'acme', repo: 'conductor', branch: 'shipment-repair/916/durable-shipped-records' } },
         { operation: 'pulls.list', input: { owner: 'acme', repo: 'conductor', state: 'open', base: 'main', head: 'acme:shipment-repair/916/durable-shipped-records', per_page: 100 } },
         { operation: 'pulls.create', input: { owner: 'acme', repo: 'conductor', head: 'shipment-repair/916/durable-shipped-records', base: 'main', title: 'Repair shipment record', body: 'Record-only repair for #916' } },
@@ -278,5 +282,24 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
         { operation: 'repos.createCommitStatus', input: { owner: 'acme', repo: 'conductor', sha: 'repair-head', state: 'success', context: 'shipped-record', description: 'durable shipment evidence valid on repair head' } },
       ],
     });
+  });
+
+  it('rejects changed-file enumeration when the Actions client lacks pagination', async () => {
+    const client = {
+      rest: {
+        pulls: {
+          listFiles: vi.fn(async () => ({ data: [{ filename: 'src/conductor/index.ts', status: 'modified' }] })),
+        },
+      },
+    };
+    const modulePath = ['../../src/engine', 'shipment-reconcile-action.js'].join('/');
+    const loaded = await import(modulePath) as {
+      createShipmentReconcileGithubAdapter: (input: { owner: string; repo: string; client: typeof client }) => {
+        listImplementationPullRequestFiles(input: { pullNumber: number }): Promise<unknown>;
+      };
+    };
+    const adapter = loaded.createShipmentReconcileGithubAdapter({ owner: 'acme', repo: 'conductor', client });
+
+    await expect(adapter.listImplementationPullRequestFiles({ pullNumber: 916 })).rejects.toThrow(/pagination/i);
   });
 });

@@ -52,7 +52,7 @@ interface GithubClient {
       }): Promise<GithubResponse<{ state: string; context: string }>>;
     };
   };
-  paginate?: (method: unknown, input: unknown) => Promise<Array<{ filename: string; status: string }>>;
+  paginate: (method: unknown, input: unknown) => Promise<Array<{ filename: string; status: string }>>;
 }
 
 export function createShipmentReconcileGithubAdapter(input: {
@@ -109,9 +109,10 @@ export function createShipmentReconcileGithubAdapter(input: {
 
     async listImplementationPullRequestFiles({ pullNumber }: { pullNumber: number }) {
       const request = { owner, repo, pull_number: pullNumber, per_page: 100 as const };
-      const files = client.paginate
-        ? await client.paginate(client.rest.pulls.listFiles, request)
-        : (await client.rest.pulls.listFiles(request)).data;
+      if (typeof client.paginate !== 'function') {
+        throw new Error('shipment reconcile GitHub client pagination is required to list changed files');
+      }
+      const files = await client.paginate(client.rest.pulls.listFiles, request);
       return files.map((file) => ({ path: file.filename, status: file.status }));
     },
 
