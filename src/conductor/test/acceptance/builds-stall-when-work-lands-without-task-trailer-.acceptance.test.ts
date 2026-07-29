@@ -12,6 +12,7 @@ import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { buildProgressReKickDeps } from '../../src/daemon-cli.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
+import { initTestRepo } from '../fixtures/git-repo.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Builds stall when work lands without Task: trailer
@@ -52,9 +53,13 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 // ─────────────────────────────────────────────────────────────────────────────
 
 async function initGitRepo(dir: string): Promise<void> {
-  await execa('git', ['init', '-b', 'main'], { cwd: dir });
-  await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-  await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+  // Delegate to the shared fixture rather than hand-rolling `git init` + identity:
+  // it also pins `gc.auto=0` / `maintenance.auto=false`. Suites here commit
+  // repeatedly across a retry budget and can cross the auto-gc threshold, and
+  // `git gc --auto` detaches a process that keeps writing `.git/objects/pack`
+  // after the test returns — racing `afterEach`'s recursive remove and failing
+  // it with ENOTEMPTY.
+  await initTestRepo(dir);
   await writeFile(join(dir, 'README.md'), '# Test\n');
   await execa('git', ['add', 'README.md'], { cwd: dir });
   await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
