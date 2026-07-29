@@ -659,3 +659,219 @@ describe('reconcileHaltPrs (Task 15)', () => {
     expect(logs3.some((msg) => msg.includes(PR_URL_CONFORMING))).toBe(true);
   });
 });
+
+// ── Stale-marking clearance (halt resolved before the sweep) ──────────────────
+
+const PR_URL_SHIPPED = 'https://github.com/owner/repo/pull/1138';
+const SHIPPED_SLUG = 'step-completion-globs-are-feature-unscoped-so-anot';
+const SHIPPED_BRANCH = `feat/daemon-${SHIPPED_SLUG}`;
+
+type FakeHeadPr = FakePr & { headRefName?: string };
+
+/**
+ * Fake gh covering the CLEAR direction (undraft, remove label, strip body
+ * marker, upsert comment) in addition to the heal direction above.
+ */
+function makeFakeGhForClearing(prs: FakeHeadPr[]) {
+  const calls: string[][] = [];
+  const byUrl = new Map(prs.map((p) => [p.url, p]));
+  const comments = new Map<string, string[]>();
+
+  const find = (url: string): FakeHeadPr => {
+    const pr = byUrl.get(url);
+    if (!pr) throw new Error(`fake gh: unknown PR ${url}`);
+    return pr;
+  };
+
+  const gh: GhRunner = async (args: string[]) => {
+    calls.push([...args]);
+
+    if (args[0] === 'pr' && args[1] === 'list') {
+      return {
+        stdout: JSON.stringify(
+          prs.map((p) => ({
+            number: p.number,
+            url: p.url,
+            body: p.body,
+            isDraft: p.isDraft,
+            labels: p.labels.map((name) => ({ name })),
+            headRefName: p.headRefName,
+          })),
+        ),
+      };
+    }
+
+    if (args[0] === 'pr' && args[1] === 'view') {
+      const url = args[2] ?? '';
+      const pr = find(url);
+      if (args.includes('comments')) {
+        return {
+          stdout: JSON.stringify({
+            comments: (comments.get(url) ?? []).map((body, i) => ({
+              body,
+              url: `${url}#issuecomment-${i + 1}`,
+            })),
+          }),
+        };
+      }
+      return {
+        stdout: JSON.stringify({
+          isDraft: pr.isDraft,
+          labels: pr.labels.map((name) => ({ name })),
+          body: pr.body,
+        }),
+      };
+    }
+
+    // `gh pr ready <url>` undrafts; the `--undo` form re-drafts.
+    if (args[0] === 'pr' && args[1] === 'ready') {
+      const url = args[args.length - 1] ?? '';
+      find(url).isDraft = args.includes('--undo');
+      return { stdout: '' };
+    }
+
+    // REST label removal: DELETE .../issues/N/labels/<name>
+    if (args[0] === 'api' && args[2] === 'DELETE' && /\/labels\//.test(args[3] ?? '')) {
+      const path = args[3] ?? '';
+      const number = Number(path.match(/issues\/(\d+)\/labels\//)?.[1]);
+      const name = path.split('/labels/')[1] ?? '';
+      const pr = prs.find((p) => p.number === number);
+      if (pr) pr.labels = pr.labels.filter((l) => l !== name);
+      return { stdout: '' };
+    }
+
+    if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+      const url = args[2] ?? '';
+      find(url).body = args[args.indexOf('--body') + 1] ?? '';
+      return { stdout: '' };
+    }
+
+    if (args[0] === 'pr' && args[1] === 'comment') {
+      const url = args[2] ?? '';
+      const body = args[args.indexOf('--body') + 1] ?? '';
+      comments.set(url, [...(comments.get(url) ?? []), body]);
+      return { stdout: '' };
+    }
+
+    return { stdout: '' };
+  };
+
+  return { gh, calls, commentsFor: (url: string) => comments.get(url) ?? [] };
+}
+
+/** Fake git reporting a shipped record only for the listed `<ref>:<path>` pairs. */
+function makeFakeGit(present: string[]) {
+  const calls: string[][] = [];
+  const runGit = async (args: string[]) => {
+    calls.push([...args]);
+    if (args[0] === 'cat-file' && args[1] === '-e' && present.includes(args[2] ?? '')) {
+      return { stdout: '' };
+    }
+    throw new Error(`fatal: path does not exist: ${args[2]}`);
+  };
+  return { runGit, calls };
+}
+
+describe('reconcileHaltPrs — stale marking on an already-resolved halt', () => {
+  let tempDir: string;
+
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'halt-pr-clear-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
+
+  it('clears draft + label + body marker when the head branch carries the feature shipped record', async () => {
+    const shipped: FakeHeadPr = {
+      number: 1138,
+      url: PR_URL_SHIPPED,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: SHIPPED_BRANCH,
+    };
+    const { gh, commentsFor } = makeFakeGhForClearing([shipped]);
+    const { runGit } = makeFakeGit([`${SHIPPED_BRANCH}:.docs/shipped/${SHIPPED_SLUG}.md`]);
+
+    const logs: string[] = [];
+    await reconcileHaltPrs({
+      projectRoot: tempDir,
+      runGh: gh,
+      runGit,
+      log: (m) => logs.push(m),
+    });
+
+    expect(shipped.isDraft).toBe(false);
+    expect(shipped.labels).not.toContain('needs-remediation');
+    expect(shipped.body).not.toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    expect(logs.some((m) => m.includes('halt resolved'))).toBe(true);
+    expect(logs.some((m) => m.includes('already conforming'))).toBe(false);
+    expect(commentsFor(PR_URL_SHIPPED).join('\n')).toContain('Halt resolved');
+  });
+
+  it('falls back to the remote-tracking ref when the local branch is gone', async () => {
+    const shipped: FakeHeadPr = {
+      number: 1138,
+      url: PR_URL_SHIPPED,
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: SHIPPED_BRANCH,
+    };
+    const { gh } = makeFakeGhForClearing([shipped]);
+    const { runGit } = makeFakeGit([`origin/${SHIPPED_BRANCH}:.docs/shipped/${SHIPPED_SLUG}.md`]);
+
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, runGit });
+
+    expect(shipped.isDraft).toBe(false);
+    expect(shipped.labels).not.toContain('needs-remediation');
+  });
+
+  it('leaves an unresolved halt PR drafted + labeled (no shipped record on its branch)', async () => {
+    const stillHalted: FakeHeadPr = {
+      number: 1126,
+      url: 'https://github.com/owner/repo/pull/1126',
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: 'feat/daemon-some-unfinished-feature',
+    };
+    const { gh } = makeFakeGhForClearing([stillHalted]);
+    const { runGit } = makeFakeGit([]); // no shipped record anywhere
+
+    const logs: string[] = [];
+    await reconcileHaltPrs({
+      projectRoot: tempDir,
+      runGh: gh,
+      runGit,
+      log: (m) => logs.push(m),
+    });
+
+    expect(stillHalted.isDraft).toBe(true);
+    expect(stillHalted.labels).toContain('needs-remediation');
+    expect(stillHalted.body).toContain(NEEDS_REMEDIATION_BODY_MARKER);
+    expect(logs.some((m) => m.includes('already conforming'))).toBe(true);
+    expect(logs.some((m) => m.includes('halt resolved'))).toBe(false);
+  });
+
+  it('never guesses a slug for a branch the daemon did not cut', async () => {
+    const foreign: FakeHeadPr = {
+      number: 900,
+      url: 'https://github.com/owner/repo/pull/900',
+      isDraft: true,
+      labels: ['needs-remediation'],
+      body: `Halt body.\n\n${NEEDS_REMEDIATION_BODY_MARKER}`,
+      headRefName: 'fix/hand-authored-branch',
+    };
+    const { gh } = makeFakeGhForClearing([foreign]);
+    const { runGit, calls } = makeFakeGit([]);
+
+    await reconcileHaltPrs({ projectRoot: tempDir, runGh: gh, runGit });
+
+    expect(calls).toHaveLength(0); // no slug → no git lookup at all
+    expect(foreign.isDraft).toBe(true);
+    expect(foreign.labels).toContain('needs-remediation');
+  });
+});
