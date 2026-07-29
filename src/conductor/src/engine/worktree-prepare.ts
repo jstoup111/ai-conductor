@@ -1,11 +1,9 @@
 import { execa } from 'execa';
-import { access, readFile, writeFile, mkdir, chmod, constants, rename, stat } from 'node:fs/promises';
+import { access, readFile, writeFile, mkdir, chmod, constants, rename, rm, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from './git-hook-assets.js';
 import {
   PRE_DISPATCH_HOOK,
-  POST_DISPATCH_HOOK,
-  MUTATION_GATE_HOOK,
   DOCS_GUARD_HOOK,
 } from './session-hook-assets.js';
 
@@ -153,8 +151,8 @@ async function excludeEngineArtifacts(
 }
 
 /**
- * Merge the session-lifecycle hook entries (pre-dispatch / post-dispatch /
- * mutation-gate) into the worktree's `.claude/settings.local.json`, preserving
+ * Merge active session hook entries into the worktree's
+ * `.claude/settings.local.json`, preserving
  * any unrelated
  * settings already present. `.claude/settings.local.json` is untracked, so
  * this is safe to write directly.
@@ -208,36 +206,19 @@ async function wireSessionHookSettings(
     const hooks = settings.hooks as Record<string, unknown>;
 
     const preDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
-    const postDispatchPath = join(worktreePath, '.pipeline', 'session-hooks', 'post-dispatch.sh');
-    const mutationGatePath = join(worktreePath, '.pipeline', 'session-hooks', 'mutation-gate.sh');
+
+    // Remove retired attribution-enforcement hooks from previously prepared
+    // worktrees. They became no-ops under #773 and should not keep spawning a
+    // shell process for every dispatch or mutation.
+    hooks.PreToolUse = removeSessionHookEntries(hooks.PreToolUse, ['mutation-gate.sh']);
+    hooks.PostToolUse = removeSessionHookEntries(hooks.PostToolUse, ['post-dispatch.sh']);
 
     hooks.PreToolUse = replaceSessionHookEntry(
       hooks.PreToolUse,
       'pre-dispatch.sh',
       { matcher: 'Task|Agent', hooks: [{ type: 'command', command: preDispatchPath }] },
     );
-    hooks.PostToolUse = replaceSessionHookEntry(
-      hooks.PostToolUse,
-      'post-dispatch.sh',
-      { matcher: 'Task|Agent', hooks: [{ type: 'command', command: postDispatchPath }] },
-    );
-    // Mutation gate (#505 Surface B): two matcher entries sharing one script,
-    // both on PreToolUse. Matched by matcher identity (not just command
-    // substring) so adding/replacing one never evicts the other — both
-    // entries' commands point at the same mutation-gate.sh.
-    hooks.PreToolUse = replaceSessionHookEntry(
-      hooks.PreToolUse,
-      'mutation-gate.sh',
-      { matcher: 'Edit|Write|NotebookEdit', hooks: [{ type: 'command', command: `${mutationGatePath} write` }] },
-    );
-    hooks.PreToolUse = replaceSessionHookEntry(
-      hooks.PreToolUse,
-      'mutation-gate.sh',
-      { matcher: 'Bash', hooks: [{ type: 'command', command: `${mutationGatePath} bash` }] },
-    );
-
-    // Docs-guard (#788): its own PreToolUse entry, independent of the
-    // mutation-gate wiring above — no chaining, no shared invocation.
+    // Docs-guard (#788): its own independent PreToolUse entry.
     const docsGuardPath = join(worktreePath, '.pipeline', 'session-hooks', 'docs-guard.sh');
     hooks.PreToolUse = replaceSessionHookEntry(
       hooks.PreToolUse,
@@ -275,10 +256,8 @@ async function wireSessionHookSettings(
  * Return a copy of `existing` (a hooks array, or anything else on a fresh /
  * malformed file) with any entry that has the *same matcher* AND a command
  * containing `marker` removed, then `entry` appended. Matching on matcher +
- * marker together (not marker alone) means several engine-owned entries can
- * share one hook script (e.g. the mutation-gate hook is wired under both an
- * `Edit|Write|NotebookEdit` and a `Bash` matcher) without one replace call
- * evicting the other's entry. Non-matching entries (e.g. an operator's own
+ * marker together (not marker alone) keeps independently matched engine
+ * entries isolated. Non-matching entries (e.g. an operator's own
  * hooks, or another engine entry with a different matcher) are preserved
  * untouched.
  */
@@ -299,9 +278,19 @@ function replaceSessionHookEntry(
   return kept;
 }
 
+function removeSessionHookEntries(existing: unknown, markers: string[]): Record<string, unknown>[] {
+  const arr = Array.isArray(existing) ? (existing as Record<string, unknown>[]) : [];
+  return arr.filter((entry) => {
+    const entryHooks = (entry as { hooks?: Array<{ command?: string }> }).hooks;
+    return !entryHooks?.some(
+      (hook) => typeof hook.command === 'string' && markers.some((marker) => hook.command!.includes(marker)),
+    );
+  });
+}
+
 /**
- * Write the session-lifecycle hook scripts (pre-dispatch.sh, post-dispatch.sh,
- * mutation-gate.sh) to .pipeline/session-hooks/ and make them executable.
+ * Write the active session hook scripts to .pipeline/session-hooks/ and make
+ * them executable. Retired no-op hook assets are removed from old worktrees.
  * Fail-open: logs and continues on any error, never throwing — provisioning
  * failures here must never block worktree setup.
  */
@@ -311,8 +300,6 @@ async function writeSessionHooks(
 ): Promise<SessionHookRepairOutcome> {
   const assets = [
     ['pre-dispatch.sh', PRE_DISPATCH_HOOK],
-    ['post-dispatch.sh', POST_DISPATCH_HOOK],
-    ['mutation-gate.sh', MUTATION_GATE_HOOK],
     ['docs-guard.sh', DOCS_GUARD_HOOK],
   ] as const;
   const outcome: SessionHookRepairOutcome = { repaired: [], failed: [] };
@@ -327,6 +314,17 @@ async function writeSessionHooks(
       repaired: [],
       failed: assets.map(([file]) => ({ file, error: msg })),
     };
+  }
+
+  for (const retired of ['post-dispatch.sh', 'mutation-gate.sh']) {
+    try {
+      await rm(join(hooksDir, retired), { force: true });
+    } catch (err) {
+      outcome.failed.push({
+        file: retired,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   for (const [file, content] of assets) {

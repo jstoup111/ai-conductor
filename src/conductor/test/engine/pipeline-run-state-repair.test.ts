@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import { execa } from 'execa';
 import { seedTaskStatus } from '../../src/engine/task-seed.js';
 import { resolveTaskIds } from '../../src/engine/task-progress.js';
-import { checkAttributionMachineryIntact } from '../../src/engine/conductor.js';
 
 /**
  * `.pipeline/` is gitignored and lives inside the worktree, so it is destroyed
@@ -280,37 +279,5 @@ describe('.pipeline run-state repair', () => {
       await expect(seedTaskStatus(dir, planPath)).rejects.toThrow();
     });
 
-    it('surfaces an unusable task-status.json as a build-preflight halt reason', async () => {
-      // A path that is not a regular parseable file must not satisfy the
-      // preflight recheck just because it exists.
-      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
-      await fsPromises.writeFile(join(dir, '.pipeline/task-status.json'), 'truncated{');
-
-      const issue = await checkAttributionMachineryIntact(dir, {
-        planResolvable: true,
-        ensureHooks: async () => ({ repaired: [], failed: [] }),
-      });
-
-      expect(issue).toMatch(/could not restore \.pipeline\/task-status\.json/);
-    });
-
-    it('passes the preflight recheck once the file is a real parseable rows file', async () => {
-      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
-      await seedTaskStatus(dir, planPath);
-      // Session hooks are out of scope here (#1088 covers them); place real
-      // executable stubs so this assertion isolates the task-status recheck.
-      const hooksDir = join(dir, '.pipeline/session-hooks');
-      await fsPromises.mkdir(hooksDir, { recursive: true });
-      for (const hook of ['pre-dispatch.sh', 'post-dispatch.sh', 'mutation-gate.sh']) {
-        await fsPromises.writeFile(join(hooksDir, hook), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
-      }
-
-      const issue = await checkAttributionMachineryIntact(dir, {
-        planResolvable: true,
-        ensureHooks: async () => ({ repaired: [], failed: [] }),
-      });
-
-      expect(issue).toBeNull();
-    });
   });
 });

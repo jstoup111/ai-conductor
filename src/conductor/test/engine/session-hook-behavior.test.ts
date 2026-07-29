@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { PRE_DISPATCH_HOOK, POST_DISPATCH_HOOK } from '../../src/engine/session-hook-assets.js';
+import { PRE_DISPATCH_HOOK } from '../../src/engine/session-hook-assets.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const FIXTURES_DIR = join(__dirname, '..', 'fixtures', 'session-hook-payloads');
@@ -311,7 +311,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       ['line 1 "Task: 7 and Task: 8" (multiple markers)', 'Task: 7 and Task: 8'],
     ];
 
-    it.each(scenarios)('blocks with exit 2 and an instructive stderr message: %s', (_label, prompt) => {
+    it.each(scenarios)('passes through without mutating telemetry: %s', (_label, prompt) => {
       tempDir = mkdtempSync(join(tmpdir(), 'pre-dispatch-hook-'));
       const pipelineDir = join(tempDir, '.pipeline');
       mkdirSync(pipelineDir, { recursive: true });
@@ -339,10 +339,7 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
         stderr = execErr.stderr ? execErr.stderr.toString('utf-8') : '';
       }
 
-      expect(exitCode).toBe(2);
-      expect(stderr).toMatch(/Task: <id>/);
-      expect(stderr).toMatch(/Task: none/);
-
+      expect(exitCode).toBe(0);
       // Zero state change
       expect(readFileSync(statusPath, 'utf-8')).toBe(seededStatusJson);
       expect(existsSync(join(pipelineDir, 'current-task'))).toBe(false);
@@ -1097,153 +1094,5 @@ describe('PRE_DISPATCH_HOOK behavior', () => {
       expect(exitCode).toBe(0);
       expect(existsSync(join(pipelineDir, 'dispatch-count'))).toBe(false);
     });
-  });
-});
-
-describe('POST_DISPATCH_HOOK behavior', () => {
-  let tempDir: string | undefined;
-
-  afterEach(() => {
-    if (tempDir) {
-      rmSync(tempDir, { recursive: true, force: true });
-      tempDir = undefined;
-    }
-  });
-
-  function loadPostDispatchPayload(
-    fixtureName: string,
-    overrides: { prompt?: string } = {},
-  ): PreDispatchPayload {
-    const payload = loadPreDispatchPayload(fixtureName, overrides);
-    return { ...payload, hook_event_name: 'PostToolUse' };
-  }
-
-  it('leaves the stamp and row untouched when the dispatched id matches', () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'post-dispatch-hook-'));
-    const pipelineDir = join(tempDir, '.pipeline');
-    mkdirSync(pipelineDir, { recursive: true });
-
-    const statusPath = join(pipelineDir, 'task-status.json');
-    const seededStatus = {
-      tasks: [
-        { id: '1', status: 'completed' },
-        { id: '2', status: 'in_progress' },
-        { id: '7', status: 'in_progress' },
-      ],
-    };
-    writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
-    const beforeStatusRaw = readFileSync(statusPath, 'utf-8');
-
-    const currentTaskPath = join(pipelineDir, 'current-task');
-    writeFileSync(currentTaskPath, '7', 'utf-8');
-
-    const hookPath = join(tempDir, 'post-dispatch-hook.sh');
-    writeFileSync(hookPath, POST_DISPATCH_HOOK, { mode: 0o755 });
-
-    const payload = loadPostDispatchPayload('pre-dispatch-task-id.json', {
-      prompt: 'Task: 7',
-    });
-
-    let exitCode = 0;
-    try {
-      execFileSync('bash', [hookPath], {
-        input: JSON.stringify(payload),
-        cwd: tempDir,
-        stdio: 'pipe',
-      });
-    } catch (err) {
-      const execErr = err as { status?: number };
-      exitCode = execErr.status ?? 1;
-    }
-
-    expect(exitCode).toBe(0);
-    expect(existsSync(currentTaskPath)).toBe(true);
-
-    const afterStatusRaw = readFileSync(statusPath, 'utf-8');
-    expect(afterStatusRaw).toBe(beforeStatusRaw);
-    const updated = JSON.parse(afterStatusRaw) as {
-      tasks: Array<{ id: string; status: string }>;
-    };
-    expect(updated.tasks.find((t) => t.id === '7')?.status).toBe('in_progress');
-  });
-
-  it('leaves a mismatched stamp untouched and exits 0 silently', () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'post-dispatch-hook-'));
-    const pipelineDir = join(tempDir, '.pipeline');
-    mkdirSync(pipelineDir, { recursive: true });
-
-    const statusPath = join(pipelineDir, 'task-status.json');
-    const seededStatus = {
-      tasks: [
-        { id: '7', status: 'pending' },
-        { id: '9', status: 'in_progress' },
-      ],
-    };
-    writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
-    const beforeStatusRaw = readFileSync(statusPath, 'utf-8');
-
-    const currentTaskPath = join(pipelineDir, 'current-task');
-    writeFileSync(currentTaskPath, '9', 'utf-8');
-
-    const hookPath = join(tempDir, 'post-dispatch-hook.sh');
-    writeFileSync(hookPath, POST_DISPATCH_HOOK, { mode: 0o755 });
-
-    const payload = loadPostDispatchPayload('pre-dispatch-task-id.json', {
-      prompt: 'Task: 7',
-    });
-
-    const result = spawnSync('bash', [hookPath], {
-      input: JSON.stringify(payload),
-      cwd: tempDir,
-      encoding: 'utf-8',
-    });
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe('');
-    expect(existsSync(currentTaskPath)).toBe(true);
-    expect(readFileSync(currentTaskPath, 'utf-8')).toBe('9');
-
-    const afterStatusRaw = readFileSync(statusPath, 'utf-8');
-    expect(afterStatusRaw).toBe(beforeStatusRaw);
-  });
-
-  it('exits 0 with no state change when no stamp is present', () => {
-    tempDir = mkdtempSync(join(tmpdir(), 'post-dispatch-hook-'));
-    const pipelineDir = join(tempDir, '.pipeline');
-    mkdirSync(pipelineDir, { recursive: true });
-
-    const statusPath = join(pipelineDir, 'task-status.json');
-    const seededStatus = {
-      tasks: [{ id: '7', status: 'pending' }],
-    };
-    writeFileSync(statusPath, JSON.stringify(seededStatus), 'utf-8');
-    const beforeStatusRaw = readFileSync(statusPath, 'utf-8');
-
-    const currentTaskPath = join(pipelineDir, 'current-task');
-
-    const hookPath = join(tempDir, 'post-dispatch-hook.sh');
-    writeFileSync(hookPath, POST_DISPATCH_HOOK, { mode: 0o755 });
-
-    const payload = loadPostDispatchPayload('pre-dispatch-task-id.json', {
-      prompt: 'Task: 7',
-    });
-
-    let exitCode = 0;
-    try {
-      execFileSync('bash', [hookPath], {
-        input: JSON.stringify(payload),
-        cwd: tempDir,
-        stdio: 'pipe',
-      });
-    } catch (err) {
-      const execErr = err as { status?: number };
-      exitCode = execErr.status ?? 1;
-    }
-
-    expect(exitCode).toBe(0);
-    expect(existsSync(currentTaskPath)).toBe(false);
-
-    const afterStatusRaw = readFileSync(statusPath, 'utf-8');
-    expect(afterStatusRaw).toBe(beforeStatusRaw);
   });
 });

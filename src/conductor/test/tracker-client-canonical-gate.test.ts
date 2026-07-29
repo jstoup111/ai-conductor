@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
 import path from 'node:path';
 
@@ -22,7 +22,7 @@ function listSourceFiles(): string[] {
   return out
     .split('\n')
     .map((l) => l.trim())
-    .filter((l) => l.length > 0 && l.endsWith('.ts'));
+    .filter((l) => l.length > 0 && l.endsWith('.ts') && existsSync(path.join(REPO_ROOT, l)));
 }
 
 describe('canonical tracker-client seam grep gate', () => {

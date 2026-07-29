@@ -161,14 +161,8 @@ export async function incrementRegradeCounter(root: string): Promise<number> {
 export async function resetRegradeCounter(root: string): Promise<void> {
   // Reset only an EXISTING counter. A missing counter already reads as count 0
   // (`readRegradeCounterState` treats absent/unparseable as a fresh session),
-  // so writing one buys nothing — and `writeRegradeCounterState` mkdir's
-  // `.pipeline/` as a side effect. Creating that directory is NOT inert: the
-  // pre-dispatch attribution guard early-returns "intact" when `.pipeline/`
-  // does not exist at all (`checkAttributionMachineryIntact`, conductor.ts),
-  // and materializing an otherwise-empty `.pipeline/` flips it into the
-  // "directory present but machinery incomplete" branch. That suppresses the
-  // build-step marker (#505 TS-3) and, where the guard is enforcing, is a
-  // HALT path — so a bookkeeping reset must never conjure the directory.
+  // so writing one buys nothing and would create an otherwise unnecessary
+  // `.pipeline/` directory as a side effect.
   const counterExists = await access(join(root, REGRADE_COUNTER_PATH))
     .then(() => true)
     .catch(() => false);

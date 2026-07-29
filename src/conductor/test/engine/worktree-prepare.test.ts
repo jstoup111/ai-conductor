@@ -15,8 +15,6 @@ import {
 } from '../../src/engine/worktree-prepare.js';
 import {
   PRE_DISPATCH_HOOK,
-  POST_DISPATCH_HOOK,
-  MUTATION_GATE_HOOK,
   DOCS_GUARD_HOOK,
 } from '../../src/engine/session-hook-assets.js';
 import { PREPARE_COMMIT_MSG_HOOK, COMMIT_MSG_HOOK } from '../../src/engine/git-hook-assets.js';
@@ -50,8 +48,6 @@ describe('engine/worktree-prepare', () => {
   describe('ensureSessionHooks', () => {
     const hookAssets = [
       ['pre-dispatch.sh', PRE_DISPATCH_HOOK],
-      ['post-dispatch.sh', POST_DISPATCH_HOOK],
-      ['mutation-gate.sh', MUTATION_GATE_HOOK],
       ['docs-guard.sh', DOCS_GUARD_HOOK],
     ] as const;
 
@@ -68,14 +64,14 @@ describe('engine/worktree-prepare', () => {
 
     it('reports exactly a deleted hook as repaired', async () => {
       await ensureSessionHooks(dir);
-      await rm(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'));
+      await rm(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'));
 
       const outcome = await ensureSessionHooks(dir);
 
-      expect(outcome.repaired).toEqual(['mutation-gate.sh']);
+      expect(outcome.repaired).toEqual(['pre-dispatch.sh']);
       expect(outcome.failed).toEqual([]);
-      expect(await readFile(join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh'), 'utf-8'))
-        .toBe(MUTATION_GATE_HOOK);
+      expect(await readFile(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'), 'utf-8'))
+        .toBe(PRE_DISPATCH_HOOK);
     });
 
     it('is idempotent when scripts and settings are already current', async () => {
@@ -409,150 +405,6 @@ describe('engine/worktree-prepare', () => {
 
   // Task 12: prepareWorktree installs session-hook scripts to
   // .pipeline/session-hooks/, executable, overwriting any stale file.
-  describe('session hook provisioning (Task 12)', () => {
-    it('writes pre-dispatch.sh and post-dispatch.sh executable with the exported asset content', async () => {
-      await prepareWorktree(dir);
-
-      const preDispatchPath = join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
-      const postDispatchPath = join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh');
-
-      const preContent = await readFile(preDispatchPath, 'utf-8');
-      expect(preContent).toBe(PRE_DISPATCH_HOOK);
-      const preStat = await stat(preDispatchPath);
-      expect(preStat.mode & 0o777).toBe(0o755);
-
-      const postContent = await readFile(postDispatchPath, 'utf-8');
-      expect(postContent).toBe(POST_DISPATCH_HOOK);
-      const postStat = await stat(postDispatchPath);
-      expect(postStat.mode & 0o777).toBe(0o755);
-    });
-
-    it('overwrites stale pre-existing session-hook files', async () => {
-      const hooksDir = join(dir, '.pipeline', 'session-hooks');
-      await mkdir(hooksDir, { recursive: true });
-      await writeFile(join(hooksDir, 'pre-dispatch.sh'), 'stale pre content', 'utf-8');
-      await writeFile(join(hooksDir, 'post-dispatch.sh'), 'stale post content', 'utf-8');
-
-      await prepareWorktree(dir);
-
-      const preContent = await readFile(join(hooksDir, 'pre-dispatch.sh'), 'utf-8');
-      expect(preContent).toBe(PRE_DISPATCH_HOOK);
-      const postContent = await readFile(join(hooksDir, 'post-dispatch.sh'), 'utf-8');
-      expect(postContent).toBe(POST_DISPATCH_HOOK);
-    });
-  });
-
-  // Task 13: prepareWorktree wires the session hooks into
-  // .claude/settings.local.json with merge-preserve semantics.
-  describe('settings.local.json hook wiring (Task 13)', () => {
-    const settingsPath = (worktreeDir: string) =>
-      join(worktreeDir, '.claude', 'settings.local.json');
-
-    function findEntry(arr: unknown[], substr: string): Record<string, unknown> | undefined {
-      return (arr as Record<string, unknown>[]).find((e) => {
-        const hooks = e.hooks as Array<{ command?: string }> | undefined;
-        return hooks?.some((h) => typeof h.command === 'string' && h.command.includes(substr));
-      });
-    }
-
-    // Operator-only skills (e.g. daemon-triage) exist for an operator debugging
-    // the harness from outside a run. bin/install symlinks every skill to user
-    // scope, so without this suppression a dispatched step would see them — and
-    // a step that triages itself reads its own in-flight state as evidence of
-    // failure. Suppression is per-worktree because that is the only seam the
-    // engine controls at dispatch time.
-    it('suppresses every operator-only skill for a dispatched-step session', async () => {
-      await prepareWorktree(dir);
-
-      const settings = JSON.parse(await readFile(settingsPath(dir), 'utf-8'));
-
-      expect(OPERATOR_ONLY_SKILLS.length).toBeGreaterThan(0);
-      for (const skill of OPERATOR_ONLY_SKILLS) {
-        expect(settings.skillOverrides?.[skill]).toBe('off');
-      }
-    });
-
-    it('preserves operator-authored skillOverrides while adding its own', async () => {
-      const claudeDir = join(dir, '.claude');
-      await mkdir(claudeDir, { recursive: true });
-      await writeFile(
-        settingsPath(dir),
-        JSON.stringify({ skillOverrides: { 'some-other-skill': 'name-only' } }, null, 2),
-        'utf-8',
-      );
-
-      await prepareWorktree(dir);
-
-      const settings = JSON.parse(await readFile(settingsPath(dir), 'utf-8'));
-      // The operator's own entry survives untouched…
-      expect(settings.skillOverrides['some-other-skill']).toBe('name-only');
-      // …alongside the engine-owned suppressions.
-      for (const skill of OPERATOR_ONLY_SKILLS) {
-        expect(settings.skillOverrides[skill]).toBe('off');
-      }
-    });
-
-    it('writes PreToolUse and PostToolUse hook entries into a fresh worktree', async () => {
-      await prepareWorktree(dir);
-
-      const raw = await readFile(settingsPath(dir), 'utf-8');
-      const settings = JSON.parse(raw);
-
-      const preEntry = findEntry(settings.hooks.PreToolUse, 'pre-dispatch.sh');
-      expect(preEntry).toBeDefined();
-      expect(preEntry?.matcher).toBe('Task|Agent');
-      const preCmd = (preEntry?.hooks as Array<{ command: string }>)[0].command;
-      expect(preCmd).toBe(join(dir, '.pipeline', 'session-hooks', 'pre-dispatch.sh'));
-
-      const postEntry = findEntry(settings.hooks.PostToolUse, 'post-dispatch.sh');
-      expect(postEntry).toBeDefined();
-      expect(postEntry?.matcher).toBe('Task|Agent');
-      const postCmd = (postEntry?.hooks as Array<{ command: string }>)[0].command;
-      expect(postCmd).toBe(join(dir, '.pipeline', 'session-hooks', 'post-dispatch.sh'));
-    });
-
-    it('preserves unrelated pre-existing settings byte-for-byte while adding hook entries', async () => {
-      const claudeDir = join(dir, '.claude');
-      await mkdir(claudeDir, { recursive: true });
-      const preExisting = { permissions: { allow: ['Bash(ls:*)'] } };
-      await writeFile(settingsPath(dir), JSON.stringify(preExisting), 'utf-8');
-
-      await prepareWorktree(dir);
-
-      const raw = await readFile(settingsPath(dir), 'utf-8');
-      const settings = JSON.parse(raw);
-
-      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)'] });
-      expect(findEntry(settings.hooks.PreToolUse, 'pre-dispatch.sh')).toBeDefined();
-      expect(findEntry(settings.hooks.PostToolUse, 'post-dispatch.sh')).toBeDefined();
-    });
-
-    it('is idempotent across repeated provisioning runs', async () => {
-      await prepareWorktree(dir);
-      const first = await readFile(settingsPath(dir), 'utf-8');
-
-      await prepareWorktree(dir);
-      const second = await readFile(settingsPath(dir), 'utf-8');
-
-      expect(second).toBe(first);
-
-      const settings = JSON.parse(second);
-      expect(
-        (settings.hooks.PreToolUse as unknown[]).filter((e) =>
-          findEntry([e], 'pre-dispatch.sh'),
-        ).length,
-      ).toBe(1);
-      expect(
-        (settings.hooks.PostToolUse as unknown[]).filter((e) =>
-          findEntry([e], 'post-dispatch.sh'),
-        ).length,
-      ).toBe(1);
-    });
-  });
-
-  // Task 14: corrupt .claude/settings.local.json is backed up and replaced
-  // rather than crashing provisioning; committed .claude/settings.json is
-  // never touched.
   describe('settings wiring negatives (Task 14)', () => {
     const settingsPath = (worktreeDir: string) =>
       join(worktreeDir, '.claude', 'settings.local.json');
@@ -835,144 +687,6 @@ describe('engine/worktree-prepare', () => {
 
   // Task 14 (#505 Surface B): the mutation-gate hook asset is wired at
   // worktree provisioning alongside the pre/post-dispatch hooks.
-  describe('mutation-gate hook wiring (Task 14)', () => {
-    const settingsPath = (worktreeDir: string) =>
-      join(worktreeDir, '.claude', 'settings.local.json');
-
-    function findEntry(
-      arr: unknown[] | undefined,
-      matcher: string,
-      substr: string,
-    ): Record<string, unknown> | undefined {
-      return (arr as Record<string, unknown>[] | undefined)?.find((e) => {
-        const hooks = (e as { hooks?: Array<{ command?: string }> }).hooks;
-        return (
-          (e as { matcher?: string }).matcher === matcher &&
-          hooks?.some((h) => typeof h.command === 'string' && h.command.includes(substr))
-        );
-      });
-    }
-
-    it('writes mutation-gate.sh executable with the exported asset content', async () => {
-      await prepareWorktree(dir);
-
-      const mutationGatePath = join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh');
-      const content = await readFile(mutationGatePath, 'utf-8');
-      expect(content).toBe(MUTATION_GATE_HOOK);
-      const s = await stat(mutationGatePath);
-      expect(s.mode & 0o777).toBe(0o755);
-    });
-
-    it('overwrites a stale pre-existing mutation-gate.sh file', async () => {
-      const hooksDir = join(dir, '.pipeline', 'session-hooks');
-      await mkdir(hooksDir, { recursive: true });
-      await writeFile(join(hooksDir, 'mutation-gate.sh'), 'stale content', 'utf-8');
-
-      await prepareWorktree(dir);
-
-      const content = await readFile(join(hooksDir, 'mutation-gate.sh'), 'utf-8');
-      expect(content).toBe(MUTATION_GATE_HOOK);
-    });
-
-    it('adds an Edit|Write|NotebookEdit PreToolUse matcher entry pointing at mutation-gate.sh', async () => {
-      await prepareWorktree(dir);
-
-      const raw = await readFile(settingsPath(dir), 'utf-8');
-      const settings = JSON.parse(raw);
-
-      const entry = findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh');
-      expect(entry).toBeDefined();
-      const cmd = (entry?.hooks as Array<{ command: string }>)[0].command;
-      // Surface flag: write-matcher invocations fail closed without payload.
-      expect(cmd).toBe(`${join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh')} write`);
-    });
-
-    it('adds a Bash PreToolUse matcher entry pointing at mutation-gate.sh', async () => {
-      await prepareWorktree(dir);
-
-      const raw = await readFile(settingsPath(dir), 'utf-8');
-      const settings = JSON.parse(raw);
-
-      const entry = findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh');
-      expect(entry).toBeDefined();
-      const cmd = (entry?.hooks as Array<{ command: string }>)[0].command;
-      // Surface flag: bash-matcher invocations keep payload-dependent logic.
-      expect(cmd).toBe(`${join(dir, '.pipeline', 'session-hooks', 'mutation-gate.sh')} bash`);
-    });
-
-    it('preserves the pre-existing Task|Agent dispatch matcher entries alongside the new mutation-gate entries', async () => {
-      await prepareWorktree(dir);
-
-      const raw = await readFile(settingsPath(dir), 'utf-8');
-      const settings = JSON.parse(raw);
-
-      expect(findEntry(settings.hooks.PreToolUse, 'Task|Agent', 'pre-dispatch.sh')).toBeDefined();
-      expect(findEntry(settings.hooks.PostToolUse, 'Task|Agent', 'post-dispatch.sh')).toBeDefined();
-      expect(findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh')).toBeDefined();
-      expect(findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh')).toBeDefined();
-    });
-
-    it('preserves unrelated pre-existing consumer hook entries when wiring the mutation gate', async () => {
-      const claudeDir = join(dir, '.claude');
-      await mkdir(claudeDir, { recursive: true });
-      const consumerEntry = {
-        matcher: 'SomeOtherTool',
-        hooks: [{ type: 'command', command: '/consumer/own-hook.sh' }],
-      };
-      const preExisting = {
-        permissions: { allow: ['Bash(ls:*)'] },
-        hooks: { PreToolUse: [consumerEntry] },
-      };
-      await writeFile(settingsPath(dir), JSON.stringify(preExisting), 'utf-8');
-
-      await prepareWorktree(dir);
-
-      const raw = await readFile(settingsPath(dir), 'utf-8');
-      const settings = JSON.parse(raw);
-
-      expect(settings.permissions).toEqual({ allow: ['Bash(ls:*)'] });
-      expect(findEntry(settings.hooks.PreToolUse, 'SomeOtherTool', 'own-hook.sh')).toBeDefined();
-      expect(findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh')).toBeDefined();
-      expect(findEntry(settings.hooks.PreToolUse, 'Bash', 'mutation-gate.sh')).toBeDefined();
-    });
-
-    it('is idempotent across repeated provisioning runs: no duplicate mutation-gate entries', async () => {
-      await prepareWorktree(dir);
-      const first = await readFile(settingsPath(dir), 'utf-8');
-
-      await prepareWorktree(dir);
-      const second = await readFile(settingsPath(dir), 'utf-8');
-
-      expect(second).toBe(first);
-
-      const settings = JSON.parse(second);
-      const preToolUse = settings.hooks.PreToolUse as Record<string, unknown>[];
-      const editMutationMatches = preToolUse.filter(
-        (e) =>
-          (e as { matcher?: string }).matcher === 'Edit|Write|NotebookEdit' &&
-          (e as { hooks?: Array<{ command?: string }> }).hooks?.some((h) =>
-            typeof h.command === 'string' && h.command.includes('mutation-gate.sh'),
-          ),
-      );
-      const bashMatches = preToolUse.filter((e) => (e as { matcher?: string }).matcher === 'Bash');
-      expect(editMutationMatches).toHaveLength(1);
-      expect(bashMatches).toHaveLength(1);
-    });
-
-    it('is fail-open when the mutation-gate hook-file write fails: logs a skip, provisioning still succeeds', async () => {
-      const hooksDir = join(dir, '.pipeline', 'session-hooks');
-      await mkdir(hooksDir, { recursive: true });
-      await chmod(hooksDir, 0o500);
-
-      const lines: string[] = [];
-      await expect(prepareWorktree(dir, (m) => lines.push(m))).resolves.toBeUndefined();
-
-      await chmod(hooksDir, 0o700).catch(() => undefined);
-
-      expect(lines.some((l) => /session hooks/i.test(l) && /skip/i.test(l))).toBe(true);
-    });
-  });
-
   // Task 9 (#788): the docs-guard hook asset is wired at worktree provisioning
   // as its own, independent PreToolUse entry — not chained onto mutation-gate.
   describe('docs-guard hook wiring (Task 9)', () => {
@@ -1003,7 +717,7 @@ describe('engine/worktree-prepare', () => {
       expect(s.mode & 0o777).toBe(0o755);
     });
 
-    it('adds an Edit|Write|NotebookEdit PreToolUse entry pointing at docs-guard.sh, distinct from mutation-gate', async () => {
+    it('adds an Edit|Write|NotebookEdit PreToolUse entry and removes the retired mutation gate', async () => {
       await prepareWorktree(dir);
 
       const raw = await readFile(settingsPath(dir), 'utf-8');
@@ -1014,10 +728,8 @@ describe('engine/worktree-prepare', () => {
       const cmd = (docsGuardEntry?.hooks as Array<{ command: string }>)[0].command;
       expect(cmd).toBe(join(dir, '.pipeline', 'session-hooks', 'docs-guard.sh'));
 
-      // Own entry — separate from mutation-gate's entry under the same matcher.
       const mutationGateEntry = findEntry(settings.hooks.PreToolUse, 'Edit|Write|NotebookEdit', 'mutation-gate.sh');
-      expect(mutationGateEntry).toBeDefined();
-      expect(mutationGateEntry).not.toBe(docsGuardEntry);
+      expect(mutationGateEntry).toBeUndefined();
     });
 
     it('is idempotent across repeated provisioning runs: no duplicate docs-guard entries', async () => {

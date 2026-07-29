@@ -47,12 +47,8 @@ describe('integration/session-hooks-provisioning (Task 15)', () => {
 
     // 1. Session-hook scripts exist and are executable.
     const preDispatchPath = join(repoRoot, '.pipeline', 'session-hooks', 'pre-dispatch.sh');
-    const postDispatchPath = join(repoRoot, '.pipeline', 'session-hooks', 'post-dispatch.sh');
-
     const preStat = await stat(preDispatchPath);
     expect(preStat.mode & 0o111).not.toBe(0);
-    const postStat = await stat(postDispatchPath);
-    expect(postStat.mode & 0o111).not.toBe(0);
 
     // 2. Wiring resolves: every command path referenced in
     // .claude/settings.local.json points at an executable file.

@@ -173,15 +173,13 @@ Exit codes: `0` no drift, `1` drift (`--check`), `2` environment error. Set
 
 ## Per-worktree engine hooks
 
-When the engine prepares a build or spec worktree it writes four scripts into
-`<worktree>/.pipeline/session-hooks/` (mode 0755) and wires five entries into
+When the engine prepares a build or spec worktree it writes two scripts into
+`<worktree>/.pipeline/session-hooks/` (mode 0755) and wires two entries into
 `<worktree>/.claude/settings.local.json` with absolute paths baked in.
 
 | Script | Event / matcher | What it does | Can block? |
 | --- | --- | --- | --- |
-| `pre-dispatch.sh` | `PreToolUse` / `Task\|Agent` | Requires line 1 of `tool_input.prompt` to match `^Task: ([A-Za-z0-9._-]+\|none)$`. Appends to `.pipeline/dispatch-count`. Flips only that task's row to `in_progress` in `.pipeline/task-status.json` under a `.pipeline/.task-status.lock` mkdir lock, abstaining on any anomaly. | **Yes — exit 2** on a grammar violation. Fails open (exit 0) on an empty or unparseable payload. |
-| `post-dispatch.sh` | `PostToolUse` / `Task\|Agent` | Nothing. | No |
-| `mutation-gate.sh` | `PreToolUse` / `Edit\|Write\|NotebookEdit` (arg `write`) and `PreToolUse` / `Bash` (arg `bash`) | Nothing. | No |
+| `pre-dispatch.sh` | `PreToolUse` / `Task\|Agent` | When line 1 matches `^Task: ([A-Za-z0-9._-]+\|none)$`, appends advisory dispatch telemetry and flips that known task row to `in_progress`. Any missing, malformed, unknown, locked, or unwritable telemetry abstains. | No — attribution is telemetry only. |
 | `docs-guard.sh` | `PreToolUse` / `Edit\|Write\|NotebookEdit` | Byte-identical to `hooks/claude/docs-guard.sh`. | **Yes — exit 2** |
 
 Re-provisioning is idempotent: `replaceSessionHookEntry` removes only entries with the same matcher
@@ -189,11 +187,8 @@ Re-provisioning is idempotent: `replaceSessionHookEntry` removes only entries wi
 The whole wiring path is fail-open — any error logs `session hook settings: skipped` and the worktree is
 used anyway.
 
-> **Known limitation.** `post-dispatch.sh` and `mutation-gate.sh` are deliberate `exit 0` no-ops — the
-> gates they once implemented were retired — but they are still wired into every worktree under three
-> matchers (`Task|Agent`, `Edit|Write|NotebookEdit`, `Bash`). Every dispatch, every edit, and every Bash
-> call in a build worktree pays a process spawn for no effect. Tracked in
-> [#1019](https://github.com/jstoup111/ai-conductor/issues/1019).
+Provisioning removes the retired `post-dispatch.sh` and `mutation-gate.sh` scripts and settings entries
+from previously prepared worktrees.
 
 ## Git hooks
 

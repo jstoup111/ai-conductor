@@ -9,7 +9,6 @@ import {
   customStepEntries,
   mergeConfigs,
   resolveMemoryProvider,
-  isAttributionEnforcementActive,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
@@ -1009,22 +1008,6 @@ complexity:
       expect(result.error.message).toMatch(
         /attribution_enforcement_cutover must be an ISO-8601 date string/,
       );
-    });
-  });
-
-  describe('isAttributionEnforcementActive', () => {
-    it('is disabled when the cutover key is absent', () => {
-      expect(isAttributionEnforcementActive(undefined)).toBe(false);
-    });
-
-    it('is enabled when the cutover instant is in the past', () => {
-      const now = new Date('2026-07-10T00:00:00Z');
-      expect(isAttributionEnforcementActive('2026-01-01T00:00:00Z', now)).toBe(true);
-    });
-
-    it('is disabled when the cutover instant is in the future', () => {
-      const now = new Date('2026-07-10T00:00:00Z');
-      expect(isAttributionEnforcementActive('2027-01-01T00:00:00Z', now)).toBe(false);
     });
   });
 

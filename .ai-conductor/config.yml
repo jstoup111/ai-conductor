@@ -36,12 +36,6 @@ harness_self_host:
 # here. Read at daemon startup; restart once to apply.
 auto_restart_on_stale_engine: true
 
-# Inline-work attribution enforcement cutover (#505, PR #509). RETIRED 2026-07-22
-# (#773): the per-task trailer/evidence rating is being demoted to telemetry;
-# leaving enforcement armed rejects legitimate commits and stalls builds. With the
-# key absent the hooks stamp but never block.
-# attribution_enforcement_cutover: "2026-07-11T08:30:00Z"
-
 # Attribution judge cutover (#520, PR #525). RETIRED 2026-07-22 (#773): the semantic
 # trailer-citation rating lane is the wedge machinery being deleted; absent = disabled,
 # so no semantic judge gate runs.
