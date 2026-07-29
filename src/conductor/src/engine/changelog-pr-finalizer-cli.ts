@@ -43,10 +43,21 @@ export function branchNewImplementationPrTokenLineIndexes(
   if (tokenLines.length === 0) return [];
   if (baseChangelogContent === null) return null;
 
-  const baseLines = new Set(baseChangelogContent.split('\n'));
-  return tokenLines
-    .filter(({ line }) => !baseLines.has(line))
-    .map(({ index }) => index);
+  const remainingBaseLineCounts = baseChangelogContent.split('\n').reduce((counts, line) => {
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+    return counts;
+  }, new Map<string, number>());
+  const branchNewIndexes: number[] = [];
+
+  for (const { line, index } of tokenLines) {
+    const inheritedOccurrences = remainingBaseLineCounts.get(line) ?? 0;
+    if (inheritedOccurrences > 0) {
+      remainingBaseLineCounts.set(line, inheritedOccurrences - 1);
+    } else {
+      branchNewIndexes.push(index);
+    }
+  }
+  return branchNewIndexes;
 }
 
 export async function finalizeChangelogPr(
