@@ -143,11 +143,13 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
     const loaded = await import(modulePath).catch(() => null) as null | {
       createShipmentReconcileGhRunner?: (input: {
         adapter: typeof adapter;
+        repository: string;
         implementationPullRequest: { url: string; number: number };
       }) => (args: string[], options: { cwd: string }) => Promise<{ stdout: string }>;
     };
     const runner = loaded?.createShipmentReconcileGhRunner?.({
       adapter,
+      repository: 'acme/conductor',
       implementationPullRequest: { url: 'https://github.com/acme/conductor/pull/916', number: 916 },
     });
     const branch = 'shipment-repair/916/durable-shipped-records';
@@ -191,6 +193,46 @@ describe('shipment reconciliation GitHub Actions adapter', () => {
         { operation: 'getPullRequestHead', input: { pullNumber: 1000 } },
         { operation: 'postCommitStatus', input: { sha: 'repair-head', state: 'success', context: 'shipped-record', description } },
       ],
+    });
+  });
+
+  it('rejects branch-ref and status API commands for a foreign repository', async () => {
+    const semanticCalls: Array<{ operation: string; input: unknown }> = [];
+    const adapter = {
+      getRepairBranch: vi.fn(async (input: unknown) => {
+        semanticCalls.push({ operation: 'getRepairBranch', input });
+        return { name: 'shipment-repair/916/durable-shipped-records', headSha: 'repair-head' };
+      }),
+      postCommitStatus: vi.fn(async (input: unknown) => {
+        semanticCalls.push({ operation: 'postCommitStatus', input });
+        return undefined;
+      }),
+    };
+    const modulePath = ['../../src/engine', 'shipment-reconcile-action.js'].join('/');
+    const loaded = await import(modulePath) as {
+      createShipmentReconcileGhRunner: (input: {
+        adapter: typeof adapter;
+        repository: string;
+        implementationPullRequest: { url: string; number: number };
+      }) => (args: string[], options: { cwd: string }) => Promise<{ stdout: string }>;
+    };
+    const runner = loaded.createShipmentReconcileGhRunner({
+      adapter,
+      repository: 'acme/conductor',
+      implementationPullRequest: { url: 'https://github.com/acme/conductor/pull/916', number: 916 },
+    });
+    const branch = 'shipment-repair/916/durable-shipped-records';
+    const results = await Promise.allSettled([
+      runner(['api', `repos/evil/other/git/ref/heads/${branch}`], { cwd: '/repo' }),
+      runner([
+        'api', '--method', 'POST', 'repos/evil/other/statuses/repair-head',
+        '-f', 'state=success', '-f', 'context=shipped-record', '-f', 'description=durable shipment evidence valid on repair head',
+      ], { cwd: '/repo' }),
+    ]);
+
+    expect({ statuses: results.map(({ status }) => status), semanticCalls }).toEqual({
+      statuses: ['rejected', 'rejected'],
+      semanticCalls: [],
     });
   });
 

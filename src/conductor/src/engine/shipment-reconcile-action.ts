@@ -158,6 +158,7 @@ type ShipmentReconcileGithubAdapter = ReturnType<typeof createShipmentReconcileG
 
 export function createShipmentReconcileGhRunner(input: {
   adapter: ShipmentReconcileGithubAdapter;
+  repository: string;
   implementationPullRequest: { url: string; number: number };
 }) {
   const pullNumbersByUrl = new Map([[input.implementationPullRequest.url, input.implementationPullRequest.number]]);
@@ -187,8 +188,9 @@ export function createShipmentReconcileGhRunner(input: {
       }
     }
 
-    if (command === 'api' && action?.startsWith('repos/') && action.includes('/git/ref/heads/') && args.length === 2) {
-      const branch = action.split('/git/ref/heads/')[1];
+    const branchRefPrefix = `repos/${input.repository}/git/ref/heads/`;
+    if (command === 'api' && action?.startsWith(branchRefPrefix) && args.length === 2) {
+      const branch = action.slice(branchRefPrefix.length);
       if (branch) {
         const repairBranch = await input.adapter.getRepairBranch({ branch });
         return json({ ref: `refs/heads/${repairBranch.name}`, object: { sha: repairBranch.headSha } });
@@ -218,9 +220,9 @@ export function createShipmentReconcileGhRunner(input: {
     }
 
     if (command === 'api' && action === '--method' && target === 'POST' && args.length === 10 &&
-        args[3]?.startsWith('repos/') && args[3].includes('/statuses/') &&
+        args[3]?.startsWith(`repos/${input.repository}/statuses/`) &&
         args[4] === '-f' && args[6] === '-f' && args[8] === '-f') {
-      const sha = args[3].split('/statuses/')[1];
+      const sha = args[3].slice(`repos/${input.repository}/statuses/`.length);
       const state = args[5]?.startsWith('state=') ? args[5].slice(6) : '';
       const context = args[7]?.startsWith('context=') ? args[7].slice(8) : '';
       const description = args[9]?.startsWith('description=') ? args[9].slice(12) : '';
@@ -256,6 +258,7 @@ export async function runShipmentReconcileAction(
   });
   const runGh = createShipmentReconcileGhRunner({
     adapter,
+    repository: `${input.context.repo.owner}/${input.context.repo.repo}`,
     implementationPullRequest: { url: pullRequest.html_url, number: pullRequest.number },
   });
 
