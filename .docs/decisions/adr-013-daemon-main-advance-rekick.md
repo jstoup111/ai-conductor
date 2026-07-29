@@ -1,7 +1,8 @@
 # ADR 013: Daemon Main-Advance Re-Kick of Halted Work
 
 **Date:** 2026-06-28
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** `adr-2026-07-28-total-halt-classification-legacy-boundary.md`
 **Deciders:** James (operator), Claude (architecture-review)
 
 ## Context

@@ -160,8 +160,9 @@ sweep cannot clear the guard and walk the daemon back into DECIDE.
 
 #### Negative Paths
 - Given the halt is written via a bare `writeFile` instead of `writeHaltMarker` (the defect this
-  story guards), then `readHaltClass` returns `'unclassified'` and the sweep clears it — a test
-  must fail in that condition, so the assertion cannot pass vacuously.
+  story guards), then `readHaltClass` returns `'unclassified'` and the sweep retains it under
+  #1077's fail-closed policy, but the exact sidecar assertion still fails because no
+  `needs-human` class exists — so the story cannot pass vacuously on skip behavior alone.
 
 #### Resume (the intake's stated negative path)
 - Given a human has edited the DECIDE artifacts and cleared the HALT, when the daemon resumes,
