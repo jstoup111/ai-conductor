@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop self-host live-boundary halts when test tooling writes cache files beneath any `node_modules` directory ({{IMPLEMENTATION_PR}}).
+
 ### Changed
 
 - The implementation PR is now opened as a **draft** at the start of the SHIP phase — before the

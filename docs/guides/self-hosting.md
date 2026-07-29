@@ -225,7 +225,8 @@ never descended into.
 
 ### Live-checkout exclusions
 
-Five paths, all of them state the harness writes itself while a build runs:
+Five state paths the harness writes itself while a build runs, plus dependency trees whose exact
+directory basename is `node_modules`:
 
 | Excluded path | Why |
 | --- | --- |
@@ -234,8 +235,10 @@ Five paths, all of them state the harness writes itself while a build runs:
 | `.worktrees` | The per-feature checkouts the build is supposed to mutate — they fall inside the surface only because the live checkout and the project root are the same directory |
 | `.pipeline` | Per-run pipeline state written into the live checkout's own directory while a self-host build is in flight |
 | `.claude/worktrees` | Throwaway checkouts agents isolate into. Scoped to this subtree deliberately: `.claude/settings.json` and `.claude/hooks/` are harness state the guard must keep protecting |
+| `node_modules` (at any depth) | Installed dependencies and tool caches, including Vitest's `.vite/vitest/results.json`; lookalike names such as `node_modules-notes` remain fingerprinted |
 
-None of these is harness source, so everything the guard exists to protect stays fingerprinted:
+None of these is harness source. The guard does not broadly honor `.gitignore`, so everything it
+exists to protect stays fingerprinted:
 adding, modifying, or deleting a tracked source file under the live checkout still trips it.
 
 ### Provider-state exclusions
