@@ -1,16 +1,17 @@
 # AI Conductor
 
-A custom development harness for Claude Code and Codex. Markdown skills and agent personas that enforce a
-disciplined SDLC — design docs, user stories with mandatory negative paths, conflict detection, TDD with
-domain review, evaluator-gated code review, and dual retrospectives — plus an autonomous build daemon that
-takes a merged spec to an open pull request without supervision.
+A custom development harness for Claude Code, Codex, and Cursor. Markdown skills and agent personas that
+enforce a disciplined SDLC — design docs, user stories with mandatory negative paths, conflict detection,
+TDD with domain review, evaluator-gated code review, and dual retrospectives — plus an autonomous build
+daemon that takes a merged spec to an open pull request without supervision.
 
-There is no custom skill runtime. Claude Code powers the conductor automation, and Codex uses the same
-Markdown skills directly.
+There is no custom skill runtime. Claude Code powers the conductor automation; Codex and Cursor use the
+same Markdown skills directly.
 
 ## Requirements
 
-- [Claude Code](https://docs.claude.com/en/docs/claude-code) v2.0+ and/or [Codex](https://github.com/openai/codex)
+- [Claude Code](https://docs.claude.com/en/docs/claude-code) v2.0+, [Codex](https://github.com/openai/codex),
+  and/or [Cursor](https://cursor.com)
 - Git, and [GitHub CLI](https://cli.github.com/) authenticated (`gh auth login`)
 - Node 20.19.2 (the engine pins this via `asdf`), npm, tmux, and `python3` with PyYAML
 - A project to work on — Rails + PostgreSQL has full tech-context support; other stacks work with the
@@ -26,9 +27,17 @@ export PATH="$HOME/.local/bin:$PATH"   # the installer warns; it never edits you
 ./bin/install --check                  # 0 clean · 1 drift · 2 build-auth
 ```
 
-This symlinks every skill and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/`
-directories and installs the conductor CLI to `~/.local/bin/`. The installer never places harness skills in
-a project directory; project-local skills are optional explicit overrides.
+The installer asks which built-in provider you plan to use — Claude, Codex, Cursor, or a combination
+(non-interactively: `--providers claude,codex,cursor`). Regardless of the selection it symlinks every skill
+and `HARNESS.md` into the user-scoped `~/.claude/skills/` and `~/.agents/skills/` directories and installs
+the conductor CLI to `~/.local/bin/`. The installer never places harness skills in a project directory;
+project-local skills are optional explicit overrides.
+
+Selecting **Cursor** additionally wires the hook adapters from `hooks/cursor/` into `~/.cursor/hooks.json`,
+giving Cursor sessions the same mechanical enforcement layer as Claude Code: destructive-git blocking, the
+TDD commit gate, the docs-guard write fence, batch-boundary lint feedback, HARNESS.md session context, and
+the memory checkpoint reminder. Cursor discovers the skills themselves from `~/.claude/skills` natively, so
+no separate skill surface is needed — `/conduct` and the other skills work in the agent chat as-is.
 
 Full walkthrough, prerequisites, and first-run blockers: **[Quickstart](docs/quickstart.md)**.
 
@@ -57,9 +66,10 @@ feature:
 conduct-ts daemon start
 ```
 
-The harness runs on Claude Code and Codex. Select the host with the `llm_provider` config key; an ordered
-array such as `[claude, codex]` acts as a fallback ladder. See
-[Multiprovider](docs/guides/multiprovider.md).
+The conductor automation runs on Claude Code and Codex. Select the host with the `llm_provider` config key;
+an ordered array such as `[claude, codex]` acts as a fallback ladder. See
+[Multiprovider](docs/guides/multiprovider.md). Cursor is an interactive client: it uses the same skills and
+gets the same hook enforcement, but is not (yet) an execution provider for `conduct-ts`.
 
 Runnable end-to-end walkthroughs live in [`examples/README.md`](examples/README.md).
 

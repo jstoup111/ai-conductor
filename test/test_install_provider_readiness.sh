@@ -21,7 +21,7 @@ cp "$HARNESS_DIR/HARNESS.md" "$HARNESS_DIR/VERSION" "$CHECKOUT/"
 FAKE_HOME="$TMP_ROOT/home"
 STUBS="$TMP_ROOT/stubs"
 mkdir -p "$FAKE_HOME" "$STUBS"
-for tool in rtk npm node claude codex uv; do
+for tool in rtk npm node claude codex cursor-agent uv; do
   printf '#!/usr/bin/env bash\nexit 0\n' > "$STUBS/$tool"
   chmod +x "$STUBS/$tool"
 done
@@ -39,10 +39,10 @@ set -e
 
 # One behavior, one assertion: the interactive prompt makes all built-in
 # readiness choices visible before setup continues.
-if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*both'; then
-  echo 'PASS interactive install offers Claude, Codex, and both choices'
+if printf '%s' "$OUT" | tr '\n' ' ' | grep -qiE 'claude.*codex.*cursor.*both'; then
+  echo 'PASS interactive install offers Claude, Codex, Cursor, and combined choices'
 else
-  echo 'FAIL interactive install offers Claude, Codex, and both choices'
+  echo 'FAIL interactive install offers Claude, Codex, Cursor, and combined choices'
   printf '%s\n' "$OUT"
   exit 1
 fi
@@ -57,10 +57,11 @@ set -e
 if [ "$UNSUPPORTED_CODE" -ne 0 ] \
   && [ "$UNSUPPORTED_CODE" -ne 124 ] \
   && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'claude' \
-  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'codex'; then
-  echo 'PASS unsupported provider selection names Claude and Codex before setup'
+  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'codex' \
+  && printf '%s' "$UNSUPPORTED_OUT" | grep -qi 'cursor'; then
+  echo 'PASS unsupported provider selection names Claude, Codex, and Cursor before setup'
 else
-  echo 'FAIL unsupported provider selection names Claude and Codex before setup'
+  echo 'FAIL unsupported provider selection names Claude, Codex, and Cursor before setup'
   printf 'exit code: %s\n' "$UNSUPPORTED_CODE"
   printf '%s\n' "$UNSUPPORTED_OUT"
   exit 1
@@ -103,6 +104,26 @@ else
   exit 1
 fi
 
+# A Cursor selection wires the hook adapters into the user-level
+# ~/.cursor/hooks.json — Cursor's mechanical-enforcement surface. Skills need
+# no Cursor-specific surface (Cursor discovers ~/.claude/skills natively).
+set +e
+CURSOR_INSTALL_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$PATH" timeout 8s "$CHECKOUT/bin/install" --providers cursor --allow-worktree-root </dev/null 2>&1)
+CURSOR_INSTALL_CODE=$?
+set -e
+
+if [ "$CURSOR_INSTALL_CODE" -eq 0 ] \
+  && [ -f "$FAKE_HOME/.cursor/hooks.json" ] \
+  && grep -q 'hooks/cursor/before-shell.sh' "$FAKE_HOME/.cursor/hooks.json" \
+  && grep -q 'hooks/cursor/session-start.sh' "$FAKE_HOME/.cursor/hooks.json"; then
+  echo 'PASS Cursor installation wires the hook adapters into ~/.cursor/hooks.json'
+else
+  echo 'FAIL Cursor installation wires the hook adapters into ~/.cursor/hooks.json'
+  printf 'exit code: %s\n' "$CURSOR_INSTALL_CODE"
+  printf '%s\n' "$CURSOR_INSTALL_OUT"
+  exit 1
+fi
+
 # The normal install above has established both provider surfaces. Its strict
 # readiness counterpart must still fail specifically for the selected, absent
 # Codex CLI; stub the common conduct-ts check so it cannot mask that condition.
@@ -110,10 +131,10 @@ mkdir -p "$FAKE_HOME/.local/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$FAKE_HOME/.local/bin/conduct-ts"
 chmod +x "$FAKE_HOME/.local/bin/conduct-ts"
 
-# With all installed surfaces, both provider CLIs, and the common check
+# With all installed surfaces, every provider CLI, and the common check
 # available, strict readiness accepts every supported required-provider set.
 STRICT_READY_MATRIX_OK=true
-for REQUIRED_PROVIDERS in claude codex claude,codex; do
+for REQUIRED_PROVIDERS in claude codex claude,codex cursor claude,codex,cursor; do
   set +e
   STRICT_READY_MATRIX_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers "$REQUIRED_PROVIDERS" --allow-worktree-root 2>&1)
   STRICT_READY_MATRIX_CODE=$?
@@ -126,9 +147,9 @@ for REQUIRED_PROVIDERS in claude codex claude,codex; do
 done
 
 if [ "$STRICT_READY_MATRIX_OK" = true ]; then
-  echo 'PASS strict readiness succeeds for Claude, Codex, and both required-provider selections when ready'
+  echo 'PASS strict readiness succeeds for every supported required-provider selection when ready'
 else
-  echo 'FAIL strict readiness succeeds for Claude, Codex, and both required-provider selections when ready'
+  echo 'FAIL strict readiness succeeds for every supported required-provider selection when ready'
   printf 'providers: %s; exit code: %s\n' "$REQUIRED_PROVIDERS" "$STRICT_READY_MATRIX_CODE"
   printf '%s\n' "$STRICT_READY_MATRIX_OUT"
   exit 1
@@ -146,6 +167,23 @@ else
   echo 'FAIL strict Codex readiness fails when the selected Codex CLI is absent'
   printf 'exit code: %s\n' "$MISSING_CODEX_CHECK_CODE"
   printf '%s\n' "$MISSING_CODEX_CHECK_OUT"
+  exit 1
+fi
+
+# Same strict-readiness contract for Cursor: a selected, absent Cursor CLI
+# fails the check even though the hooks surface is already wired.
+set +e
+MISSING_CURSOR_CHECK_OUT=$(cd "$CHECKOUT" && HOME="$FAKE_HOME" PATH="$MISSING_CODEX_STUBS:$FAKE_HOME/.local/bin:/usr/bin:/bin" timeout 8s "$CHECKOUT/bin/install" --check --providers cursor --allow-worktree-root 2>&1)
+MISSING_CURSOR_CHECK_CODE=$?
+set -e
+
+if [ "$MISSING_CURSOR_CHECK_CODE" -ne 0 ] \
+  && printf '%s' "$MISSING_CURSOR_CHECK_OUT" | grep -qiE 'cursor.*(not found|missing|not installed)'; then
+  echo 'PASS strict Cursor readiness fails when the selected Cursor CLI is absent'
+else
+  echo 'FAIL strict Cursor readiness fails when the selected Cursor CLI is absent'
+  printf 'exit code: %s\n' "$MISSING_CURSOR_CHECK_CODE"
+  printf '%s\n' "$MISSING_CURSOR_CHECK_OUT"
   exit 1
 fi
 
@@ -181,7 +219,7 @@ fi
 # Every non-interactive provider selection, including the implicit default,
 # establishes the common conduct command and both client skill surfaces.
 INSTALL_SURFACE_MATRIX_FAILURE=''
-for INSTALL_SELECTION in claude codex claude,codex omitted; do
+for INSTALL_SELECTION in claude codex cursor claude,codex omitted; do
   INSTALL_SURFACE_HOME="$TMP_ROOT/install-surface-$INSTALL_SELECTION"
   mkdir -p "$INSTALL_SURFACE_HOME"
 
@@ -224,7 +262,7 @@ for tool in rtk npm node codex uv python3; do
 done
 
 NORMAL_READINESS_MATRIX_FAILURE=''
-for NORMAL_READINESS_SELECTION in claude codex claude,codex omitted; do
+for NORMAL_READINESS_SELECTION in claude codex cursor claude,codex omitted; do
   NORMAL_READINESS_HOME="$TMP_ROOT/normal-readiness-$NORMAL_READINESS_SELECTION"
   mkdir -p "$NORMAL_READINESS_HOME"
 
@@ -235,6 +273,10 @@ for NORMAL_READINESS_SELECTION in claude codex claude,codex omitted; do
       ;;
     codex)
       NORMAL_READINESS_ARGS=(--providers codex --allow-worktree-root)
+      NORMAL_READINESS_PATH="$STUBS:$PATH"
+      ;;
+    cursor)
+      NORMAL_READINESS_ARGS=(--providers cursor --allow-worktree-root)
       NORMAL_READINESS_PATH="$STUBS:$PATH"
       ;;
     claude,codex)
@@ -261,6 +303,12 @@ for NORMAL_READINESS_SELECTION in claude codex claude,codex omitted; do
     codex)
       printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Codex CLI found' \
         && ! printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'Claude Code CLI (found|not found)' \
+        && NORMAL_READINESS_CASE_OK=true || NORMAL_READINESS_CASE_OK=false
+      ;;
+    cursor)
+      printf '%s' "$NORMAL_READINESS_OUT" | grep -Fqi 'Cursor CLI found' \
+        && ! printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'Claude Code CLI (found|not found)' \
+        && ! printf '%s' "$NORMAL_READINESS_OUT" | grep -qiE 'Codex CLI (found|not found)' \
         && NORMAL_READINESS_CASE_OK=true || NORMAL_READINESS_CASE_OK=false
       ;;
     claude,codex)
@@ -332,12 +380,13 @@ set -e
 if [ "$TRAILING_COMMA_CODE" -ne 0 ] \
   && [ "$TRAILING_COMMA_CODE" -ne 124 ] \
   && printf '%s' "$TRAILING_COMMA_OUT" | grep -qi 'claude' \
-  && printf '%s' "$TRAILING_COMMA_OUT" | grep -qi 'codex'; then
-  echo 'PASS trailing-comma provider selection names Claude and Codex before setup'
+  && printf '%s' "$TRAILING_COMMA_OUT" | grep -qi 'codex' \
+  && printf '%s' "$TRAILING_COMMA_OUT" | grep -qi 'cursor'; then
+  echo 'PASS trailing-comma provider selection names Claude, Codex, and Cursor before setup'
   exit 0
 fi
 
-echo 'FAIL trailing-comma provider selection names Claude and Codex before setup'
+echo 'FAIL trailing-comma provider selection names Claude, Codex, and Cursor before setup'
 printf 'exit code: %s\n' "$TRAILING_COMMA_CODE"
 printf '%s\n' "$TRAILING_COMMA_OUT"
 exit 1

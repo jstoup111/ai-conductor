@@ -5,7 +5,8 @@ into the Claude host, git, and the self-host sandbox. For operators debugging wh
 blocked, and for anyone auditing what the harness installed on their machine.
 
 Three unrelated things are called "hooks" in this repo. This page covers two of them: **host event
-hooks** (`hooks/claude/*.sh` and the engine's per-worktree scripts, fired by the Claude host) and **git
+hooks** (`hooks/claude/*.sh` and the engine's per-worktree scripts, fired by the Claude host, plus the
+`hooks/cursor/*.sh` adapters that re-expose them to the Cursor host) and **git
 hooks** (`prepare-commit-msg` / `commit-msg`, generated per worktree). The third — **config step
 hooks**, `steps.<name>.hooks.before` / `.after` — is a `.ai-conductor/config.yml` key and is documented
 in [configuration](configuration.md). Config step hooks are not connected to any host event.
@@ -155,6 +156,36 @@ it finds.
 > never inspects the command, so while the phase is not `COMMIT` it blocks **every** `Bash` tool call,
 > not only `git commit`. Remove `.pipeline/tdd-phase` to restore normal operation. Tracked in
 > [#1009](https://github.com/jstoup111/ai-conductor/issues/1009).
+
+## Cursor hook adapters
+
+Six scripts live in `hooks/cursor/`. They contain no policy of their own: each translates Cursor's hook
+payload shape into the Claude shape and delegates to the `hooks/claude/` script(s) above, so enforcement
+logic stays single-sourced. `bin/install --providers cursor` (or choosing Cursor at the interactive
+provider prompt) merges their registrations into the user-level `~/.cursor/hooks.json`; `--update` refreshes
+already-wired entries without a new selection. Cursor needs no skill surface of its own — it discovers
+`~/.claude/skills` natively.
+
+| Script | Cursor event / matcher | Delegates to | Can block? |
+| --- | --- | --- | --- |
+| `before-shell.sh` | `beforeShellExecution` | `block-destructive-git.sh`; `tdd-commit-gate.sh` (git-commit commands only) | **Yes** — returns `{"permission":"deny"}` when a gate exits 2. Non-blocking gate notes (the rebase reminder) are forwarded as `agent_message` on the allow. |
+| `pre-edit-guard.sh` | `preToolUse` / `Write\|StrReplace\|Edit` | `docs-guard.sh` | **Yes** — same fail-closed behavior while `.pipeline/phase-active` exists |
+| `post-edit.sh` | `postToolUse` / `Write\|StrReplace\|Edit` | `lint-after-edit.sh`, `spec-coverage-check.sh`, `diagram-coverage-check.sh` | No — findings returned as `additional_context` |
+| `post-shell.sh` | `postToolUse` / `Shell` | `post-commit-derive-feedback.sh` (git-commit commands only) | No — warning returned as `additional_context` |
+| `session-start.sh` | `sessionStart` | `session-start-context.sh` | No — HARNESS.md, memory, and pipeline state returned as `additional_context` |
+| `stop.sh` | `stop` (`loop_limit: 1`) | `stop-memory-reminder.sh` | No — reminder returned as `followup_message`, at most once per conversation (`status == "completed"` and `loop_count == 0` only) |
+
+Two deliberate divergences from the Claude registrations:
+
+- `tdd-commit-gate.sh` is scoped to git-commit commands in the adapter, matching the gate's documented
+  intent instead of the Claude host's blocks-every-Bash-call behavior described in
+  [#1009](https://github.com/jstoup111/ai-conductor/issues/1009).
+- `rate-limit-wait.sh` has no Cursor adapter: its `StopFailure` registration is inert on the Claude host
+  too ([#1019](https://github.com/jstoup111/ai-conductor/issues/1019)), and Cursor has no equivalent event.
+
+All adapters fail open on unparseable payloads (matching Cursor's default hook-failure mode), with one
+exception inherited from `docs-guard.sh`: while a phase marker is active, an undeterminable write target is
+blocked.
 
 ### Generating `docs-guard.sh`
 

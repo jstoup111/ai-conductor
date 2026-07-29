@@ -65,12 +65,14 @@ for script in "${HARNESS_DIR}"/bin/*; do
   fi
 done
 
-# Also check hook scripts
-for script in "${HARNESS_DIR}"/hooks/claude/*.sh; do
-  [ -f "$script" ] || continue
-  name="hooks/claude/$(basename "$script")"
-  bash -n "$script" 2>/dev/null
-  assert "${name}" $?
+# Also check hook scripts (Claude host hooks and their Cursor adapters)
+for hooks_client in claude cursor; do
+  for script in "${HARNESS_DIR}"/hooks/${hooks_client}/*.sh; do
+    [ -f "$script" ] || continue
+    name="hooks/${hooks_client}/$(basename "$script")"
+    bash -n "$script" 2>/dev/null
+    assert "${name}" $?
+  done
 done
 
 # Check test scripts

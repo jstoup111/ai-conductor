@@ -12,6 +12,17 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
+- **Cursor as a built-in provider.** `bin/install` now offers Cursor alongside Claude and Codex at the
+  interactive provider prompt (and via `--providers cursor`). Selecting it wires six new hook adapters
+  (`hooks/cursor/*.sh`) into the user-level `~/.cursor/hooks.json`, giving Cursor sessions the same
+  mechanical enforcement layer as Claude Code: destructive-git blocking and the TDD commit gate
+  (`beforeShellExecution`), the docs-guard write fence (`preToolUse`), batch-boundary lint / spec-coverage
+  / diagram-coverage feedback (`postToolUse` → `additional_context`), HARNESS.md + memory session context
+  (`sessionStart` → `additional_context`), and the memory checkpoint reminder (`stop` →
+  `followup_message`, capped at one follow-up). The adapters delegate to the existing `hooks/claude/`
+  scripts, so gate logic stays single-sourced; skills need no new surface because Cursor discovers
+  `~/.claude/skills` natively. `--check --providers cursor` verifies the Cursor CLI (`cursor-agent`) and
+  the hooks wiring; `--update` refreshes previously wired entries without re-prompting.
 - Add cost-unmetered metering and per-provider attribution to committed Cost records and `conduct-ts kpi` output ([implementation PR #1090](https://github.com/jstoup111/ai-conductor/pull/1090)).
 - Whole-feature usage total at `finish`: when a feature's `finish` step completes, the build logs
   one aggregate line — `finish: total usage — 23 dispatches, $12.34, 1.2M→48k tok, 2 unmetered` —

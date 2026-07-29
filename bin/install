@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# install — Installs the harness skills and conduct script for Claude Code and Codex.
+# install — Installs the harness skills and conduct script for Claude Code, Codex, and Cursor.
 #
 # Usage:
 #   ./bin/install          # Install everything
@@ -11,6 +11,11 @@ HARNESS_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 HARNESS_INSTRUCTIONS_SOURCE="${HARNESS_DIR}/HARNESS.md"
 CLAUDE_SKILLS_DIR="${HOME}/.claude/skills"
 CODEX_SKILLS_DIR="${HOME}/.agents/skills"
+# Cursor discovers skills from ~/.claude/skills natively, so it needs no skill
+# directory of its own — installing one under ~/.cursor/skills would make every
+# skill appear twice in Cursor's catalog. Cursor-specific state is limited to
+# the user-level hooks file below.
+CURSOR_HOOKS_FILE="${HOME}/.cursor/hooks.json"
 LOCAL_BIN="${HOME}/.local/bin"
 CONDUCTOR_CONFIG="${HOME}/.claude/ai-conductor.config.json"
 HARNESS_USER_CONFIG="${HOME}/.ai-conductor/config.yml"
@@ -125,6 +130,20 @@ check_installation() {
           ok "Codex CLI installed ($(codex --version 2>/dev/null || echo 'unknown version'))"
         else
           fail "Codex CLI not found on PATH — install it with: npm install -g @openai/codex"
+          all_ok=false
+        fi
+        ;;
+      cursor)
+        if command -v cursor-agent &>/dev/null; then
+          ok "Cursor CLI installed ($(cursor-agent --version 2>/dev/null || echo 'unknown version'))"
+        else
+          fail "Cursor CLI not found on PATH — install it with: curl https://cursor.com/install -fsS | bash"
+          all_ok=false
+        fi
+        if [ -f "$CURSOR_HOOKS_FILE" ] && grep -q "/hooks/cursor/" "$CURSOR_HOOKS_FILE" 2>/dev/null; then
+          ok "Cursor hooks wired (${CURSOR_HOOKS_FILE})"
+        else
+          fail "Cursor hooks not wired (${CURSOR_HOOKS_FILE}) — run ./bin/install --providers cursor"
           all_ok=false
         fi
         ;;
@@ -561,6 +580,102 @@ PYEOF
   else
     warn "Could not configure hooks automatically"
     info "Manually add hooks to ${settings_file}"
+  fi
+}
+
+# Wire the Cursor hook adapters (hooks/cursor/*.sh) into the user-level
+# ~/.cursor/hooks.json. These adapters delegate to the Claude hook scripts, so
+# Cursor sessions get the same mechanical enforcement layer: destructive-git
+# blocking, the TDD commit gate, the docs-guard write fence, edit feedback,
+# HARNESS.md session context, and the memory checkpoint reminder.
+#
+# Merge policy mirrors configure_hooks: harness-owned entries (any command
+# path containing /hooks/cursor/) are replaced in place so updates repoint
+# stale checkouts; foreign entries are preserved untouched.
+configure_cursor_hooks() {
+  local hooks_file=$1
+  local hooks_dir="${HARNESS_DIR}/hooks/cursor"
+
+  if ! command -v python3 &>/dev/null; then
+    warn "python3 not found — skipping Cursor hooks configuration (re-run bin/install after installing python3)"
+    return 1
+  fi
+
+  mkdir -p "$(dirname "$hooks_file")" || { warn "Could not create $(dirname "$hooks_file")"; return 1; }
+
+  local output
+  output=$(HOOKS_FILE="$hooks_file" HOOKS_DIR="$hooks_dir" python3 << 'PYEOF'
+import json, os
+
+hooks_path = os.environ["HOOKS_FILE"]
+hooks_dir = os.environ["HOOKS_DIR"]
+
+harness_hooks = {
+    "beforeShellExecution": [
+        {"command": f"{hooks_dir}/before-shell.sh", "timeout": 15},
+    ],
+    "preToolUse": [
+        {"command": f"{hooks_dir}/pre-edit-guard.sh", "matcher": "Write|StrReplace|Edit", "timeout": 10},
+    ],
+    "postToolUse": [
+        {"command": f"{hooks_dir}/post-edit.sh", "matcher": "Write|StrReplace|Edit", "timeout": 30},
+        {"command": f"{hooks_dir}/post-shell.sh", "matcher": "Shell", "timeout": 15},
+    ],
+    "sessionStart": [
+        {"command": f"{hooks_dir}/session-start.sh", "timeout": 15},
+    ],
+    "stop": [
+        {"command": f"{hooks_dir}/stop.sh", "timeout": 10, "loop_limit": 1},
+    ],
+}
+
+try:
+    with open(hooks_path) as f:
+        settings = json.load(f)
+except (FileNotFoundError, json.JSONDecodeError):
+    settings = {}
+
+settings.setdefault("version", 1)
+settings.setdefault("hooks", {})
+
+added = 0
+updated = 0
+skipped = 0
+
+for event, entries in harness_hooks.items():
+    existing = settings["hooks"].setdefault(event, [])
+    for entry in entries:
+        basename = entry["command"].rsplit("/", 1)[-1]
+        owned = [
+            e for e in existing
+            if "/hooks/cursor/" in e.get("command", "")
+            and e.get("command", "").endswith("/" + basename)
+        ]
+        if owned:
+            for e in owned:
+                if e != entry:
+                    e.clear()
+                    e.update(entry)
+                    updated += 1
+                else:
+                    skipped += 1
+        else:
+            existing.append(dict(entry))
+            added += 1
+
+with open(hooks_path, "w") as f:
+    json.dump(settings, f, indent=2)
+    f.write("\n")
+
+print(f"{added} added, {updated} updated, {skipped} already set")
+PYEOF
+  )
+
+  if [ $? -eq 0 ]; then
+    ok "Cursor hooks: ${output} (${hooks_file})"
+  else
+    warn "Could not configure Cursor hooks automatically"
+    info "Manually add hooks/cursor/ entries to ${hooks_file}"
   fi
 }
 
@@ -1053,17 +1168,21 @@ choose_builtin_provider() {
   [ -n "$PROVIDER_SELECTION" ] || [ "$UPDATE_MODE" = true ] || [ ! -t 0 ] && return 0
 
   echo ""
-  info "Built-in provider — choose the CLI you plan to use:"
+  info "Built-in provider — choose the CLI/client you plan to use:"
   echo "    1) Claude"
   echo "    2) Codex"
-  echo "    3) Both Claude and Codex"
+  echo "    3) Cursor"
+  echo "    4) Both Claude and Codex"
+  echo "    5) All three"
   local choice
   read -r -p "  Choice [1]: " choice || choice=1
 
   case "$choice" in
     ""|1) PROVIDER_SELECTION="claude" ;;
     2)    PROVIDER_SELECTION="codex" ;;
-    3)    PROVIDER_SELECTION="claude,codex" ;;
+    3)    PROVIDER_SELECTION="cursor" ;;
+    4)    PROVIDER_SELECTION="claude,codex" ;;
+    5)    PROVIDER_SELECTION="claude,codex,cursor" ;;
     *)
       warn "Unrecognized provider choice '${choice}' — using Claude"
       PROVIDER_SELECTION="claude"
@@ -1098,8 +1217,25 @@ report_selected_provider_readiness() {
           warn "Codex CLI not found — install it with: npm install -g @openai/codex"
         fi
         ;;
+      cursor)
+        if command -v cursor-agent &>/dev/null; then
+          ok "Cursor CLI found"
+        else
+          warn "Cursor CLI not found — install it with: curl https://cursor.com/install -fsS | bash"
+        fi
+        info "Cursor discovers the harness skills from ~/.claude/skills automatically"
+        ;;
     esac
   done
+}
+
+# True when the given built-in provider is part of the current selection
+# (defaulting to claude, matching readiness behavior).
+provider_selected() {
+  case ",${PROVIDER_SELECTION:-claude}," in
+    *,"$1",*) return 0 ;;
+    *)        return 1 ;;
+  esac
 }
 
 # A prior catalog is trusted only when its HARNESS.md resolves to a complete
@@ -1350,6 +1486,13 @@ install() {
   configure_permissions "$settings_file" || warn "Permissions configuration incomplete — continuing"
   configure_hooks "$settings_file" || warn "Hooks configuration incomplete — continuing"
 
+  # 4b. Wire Cursor hooks when Cursor is a selected provider, or refresh them
+  # when a previous install already wired harness entries (so --update keeps
+  # pointing them at the current checkout without re-asking for a selection).
+  if provider_selected cursor || { [ -f "$CURSOR_HOOKS_FILE" ] && grep -q "/hooks/cursor/" "$CURSOR_HOOKS_FILE" 2>/dev/null; }; then
+    configure_cursor_hooks "$CURSOR_HOOKS_FILE" || warn "Cursor hooks configuration incomplete — continuing"
+  fi
+
   # 5. Check PATH (pure bash — no external tools, so it can never abort)
   if [[ ":$PATH:" == *".local/bin"* ]]; then
     ok "~/.local/bin is on PATH"
@@ -1386,6 +1529,12 @@ install() {
   echo -e "    cd your-project/"
   echo -e "    claude                        # Start Claude Code"
   echo -e "    /conduct                      # Follow the SDLC flow"
+  if provider_selected cursor; then
+    echo ""
+    echo -e "  ${BOLD}Or in Cursor:${NC}"
+    echo -e "    Open your project and run /conduct in the agent chat"
+    echo -e "    (skills are discovered from ~/.claude/skills; hooks from ~/.cursor/hooks.json)"
+  fi
   echo ""
   echo -e "  ${BOLD}Or automated:${NC}"
   echo -e "    cd your-project/"
@@ -1490,7 +1639,7 @@ while [ "$#" -gt 0 ]; do
     --providers)
       shift
       if [ "$#" -eq 0 ] || [ -z "$1" ]; then
-        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        fail "--providers requires a comma-separated selection of Claude, Codex, and/or Cursor"
         exit 1
       fi
       PROVIDER_SELECTION="$1"
@@ -1498,7 +1647,7 @@ while [ "$#" -gt 0 ]; do
     --providers=*)
       PROVIDER_SELECTION="${1#--providers=}"
       if [ -z "$PROVIDER_SELECTION" ]; then
-        fail "--providers requires a comma-separated selection of Claude and/or Codex"
+        fail "--providers requires a comma-separated selection of Claude, Codex, and/or Cursor"
         exit 1
       fi
       ;;
@@ -1512,7 +1661,7 @@ done
 if [ -n "$PROVIDER_SELECTION" ]; then
   case ",${PROVIDER_SELECTION}," in
     *,,*)
-      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex"
+      fail "Provider selection cannot contain an empty value. Supported built-in providers: Claude, Codex, Cursor"
       exit 1
       ;;
   esac
@@ -1520,9 +1669,9 @@ if [ -n "$PROVIDER_SELECTION" ]; then
   IFS=',' read -r -a _selected_providers <<< "$PROVIDER_SELECTION"
   for _provider in "${_selected_providers[@]}"; do
     case "$_provider" in
-      claude|codex) ;;
+      claude|codex|cursor) ;;
       *)
-        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex"
+        fail "Unsupported provider '${_provider}'. Supported built-in providers: Claude, Codex, Cursor"
         exit 1
         ;;
     esac
@@ -1538,12 +1687,15 @@ case "${1:-}" in
   --uninstall) uninstall ;;
   --update)    UPDATE_MODE=true; install ;;
   -h|--help)
-    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--allow-worktree-root]"
+    echo "Usage: ./bin/install [--check | --update | --uninstall | -h] [--providers LIST] [--allow-worktree-root]"
     echo ""
     echo "  (no args)     Install/update harness skills and conduct script"
     echo "  --check       Check installation status"
     echo "  --update      Refresh symlinks + settings (skip deps + channel prompt)"
     echo "  --uninstall   Remove all symlinks"
+    echo "  --providers LIST"
+    echo "                Comma-separated built-in provider selection: claude, codex, cursor"
+    echo "                (skips the interactive provider prompt)"
     echo "  --allow-worktree-root"
     echo "                Bypass the refusal to install from a .worktrees/ checkout"
     echo "                (installs from a worktree normally repoint global symlinks"
