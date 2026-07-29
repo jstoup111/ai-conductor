@@ -2,9 +2,184 @@ import { describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from '../../../src/engine/self-host/live-boundary.js';
 
+const execFileAsync = promisify(execFile);
+
 describe('live self-host boundary', () => {
+  it('accepts an operator edit to a tracked live-checkout file during the build', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-edit-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'README.md'), 'after');
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('accepts an operator deletion of a tracked live-checkout file during the build', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-delete-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'obsolete.md'), 'tracked');
+    await execFileAsync('git', ['add', 'obsolete.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await rm(join(live, 'obsolete.md'));
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('accepts operator edits when every changed live-checkout file is tracked', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-tracked-edits-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await Promise.all([
+      writeFile(join(live, 'README.md'), 'before'),
+      writeFile(join(live, 'CHANGELOG.md'), 'before'),
+    ]);
+    await execFileAsync('git', ['add', 'README.md', 'CHANGELOG.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await Promise.all([
+      writeFile(join(live, 'README.md'), 'after'),
+      writeFile(join(live, 'CHANGELOG.md'), 'after'),
+    ]);
+    try { expect(await verifyLiveBoundary(baseline)).toEqual({ ok: true }); }
+    finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('allows only the approved staged and mixed Git statuses', async () => {
+    const cases: ReadonlyArray<{
+      label: string;
+      mutate: (live: string) => Promise<void>;
+      expectedOk: boolean;
+    }> = [
+      {
+        label: 'staged modification (M )',
+        mutate: async live => {
+          await writeFile(join(live, 'README.md'), 'staged');
+          await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+        },
+        expectedOk: true,
+      },
+      {
+        label: 'staged deletion (D )',
+        mutate: async live => {
+          await rm(join(live, 'README.md'));
+          await execFileAsync('git', ['add', '-A'], { cwd: live });
+        },
+        expectedOk: true,
+      },
+      {
+        label: 'index and working-tree modification (MM)',
+        mutate: async live => {
+          await writeFile(join(live, 'README.md'), 'staged');
+          await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+          await writeFile(join(live, 'README.md'), 'staged then modified');
+        },
+        expectedOk: true,
+      },
+      {
+        label: 'unexpected staged addition (A )',
+        mutate: async live => {
+          await writeFile(join(live, 'added.txt'), 'staged addition');
+          await execFileAsync('git', ['add', 'added.txt'], { cwd: live });
+        },
+        expectedOk: false,
+      },
+    ];
+    for (const testCase of cases) {
+      const root = await mkdtemp(join(tmpdir(), 'live-boundary-git-status-'));
+      const live = join(root, 'live'); const provider = join(root, 'provider');
+      await Promise.all([mkdir(live), mkdir(provider)]);
+      await execFileAsync('git', ['init'], { cwd: live });
+      await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+      await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+      await writeFile(join(live, 'README.md'), 'before');
+      await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+      await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+      const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      await testCase.mutate(live);
+      try {
+        expect(await verifyLiveBoundary(baseline), testCase.label).toMatchObject({ ok: testCase.expectedOk });
+      } finally { await rm(root, { recursive: true, force: true }); }
+    }
+  });
+
+  it('rejects mixed tracked edits and untracked live-checkout additions with the untracked path named', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-mixed-edits-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await Promise.all([
+      writeFile(join(live, 'README.md'), 'after'),
+      writeFile(join(live, 'untracked.txt'), 'unexplained'),
+    ]);
+    try {
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('added untracked.txt'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('rejects an untracked live-checkout addition with its path named', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-untracked-addition-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await writeFile(join(live, 'escaped.txt'), 'untracked');
+    try {
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('added escaped.txt'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
+  it('fails closed when Git classification cannot inspect the live checkout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-git-failure-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([mkdir(live), mkdir(provider)]);
+    await execFileAsync('git', ['init'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.email', 'test@example.com'], { cwd: live });
+    await execFileAsync('git', ['config', 'user.name', 'Test'], { cwd: live });
+    await writeFile(join(live, 'README.md'), 'before');
+    await execFileAsync('git', ['add', 'README.md'], { cwd: live });
+    await execFileAsync('git', ['commit', '-m', 'initial'], { cwd: live });
+    const baseline = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+    await rm(join(live, '.git'), { recursive: true });
+    await writeFile(join(live, 'README.md'), 'after');
+    try {
+      expect(await verifyLiveBoundary(baseline)).toMatchObject({
+        ok: false,
+        reason: expect.stringContaining('changed README.md'),
+      });
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('accepts a feature-worktree mutation while live checkout and unrelated provider state remain identical', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-'));
     const live = join(root, 'live'); const worktree = join(root, 'worktree'); const provider = join(root, 'provider');

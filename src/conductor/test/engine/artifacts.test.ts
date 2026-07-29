@@ -1059,13 +1059,105 @@ describe('engine/artifacts', () => {
         'CHANGELOG.md',
         '## [Unreleased]\n\n- Fixed the thing ({{IMPLEMENTATION_PR}}).\n',
       );
+      const git = vi.fn(async (args: string[]) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref --short HEAD') {
+          return { exitCode: 0, stdout: 'feature\n', stderr: '' };
+        }
+        if (command === 'remote') return { exitCode: 0, stdout: 'origin\n', stderr: '' };
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (command === 'rev-parse refs/remotes/origin/main') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'ls-remote origin main') {
+          return { exitCode: 0, stdout: 'base-sha\trefs/heads/main\n', stderr: '' };
+        }
+        if (command === 'merge-base origin/main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'show base-sha:CHANGELOG.md') {
+          return { exitCode: 0, stdout: '## [Unreleased]\n', stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected: ${command}` };
+      });
       const result = await checkStepCompletion(dir, 'finish', {
         sessionStartedAt: 0,
         isHeadPushed: async () => true,
+        git,
       });
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/IMPLEMENTATION_PR/);
       expect(result.reason).toMatch(/finalize-changelog-pr/);
+    });
+
+    it('allows a pre-existing merge-base token after this branch finalizes its own changelog entry', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      const staleLine = '- Earlier change ({{IMPLEMENTATION_PR}}).';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile(
+        'CHANGELOG.md',
+        `## [Unreleased]\n\n- This change ([implementation PR #1](${prUrl})).\n${staleLine}\n`,
+      );
+      const git = vi.fn(async (args: string[]) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref --short HEAD') {
+          return { exitCode: 0, stdout: 'feature\n', stderr: '' };
+        }
+        if (command === 'remote') return { exitCode: 0, stdout: 'origin\n', stderr: '' };
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (command === 'rev-parse refs/remotes/origin/main') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'ls-remote origin main') {
+          return { exitCode: 0, stdout: 'base-sha\trefs/heads/main\n', stderr: '' };
+        }
+        if (command === 'merge-base origin/main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'show base-sha:CHANGELOG.md') {
+          return {
+            exitCode: 0,
+            stdout: `## [Unreleased]\n\n${staleLine}\n`,
+            stderr: '',
+          };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected: ${command}` };
+      });
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        git,
+      });
+
+      expect(result).toEqual({ done: true });
+    });
+
+    it('fails closed when merge-base evidence for an unresolved changelog token is indeterminate', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile(
+        'CHANGELOG.md',
+        '## [Unreleased]\n\n- Unknown provenance ({{IMPLEMENTATION_PR}}).\n',
+      );
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        git: async () => ({ exitCode: 1, stdout: '', stderr: 'indeterminate' }),
+      });
+
+      expect(result).toEqual({
+        done: false,
+        reason: `CHANGELOG.md still contains an unsubstituted {{IMPLEMENTATION_PR}} token — run 'conduct-ts finalize-changelog-pr --pr-url ${prUrl}', commit, and push before finish can complete`,
+        missing: 'other',
+      });
     });
 
     it('passes when finish-choice="pr" and CHANGELOG.md has no unsubstituted token', async () => {
