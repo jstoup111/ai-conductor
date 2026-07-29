@@ -1128,6 +1128,42 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
+    it('blocks when an additional {{IMPLEMENTATION_PR}} token line is identical to an inherited line', async () => {
+      const prUrl = 'https://github.com/foo/bar/pull/1';
+      const tokenLine = '- Earlier change ({{IMPLEMENTATION_PR}}).\n';
+      const baseChangelog = `## [Unreleased]\n\n${tokenLine}`;
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+      await createFile('CHANGELOG.md', `${baseChangelog}${tokenLine}`);
+      const git = vi.fn<NonNullable<CompletionContext['git']>>(async (args) => {
+        const command = args.join(' ');
+        if (command === 'symbolic-ref --short HEAD') {
+          return { exitCode: 0, stdout: 'feature\n', stderr: '' };
+        }
+        if (command === 'remote') {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        if (command === 'symbolic-ref refs/remotes/origin/HEAD') {
+          return { exitCode: 0, stdout: 'refs/remotes/origin/main\n', stderr: '' };
+        }
+        if (command === 'merge-base main HEAD') {
+          return { exitCode: 0, stdout: 'base-sha\n', stderr: '' };
+        }
+        if (command === 'show base-sha:CHANGELOG.md') {
+          return { exitCode: 0, stdout: baseChangelog, stderr: '' };
+        }
+        return { exitCode: 1, stdout: '', stderr: `unexpected git command: ${command}` };
+      });
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        isHeadPushed: async () => true,
+        git,
+      });
+
+      expect(result.done).toBe(false);
+    });
+
     it('passes when finish-choice="pr" and CHANGELOG.md has no unsubstituted token', async () => {
       const prUrl = 'https://github.com/foo/bar/pull/1';
       await createFile(FINISH_CHOICE_MARKER, 'pr');

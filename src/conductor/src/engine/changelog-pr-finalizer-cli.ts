@@ -36,16 +36,25 @@ export function unresolvedImplementationPrTokenLineIndexes(
   changelog: string,
   baseChangelogContent: string | null,
 ): number[] {
-  const baseLines =
-    baseChangelogContent === null ? null : new Set(baseChangelogContent.split('\n'));
-  return changelog
-    .split('\n')
-    .map((line, index) => ({ line, index }))
-    .filter(
-      ({ line }) =>
-        line.includes(IMPLEMENTATION_PR_TOKEN) && (baseLines === null || !baseLines.has(line)),
-    )
-    .map(({ index }) => index);
+  const remainingBaseLineCounts =
+    baseChangelogContent === null
+      ? null
+      : baseChangelogContent.split('\n').reduce((counts, line) => {
+          counts.set(line, (counts.get(line) ?? 0) + 1);
+          return counts;
+        }, new Map<string, number>());
+  const unresolvedIndexes: number[] = [];
+
+  for (const [index, line] of changelog.split('\n').entries()) {
+    if (!line.includes(IMPLEMENTATION_PR_TOKEN)) continue;
+    const inheritedOccurrences = remainingBaseLineCounts?.get(line) ?? 0;
+    if (inheritedOccurrences > 0) {
+      remainingBaseLineCounts?.set(line, inheritedOccurrences - 1);
+    } else {
+      unresolvedIndexes.push(index);
+    }
+  }
+  return unresolvedIndexes;
 }
 
 export async function finalizeChangelogPr(
