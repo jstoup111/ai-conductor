@@ -331,6 +331,38 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     expect(violations).toEqual([]);
   });
 
+  it('rejects incomplete and cross-provider interactive metadata with row and field details', () => {
+    const canonical = buildExtraRows()[0]!;
+    const invalidCases = [
+      { field: 'codexModel', value: '' },
+      { field: 'codexEffort', value: '' },
+      { field: 'codexModel', value: 'sonnet' },
+    ] as const;
+
+    const messages = invalidCases.map(({ field, value }) => {
+      try {
+        buildExtraRows([{ ...canonical, name: 'invalid-row', [field]: value }]);
+        return '<no error>';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    expect(messages).toEqual(
+      invalidCases.map(({ field, value }) =>
+        expect.stringMatching(
+          new RegExp(`invalid-row.*${field}.*${JSON.stringify(value)}`, 'i'),
+        ),
+      ),
+    );
+  });
+
+  it('accepts every canonical interactive row', () => {
+    const canonical = buildExtraRows();
+
+    expect(() => buildExtraRows(canonical)).not.toThrow();
+  });
+
   it('maps display names: snake_case -> kebab-case, build -> pipeline, worktree -> worktree-manager, acceptance_specs -> writing-system-tests', () => {
     expect(stepDisplayName('architecture_diagram')).toBe('architecture-diagram');
     expect(stepDisplayName('build')).toBe('pipeline');

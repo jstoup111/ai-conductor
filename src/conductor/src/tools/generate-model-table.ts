@@ -315,9 +315,26 @@ export function buildEngineRows(
   }));
 }
 
+const CLAUDE_NATIVE_MODEL_ALIAS = /\b(?:haiku|sonnet|opus|fable)\b/i;
+
+export function assertValidInteractiveRows(rows: readonly ModelTableRow[]): void {
+  for (const row of rows) {
+    for (const field of ['codexModel', 'codexEffort'] as const) {
+      const value = row[field];
+      if (value.trim() === '' || CLAUDE_NATIVE_MODEL_ALIAS.test(value)) {
+        throw new Error(
+          `Invalid interactive model-table row "${row.name}": ${field}=${JSON.stringify(value)}`,
+        );
+      }
+    }
+  }
+}
+
 /** Rows for skills/agents with no corresponding engine step. */
-export function buildExtraRows(): ModelTableRow[] {
-  return EXTRA_MODEL_TABLE_ROWS.map((row) => ({
+export function buildExtraRows(
+  metadata: readonly ModelTableRow[] = EXTRA_MODEL_TABLE_ROWS,
+): ModelTableRow[] {
+  const rows = metadata.map((row) => ({
     name: row.name,
     executionPath: row.executionPath,
     claudeModel: row.claudeModel,
@@ -326,6 +343,9 @@ export function buildExtraRows(): ModelTableRow[] {
     codexEffort: row.codexEffort,
     why: row.why,
   }));
+
+  assertValidInteractiveRows(rows);
+  return rows;
 }
 
 const TABLE_HEADER =
