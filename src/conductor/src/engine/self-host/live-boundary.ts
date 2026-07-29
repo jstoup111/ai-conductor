@@ -3,7 +3,13 @@ import { readdir, readFile, readlink } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { redactSafetyText } from '../safety-diagnostics.js';
 
-interface Surface { root: string; label: string; exclude: readonly string[]; manifest: readonly Entry[]; }
+interface Surface {
+  root: string;
+  label: string;
+  exclude: readonly string[];
+  excludeDirectoryBasenames?: readonly string[];
+  manifest: readonly Entry[];
+}
 interface Entry { path: string; digest: string; }
 export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
 
@@ -29,6 +35,9 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  *                  this SUBTREE deliberately: `.claude/settings.json` and
  *                  `.claude/hooks/` are harness state the guard must protect,
  *                  and excluding all of `.claude` would blind it to them.
+ *   `node_modules` — dependency and tool-cache trees at any nesting depth. The
+ *                    exact directory basename is excluded; lookalikes remain
+ *                    fingerprinted, and `.gitignore` is deliberately not used.
  * None of these is harness SOURCE, so everything the guard exists to protect
  * stays fingerprinted: adding, modifying or deleting a tracked source file
  * under the live checkout still trips it.
@@ -36,6 +45,7 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
 const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
 ];
+const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_modules'];
 
 /**
  * Noise the CURRENT provider's home accumulates from parties OTHER than the
@@ -175,11 +185,16 @@ function isExcluded(path: string, exclude: readonly string[]): boolean {
     : path === ex || path.startsWith(`${ex}/`));
 }
 
-async function manifest(root: string, exclude: readonly string[]): Promise<Entry[]> {
+async function manifest(
+  root: string,
+  exclude: readonly string[],
+  excludeDirectoryBasenames: readonly string[] = [],
+): Promise<Entry[]> {
   // Filter DURING the walk: an excluded subtree is never descended into, so
   // `.git` is neither hashed nor a source of transient mid-run read errors.
   const walk = async (dir: string): Promise<string[]> => {
     const entries = (await readdir(dir, { withFileTypes: true }))
+      .filter(entry => !(entry.isDirectory() && excludeDirectoryBasenames.includes(entry.name)))
       .filter(entry => !isExcluded(relative(root, join(dir, entry.name)), exclude));
     // `async` on the callback is load-bearing for lint, not for behaviour: it makes
     // every element a promise so `Promise.all` is not handed a mixed array.
@@ -209,7 +224,17 @@ export async function fingerprintLiveBoundary(args: {
 }): Promise<LiveBoundarySnapshot> {
   const excluded = [...providerStateVolatile(args.provider), ...(args.selectedAuthPaths ?? [])];
   return { surfaces: [
-    { root: args.liveCheckout, label: 'live checkout', exclude: LIVE_CHECKOUT_VOLATILE, manifest: await manifest(args.liveCheckout, LIVE_CHECKOUT_VOLATILE) },
+    {
+      root: args.liveCheckout,
+      label: 'live checkout',
+      exclude: LIVE_CHECKOUT_VOLATILE,
+      excludeDirectoryBasenames: LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
+      manifest: await manifest(
+        args.liveCheckout,
+        LIVE_CHECKOUT_VOLATILE,
+        LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES,
+      ),
+    },
     { root: args.unrelatedProviderState, label: 'provider state', exclude: excluded, manifest: await manifest(args.unrelatedProviderState, excluded) },
   ] };
 }
@@ -264,7 +289,11 @@ function describeDiff(diff: { added: string[]; removed: string[]; changed: strin
 
 export async function verifyLiveBoundary(snapshot: LiveBoundarySnapshot): Promise<{ ok: boolean; reason?: string }> {
   for (const surface of snapshot.surfaces) {
-    const current = await manifest(surface.root, surface.exclude);
+    const current = await manifest(
+      surface.root,
+      surface.exclude,
+      surface.excludeDirectoryBasenames ?? [],
+    );
     if (JSON.stringify(current) !== JSON.stringify(surface.manifest)) {
       const diff = diffManifests(surface.manifest, current);
       return { ok: false, reason: `${surface.label} changed during self-host execution — ${describeDiff(diff)}.` };

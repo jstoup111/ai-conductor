@@ -10,6 +10,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+### Fixed
+
+- Stop self-host live-boundary halts when test tooling writes cache files beneath any `node_modules` directory ([implementation PR #1158](https://github.com/jstoup111/ai-conductor/pull/1158)).
+
 ### Changed
 
 - The implementation PR is now opened as a **draft** at the start of the SHIP phase — before the
