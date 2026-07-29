@@ -9370,6 +9370,96 @@ describe('engine/conductor', () => {
       vi.clearAllMocks();
     });
 
+    it('classifies an immediate operator OAuth preflight HALT as needs-human', async () => {
+      const { readOperatorCredentialsState } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
+      const credentialsPath = join(dir, '.credentials.json');
+      await writeFile(
+        credentialsPath,
+        JSON.stringify({ claudeAiOauth: { expiresAt: 1234 } }),
+        'utf-8',
+      );
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      });
+
+      const result = await (
+        conductor as unknown as {
+          preflightCredentialsCheck: (configDir: string) => Promise<StepRunResult | undefined>;
+        }
+      ).preflightCredentialsCheck(dir);
+
+      expect(result?.output).toContain('Operator OAuth token is expired');
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    });
+
+    it('classifies a timed-out operator OAuth preflight HALT as needs-human', async () => {
+      const { readOperatorCredentialsState, waitForCredentialsChange } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
+      const credentialsPath = join(dir, '.credentials.json');
+      vi.mocked(waitForCredentialsChange).mockResolvedValue({
+        type: 'timeout',
+        credentialsPath,
+        credentialsState: 'expired',
+        expiresAt: '1234',
+      });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as HarnessConfig,
+      });
+
+      const result = await (
+        conductor as unknown as {
+          preflightCredentialsCheck: (configDir: string) => Promise<StepRunResult | undefined>;
+        }
+      ).preflightCredentialsCheck(dir);
+
+      expect(result?.output).toContain('Operator credentials expired and refresh timed out');
+      expect(await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8')).toBe('needs-human');
+    });
+
+    it('preserves an existing classified marker during operator OAuth preflight', async () => {
+      const { readOperatorCredentialsState } = await import(
+        '../../src/engine/self-host/operator-credentials.js'
+      );
+      vi.mocked(readOperatorCredentialsState).mockResolvedValue('expired');
+      await mkdir(join(dir, '.pipeline'), { recursive: true });
+      await writeFile(join(dir, '.pipeline/HALT'), 'specific prior reason\n', 'utf-8');
+      await writeFile(join(dir, '.pipeline/HALT.class'), 'mechanical', 'utf-8');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        config: { harness_self_host: { auth_park_timeout_minutes: 0 } } as HarnessConfig,
+      });
+
+      await (
+        conductor as unknown as {
+          preflightCredentialsCheck: (configDir: string) => Promise<StepRunResult | undefined>;
+        }
+      ).preflightCredentialsCheck(dir);
+
+      expect({
+        reason: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+        haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8'),
+      }).toEqual({
+        reason: 'specific prior reason\n',
+        haltClass: 'mechanical',
+      });
+    });
+
     it('parks on authFailure without burning retry budget', async () => {
       const { waitForCredentialsChange } = await import(
         '../../src/engine/self-host/operator-credentials.js'

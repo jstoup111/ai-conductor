@@ -1635,9 +1635,7 @@ export class Conductor {
       const haltPath = join(this.projectRoot, HALT_MARKER);
       const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
       if (!haltExists) {
-        await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
-          // Best-effort HALT write; if it fails, still return the failure
-        });
+        await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
       }
 
       return {
@@ -1676,9 +1674,7 @@ export class Conductor {
       const haltPath = join(this.projectRoot, HALT_MARKER);
       const haltExists = await accessFile(haltPath).then(() => true).catch(() => false);
       if (!haltExists) {
-        await writeFile(haltPath, haltReason + '\n', 'utf-8').catch(() => {
-          // Best-effort HALT write; if it fails, still return the failure
-        });
+        await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
       }
       return { success: false, output: haltReason };
     }
