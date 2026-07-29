@@ -422,6 +422,51 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     });
   });
 
+  it('isolates a failed reap, prunes it, and makes a second pass a no-op', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    });
+    const logs: string[] = [];
+    let teardownCalls = 0;
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+
+    const sweep = () =>
+      sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: gh,
+        log: (message) => logs.push(message),
+        shippedRecordProbe: async () => 'present',
+        teardownWorktree: async () => {
+          teardownCalls += 1;
+          throw new Error('worktree path is busy');
+        },
+      });
+
+    await sweep();
+    await sweep();
+
+    expect({
+      teardownCalls,
+      survivors: (await readWatch(tmpDir)).map((watched) => watched.prUrl),
+      failureSurfaced: logs.some(
+        (message) =>
+          message.includes(PR_URL) &&
+          message.includes('worktree path is busy') &&
+          message.includes('error'),
+      ),
+      remainingEntryProcessCount: addLabelCalls.filter(
+        (call) => call.prUrl === PR_URL_2 && call.label === 'mergeable',
+      ).length,
+    }).toEqual({
+      teardownCalls: 1,
+      survivors: [PR_URL_2],
+      failureSurfaced: true,
+      remainingEntryProcessCount: 2,
+    });
+  });
+
   it('routes a MERGED PR through the shipped-record gate path', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const logs: string[] = [];

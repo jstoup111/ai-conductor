@@ -297,13 +297,17 @@ export async function sweepMergeableLabels({
           log?.(`[mergeable-sweep] merged ${entry.prUrl} entering shipped-record gate`);
           const shippedRecord = await probe(entry.repoCwd, entry.slug);
           if (shippedRecord === 'present') {
-            await teardownWorktree?.(
-              {
-                path: join(entry.repoCwd, '.worktrees', entry.slug),
-                branch: `feat/daemon-${entry.slug}`,
-              },
-              false,
-            );
+            try {
+              await teardownWorktree?.(
+                {
+                  path: join(entry.repoCwd, '.worktrees', entry.slug),
+                  branch: `feat/daemon-${entry.slug}`,
+                },
+                false,
+              );
+            } catch (err) {
+              log?.(`[mergeable-sweep] error reaping ${entry.prUrl}: ${err}`);
+            }
           } else {
             survivors.push(entry);
           }
