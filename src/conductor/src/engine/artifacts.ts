@@ -94,6 +94,10 @@ export interface ArtifactResolutionContext {
 
 export interface ArtifactResolutionResult {
   files: string[];
+  diagnostic?: {
+    code: 'missing' | 'foreign' | 'ambiguous';
+    reason: string;
+  };
 }
 
 export interface BuildArtifactResolutionContextOptions {
@@ -429,6 +433,8 @@ export async function resolveArtifactFiles(
   extraGlobs: string[] = [],
 ): Promise<ArtifactResolutionResult> {
   const files = new Set<string>();
+  let featureCandidateCount = 0;
+  let hasFeatureContract = false;
   for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
     const candidates = await matchGlob(dir, contract.pattern);
     if (contract.scope !== 'feature') {
@@ -436,6 +442,8 @@ export async function resolveArtifactFiles(
       continue;
     }
 
+    hasFeatureContract = true;
+    featureCandidateCount += candidates.length;
     const associated = candidates.filter((file) => {
       const repoPath = relative(dir, file).replaceAll('\\', '/');
       return (
@@ -459,7 +467,38 @@ export async function resolveArtifactFiles(
   for (const pattern of extraGlobs) {
     for (const file of await matchGlob(dir, pattern)) files.add(file);
   }
-  return { files: [...files] };
+  const resolvedFiles = [...files];
+  if (resolvedFiles.length > 0 || !hasFeatureContract) return { files: resolvedFiles };
+
+  const activeIdentity = context.featureIdentities[0];
+  const identityLabel = activeIdentity
+    ? `active feature "${activeIdentity}"`
+    : 'the active feature (identity unavailable)';
+  if (featureCandidateCount === 0) {
+    return {
+      files: [],
+      diagnostic: {
+        code: 'missing',
+        reason: `${step} has no artifact candidates for ${identityLabel}`,
+      },
+    };
+  }
+  if (featureCandidateCount === 1) {
+    return {
+      files: [],
+      diagnostic: {
+        code: 'foreign',
+        reason: `${step} has one artifact candidate that does not match ${identityLabel}`,
+      },
+    };
+  }
+  return {
+    files: [],
+    diagnostic: {
+      code: 'ambiguous',
+      reason: `${step} has ${featureCandidateCount} artifact candidates and none can be associated with ${identityLabel}`,
+    },
+  };
 }
 
 /**

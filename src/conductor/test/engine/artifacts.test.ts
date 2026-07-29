@@ -456,6 +456,75 @@ describe('engine/artifacts', () => {
         raw: ['.docs/specs/2026-07-28-feature-b.md', '.docs/specs/feature-a.md'],
       });
     });
+
+    it('returns actionable diagnostics without selecting foreign or ambiguous candidates', async () => {
+      await createFile('.docs/plans/feature-a.md');
+      await createFile('.docs/stories/feature-a.md');
+      await createFile('.docs/stories/feature-c.md');
+      await createFile('.docs/conflicts/foreign-conflict.md');
+      await createFile('.docs/specs/2026-07-28-feature-a.md');
+      const featureB = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set<string>(),
+      };
+
+      const [foreign, ambiguous, outsidePattern, normalizedForeign, missing] = await Promise.all([
+        resolveArtifactFiles(dir, 'plan', featureB),
+        resolveArtifactFiles(dir, 'stories', featureB),
+        resolveArtifactFiles(dir, 'conflict_check', {
+          featureIdentities: ['feature-b'],
+          changedPaths: new Set(['src/current-feature-change.ts']),
+        }),
+        resolveArtifactFiles(dir, 'prd', featureB),
+        resolveArtifactFiles(dir, 'retro', featureB),
+      ]);
+
+      expect({
+        foreign,
+        ambiguous,
+        outsidePattern,
+        normalizedForeign,
+        missing,
+      }).toEqual({
+        foreign: {
+          files: [],
+          diagnostic: {
+            code: 'foreign',
+            reason: 'plan has one artifact candidate that does not match active feature "feature-b"',
+          },
+        },
+        ambiguous: {
+          files: [],
+          diagnostic: {
+            code: 'ambiguous',
+            reason:
+              'stories has 2 artifact candidates and none can be associated with active feature "feature-b"',
+          },
+        },
+        outsidePattern: {
+          files: [],
+          diagnostic: {
+            code: 'foreign',
+            reason:
+              'conflict_check has one artifact candidate that does not match active feature "feature-b"',
+          },
+        },
+        normalizedForeign: {
+          files: [],
+          diagnostic: {
+            code: 'foreign',
+            reason: 'prd has one artifact candidate that does not match active feature "feature-b"',
+          },
+        },
+        missing: {
+          files: [],
+          diagnostic: {
+            code: 'missing',
+            reason: 'retro has no artifact candidates for active feature "feature-b"',
+          },
+        },
+      });
+    });
   });
 
   describe('checkStepCompletion: test_suite current-PASS predicate', () => {
