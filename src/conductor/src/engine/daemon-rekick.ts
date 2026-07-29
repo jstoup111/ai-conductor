@@ -1,6 +1,6 @@
 import { readdir, readFile, rename, rm, writeFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { HALT_MARKER, HALT_CLASS_MARKER, type HaltClass } from './halt-marker.js';
+import { HALT_MARKER, HALT_CLASS_MARKER, type HaltDisposition } from './halt-marker.js';
 import {
   makeGitRunner,
   rebaseStateActive,
@@ -79,14 +79,14 @@ export interface RekickSweepDeps {
    */
   isOperatorParked?: (slug: string) => Promise<boolean>;
   /**
-   * Classify a slug's live HALT via `.pipeline/HALT.class`. `needs-human`
-   * halts are skipped (never cleared) — only an operator can resolve them.
+   * Classify a slug's live HALT via `.pipeline/HALT.class`. `needs-human` and
+   * `unclassified` halts are skipped (never cleared).
    * Checked AFTER isOperatorParked/isProcessed, BEFORE the FR-9 SHA guard, so
-   * a needs-human halt is skipped on every sweep, not just once per SHA.
-   * Absent, or resolving to `mechanical`/`unclassified` → behavior unchanged
-   * (falls through to the existing FR-9 guard and clear path).
+   * retained halts are skipped on every sweep, not just once per SHA.
+   * Absent, or resolving to `mechanical`/`legacy` → behavior unchanged (falls
+   * through to the existing FR-9 guard and canonical clear path).
    */
-  readHaltClass?: (slug: string) => Promise<HaltClass | 'unclassified'>;
+  readHaltClass?: (slug: string) => Promise<HaltDisposition>;
 }
 
 export interface RekickSweepResult {
@@ -170,19 +170,18 @@ export async function rekickSweep(
       }
     }
 
-    // needs-human classified halt: only an operator can resolve it. Skip on
-    // EVERY sweep (not bounded by SHA) — never abort/clear/sentinel/lastRekickSha.
-    // The resolved class (when the dep is present) is reused below in the
-    // clear-path log line so mechanical/unclassified re-kicks are observable.
-    let haltClass: HaltClass | 'unclassified' | undefined;
+    // Retained dispositions skip on EVERY sweep (not bounded by SHA) — never
+    // abort/clear/sentinel/lastRekickSha. The resolved retryable disposition
+    // is reused below so mechanical/legacy clear-path logs are observable.
+    let haltClass: HaltDisposition | undefined;
     if (deps.readHaltClass) {
       haltClass = 'unclassified';
       try {
         haltClass = await deps.readHaltClass(slug);
       } catch {
-        /* best-effort: an unreadable class falls through as unclassified */
+        /* best-effort: an unreadable class is retained as unclassified */
       }
-      if (haltClass === 'needs-human') {
+      if (haltClass === 'needs-human' || haltClass === 'unclassified') {
         skipped.push(slug);
         let classReason = 'unknown';
         try {
@@ -190,7 +189,7 @@ export async function rekickSweep(
         } catch {
           /* best-effort */
         }
-        log(`re-kick ${slug}: skipped — halt class needs-human (${classReason})`);
+        log(`re-kick ${slug}: skipped — halt disposition ${haltClass} (${classReason})`);
         continue;
       }
     }

@@ -48,7 +48,9 @@ function fakeDeps(opts: {
   isProcessed?: (slug: string) => Promise<boolean>;
   warned?: Set<string>;
   isOperatorParked?: (slug: string) => Promise<boolean>;
-  readHaltClass?: (slug: string) => Promise<'needs-human' | 'mechanical' | 'unclassified'>;
+  readHaltClass?: (
+    slug: string,
+  ) => Promise<'needs-human' | 'mechanical' | 'legacy' | 'unclassified'>;
 }): { deps: RekickSweepDeps; trace: Trace } {
   const trace: Trace = { events: [], cleared: new Set() };
   const warned = opts.warned ?? new Set<string>();
@@ -206,20 +208,37 @@ describe('engine/daemon-rekick — rekickSweep (FR-7/FR-9)', () => {
     expect(logLine).toBeDefined();
   });
 
-  it('an unclassified halt (readHaltClass resolves to unclassified) still clears and the log line names it unclassified', async () => {
-    const last = new Map<string, string>();
+  it('applies the four-way halt disposition matrix and logs each slug with its disposition', async () => {
+    const dispositionBySlug = new Map<
+      string,
+      'needs-human' | 'mechanical' | 'legacy' | 'unclassified'
+    >([
+      ['mechanical', 'mechanical'],
+      ['legacy', 'legacy'],
+      ['needs-human', 'needs-human'],
+      ['unclassified', 'unclassified'],
+    ]);
     const { deps, trace } = fakeDeps({
-      halted: ['u'],
-      lastRekickSha: last,
-      readHaltClass: async () => 'unclassified',
+      halted: [...dispositionBySlug.keys()],
+      readHaltClass: async (slug) => dispositionBySlug.get(slug)!,
     });
+
     const res = await rekickSweep(deps, SHA_B);
-    expect(res.cleared).toEqual(['u']);
-    expect(last.get('u')).toBe(SHA_B);
-    const logLine = trace.events.find(
-      (e) => e.startsWith('log:') && e.includes('u') && e.includes('unclassified'),
-    );
-    expect(logLine).toBeDefined();
+
+    expect({
+      cleared: res.cleared,
+      skipped: res.skipped,
+      logged: [...dispositionBySlug].map(([slug, disposition]) =>
+        trace.events.some(
+          (event) =>
+            event.startsWith('log:') && event.includes(slug) && event.includes(disposition),
+        ),
+      ),
+    }).toEqual({
+      cleared: ['mechanical', 'legacy'],
+      skipped: ['needs-human', 'unclassified'],
+      logged: [true, true, true, true],
+    });
   });
 
   it('no readHaltClass dep at all still clears the slug normally (backward-compat)', async () => {

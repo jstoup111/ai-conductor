@@ -1333,8 +1333,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     hasRebaseInProgress: (slug) => hasRebaseInProgress(join(worktreeBase, slug)),
     abortRebase: (slug) => abortRebase(join(worktreeBase, slug)),
     clearMarker: (slug) => clearMarker(join(worktreeBase, slug)),
-    // Task 5: real classification read wired into the sweep — a needs-human
-    // HALT is skipped instead of re-kicked (see daemon-rekick.ts rekickSweep).
+    // Real disposition read wired into the sweep: mechanical/legacy HALTs use
+    // the canonical clear path; needs-human/unclassified HALTs are retained.
     readHaltClass: (slug) => readHaltClass(join(worktreeBase, slug)),
     lastRekickSha,
     log,
