@@ -295,7 +295,8 @@ export async function sweepMergeableLabels({
         // present on origin/main authorizes feature-worktree teardown.
         if (state.state === 'MERGED') {
           log?.(`[mergeable-sweep] merged ${entry.prUrl} entering shipped-record gate`);
-          if ((await probe(entry.repoCwd, entry.slug)) === 'present') {
+          const shippedRecord = await probe(entry.repoCwd, entry.slug);
+          if (shippedRecord === 'present') {
             await teardownWorktree?.(
               {
                 path: join(entry.repoCwd, '.worktrees', entry.slug),
@@ -303,8 +304,10 @@ export async function sweepMergeableLabels({
               },
               false,
             );
+          } else {
+            survivors.push(entry);
           }
-          continue; // not added to survivors
+          continue;
         }
 
         // FR-13: CLOSED / NOTFOUND → prune the registry entry while retaining

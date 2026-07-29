@@ -386,6 +386,42 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     expect(await readWatch(tmpDir)).toEqual([]);
   });
 
+  it('retains merged entries until a later shipped-record probe proves present and keeps processing', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    });
+    const probeResults = ['absent', 'indeterminate', 'present'] as const;
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    const registryAfterProbe: string[][] = [];
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+
+    for (const probeResult of probeResults) {
+      await sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: gh,
+        shippedRecordProbe: async () => probeResult,
+        teardownWorktree: async (worktree, keep) => {
+          teardownCalls.push({ ...worktree, keep });
+        },
+      });
+      registryAfterProbe.push((await readWatch(tmpDir)).map((watched) => watched.prUrl));
+    }
+
+    expect({ registryAfterProbe, teardownCalls, nextEntryProcessCount: addLabelCalls.length }).toEqual({
+      registryAfterProbe: [[PR_URL, PR_URL_2], [PR_URL, PR_URL_2], [PR_URL_2]],
+      teardownCalls: [
+        {
+          path: join('/fake/repo', '.worktrees', 'test-feature'),
+          branch: 'feat/daemon-test-feature',
+          keep: false,
+        },
+      ],
+      nextEntryProcessCount: 3,
+    });
+  });
+
   it('routes a MERGED PR through the shipped-record gate path', async () => {
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
     const logs: string[] = [];
@@ -518,7 +554,7 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
 
   it('keeps other entries when one is pruned', async () => {
     const { gh } = makeFakeGh({
-      [PR_URL]: prViewJson('MERGED'),
+      [PR_URL]: prViewJson('CLOSED'),
       [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
     });
     await enrollWatch(tmpDir, entry(PR_URL));
