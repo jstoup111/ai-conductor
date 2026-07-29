@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, utimes, readFile, symlink } from 'fs/promises';
-import { join, dirname } from 'path';
+import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
@@ -57,6 +57,7 @@ import {
   STEP_ARTIFACT_GLOBS,
   artifactMatchesFeatureIdentity,
   buildArtifactResolutionContext,
+  resolveArtifactFiles,
   findArtifactFiles,
   stepHasArtifacts,
   getArtifactStatus,
@@ -82,6 +83,7 @@ import {
 import type {
   CompletionResult,
   CompletionContext,
+  ArtifactResolutionContext,
   FeatureArtifactIdentityStrategy,
 } from '../../src/engine/artifacts.js';
 import type { StepName } from '../../src/types/index.js';
@@ -383,6 +385,75 @@ describe('engine/artifacts', () => {
           featureIdentities: ['still-explicit', 'engine-recorded'],
           changedPaths: [],
         },
+      });
+    });
+  });
+
+  describe('resolveArtifactFiles', () => {
+    it('selects associated feature files while preserving broad and raw corpora', async () => {
+      await createFile('.docs/specs/feature-a.md');
+      await createFile('.docs/specs/2026-07-28-feature-b.md');
+      await createFile('.docs/plans/feature-a.md');
+      await createFile('.docs/plans/feature-b.md');
+      await createFile('.docs/conflicts/foreign-conflict.md');
+      await createFile('.docs/conflicts/unconventional-current.md');
+      await createFile('.docs/retros/legacy-singleton.md');
+      await createFile('.docs/decisions/technical-assessment-one.md');
+      await createFile('.docs/decisions/technical-assessment-two.md');
+      await createFile('.pipeline/task-status.json', '{}');
+
+      const featureB: Pick<
+        ArtifactResolutionContext,
+        'featureIdentities' | 'changedPaths'
+      > = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set(),
+      };
+      const changedFeature = {
+        featureIdentities: ['feature-b'],
+        changedPaths: new Set(['.docs/conflicts/unconventional-current.md']),
+      };
+      const unknownFeature = {
+        featureIdentities: ['unknown-feature'],
+        changedPaths: new Set<string>(),
+      };
+      const legacyContext = {
+        featureIdentities: [],
+        changedPaths: new Set<string>(),
+      };
+
+      const [prd, plan, changed, singleton, repository, run, raw] = await Promise.all([
+        resolveArtifactFiles(dir, 'prd', featureB),
+        resolveArtifactFiles(dir, 'plan', featureB),
+        resolveArtifactFiles(dir, 'conflict_check', changedFeature),
+        resolveArtifactFiles(dir, 'retro', legacyContext),
+        resolveArtifactFiles(dir, 'assess', unknownFeature),
+        resolveArtifactFiles(dir, 'build', unknownFeature),
+        findArtifactFiles(dir, 'prd'),
+      ]);
+
+      const relativeFiles = (files: readonly string[]) =>
+        files.map((file) => relative(dir, file).replaceAll('\\', '/')).sort();
+
+      expect({
+        prd: relativeFiles(prd.files),
+        plan: relativeFiles(plan.files),
+        changed: relativeFiles(changed.files),
+        singleton: relativeFiles(singleton.files),
+        repository: relativeFiles(repository.files),
+        run: relativeFiles(run.files),
+        raw: relativeFiles(raw),
+      }).toEqual({
+        prd: ['.docs/specs/2026-07-28-feature-b.md'],
+        plan: ['.docs/plans/feature-b.md'],
+        changed: ['.docs/conflicts/unconventional-current.md'],
+        singleton: ['.docs/retros/legacy-singleton.md'],
+        repository: [
+          '.docs/decisions/technical-assessment-one.md',
+          '.docs/decisions/technical-assessment-two.md',
+        ],
+        run: ['.pipeline/task-status.json'],
+        raw: ['.docs/specs/2026-07-28-feature-b.md', '.docs/specs/feature-a.md'],
       });
     });
   });

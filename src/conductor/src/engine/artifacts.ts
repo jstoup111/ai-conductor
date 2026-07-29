@@ -92,6 +92,10 @@ export interface ArtifactResolutionContext {
   changedPaths: ReadonlySet<string>;
 }
 
+export interface ArtifactResolutionResult {
+  files: string[];
+}
+
 export interface BuildArtifactResolutionContextOptions {
   planPath?: string;
   featureDesc?: string;
@@ -416,6 +420,46 @@ export async function findArtifactFiles(
     files.push(...(await matchGlob(dir, pattern)));
   }
   return files;
+}
+
+export async function resolveArtifactFiles(
+  dir: string,
+  step: StepName,
+  context: Pick<ArtifactResolutionContext, 'featureIdentities' | 'changedPaths'>,
+  extraGlobs: string[] = [],
+): Promise<ArtifactResolutionResult> {
+  const files = new Set<string>();
+  for (const contract of STEP_ARTIFACT_CONTRACTS[step]) {
+    const candidates = await matchGlob(dir, contract.pattern);
+    if (contract.scope !== 'feature') {
+      candidates.forEach((file) => files.add(file));
+      continue;
+    }
+
+    const associated = candidates.filter((file) => {
+      const repoPath = relative(dir, file).replaceAll('\\', '/');
+      return (
+        context.changedPaths.has(repoPath) ||
+        context.featureIdentities.some((identity) =>
+          artifactMatchesFeatureIdentity(file, identity, contract.identity),
+        )
+      );
+    });
+    if (associated.length > 0) {
+      associated.forEach((file) => files.add(file));
+    } else if (
+      candidates.length === 1 &&
+      context.featureIdentities.length === 0 &&
+      context.changedPaths.size === 0
+    ) {
+      files.add(candidates[0]);
+    }
+  }
+
+  for (const pattern of extraGlobs) {
+    for (const file of await matchGlob(dir, pattern)) files.add(file);
+  }
+  return { files: [...files] };
 }
 
 /**
