@@ -317,7 +317,7 @@ export function buildEngineRows(
 
 const CLAUDE_NATIVE_MODEL_ALIAS = /\b(?:haiku|sonnet|opus|fable)\b/i;
 
-export function assertValidInteractiveRows(rows: readonly ModelTableRow[]): void {
+function assertValidInteractiveRows(rows: readonly ModelTableRow[]): void {
   for (const row of rows) {
     if (row.executionPath !== 'supported-host interactive') {
       throw new Error(
