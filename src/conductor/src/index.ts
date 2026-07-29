@@ -785,7 +785,8 @@ async function main(): Promise<void> {
 
   // Handle --reset: clear state and exit
   if (opts.reset) {
-    await writeState(stateFilePath, {});
+    // Deliberate full clear — the one place a recorded pr_url is meant to go.
+    await writeState(stateFilePath, {}, { allowPrUrlClear: true });
     console.log('State cleared.');
     return;
   }
@@ -907,7 +908,8 @@ async function main(): Promise<void> {
         pipelineDir = join(projectRoot, '.pipeline');
         stateFilePath = join(pipelineDir, 'conduct-state.json');
         await mkdir(pipelineDir, { recursive: true });
-        await writeState(stateFilePath, {});
+        // Explicit start-over — the prior run's pr_url is intentionally dropped.
+        await writeState(stateFilePath, {}, { allowPrUrlClear: true });
       }
     } else if (detection.kind === 'orphaned-state') {
       // Root-level state says we're past the worktree step, but no worktree

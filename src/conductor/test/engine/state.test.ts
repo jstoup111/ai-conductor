@@ -107,6 +107,39 @@ describe('engine/state', () => {
       expect(() => JSON.parse(raw)).not.toThrow();
       expect(JSON.parse(raw)).toEqual(state);
     });
+
+    // Regression: the conductor loads `state` once per run (conductor.ts) and
+    // rewrites the whole file from that in-memory object on every subsequent
+    // transition. An out-of-process writer — `conduct-ts finish-record
+    // --choice pr --pr-url ...` — records `pr_url` into the same file mid-run.
+    // If the finish step then fails its completion check, the conductor never
+    // re-reads it and the next whole-object write wipes the recorded PR.
+    it('preserves an already-persisted pr_url when the written state omits it', async () => {
+      await writeState(statePath, {
+        feature_desc: 'demo',
+        finish: 'done',
+        pr_url: 'https://github.com/acme/repo/pull/1164',
+      });
+
+      // A stale in-memory snapshot that predates the out-of-process pr_url write.
+      await writeState(statePath, { feature_desc: 'demo', finish: 'stale' });
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value.pr_url).toBe('https://github.com/acme/repo/pull/1164');
+        expect(result.value.finish).toBe('stale');
+      }
+    });
+
+    it('clears pr_url when the caller explicitly allows it (--reset / start-over)', async () => {
+      await writeState(statePath, { pr_url: 'https://github.com/acme/repo/pull/1164' });
+      await writeState(statePath, {}, { allowPrUrlClear: true });
+
+      const result = await readState(statePath);
+      expect(result.ok).toBe(true);
+      if (result.ok) expect(result.value).toEqual({});
+    });
   });
 
   // --- saveStepStatus ---
