@@ -508,7 +508,7 @@ describe('#902 unknown-provider compatibility policy', () => {
 });
 
 describe('#902 generated provider documentation', () => {
-  it('labels both autonomous policies and the Claude interactive path', () => {
+  it('labels both autonomous policies and the supported-host interactive path', () => {
     const table = renderModelTable();
     expect(table).toContain(
       '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
@@ -519,7 +519,9 @@ describe('#902 generated provider documentation', () => {
     expect(table).toMatch(
       /\| plan \| autonomous engine \| opus \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-sol \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );
-    expect(table).toContain('| code-review | Claude interactive |');
+    expect(table).toMatch(
+      /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,
+    );
     expect(table.match(/\| autonomous engine \|/g)).toHaveLength(Object.keys(CLAUDE_MODELS).length);
 
     const pins = buildPinsJson();

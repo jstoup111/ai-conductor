@@ -1,6 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile, readFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
@@ -77,6 +76,9 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
       expect(afterWrite).toContain(
         '| Skill/Agent | Execution path | Claude model | Claude effort | Codex model | Codex effort | Why |',
       );
+      expect(afterWrite).toMatch(
+        /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,
+      );
       // The stale placeholder row must be gone — real regeneration happened.
       expect(afterWrite).not.toContain('stale row from a previous run');
       // Prose outside the markers is byte-identical.
@@ -114,7 +116,7 @@ describe('Generator write mode rewrites only the marked region (TS-2)', () => {
   );
 });
 
-describe('real binary provider-labelled contract drift', () => {
+describe('public CLI provider-labelled contract drift', () => {
   it(
     'reports a useful diff for every representative provider-labelled table mutation',
     async () => {
@@ -142,7 +144,8 @@ describe('real binary provider-labelled contract drift', () => {
           line.split('|').length === 9,
       );
       const autonomousRows = rows.filter((row) => cells(row)[1] === 'autonomous engine');
-      const interactiveRow = rows.find((row) => cells(row)[1] === 'Claude interactive') ?? '';
+      const interactiveRow =
+        rows.find((row) => cells(row)[1] === 'supported-host interactive') ?? '';
       const autonomousRowWith = (column: number): string =>
         autonomousRows.find((row) => Boolean(cells(row)[column])) ?? '';
       const changedCellRow = (row: string, column: number, suffix: string): string => {
@@ -184,6 +187,12 @@ describe('real binary provider-labelled contract drift', () => {
           category: 'interactive execution/provider label',
           document: replaceCell(interactiveRow, 1, '-drift'),
           removed: changedCellRow(interactiveRow, 1, '-drift'),
+          restored: interactiveRow,
+        },
+        {
+          category: 'interactive Codex model inheritance',
+          document: replaceCell(interactiveRow, 4, '-drift'),
+          removed: changedCellRow(interactiveRow, 4, '-drift'),
           restored: interactiveRow,
         },
         {
@@ -233,23 +242,12 @@ describe('real binary provider-labelled contract drift', () => {
       const results = [];
       for (const { category, document, removed, restored } of mutations) {
         await writeFile(fixtureHarness, document, 'utf8');
-        const result = spawnSync(
-          'bash',
-          [join(harnessRoot, 'bin', 'generate-model-table'), '--check'],
-          {
-            cwd: harnessRoot,
-            env: {
-              ...process.env,
-              GENERATE_MODEL_TABLE_HARNESS_MD: fixtureHarness,
-            },
-            encoding: 'utf8',
-          },
-        );
-        const output = `${result.stdout}${result.stderr}`;
+        const result = await runCli({ harnessMdPath: fixtureHarness, mode: 'check' });
+        const output = result.message ?? '';
         results.push({
           category,
           seeded: document !== committed,
-          driftExit: result.status === 1,
+          driftExit: result.exitCode === 1,
           unifiedDiff:
             /^--- a\/.*HARNESS\.md$/m.test(output) && /^\+\+\+ b\/.*HARNESS\.md$/m.test(output),
           usefulDatum:

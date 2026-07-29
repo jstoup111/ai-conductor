@@ -313,26 +313,57 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     }
   });
 
-  it('labels every non-engine row as Claude interactive without invented effort or Codex values', () => {
-    expect(
-      buildExtraRows().map(
-        ({ name, executionPath, claudeEffort, codexModel, codexEffort }) => ({
-          name,
-          executionPath,
-          claudeEffort,
-          codexModel,
-          codexEffort,
-        }),
+  it('renders supported-host interactive rows with Codex inheritance semantics', () => {
+    const violations = buildExtraRows().flatMap((row) => {
+      const describesCodexInheritance = (value: string): boolean =>
+        /\bCodex\b/.test(value) &&
+        /\binherit(?:s|ed|ance|ing)?\b/i.test(value) &&
+        /(?:\bsession\b|\bspawned-agent\b)/.test(value) &&
+        !/\b(?:haiku|sonnet|opus|fable)\b/i.test(value);
+      const hasSupportedHostContract =
+        row.executionPath === 'supported-host interactive' &&
+        describesCodexInheritance(row.codexModel) &&
+        describesCodexInheritance(row.codexEffort);
+
+      return hasSupportedHostContract ? [] : [row.name];
+    });
+
+    expect(violations).toEqual([]);
+  });
+
+  it('rejects incomplete and cross-provider interactive metadata with row and field details', () => {
+    const canonical = buildExtraRows()[0]!;
+    const invalidCases = [
+      { field: 'executionPath', value: 'Claude interactive' },
+      { field: 'codexModel', value: '' },
+      { field: 'codexEffort', value: '' },
+      { field: 'codexModel', value: 'sonnet' },
+      { field: 'codexModel', value: 'gpt-5.6-sol' },
+      { field: 'codexEffort', value: 'high' },
+    ] as const;
+
+    const messages = invalidCases.map(({ field, value }) => {
+      try {
+        buildExtraRows([{ ...canonical, name: 'invalid-row', [field]: value }]);
+        return '<no error>';
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+    });
+
+    expect(messages).toEqual(
+      invalidCases.map(({ field, value }) =>
+        expect.stringMatching(
+          new RegExp(`invalid-row.*${field}.*${JSON.stringify(value)}`, 'i'),
+        ),
       ),
-    ).toEqual(
-      buildExtraRows().map(({ name }) => ({
-        name,
-        executionPath: 'Claude interactive',
-        claudeEffort: '',
-        codexModel: '',
-        codexEffort: '',
-      })),
     );
+  });
+
+  it('accepts every canonical interactive row', () => {
+    const canonical = buildExtraRows();
+
+    expect(() => buildExtraRows(canonical)).not.toThrow();
   });
 
   it('maps display names: snake_case -> kebab-case, build -> pipeline, worktree -> worktree-manager, acceptance_specs -> writing-system-tests', () => {

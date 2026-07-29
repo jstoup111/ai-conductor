@@ -96,7 +96,7 @@ export const PIN_EXEMPT_SKILLS: readonly string[] = [
 //
 // Rows for skills/agents that are NOT engine steps (no StepName / no entry in
 // CLAUDE_MODEL_POLICY.stepModels) but that HARNESS.md's model-selection table
-// still documents on the Claude interactive path: domain-reviewer/evaluator
+// still documents on the supported-host interactive path: domain-reviewer/evaluator
 // (dispatched sub-agents), code-review/debugging/simplify/engineer (skills
 // with their own model pin but no engine step), conduct/pr (orchestration
 // skills), tdd-red/tdd-green (TDD sub-phases), and the 10 cto-* assess
@@ -115,225 +115,176 @@ export interface ExtraModelTableRow {
    *  both this list and the engine-derived rows — enforced by
    *  assertNoDuplicateRowNames() in generate-model-table.ts. */
   name: string;
-  executionPath: 'Claude interactive';
+  executionPath: 'supported-host interactive';
   claudeModel: string;
   claudeEffort: '';
-  codexModel: '';
-  codexEffort: '';
+  codexModel: string;
+  codexEffort: string;
   why: string;
 }
 
-export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] = [
+const INTERACTIVE_EXECUTION_PATH = 'supported-host interactive' as const;
+const CODEX_MODEL_INHERITANCE =
+  'inherits model from the Codex session or spawned-agent configuration';
+const CODEX_EFFORT_INHERITANCE =
+  'inherits effort from the Codex session or spawned-agent configuration';
+
+const EXTRA_MODEL_TABLE_ROW_DEFAULTS = {
+  executionPath: INTERACTIVE_EXECUTION_PATH,
+  codexModel: CODEX_MODEL_INHERITANCE,
+  codexEffort: CODEX_EFFORT_INHERITANCE,
+} as const;
+
+const EXTRA_MODEL_TABLE_ROW_INPUTS: Array<
+  Omit<ExtraModelTableRow, keyof typeof EXTRA_MODEL_TABLE_ROW_DEFAULTS>
+> = [
   {
     name: 'verify-claims',
-    executionPath: 'Claude interactive',
     claudeModel: 'inherits caller',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why:
       'Cross-cutting correctness protocol applied within the invoking skill\'s context (calibrate claims, gate assumptions) — not a separately dispatched agent, so it runs on the caller\'s model.',
   },
   {
     name: 'domain-reviewer',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet (<50-line diff), opus (≥50-line diff)',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why:
       'Right-sized by diff size: Sonnet for focused small diffs, Opus for large changes needing cross-boundary judgment.',
   },
   {
     name: 'evaluator',
-    executionPath: 'Claude interactive',
     claudeModel:
       'sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance)',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Right-sized by batch content.',
   },
   {
     name: 'code-review',
-    executionPath: 'Claude interactive',
     claudeModel: 'opus',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Multi-dimensional analysis (spec, quality, domain).',
   },
   {
     name: 'debugging',
-    executionPath: 'Claude interactive',
     claudeModel: 'fable',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Fable guards root-cause analysis; wrong diagnosis produces band-aid fixes.',
   },
   {
     name: 'simplify',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Pattern matching for duplication and complexity — structured checklist work.',
   },
   {
     name: 'engineer',
-    executionPath: 'Claude interactive',
     claudeModel: 'fable',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why:
       'Interactive idea→spec control plane routing the real DECIDE skills. Kept on Fable for operator-driven interactive quality — this is a capability / operator-preference call, NOT a cost saving: Fable is the premium tier ($10/$50 per 1M, ~2x Opus).',
   },
   {
     name: 'intake',
-    executionPath: 'Claude interactive',
     claudeModel: 'inherits caller',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why:
       'Issue authoring runs in whatever session observed the problem (operator chat, halt monitor, build session) — evidence is freshest there; structured writing needs no dedicated dispatch.',
   },
   {
     name: 'conduct',
-    executionPath: 'Claude interactive',
     claudeModel: 'haiku',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Artifact checking and status reporting — mechanical.',
   },
   {
     name: 'daemon-triage',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: "Operator-invoked, read-only triage. Routing determinism lives in the skill's signal table, not the model; the model gathers evidence and matches rows.",
   },
   {
     name: 'pr',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Diff analysis and structured PR body — templated output.',
   },
   {
     name: 'tdd-red',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Writing one test at a time — focused, constrained.',
   },
   {
     name: 'tdd-green',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Writing minimal implementation — constrained scope.',
   },
   {
     name: 'cto-security',
-    executionPath: 'Claude interactive',
     claudeModel: 'opus',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Deep security analysis requires reasoning about attack vectors.',
   },
   {
     name: 'cto-data-integrity',
-    executionPath: 'Claude interactive',
     claudeModel: 'opus',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Transaction and race condition analysis requires deep reasoning.',
   },
   {
     name: 'cto-dependencies',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Checklist-based package and license scanning.',
   },
   {
     name: 'cto-architecture',
-    executionPath: 'Claude interactive',
     claudeModel: 'opus',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Cross-module coherence and coupling analysis requires deep reasoning.',
   },
   {
     name: 'cto-duplication',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Pattern matching across modules — structured checklist work.',
   },
   {
     name: 'cto-testing',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Coverage gap analysis and test quality review — structured.',
   },
   {
     name: 'cto-infrastructure',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Infrastructure config review — checklist-based.',
   },
   {
     name: 'cto-observability',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Error handling and logging pattern review — checklist-based.',
   },
   {
     name: 'cto-devex',
-    executionPath: 'Claude interactive',
     claudeModel: 'sonnet',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Documentation and tooling review — checklist-based.',
   },
   {
     name: 'cto-orchestrator',
-    executionPath: 'Claude interactive',
     claudeModel: 'opus',
     claudeEffort: '',
-    codexModel: '',
-    codexEffort: '',
     why: 'Cross-referencing 9 reports and prioritizing requires deep reasoning.',
   },
 ];
+
+export const EXTRA_MODEL_TABLE_ROWS: ExtraModelTableRow[] =
+  EXTRA_MODEL_TABLE_ROW_INPUTS.map((row) => ({
+    ...EXTRA_MODEL_TABLE_ROW_DEFAULTS,
+    ...row,
+  }));

@@ -196,22 +196,18 @@ describe('EXTRA_MODEL_TABLE_ROWS completeness (TS-1 happy path 2)', () => {
     expect(names.length).toBe(EXPECTED_EXTRA_ROW_NAMES.length);
   });
 
-  it('has a complete Claude-interactive seven-column shape for every row', () => {
-    for (const row of EXTRA_MODEL_TABLE_ROWS) {
-      expect(row.executionPath, `row "${row.name}" has the wrong execution path`).toBe(
-        'Claude interactive',
-      );
-      expect(
-        row.claudeModel.trim().length,
-        `row "${row.name}" has empty Claude model text`,
-      ).toBeGreaterThan(0);
-      expect(row.claudeEffort, `row "${row.name}" invents Claude effort`).toBe('');
-      expect(row.codexModel, `row "${row.name}" invents a Codex model`).toBe('');
-      expect(row.codexEffort, `row "${row.name}" invents Codex effort`).toBe('');
-      expect(row.why.trim().length, `row "${row.name}" has empty rationale text`).toBeGreaterThan(
-        0,
-      );
-    }
+  it('documents provider-neutral interactive model inheritance for every extra row', () => {
+    const violations = EXTRA_MODEL_TABLE_ROWS.flatMap((row) => {
+      const hasInteractiveHostContract =
+        row.executionPath === 'supported-host interactive' &&
+        row.claudeModel.trim().length > 0 &&
+        /\binherit(?:s|ed|ance|ing)?\b/i.test(row.codexModel) &&
+        /\binherit(?:s|ed|ance|ing)?\b/i.test(row.codexEffort);
+
+      return hasInteractiveHostContract ? [] : [row.name];
+    });
+
+    expect(violations).toEqual([]);
   });
 });
 
