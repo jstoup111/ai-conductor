@@ -313,7 +313,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     ]);
   });
 
-  it('done → marks processed, removes the worktree, reports prUrl', async () => {
+  it('done → marks processed, retains the worktree, reports prUrl', async () => {
     const rec: { teardownKeep?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
       deps(
@@ -332,7 +332,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.prUrl).toBe('http://pr/1');
     expect(out.costTokens).toBe(42);
     expect(rec.processed).toBe(true);
-    expect(rec.teardownKeep).toBe(false); // removed on success
+    expect(rec.teardownKeep).toBeUndefined();
   });
 
   it('done with verified prUrl and finishChoice="pr" → ships (happy path)', async () => {
@@ -354,7 +354,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(out.prUrl).toBe('https://github.com/owner/repo/pull/123');
     expect(out.costTokens).toBe(50);
     expect(rec.processed).toBe(true);
-    expect(rec.teardownKeep).toBe(false); // removed on success
+    expect(rec.teardownKeep).toBeUndefined();
   });
 
   it.each([
@@ -1663,6 +1663,81 @@ describe('engine/daemon-runner — makeRunFeature', () => {
   describe('verified PR ship outcome', () => {
     const PR_URL = 'https://github.com/jstoup111/ai-conductor/pull/358';
 
+    it('keeps retention reporting ship-only and tolerates cleanup failure with an absent worktree', async () => {
+      const effects: string[] = [];
+      const logs: string[] = [];
+      const absentPath = join(tmpdir(), 'already-absent-feature-worktree');
+      await rm(absentPath, { recursive: true, force: true });
+      const featureDeps = {
+        ...deps({
+          done: true,
+          halted: false,
+          finishChoice: 'pr' as const,
+          prUrl: PR_URL,
+        }),
+        createWorktree: async () => ({ path: absentPath, branch: `feat/${ITEM.slug}` }),
+        cleanupHaltPresentation: async () => {
+          throw new Error('cleanup exploded');
+        },
+        enrollWatch: async () => {
+          effects.push('enrollWatch');
+        },
+        markProcessed: async () => {
+          effects.push('markProcessed');
+        },
+        log: (message: string) => logs.push(message),
+      };
+
+      const shipped = await makeRunFeature(featureDeps)(ITEM);
+      const haltedLogs: string[] = [];
+      const haltedDeps = deps({ done: false, halted: true, reason: 'paused' });
+      haltedDeps.log = (message: string) => haltedLogs.push(message);
+      const halted = await makeRunFeature(haltedDeps)(ITEM);
+
+      expect({
+        shippedStatus: shipped.status,
+        effects,
+        cleanupErrorLogged: logs.some(line => line.includes('clear-on-success error: cleanup exploded')),
+        retainedPathLogged: logs.some(line => line.includes(`worktree retained at ${absentPath}`)),
+        retainedReasonLogged: logs.includes(
+          `[daemon-runner] retained ${ITEM.slug} — reason: pr-open-awaiting-main`,
+        ),
+        haltedStatus: halted.status,
+        haltedClaimsShipRetention: haltedLogs.some(line => line.includes('worktree retained at')),
+      }).toEqual({
+        shippedStatus: 'done',
+        effects: ['enrollWatch', 'markProcessed'],
+        cleanupErrorLogged: true,
+        retainedPathLogged: true,
+        retainedReasonLogged: true,
+        haltedStatus: 'halted',
+        haltedClaimsShipRetention: false,
+      });
+    });
+
+    it('retains the worktree after enrolling and marking a verified ship', async () => {
+      const effects: string[] = [];
+      const featureDeps = deps({
+        done: true,
+        halted: false,
+        finishChoice: 'pr',
+        prUrl: PR_URL,
+      });
+      featureDeps.enrollWatch = async () => {
+        effects.push('enrollWatch');
+      };
+      featureDeps.markProcessed = async () => {
+        effects.push('markProcessed');
+      };
+      featureDeps.teardownWorktree = async () => {
+        effects.push('teardownWorktree');
+      };
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect(effects).toEqual(['enrollWatch', 'markProcessed']);
+    });
+
     it('a valid PR outcome marks the feature processed with its PR URL', async () => {
       const rec: TestRecorder = {};
       const run = makeRunFeature(
@@ -1682,8 +1757,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       expect(rec.processed).toBe(true);
       expect(rec.processedCalls).toHaveLength(1);
       expect(rec.processedCalls![0]).toEqual({ slug: ITEM.slug, prUrl: PR_URL });
-      // Side effects remain owned by the daemon runner's single verified path.
-      expect(rec.teardownKeep).toBe(false);
+      expect(rec.teardownKeep).toBeUndefined();
     });
 
     it('a halted outcome writes no processed marker', async () => {

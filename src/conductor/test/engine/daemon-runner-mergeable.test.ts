@@ -1,7 +1,8 @@
 /**
  * Tests for PR-label wiring in daemon-runner and daemon.ts.
  *
- * FR-9  — enrollWatch called on done + prUrl, before teardown; not on halted/error.
+ * FR-9  — enrollWatch called on done + prUrl, before markProcessed; not on halted/error.
+ *          The worktree remains intact until shipped-record reconciliation on main.
  * FR-16 — clear-on-success: removeLabel('needs-remediation') + setReady on done;
  *          no-op when label absent; failure swallowed; never on halted/error.
  * FR-14 — sweepMergeableLabels called after each feature in daemon-runner; on
@@ -87,7 +88,7 @@ function makeGhFake(opts: { labels?: string[]; throws?: boolean } = {}): {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('FR-9: enrollWatch on done', () => {
-  it('done + prUrl => enrollWatch called before teardown', async () => {
+  it('done + prUrl => enrollWatch called before markProcessed without teardown', async () => {
     const order: string[] = [];
     const enrollArgs: Array<{ root: string; prUrl: string; slug: string }> = [];
 
@@ -119,8 +120,7 @@ describe('FR-9: enrollWatch on done', () => {
     expect(enrollArgs[0].root).toBe('/project');
     expect(enrollArgs[0].prUrl).toBe(PR_URL);
     expect(enrollArgs[0].slug).toBe('feat-x');
-    // enroll must precede teardown
-    expect(order.indexOf('enroll')).toBeLessThan(order.indexOf('teardown'));
+    expect(order).toEqual(['enroll', 'markProcessed']);
   });
 
   it('halted => enrollWatch NOT called', async () => {
@@ -174,7 +174,7 @@ describe('FR-9: enrollWatch on done', () => {
     expect(enrollCalls).toHaveLength(0); // ship path skipped
   });
 
-  it('enroll failure is swallowed => teardown + markProcessed still run', async () => {
+  it('enroll failure is swallowed => markProcessed still runs without teardown', async () => {
     const rec: { teardown?: boolean; processed?: boolean } = {};
     const run = makeRunFeature(
       baseDeps({
@@ -199,7 +199,7 @@ describe('FR-9: enrollWatch on done', () => {
     const out = await run(ITEM);
     expect(out.status).toBe('done');
     expect(rec.processed).toBe(true);
-    expect(rec.teardown).toBe(true);
+    expect(rec.teardown).toBeUndefined();
   });
 });
 
@@ -262,7 +262,7 @@ describe('FR-16: clear-on-success', () => {
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'ready')).toBe(false);
   });
 
-  it('clear failure is swallowed => enroll + teardown still proceed', async () => {
+  it('clear failure is swallowed => enroll proceeds without teardown', async () => {
     const { runGh } = makeGhFake({ throws: true });
     const enrollCalls: unknown[] = [];
     const rec: { teardown?: boolean } = {};
@@ -287,7 +287,7 @@ describe('FR-16: clear-on-success', () => {
     const out = await run(ITEM);
     expect(out.status).toBe('done');
     expect(enrollCalls).toHaveLength(1); // enroll still ran
-    expect(rec.teardown).toBe(true);    // teardown still ran
+    expect(rec.teardown).toBeUndefined();
   });
 
   it('halted => clear NOT attempted (no gh calls)', async () => {
@@ -318,7 +318,7 @@ describe('FR-16: clear-on-success', () => {
     expect(calls.some((a) => a[0] === 'pr' && a[1] === 'view')).toBe(false);
   });
 
-  it('clear + enroll order: removeLabel before enroll before teardown', async () => {
+  it('clear + enroll order: removeLabel before enroll before markProcessed, without teardown', async () => {
     const { runGh } = makeGhFake({ labels: ['needs-remediation'] });
     const order: string[] = [];
     const run = makeRunFeature(
@@ -345,11 +345,15 @@ describe('FR-16: clear-on-success', () => {
         teardownWorktree: async () => {
           order.push('teardown');
         },
+        markProcessed: async () => {
+          order.push('markProcessed');
+        },
       }),
     );
     await run(ITEM);
     expect(order.indexOf('removeLabel')).toBeLessThan(order.indexOf('enroll'));
-    expect(order.indexOf('enroll')).toBeLessThan(order.indexOf('teardown'));
+    expect(order.indexOf('enroll')).toBeLessThan(order.indexOf('markProcessed'));
+    expect(order).not.toContain('teardown');
   });
 });
 

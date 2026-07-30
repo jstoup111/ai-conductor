@@ -28,20 +28,34 @@ sequenceDiagram
     loop each sweep pass
         S->>REG: read entries
         S->>GH: prMergeState(prUrl)
-        alt state MERGED
+        alt state MERGED or CLOSED
             S->>G: fetch origin main
             S->>G: cat-file -e origin/main:.docs/shipped/«slug».md
             alt record present at path
                 S->>W: teardownWorktree(keep=false)
-                S->>REG: prune entry (FR-13)
-                S->>L: reaped «slug» — reason: shipped-record-on-main
-            else record absent (or fetch failed)
+                alt teardown succeeds
+                    S->>L: reaped «slug» — reason: shipped-record-on-main
+                    S->>REG: prune entry (FR-13)
+                else teardown rejects
+                    S->>L: error reaping PR: «error»
+                    S->>REG: prune entry (FR-13)
+                    Note over S,REG: terminal watch disposition — no later retry
+                end
+            else record absent or probe indeterminate, state MERGED
                 S->>L: retained «slug» — reason: record-not-yet-on-main
                 Note over S,REG: entry kept — re-checked next pass (idempotent)
+            else record absent or probe indeterminate, state CLOSED
+                S->>REG: prune entry
+                S->>L: retained «slug» — reason: pr-closed-without-ship-proof, reclaimable
+                S->>L: dashboard lists «slug» under retained worktrees
             end
-        else state CLOSED unmerged or NOTFOUND
+        else state UNKNOWN
+            S->>L: skip «slug» — reason: could-not-read-state
+            Note over S,REG: no shipped-record probe or teardown, entry kept
+            S->>S: continue sweep with next entry
+        else state NOTFOUND
             S->>REG: prune entry
-            S->>L: retained «slug» — reason: pr-closed-unmerged, reclaimable
+            S->>L: [mergeable-sweep] pruning «prUrl» (state: NOTFOUND)
             S->>L: dashboard lists «slug» under retained worktrees
         else state OPEN
             S->>L: retained «slug» — reason: pr-open-awaiting-main
@@ -51,8 +65,20 @@ sequenceDiagram
 
     opt operator reclaims an abandoned worktree
         OP->>L: conduct daemon status (sees retained «slug»)
-        OP->>W: conduct daemon reclaim-worktree «slug»
-        Note over OP,W: single named slug, path printed before removal
+        OP->>S: conduct daemon reclaim-worktree «slug»
+        S->>S: validate exactly one slug
+        alt named worktree is absent
+            S->>OP: no retained worktree (success, no-op)
+        else named worktree exists
+            S->>S: detectAutoResume(root, slug)
+            alt resume kind is resume
+                S->>OP: refuse: in-progress
+            else target is quiescent
+                S->>L: print named worktree path
+                S->>W: removeWorktree(named path)
+                S->>OP: removed retained worktree
+            end
+        end
     end
 
     opt resume of a closed-unmerged feature
@@ -67,11 +93,20 @@ sequenceDiagram
   PR-head-scoped and unchanged; the new gate is a separate, main-scoped check owned by the sweep.
 - The gate is **file presence at path** on `origin/main`, not ancestry — squash-merge makes the
   feature branch a non-ancestor of main even after merging (#1114, verified against PR #1138).
-- Retention is not permanent for closed-unmerged PRs: the registry entry is pruned (nothing left to
-  label) but the worktree is surfaced to the operator with a named reclaim verb, satisfying the
-  issue's "no worktree retained forever with no way to see or reclaim it" negative path.
+- MERGED and CLOSED both enter the shipped-record probe. A present record authorizes teardown and
+  terminal watch pruning for either state. Without proof, MERGED keeps its watch for another pass;
+  CLOSED prunes its watch and surfaces the retained worktree through the named reclaim verb.
+- UNKNOWN performs no shipped-record probe or teardown. It keeps the watch and continues with the
+  next entry so a transient state-read failure cannot destroy evidence or stall sibling entries.
+- NOTFOUND prunes the watch but retains and surfaces the reclaimable worktree.
 - Every branch of the decision emits a log line naming the driving condition, so an operator can
   distinguish a deliberate retention from a leak.
+- Once a MERGED or CLOSED entry's shipped record is present, its watch is pruned even if teardown
+  rejects: the rejection is caught and logged, and the sweep does not retry it later. Successful
+  teardown emits the `reaped` log before the same terminal prune.
+- Operator reclaim accepts one validated slug, treats an absent named worktree as a successful
+  no-op, and calls `detectAutoResume` before teardown. A target classified for resume is in progress
+  and is refused.
 - Post-ship **CI-fix** continues to cut `.worktrees/resolve-«slug»` from the branch tip and is
   unaffected by the retained feature worktree.
 - **Rebase resolution is NOT unaffected.** `isEligibleForResolve` Gate 6 (`autoresolve.ts:216-226`)
@@ -83,4 +118,6 @@ sequenceDiagram
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-29 | Added CLOSED proof handling and explicit UNKNOWN / NOTFOUND branches | Batch 3 as-built update |
+| 2026-07-29 | Added guarded single-slug reclaim and terminal reap-error path | Batch 2 as-built update |
 | 2026-07-29 | Initial generation | DECIDE for #1091 |

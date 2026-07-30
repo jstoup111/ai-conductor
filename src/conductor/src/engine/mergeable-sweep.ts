@@ -8,7 +8,7 @@
  *   - rewriteWatch   — overwrite the file; swallow write failures (C3).
  *
  * sweepMergeableLabels — for each tracked PR:
- *   1. MERGED / CLOSED → prune (FR-13).
+ *   1. MERGED / CLOSED → enter the shipped-record gate path; NOTFOUND → prune (FR-13).
  *   2. UNKNOWN state (read error) → log + skip (FR-15).
  *   3. labels includes `needs-remediation` → ensure `mergeable` absent (FR-12).
  *   4. isMergeable → add `mergeable` if not already present (FR-10, C2).
@@ -22,6 +22,7 @@ import { join } from 'node:path';
 import {
   GhRunner,
   makeProductionGh,
+  makeProductionGit,
   ensureLabel,
   addLabel,
   removeLabel,
@@ -31,6 +32,8 @@ import {
   type PrMergeState,
 } from './pr-labels.js';
 import type { ConductorEvent } from '../types/events.js';
+import type { FeatureWorktree } from './daemon-runner.js';
+import { shippedRecordOnMain } from './shipped-record-on-main.js';
 
 // ── Task 21: exhaustion escalation ──────────────────────────────────────────
 
@@ -80,6 +83,38 @@ const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
  * entries — preventing unbounded growth (Task 1).
  */
 const MAX_WATCH_ENTRIES = 100;
+
+/** Retain/unknown outcome state scoped to the lifetime of one daemon logger. */
+const dispositionCaches = new WeakMap<
+  (msg: string) => void,
+  Map<string, string>
+>();
+
+function recordDisposition(
+  log: ((msg: string) => void) | undefined,
+  entry: WatchEntry,
+  disposition: string,
+): boolean {
+  if (!log) return false;
+  let cache = dispositionCaches.get(log);
+  if (!cache) {
+    cache = new Map<string, string>();
+    dispositionCaches.set(log, cache);
+  }
+  const entryIdentity = `${entry.repoCwd}\0${entry.prUrl}\0${entry.slug}`;
+  if (cache.get(entryIdentity) === disposition) return false;
+  cache.set(entryIdentity, disposition);
+  return true;
+}
+
+function logDisposition(
+  log: ((msg: string) => void) | undefined,
+  entry: WatchEntry,
+  disposition: string,
+  message: string,
+): void {
+  if (recordDisposition(log, entry, disposition)) log?.(message);
+}
 
 // ── Registry helpers ──────────────────────────────────────────────────────────
 
@@ -234,6 +269,16 @@ export interface SweepOpts {
   autoresolve?: AutoresolveDispatchOpts;
   /** Task 10: optional CI fix dispatch, run once per tick after the label pass. */
   ciFix?: CiFixDispatchOpts;
+  /**
+   * Optional worktree teardown seam for the shipped-record gate.
+   * MERGED and CLOSED may use this dependency; NOTFOUND never does.
+   */
+  teardownWorktree?: (worktree: FeatureWorktree, keep: boolean) => Promise<void>;
+  /** Probe whether the feature's shipped record is present on origin/main. */
+  shippedRecordProbe?: (
+    repoCwd: string,
+    slug: string,
+  ) => Promise<'present' | 'absent' | 'indeterminate'>;
   /** Task 8: optional event callback for sweep events (e.g. ci_failed on transition). */
   onEvent?: (event: ConductorEvent) => void;
 }
@@ -248,9 +293,19 @@ export async function sweepMergeableLabels({
   runGh,
   autoresolve,
   ciFix,
+  teardownWorktree,
+  shippedRecordProbe,
   onEvent,
 }: SweepOpts): Promise<void> {
   const gh = runGh ?? makeProductionGh();
+  const git = makeProductionGit();
+  const probe =
+    shippedRecordProbe ??
+    ((repoCwd: string, slug: string) =>
+      shippedRecordOnMain(repoCwd, slug, async (args, opts) => ({
+        ...(await git(args, opts)),
+        stderr: '',
+      })));
   try {
     const entries = await readWatch(projectRoot);
     const survivors: WatchEntry[] = [];
@@ -267,14 +322,62 @@ export async function sweepMergeableLabels({
       try {
         const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
 
-        // FR-13: MERGED / CLOSED / NOTFOUND → prune from registry.
-        // NOTFOUND means the PR is genuinely gone (404 / deleted); prune it so
-        // the watch registry does not grow without bound.
-        if (
-          state.state === 'MERGED' ||
-          state.state === 'CLOSED' ||
-          state.state === 'NOTFOUND'
-        ) {
+        // MERGED and CLOSED may both represent a completed merge: only a
+        // shipped record proven present authorizes feature-worktree teardown.
+        if (state.state === 'MERGED' || state.state === 'CLOSED') {
+          log?.(
+            `[mergeable-sweep] ${state.state.toLowerCase()} ${entry.prUrl} entering shipped-record gate`,
+          );
+          const shippedRecord = await probe(entry.repoCwd, entry.slug);
+          if (shippedRecord === 'present') {
+            try {
+              if (!teardownWorktree) {
+                throw new Error('worktree teardown dependency unavailable');
+              }
+              await teardownWorktree(
+                {
+                  path: join(entry.repoCwd, '.worktrees', entry.slug),
+                  branch: `feat/daemon-${entry.slug}`,
+                },
+                false,
+              );
+              log?.(
+                `[mergeable-sweep] reaped ${entry.slug} — reason: shipped-record-on-main`,
+              );
+            } catch (err) {
+              const detail = err instanceof Error ? err.message : String(err);
+              log?.(
+                `[mergeable-sweep] reap failed ${entry.slug} (${entry.prUrl}) — reason: shipped-record-on-main — error: ${detail}`,
+              );
+            }
+          } else if (state.state === 'MERGED') {
+            logDisposition(
+              log,
+              entry,
+              `retained:record-not-yet-on-main:${shippedRecord}`,
+              `[mergeable-sweep] retained ${entry.slug} — reason: record-not-yet-on-main${
+                shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
+              }`,
+            );
+            survivors.push(entry);
+          } else {
+            logDisposition(
+              log,
+              entry,
+              `retained:pr-closed-unmerged:${shippedRecord}`,
+              `[mergeable-sweep] retained ${entry.slug} (reclaimable) — reason: pr-closed-unmerged${
+                shippedRecord === 'indeterminate' ? ' (record probe indeterminate)' : ''
+              }`,
+            );
+          }
+          continue;
+        }
+
+        // FR-13: NOTFOUND → prune the registry entry while retaining the
+        // worktree. It means the PR is genuinely gone (404 / deleted);
+        // pruning prevents unbounded registry growth.
+        if (state.state === 'NOTFOUND') {
+          recordDisposition(log, entry, 'notfound');
           log?.(`[mergeable-sweep] pruning ${entry.prUrl} (state: ${state.state})`);
           continue; // not added to survivors
         }
@@ -283,11 +386,18 @@ export async function sweepMergeableLabels({
         // iteration; keep the entry so it is retried on the next sweep cycle.
         if (state.state === 'UNKNOWN') {
           log?.(`[mergeable-sweep] skipping ${entry.prUrl} (could not read state)`);
+          logDisposition(
+            log,
+            entry,
+            'unknown:pr-state-unknown',
+            `[mergeable-sweep] disposition unknown ${entry.slug} — reason: pr-state-unknown`,
+          );
           survivors.push(entry);
           continue;
         }
 
         // Entry is live — keep it in the registry.
+        recordDisposition(log, entry, `live:${state.state}`);
         survivors.push(entry);
 
         // Task 17 (AC1): track CONFLICTING PRs for the post-label-pass

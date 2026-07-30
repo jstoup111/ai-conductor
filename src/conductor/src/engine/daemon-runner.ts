@@ -153,6 +153,8 @@ export interface FeatureRunnerDeps {
    * Defaults to the production factory when absent.
    */
   runGh?: GhRunner;
+  /** Clear halt presentation after a verified ship. Injected in tests. */
+  cleanupHaltPresentation?: typeof cleanupHaltPresentation;
   /**
    * FR-9: enroll a shipped PR in the mergeable watch registry.
    * Defaults to the real enrollWatch; injected in tests to assert call order and
@@ -290,12 +292,18 @@ export function makeRunFeature(
   const gh = deps.runGh ?? makeProductionGh();
   const enroll = deps.enrollWatch ?? enrollWatchImpl;
   const sweep = deps.sweepMergeableLabels ?? sweepMergeableLabelsImpl;
+  const cleanup = deps.cleanupHaltPresentation ?? cleanupHaltPresentation;
 
   /** FR-14: best-effort sweep; never throws, never disrupts feature processing. */
   const maybeSweep = async (): Promise<void> => {
     if (!deps.projectRoot) return;
     try {
-      await sweep({ projectRoot: deps.projectRoot, log, runGh: deps.runGh });
+      await sweep({
+        projectRoot: deps.projectRoot,
+        log,
+        runGh: deps.runGh,
+        teardownWorktree: deps.teardownWorktree,
+      });
     } catch (err) {
       log(`[daemon-runner] sweep error: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -404,7 +412,7 @@ export function makeRunFeature(
           // enroll + teardown still run regardless.
           if (outcome.prUrl && deps.projectRoot) {
             try {
-              const cleanupResult = await cleanupHaltPresentation(
+              const cleanupResult = await cleanup(
                 gh,
                 deps.projectRoot,
                 outcome.prUrl,
@@ -435,6 +443,8 @@ export function makeRunFeature(
           }
 
           await deps.markProcessed(item.slug, outcome.prUrl);
+          featureLog(`[daemon-runner] worktree retained at ${worktree.path}`);
+          featureLog(`[daemon-runner] retained ${item.slug} — reason: pr-open-awaiting-main`);
 
           // #204/#205: the durable `.docs/shipped/<slug>.md` record is NOT
           // written here — `/finish` commits it on the IMPLEMENTATION branch
@@ -444,7 +454,6 @@ export function makeRunFeature(
           // If the finish flow failed to write it, dedup degrades to the
           // `.daemon/processed/` ledger marker written above.
 
-          await deps.teardownWorktree(worktree, false);
           featureLog(`✓ ${item.slug} shipped${outcome.prUrl ? ` → ${outcome.prUrl}` : ''}`);
           // FR-14: sweep mergeable labels after feature completes.
           await maybeSweep();

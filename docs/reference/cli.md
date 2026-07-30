@@ -112,9 +112,9 @@ Runs the background build/ship loop, or manages one. Procedures are in
 deliberately checked before every daemon dispatcher — without it, `daemon --help` would be treated as
 an unknown flag and launch a daemon run.
 
-A non-flag token after `daemon` that is not one of `status`, `logs`, `park`, `unpark`, `start`, `stop`,
-`restart`, `connect`, `debug`, `pause`, `resume` prints `conduct daemon: unknown subcommand '<token>'.`
-plus the daemon help to stderr and exits 1.
+A non-flag token after `daemon` that is not one of `status`, `logs`, `park`, `unpark`,
+`reclaim-worktree`, `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` prints
+`conduct daemon: unknown subcommand '<token>'.` plus the daemon help to stderr and exits 1.
 
 ### Running the daemon
 
@@ -272,6 +272,30 @@ steps completed in place.
 
 See [park a feature before you touch its git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state)
 for the automatic sweep this verb shares its logic with.
+
+### `daemon reclaim-worktree`
+
+```bash
+conduct-ts daemon reclaim-worktree <slug>
+```
+
+Removes exactly one named, retained feature worktree — the manual counterpart to the automatic
+reap described in [retained worktrees](../guides/running-the-daemon.md#retained-worktrees). It
+never bulk-deletes: only a single `[a-z0-9][a-z0-9-]*` slug is accepted, so a traversal
+(`../other`), a glob (`*`), a path (`nested/path`), a list (`one,two`), or more than one argument
+each print `Could not reclaim-worktree '<slug>': invalid-slug` and exit 1.
+
+A slug with no `.worktrees/<slug>` directory prints `No retained worktree to reclaim for
+'<slug>'.` and exits 0 — reclaiming an already-gone worktree is not an error. A slug with a resume
+in progress prints `Could not reclaim-worktree '<slug>': in-progress` and exits 1, so the verb
+never races a live build.
+
+Otherwise it prints `Reclaiming retained worktree: <path>`, removes the worktree, then prints
+`Removed retained worktree '<slug>': <path>` and exits 0. A removal failure prints `Could not
+reclaim-worktree '<slug>': <error message>` and exits 1, leaving the worktree in place.
+
+Like `park`/`unpark`/`reconcile-parked`, it resolves the main repo root via `git rev-parse
+--git-common-dir` before doing any other work, so it works from inside any worktree.
 
 ### Daemon management verbs
 

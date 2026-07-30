@@ -24,9 +24,10 @@ graph TD
 
     subgraph sweep["mergeable-sweep.ts — sweepMergeableLabels, per entry"]
         ST["prMergeState(gh, repoCwd, prUrl)"]
-        TERM{"terminal state?"}
-        MERGED["MERGED → reap gate"]
-        CLOSEDU["CLOSED unmerged / NOTFOUND<br/>→ RETAIN + mark reclaimable"]
+        TERM{"PR state?"}
+        PROBE["MERGED / CLOSED<br/>→ shipped-record probe"]
+        UNKNOWN["UNKNOWN → keep watch<br/>no probe or teardown; continue"]
+        NOTFOUND["NOTFOUND → prune watch<br/>RETAIN reclaimable worktree"]
     end
 
     subgraph gate["Shipped-record-on-main gate (new module)"]
@@ -37,6 +38,8 @@ graph TD
 
     subgraph reap["Reap (existing teardownWorktree, new caller)"]
         TD["teardownWorktree(wt, keep=false)<br/>git worktree remove --force"]
+        TDR{"teardown result"}
+        ERR["catch + log reap error<br/>watch still pruned; no later retry"]
         PR["prune registry entry (FR-13)"]
         RLOG2["featureLog: reaped «slug» —<br/>reason: shipped-record-on-main"]
     end
@@ -44,6 +47,12 @@ graph TD
     subgraph reclaim["Operator reclaim surface (new)"]
         DASH["daemon dashboard / status<br/>retained-worktree category"]
         CLI["conduct daemon reclaim-worktree «slug»<br/>(explicit single slug, never bulk)"]
+        VALID["validate exactly one slug<br/>(reject separators, glob, comma)"]
+        EXISTS{"named worktree exists?"}
+        QUIET["detectAutoResume(slug)<br/>quiescence guard"]
+        ACTIVE{"in progress?"}
+        NOOP["absent target → no-op success"]
+        REFUSE["refuse reclaim-worktree:<br/>in-progress"]
     end
 
     subgraph adjacent["Untouched adjacent flows"]
@@ -54,13 +63,22 @@ graph TD
     SFR --> CHP --> ENR --> MP --> RETAIN --> RLOG
     ENR --> WE
     WE --> ST --> TERM
-    TERM -->|MERGED| MERGED
-    TERM -->|"CLOSED unmerged / NOTFOUND"| CLOSEDU
-    MERGED --> FETCH --> CAT --> DEC
-    DEC -->|yes| TD --> PR --> RLOG2
-    DEC -->|"no — record not on main yet"| RETAIN2["retain; re-check next sweep"]
-    CLOSEDU --> DASH
-    DASH --> CLI --> TD
+    TERM -->|"MERGED / CLOSED"| PROBE
+    TERM -->|UNKNOWN| UNKNOWN
+    TERM -->|NOTFOUND| NOTFOUND
+    TERM -->|OPEN| LIVE["keep watch; existing label flow continues"]
+    PROBE --> FETCH --> CAT --> DEC
+    DEC -->|yes| TD --> TDR
+    TDR -->|success| RLOG2 --> PR
+    TDR -->|failure| ERR --> PR
+    DEC -->|"no / indeterminate + MERGED"| RETAIN2["retain worktree + watch;<br/>re-check next sweep"]
+    DEC -->|"no / indeterminate + CLOSED"| CLOSEDNOPROOF["prune watch;<br/>RETAIN reclaimable worktree"] --> DASH
+    NOTFOUND --> DASH
+    DASH --> CLI --> VALID --> EXISTS
+    EXISTS -->|no| NOOP
+    EXISTS -->|yes| QUIET --> ACTIVE
+    ACTIVE -->|yes| REFUSE
+    ACTIVE -->|no| TD
     RES -.->|"separate checkout, no collision"| RETAIN
     PF -.->|"complementary — do not duplicate"| RETAIN
 ```
@@ -76,15 +94,19 @@ graph TD
   (verified 2026-07-29 against squash-merged PR #1138; this is the #1114 trap). `mergedAt` is a
   GitHub assertion about PR state, not about the content of the tree the daemon builds from, so it
   is not the gate either.
-- **CLOSED unmerged is separated from MERGED.** Today `mergeable-sweep.ts` prunes both identically
-  (FR-13). Under this design only MERGED enters the reap gate; CLOSED-unmerged and NOTFOUND retain
-  the worktree and become operator-reclaimable, because a rejected PR is exactly the case where the
-  evidence is still needed.
-- **Reap is unconditional-once-proven, and idempotent.** `teardownWorktree` is unchanged and already
-  best-effort/non-throwing; the sweep re-checks the gate every pass, so a transient fetch failure
-  only defers a reap, never loses one.
-- **Reclaim is explicitly single-slug.** Per this repo's Daemon Operations Safety rule 1, no globbed
-  or computed delete set — the operator names the slug and the path is printed before removal.
+- **MERGED and CLOSED both probe for a shipped record.** A present record proves shipment despite
+  GitHub's state spelling, so either state reaps and prunes. Without proof, MERGED retains its watch
+  for another pass while CLOSED prunes the watch and retains a reclaimable worktree.
+- **UNKNOWN and NOTFOUND remain distinct.** UNKNOWN is transient: it keeps the watch, performs no
+  shipped-record probe or teardown, and continues the sweep. NOTFOUND is terminal for tracking: it
+  prunes the watch while retaining the reclaimable worktree.
+- **A present-record watch is terminal.** Successful teardown logs `reaped`; teardown rejection is
+  caught and logged, but either outcome prunes the watch, so a failed reap is not retried by a later
+  sweep. This preserves the Batch 2 failure disposition for both MERGED and CLOSED.
+- **Reclaim is explicitly single-slug and quiescence-gated.** Per this repo's Daemon Operations
+  Safety rule 1, no globbed or computed delete set: the command validates one slug, no-ops when that
+  named worktree is absent, and calls `detectAutoResume` before teardown. A resumable/in-progress
+  target is refused; an inactive target's path is printed before removal.
 - `.worktrees/resolve-«slug»` remediation checkouts are cut from the branch tip into their own
   directory, so a retained feature worktree does not collide with CI-fix **on disk**.
 - **Known accepted regression (descoped to #1150).** `isEligibleForResolve`
@@ -97,4 +119,6 @@ graph TD
 
 | Date | Change | Reason |
 |------|--------|--------|
+| 2026-07-29 | Added CLOSED shipped-record probe and explicit UNKNOWN / NOTFOUND dispositions | Batch 3 as-built update |
+| 2026-07-29 | Added reclaim validation/quiescence guard and terminal reap-error disposition | Batch 2 as-built update |
 | 2026-07-29 | Initial generation | DECIDE for #1091 |

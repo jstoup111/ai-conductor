@@ -69,6 +69,19 @@ export interface ProcessedEntry {
   prUrl?: string;
 }
 
+export interface RetainedWorktreeEntry {
+  slug: string;
+  /**
+   * `pr-open-awaiting-main` — a verified ship whose PR has not yet merged to
+   * `origin/main` (the `.daemon/processed/` ledger names it).
+   * `pr-closed-unmerged` — the PR closed without merging, but the worktree's
+   * pipeline had already reached a completed run (`.pipeline/DONE` present)
+   * before that happened, so the stale `.pipeline/HALT` left behind is not a
+   * live block — it is surfaced as reclaimable (Story S3/S5).
+   */
+  reason: 'pr-open-awaiting-main' | 'pr-closed-unmerged';
+}
+
 /**
  * A spec held back by an unresolved dependency gate (FR-6). Carries the
  * closed `BlockerVerdict` union so the dashboard can render blockers, cycle
@@ -132,6 +145,8 @@ export interface InheritedState {
    * slug and are never filtered by precedence.
    */
   gated?: GatedItem[];
+  /** Feature worktrees retained after PR open until their branch lands on main. */
+  retainedWorktrees?: RetainedWorktreeEntry[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -151,6 +166,19 @@ export interface ScanInheritedStateDeps {
   >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
+}
+
+/** The completed-run marker; mirrors the private constant in conductor.ts. */
+const DONE_MARKER = '.pipeline/DONE';
+
+/** `true` when `path` exists (any type), tolerant of missing/unreadable paths. */
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await readFile(path, 'utf-8');
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** List immediate subdirectory names of `dir`; `[]` when `dir` is absent. */
@@ -277,6 +305,7 @@ export async function scanInheritedState(
   const halted: HaltedEntry[] = [];
   const haltedSlugs = new Set<string>();
   const inProgress: InProgressEntry[] = [];
+  const retainedWorktrees: RetainedWorktreeEntry[] = [];
 
   for (const slug of slugs) {
     try {
@@ -288,7 +317,15 @@ export async function scanInheritedState(
       } catch {
         haltContent = null; // no live HALT marker
       }
-      if (haltContent !== null) {
+      // A HALT marker alongside a `.pipeline/DONE` marker is never a live
+      // block in production: the false-ship path always removes DONE before
+      // writing a real HALT (daemon-runner.ts). So this combination only
+      // occurs when a fully-finished pipeline's PR was later closed unmerged
+      // — treat it as reclaimable, not as an operator-blocking halt
+      // (Story S3/S5), rather than the ordinary halted case below.
+      const donePresent = haltContent !== null && (await pathExists(join(wt, DONE_MARKER)));
+
+      if (haltContent !== null && !donePresent) {
         // HALTED wins over every other group, even with a conduct-state present.
         // A halted worktree is KEPT for the human, so its conduct-state is still
         // on disk — mine it for the step reached, tier, and any PR already open.
@@ -305,12 +342,30 @@ export async function scanInheritedState(
         continue;
       }
 
-      // PROCESSED wins over IN-PROGRESS: a shipped+stateful worktree is not
-      // "in progress" (precedence; FR-2 / story negative path).
-      if (processedSlugs.has(slug)) continue;
-
       const { present, state } = await loadWorktreeState(wt);
-      if (!present) continue; // no conduct-state → not in-progress
+      const isRetainedFeatureWorktree =
+        !slug.startsWith('resolve-') && !slug.startsWith('engineer-');
+      if (processedSlugs.has(slug)) {
+        if (isRetainedFeatureWorktree) {
+          retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
+        }
+        continue; // processed worktrees are retained, never in-progress
+      }
+      if (!present) {
+        if (isRetainedFeatureWorktree) {
+          retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
+        }
+        continue; // no conduct-state → not in-progress
+      }
+      if (donePresent) {
+        // Finished pipeline, stale HALT, not (yet) in the processed ledger —
+        // a closed-unmerged feature the sweep pruned from the watch registry
+        // but left retained on disk for reclaim.
+        if (isRetainedFeatureWorktree) {
+          retainedWorktrees.push({ slug, reason: 'pr-closed-unmerged' });
+        }
+        continue;
+      }
 
       // Has state, no HALT, not processed → IN-PROGRESS. Malformed JSON still
       // appears, with step `unknown` and no enrichment (FR-3).
@@ -401,6 +456,7 @@ export async function scanInheritedState(
     waiting,
     gated,
     priorityResolution,
+    retainedWorktrees,
   };
 }
 
@@ -533,9 +589,20 @@ export function renderDashboard(
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
+  const retainedWorktrees = (state.retainedWorktrees ?? []).filter(
+    (entry) => !parkedSet.has(entry.slug),
+  );
+  const retainedWorktreeSet = new Set(retainedWorktrees.map((entry) => entry.slug));
+  if (retainedWorktrees.length > 0) {
+    lines.push(`RETAINED WORKTREES (${retainedWorktrees.length})`);
+    for (const entry of retainedWorktrees) {
+      lines.push(`  • ${entry.slug} — ${entry.reason}`);
+    }
+  }
+
   // GATED (FR-7/FR-11): specs (and repo-scoped conditions) held back by the
-  // OWNERSHIP gate. Precedence HALTED > PROCESSED > IN-PROGRESS > GATED >
-  // WAITING > ELIGIBLE — a `kind: 'spec'` slug already excluded upstream from
+  // OWNERSHIP gate. Precedence HALTED > IN-PROGRESS > RETAINED > GATED >
+  // WAITING > ELIGIBLE > PROCESSED — a `kind: 'spec'` slug already excluded upstream from
   // higher-precedence buckets is rendered here and then excluded below from
   // WAITING and ELIGIBLE. `kind: 'repo'` entries have no slug and render as
   // section-level warning lines. Omitted entirely when `gated` is absent or
@@ -544,7 +611,11 @@ export function renderDashboard(
   // rather than rendering a distinct failure line).
   const processedSlugsSet = new Set(state.processed.map((p) => p.slug));
   const gated = (state.gated ?? []).filter(
-    (g) => g.kind !== 'spec' || (!parkedSet.has(g.slug) && !processedSlugsSet.has(g.slug)),
+    (g) =>
+      g.kind !== 'spec' ||
+      (!parkedSet.has(g.slug) &&
+        !retainedWorktreeSet.has(g.slug) &&
+        !processedSlugsSet.has(g.slug)),
   );
   const gatedSlugs = new Set(
     gated.filter((g): g is GatedItem & { kind: 'spec' } => g.kind === 'spec').map((g) => g.slug),
@@ -557,7 +628,10 @@ export function renderDashboard(
   }
 
   const waiting = (state.waiting ?? []).filter(
-    (w) => !parkedSet.has(w.slug) && !gatedSlugs.has(w.slug),
+    (w) =>
+      !parkedSet.has(w.slug) &&
+      !retainedWorktreeSet.has(w.slug) &&
+      !gatedSlugs.has(w.slug),
   );
   const waitingSlugs = new Set(waiting.map((w) => w.slug));
   if (waiting.length > 0) {
@@ -572,7 +646,11 @@ export function renderDashboard(
   // IN-PROGRESS > GATED > WAITING > ELIGIBLE) — filter it out of ELIGIBLE
   // rather than double-list it.
   const eligible = state.eligible.filter(
-    (e) => !waitingSlugs.has(e.slug) && !gatedSlugs.has(e.slug) && !parkedSet.has(e.slug),
+    (e) =>
+      !waitingSlugs.has(e.slug) &&
+      !gatedSlugs.has(e.slug) &&
+      !parkedSet.has(e.slug) &&
+      !retainedWorktreeSet.has(e.slug),
   );
   lines.push(`ELIGIBLE (${eligible.length})`);
 
@@ -591,7 +669,9 @@ export function renderDashboard(
   }
 
   if (opts?.includeCompleted) {
-    const processed = state.processed.filter((p) => !parkedSet.has(p.slug));
+    const processed = state.processed.filter(
+      (p) => !parkedSet.has(p.slug) && !retainedWorktreeSet.has(p.slug),
+    );
     lines.push(`PROCESSED (${processed.length})`);
     for (const p of processed) lines.push(`  • ${p.slug}${prSuffix(p.prUrl)}`);
   }

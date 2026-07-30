@@ -154,8 +154,8 @@ function makeFakeGh(
 const PR_URL = 'https://github.com/foo/bar/pull/42';
 const PR_URL_2 = 'https://github.com/foo/bar/pull/43';
 
-function entry(prUrl = PR_URL): WatchEntry {
-  return { prUrl, slug: 'test-feature', repoCwd: '/fake/repo', resolveAttempts: 0, ciFixAttempts: 0 };
+function entry(prUrl = PR_URL, slug = 'test-feature'): WatchEntry {
+  return { prUrl, slug, repoCwd: '/fake/repo', resolveAttempts: 0, ciFixAttempts: 0 };
 }
 
 // ── Temp dir lifecycle ────────────────────────────────────────────────────────
@@ -362,25 +362,324 @@ describe('rewriteWatch', () => {
 // ── Task 13: sweep decision tree ──────────────────────────────────────────────
 
 describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned', () => {
-  it('prunes a MERGED PR from the registry', async () => {
-    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
-    await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(await readWatch(tmpDir)).toHaveLength(0);
+  it('logs failed-reap and unknown boundaries without claiming a failed reap succeeded', async () => {
+    const scenarios = [
+      { url: PR_URL, slug: 'record-present', state: 'MERGED', probe: 'present' },
+      { url: 'https://github.com/x/y/pull/4', slug: 'state-unknown', state: 'UNKNOWN', probe: 'absent' },
+    ] as const;
+    const { gh } = makeFakeGh(
+      Object.fromEntries(
+        scenarios.map(({ url, state }) => [
+          url,
+          state === 'UNKNOWN' ? new Error('temporary platform failure') : prViewJson(state),
+        ]),
+      ),
+    );
+    const logs: string[] = [];
+    for (const scenario of scenarios) {
+      await enrollWatch(tmpDir, entry(scenario.url, scenario.slug));
+    }
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async (_repoCwd, slug) =>
+        scenarios.find((scenario) => scenario.slug === slug)?.probe ?? 'indeterminate',
+      teardownWorktree: async () => {
+        throw new Error('worktree path is busy');
+      },
+    });
+
+    expect(logs).toEqual(expect.arrayContaining([
+      `[mergeable-sweep] reap failed record-present (${PR_URL}) — reason: shipped-record-on-main — error: worktree path is busy`,
+      `[mergeable-sweep] disposition unknown state-unknown — reason: pr-state-unknown`,
+    ]));
+    expect(logs.some((line) => line.includes('reaped record-present'))).toBe(false);
   });
 
-  it('prunes a CLOSED PR from the registry', async () => {
-    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('CLOSED', 'UNKNOWN', [], []) });
+  it('does not claim a shipped-record-present worktree was reaped when teardown is omitted', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const logs: string[] = [];
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(await readWatch(tmpDir)).toHaveLength(0);
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async () => 'present',
+    });
+
+    expect({
+      failure: logs.includes(
+        `[mergeable-sweep] reap failed test-feature (${PR_URL}) — reason: shipped-record-on-main — error: worktree teardown dependency unavailable`,
+      ),
+      falseSuccess: logs.some((line) => line.includes('reaped test-feature')),
+      survivors: await readWatch(tmpDir),
+    }).toEqual({
+      failure: true,
+      falseSuccess: false,
+      survivors: [],
+    });
+  });
+
+  it('suppresses an unchanged retained disposition across passes and logs when it changes', async () => {
+    const retainedGh = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    }).gh;
+    const unknownGh = makeFakeGh({
+      [PR_URL]: new Error('temporary platform failure'),
+    }).gh;
+    const logs: string[] = [];
+    const log = (message: string) => logs.push(message);
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: retainedGh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: retainedGh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: unknownGh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+
+    expect({
+      unchangedRetainLines: logs.filter(
+        (line) => line === '[mergeable-sweep] retained test-feature — reason: record-not-yet-on-main',
+      ).length,
+      changedDispositionLines: logs.filter(
+        (line) => line === '[mergeable-sweep] disposition unknown test-feature — reason: pr-state-unknown',
+      ).length,
+    }).toEqual({
+      unchangedRetainLines: 1,
+      changedDispositionLines: 1,
+    });
+  });
+
+  it('logs a retained disposition again after the same entry transitions through OPEN', async () => {
+    const retainedGh = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    }).gh;
+    const openGh = makeFakeGh({
+      [PR_URL]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    }).gh;
+    const logs: string[] = [];
+    const log = (message: string) => logs.push(message);
+    await enrollWatch(tmpDir, entry());
+
+    for (const runGh of [retainedGh, openGh, retainedGh]) {
+      await sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh,
+        log,
+        shippedRecordProbe: async () => 'absent',
+      });
+    }
+
+    expect(logs.filter(
+      (line) => line === '[mergeable-sweep] retained test-feature — reason: record-not-yet-on-main',
+    )).toHaveLength(2);
+  });
+
+  it('does not suppress distinct retained entries that share a slug', async () => {
+    const { gh } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('MERGED', 'UNKNOWN', [], []),
+    });
+    const logs: string[] = [];
+    const log = (message: string) => logs.push(message);
+    await enrollWatch(tmpDir, {
+      ...entry(PR_URL, 'shared-slug'),
+      repoCwd: '/fake/repo-a',
+    });
+    await enrollWatch(tmpDir, {
+      ...entry(PR_URL_2, 'shared-slug'),
+      repoCwd: '/fake/repo-b',
+    });
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log,
+      shippedRecordProbe: async () => 'absent',
+    });
+
+    expect(logs.filter(
+      (line) => line === '[mergeable-sweep] retained shared-slug — reason: record-not-yet-on-main',
+    )).toHaveLength(2);
+  });
+
+  it('reaps a MERGED feature worktree when its shipped record is present on main', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    const logs: string[] = [];
+    await enrollWatch(tmpDir, entry());
+
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: async (worktree, keep) => {
+        teardownCalls.push({ ...worktree, keep });
+      },
+    });
+
+    expect(teardownCalls).toEqual([
+      {
+        path: join('/fake/repo', '.worktrees', 'test-feature'),
+        branch: 'feat/daemon-test-feature',
+        keep: false,
+      },
+    ]);
+    expect(logs).toContain(
+      '[mergeable-sweep] reaped test-feature — reason: shipped-record-on-main',
+    );
+    expect(await readWatch(tmpDir)).toEqual([]);
+  });
+
+  it('retains merged entries until a later shipped-record probe proves present and keeps processing', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    });
+    const probeResults = ['absent', 'indeterminate', 'present'] as const;
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    const registryAfterProbe: string[][] = [];
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+
+    for (const probeResult of probeResults) {
+      await sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: gh,
+        shippedRecordProbe: async () => probeResult,
+        teardownWorktree: async (worktree, keep) => {
+          teardownCalls.push({ ...worktree, keep });
+        },
+      });
+      registryAfterProbe.push((await readWatch(tmpDir)).map((watched) => watched.prUrl));
+    }
+
+    expect({ registryAfterProbe, teardownCalls, nextEntryProcessCount: addLabelCalls.length }).toEqual({
+      registryAfterProbe: [[PR_URL, PR_URL_2], [PR_URL, PR_URL_2], [PR_URL_2]],
+      teardownCalls: [
+        {
+          path: join('/fake/repo', '.worktrees', 'test-feature'),
+          branch: 'feat/daemon-test-feature',
+          keep: false,
+        },
+      ],
+      nextEntryProcessCount: 3,
+    });
+  });
+
+  it('isolates a failed reap, prunes it, and makes a second pass a no-op', async () => {
+    const { gh, addLabelCalls } = makeFakeGh({
+      [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []),
+      [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
+    });
+    const logs: string[] = [];
+    let teardownCalls = 0;
+    await enrollWatch(tmpDir, entry(PR_URL));
+    await enrollWatch(tmpDir, entry(PR_URL_2));
+
+    const sweep = () =>
+      sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: gh,
+        log: (message) => logs.push(message),
+        shippedRecordProbe: async () => 'present',
+        teardownWorktree: async () => {
+          teardownCalls += 1;
+          throw new Error('worktree path is busy');
+        },
+      });
+
+    await sweep();
+    await sweep();
+
+    expect({
+      teardownCalls,
+      survivors: (await readWatch(tmpDir)).map((watched) => watched.prUrl),
+      failureSurfaced: logs.some(
+        (message) =>
+          message.includes(PR_URL) &&
+          message.includes('worktree path is busy') &&
+          message.includes('error'),
+      ),
+      remainingEntryProcessCount: addLabelCalls.filter(
+        (call) => call.prUrl === PR_URL_2 && call.label === 'mergeable',
+      ).length,
+    }).toEqual({
+      teardownCalls: 1,
+      survivors: [PR_URL_2],
+      failureSurfaced: true,
+      remainingEntryProcessCount: 2,
+    });
+  });
+
+  it('routes a MERGED PR through the shipped-record gate path', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('MERGED', 'UNKNOWN', [], []) });
+    const logs: string[] = [];
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      teardownWorktree: async () => undefined,
+    });
+    expect(logs).toContain(`[mergeable-sweep] merged ${PR_URL} entering shipped-record gate`);
+  });
+
+  it('reaps a CLOSED feature worktree when its shipped record is present on main', async () => {
+    const { gh } = makeFakeGh({ [PR_URL]: prViewJson('CLOSED', 'UNKNOWN', [], []) });
+    const teardownCalls: Array<{ path: string; branch: string; keep: boolean }> = [];
+    await enrollWatch(tmpDir, entry());
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      shippedRecordProbe: async () => 'present',
+      teardownWorktree: async (worktree, keep) => {
+        teardownCalls.push({ ...worktree, keep });
+      },
+    });
+    expect({ survivors: await readWatch(tmpDir), teardownCalls }).toEqual({
+      survivors: [],
+      teardownCalls: [
+        {
+          path: join('/fake/repo', '.worktrees', 'test-feature'),
+          branch: 'feat/daemon-test-feature',
+          keep: false,
+        },
+      ],
+    });
   });
 
   it('prunes a not-found / gone PR (simulated as CLOSED) from the registry', async () => {
     // When `gh pr view` returns CLOSED it means the PR is gone; same as deleted.
     const { gh } = makeFakeGh({ [PR_URL]: prViewJson('CLOSED') });
+    const logs: string[] = [];
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      log: (message) => logs.push(message),
+      shippedRecordProbe: async () => 'absent',
+    });
+    expect(logs).toContain(
+      '[mergeable-sweep] retained test-feature (reclaimable) — reason: pr-closed-unmerged',
+    );
     expect(await readWatch(tmpDir)).toHaveLength(0);
   });
 
@@ -395,9 +694,19 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
     const { gh } = makeFakeGh({
       [PR_URL]: err,
     });
+    let teardownCalls = 0;
     await enrollWatch(tmpDir, entry());
-    await sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh });
-    expect(await readWatch(tmpDir)).toHaveLength(0);
+    await sweepMergeableLabels({
+      projectRoot: tmpDir,
+      runGh: gh,
+      teardownWorktree: async () => {
+        teardownCalls += 1;
+      },
+    });
+    expect({ survivors: await readWatch(tmpDir), teardownCalls }).toEqual({
+      survivors: [],
+      teardownCalls: 0,
+    });
   });
 
   it('prunes on a structured GraphQL not-found signal in stderr with a non-zero exit code', async () => {
@@ -468,7 +777,7 @@ describe('sweepMergeableLabels — FR-13: MERGED / CLOSED / not-found → pruned
 
   it('keeps other entries when one is pruned', async () => {
     const { gh } = makeFakeGh({
-      [PR_URL]: prViewJson('MERGED'),
+      [PR_URL]: prViewJson('CLOSED'),
       [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
     });
     await enrollWatch(tmpDir, entry(PR_URL));
@@ -693,10 +1002,12 @@ describe('sweepMergeableLabels — FR-11: non-mergeable PR → remove mergeable 
 });
 
 describe('sweepMergeableLabels — FR-15: per-PR failure → skip, continue others, no throw', () => {
-  it('logs and skips an entry when prMergeState returns UNKNOWN (gh runner error)', async () => {
+  it('keeps UNKNOWN without probing or teardown and continues processing', async () => {
     // Runner throws for PR_URL → prMergeState returns sentinel (state='UNKNOWN') → skip.
     // PR_URL_2 is fine → should be processed (addLabel called).
     const logs: string[] = [];
+    let probeCalls = 0;
+    let teardownCalls = 0;
     const { gh, addLabelCalls } = makeFakeGh({
       [PR_URL]: new Error('network timeout'),
       [PR_URL_2]: prViewJson('OPEN', 'MERGEABLE', [], []),
@@ -704,13 +1015,33 @@ describe('sweepMergeableLabels — FR-15: per-PR failure → skip, continue othe
     await enrollWatch(tmpDir, entry(PR_URL));
     await enrollWatch(tmpDir, entry(PR_URL_2));
     await expect(
-      sweepMergeableLabels({ projectRoot: tmpDir, runGh: gh, log: (m) => logs.push(m) }),
+      sweepMergeableLabels({
+        projectRoot: tmpDir,
+        runGh: gh,
+        log: (m) => logs.push(m),
+        shippedRecordProbe: async () => {
+          probeCalls += 1;
+          return 'present';
+        },
+        teardownWorktree: async () => {
+          teardownCalls += 1;
+        },
+      }),
     ).resolves.toBeUndefined();
-    // PR_URL is still in the registry (skipped, not pruned).
     const remaining = await readWatch(tmpDir);
-    expect(remaining.some((e) => e.prUrl === PR_URL)).toBe(true);
-    // PR_URL_2 was processed and got the mergeable label.
-    expect(addLabelCalls.some((c) => c.prUrl === PR_URL_2 && c.label === 'mergeable')).toBe(true);
+    expect({
+      unknownRetained: remaining.some((e) => e.prUrl === PR_URL),
+      probeCalls,
+      teardownCalls,
+      nextEntryProcessed: addLabelCalls.some(
+        (call) => call.prUrl === PR_URL_2 && call.label === 'mergeable',
+      ),
+    }).toEqual({
+      unknownRetained: true,
+      probeCalls: 0,
+      teardownCalls: 0,
+      nextEntryProcessed: true,
+    });
   });
 
   it('does not throw when the sweep encounters an unexpected error', async () => {

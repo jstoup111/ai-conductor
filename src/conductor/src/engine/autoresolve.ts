@@ -221,7 +221,7 @@ async function evaluateEligibilityGates(
   if (worktreeExists) {
     return {
       eligible: false,
-      reason: `worktree already exists at ${worktreePath}; concurrent prepare in progress`,
+      reason: `retained build worktree already exists at ${worktreePath}; concurrent prepare in progress`,
     };
   }
 
