@@ -177,6 +177,29 @@ describe("ModelAvailability", () => {
       expect(avail.dead.has("fable")).toBe(true);
     });
 
+    it("retains every model attempt interval when two unavailable models precede success", async () => {
+      const avail = new ModelAvailability(claudeLadder);
+      const intervals = [
+        { startedAtMs: 100, durationMs: 10 },
+        { startedAtMs: 120, durationMs: 20 },
+        { startedAtMs: 150, durationMs: 30 },
+      ];
+      const { provider } = fakeProvider({
+        fable: { ...modelUnavailable(), observedIntervals: [intervals[0]] },
+        opus: { ...modelUnavailable(), observedIntervals: [intervals[1]] },
+        sonnet: { success: true, output: "done", exitCode: 0, observedIntervals: [intervals[2]] },
+      });
+
+      const result = await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "s1",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(result.observedIntervals).toEqual(intervals);
+    });
+
     it("configured model returns rateLimited immediately: no ladder walk, result propagated", async () => {
       const avail = new ModelAvailability(claudeLadder);
       const { provider, invokeCalls } = fakeProvider({

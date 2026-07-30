@@ -107,9 +107,20 @@ export class ModelAvailability {
       return { result, model: requested };
     }
 
-    return this.invokeWithLadderResolved(provider, {
+    const resolved = await this.invokeWithLadderResolved(provider, {
       ...options,
       model: nextModel,
     });
+    const observedIntervals = [
+      ...(result.observedIntervals ?? []),
+      ...(resolved.result.observedIntervals ?? []),
+    ];
+
+    return observedIntervals.length === 0
+      ? resolved
+      : {
+          ...resolved,
+          result: { ...resolved.result, observedIntervals },
+        };
   }
 }
