@@ -203,8 +203,9 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
     ]);
   });
 
-  it('renders all 24 autonomous engine rows from both provider policies, including every S/M/L variation', () => {
+  it('renders model-driven rows from provider policies and deterministic BUILD gates as model-free engine machinery', () => {
     const tiers: readonly ComplexityTier[] = ['S', 'M', 'L'];
+    const modelFreeEngineSteps = new Set<StepName>(['wiring_check', 'test_suite']);
     const renderPolicyField = (
       policy: ProviderModelPolicy,
       step: StepName,
@@ -226,11 +227,21 @@ describe('renderModelTable (TS-2 happy path 2)', () => {
 
     const expected = (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => ({
       name: stepDisplayName(step),
-      executionPath: 'autonomous engine',
-      claudeModel: renderPolicyField(CLAUDE_MODEL_POLICY, step, 'model'),
-      claudeEffort: renderPolicyField(CLAUDE_MODEL_POLICY, step, 'effort'),
-      codexModel: renderPolicyField(CODEX_MODEL_POLICY, step, 'model'),
-      codexEffort: renderPolicyField(CODEX_MODEL_POLICY, step, 'effort'),
+      executionPath: modelFreeEngineSteps.has(step)
+        ? 'engine machinery'
+        : 'autonomous engine',
+      claudeModel: modelFreeEngineSteps.has(step)
+        ? '—'
+        : renderPolicyField(CLAUDE_MODEL_POLICY, step, 'model'),
+      claudeEffort: modelFreeEngineSteps.has(step)
+        ? '—'
+        : renderPolicyField(CLAUDE_MODEL_POLICY, step, 'effort'),
+      codexModel: modelFreeEngineSteps.has(step)
+        ? '—'
+        : renderPolicyField(CODEX_MODEL_POLICY, step, 'model'),
+      codexEffort: modelFreeEngineSteps.has(step)
+        ? '—'
+        : renderPolicyField(CODEX_MODEL_POLICY, step, 'effort'),
       why: STEP_RATIONALE[step],
     }));
 
