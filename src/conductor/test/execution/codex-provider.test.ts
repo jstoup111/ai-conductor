@@ -131,6 +131,75 @@ describe('CodexProvider', () => {
     },
   );
 
+  it.each([
+    {
+      name: 'operator-interactive completion',
+      invoke: (subject: CodexProvider) =>
+        subject.invokeInteractive({ ...baseOptions, interactive: true }),
+      response: { stdout: 'Done!', stderr: '', exitCode: 0 },
+      expected: { success: true },
+    },
+    {
+      name: 'ordinary non-zero exit',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      response: { stdout: '', stderr: 'build failed', exitCode: 1 },
+      expected: { success: false },
+    },
+    {
+      name: 'automatic permission rejection',
+      invoke: (subject: CodexProvider) =>
+        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+      response: {
+        stdout: '',
+        stderr: 'Codex automatic review denied the permission request.',
+        exitCode: 1,
+      },
+      expected: { success: false, permissionDenied: true },
+    },
+    {
+      name: 'authentication rejection',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      response: {
+        stdout: '',
+        stderr: 'Authentication required. Please run codex login.',
+        exitCode: 1,
+      },
+      expected: { success: false, authFailure: true },
+    },
+    {
+      name: 'rate-limit rejection',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      response: {
+        stdout: '',
+        stderr: 'Error 429: rate limit exceeded; retry after 45 seconds',
+        exitCode: 1,
+      },
+      expected: { success: false, rateLimited: true },
+    },
+  ])('retains one subprocess interval for $name', async ({ invoke, response, expected }) => {
+    const readings = [3_000, 3_075];
+    const clock: IntervalClock = {
+      nowMs: () =>
+        readings.shift() ??
+        (() => {
+          throw new Error('scripted clock exhausted');
+        })(),
+    };
+    const timedProvider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      clock,
+    );
+    mockExeca.mockResolvedValue(response as any);
+
+    const result = await invoke(timedProvider);
+
+    expect(result).toMatchObject({
+      ...expected,
+      observedIntervals: [{ startedAtMs: 3_000, durationMs: 75 }],
+    });
+  });
+
   it('prepares only the selected API-key auth for an isolated Codex home', async () => {
     const priorKey = process.env.CODEX_API_KEY;
     process.env.CODEX_API_KEY = 'sk-self-host-selected';
@@ -792,6 +861,7 @@ describe('CodexProvider', () => {
       readiness: expect.objectContaining({ state: 'missing' }),
       execCalls: 0,
     });
+    expect(result).not.toHaveProperty('observedIntervals');
   });
 
   it.each([
