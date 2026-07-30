@@ -114,9 +114,10 @@ completed feature afterward.
 Keep scoped RED/GREEN tests inside the implementation task that owns the behavior or wiring. A
 behavior-specific integration task is valid only when it implements a named production integration
 point, not when it merely exercises the already-completed feature or promises to repair unspecified
-findings. If a later validation phase exposes a gap, route that evidence through `/remediate` as a
-concrete remediation task at the appropriate SDLC step, or to the required human decision; do not
-pre-create a speculative "fix anything uncovered" task.
+findings. Aggregate `test-suite` failures and `/manual-test` failures return directly to BUILD for
+scoped repair. Blockers from `/prd-audit`, as-built `/architecture-review`, and `/finish` route
+through `/remediate` to the appropriate SDLC step or the required human decision. Do not pre-create
+a speculative "fix anything uncovered" task.
 
 ### 5c. `Wired-into:` Grammar and Derivation
 

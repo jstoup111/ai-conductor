@@ -895,9 +895,22 @@ if [ -f "$plan_skill" ]; then
     && grep -qiE 'architecture-review' <<<"$plan_terminal_validation_contract"
   assert "skills/plan/SKILL.md — assigns whole-feature validation to later gates" $?
 
-  grep -qiE 'concrete remediation task' <<<"$plan_terminal_validation_contract" \
+  grep -qiE 'test-suite.*failures.*manual-test.*failures.*return directly to BUILD' \
+    <<<"$plan_terminal_validation_contract" \
+    && grep -qiE 'prd-audit.*architecture-review.*finish.*route' \
+      <<<"$plan_terminal_validation_contract" \
+    && grep -qiE 'remediate.*appropriate SDLC' <<<"$plan_terminal_validation_contract" \
     && grep -qiE 'speculative' <<<"$plan_terminal_validation_contract"
-  assert "skills/plan/SKILL.md — routes later findings to concrete remediation" $?
+  assert "skills/plan/SKILL.md — routes aggregate, manual, and judged findings correctly" $?
+
+  grep -qiE 'scoped RED/GREEN tests.*implementation task.*owns' \
+    <<<"$plan_terminal_validation_contract"
+  assert "skills/plan/SKILL.md — keeps scoped tests with behavior-owning tasks" $?
+
+  grep -qiE 'behavior-specific integration task' <<<"$plan_terminal_validation_contract" \
+    && grep -qiE 'is valid only' <<<"$plan_terminal_validation_contract" \
+    && grep -qiE 'named production integration' <<<"$plan_terminal_validation_contract"
+  assert "skills/plan/SKILL.md — preserves named production integration tasks" $?
 
   harness_plan_ownership_contract=$(awk '
     /^### Plan Task Ownership$/ { capture=1; next }
@@ -909,9 +922,15 @@ if [ -f "$plan_skill" ]; then
     && grep -qiE 'terminal catch-all' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'writing-system-tests' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'test-suite' <<<"$harness_plan_ownership_contract" \
-    && grep -qiE 'remediation' <<<"$harness_plan_ownership_contract" \
+    && grep -qiE 'aggregate' <<<"$harness_plan_ownership_contract" \
+    && grep -qiE 'test-suite.*failures.*manual-test.*failures.*return directly to BUILD' \
+      <<<"$harness_plan_ownership_contract" \
+    && grep -qiE 'prd-audit.*architecture-review.*finish.*route' \
+      <<<"$harness_plan_ownership_contract" \
+    && grep -qiE 'remediate' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'appropriate SDLC step' <<<"$harness_plan_ownership_contract" \
-    && grep -qiE 'human decision' <<<"$harness_plan_ownership_contract"
+    && grep -qiE 'required human' <<<"$harness_plan_ownership_contract" \
+    && grep -qiE 'decision' <<<"$harness_plan_ownership_contract"
   assert "HARNESS.md — assigns whole-feature validation outside terminal plan tasks" $?
 else
   assert "skills/plan/SKILL.md exists" 1
