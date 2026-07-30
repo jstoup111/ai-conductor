@@ -67,6 +67,28 @@ assert_absent() {
   fi
 }
 
+assert_unreleased_migration_invokes_update() {
+  local description=$1
+  local migration
+  migration=$(awk '
+    /^## \[Unreleased\]$/ { in_unreleased=1; next }
+    in_unreleased && /^## \[/ { exit }
+    in_unreleased && /^```bash migration$/ { in_migration=1; next }
+    in_migration && /^```$/ { exit }
+    in_migration { print }
+  ' "$HARNESS_DIR/CHANGELOG.md")
+  TOTAL=$((TOTAL + 1))
+  if printf '%s\n' "$migration" |
+    grep -Eq '^[[:space:]]*\./bin/install --update([[:space:]]|$)'; then
+    printf 'PASS %s\n' "$description"
+    PASS=$((PASS + 1))
+  else
+    printf 'FAIL %s (Unreleased bash migration must execute ./bin/install --update)\n' \
+      "$description"
+    FAIL=$((FAIL + 1))
+  fi
+}
+
 assert_step_before() {
   local description=$1
   local first_step=$2
@@ -195,6 +217,8 @@ assert_step_field "GitHub Release creation is guarded by pending content" \
   "Create GitHub Release" "if" "$mutation_guard"
 assert_absent "empty content no longer reaches the former hard-fail verification step" \
   "Verify [Unreleased] has content" "$workflow"
+assert_unreleased_migration_invokes_update \
+  "Unreleased migration executes the supported installer update path"
 printf '\nResults: %s/%s passed\n' "$PASS" "$TOTAL"
 if [ "$FAIL" -gt 0 ]; then
   printf '%s assertion(s) failed.\n' "$FAIL"
