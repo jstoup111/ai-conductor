@@ -264,6 +264,16 @@ import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
+export type SchedulingUnitRef =
+  | { kind: 'step'; name: StepName }
+  | { kind: 'group'; name: string }
+  | { kind: 'pre-first-unit' };
+
+export interface OperatorParkedTermination {
+  kind: 'operator-parked';
+  boundary: SchedulingUnitRef;
+}
+
 /**
  * How many times a user may pick `retry` from the recovery menu for a single
  * step in one conductor session before the UI drops the option. After this,
@@ -662,6 +672,8 @@ export interface ConductorOptions {
   stateFilePath: string;
   stepRunner: StepRunner;
   events: ConductorEventEmitter;
+  featureSlug?: string;
+  operatorParkBoundary?: () => Promise<boolean>;
   resume?: boolean;
   fromStep?: StepName;
   mode?: RunMode;
@@ -2404,7 +2416,7 @@ export class Conductor {
     return parseNameStatus(r.stdout);
   }
 
-  async run(): Promise<void> {
+  async run(): Promise<OperatorParkedTermination | undefined> {
     // #788 regression guard: the phase-active marker creates `.pipeline/`
     // via `mkdirSync` as a side effect ahead of any real init (worktree-
     // prepare provisioning session-hooks/, task-status.json, etc). Recorded
