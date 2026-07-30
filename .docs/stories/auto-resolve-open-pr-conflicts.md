@@ -108,9 +108,11 @@ and the daemon's build worktrees are never disturbed.
 - Given a stale `resolve-<slug>` directory left by a crashed prior run (dirty or locked), when
   a new attempt starts, then the leftover is force-removed and recreated fresh; the attempt
   proceeds against the current PR branch tip, not the stale checkout.
-- Given the feature's build worktree `.worktrees/<slug>` currently exists (mid-build, halted,
-  or awaiting rekick), when the sweep evaluates the PR, then resolution is skipped with a
-  logged reason and no `resolve-<slug>` worktree is created (daemon-owned precedence).
+- Given the completed feature's retained evidence worktree `.worktrees/<slug>` exists after its
+  verified shipped-watch enrollment, when the sweep evaluates the PR, then retention alone does
+  not prevent creation of the disjoint `resolve-<slug>` worktree. This criterion supersedes the
+  former directory-existence ownership proxy per
+  `adr-2026-07-30-shipped-pr-conflict-remediation-ownership`.
 - Given worktree creation itself fails (e.g. git error), when the attempt aborts, then the
   primary checkout and all other worktrees are untouched, the failure is logged, and the
   attempt counts toward the cap (no infinite retry on a broken environment).
@@ -322,23 +324,24 @@ telling me exactly why, and I want every outcome in the daemon log.
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an attempt fails at any stage, when escalation runs, then the `mergeable` label is
-  removed and `needs-remediation` added via the REST label helpers (never
-  `gh pr edit --add-label`), and one PR comment states the failing stage and concrete reason
-  (e.g. "commit-preservation guard: 2 of 5 feature commits missing after rebase") — posted via
-  the existing marker-tagged `upsertComment` convention (remediation-comment-upsert stories),
-  so a later occurrence updates the same comment rather than adding another.
+- Given an attempt fails at any stage, when escalation runs, then one confirmed marker-tagged PR
+  comment states the failing stage and concrete reason (e.g. "commit-preservation guard: 2 of 5
+  feature commits missing after rebase") before `needs-remediation` is added. A later occurrence
+  updates that same comment rather than adding another; comment failure leaves the sticky label
+  unapplied and retryable.
 - Given any attempt concludes, when the tick finishes, then the daemon log contains one
   outcome line identifying the PR, the stage reached, and refreshed/escalated/skipped.
 
 #### Negative Paths
-- Given the REST label call fails, when escalation runs, then the comment is still attempted,
-  the failure is logged, and the sweep does not crash (best-effort, C3).
+- Given the actionable comment is confirmed but the REST label call fails, when escalation ends,
+  then the failure is logged, the sweep does not crash, and a later cycle updates the same comment
+  before retrying the idempotent label.
 - Given escalation already happened for this conflict occurrence, when later ticks see the
   same conflicting PR, then no duplicate comment is posted (the sticky label suppresses
   re-entry — at most one escalation comment per occurrence).
-- Given the comment API fails but the label succeeded, when the tick ends, then the PR is
-  still protected from retries (label is the gate, comment is advisory).
+- Given comment lookup or write fails, when the tick ends, then `needs-remediation` is not newly
+  applied, the failure is logged, and a later cycle retries the actionable signal without burning
+  another resolution attempt or creating on an indeterminate lookup.
 
 ### Done When
 - [ ] Injected-gh tests assert REST endpoints for label ops, single-comment-per-occurrence,

@@ -1,8 +1,9 @@
 # ADR: Dedicated Transient Worktree for Open-PR Conflict Resolution
 
-**Status:** APPROVED
+**Status:** SUPERSEDED
 **Date:** 2026-07-04
 **Related:** adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep
+**Superseded by:** adr-2026-07-30-shipped-pr-conflict-remediation-ownership
 
 ## Context
 
