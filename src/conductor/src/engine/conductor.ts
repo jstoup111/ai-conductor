@@ -2397,10 +2397,12 @@ export class Conductor {
     // partial join on a HALT/failed round" invariant), since those paths
     // run only after this is cleared and never consult it themselves.
     let inFlightGroupCompletions: Record<string, StepStatus> | undefined;
+    let signalExitRequested = false;
 
     // Save state on SIGINT/SIGTERM/SIGHUP before exit
     // Exit codes follow Unix convention: 128 + signal number
     const signalHandlerBase = async (signal: NodeJS.Signals) => {
+      signalExitRequested = true;
       if (inFlightGroupCompletions) {
         for (const [key, status] of Object.entries(inFlightGroupCompletions)) {
           (state as Record<string, unknown>)[key] = status;
@@ -2432,6 +2434,7 @@ export class Conductor {
     // handles SIGTERM for N concurrent conductors; in interactive mode, each
     // conductor installs its own handler.
     const sigterm = async () => {
+      signalExitRequested = true;
       // Abort any in-flight rate-limit wait
       if (currentWaitController) {
         currentWaitController.abort();
@@ -3076,6 +3079,7 @@ export class Conductor {
             // Round settled (whatever the outcome) — the pending side-channel
             // must never leak into the halt/allGreen/kickback paths below.
             inFlightGroupCompletions = undefined;
+            if (signalExitRequested) return;
 
             // Task 4 (build-auth-token-check-and-classify, FR-4): an
             // `authFailure` no-verdict is NOT the ordinary "exhausted its
@@ -3135,6 +3139,7 @@ export class Conductor {
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
+              if (signalExitRequested) return;
               retryIdxs.forEach((idx, k) => {
                 outcomes[idx] = retryOutcomes[k]!;
               });
