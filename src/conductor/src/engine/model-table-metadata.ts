@@ -1,5 +1,12 @@
 import type { StepName } from '../types/steps.js';
 
+// These steps retain exhaustive provider-policy placeholders for StepName
+// type safety, but execute entirely in-process and never dispatch a model.
+export const MODEL_FREE_ENGINE_STEPS = [
+  'wiring_check',
+  'test_suite',
+] as const satisfies readonly StepName[];
+
 // ────────────────────────────────────────────────────────────────────────────
 // Model-table metadata
 //

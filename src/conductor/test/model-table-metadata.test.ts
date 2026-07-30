@@ -10,6 +10,7 @@ import {
 } from '../src/engine/provider-model-policy.js';
 import {
   STEP_RATIONALE,
+  MODEL_FREE_ENGINE_STEPS,
   SKILL_STEP_MAP,
   PIN_EXEMPT_SKILLS,
   EXTRA_MODEL_TABLE_ROWS,
@@ -45,6 +46,10 @@ function containsToken(text: string, token: string): boolean {
 // ─────────────────────────────────────────────────────────────────────────────
 
 describe('STEP_RATIONALE completeness (TS-1)', () => {
+  it('classifies only the deterministic BUILD gates as model-free engine machinery', () => {
+    expect(MODEL_FREE_ENGINE_STEPS).toEqual(['wiring_check', 'test_suite']);
+  });
+
   it('describes current explore and prd defaults with provider-neutral high-effort policy language', () => {
     const violations = (['explore', 'prd'] as const).flatMap((step) => {
       const rationale = STEP_RATIONALE[step];
@@ -88,10 +93,16 @@ describe('STEP_RATIONALE completeness (TS-1)', () => {
     expect(policySteps.size).toBe(26);
   });
 
-  it('describes test_suite as a mechanical native gate rather than a generative review', () => {
-    expect(STEP_RATIONALE.test_suite).toMatch(
-      /mechanical.*(?:aggregate|full).*test.*(?:verifier|proof)/i,
-    );
+  it('describes deterministic BUILD gates as engine machinery rather than generative review', () => {
+    expect({
+      wiring_check: STEP_RATIONALE.wiring_check,
+      test_suite: STEP_RATIONALE.test_suite,
+    }).toEqual({
+      wiring_check: expect.stringMatching(/deterministic|mechanical/i),
+      test_suite: expect.stringMatching(
+        /mechanical.*(?:aggregate|full).*test.*(?:verifier|proof)/i,
+      ),
+    });
   });
 
   it('type-checks as a complete Record<StepName, string>', () => {
