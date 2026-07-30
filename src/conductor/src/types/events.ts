@@ -5,6 +5,7 @@ import type {
   AuthenticationSource,
   TokenUsage,
 } from '../execution/llm-provider.js';
+import type { ObservedInterval } from '../execution/observed-interval.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -59,8 +60,15 @@ export type ConductorEvent =
       preferredProvider?: string;
       /** Provider that produced the successful result. */
       actualProvider?: string;
+      observedIntervals?: readonly ObservedInterval[];
     }
-  | { type: 'step_failed'; step: StepName; error: string; retryCount: number }
+  | {
+      type: 'step_failed';
+      step: StepName;
+      error: string;
+      retryCount: number;
+      observedIntervals?: readonly ObservedInterval[];
+    }
   | {
       /** One provider candidate's result within a step attempt. */
       type: 'provider_attempt';
@@ -73,6 +81,7 @@ export type ConductorEvent =
       invoked: boolean;
       model?: string;
       tokenUsage?: TokenUsage;
+      observedIntervals?: readonly ObservedInterval[];
       reason?: string;
       fallbackReason?: string;
     }

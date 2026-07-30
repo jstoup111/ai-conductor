@@ -3223,6 +3223,9 @@ export class Conductor {
                 step: step.name,
                 error: haltReason,
                 retryCount: 0,
+                ...(noVerdictOutcome.observedIntervals
+                  ? { observedIntervals: noVerdictOutcome.observedIntervals }
+                  : {}),
               });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) {
@@ -5073,6 +5076,9 @@ export class Conductor {
             step: step.name,
             error: lastError,
             retryCount: attempt,
+            ...(failedStepResult?.observedIntervals
+              ? { observedIntervals: failedStepResult.observedIntervals }
+              : {}),
           });
 
           // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
@@ -6109,6 +6115,9 @@ export class Conductor {
             unmetered: stepResult?.tokenUsage ? undefined : true,
             preferredProvider: stepResult?.preferredProvider,
             actualProvider: stepResult?.actualProvider,
+            ...(stepResult?.observedIntervals
+              ? { observedIntervals: stepResult.observedIntervals }
+              : {}),
           });
 
           // Store PR URL from finish step output. Prefer state-file write

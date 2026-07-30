@@ -386,6 +386,7 @@ describe('EventPersister', () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
 
+    const observedIntervals = [{ startedAtMs: 100, durationMs: 25 }];
     const providerEvents = [
       {
         type: 'provider_attempt',
@@ -396,6 +397,7 @@ describe('EventPersister', () => {
         reason: 'executable not found',
         model: 'gpt-5.6-sol',
         invoked: true,
+        observedIntervals,
       },
       {
         type: 'provider_fallback',
@@ -412,6 +414,15 @@ describe('EventPersister', () => {
         model: 'sonnet',
         tokenUsage: { input: 120, output: 30 },
         invoked: true,
+        observedIntervals,
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        reason: 'cached unavailable',
+        invoked: false,
       },
       {
         type: 'step_completed',
@@ -419,6 +430,7 @@ describe('EventPersister', () => {
         status: 'done',
         preferredProvider: 'codex',
         actualProvider: 'claude',
+        observedIntervals,
       },
     ] satisfies ConductorEvent[];
 
@@ -433,6 +445,24 @@ describe('EventPersister', () => {
         return event;
       });
     expect(records).toEqual(providerEvents);
+  });
+
+  it('persists provider intervals on a failed scalar terminal event', async () => {
+    const observedIntervals = [{ startedAtMs: 200, durationMs: 30 }];
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'step_failed',
+      step: 'plan',
+      error: 'failed',
+      retryCount: 1,
+      observedIntervals,
+    });
+    persister.stop();
+
+    const record = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record.observedIntervals).toEqual(observedIntervals);
   });
 
   // ─── Task 6: creates parent directories ───────────────────────────────────
