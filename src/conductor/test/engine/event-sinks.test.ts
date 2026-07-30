@@ -7,6 +7,7 @@ import {
   renderedEventTypes,
   type SinkDeclaration,
 } from '../../src/engine/event-sinks.js';
+import type { SchedulingUnitRef } from '../../src/engine/conductor.js';
 import type { ConductorEvent } from '../../src/types/events.js';
 
 const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
@@ -83,6 +84,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'parallel_started',
   'parallel_completed',
   'rebase_mergeable_skip',
+  'operator_park_boundary',
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
@@ -97,8 +99,37 @@ const deliberatelyNotPersisted = {
 void deliberatelyNotPersisted;
 
 describe('event sink subscriptions', () => {
-  it('is total over all 63 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(63);
+  it('defines provider-neutral operator park boundary telemetry without completion authority', () => {
+    const boundaries = [
+      { kind: 'step', name: 'memory' },
+      { kind: 'group', name: 'ship-validation' },
+      { kind: 'pre-first-unit' },
+    ] satisfies SchedulingUnitRef[];
+    const events = boundaries.map((boundary) => ({
+      type: 'operator_park_boundary' as const,
+      featureSlug: 'boundary-aware-operator-parking',
+      boundary,
+    })) satisfies ConductorEvent[];
+
+    expect({
+      events,
+      sinks: EVENT_SINKS.operator_park_boundary,
+    }).toEqual({
+      events: boundaries.map((boundary) => ({
+        type: 'operator_park_boundary',
+        featureSlug: 'boundary-aware-operator-parking',
+        boundary,
+      })),
+      sinks: {
+        render: true,
+        persist: true,
+        audit: false,
+      },
+    });
+  });
+
+  it('is total over all 64 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(64);
   });
 
   it('routes verdict_freshness to every sink', () => {
@@ -115,6 +146,7 @@ describe('event sink subscriptions', () => {
     expect(new Set(persisted)).toEqual(new Set([
       ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
       'verdict_freshness',
+      'operator_park_boundary',
       // Seal-rebaseline decisions are durable telemetry: the record of which
       // inherited seals were rebaselined (and which were refused as genuine
       // DECIDE-artifact violations) has to outlive the run that made it.

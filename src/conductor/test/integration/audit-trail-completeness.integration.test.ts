@@ -109,6 +109,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_resolution_failed: 'not-audited-by-design',
   rebase_resolution_exhausted: 'not-audited-by-design',
   auto_park: 'not-audited-by-design',
+  operator_park_boundary: 'not-audited-by-design',
   auto_park_contradiction: 'not-audited-by-design',
   zero_work_product: 'not-audited-by-design',
   unattributed_dispatch: 'not-audited-by-design',
@@ -257,6 +258,11 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   rebase_resolution_failed: { type: 'rebase_resolution_failed' },
   rebase_resolution_exhausted: { type: 'rebase_resolution_exhausted' },
   auto_park: { type: 'auto_park', slug: 'my-feature', reason: 'no evidence' },
+  operator_park_boundary: {
+    type: 'operator_park_boundary',
+    featureSlug: 'my-feature',
+    boundary: { kind: 'pre-first-unit' },
+  },
   auto_park_contradiction: {
     type: 'auto_park_contradiction',
     slug: 'my-feature',
