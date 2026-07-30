@@ -2722,7 +2722,32 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.events.emit(ev);
     };
-    let lastSettledSerialStep: StepName | undefined;
+    let lastSettledUnit: SchedulingUnitRef | undefined;
+    const stopAtOperatorParkBoundary =
+      async (): Promise<OperatorParkedTermination | undefined> => {
+        if (
+          !this.daemon ||
+          this.featureSlug === undefined ||
+          !this.operatorParkBoundary
+        ) {
+          return undefined;
+        }
+
+        const operatorParkRequested = await this.operatorParkBoundary().catch(() => true);
+        if (!operatorParkRequested) {
+          return undefined;
+        }
+
+        const boundary: SchedulingUnitRef = lastSettledUnit ?? { kind: 'pre-first-unit' };
+        await emitTracked({
+          type: 'operator_park_boundary',
+          featureSlug: this.featureSlug,
+          boundary,
+        });
+        process.off('SIGINT', sigintHandler);
+        process.off('SIGTERM', sigterm);
+        return { kind: 'operator-parked', boundary };
+      };
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
@@ -2931,6 +2956,11 @@ export class Conductor {
 
         // Execute parallel group (T15 — Promise.all fan-out)
         if (stepCfg?.parallel) {
+          const preDispatchPark = await stopAtOperatorParkBoundary();
+          if (preDispatchPark) {
+            return preDispatchPark;
+          }
+
           await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);
           // State keys are already written inside runParallelGroupViaCore.
           // The step's own status is set to 'done' or 'failed' inside runParallelGroupViaCore.
@@ -2948,6 +2978,14 @@ export class Conductor {
               process.off('SIGTERM', sigterm);
             }
             return;
+          }
+
+          if (state[step.name] === 'done') {
+            lastSettledUnit = { kind: 'group', name: step.name };
+          }
+          const postJoinPark = await stopAtOperatorParkBoundary();
+          if (postJoinPark) {
+            return postJoinPark;
           }
           continue;
         }
@@ -3875,26 +3913,9 @@ export class Conductor {
           }
         }
 
-        let operatorParkRequested = false;
-        if (
-          this.daemon &&
-          this.featureSlug !== undefined &&
-          this.operatorParkBoundary
-        ) {
-          operatorParkRequested = await this.operatorParkBoundary().catch(() => true);
-        }
-        if (operatorParkRequested && this.featureSlug !== undefined) {
-          const boundary: SchedulingUnitRef = lastSettledSerialStep
-            ? { kind: 'step', name: lastSettledSerialStep }
-            : { kind: 'pre-first-unit' };
-          await emitTracked({
-            type: 'operator_park_boundary',
-            featureSlug: this.featureSlug,
-            boundary,
-          });
-          process.off('SIGINT', sigintHandler);
-          process.off('SIGTERM', sigterm);
-          return { kind: 'operator-parked', boundary };
+        const preDispatchPark = await stopAtOperatorParkBoundary();
+        if (preDispatchPark) {
+          return preDispatchPark;
         }
 
         // Mark in_progress before running
@@ -6321,7 +6342,7 @@ export class Conductor {
             await saveStepStatus(this.stateFilePath, step.name, 'done');
           }
           state[step.name] = 'done';
-          lastSettledSerialStep = step.name;
+          lastSettledUnit = { kind: 'step', name: step.name };
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
           await emitTracked({
             type: 'step_completed',
