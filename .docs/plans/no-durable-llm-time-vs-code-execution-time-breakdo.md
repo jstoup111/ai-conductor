@@ -93,7 +93,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/execution/claude-provider.ts`
 - `src/conductor/test/execution/claude-provider.test.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** `src/conductor/src/engine/model-availability.ts#invokeWithLadderResolved`
 **Dependencies:** Task 1
 
 ### Task 3: Preserve Claude timing on interactive and unsuccessful outcomes
@@ -117,7 +117,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/test/execution/claude-provider.test.ts`
 - `src/conductor/test/execution/claude-provider-token-usage.test.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** same as Task 2
 **Dependencies:** Task 2
 
 ### Task 4: Capture successful Codex and self-host subprocess intervals
@@ -139,7 +139,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/execution/codex-provider.ts`
 - `src/conductor/test/execution/codex-provider.test.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** same as Task 2
 **Dependencies:** Task 1
 
 ### Task 5: Preserve Codex timing on interactive, failure, and skip paths
@@ -162,7 +162,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/execution/codex-provider.ts`
 - `src/conductor/test/execution/codex-provider.test.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** same as Task 4
 **Dependencies:** Task 4
 
 ### Task 6: Accumulate every model-ladder interval
@@ -231,7 +231,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/step-runners.ts`
 - `src/conductor/test/engine/step-runners.test.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#toStepRunResult, src/conductor/src/engine/conductor.ts#emitTracked`
 **Dependencies:** Task 7
 
 ### Task 9: Close grouped and auxiliary propagation gaps
@@ -281,7 +281,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/test/engine/event-persister.test.ts`
 - `src/conductor/test/integration/daemon-provider-event-persistence.integration.test.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** `src/conductor/src/daemon-cli.ts#beginFeatureRun, src/conductor/src/engine/conductor.ts#emitTracked, src/conductor/src/engine/event-persister.ts#persist`
 **Dependencies:** Task 9
 
 ### Task 11: Record explicit serial active-step intervals
@@ -349,7 +349,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/interval-algebra.ts`
 - `src/conductor/test/engine/timing-rollup.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/timing-rollup.ts#unionIntervals, src/conductor/src/engine/timing-rollup.ts#intersectIntervalUnions, src/conductor/src/engine/shipped-record-cli.ts#computeTimingRollup`
+**Wired-into:** `src/conductor/src/engine/timing-rollup.ts#unionIntervals, src/conductor/src/engine/timing-rollup.ts#intersectIntervalUnions`
 **Dependencies:** Task 1
 
 ### Task 14: Compute a measured feature-time partition
