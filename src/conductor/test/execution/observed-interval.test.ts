@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { createEpochAnchoredMonotonicClock } from '../../src/execution/epoch-clock.js';
 import {
-  createEpochAnchoredMonotonicClock,
   epochAnchoredMonotonicClock,
   observeInterval,
   type IntervalClock,

@@ -1,4 +1,5 @@
 import { performance } from 'node:perf_hooks';
+import { createEpochAnchoredMonotonicClock } from './epoch-clock.js';
 
 export interface ObservedInterval {
   startedAtMs: number;
@@ -7,19 +8,6 @@ export interface ObservedInterval {
 
 export interface IntervalClock {
   nowMs(): number;
-}
-
-interface MonotonicPerformanceSource {
-  readonly timeOrigin: number;
-  now(): number;
-}
-
-export function createEpochAnchoredMonotonicClock(
-  source: MonotonicPerformanceSource,
-): IntervalClock {
-  return {
-    nowMs: () => source.timeOrigin + source.now(),
-  };
 }
 
 export const epochAnchoredMonotonicClock: IntervalClock =

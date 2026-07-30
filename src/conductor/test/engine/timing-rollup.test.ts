@@ -2,11 +2,11 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { computeTimingRollup } from '../../src/engine/timing-rollup.js';
 import {
-  computeTimingRollup,
   intersectIntervalUnions,
   unionIntervals,
-} from '../../src/engine/timing-rollup.js';
+} from '../../src/engine/interval-algebra.js';
 
 const temporaryDirectories: string[] = [];
 

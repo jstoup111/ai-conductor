@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseCostBlock, parseTimeBlock, renderKpi } from '../../src/engine/kpi-report.js';
+import { parseCostBlock, renderKpi } from '../../src/engine/kpi-report.js';
 
 let root: string;
 
@@ -106,14 +106,6 @@ describe('parseCostBlock', () => {
   });
 });
 
-describe('parseTimeBlock', () => {
-  it('does not classify an impossible elapsed-time partition as measured', () => {
-    expect(parseTimeBlock(
-      '## Time\nstate: measured\nactive_ms: 100\nprovider_active_ms: 70\nno_provider_active_ms: 40\n',
-    )).toEqual({ state: 'partial', activeMs: 100 });
-  });
-});
-
 describe('renderKpi', () => {
   it('reports historical and corrupt timing explicitly without polluting measured averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
@@ -123,6 +115,7 @@ describe('renderKpi', () => {
       unavailable: 'state: unavailable\n',
       malformed: 'state: measured\nactive_ms: nope\nprovider_active_ms: 17\nno_provider_active_ms: 13\n',
       missing: 'state: measured\nactive_ms: 100\nno_provider_active_ms: 7\n',
+      impossible: 'state: measured\nactive_ms: 100\nprovider_active_ms: 70\nno_provider_active_ms: 40\n',
     };
     for (const [slug, time] of Object.entries(fixtures)) {
       await writeFile(
@@ -158,15 +151,16 @@ describe('renderKpi', () => {
         unavailable: 'time=unavailable',
         malformed: 'time=partial',
         missing: 'time=partial active_ms=100',
+        impossible: 'time=partial active_ms=100',
         legacy: 'time=unavailable',
         'mixed-version': 'time=unavailable',
       },
       costPreserved: true,
       mixedVersionPreserved: true,
       aggregate:
-        'Aggregate / trend across 7 feature(s): total tokens=8400 ' +
-        '(input=7000, output=1400), total cost_usd=0.7; timing measured=1 ' +
-        'partial=3 unavailable=3 avg_active_ms=100 avg_provider_active_ms=60 ' +
+        'Aggregate / trend across 8 feature(s): total tokens=9600 ' +
+        '(input=8000, output=1600), total cost_usd=0.8; timing measured=1 ' +
+        'partial=4 unavailable=3 avg_active_ms=100 avg_provider_active_ms=60 ' +
         'avg_no_provider_active_ms=40',
     });
   });

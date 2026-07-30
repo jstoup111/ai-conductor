@@ -45,7 +45,7 @@ export type KpiTimeFields = TimingRollup;
  * Parse the independently rendered `## Time` section. Cost fields are never
  * consulted, so timing remains reportable when cost evidence is absent.
  */
-export function parseTimeBlock(content: string): KpiTimeFields {
+function parseTimeBlock(content: string): KpiTimeFields {
   const match = /^## Time\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
   if (!match) return { state: 'unavailable' };
 
