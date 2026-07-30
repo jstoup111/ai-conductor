@@ -309,7 +309,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Gate role** — blocking. It refuses to produce a plan without stories, dependency lines, both paths,
   and a clean conflict-check; every acceptance criterion must map to at least one task; a missing
   `**Wired-into:**` line blocks its own verification; 41 or more tasks is a hard stop. Each `Story:`
-  line takes one id — a comma-separated list silently registers only the first.
+  line takes one id — a comma-separated list silently registers only the first. Plans must not append
+  a terminal catch-all task that re-proves the completed feature; scoped tests stay with their
+  behavior-owning implementation task, while writing-system-tests and later BUILD/SHIP gates own
+  whole-feature validation.
 
 ### coherence-check
 

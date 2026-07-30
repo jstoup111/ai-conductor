@@ -179,11 +179,11 @@ export async function openSpecPr(
 
   // 1. Invoke `gh pr create` with the spec branch in the worktree's cwd.
   //    The `--head` flag names the branch to open a PR for; `--fill` uses the
-  //    branch name + last commit message as the title/body so no interaction is
-  //    required.
+  //    branch name + last commit message as the title/body, and `--label spec`
+  //    classifies the DECIDE deliverable atomically when the PR is created.
   let result: RunnerResult;
   try {
-    result = await runner(['pr', 'create', '--head', branch, '--fill'], {
+    result = await runner(['pr', 'create', '--head', branch, '--fill', '--label', 'spec'], {
       cwd,
     });
   } catch (err) {
