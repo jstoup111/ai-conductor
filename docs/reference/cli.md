@@ -762,6 +762,37 @@ The matching grant is consumed immediately before the provider dispatches the na
 malformed, mismatched, or already-consumed grant authorizes nothing and the run remains fail-closed.
 Clearing `.pipeline/HALT` or `.pipeline/HALT.class` is not an authorization; use the
 [DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry).
+## `conduct-ts validate-wired-into`
+
+```bash
+conduct-ts validate-wired-into <plan-file-path> [--cwd <dir>]
+```
+
+Resolves every task's `**Wired-into:**` declaration in a plan file against the real wiring
+machinery, at DECIDE time. Parsing and `same as Task N` inheritance come from `wired-into.ts`
+(`extractWiredIntoContracts`); the per-anchor check is `wiring-probe.ts`'s `verifyDeclaredSites` —
+the same function BUILD-time per-task completion verification and the `wiring_check` step call, so
+the validator's verdict cannot drift from what the build will accept.
+
+| Positional / Flag | Type | Default | Effect |
+| --- | --- | --- | --- |
+| `<plan-file-path>` | path | required | Plan to validate. Resolved against `--cwd`. |
+| `--cwd <dir>` | path | current directory | Repository root the plan's repo-relative anchor paths resolve against. |
+
+One report line per declaration:
+
+| Verdict | Meaning |
+| --- | --- |
+| `PASS` | Every declared `path#symbol` anchor's file exists and carries a non-test reference to the symbol. |
+| `SKIP` | A `none (no new production surface)` or `none (inert until <ref>)` waiver form — no anchor to resolve. |
+| `FAIL` | A malformed declaration, a `**Wired-into:**` line declaring no call site at all, an unresolvable `same as Task N` target, a declared file that does not exist, or a symbol with no reference in its declared file. |
+
+**Blocking by contract** — unlike `overlap-scan`, this command exits **1** on any `FAIL`, because an
+anchor that cannot resolve here is one per-task completion verification will never satisfy: the build
+advances no task past `pending` while committing real work, which is silent for hours. It also exits 1
+with a usage line when the plan positional is missing, and 1 with `validate-wired-into: cannot read
+plan <path> (<msg>)` when the plan file is unreadable. `skills/plan/SKILL.md` §5c requires running it
+before a plan is presented as complete. Reads files only; writes nothing.
 
 ## `conduct-ts evidence`
 
