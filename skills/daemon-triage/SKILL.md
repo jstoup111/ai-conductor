@@ -1,10 +1,11 @@
 ---
 name: daemon-triage
-description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Gathers read-only evidence, classifies the failure against a deterministic signal table, routes to the right runbook, and writes a triage report. May then perform recovery, but only with explicit operator approval for each action — it never mutates anything unprompted. Operator-invoked only: never runs inside a dispatched step."
+description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Gathers read-only evidence, classifies the failure against a deterministic signal table, routes to the right runbook, and writes a triage report. May then perform recovery, but only with explicit operator approval for each action — it never mutates anything unprompted. Intended only for operator invocation; never auto-dispatched."
 enforcement: advisory
 phase: all
 standalone: true
 operator_only: true
+phase_active_policy: advisory
 requires: [verify-claims]
 ---
 
@@ -52,38 +53,33 @@ pick the right one correctly and to stop an operator from guessing.
 
 ## Preconditions — check these first, in order
 
-### Operator-invoked only — refuse otherwise
+### Operator-invoked only — record advisory context
 
-This skill must never run inside a live dispatched step. The engine records the
-dispatched step in a phase marker in the feature's worktree:
+This skill is intended only for direct operator invocation and must never be
+auto-dispatched. The engine records a dispatched step in a phase marker in the
+feature's worktree:
 
 ```bash
 cat .pipeline/phase-active 2>/dev/null
 ```
 
-The marker is advisory by itself because it can survive a daemon crash. Check it
-first, then run this read-only liveness corroboration:
+The marker is advisory because it can survive a daemon crash. Check it first,
+then run this read-only liveness corroboration:
 
 ```bash
 conduct-ts daemon status
 ```
 
-Refuse only when that status confirms the recorded `<step>/<phase>` is the
-currently live dispatched step. **Stop immediately.** Emit exactly:
+Read-only triage always continues, even when the marker or daemon status appears live.
+When both signals make the recorded `<step>/<phase>` look live, record a warning
+that operator-only triage is observing an apparently active dispatched step.
+Diagnosis is unconditionally read-only, so this warning does not block evidence
+gathering or classification.
 
-```
-daemon-triage is operator-only and must not run inside a dispatched step
-(.pipeline/phase-active present: <step>/<phase>). Refusing.
-```
-
-and do nothing else. A step that triages itself will read its own in-flight state
-as evidence of failure and recommend recovery against a run that is working.
-
-If status reports the daemon as stale or stopped, or its session as down, do not
-refuse: explicitly continue read-only triage and treat the marker as crash
-residue evidence. If status does not confirm that the recorded step is currently
-live for any other reason, continue read-only triage and treat the marker as
-uncorroborated evidence, not execution authority.
+If status reports the daemon as stale or stopped, or its session as down,
+explicitly continue read-only triage and treat the marker as crash residue
+evidence. If status does not corroborate the recorded step for any other reason,
+treat the marker as uncorroborated evidence, not execution authority.
 
 > The harness also suppresses this skill mechanically for step sessions, but
 > coverage differs by provider: Claude gets a `skillOverrides` entry in the
@@ -91,8 +87,8 @@ uncorroborated evidence, not execution authority.
 > pruned from its throwaway home entirely. Codex in any other repo has **no**
 > mechanical suppression — it lists a user-space skills directory and honors no
 > per-session override. That cell is exactly why this marker-plus-liveness
-> runtime check exists and why it is not optional: for that combination, it is
-> the only guard.
+> warning exists: it surfaces the unsupported invocation context without
+> blocking read-only diagnosis.
 
 ### Confirm you have a slug and a repo root
 
@@ -288,11 +284,12 @@ wrong midway, the record must already show what had actually run.
 
 ## Verification
 
+- [ ] The skill was directly operator-invoked, never auto-dispatched
 - [ ] `.pipeline/phase-active` was checked **first**, then `conduct-ts daemon
-      status` corroborated liveness before any refusal
-- [ ] Refused only when status confirmed the recorded step was currently live;
-      stale/stopped daemon or session-down state continued read-only triage with
-      the marker treated as crash residue evidence
+      status` supplied advisory liveness context
+- [ ] Read-only triage continued for every marker/status combination; an
+      apparently live step produced a warning, while stale/stopped daemon or
+      session-down state treated the marker as crash residue evidence
 - [ ] Evidence gathered before any classification was stated
 - [ ] Classification cites the specific signal it matched, or is declared a
       judgment call with a confidence estimate
