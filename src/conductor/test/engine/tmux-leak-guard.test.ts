@@ -19,6 +19,7 @@ import {
   snapshotDaemonSessions,
   isTmpdirRooted,
   sessionPaneCwd,
+  realTmuxRunner,
   type TmuxRunner,
 } from '../tmux-leak-guard.js';
 import {
@@ -35,13 +36,13 @@ import { applyTeardownDecision } from '../global-setup.js';
 // kill-authorization tests below can never pass — that's not a guard bug
 // (the guard's fail-closed refusal per #437's two-signal contract is
 // correct), it's an environment capability gap. Skip rather than fail.
-async function paneCwdSticky(): Promise<boolean> {
+async function paneCwdSticky(runner?: TmuxRunner): Promise<boolean> {
   const name = `cc-daemon-cwdprobe-${randomBytes(4).toString('hex')}`;
   const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
   delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
   try {
-    await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir());
-    const cwd = sessionPaneCwd(name);
+    await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir(), runner);
+    const cwd = sessionPaneCwd(name, runner);
     return isTmpdirRooted(cwd);
   } finally {
     if (prevFlag === undefined) {
@@ -49,7 +50,7 @@ async function paneCwdSticky(): Promise<boolean> {
     } else {
       process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
     }
-    killDaemonSession(name);
+    killDaemonSession(name, runner);
   }
 }
 
@@ -504,33 +505,37 @@ describe('tmux-leak-guard (#377)', () => {
 
   it('kills and reports a cc-daemon-* session created after the snapshot', async () => {
     if (!(await tmuxInstalled())) return; // no tmux in this sandbox — skip
-    if (!(await paneCwdSticky())) return; // host rewrites pane cwd away from start path — skip
+    // A dedicated server keeps concurrent Vitest invocations' global leak
+    // reapers from consuming this run's fixture between hasSession and reap.
+    const socket = `leaktest-${randomBytes(8).toString('hex')}`;
+    const runner: TmuxRunner = (args) => realTmuxRunner(['-L', socket, ...args]);
+    if (!(await paneCwdSticky(runner))) return; // host rewrites pane cwd away from start path — skip
 
-    const before = snapshotDaemonSessions();
+    const before = snapshotDaemonSessions(runner);
     const name = `cc-daemon-leaktest-${randomBytes(4).toString('hex')}`;
 
     // Create the "leak" the way an escape would: real tmux, kill-switch off.
     const prevFlag = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     try {
-      await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir());
-      expect(await hasSession(name)).toBe(true);
+      await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir(), runner);
+      expect(await hasSession(name, runner)).toBe(true);
 
-      const { killed, indeterminate } = reapLeakedDaemonSessions(before);
+      const { killed, indeterminate } = reapLeakedDaemonSessions(before, runner);
 
       // Reported by name with a pane-cwd fingerprint…
       expect(killed.some((l) => l.includes(name))).toBe(true);
       expect(killed.find((l) => l.includes(name))).toContain('pane cwd:');
       expect(indeterminate).toEqual([]);
       // …and actually gone (nothing left resident).
-      expect(await hasSession(name)).toBe(false);
+      expect(await hasSession(name, runner)).toBe(false);
     } finally {
       if (prevFlag === undefined) {
         delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
       } else {
         process.env.AI_CONDUCTOR_NO_REAL_EXEC = prevFlag;
       }
-      killDaemonSession(name); // idempotent safety net
+      killDaemonSession(name, runner); // idempotent safety net
     }
   });
 });
