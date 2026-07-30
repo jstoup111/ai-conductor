@@ -143,4 +143,68 @@ describe('deterministic BUILD verification group', () => {
       'review:start',
     ]);
   });
+
+  it.each([
+    ['wiring_check', false, true, 'wiring diagnostic'],
+    ['test_suite', true, false, 'suite diagnostic'],
+  ] as const)(
+    'rewinds BUILD once when %s fails and never dispatches review or SHIP validation',
+    async (failedMember, wiringPasses, suitePasses, diagnostic) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-failure-'));
+      dirs.push(projectRoot);
+      const stateFilePath = join(projectRoot, 'conduct-state.json');
+      await writeFile(stateFilePath, JSON.stringify({ plan: 'done', build: 'done' }));
+
+      const dispatches: string[] = [];
+      const stepRunner: StepRunner = {
+        run: vi.fn(async (step) => {
+          dispatches.push(step);
+          if (step === 'wiring_check') {
+            return wiringPasses
+              ? { success: true }
+              : { success: false, output: diagnostic };
+          }
+          if (step === 'build') return { success: false, output: 'stop after BUILD rewind' };
+          throw new Error(`unexpected model or SHIP dispatch: ${step}`);
+        }),
+      };
+      const verifier = {
+        inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+        ensure: vi.fn(async () => (
+          suitePasses
+            ? { status: 'REUSED' as const, evidence: {} as never }
+            : { status: 'FAILED' as const, reason: 'test_failure' as never, message: diagnostic }
+        )),
+      };
+      const events = new ConductorEventEmitter();
+      const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kickbacks.push(event);
+      });
+      const conductor = new Conductor({
+        stateFilePath,
+        stepRunner,
+        events,
+        projectRoot,
+        fromStep: 'wiring_check',
+        mode: 'auto',
+        maxRetries: 1,
+        config: { validation_concurrency: 2 },
+        fullSuiteVerifier: verifier,
+        onRecovery: async () => 'quit',
+      });
+
+      await conductor.run();
+
+      expect(dispatches).toEqual(['wiring_check', 'build']);
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+      expect(kickbacks).toEqual([{
+        type: 'kickback',
+        from: failedMember,
+        to: 'build',
+        evidence: diagnostic,
+        count: 1,
+      }]);
+    },
+  );
 });
