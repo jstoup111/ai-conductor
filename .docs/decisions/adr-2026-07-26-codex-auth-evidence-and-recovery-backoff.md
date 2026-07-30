@@ -1,12 +1,14 @@
 # ADR: Codex auth evidence is independent from unrelated doctor health
 
 **Date:** 2026-07-26
-**Status:** APPROVED
+**Status:** SUPERSEDED
 **Feature:** Codex readiness park loops on unrelated doctor failure (#970)
 **Deciders:** James Stoup (operator), architecture review for issue #970
 **Supersedes:** `adr-2026-07-25-provider-neutral-auth-park-source-specific-readiness`
 **Preserves:** provider/source isolation, bounded timeout, zero retry/escalation/fallback budget,
 startup-only API-key restart semantics, and all non-readiness decisions from the superseded ADR
+
+**Superseded by:** `adr-2026-07-29-codex-readiness-probe-failure-disposition`
 
 **Approval:** Approved by James Stoup on 2026-07-26.
 

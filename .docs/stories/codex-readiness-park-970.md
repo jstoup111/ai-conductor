@@ -2,6 +2,8 @@
 
 # Technical Stories: Codex readiness park loops on unrelated doctor failure (#970)
 
+**Amended by #1039:** Criteria that keep malformed, unsupported, absent, ambiguous, or otherwise unobtainable readiness evidence in blocking `unverifiable` recovery are superseded by the accepted #1039 probe-failure and one-trial stories. Auth-subcheck authority, unrelated-health handling, capped backoff, progress cadence, and affirmative credential recovery remain authoritative.
+
 **Source:** Approved technical intent, architecture review, and
 `adr-2026-07-26-codex-auth-evidence-and-recovery-backoff`
 
