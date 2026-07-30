@@ -101,6 +101,23 @@ N's, and `none` means the task's commit trailer alone corroborates. Backticked
 file names elsewhere in the task (Steps prose) are only used when no Files
 line exists.
 
+### 3a. No Terminal Catch-All Validation Task
+
+A plan MUST NOT end with a catch-all validation task whose purpose is to prove, validate, confirm,
+or re-run the completed feature as a whole. Do not create a terminal "did everything work?",
+"end-to-end proof", "full-flow validation", or similar task after the behavior-owning implementation
+tasks. `/writing-system-tests` authors the story-level acceptance specs at BUILD entry, before
+implementation; the native
+`test-suite` gate, `/manual-test`, `/prd-audit`, and the as-built `/architecture-review` validate the
+completed feature afterward.
+
+Keep scoped RED/GREEN tests inside the implementation task that owns the behavior or wiring. A
+behavior-specific integration task is valid only when it implements a named production integration
+point, not when it merely exercises the already-completed feature or promises to repair unspecified
+findings. If a later validation phase exposes a gap, route that evidence through `/remediate` as a
+concrete remediation task at the appropriate SDLC step, or to the required human decision; do not
+pre-create a speculative "fix anything uncovered" task.
+
 ### 5c. `Wired-into:` Grammar and Derivation
 
 Every task that introduces a new production surface (exported function/module, hook
@@ -296,6 +313,7 @@ any code is written. The full flow from here is:
 - [ ] Preconditions validated (stories exist, both paths, conflict-check clean)
 - [ ] Every acceptance criterion maps to at least one task
 - [ ] Negative paths are explicit tasks (not grouped into catch-alls)
+- [ ] The plan has no terminal catch-all task that re-validates the completed feature
 - [ ] Tasks are 2-5 minute granularity
 - [ ] Each task has specific test and implementation descriptions
 - [ ] Dependencies are declared and acyclic

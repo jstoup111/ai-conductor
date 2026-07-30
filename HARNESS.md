@@ -68,6 +68,15 @@ shown above.
 | SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/retros/ |
 | CHECKPOINT | User validation after manual-test | Harness pause — continue, go back, or quit |
 
+### Plan Task Ownership
+
+Plan tasks own implementation behavior and its scoped RED/GREEN tests. A plan must not append a
+terminal catch-all task that proves the completed feature as a whole or promises to repair
+unspecified findings. `writing-system-tests` owns story-level acceptance specs at BUILD entry before
+implementation; `test-suite` and the SHIP validators own completed-feature validation. Evidence from
+those later gates routes through remediation as a concrete task at the appropriate SDLC step, or to
+a required human decision; it is never pre-authored as speculative implementation work.
+
 **Checkpoints** are harness-level pauses (no Claude session). The user reviews output and
 chooses to continue, navigate back to a prior step, or quit. Navigating back marks the target
 step as `pending` and all downstream steps as `stale` (⚠), then re-runs from the target forward.
