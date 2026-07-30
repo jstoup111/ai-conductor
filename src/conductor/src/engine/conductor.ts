@@ -662,6 +662,8 @@ export interface ConductorOptions {
   /** Feature description — used by the engine-run worktree step to name the
    *  worktree/branch when state.feature_desc isn't set yet. */
   featureDesc?: string;
+  /** Caller-known feature worktree branch to persist for SHIP consumers. */
+  worktreeBranch?: string;
   /**
    * When true, after each step that declares artifact globs, require at least
    * one matching file on disk. If not, mark the step failed and route through
@@ -902,6 +904,7 @@ export class Conductor {
   private readonly surfacedRebaselineRefusals = new Set<string>();
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
   private featureDesc?: string;
+  private worktreeBranch?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
   private onNavigate: (steps: NavigableStep[]) => Promise<StepName | null>;
   private verifyArtifacts: boolean;
@@ -1268,6 +1271,7 @@ export class Conductor {
     this.fullSuiteVerifier =
       opts.fullSuiteVerifier ?? new FullSuiteVerifier({ projectRoot: this.projectRoot });
     this.featureDesc = opts.featureDesc;
+    this.worktreeBranch = opts.worktreeBranch;
     this.verifyArtifacts = opts.verifyArtifacts ?? false;
     this.daemon = opts.daemon ?? false;
     this.selfHost = opts.selfHost ?? false;
@@ -2269,6 +2273,7 @@ export class Conductor {
 
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
+    if (this.worktreeBranch !== undefined) state.worktree_branch = this.worktreeBranch;
 
     // Stamp this conductor invocation. SHIP-phase completion predicates
     // compare artifact mtimes against this timestamp so a stale file left
