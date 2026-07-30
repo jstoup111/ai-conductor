@@ -232,4 +232,46 @@ describe('loadMergedConfig precedence', () => {
       ],
     });
   });
+
+  it('rejects a malformed user-only retry_routing value', async () => {
+    const projectRoot = await makeConfigPair(
+      'retry_routing:\n  enabled: banana\n',
+    );
+
+    const result = await loadMergedConfig(projectRoot);
+
+    expect(
+      result.ok
+        ? result.config.retry_routing
+        : {
+            type: result.error.type,
+            message: result.error.message,
+          },
+    ).toEqual({
+      type: 'validation_error',
+      message: 'retry_routing.enabled must be a boolean',
+    });
+  });
+
+  it('clamps a malformed user-only attribution sample with one warning', async () => {
+    const projectRoot = await makeConfigPair(
+      'attribution_audit_sample_pct: 150\n',
+    );
+
+    const result = await loadMergedConfig(projectRoot);
+
+    expect(
+      result.ok
+        ? {
+            value: result.config.attribution_audit_sample_pct,
+            warnings: result.warnings,
+          }
+        : result,
+    ).toEqual({
+      value: 100,
+      warnings: [
+        'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
+      ],
+    });
+  });
 });
