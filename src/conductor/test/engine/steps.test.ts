@@ -28,7 +28,7 @@ describe('engine/steps', () => {
       'worktree', 'memory', 'explore', 'complexity', 'prd',
       'architecture_diagram', 'architecture_review', 'stories', 'conflict_check', 'plan',
       'coherence_check',
-      'acceptance_specs', 'build', 'build_review', 'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'acceptance_specs', 'build', 'wiring_check', 'test_suite', 'build_review', 'manual_test', 'prd_audit',
       'architecture_review_as_built', 'retro', 'rebase', 'finish',
     ];
 
@@ -150,39 +150,39 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(true);
     });
 
-    it('build_review is a BUILD/gating loop gate sitting between build and manual_test', () => {
+    it('wiring_check is a BUILD/gating loop gate in the deterministic group after build', () => {
       const s = ALL_STEPS[13];
-      expect(s.name).toBe('build_review');
-      expect(s.phase).toBe('BUILD');
-      expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['build']);
-      expect(s.loopGate).toBe(true);
-      expect(s.isCheckpoint).toBe(false);
-    });
-
-    it('wiring_check is a BUILD/gating loop gate sitting between build_review and manual_test', () => {
-      const s = ALL_STEPS[14];
       expect(s.name).toBe('wiring_check');
       expect(s.phase).toBe('BUILD');
       expect(s.enforcement).toBe('gating');
-      expect(s.prerequisites).toEqual(['build_review']);
+      expect(s.prerequisites).toEqual(['build']);
       expect(s.loopGate).toBe(true);
       expect(s.skippableForTiers).toEqual([]);
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('test_suite is a native non-disableable BUILD/gating loop gate after wiring_check', () => {
-      const s = ALL_STEPS[15];
+    it('test_suite is a native non-disableable BUILD/gating loop gate in the deterministic group after build', () => {
+      const s = ALL_STEPS[14];
       expect(s).toEqual({
         name: 'test_suite',
         label: 'Test Suite',
         phase: 'BUILD',
         enforcement: 'gating',
-        prerequisites: ['wiring_check'],
+        prerequisites: ['build'],
         skippableForTiers: [],
         isCheckpoint: false,
         loopGate: true,
       });
+    });
+
+    it('build_review is a BUILD/gating loop gate after the deterministic group join', () => {
+      const s = ALL_STEPS[15];
+      expect(s.name).toBe('build_review');
+      expect(s.phase).toBe('BUILD');
+      expect(s.enforcement).toBe('gating');
+      expect(s.prerequisites).toEqual(['wiring_check', 'test_suite']);
+      expect(s.loopGate).toBe(true);
+      expect(s.isCheckpoint).toBe(false);
     });
 
     it('manual_test is SHIP/gating, checkpoint, prereq test_suite (#367 — a failing manual test must be able to block)', () => {
@@ -255,11 +255,11 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('build → build_review → wiring_check → test_suite → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
+    it('build → wiring_check → test_suite → build_review → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
       const names = ALL_STEPS.map((s) => s.name);
       const tail = names.slice(names.indexOf('build'));
       expect(tail).toEqual([
-        'build', 'build_review', 'wiring_check', 'test_suite', 'manual_test', 'prd_audit', 'architecture_review_as_built',
+        'build', 'wiring_check', 'test_suite', 'build_review', 'manual_test', 'prd_audit', 'architecture_review_as_built',
         'retro', 'rebase', 'finish',
       ]);
     });
@@ -476,11 +476,11 @@ describe('engine/steps', () => {
       expect(getPrerequisites('build')).toEqual(['plan']);
     });
 
-    it('test_suite requires wiring_check and manual_test requires test_suite', () => {
+    it('test_suite requires build and manual_test requires test_suite', () => {
       expect({
         testSuite: getPrerequisites('test_suite'),
         manualTest: getPrerequisites('manual_test'),
-      }).toEqual({ testSuite: ['wiring_check'], manualTest: ['test_suite'] });
+      }).toEqual({ testSuite: ['build'], manualTest: ['test_suite'] });
     });
 
     it('rebase requires the joined validation tail through retro', () => {
