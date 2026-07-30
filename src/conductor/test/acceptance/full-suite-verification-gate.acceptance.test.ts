@@ -220,6 +220,36 @@ describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () =>
     expect(await readCount()).toBe(1);
   });
 
+  it('guides interactive conduct through the native verifier without a removed skill fallback', async () => {
+    const conduct = await readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8');
+    const commandIndex = conduct.indexOf('conduct-ts test-suite');
+    const guidance =
+      commandIndex < 0
+        ? ''
+        : conduct.slice(Math.max(0, commandIndex - 800), commandIndex + 1_600);
+
+    expect({
+      runsAfterBuild: /BUILD[\s\S]*conduct-ts test-suite/i.test(guidance),
+      acceptsExecuted: /EXECUTED[\s\S]{0,100}(?:PASS|success)/i.test(guidance),
+      acceptsReused: /REUSED[\s\S]{0,100}(?:PASS|success)/i.test(guidance),
+      remediatesNonZeroInBuild:
+        /non-?zero[\s\S]{0,300}BUILD[\s\S]{0,160}(?:remediat|\/tdd|\/pipeline)|non-?zero[\s\S]{0,300}(?:remediat|\/tdd|\/pipeline)[\s\S]{0,160}BUILD/i.test(
+          guidance,
+        ),
+      removedHostInvocationAbsent:
+        !/(^|[^A-Za-z0-9_-])(?:\/test-suite|\$test-suite)([^A-Za-z0-9_-]|$)/m.test(guidance),
+      removedSkillPathAbsent: !/skills\/test-suite(?:[^A-Za-z0-9_-]|$)/i.test(guidance),
+      modelOrSkillRoutingAbsent: !/\b(?:model|skill)\b/i.test(guidance),
+    }).toEqual({
+      runsAfterBuild: true,
+      acceptsExecuted: true,
+      acceptsReused: true,
+      remediatesNonZeroInBuild: true,
+      removedHostInvocationAbsent: true,
+      removedSkillPathAbsent: true,
+      modelOrSkillRoutingAbsent: true,
+    });
+  });
 });
 
 describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
