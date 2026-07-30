@@ -1091,6 +1091,9 @@ export class DefaultStepRunner implements StepRunner {
       model: effectiveModel,
       effort: resolved.effort,
       cwd: this.projectDir,
+    }, async () => {
+      const { v4: uuidv4 } = await import('uuid');
+      return { sessionId: uuidv4(), resume: false };
     });
     this.callCount++;
     const observedIntervals = result.observedIntervals
@@ -1328,7 +1331,7 @@ export class DefaultStepRunner implements StepRunner {
       model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: this.projectDir,
-    });
+    }, async () => ({ sessionId: uuidv4(), resume: false }));
 
     if (!result.success) return null;
 
@@ -1405,7 +1408,7 @@ export class DefaultStepRunner implements StepRunner {
       model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: ctx.projectRoot,
-    });
+    }, async () => ({ sessionId: uuidv4(), resume: false }));
 
     return parseRebaseResolutionOutput(result.output);
   }
@@ -1470,7 +1473,7 @@ export class DefaultStepRunner implements StepRunner {
       model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: ctx.worktreePath,
-    });
+    }, async () => ({ sessionId: uuidv4(), resume: false }));
 
     // Always report attempted: true — the success of the fix is determined by
     // whether the setup step subsequently passes.
@@ -1537,7 +1540,7 @@ export class DefaultStepRunner implements StepRunner {
       model: this.modelAvailability.effectiveModel(resolved.model).model,
       effort: resolved.effort,
       cwd: ctx.worktreePath,
-    });
+    }, async () => ({ sessionId: uuidv4(), resume: false }));
 
     // Always report attempted: true — the success of the fix is determined by
     // whether CI subsequently passes.
@@ -1745,7 +1748,7 @@ export class DefaultStepRunner implements StepRunner {
           model: this.modelAvailability.effectiveModel(resolved.model).model,
           effort: resolved.effort,
           cwd: this.projectDir,
-        });
+        }, async () => ({ sessionId: uuidv4(), resume: false }));
       })());
     if (providerResult) {
       attemptedModels.push(

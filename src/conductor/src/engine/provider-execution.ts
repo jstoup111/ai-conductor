@@ -26,6 +26,7 @@ import {
   resolvePreferredProviderNativeStepConfig,
   type ResolvedProviderNativeStepConfig,
 } from './resolved-config.js';
+import type { PrepareModelFallbackOptions } from './model-availability.js';
 import {
   validateTaskAttribution,
   type TaskAttributionDiagnosticCode,
@@ -291,6 +292,7 @@ export async function invokeRuntime(
 async function invokeRuntimeResolved(
   runtime: ProviderRuntime,
   options: InvokeOptions,
+  prepareFallbackOptions?: PrepareModelFallbackOptions,
 ): Promise<{ result: InvokeResult; model?: string }> {
   if (runtime.runWideUnavailable) {
     const reason = runtime.runWideUnavailable.reason;
@@ -310,6 +312,7 @@ async function invokeRuntimeResolved(
   const invocation = await runtime.availability.invokeWithLadderResolved(
     runtime.provider,
     options,
+    prepareFallbackOptions,
   );
   const { result } = invocation;
   const unavailable = classifyProviderAttempt(result);
@@ -407,6 +410,9 @@ export async function invokeProviderCandidate({
     resume: false,
     model: resolved.model,
     effort: resolved.effort,
+  }, async () => {
+    const next = await sessions.prepare(providerKey);
+    return { sessionId: next.id, resume: next.resume };
   });
   return {
     result: invocation.result,

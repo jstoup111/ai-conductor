@@ -124,6 +124,26 @@ describe("ModelAvailability", () => {
       });
     });
 
+    it("mints a fresh non-resumed session for each fallback when no provider session scope is supplied", async () => {
+      const avail = new ModelAvailability(claudeLadder);
+      const { provider, invokeCalls } = fakeProvider({
+        fable: modelUnavailable(),
+        opus: { success: true, output: "done", exitCode: 0 },
+      });
+
+      await avail.invokeWithLadder(provider, {
+        prompt: "hi",
+        sessionId: "fable-session-id",
+        resume: false,
+        model: "fable",
+      });
+
+      expect(invokeCalls).toHaveLength(2);
+      expect(invokeCalls[0]).toMatchObject({ model: "fable", sessionId: "fable-session-id", resume: false });
+      expect(invokeCalls[1]).toMatchObject({ model: "opus", resume: false });
+      expect(invokeCalls[1].sessionId).not.toBe("fable-session-id");
+    });
+
     it("Codex skips a dead Terra rung while walking from unavailable Sol to Luna", async () => {
       const avail = new ModelAvailability(codexLadder);
       avail.markDead(codexLadder[1]);

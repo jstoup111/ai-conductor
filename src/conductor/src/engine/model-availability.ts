@@ -1,4 +1,5 @@
 import type { LLMProvider, InvokeOptions, InvokeResult } from "../execution/llm-provider.js";
+import { v4 as uuidv4 } from "uuid";
 import { CLAUDE_MODEL_POLICY } from "./provider-model-policy.js";
 
 /** @deprecated Use CLAUDE_MODEL_POLICY.modelFallbackLadder instead. */
@@ -13,6 +14,15 @@ export interface ResolvedModelInvocation {
   result: InvokeResult;
   model: string;
 }
+
+export type PrepareModelFallbackOptions = (
+  nextModel: string,
+) => Promise<Pick<InvokeOptions, 'sessionId' | 'resume'>>;
+
+const prepareFreshFallbackOptions: PrepareModelFallbackOptions = async () => ({
+  sessionId: uuidv4(),
+  resume: false,
+});
 
 /**
  * Per-process cache tracking which models have been observed to be unavailable
@@ -69,8 +79,12 @@ export class ModelAvailability {
    * Ordering: recovery signals are checked before modelUnavailable. Auth,
    * rate-limit, and session-expiry recovery must never poison the ladder.
    */
-  async invokeWithLadder(provider: LLMProvider, options: InvokeOptions): Promise<InvokeResult> {
-    return (await this.invokeWithLadderResolved(provider, options)).result;
+  async invokeWithLadder(
+    provider: LLMProvider,
+    options: InvokeOptions,
+    prepareFallbackOptions: PrepareModelFallbackOptions = prepareFreshFallbackOptions,
+  ): Promise<InvokeResult> {
+    return (await this.invokeWithLadderResolved(provider, options, prepareFallbackOptions)).result;
   }
 
   /**
@@ -80,6 +94,7 @@ export class ModelAvailability {
   async invokeWithLadderResolved(
     provider: LLMProvider,
     options: InvokeOptions,
+    prepareFallbackOptions: PrepareModelFallbackOptions = prepareFreshFallbackOptions,
   ): Promise<ResolvedModelInvocation> {
     const requested = options.model ?? "";
     const result = await provider.invoke({ ...options, model: requested });
@@ -107,10 +122,12 @@ export class ModelAvailability {
       return { result, model: requested };
     }
 
+    const fallbackOptions = await prepareFallbackOptions(nextModel);
     const resolved = await this.invokeWithLadderResolved(provider, {
       ...options,
+      ...fallbackOptions,
       model: nextModel,
-    });
+    }, prepareFallbackOptions);
     const observedIntervals = [
       ...(result.observedIntervals ?? []),
       ...(resolved.result.observedIntervals ?? []),

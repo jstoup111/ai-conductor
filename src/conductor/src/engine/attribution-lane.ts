@@ -376,7 +376,7 @@ export async function dispatchAttributionVerifier(
           effort: resolved.effort,
           cwd: featureWorktreePath,
           systemPrompt,
-        });
+        }, async () => ({ sessionId: uuidv4(), resume: false }));
       })());
   const providerMetadata = providerResult
     ? {
