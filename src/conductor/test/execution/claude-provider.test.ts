@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { IntervalClock } from '../../src/execution/observed-interval.js';
 
 // Mock execa before importing anything that uses it
 vi.mock('execa', () => ({
@@ -43,6 +44,34 @@ describe('ClaudeProvider', () => {
   };
 
   describe('invoke', () => {
+    it('returns the successful subprocess interval without changing output or provider usage', async () => {
+      const readings = [1_000, 1_025];
+      const clock: IntervalClock = {
+        nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
+      };
+      provider = new ClaudeProvider(clock);
+      mockExeca.mockResolvedValue({
+        stdout: JSON.stringify({
+          result: 'Done!',
+          usage: { input_tokens: 12, output_tokens: 7 },
+          duration_ms: 20,
+        }),
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result).toMatchObject({
+        success: true,
+        output: 'Done!',
+        exitCode: 0,
+        tokenUsage: { input: 12, output: 7, durationMs: 20 },
+        observedIntervals: [{ startedAtMs: 1_000, durationMs: 25 }],
+      });
+    });
+
     it('routes interactive subprocess diagnostics through the supplied feature logger', async () => {
       const featureLog = vi.fn();
       mockExeca.mockResolvedValue({
