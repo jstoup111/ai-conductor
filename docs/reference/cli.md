@@ -253,20 +253,23 @@ prefix), or a local branch ending in `/<slug>` under any prefix that `git merge-
 proves is contained in `origin/main`. If neither holds, or the check fails, it prints `Could not
 reconcile '<slug>': <reason>` and exits 1, where `<reason>` is one of `not-ancestor`,
 `branch-missing`, or `ancestry-check-failed`. `not-ancestor` also covers the case where the record
-proves the ship but a branch for the slug still carries commits outside `origin/main` — ancestry is
-the only authority for deleting a branch, so nothing is deleted there. If the slug is
+proves the ship but a branch for the slug is proven neither by ancestry nor by
+[merged-PR head identity](../guides/running-the-daemon.md#parked-feature-reconciliation) to carry
+only what landed, so nothing is deleted there. If the slug is
 merged but `.docs/shipped/<slug>.md` does not exist on `origin/main`, it requests an ST-916
 record-repair PR when a merged PR can be found, prints `Could not reconcile '<slug>':
 record-missing`, and exits 1 — the same deferral the daemon sweep applies until the shipped record
-lands. If a resume is in progress for the slug, it prints `Could not reconcile '<slug>':
-in-progress` and exits 1.
+lands. A shipped record on `origin/main` settles completion on its own, so local per-worktree
+`.pipeline/` state that still reads mid-build never refuses cleanup.
 
-Once merged, recorded, and not in progress, it removes `.worktrees/<slug>`, deletes every local
+Once merged and recorded, it removes `.worktrees/<slug>`, deletes every local
 branch for the slug, and unparks the slug — the same three steps
 [park before you touch a feature's git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state)
 describes doing by hand. It prints `Reconciled '<slug>': worktree-removed, branch-deleted,
 unparked` and exits 0. When the branch was already deleted at merge — the normal end state for
-shipped work — the middle step reads `branch-absent` instead. A failure partway through prints `Could not reconcile '<slug>':
+shipped work — the middle step reads `branch-absent` instead. When `.worktrees/<slug>` exists on disk
+but git never registered it as a worktree, the directory is removed outright rather than refused.
+A failure partway through prints `Could not reconcile '<slug>':
 worktree-remove-failed`, `branch-delete-failed`, or `unpark-failed` and exits 1, leaving whatever
 steps completed in place.
 

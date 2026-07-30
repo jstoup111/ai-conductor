@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -30,8 +30,14 @@ interface GitWorld {
   ancestryBroken?: readonly string[];
   /** `git for-each-ref` itself fails. */
   refsUnavailable?: boolean;
-  /** `git branch -d` fails. */
+  /** `git branch -d`/`-D` fails whatever the ref's merge state. */
   branchDeleteFails?: boolean;
+  /** `git worktree remove` fails with this message (non-ENOENT, as git reports). */
+  worktreeRemoveFails?: string;
+  /** Paths `git worktree list --porcelain` reports as registered worktrees. */
+  registeredWorktrees?: readonly string[];
+  /** `git worktree list --porcelain` itself fails. */
+  worktreeListUnavailable?: boolean;
 }
 
 function gitFailure(code: number, message: string): Error {
@@ -41,12 +47,14 @@ function gitFailure(code: number, message: string): Error {
 function makeGit(world: GitWorld = {}): {
   run: ReturnType<typeof vi.fn<GitRunner>>;
   deleted: string[];
+  deleteArgv: string[][];
   events: string[];
 } {
   const shipped = world.shipped ?? [];
   const branches = world.branches ?? [];
   const merged = world.merged ?? [];
   const deleted: string[] = [];
+  const deleteArgv: string[][] = [];
   const events: string[] = [];
 
   const run = vi.fn<GitRunner>(async (args) => {
@@ -82,18 +90,33 @@ function makeGit(world: GitWorld = {}): {
     }
     if (verb === 'branch') {
       events.push('branch-deleted');
+      deleteArgv.push([...args]);
       if (world.branchDeleteFails) throw gitFailure(1, 'branch delete failed');
+      // Faithful to git: the safe delete refuses any ref it cannot prove merged
+      // by ancestry, which is exactly the squash-merge case. Only `-D` forces.
+      if (args[1] === '-d' && !merged.includes(args[2])) {
+        throw gitFailure(1, `error: the branch '${args[2]}' is not fully merged`);
+      }
       deleted.push(args[2]);
       return { stdout: '' };
     }
     if (verb === 'worktree') {
+      if (args[1] === 'list') {
+        if (world.worktreeListUnavailable) throw gitFailure(128, 'fatal: not a git repository');
+        return {
+          stdout: (world.registeredWorktrees ?? [])
+            .map((path) => `worktree ${path}\nHEAD deadbeef\n`)
+            .join('\n'),
+        };
+      }
       events.push('worktree-removed');
+      if (world.worktreeRemoveFails) throw gitFailure(128, world.worktreeRemoveFails);
       return { stdout: '' };
     }
     throw new Error(`unexpected git invocation: ${args.join(' ')}`);
   });
 
-  return { run, deleted, events };
+  return { run, deleted, deleteArgv, events };
 }
 
 describe('engine/park-reconciliation — reconcileMergedPark', () => {
@@ -229,7 +252,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'squash-merged';
     const tip = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
-    const { run, deleted } = makeGit({
+    const { run, deleted, deleteArgv } = makeGit({
       shipped: [slug],
       branches: [`fix/${slug}`],
       merged: [],
@@ -246,11 +269,15 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       expect({
         outcome,
         deleted,
+        deleteArgv,
         ghCalls: runGh.mock.calls,
         parked: await isOperatorParked(projectRoot, slug),
       }).toEqual({
         outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
         deleted: [`fix/${slug}`],
+        // Force delete: this function, not git, established that the tip is the
+        // commit the squash merge landed, and `-d` refuses that ref forever.
+        deleteArgv: [['branch', '-D', `fix/${slug}`]],
         ghCalls: [
           [
             ['pr', 'list', '--head', `fix/${slug}`, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
@@ -366,7 +393,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         'ls-tree --name-only',
         'for-each-ref --format=%(refname:short)',
         'merge-base --is-ancestor',
-        'branch -d',
+        'branch -D',
       ],
       ghCalls: [],
     });
@@ -443,12 +470,16 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     });
   });
 
-  it('refuses cleanup when the established resume detector finds an in-progress worktree run', async () => {
+  it('reconciles a record-backed park whose local pipeline state still reads in-progress', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
-    const slug = 'active-run';
+    const slug = 'stale-in-progress-state';
     const { run } = makeGit({ shipped: [slug] });
     const log = vi.fn<(message: string) => void>();
     try {
+      await writeOperatorPark(projectRoot, slug);
+      // Exactly the shape `detectAutoResume` classifies as resumable: no
+      // `feature_status: complete`, a build left mid-flight. The shipped record
+      // on origin/main is the stronger, durable proof and must win.
       const pipeline = join(projectRoot, '.worktrees', slug, '.pipeline');
       await mkdir(pipeline, { recursive: true });
       await writeFile(
@@ -458,14 +489,90 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, log });
 
+      expect({ outcome, parked: await isOperatorParked(projectRoot, slug), logs: log.mock.calls }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-absent', 'unparked'] },
+        parked: false,
+        // Only the canonical unpark's own report; no in-progress refusal line.
+        logs: [[
+          `Unparked '${slug}' and reset no-evidence counter — normal dispatch and re-kick resume.`,
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('falls back to plain directory removal for a leftover path git never registered', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'unregistered-leftover';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      worktreeRemoveFails: `fatal: '${worktree}' is not a working tree`,
+      registeredWorktrees: [projectRoot],
+    });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeFile(join(worktree, 'leftover.txt'), 'not a git worktree');
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
+
       expect({
         outcome,
-        destructive: run.mock.calls.filter(([args]) => args[0] === 'branch' || args[0] === 'worktree'),
-        logs: log.mock.calls,
+        deleted,
+        stillOnDisk: await access(worktree).then(() => true, () => false),
+        parked: await isOperatorParked(projectRoot, slug),
       }).toEqual({
-        outcome: { slug, steps: [], refusal: 'in-progress' },
-        destructive: [],
-        logs: [[`[parked-reconciliation] ${slug} has an in-progress run; refusing cleanup`]],
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+        deleted: [`feat/${slug}`],
+        stillOnDisk: false,
+        parked: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: 'the path is a registered worktree git refused to remove',
+      registeredWorktrees: undefined as string[] | undefined,
+      worktreeListUnavailable: false,
+    },
+    {
+      name: 'the worktree registration itself cannot be read',
+      registeredWorktrees: [] as string[] | undefined,
+      worktreeListUnavailable: true,
+    },
+  ])('refuses worktree removal when $name', async ({ registeredWorktrees, worktreeListUnavailable }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'registered-remove-fails';
+    const worktree = join(projectRoot, '.worktrees', slug);
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [`feat/${slug}`],
+      worktreeRemoveFails: 'fatal: cannot remove a locked working tree',
+      registeredWorktrees: registeredWorktrees ?? [projectRoot, worktree],
+      worktreeListUnavailable,
+    });
+    try {
+      await mkdir(worktree, { recursive: true });
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
+
+      expect({
+        outcome,
+        stillOnDisk: await access(worktree).then(() => true, () => false),
+        parked: await isOperatorParked(projectRoot, slug),
+      }).toEqual({
+        outcome: { slug, steps: [], refusal: 'worktree-remove-failed' },
+        stillOnDisk: true,
+        parked: true,
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

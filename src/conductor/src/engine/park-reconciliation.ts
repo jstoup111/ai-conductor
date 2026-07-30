@@ -4,9 +4,8 @@ import {
   type GhRunner,
   type GitRunner,
 } from './pr-labels.js';
-import { detectAutoResume } from './auto-resume.js';
 import { dispatchDaemonPark } from './daemon-park-cli.js';
-import { access, readFile } from 'node:fs/promises';
+import { access, readFile, rm } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { listOperatorParkedSlugs } from './park-marker.js';
 import { parseIntakeSourceRef } from './artifacts.js';
@@ -247,6 +246,37 @@ async function isSquashMergedAtTip(
 }
 
 /**
+ * `true` when `path` appears in `git worktree list --porcelain` — i.e. git owns
+ * it and `git worktree remove` failing on it is a REAL failure (locked, dirty,
+ * permissions) that must refuse cleanup.
+ *
+ * `false` only when the listing was read successfully and `path` is absent: a
+ * plain leftover directory under `.worktrees/` that was never registered (or
+ * whose registration was already pruned). `git worktree remove` rejects such a
+ * path with "is not a working tree" — not `ENOENT` — so without this
+ * distinction the reconciler refuses forever on a directory that is safe to
+ * delete outright once every merge proof has passed.
+ *
+ * Fails closed: an unreadable listing reports `true`, keeping the refusal.
+ */
+async function isRegisteredWorktree(
+  runGit: GitRunner,
+  projectRoot: string,
+  path: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await runGit(['worktree', 'list', '--porcelain'], { cwd: projectRoot });
+    return stdout
+      .split('\n')
+      .filter((line) => line.startsWith('worktree '))
+      .map((line) => line.slice('worktree '.length).trim())
+      .includes(path);
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Collect both merge signals for one slug. Returns `null` when the evidence is
  * indeterminate, which callers must treat as inaction (`unclassified`), never
  * as "not merged".
@@ -457,23 +487,47 @@ export async function reconcileMergedPark(
     return { slug: opts.slug, steps: [], refusal: 'record-missing', deferred: true };
   }
 
-  const resume = await detectAutoResume(opts.projectRoot, opts.slug);
-  if (resume.kind === 'resume') {
-    opts.log?.(`[parked-reconciliation] ${opts.slug} has an in-progress run; refusing cleanup`);
-    return { slug: opts.slug, steps: [], refusal: 'in-progress' };
-  }
+  // No local-resume check runs here, deliberately. Reaching this line means
+  // `evidence.shippedRecordOnMain` is true — the gate above returns for every
+  // other case — and a shipped record on origin/main is the harness's durable
+  // definition of "the work shipped" (CLAUDE.md rule 4). The per-worktree
+  // `detectAutoResume` verdict is derived from local `.pipeline/conduct-state.json`
+  // and classifies as resumable any worktree missing `feature_status: complete`,
+  // which is the normal state for every feature built before that field existed
+  // and for any `finish` that pushed and then died. Such a worktree cannot have
+  // an in-progress run worth protecting once its record is on the base branch,
+  // so honouring the local verdict refused cleanup for exactly the shipped
+  // features this reconciler exists to clean up.
 
   const steps: string[] = [];
   const worktreePath = join(opts.projectRoot, '.worktrees', opts.slug);
   opts.disposeHaltWatcher?.(opts.slug);
 
+  let worktreeOnDisk = true;
   try {
     await access(worktreePath);
-    await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
   } catch (error) {
-    const failure = error as { code?: unknown };
-    if (failure.code !== 'ENOENT') {
+    if ((error as { code?: unknown }).code !== 'ENOENT') {
       return { slug: opts.slug, steps, refusal: 'worktree-remove-failed' };
+    }
+    worktreeOnDisk = false;
+  }
+
+  if (worktreeOnDisk) {
+    try {
+      await runGit(['worktree', 'remove', '--force', worktreePath], { cwd: opts.projectRoot });
+    } catch {
+      // A removal failure on a path git actually owns is a real failure. A path
+      // git never registered is a plain leftover directory, safe to delete once
+      // every merge proof above has passed.
+      if (await isRegisteredWorktree(runGit, opts.projectRoot, worktreePath)) {
+        return { slug: opts.slug, steps, refusal: 'worktree-remove-failed' };
+      }
+      try {
+        await rm(worktreePath, { recursive: true, force: true });
+      } catch {
+        return { slug: opts.slug, steps, refusal: 'worktree-remove-failed' };
+      }
     }
   }
   steps.push('worktree-removed');
@@ -488,7 +542,11 @@ export async function reconcileMergedPark(
   } else {
     for (const ref of evidence.branches) {
       try {
-        await runGit(['branch', '-d', ref], { cwd: opts.projectRoot });
+        // Force delete. THIS function is the authority that deleting these refs
+        // drops no commit, and one of its two proofs — merged-PR head identity —
+        // is precisely the squash-merge case where git's own `-d` merge check is
+        // permanently false. `-d` would refuse every squash-merged branch here.
+        await runGit(['branch', '-D', ref], { cwd: opts.projectRoot });
       } catch {
         return { slug: opts.slug, steps, refusal: 'branch-delete-failed' };
       }
