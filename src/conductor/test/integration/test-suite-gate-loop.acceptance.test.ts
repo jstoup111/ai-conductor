@@ -368,18 +368,18 @@ describe('test_suite native gate loop', () => {
         shipDispatches: [],
         kickbacks: [
           { evidence: routedEvidence, count: 1 },
-          { evidence: routedEvidence, count: 2 },
+          { evidence: message, count: 2 },
         ],
         buildRetryReasons: [
           `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
-          `test_suite failed:\n${routedEvidence}\nFix and commit the failure before the suite is re-run.`,
+          `test_suite failed deterministic BUILD verification:\n${message}`,
         ],
         haltReason:
-          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}`,
+          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${message}`,
         haltMarker:
-          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${routedEvidence}\n`,
-        haltClass: 'mechanical',
-        finalGateState: 'failed',
+          `test_suite failure unresolved after 2 build kickback(s) (cap 2): ${message}\n`,
+        haltClass: 'needs-human',
+        finalGateState: 'pending',
         restagedDownstreamState: 'stale',
       });
     },
