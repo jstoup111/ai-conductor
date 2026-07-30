@@ -17,6 +17,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
 import { renderShippedRecord, specHash } from '../../src/engine/shipped-record.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import type { OperatorParkedTermination } from '../../src/engine/conductor.js';
 
 const execFile = promisify(execFileCb);
 
@@ -85,6 +86,63 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('classifies a boundary stop before reading markers or running terminal side effects', async () => {
+    const termination: OperatorParkedTermination = {
+      kind: 'operator-parked',
+      boundary: { kind: 'step', name: 'build' },
+    };
+    const featureDeps = deps({ done: false, halted: false });
+    const readOutcome = vi.fn(featureDeps.readOutcome);
+    const teardownWorktree = vi.fn(featureDeps.teardownWorktree);
+    const markProcessed = vi.fn(featureDeps.markProcessed);
+    const shipmentEvidence = vi.fn(featureDeps.shipmentEvidence!);
+    const escalateBuildFailure = vi.fn(async () => ({}));
+    const cleanupHaltPresentation = vi.fn(async () => 'confirmed' as const);
+    const enrollWatch = vi.fn(async () => {});
+    const stop = vi.fn();
+    featureDeps.daemon = true;
+    featureDeps.runConductor = vi.fn(async () => termination);
+    featureDeps.readOutcome = readOutcome;
+    featureDeps.teardownWorktree = teardownWorktree;
+    featureDeps.markProcessed = markProcessed;
+    featureDeps.shipmentEvidence = shipmentEvidence;
+    featureDeps.escalateBuildFailure = escalateBuildFailure;
+    featureDeps.cleanupHaltPresentation = cleanupHaltPresentation;
+    featureDeps.enrollWatch = enrollWatch;
+    featureDeps.beginFeatureRun = () => ({
+      events: new ConductorEventEmitter(),
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([]),
+        sessions: new ProviderSessionStore(),
+      },
+      stop,
+    });
+
+    const outcome = await makeRunFeature(featureDeps)(ITEM);
+
+    expect(outcome).toEqual({ slug: ITEM.slug, status: 'parked' });
+    expect({
+      readOutcome: readOutcome.mock.calls.length,
+      teardownWorktree: teardownWorktree.mock.calls.length,
+      markProcessed: markProcessed.mock.calls.length,
+      shipmentEvidence: shipmentEvidence.mock.calls.length,
+      escalateBuildFailure: escalateBuildFailure.mock.calls.length,
+      cleanupHaltPresentation: cleanupHaltPresentation.mock.calls.length,
+      enrollWatch: enrollWatch.mock.calls.length,
+      stop: stop.mock.calls.length,
+    }).toEqual({
+      readOutcome: 0,
+      teardownWorktree: 0,
+      markProcessed: 0,
+      shipmentEvidence: 0,
+      escalateBuildFailure: 0,
+      cleanupHaltPresentation: 0,
+      enrollWatch: 0,
+      stop: 1,
+    });
+  });
+
   it('routes setup, triage, and conductor execution through the feature logger', async () => {
     const featureLog = vi.fn();
     const setupFailure = new SetupFailureError('setup failed', 'diagnostic output');
