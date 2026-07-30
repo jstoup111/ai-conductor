@@ -311,6 +311,12 @@ An operator park outranks everything: the re-kick sweep checks it first, ahead o
 dedup and the per-SHA guard, and preserves a pending `.pipeline/REKICK` sentinel rather than
 consuming it.
 
+If the feature is already running, the daemon lets the active scheduling unit settle before it
+stops. A serial step reaches its natural status; a parallel group lets every started member settle
+and completes the group join. The daemon persists those outcomes, then blocks the next serial step
+or parallel group and logs the last settled boundary. It does not create a HALT or interrupt work
+inside the active unit. Interactive `conduct` runs are unchanged.
+
 To release:
 
 ```bash
