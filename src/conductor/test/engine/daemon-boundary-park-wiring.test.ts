@@ -28,11 +28,18 @@ describe('daemon operator-park boundary wiring', () => {
   });
 
   it('propagates the conductor termination unchanged through real daemon deps', async () => {
+    const marker = join(mainRoot, '.daemon', 'parked', 'feature-a');
+    await mkdir(join(mainRoot, '.daemon', 'parked'), { recursive: true });
+    await writeFile(marker, 'operator\n');
     const termination: OperatorParkedTermination = {
       kind: 'operator-parked',
-      boundary: { kind: 'step', name: 'build' },
+      boundary: { kind: 'pre-first-unit' },
     };
-    const runConductorInWorktree = vi.fn(async () => termination);
+    const runConductorInWorktree = vi.fn(async () => {
+      expect(await isOperatorParked(mainRoot, 'feature-a')).toBe(true);
+      await rm(marker);
+      return termination;
+    });
     const deps = makeFeatureRunnerDeps({
       projectRoot: mainRoot,
       worktreeBase: join(mainRoot, '.worktrees'),
@@ -48,12 +55,28 @@ describe('daemon operator-park boundary wiring', () => {
     const result = await deps.runConductor(worktree, item);
 
     expect(result).toBe(termination);
+    expect(await isOperatorParked(mainRoot, 'feature-a')).toBe(false);
     expect(runConductorInWorktree).toHaveBeenCalledWith(
       worktree,
       item,
       undefined,
       undefined,
       undefined,
+    );
+  });
+
+  it('returns a typed pre-first-unit stop from the pre-rebase park decision', async () => {
+    const source = await readFile(
+      new URL('../../src/daemon-cli.ts', import.meta.url),
+      'utf8',
+    );
+    const preRebasePark = source.match(
+      /const parked = await isOperatorParked\(projectRoot, item\.slug\);[\s\S]*?const resume = await resumeRebaseFirst/,
+    )?.[0];
+
+    expect(preRebasePark).toBeDefined();
+    expect(preRebasePark).toMatch(
+      /const termination: OperatorParkedTermination = \{\s*kind: 'operator-parked',\s*boundary: \{ kind: 'pre-first-unit' \},\s*\};\s*return termination;/,
     );
   });
 
