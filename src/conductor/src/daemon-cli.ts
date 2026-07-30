@@ -1036,6 +1036,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
+      featureSlug: item.slug,
+      operatorParkBoundary: () => isOperatorParked(projectRoot, item.slug),
       rateLimitEpisode,
       // Task 22: Register in-flight wait AbortControllers with daemon-level handler
       // so process-level SIGTERM can abort all waits across N concurrent conductors.
@@ -1084,7 +1086,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       featureLog(`merged shipment evidence verified for ${item.slug}; continuing normal completion`);
     }
 
-    await conductor.run();
+    const conductorTermination = await conductor.run();
+    if (conductorTermination) {
+      return conductorTermination;
+    }
 
     // Link & close the originating issue (intake specs only): once the
     // implementation PR exists, add `Closes owner/repo#N` to its body so GitHub
