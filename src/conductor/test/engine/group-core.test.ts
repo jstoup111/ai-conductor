@@ -285,6 +285,53 @@ describe("group-core: runNativeGroupBranch", () => {
       ],
     });
   });
+
+  it("maps a throwing native executor to no-verdict after started sibling work settles", async () => {
+    let settleSibling!: (value: string) => void;
+    const sibling = new Promise<string>((resolve) => {
+      settleSibling = resolve;
+    });
+    let siblingSettled = false;
+    const members: GroupMember[] = [
+      { name: "wiring_check", skill: "", outcome: makeSkippedOutcome() },
+      { name: "test_suite", skill: "", outcome: makeSkippedOutcome() },
+    ];
+    const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
+
+    const groupPromise = runWithConcurrency(
+      [
+        () => runNativeGroupBranch(members[0]!, async () => {
+          throw new Error("wiring crashed");
+        }, {
+          onMemberEvent: ({ member, phase, outcome }) => {
+            events.push({ member, phase, outcome });
+          },
+        }),
+        async () => {
+          const result = await sibling;
+          siblingSettled = true;
+          return runNativeGroupBranch(members[1]!, async () => ({ success: true, output: result }));
+        },
+      ],
+      2,
+    );
+
+    await Promise.resolve();
+    settleSibling("suite settled");
+    const outcomes = await groupPromise;
+
+    expect({ outcomes, siblingSettled, events }).toEqual({
+      outcomes: [
+        { kind: "no-verdict", reason: "wiring crashed" },
+        { kind: "verdict", verdict: "pass" },
+      ],
+      siblingSettled: true,
+      events: [
+        { member: "wiring_check", phase: "dispatch" },
+        { member: "wiring_check", phase: "result", outcome: "no-verdict" },
+      ],
+    });
+  });
 });
 
 describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions)", () => {
