@@ -395,6 +395,19 @@ export interface NativeBranchExecutorDeps {
   onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
 }
 
+const NATIVE_BRANCH_FAILURE_REASON_LIMIT = 1_024;
+
+function nativeBranchFailureReason(error: unknown): string {
+  const detail = error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "unknown error";
+  return detail.length <= NATIVE_BRANCH_FAILURE_REASON_LIMIT
+    ? detail
+    : `${detail.slice(0, NATIVE_BRANCH_FAILURE_REASON_LIMIT - 3)}...`;
+}
+
 /**
  * Executes one injected engine-native branch and maps its result through the
  * shared branch-outcome/event contracts used by dispatched group members.
@@ -410,10 +423,15 @@ export async function runNativeGroupBranch(
     skill: member.skill,
     phase: "dispatch",
   });
-  const result = await execute();
-  const outcome = result.success
-    ? makeVerdictOutcome("pass", result.authentication)
-    : makeNoVerdictOutcome(result.output ?? "native branch failed", result.authentication);
+  let outcome: BranchOutcome;
+  try {
+    const result = await execute();
+    outcome = result.success
+      ? makeVerdictOutcome("pass", result.authentication)
+      : makeNoVerdictOutcome(result.output ?? "native branch failed", result.authentication);
+  } catch (error) {
+    outcome = makeNoVerdictOutcome(nativeBranchFailureReason(error));
+  }
   await deps.onMemberEvent?.({
     type: "group_member_step",
     member: member.name,
