@@ -19,6 +19,11 @@ export interface MeasuredTimingRollup {
   noProviderActiveMs: number;
 }
 
+export type TimingRollup =
+  | MeasuredTimingRollup
+  | { state: 'partial'; activeMs?: number }
+  | { state: 'unavailable' };
+
 function intervalEndMs(interval: ObservedInterval): number {
   return interval.startedAtMs + interval.durationMs;
 }
@@ -118,42 +123,117 @@ export function intersectIntervalUnions(
 
 export async function computeTimingRollup(
   worktreeDir: string,
-): Promise<MeasuredTimingRollup> {
+): Promise<TimingRollup> {
   const raw = await readFile(
     join(worktreeDir, '.pipeline', 'events.jsonl'),
     'utf8',
   );
   const activeIntervals: unknown[] = [];
   const providerIntervals: unknown[] = [];
+  const openExecutions = new Map<string, number>();
+  let activeEvidenceIncomplete = false;
+  let providerEvidenceIncomplete = false;
 
   for (const line of raw.split('\n')) {
     if (line.trim().length === 0) continue;
-    const event = JSON.parse(line) as Record<string, unknown>;
-    if ('activeInterval' in event) {
+    let event: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(line) as unknown;
+      if (typeof parsed !== 'object' || parsed === null) return { state: 'partial' };
+      event = parsed as Record<string, unknown>;
+    } catch {
+      return { state: 'partial' };
+    }
+
+    const step = typeof event.step === 'string' ? event.step : undefined;
+    const startKind =
+      event.type === 'step_started'
+        ? 'step'
+        : event.type === 'parallel_started'
+          ? 'parallel'
+          : undefined;
+    const terminalKind =
+      event.type === 'step_completed' || event.type === 'step_failed'
+        ? 'step'
+        : event.type === 'parallel_completed' || event.type === 'parallel_failure'
+          ? 'parallel'
+          : undefined;
+    if (startKind && step) {
+      const key = `${startKind}:${step}`;
+      openExecutions.set(key, (openExecutions.get(key) ?? 0) + 1);
+    }
+    if (terminalKind) {
+      if (!step || !('activeInterval' in event)) activeEvidenceIncomplete = true;
+      if (step) {
+        const key = `${terminalKind}:${step}`;
+        const count = openExecutions.get(key) ?? 0;
+        if (count > 1) openExecutions.set(key, count - 1);
+        else openExecutions.delete(key);
+      }
+    }
+    if (terminalKind && 'activeInterval' in event) {
       activeIntervals.push(event.activeInterval);
     }
-    if (Array.isArray(event.observedIntervals)) {
+    const mayCarryProviderEvidence =
+      terminalKind !== undefined || event.type === 'provider_attempt';
+    if (
+      mayCarryProviderEvidence &&
+      'observedIntervals' in event &&
+      !Array.isArray(event.observedIntervals)
+    ) {
+      providerEvidenceIncomplete = true;
+    } else if (mayCarryProviderEvidence && Array.isArray(event.observedIntervals)) {
       providerIntervals.push(...event.observedIntervals);
+    }
+    if (
+      event.type === 'provider_attempt' &&
+      event.invoked === true &&
+      (!Array.isArray(event.observedIntervals) || event.observedIntervals.length === 0)
+    ) {
+      providerEvidenceIncomplete = true;
     }
   }
 
   const activeUnion = unionIntervals(activeIntervals);
+  const providerUnion = unionIntervals(providerIntervals);
   const providerWithinActive = intersectIntervalUnions(
     activeUnion.intervals,
-    providerIntervals,
+    providerUnion.intervals,
   );
+  activeEvidenceIncomplete ||= activeUnion.invalidIntervals.length > 0;
+  providerEvidenceIncomplete ||= providerUnion.invalidIntervals.length > 0;
+
+  if (activeUnion.intervals.length === 0) {
+    return activeEvidenceIncomplete || openExecutions.size > 0
+      ? { state: 'partial' }
+      : { state: 'unavailable' };
+  }
+
+  const providerDurationMs = providerUnion.intervals.reduce(
+    (total, interval) => total + interval.durationMs,
+    0,
+  );
+  const providerWithinActiveDurationMs = providerWithinActive.intervals.reduce(
+    (total, interval) => total + interval.durationMs,
+    0,
+  );
+  if (
+    activeEvidenceIncomplete ||
+    openExecutions.size > 0 ||
+    providerDurationMs !== providerWithinActiveDurationMs
+  ) {
+    return { state: 'partial' };
+  }
+
   const activeMs = Math.round(
     activeUnion.intervals.reduce(
       (total, interval) => total + interval.durationMs,
       0,
     ),
   );
-  const providerActiveMs = Math.round(
-    providerWithinActive.intervals.reduce(
-      (total, interval) => total + interval.durationMs,
-      0,
-    ),
-  );
+  if (providerEvidenceIncomplete) return { state: 'partial', activeMs };
+
+  const providerActiveMs = Math.round(providerWithinActiveDurationMs);
 
   return {
     state: 'measured',

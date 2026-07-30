@@ -32,6 +32,15 @@ async function writeFeatureEvents(events: readonly object[]): Promise<string> {
   return directory;
 }
 
+async function writeRawFeatureEvents(raw: string): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'timing-rollup-'));
+  temporaryDirectories.push(directory);
+  const pipelineDirectory = join(directory, '.pipeline');
+  await mkdir(pipelineDirectory, { recursive: true });
+  await writeFile(join(pipelineDirectory, 'events.jsonl'), raw, 'utf8');
+  return directory;
+}
+
 describe('unionIntervals', () => {
   it.each([
     {
@@ -207,5 +216,114 @@ describe('computeTimingRollup', () => {
       providerActiveMs: 50,
       noProviderActiveMs: 50,
     });
+  });
+
+  it.each([
+    {
+      name: 'an invoked provider attempt without observed intervals',
+      events: [
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          invoked: true,
+          outcome: 'success',
+        },
+        {
+          type: 'step_completed',
+          step: 'plan',
+          activeInterval: { startedAtMs: 0, durationMs: 100 },
+        },
+      ],
+      expected: { state: 'partial', activeMs: 100 },
+    },
+    {
+      name: 'a malformed provider interval beside trustworthy active evidence',
+      events: [
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          invoked: true,
+          observedIntervals: [{ startedAtMs: 10, durationMs: -5 }],
+        },
+        {
+          type: 'step_completed',
+          step: 'plan',
+          activeInterval: { startedAtMs: 0, durationMs: 100 },
+        },
+      ],
+      expected: { state: 'partial', activeMs: 100 },
+    },
+    {
+      name: 'an unmatched step start',
+      events: [{ type: 'step_started', step: 'plan' }],
+      expected: { state: 'partial' },
+    },
+    {
+      name: 'provider evidence outside known active execution',
+      events: [
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          invoked: true,
+          observedIntervals: [{ startedAtMs: 200, durationMs: 20 }],
+        },
+        {
+          type: 'step_completed',
+          step: 'plan',
+          activeInterval: { startedAtMs: 0, durationMs: 100 },
+        },
+      ],
+      expected: { state: 'partial' },
+    },
+    {
+      name: 'provider-only evidence',
+      events: [
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          invoked: true,
+          observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+        },
+      ],
+      expected: { state: 'unavailable' },
+    },
+    {
+      name: 'no timing evidence',
+      events: [{ type: 'feature_started', feature: 'example' }],
+      expected: { state: 'unavailable' },
+    },
+    {
+      name: 'a mixed-version ledger with a legacy terminal event',
+      events: [
+        { type: 'step_completed', step: 'explore' },
+        {
+          type: 'step_completed',
+          step: 'plan',
+          activeInterval: { startedAtMs: 100, durationMs: 50 },
+          observedIntervals: [{ startedAtMs: 110, durationMs: 20 }],
+        },
+      ],
+      expected: { state: 'partial' },
+    },
+  ])('classifies $name without fabricating components', async ({ events, expected }) => {
+    const directory = await writeFeatureEvents(events);
+
+    expect(await computeTimingRollup(directory)).toEqual(expected);
+  });
+
+  it('fails soft on malformed JSON without exposing an untrustworthy partition', async () => {
+    const directory = await writeRawFeatureEvents(
+      [
+        JSON.stringify({
+          type: 'step_completed',
+          step: 'plan',
+          activeInterval: { startedAtMs: 0, durationMs: 100 },
+          observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
+        }),
+        '{"type":',
+      ].join('\n'),
+    );
+
+    expect(await computeTimingRollup(directory)).toEqual({ state: 'partial' });
   });
 });
