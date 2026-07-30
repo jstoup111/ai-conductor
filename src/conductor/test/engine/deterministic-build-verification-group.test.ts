@@ -276,4 +276,93 @@ describe('deterministic BUILD verification group', () => {
       suite: ledger.gates.test_suite?.count,
     }).toEqual({ wiring: 1, suite: 1 });
   });
+
+  it('fails closed on an indeterminate native suite result after wiring settles', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-indeterminate-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({ plan: 'done', build: 'done' }));
+
+    const wiring = deferred<{ success: true }>();
+    const starts: string[] = [];
+    const dispatches: string[] = [];
+    const review = vi.fn(async () => ({ success: true }));
+    const stepRunner: StepRunner = {
+      run: vi.fn((step) => {
+        dispatches.push(step);
+        if (step === 'wiring_check') {
+          starts.push('wiring');
+          return wiring.promise;
+        }
+        if (step === 'build_review') return review();
+        if (step === 'build') return Promise.resolve({ success: false, output: 'stop after rewind' });
+        throw new Error(`unexpected model or SHIP dispatch: ${step}`);
+      }),
+    };
+    const verifier = {
+      inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+      ensure: vi.fn(async () => {
+        starts.push('suite');
+        return {
+          status: 'INDETERMINATE',
+          message: 'suite verifier returned no verdict',
+        } as never;
+      }),
+    };
+    const events = new ConductorEventEmitter();
+    const completions: string[][] = [];
+    const kickbacks: Array<{ from: string; to: string; evidence?: string }> = [];
+    events.on('parallel_completed', (event) => {
+      if (event.type === 'parallel_completed') completions.push(event.branches);
+    });
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner,
+      events,
+      projectRoot,
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      maxRetries: 1,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: verifier,
+      onRecovery: async () => 'quit',
+    });
+
+    const run = conductor.run();
+    await vi.waitFor(() => expect(starts).toEqual(['wiring', 'suite']));
+    wiring.resolve({ success: true });
+    await run;
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
+
+    expect({
+      dispatches,
+      reviewCalls: review.mock.calls.length,
+      completions,
+      kickbacks,
+      gates: {
+        wiring_check: state.wiring_check,
+        test_suite: state.test_suite,
+        build_review: state.build_review,
+      },
+    }).toEqual({
+      dispatches: ['wiring_check', 'build'],
+      reviewCalls: 0,
+      completions: [],
+      kickbacks: [{
+        type: 'kickback',
+        from: 'test_suite',
+        to: 'build',
+        evidence: 'suite verifier returned no verdict',
+        count: 1,
+      }],
+      gates: {
+        wiring_check: 'pending',
+        test_suite: 'pending',
+        build_review: undefined,
+      },
+    });
+  });
 });
