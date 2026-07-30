@@ -652,6 +652,44 @@ if [ -f "$arch_review_skill" ]; then
   fi
 fi
 
+# 9g. The operator phase-marker precondition is advisory only. Pin the policy
+# in frontmatter, require the exact operator-facing invariant in that isolated
+# subsection, and reject only the three legacy hard-control constructs.
+daemon_triage_skill="${HARNESS_DIR}/skills/daemon-triage/SKILL.md"
+daemon_triage_contract=1
+if [ -f "$daemon_triage_skill" ]; then
+  daemon_triage_frontmatter=$(awk '
+    NR == 1 && $0 != "---" { exit 1 }
+    NR > 1 && $0 == "---" { exit }
+    NR > 1 { print }
+  ' "$daemon_triage_skill" || true)
+  daemon_triage_precondition=$(awk '
+    /^### Confirm you have a slug/ {
+      printf "%s", subsection
+      found = 1
+      exit
+    }
+    /^### / {
+      subsection = $0 ORS
+      next
+    }
+    length(subsection) {
+      subsection = subsection $0 ORS
+    }
+    END {
+      if (!found) exit 1
+    }
+  ' "$daemon_triage_skill" || true)
+  if grep -Fxq 'phase_active_policy: advisory' <<<"$daemon_triage_frontmatter" \
+    && grep -Fxq 'Read-only triage always continues, even when the marker or daemon status appears live.' <<<"$daemon_triage_precondition" \
+    && ! grep -Fq '**Stop immediately.**' <<<"$daemon_triage_precondition" \
+    && ! grep -Fq 'Refusing.' <<<"$daemon_triage_precondition" \
+    && ! grep -Fq 'and do nothing else' <<<"$daemon_triage_precondition"; then
+    daemon_triage_contract=0
+  fi
+fi
+assert "skills/daemon-triage/SKILL.md keeps its phase-marker precondition advisory-only" "$daemon_triage_contract"
+
 # 9c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
 # exists (skips cleanly in shallow clones).

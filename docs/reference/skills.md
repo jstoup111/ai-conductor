@@ -23,6 +23,7 @@ matches on when deciding to invoke the skill.
 | `phase` | yes for `skills/*` | `understand`, `decide`, `build`, `ship`, or `all` |
 | `standalone` | no | Whether an operator can run the skill on its own. Absent means non-standalone |
 | `operator_only` | no | `true` marks a skill an operator invokes from *outside* a run. `bin/install` still symlinks it into both user-space catalogs (`~/.claude/skills`, `~/.agents/skills`), so the operator has it on either provider; the engine suppresses it per dispatch instead. Enforced — integrity check 5d fails on drift between this flag and `OPERATOR_ONLY_SKILLS` in `worktree-prepare.ts`. See [operator-only suppression coverage](#operator-only-suppression-coverage) for what each provider actually enforces |
+| `phase_active_policy` | no | Operator-skill policy for `.pipeline/phase-active`. `daemon-triage` declares `advisory`: marker and daemon-status evidence may warn but never block read-only diagnosis |
 | `requires` | no | Prerequisite skills or artifact paths |
 | `model` | no | Hand-authored model pin. Seven skills carry one; the rest inherit. See [models](models.md) |
 
@@ -39,10 +40,11 @@ both providers. Coverage is not uniform, and the gap is load-bearing enough to s
 The bottom-right cell is a real gap. Codex discovers skills by listing `~/.agents/skills` and honors
 no per-session override, and the isolated-home path that would let the engine prune that view is
 gated to self-host builds (`isSelfBuild()`, `conductor.ts`) precisely so other repos stay
-byte-for-byte unchanged. In that cell the only guard is the skill's own refusal check on
-`.pipeline/phase-active` — prompt-level, which this repo's design principle is rightly skeptical of.
-Closing it properly means the engine owning the entry point rather than shipping a loadable skill at
-all; that is [#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
+byte-for-byte unchanged. In that cell `daemon-triage` warns when phase-marker and daemon-status
+evidence looks live but still continues read-only diagnosis; its mutation approval contract prevents
+unprompted recovery actions. Closing the invocation gap properly means the engine owning the entry
+point rather than shipping a loadable skill at all; that is
+[#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
 `enforcement`, and `phase`. The three `.agents/skills/` entries are outside that check and declare only
@@ -124,11 +126,12 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 > Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `operator_only: true`,
-  `requires: [verify-claims]`, no model pin.
+  `phase_active_policy: advisory`, `requires: [verify-claims]`, no model pin.
 - **Engine step** — none, by design. It is never dispatched. `operator_only: true` suppresses it for
-  step sessions (see [Frontmatter fields](#frontmatter-fields)), and the skill itself refuses to run
-  when `.pipeline/phase-active` is present — a step that triages itself reads its own in-flight state
-  as evidence of failure.
+  step sessions where the provider supports suppression (see [Frontmatter fields](#frontmatter-fields)).
+  The skill treats `.pipeline/phase-active` and daemon status as advisory context: an apparently live
+  step produces a warning, while read-only triage always continues. Recovery mutations remain
+  individually operator-approved.
 - **Inputs** — read-only evidence only: `conduct-ts daemon status`, `.daemon/daemon.log`, and the
   feature's `.pipeline/` state (`HALT` + `HALT.class`, `events.jsonl`, `task-status.json`,
   `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.
