@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -7,7 +7,7 @@ import { Conductor } from '../test-conductor.js';
 import { writeState, readState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductState, StepName } from '../../src/types/index.js';
+import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type {
   ConductorOptions,
   OperatorParkedTermination,
@@ -139,12 +139,18 @@ describe('operator park boundary contract', () => {
 
     const result = await conductor.run();
     const persisted = await readState(statePath);
+    const persistedState = persisted.ok ? persisted.value : undefined;
 
     expect({
       result,
       runnerSteps: run.mock.calls.map(([step]) => step),
       boundaryChecks: operatorParkBoundary.mock.calls.length,
       boundaryObservation,
+      settledStepsStillInProgress: persistedState
+        ? ALL_STEPS
+            .map(({ name }) => name)
+            .filter((name) => persistedState[name] === 'in_progress')
+        : ['state-read-failed'],
       persisted:
         persisted.ok
           ? { memory: persisted.value.memory, explore: persisted.value.explore }
@@ -157,7 +163,134 @@ describe('operator park boundary contract', () => {
       runnerSteps: ['memory'],
       boundaryChecks: 2,
       boundaryObservation: { memory: 'done', explore: 'pending' },
+      settledStepsStillInProgress: [],
       persisted: { memory: 'done', explore: 'pending' },
+    });
+  });
+
+  it('keeps a failed gate diagnostic authoritative when parking becomes active during bounded recovery', async () => {
+    await writeState(statePath, stateWithPending('build_review', 'wiring_check'));
+    let parked = false;
+    const events = new ConductorEventEmitter();
+    const failed: Array<{ step: StepName; error: string; retryCount: number }> = [];
+    const parkedBoundaries: ConductorEvent[] = [];
+    events.on('step_failed', (event) => {
+      if (event.type === 'step_failed') {
+        failed.push({
+          step: event.step,
+          error: event.error,
+          retryCount: event.retryCount,
+        });
+      }
+    });
+    events.on('operator_park_boundary', (event) => {
+      parkedBoundaries.push(event);
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === 'build_review') parked = true;
+      return {
+        success: false,
+        output: 'build review found a genuine structural gap',
+      };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'build_review',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 2,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const result = await conductor.run();
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      runnerSteps: run.mock.calls.map(([step]) => step),
+      failed,
+      parkedBoundaries,
+      persisted: persisted.ok
+        ? {
+            buildReview: persisted.value.build_review,
+            wiringCheck: persisted.value.wiring_check,
+          }
+        : persisted,
+    }).toEqual({
+      result: undefined,
+      runnerSteps: ['build_review', 'build_review'],
+      failed: [
+        {
+          step: 'build_review',
+          error: 'build review found a genuine structural gap',
+          retryCount: 2,
+        },
+      ],
+      parkedBoundaries: [],
+      persisted: { buildReview: 'failed', wiringCheck: 'pending' },
+    });
+  });
+
+  it('keeps durable persistence failure authoritative after a successful runner', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const preservedStatePath = join(projectRoot, 'conduct-state-before-obstruction.json');
+    let parked = false;
+    const events = new ConductorEventEmitter();
+    const parkedBoundaries: ConductorEvent[] = [];
+    const loopHaltReasons: string[] = [];
+    events.on('operator_park_boundary', (event) => {
+      parkedBoundaries.push(event);
+    });
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') loopHaltReasons.push(event.reason);
+    });
+    const run = vi.fn<StepRunner['run']>(async () => {
+      await rename(statePath, preservedStatePath);
+      await mkdir(statePath);
+      parked = true;
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const result = await conductor.run();
+    const preserved = await readState(preservedStatePath);
+    const haltDiagnostic = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
+
+    expect({
+      result,
+      runnerSteps: run.mock.calls.map(([step]) => step),
+      loopHaltReasons,
+      haltDiagnostic,
+      parkedBoundaries,
+      preserved: preserved.ok
+        ? {
+            memory: preserved.value.memory,
+            explore: preserved.value.explore,
+          }
+        : preserved,
+    }).toEqual({
+      result: undefined,
+      runnerSteps: ['memory'],
+      loopHaltReasons: [expect.stringMatching(/EISDIR|directory|rename/i)],
+      haltDiagnostic: expect.stringMatching(/EISDIR|directory|rename/i),
+      parkedBoundaries: [],
+      preserved: { memory: 'in_progress', explore: 'pending' },
     });
   });
 
