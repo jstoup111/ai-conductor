@@ -4,10 +4,10 @@ import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { Conductor } from '../test-conductor.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for #859 "Trailer-union build completion"
@@ -150,7 +150,23 @@ describe('#859 trailer-union build completion (real Conductor.run() loop)', () =
       runInteractive: ReturnType<typeof vi.fn>;
       run: ReturnType<typeof vi.fn>;
     } = {
-      run: vi.fn().mockResolvedValue({ success: true }),
+      run: vi.fn().mockImplementation(async (step: StepName) => {
+        if (step === 'wiring_check') {
+          const { stdout: head } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
+          await writeFile(
+            join(dir, '.pipeline/wiring-evidence.json'),
+            JSON.stringify({
+              schema: 1,
+              base: 'fixture-base',
+              head: head.trim(),
+              layer2: { applicable: false },
+              waivers: [],
+              tasks: [{ id: 'fixture', contract: 'none (fixture)', gaps: [] }],
+            }),
+          );
+        }
+        return { success: true };
+      }),
       runInteractive: vi.fn().mockResolvedValue(undefined),
     };
     const stallEvents: Array<{ reason: string }> = [];

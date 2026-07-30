@@ -386,7 +386,12 @@ describe('conductor auth-park: daemon-token mode', () => {
   });
 
   it('judged build_review dispatch timeout halts without retry, escalation, or alternate provider use', async () => {
-    await writeState(statePath, { ...READY_STATE, build: 'done' });
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done',
+      wiring_check: 'done',
+      test_suite: 'done',
+    });
     const { runtimes, selectedReadiness, alternateReadiness } = timeoutRuntimes();
     const runner: StepRunner = { run: vi.fn(async () => codexCachedLoginFailure()) };
     const halts: string[] = [];

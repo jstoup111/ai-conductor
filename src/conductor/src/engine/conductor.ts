@@ -3237,6 +3237,22 @@ export class Conductor {
                       .replace(/^wiring-reachability gaps found:\n/, ''),
                 });
               }
+              const wiringFailure = deterministicFailures.find(
+                (failure) => failure.member.name === 'wiring_check',
+              );
+              if (wiringFailure) {
+                const escalation = await checkKickbackToBuildEscalation('wiring_check');
+                if (escalation.halt) {
+                  const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
+                  await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(reason);
+                  await emitTracked({ type: 'loop_halt', reason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  if (!this.daemon) process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
               const kickbacks = [] as Awaited<ReturnType<typeof consumeKickbackBudget>>[];
               for (const failure of deterministicFailures) {
                 kickbacks.push(
