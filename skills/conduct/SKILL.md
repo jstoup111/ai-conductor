@@ -252,8 +252,10 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
 
 **After the engine-native configured-verifier gate (before suggesting /manual-test):**
-- Require current PASS evidence from the repository-configured aggregate verifier.
-- If the verifier fails, BLOCK progression to SHIP and return to `/tdd` or `/pipeline` for remediation.
+- After the BUILD verification above passes, run `conduct-ts test-suite`.
+- A zero exit reporting `EXECUTED PASS` or `REUSED PASS` satisfies this gate.
+- A non-zero exit BLOCKS progression to SHIP. Return to BUILD remediation via
+  `/tdd` or `/pipeline`, then rerun the command.
 
 **After prd-audit (before suggesting architecture-review --as-built):**
 - Open the audit report (`.pipeline/prd-audit.md`) and check the per-FR verdict table
