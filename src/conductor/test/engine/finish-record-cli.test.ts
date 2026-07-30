@@ -438,6 +438,12 @@ describe('engine/finish-record-cli', () => {
           feature_desc: 'Codex harness parity follow-up',
           worktree_branch: 'feature/first-class-codex-harness-parity-904',
         },
+        // Daemon-cut branches (`daemon-deps.ts` createWorktree) use the
+        // `feat/daemon-` prefix, not `feature/`.
+        {
+          feature_desc: 'Codex harness parity daemon build',
+          worktree_branch: 'feat/daemon-first-class-codex-harness-parity-904',
+        },
       ]) {
         await writeFile(join(existingAbsDir, 'conduct-state.json'), JSON.stringify(state));
         await dispatchFinishRecord(
@@ -453,6 +459,7 @@ describe('engine/finish-record-cli', () => {
       }
 
       expect(evaluateEvidence.mock.calls.map(([input]) => input.slug)).toEqual([
+        'first-class-codex-harness-parity-904',
         'first-class-codex-harness-parity-904',
         'first-class-codex-harness-parity-904',
       ]);
@@ -740,6 +747,78 @@ describe('engine/finish-record-cli', () => {
         evaluateCalls: 0,
         entries: ['conduct-state.json'],
       });
+    });
+
+    it('choice=pr accepts a daemon feat/daemon-<slug> worktree branch and derives its slug', async () => {
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({
+          feature_desc: 'Daemon mode kickbacks route human judgment gaps',
+          worktree_branch: 'feat/daemon-daemon-mode-kickbacks-route-human-judgment-gaps-in',
+        }),
+      );
+      let observedSlug = '';
+      const runners: FinishRecordRunners = {
+        ...passingRunners,
+        evaluateEvidence: async (input) => {
+          observedSlug = input.slug;
+          return validEvidence;
+        },
+      };
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        runners,
+      );
+
+      expect({ code, observedSlug }).toEqual({
+        code: 0,
+        observedSlug: 'daemon-mode-kickbacks-route-human-judgment-gaps-in',
+      });
+    });
+
+    it('choice=pr refuses a non-daemon feat/<slug> branch — feat/ alone is not a slug prefix', async () => {
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      await writeFile(
+        join(existingAbsDir, 'conduct-state.json'),
+        JSON.stringify({
+          feature_desc: 'Hand-cut branch',
+          worktree_branch: 'feat/some-unrelated-feature',
+        }),
+      );
+      let evaluateCalls = 0;
+      const runners: FinishRecordRunners = {
+        ...passingRunners,
+        evaluateEvidence: async () => {
+          evaluateCalls += 1;
+          return validEvidence;
+        },
+      };
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        runners,
+      );
+
+      expect({ code, evaluateCalls, entries: await readdir(existingAbsDir) }).toEqual({
+        code: 1,
+        evaluateCalls: 0,
+        entries: ['conduct-state.json'],
+      });
+      expect(errSpy.mock.calls.flat().join(' ')).toContain('feat/daemon-<slug>');
+      errSpy.mockRestore();
     });
 
     it('choice=pr with no pre-existing state file creates one containing pr_url', async () => {
