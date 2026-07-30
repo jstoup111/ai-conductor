@@ -516,6 +516,11 @@ It resolves the plan identity, hashes `.docs/plans/<slug>.md` and its stories fi
 when one can be computed, then `git add`s the file and commits it as `shipped record: <slug>` only when
 the staged content actually changed. Identical already-committed content produces no duplicate commit.
 
+It also appends a `## Time` block computed independently from `.pipeline/events.jsonl`, reporting
+`state: measured|partial|unavailable` with `active_ms`, `provider_active_ms`, and
+`no_provider_active_ms` when measured. A missing or corrupt event ledger, or any timing-computation
+failure, never blocks the Cost block or the commit — the record ships with `state: unavailable` instead.
+
 The frontmatter also carries `engine_version`: the engine build id that shipped the feature — the same
 value `conduct-ts daemon status` prints as `version:<id>`. It is resolved from the running engine's own
 module path, so a published build records e.g. `20260727T234833Z-b5b34bb9f015` and an unpublished
@@ -548,6 +553,15 @@ Rows also show token, cache, dispatch, retry, halt, duration, and cost totals. C
 dispatches are marked `COST-PARTIAL`, retain their tokens, and render their cost as unavailable;
 truly unmetered dispatches remain excluded from both aggregates. Provider rows attribute tokens,
 cost, cost-unmetered dispatches, and dispatch counts by provider.
+
+Each row also reports engine-observed execution time, parsed from the record's `## Time` block
+independently of Cost: `time=measured active_ms=<n> provider_active_ms=<n> no_provider_active_ms=<n>`
+splits durable feature wall-clock time into time spent inside a provider process versus engine/code
+time; `time=partial` (optionally with `active_ms`) or `time=unavailable` mark evidence that could not
+be trusted, and a record with no `## Time` block — including every record shipped before this
+section existed — reports `time=unavailable`. The aggregate line adds `timing measured=<n>
+partial=<n> unavailable=<n>` counts and `avg_active_ms`/`avg_provider_active_ms`/
+`avg_no_provider_active_ms`, averaged only over measured features.
 
 ## `conduct-ts memory setup`
 

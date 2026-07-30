@@ -505,6 +505,16 @@ normalized. Changing that computation is a breaking change to persisted identity
 `unmetered`, and a `providers:` sub-block when non-empty). Appending is safe because the parser stops at
 the closing `---`.
 
+A separate `## Time` block follows, computed and rendered independently of Cost so a timing failure
+never blocks either section. `state` is one of `measured`, `partial`, or `unavailable`. `measured`
+carries `active_ms` (the union of all active step/group execution intervals), `provider_active_ms` (the
+portion of active time actually spent inside a provider process), and `no_provider_active_ms`
+(`active_ms - provider_active_ms`, engine/code time). `partial` carries `active_ms` only when active
+time itself was trustworthy but provider or completeness evidence was not; `unavailable` carries no
+fields. Timing is derived from `.pipeline/events.jsonl` at ship time and is never a fabricated zero —
+missing or incomplete evidence downgrades the state instead. Records written before this section
+existed simply have no `## Time` block, and `conduct-ts kpi` reports those as `time=unavailable`.
+
 `conduct-ts shipped-record --slug <plan-stem> --pr <pr-url-or-local>` writes it; both flags are
 required and re-running with identical content is a no-op. Its exit code cannot be used to detect
 success — it exits 0 even when it wrote nothing. Recording a ship and verifying it landed is in
@@ -619,13 +629,18 @@ Read it with `conduct-ts daemon logs`; flags are in [cli](cli.md).
 
 ### `conduct-ts kpi`
 
-**Input:** `<cwd>/.docs/shipped/*.md` and nothing else. It re-parses the committed `## Cost` markdown
-block with regexes; it does not read `events.jsonl`, `.pipeline/`, or `otel.jsonl`.
+**Input:** `<cwd>/.docs/shipped/*.md` and nothing else. It re-parses the committed `## Cost` and
+`## Time` markdown blocks with regexes; it does not read `events.jsonl`, `.pipeline/`, or `otel.jsonl`.
 
 **Parsed fields** (`KpiCostFields`): `input`, `output`, `cacheRead`, `cacheCreation`, `costUsd`,
 `dispatches`, `retries`, `halts`, `unmeteredCount`, `unmeteredDurationMs`, and
 `costUnmetered` (from the top-level `cost_unmetered` field). Each `providers:` entry is also
 parsed with its input, output, cache, cost, dispatch, and `cost_unmetered` fields.
+
+**Parsed timing fields** (`KpiTimeFields`, mirrors `TimingRollup`): `state` (`measured`, `partial`, or
+`unavailable`), plus `activeMs`, `providerActiveMs`, and `noProviderActiveMs` when present. Parsing is
+independent of Cost — a missing, malformed, or absent `## Time` block never affects Cost output and is
+reported as `state: unavailable`.
 
 **Output:** a plain-text report on stdout. No file, no JSON. Per feature it prints `input`, `output`,
 `tokens` (their sum), cache fields, dispatch fields, `duration_ms`, and `cost_usd`, suffixed
@@ -639,5 +654,12 @@ places; **features with any unmetered dispatch are excluded from the aggregate**
 cost-unmetered features still contribute tokens but not cost. If no feature has metered cost, the
 aggregate cost is `unavailable`. An empty or missing directory prints `No shipped features yet —
 .docs/shipped/ is empty or does not exist.`
+
+Each feature row also appends a `time=` suffix: `time=measured active_ms=<n> provider_active_ms=<n>
+no_provider_active_ms=<n>` when measured, `time=partial` (with `active_ms=<n>` when active time alone
+was trustworthy), or `time=unavailable`. The aggregate line adds `timing measured=<n> partial=<n>
+unavailable=<n>` counts, plus `avg_active_ms`, `avg_provider_active_ms`, and
+`avg_no_provider_active_ms` averaged only over `measured` features — partial and unavailable rows
+never contribute to or fabricate an average.
 
 The command takes zero flags — anything after `kpi` is ignored — and always exits 0.
