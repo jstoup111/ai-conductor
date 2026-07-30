@@ -34,6 +34,7 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import {
   ALL_STEPS,
+  BUILD_VERIFICATION_GROUP,
   STEP_GROUPS,
   VALIDATION_GROUP,
   getGroupForStep,
@@ -797,6 +798,7 @@ describe('engine/conductor', () => {
       complexity_tier: 'M', prd: 'done', architecture_diagram: 'done',
       architecture_review: 'done', stories: 'done', conflict_check: 'done',
       writing_system_tests: 'done', acceptance_specs: 'done', plan: 'done', coherence_check: 'done', build: 'done',
+      wiring_check: 'done', test_suite: 'done',
     } as ConductState);
 
     let buildReviewCalls = 0;
@@ -13294,6 +13296,34 @@ describe('HALT content robust to hostile question text (Task 12)', () => {
   });
 });
 
+describe('built-in deterministic BUILD verification group', () => {
+  it('registers wiring and suite verification between build and build review', () => {
+    expect(BUILD_VERIFICATION_GROUP.members).toEqual(['wiring_check', 'test_suite']);
+    expect(STEP_GROUPS[BUILD_VERIFICATION_GROUP.name]).toBe(BUILD_VERIFICATION_GROUP);
+    expect(getGroupForStep('wiring_check')).toBe(BUILD_VERIFICATION_GROUP);
+    expect(getGroupForStep('test_suite')).toBe(BUILD_VERIFICATION_GROUP);
+    expect(VALIDATION_GROUP.members).toEqual([
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ]);
+
+    const buildIndex = ALL_STEPS.findIndex((step) => step.name === 'build');
+    const wiringIndex = ALL_STEPS.findIndex((step) => step.name === 'wiring_check');
+    const suiteIndex = ALL_STEPS.findIndex((step) => step.name === 'test_suite');
+    const reviewIndex = ALL_STEPS.findIndex((step) => step.name === 'build_review');
+    expect([wiringIndex, suiteIndex]).toEqual([buildIndex + 1, buildIndex + 2]);
+    expect(reviewIndex).toBe(suiteIndex + 1);
+
+    expect(ALL_STEPS.find((step) => step.name === 'wiring_check')?.prerequisites).toEqual(['build']);
+    expect(ALL_STEPS.find((step) => step.name === 'test_suite')?.prerequisites).toEqual(['build']);
+    expect(ALL_STEPS.find((step) => step.name === 'build_review')?.prerequisites).toEqual([
+      'wiring_check',
+      'test_suite',
+    ]);
+  });
+});
+
 // adr-2026-07-10-validation-group-join.md, Decision-1: the SHIP sequence
 // gains a built-in validation group entry describing the three validators
 // as a group, without disturbing their existing standalone StepDefinitions
@@ -13307,14 +13337,12 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
     ]);
   });
 
-  it('positions the group after the serial build gates (build_review → wiring_check → test_suite) in ALL_STEPS ordering', () => {
+  it('positions the group after build review in ALL_STEPS ordering', () => {
     const buildReviewIdx = ALL_STEPS.findIndex((s) => s.name === 'build_review');
     const wiringCheckIdx = ALL_STEPS.findIndex((s) => s.name === 'wiring_check');
     const testSuiteIdx = ALL_STEPS.findIndex((s) => s.name === 'test_suite');
-    expect(wiringCheckIdx).toBe(buildReviewIdx + 1);
-    expect(testSuiteIdx).toBe(wiringCheckIdx + 1);
     const firstMemberIdx = ALL_STEPS.findIndex((s) => s.name === VALIDATION_GROUP.members[0]);
-    expect(firstMemberIdx).toBe(testSuiteIdx + 1);
+    expect(firstMemberIdx).toBe(buildReviewIdx + 1);
 
     // Members remain contiguous and in order in the underlying linear list.
     const memberIndices = VALIDATION_GROUP.members.map(
@@ -13339,7 +13367,6 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
   it('reports undefined group for ordinary serial steps', () => {
     expect(getGroupForStep('build')).toBeUndefined();
     expect(getGroupForStep('build_review')).toBeUndefined();
-    expect(getGroupForStep('test_suite')).toBeUndefined();
     expect(getGroupForStep('retro')).toBeUndefined();
   });
 
@@ -13359,11 +13386,11 @@ describe('built-in SHIP validation group entry (Decision-1)', () => {
   it('leaves tryGetStepIndex behavior for members and ordinary steps unchanged', () => {
     // Each member still resolves to its OWN linear-list index, not a
     // group-collapsed position.
-    const testSuiteIdx = tryGetStepIndex('test_suite');
-    expect(testSuiteIdx).not.toBeNull();
+    const buildReviewIdx = tryGetStepIndex('build_review');
+    expect(buildReviewIdx).not.toBeNull();
     for (let i = 0; i < VALIDATION_GROUP.members.length; i += 1) {
       const idx = tryGetStepIndex(VALIDATION_GROUP.members[i] as StepName);
-      expect(idx).toBe((testSuiteIdx as number) + 1 + i);
+      expect(idx).toBe((buildReviewIdx as number) + 1 + i);
     }
 
     // Ordinary serial steps are completely unaffected.
