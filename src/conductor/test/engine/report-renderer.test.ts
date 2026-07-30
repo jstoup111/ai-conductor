@@ -268,4 +268,42 @@ describe('report-renderer', () => {
     expect(report).toContain('Token Spend');
     expect(report).toContain('No token data recorded');
   });
+
+  it('reports exact serial, group, and pre-first operator park boundaries', async () => {
+    const content = makeLines([
+      {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'serial-feature',
+          boundary: { kind: 'step', name: 'memory' },
+        },
+        ts: '2026-01-01T00:00:01.000Z',
+      },
+      {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'group-feature',
+          boundary: { kind: 'group', name: 'ship-validation' },
+        },
+        ts: '2026-01-01T00:00:02.000Z',
+      },
+      {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'early-feature',
+          boundary: { kind: 'pre-first-unit' },
+        },
+        ts: '2026-01-01T00:00:03.000Z',
+      },
+    ]);
+    await writeFile(eventsPath, content, 'utf-8');
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toContain('## Operator Park Boundaries');
+    expect(report).toMatch(/serial-feature\s+step\s+memory/);
+    expect(report).toMatch(/group-feature\s+group\s+ship-validation/);
+    expect(report).toMatch(/early-feature\s+pre-first-unit\s+—/);
+    expect(report).not.toMatch(/\b(?:DONE|HALT|ERROR)\b/);
+  });
 });

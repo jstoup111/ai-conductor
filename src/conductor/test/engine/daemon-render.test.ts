@@ -59,6 +59,30 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders exact operator park boundaries without lifecycle semantics', () => {
+    expect([
+      lines({
+        type: 'operator_park_boundary',
+        featureSlug: 'serial-feature',
+        boundary: { kind: 'step', name: 'memory' },
+      }),
+      lines({
+        type: 'operator_park_boundary',
+        featureSlug: 'group-feature',
+        boundary: { kind: 'group', name: 'ship-validation' },
+      }),
+      lines({
+        type: 'operator_park_boundary',
+        featureSlug: 'early-feature',
+        boundary: { kind: 'pre-first-unit' },
+      }),
+    ]).toEqual([
+      ['· ⏸ operator park[serial-feature]: settled after step memory'],
+      ['· ⏸ operator park[group-feature]: settled after group ship-validation'],
+      ['· ⏸ operator park[early-feature]: before first scheduling unit'],
+    ]);
+  });
+
   it('renders step_retry with reason and progress delta', () => {
     const output = lines({
       type: 'step_retry',
@@ -332,6 +356,11 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
         remoteHeadSha: 'abc1234567890',
         fresh: true,
       },
+      {
+        type: 'operator_park_boundary',
+        featureSlug: 'feature',
+        boundary: { kind: 'step', name: 'build' },
+      },
     ];
 
     const renderingTypes = new Set(
@@ -361,6 +390,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'parallel_started',
       'parallel_completed',
       'rebase_mergeable_skip',
+      'operator_park_boundary',
     ]);
 
     expect(renderingTypes).toEqual(expected);
