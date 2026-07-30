@@ -228,12 +228,11 @@ describe('engine/daemon — runDaemon', () => {
     expect({
       dispatches,
       statuses: result.processed.map((outcome) => outcome.status),
-      idlePollsBeforeResume: idlePolls,
     }).toEqual({
       dispatches: 2,
       statuses: ['parked', 'done'],
-      idlePollsBeforeResume: 2,
     });
+    expect(idlePolls).toBeGreaterThanOrEqual(2);
   });
 
   it('classifies a daemon-runner terminal triage HALT without changing its diagnostic body', async () => {

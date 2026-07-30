@@ -58,7 +58,7 @@ describe('Task 8 — daemon-cli guards resumeRebaseFirst (REKICK sentinel) on op
     // extension conductor.run()) rather than merely logging, so a parked
     // worktree's sentinel is genuinely never touched.
     const between = block.slice(parkedCheckIdx, resumeCallIdx);
-    expect(between).toMatch(/return;/);
+    expect(between).toMatch(/return(?:\s+termination)?;/);
   });
 
   it('the parked branch is reached before the sentinel would be consumed (behavioral proxy via the real primitives)', async () => {

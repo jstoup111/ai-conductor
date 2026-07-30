@@ -129,7 +129,7 @@ describe('Task 2 — every build-start call site is park-guarded (enumeration re
     expect(parkedCheckIdx).toBeLessThan(resumeCallIdx);
 
     const between = block.slice(parkedCheckIdx, resumeCallIdx);
-    expect(between).toMatch(/return;/);
+    expect(between).toMatch(/return(?:\s+termination)?;/);
   });
 
   it('daemon-rekick.ts sweep checks deps.isOperatorParked before any per-slug dispatch-adjacent action', async () => {
