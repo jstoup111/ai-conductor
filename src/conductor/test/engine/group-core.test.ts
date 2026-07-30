@@ -6,6 +6,7 @@ import {
   classifyOutcome,
   runWithConcurrency,
   runGroupBranch,
+  runNativeGroupBranch,
   type BranchOutcome,
   type GroupMember,
   type GroupMemberStepEvent,
@@ -234,6 +235,45 @@ describe("group-core: runWithConcurrency (capped fan-out semaphore)", () => {
     await expect(
       runWithConcurrency([makeThunk("a", 5), makeThunk("b", 1, true), makeThunk("c", 5)], 3),
     ).rejects.toThrow("b failed");
+  });
+});
+
+describe("group-core: runNativeGroupBranch", () => {
+  it("maps injected native results into ordered member-attributed outcomes", async () => {
+    const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
+    const members: GroupMember[] = [
+      { name: "wiring_check", skill: "", outcome: makeSkippedOutcome() },
+      { name: "test_suite", skill: "", outcome: makeSkippedOutcome() },
+    ];
+
+    const outcomes = await runWithConcurrency(
+      [
+        () => runNativeGroupBranch(members[0]!, async () => ({ success: true }), {
+          onMemberEvent: ({ member, phase, outcome }) => {
+            events.push({ member, phase, outcome });
+          },
+        }),
+        () => runNativeGroupBranch(members[1]!, async () => ({ success: false, output: "suite failed" }), {
+          onMemberEvent: ({ member, phase, outcome }) => {
+            events.push({ member, phase, outcome });
+          },
+        }),
+      ],
+      2,
+    );
+
+    expect({ outcomes, events }).toEqual({
+      outcomes: [
+        { kind: "verdict", verdict: "pass" },
+        { kind: "no-verdict", reason: "suite failed" },
+      ],
+      events: [
+        { member: "wiring_check", phase: "dispatch" },
+        { member: "test_suite", phase: "dispatch" },
+        { member: "wiring_check", phase: "result", outcome: "verdict:pass" },
+        { member: "test_suite", phase: "result", outcome: "no-verdict" },
+      ],
+    });
   });
 });
 
