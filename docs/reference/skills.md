@@ -126,9 +126,10 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 - **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `operator_only: true`,
   `requires: [verify-claims]`, no model pin.
 - **Engine step** — none, by design. It is never dispatched. `operator_only: true` suppresses it for
-  step sessions (see [Frontmatter fields](#frontmatter-fields)), and the skill itself refuses to run
-  when `.pipeline/phase-active` is present — a step that triages itself reads its own in-flight state
-  as evidence of failure.
+  step sessions (see [Frontmatter fields](#frontmatter-fields)). The skill treats
+  `.pipeline/phase-active` as advisory until `conduct-ts daemon status` confirms the recorded step is
+  currently live; it refuses a confirmed-live step but continues read-only triage when the daemon is
+  stale, stopped, or its session is down.
 - **Inputs** — read-only evidence only: `conduct-ts daemon status`, `.daemon/daemon.log`, and the
   feature's `.pipeline/` state (`HALT` + `HALT.class`, `events.jsonl`, `task-status.json`,
   `step-heartbeat`, `phase-active`, `gates/<step>.json`), plus the branch's commit log.

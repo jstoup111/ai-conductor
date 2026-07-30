@@ -652,6 +652,23 @@ if [ -f "$arch_review_skill" ]; then
   fi
 fi
 
+# 9g. A leftover phase-active marker is not proof that a dispatched step is
+# still executing. Daemon triage may refuse to inspect a feature only after
+# daemon liveness corroborates the marker; stale or down-daemon state remains
+# eligible for read-only triage.
+daemon_triage_skill="${HARNESS_DIR}/skills/daemon-triage/SKILL.md"
+daemon_triage_contract=1
+if [ -f "$daemon_triage_skill" ]; then
+  daemon_triage_text=$(tr '\n' ' ' < "$daemon_triage_skill")
+  if grep -qiE '\.pipeline/phase-active.{0,240}advisory|advisory.{0,240}\.pipeline/phase-active' <<<"$daemon_triage_text" \
+    && grep -qiE 'daemon (liveness|status).{0,240}(corroborat|confirm).{0,240}(recorded )?(dispatched )?step.{0,160}(currently )?live|(recorded )?(dispatched )?step.{0,160}(currently )?live.{0,240}(corroborat|confirm).{0,160}daemon (liveness|status)' <<<"$daemon_triage_text" \
+    && grep -qiE 'refus(e|al).{0,200}only.{0,200}(corroborat|confirm).{0,200}(live|execut)' <<<"$daemon_triage_text" \
+    && grep -qiE '(stale|down|offline).{0,240}(continue|proceed|remain).{0,160}read-only triage|read-only triage.{0,240}(continue|proceed|remain).{0,160}(stale|down|offline)' <<<"$daemon_triage_text"; then
+    daemon_triage_contract=0
+  fi
+fi
+assert "skills/daemon-triage/SKILL.md treats phase-active as advisory until daemon liveness corroborates live execution" "$daemon_triage_contract"
+
 # 9c. Every vX.Y.Z tag has a matching ## [X.Y.Z] section in CHANGELOG.md.
 # Only run when we're inside the harness repo's own git dir AND CHANGELOG.md
 # exists (skips cleanly in shallow clones).

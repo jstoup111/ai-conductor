@@ -54,15 +54,22 @@ pick the right one correctly and to stop an operator from guessing.
 
 ### Operator-invoked only — refuse otherwise
 
-This skill must never run inside a dispatched step. The engine marks an active
-step with a phase marker in the feature's worktree:
+This skill must never run inside a live dispatched step. The engine records the
+dispatched step in a phase marker in the feature's worktree:
 
 ```bash
 cat .pipeline/phase-active 2>/dev/null
 ```
 
-If that file exists, you are inside a dispatched BUILD/SHIP step. **Stop
-immediately.** Emit exactly:
+The marker is advisory by itself because it can survive a daemon crash. Check it
+first, then run this read-only liveness corroboration:
+
+```bash
+conduct-ts daemon status
+```
+
+Refuse only when that status confirms the recorded `<step>/<phase>` is the
+currently live dispatched step. **Stop immediately.** Emit exactly:
 
 ```
 daemon-triage is operator-only and must not run inside a dispatched step
@@ -72,13 +79,20 @@ daemon-triage is operator-only and must not run inside a dispatched step
 and do nothing else. A step that triages itself will read its own in-flight state
 as evidence of failure and recommend recovery against a run that is working.
 
+If status reports the daemon as stale or stopped, or its session as down, do not
+refuse: explicitly continue read-only triage and treat the marker as crash
+residue evidence. If status does not confirm that the recorded step is currently
+live for any other reason, continue read-only triage and treat the marker as
+uncorroborated evidence, not execution authority.
+
 > The harness also suppresses this skill mechanically for step sessions, but
 > coverage differs by provider: Claude gets a `skillOverrides` entry in the
 > worktree's session settings, and on a self-host build Codex has the skill
 > pruned from its throwaway home entirely. Codex in any other repo has **no**
 > mechanical suppression — it lists a user-space skills directory and honors no
-> per-session override. That cell is exactly why this runtime check exists and
-> why it is not optional: for that combination, it is the only guard.
+> per-session override. That cell is exactly why this marker-plus-liveness
+> runtime check exists and why it is not optional: for that combination, it is
+> the only guard.
 
 ### Confirm you have a slug and a repo root
 
@@ -274,7 +288,11 @@ wrong midway, the record must already show what had actually run.
 
 ## Verification
 
-- [ ] `.pipeline/phase-active` was checked **first**; refused if present
+- [ ] `.pipeline/phase-active` was checked **first**, then `conduct-ts daemon
+      status` corroborated liveness before any refusal
+- [ ] Refused only when status confirmed the recorded step was currently live;
+      stale/stopped daemon or session-down state continued read-only triage with
+      the marker treated as crash residue evidence
 - [ ] Evidence gathered before any classification was stated
 - [ ] Classification cites the specific signal it matched, or is declared a
       judgment call with a confidence estimate
