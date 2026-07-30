@@ -72,7 +72,7 @@ export const MODEL_UNAVAILABLE_RE =
 // with credits (a different model on the same account is unaffected), instead
 // of the step silently "completing" with no artifact and halting.
 export const OUT_OF_CREDITS_RE =
-  /out of usage credits|out of credits|run \/usage-credits/i;
+  /out of usage credits|out of credits|run \/usage-credits|(?:^|\n)you've hit your monthly spend limit\. \/model to switch models\.(?:\n|$)/i;
 
 /**
  * Result of parsing a rate-limit message.

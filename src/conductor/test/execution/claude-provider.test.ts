@@ -570,6 +570,31 @@ describe('ClaudeProvider', () => {
       expect(result.success).toBe(false);
     });
 
+    it('treats the monthly spend limit notice as modelUnavailable and NOT success', async () => {
+      mockExeca.mockResolvedValue({
+        stdout: "You've hit your monthly spend limit. /model to switch models.",
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result).toMatchObject({ modelUnavailable: true, success: false });
+    });
+
+    it('does not flag modelUnavailable when prose quotes the monthly spend limit message', async () => {
+      mockExeca.mockResolvedValue({
+        stdout:
+          'The incident report quotes "You\'ve hit your monthly spend limit" as an example.',
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+      expect(result.modelUnavailable).toBeUndefined();
+    });
+
     it('does not flag modelUnavailable for "model" appearing in unrelated prose', async () => {
       mockExeca.mockResolvedValue({
         stdout: '',

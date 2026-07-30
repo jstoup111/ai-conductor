@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Claude monthly-spend exhaustion now enters the existing model/provider fallback ladder instead of being treated as an ordinary step failure and retrying the unavailable host until HALT ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Keep daemon feature worktrees intact through `finish` and open-PR review by reserving automatic cleanup for the mergeable sweep after the shipped record reaches the default branch; interactive local-merge and confirmed-discard outcomes retain their proof-gated cleanup paths ([implementation PR #1200](https://github.com/jstoup111/ai-conductor/pull/1200)).
 - Daemon triage now treats `.pipeline/phase-active` and daemon status as advisory context that can warn but never block read-only recovery diagnosis, while every recovery mutation still requires individual operator approval ([implementation PR #1193](https://github.com/jstoup111/ai-conductor/pull/1193)).
 - `/plan` no longer appends a terminal catch-all task whose purpose is to prove the completed feature works or repair unspecified findings; scoped RED/GREEN stays with the behavior-owning implementation task, while the existing acceptance, aggregate, and SHIP gates own whole-feature validation ([implementation PR #1198](https://github.com/jstoup111/ai-conductor/pull/1198)).
