@@ -36,6 +36,15 @@ function deferred(): {
   return { promise, resolve };
 }
 
+function noExternalIo(): Pick<ConductorOptions, 'gh' | 'git' | 'runGh'> {
+  const result = { stdout: '', stderr: '', exitCode: 0 };
+  return {
+    gh: vi.fn(async () => result),
+    git: vi.fn(async () => result),
+    runGh: vi.fn(async () => result),
+  };
+}
+
 describe('operator park boundary contract', () => {
   let projectRoot: string;
   let statePath: string;
@@ -447,6 +456,144 @@ describe('operator park boundary contract', () => {
       },
       laterSerialDispatches: 0,
       settledMembers: 2,
+    });
+  });
+
+  it('joins the built-in SHIP validation group before parking and does not dispatch the later unit', async () => {
+    await writeState(statePath, {
+      ...stateWithPending(
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+        'rebase',
+      ),
+      track: 'product',
+      complexity_tier: 'M',
+    });
+    const members = [
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const;
+    const yieldCounts: Record<(typeof members)[number], number> = {
+      manual_test: 4,
+      prd_audit: 1,
+      architecture_review_as_built: 2,
+    };
+    const startOrder: StepName[] = [];
+    const settlementOrder: StepName[] = [];
+    let activeMembers = 0;
+    let maxActiveMembers = 0;
+    let startsAtFirstSettlement = 0;
+    let thirdStartedWithoutCapacity = false;
+    let parked = false;
+    let boundaryObservation:
+      | {
+          event: ConductorEvent;
+          memberStatuses: Record<string, unknown>;
+          syntheticStatuses: Record<string, unknown>;
+        }
+      | undefined;
+    const events = new ConductorEventEmitter();
+    events.on('operator_park_boundary', async (event) => {
+      const persisted = await readState(statePath);
+      if (persisted.ok) {
+        const raw = persisted.value as unknown as Record<string, unknown>;
+        boundaryObservation = {
+          event,
+          memberStatuses: Object.fromEntries(
+            members.map((member) => [member, raw[member]]),
+          ),
+          syntheticStatuses: Object.fromEntries(
+            members.map((member) => [
+              `validation__${member}`,
+              raw[`validation__${member}`],
+            ]),
+          ),
+        };
+      }
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (members.includes(step as (typeof members)[number])) {
+        const member = step as (typeof members)[number];
+        if (startOrder.length === 0) parked = true;
+        if (member === 'architecture_review_as_built' && activeMembers >= 2) {
+          thirdStartedWithoutCapacity = true;
+        }
+        activeMembers += 1;
+        maxActiveMembers = Math.max(maxActiveMembers, activeMembers);
+        startOrder.push(member);
+        for (let index = 0; index < yieldCounts[member]; index += 1) {
+          await Promise.resolve();
+        }
+        if (settlementOrder.length === 0) startsAtFirstSettlement = startOrder.length;
+        settlementOrder.push(member);
+        activeMembers -= 1;
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: { validation_concurrency: 2 },
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+      ...noExternalIo(),
+    });
+
+    const result = await conductor.run();
+
+    expect({
+      result,
+      startsAtFirstSettlement,
+      thirdStartedWithoutCapacity,
+      maxActiveMembers,
+      startedMembers: startOrder,
+      settlementOrder,
+      boundaryObservation,
+      laterUnitDispatches: run.mock.calls.filter(([step]) => step === 'rebase').length,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'group', name: 'validation' },
+      },
+      startsAtFirstSettlement: 2,
+      thirdStartedWithoutCapacity: false,
+      maxActiveMembers: 2,
+      startedMembers: [
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ],
+      settlementOrder: [
+        'prd_audit',
+        'manual_test',
+        'architecture_review_as_built',
+      ],
+      boundaryObservation: {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'operator-park-boundary',
+          boundary: { kind: 'group', name: 'validation' },
+        },
+        memberStatuses: {
+          manual_test: 'done',
+          prd_audit: 'done',
+          architecture_review_as_built: 'done',
+        },
+        syntheticStatuses: {
+          validation__manual_test: 'done',
+          validation__prd_audit: 'done',
+          validation__architecture_review_as_built: 'done',
+        },
+      },
+      laterUnitDispatches: 0,
     });
   });
 
