@@ -4,6 +4,7 @@ import type {
   SelfHostInvocation,
   TokenUsage,
 } from '../execution/llm-provider.js';
+import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ComplexityTier, StepName } from '../types/index.js';
 import type {
   EffortLevel,
@@ -53,6 +54,7 @@ export interface ProviderAttemptMetadata {
   authenticationSource?: 'api-key' | 'cached-login';
   model?: string;
   tokenUsage?: TokenUsage;
+  observedIntervals?: readonly ObservedInterval[];
   outcome: 'success' | 'failure' | 'unavailable';
   reason?: string;
   fallbackReason?: string;
@@ -451,6 +453,9 @@ export function buildProviderAttemptMetadata({
     ...(result.authentication ? { authenticationSource: result.authentication.source } : {}),
     ...(invoked ? { model: invokedModel ?? resolvedModel } : {}),
     ...(invoked && result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+    ...(invoked && result.observedIntervals
+      ? { observedIntervals: result.observedIntervals }
+      : {}),
     outcome: unavailable
       ? 'unavailable'
       : result.success
@@ -597,6 +602,9 @@ export async function executeProviderCandidates({
       nextProvider,
     });
     attempts.push(attemptMetadata);
+    const observedIntervals = attempts.flatMap(
+      (providerAttempt) => providerAttempt.observedIntervals ?? [],
+    );
     try {
       await onAttempt?.(step, attemptMetadata);
     } catch (error) {
@@ -616,6 +624,7 @@ export async function executeProviderCandidates({
         resolvedModel: invokedModel ?? resolved.model,
         resolvedEffort: resolved.effort,
         attempts,
+        ...(observedIntervals.length ? { observedIntervals } : {}),
       };
     }
 
@@ -631,6 +640,7 @@ export async function executeProviderCandidates({
         exitCode: result.exitCode,
         preferredProvider,
         attempts,
+        ...(observedIntervals.length ? { observedIntervals } : {}),
       };
     }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Mock } from 'vitest';
 import { ClaudeProvider, parseRateLimitWaitSeconds } from '../../src/execution/claude-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { IntervalClock } from '../../src/execution/observed-interval.js';
 
 // Mock execa before importing anything that uses it
 vi.mock('execa', () => ({
@@ -43,6 +44,101 @@ describe('ClaudeProvider', () => {
   };
 
   describe('invoke', () => {
+    it('returns the successful subprocess interval without changing output or provider usage', async () => {
+      const readings = [1_000, 1_025];
+      const clock: IntervalClock = {
+        nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
+      };
+      provider = new ClaudeProvider(clock);
+      mockExeca.mockResolvedValue({
+        stdout: JSON.stringify({
+          result: 'Done!',
+          usage: { input_tokens: 12, output_tokens: 7 },
+          duration_ms: 20,
+        }),
+        stderr: '',
+        exitCode: 0,
+        failed: false,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result).toMatchObject({
+        success: true,
+        output: 'Done!',
+        exitCode: 0,
+        tokenUsage: { input: 12, output: 7, durationMs: 20 },
+        observedIntervals: [{ startedAtMs: 1_000, durationMs: 25 }],
+      });
+    });
+
+    it('returns the interactive subprocess interval without changing completion classification', async () => {
+      const readings = [2_000, 2_040];
+      const clock: IntervalClock = {
+        nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
+      };
+      provider = new ClaudeProvider(clock);
+      mockExeca.mockResolvedValue({
+        stdout: 'No conversation found',
+        stderr: '',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invokeInteractive({
+        ...baseOptions,
+        interactive: true,
+      });
+
+      expect(result).toEqual({
+        success: false,
+        output: 'No conversation found',
+        exitCode: 1,
+        authFailure: undefined,
+        rateLimited: undefined,
+        sessionExpired: true,
+        modelUnavailable: undefined,
+        tokenUsage: undefined,
+        waitSeconds: undefined,
+        deadline: undefined,
+        observedIntervals: [{ startedAtMs: 2_000, durationMs: 40 }],
+      });
+    });
+
+    it('returns the unsuccessful subprocess interval without changing output or provider usage', async () => {
+      const readings = [3_000, 3_055];
+      const clock: IntervalClock = {
+        nowMs: () => readings.shift() ?? (() => { throw new Error('scripted clock exhausted'); })(),
+      };
+      provider = new ClaudeProvider(clock);
+      mockExeca.mockResolvedValue({
+        stdout: JSON.stringify({
+          result: 'Failed output',
+          usage: { input_tokens: 17, output_tokens: 4 },
+          duration_ms: 45,
+        }),
+        stderr: 'Invalid API key',
+        exitCode: 1,
+        failed: true,
+      } as any);
+
+      const result = await provider.invoke(baseOptions);
+
+      expect(result).toEqual({
+        success: false,
+        output: 'Failed output\nInvalid API key',
+        exitCode: 1,
+        authFailure: true,
+        rateLimited: undefined,
+        sessionExpired: undefined,
+        modelUnavailable: undefined,
+        tokenUsage: { input: 17, output: 4, durationMs: 45 },
+        waitSeconds: undefined,
+        deadline: undefined,
+        observedIntervals: [{ startedAtMs: 3_000, durationMs: 55 }],
+      });
+    });
+
     it('routes interactive subprocess diagnostics through the supplied feature logger', async () => {
       const featureLog = vi.fn();
       mockExeca.mockResolvedValue({

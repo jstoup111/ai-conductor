@@ -1,5 +1,11 @@
 import { execa, type Options as ExecaOptions } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
+import {
+  epochAnchoredMonotonicClock,
+  observeInterval,
+  type IntervalClock,
+  type ObservedInterval,
+} from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
@@ -462,6 +468,10 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
 export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
 
+  constructor(
+    private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
+  ) {}
+
   private async runClaude(
     args: string[],
     options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn'>,
@@ -522,8 +532,9 @@ export class ClaudeProvider implements LLMProvider {
     // With a prompt, feed it on stdin (execa closes stdin after writing). With
     // no prompt, stdin is explicitly closed: otherwise Claude's CLI waits ~3s
     // for piped input on a TTY and logs "no stdin data received in 3s" per call.
-    const result = hasPrompt
-      ? await this.runClaude(args, {
+    const observed = await observeInterval(this.intervalClock, () =>
+      hasPrompt
+        ? this.runClaude(args, {
           reject: false,
           input: options.prompt,
           env: this.buildEnv(options),
@@ -532,7 +543,7 @@ export class ClaudeProvider implements LLMProvider {
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
         })
-      : await this.runClaude(args, {
+        : this.runClaude(args, {
           reject: false,
           stdin: 'ignore',
           env: this.buildEnv(options),
@@ -540,9 +551,10 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
-        });
+        }),
+    );
 
-    return this.classifyCompletion(result, true);
+    return this.classifyCompletion(observed.value, true, observed.interval);
   }
 
   /**
@@ -573,17 +585,19 @@ export class ClaudeProvider implements LLMProvider {
 
     // Capture while inheriting output so classification remains available only
     // after the visibly streamed process completes.
-    const result = await this.runClaude(args, {
-      stdin: options.interactive ? 'inherit' : 'ignore',
-      reject: false,
-      env: this.buildEnv(options),
-      cwd: options.cwd,
-      diagnosticLog: options.diagnosticLog,
-      onActivity: options.onActivity,
-      onSpawn: options.onSpawn,
-    });
+    const observed = await observeInterval(this.intervalClock, () =>
+      this.runClaude(args, {
+        stdin: options.interactive ? 'inherit' : 'ignore',
+        reject: false,
+        env: this.buildEnv(options),
+        cwd: options.cwd,
+        diagnosticLog: options.diagnosticLog,
+        onActivity: options.onActivity,
+        onSpawn: options.onSpawn,
+      }),
+    );
 
-    return this.classifyCompletion(result, false);
+    return this.classifyCompletion(observed.value, false, observed.interval);
   }
 
   private classifyCompletion(
@@ -594,6 +608,7 @@ export class ClaudeProvider implements LLMProvider {
       code?: string;
     },
     jsonOutput: boolean,
+    observedInterval: ObservedInterval,
   ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
@@ -618,6 +633,7 @@ export class ClaudeProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        observedIntervals: [observedInterval],
       };
     }
 
@@ -663,6 +679,7 @@ export class ClaudeProvider implements LLMProvider {
       tokenUsage: parsed.tokenUsage,
       waitSeconds,
       deadline,
+      observedIntervals: [observedInterval],
     };
   }
 

@@ -22,6 +22,7 @@ import type {
   InvokeResult,
   TokenUsage,
 } from '../execution/llm-provider.js';
+import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -379,6 +380,8 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
+  observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
   /** Provider routing identity and ordered candidate-attempt accounting. */
@@ -465,6 +468,7 @@ export interface StepRunResult {
 export interface SpotAuditDispatchResult {
   success: boolean;
   output?: string;
+  observedIntervals?: readonly ObservedInterval[];
   authFailure?: boolean;
   authentication?: AuthenticationReadiness;
 }
@@ -476,6 +480,9 @@ export function toSpotAuditVerifierResult(
   return {
     success: result.success,
     output: result.output ?? '',
+    ...(result.observedIntervals
+      ? { observedIntervals: result.observedIntervals }
+      : {}),
     ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
     ...(result.authentication ? { authentication: result.authentication } : {}),
   };
@@ -3216,6 +3223,9 @@ export class Conductor {
                 step: step.name,
                 error: haltReason,
                 retryCount: 0,
+                ...(noVerdictOutcome.observedIntervals
+                  ? { observedIntervals: noVerdictOutcome.observedIntervals }
+                  : {}),
               });
               process.off('SIGINT', sigintHandler);
               if (!this.daemon) {
@@ -5066,6 +5076,9 @@ export class Conductor {
             step: step.name,
             error: lastError,
             retryCount: attempt,
+            ...(failedStepResult?.observedIntervals
+              ? { observedIntervals: failedStepResult.observedIntervals }
+              : {}),
           });
 
           // Auto mode is unattended — NEVER prompt or open a REPL. An advisory
@@ -6102,6 +6115,9 @@ export class Conductor {
             unmetered: stepResult?.tokenUsage ? undefined : true,
             preferredProvider: stepResult?.preferredProvider,
             actualProvider: stepResult?.actualProvider,
+            ...(stepResult?.observedIntervals
+              ? { observedIntervals: stepResult.observedIntervals }
+              : {}),
           });
 
           // Store PR URL from finish step output. Prefer state-file write

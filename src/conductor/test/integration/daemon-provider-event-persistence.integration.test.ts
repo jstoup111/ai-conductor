@@ -89,6 +89,8 @@ describe('daemon feature provider-event persistence', () => {
     };
     let featureAEvents: ConductorEventEmitter | undefined;
     let featureBEvents: ConductorEventEmitter | undefined;
+    const codexIntervals = [{ startedAtMs: 1_000, durationMs: 20 }];
+    const claudeIntervals = [{ startedAtMs: 2_000, durationMs: 30 }];
 
     const runA = withFeatureEventPersistence?.({
       worktreePath: featureA,
@@ -106,12 +108,14 @@ describe('daemon feature provider-event persistence', () => {
                   providerUnavailable: true,
                   providerUnavailableReason: 'codex executable not found',
                   providerUnavailableScope: 'run' as const,
+                  observedIntervals: codexIntervals,
                 }
               : {
                   success: true,
                   output: 'completed by claude',
                   exitCode: 0,
                   tokenUsage: { input: 120, output: 30 },
+                  observedIntervals: claudeIntervals,
                 });
           return { invoke, invokeInteractive: invoke };
         };
@@ -282,6 +286,7 @@ describe('daemon feature provider-event persistence', () => {
           step: 'plan',
           provider: 'codex',
           outcome: 'unavailable',
+          observedIntervals: codexIntervals,
         },
         {
           type: 'provider_fallback',
@@ -294,12 +299,14 @@ describe('daemon feature provider-event persistence', () => {
           step: 'plan',
           provider: 'claude',
           outcome: 'success',
+          observedIntervals: claudeIntervals,
         },
         {
           type: 'step_completed',
           step: 'plan',
           preferredProvider: 'codex',
           actualProvider: 'claude',
+          observedIntervals: [...codexIntervals, ...claudeIntervals],
         },
       ],
       featureB: [

@@ -7,6 +7,7 @@ import {
   parseCodexJsonl,
 } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 // This is a fake Codex CLI boundary: no test invokes a locally installed Codex.
@@ -66,6 +67,137 @@ describe('CodexProvider', () => {
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
+  });
+
+  it.each([
+    {
+      name: 'ordinary executable',
+      executable: 'codex',
+      selfHost: undefined,
+    },
+    {
+      name: 'self-host executable',
+      executable: '/isolated/bin/codex',
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: { CODEX_HOME: '/isolated/codex-home' },
+        args: ['--config', 'project_doc_max_bytes=0'],
+        teardown: async () => {},
+      },
+    },
+  ])(
+    'returns one successful subprocess interval for the $name without changing JSONL output or usage',
+    async ({ executable, selfHost }) => {
+      const readings = [2_000, 2_040];
+      const clock: IntervalClock = {
+        nowMs: () =>
+          readings.shift() ??
+          (() => {
+            throw new Error('scripted clock exhausted');
+          })(),
+      };
+      const runDoctor = vi.fn(async () => {
+        expect(readings).toHaveLength(2);
+        return readyDoctorResult();
+      });
+      provider = new CodexProvider(runDoctor, 'codex', clock);
+      mockExeca.mockResolvedValue({
+        stdout: jsonlMessage('No-op complete.'),
+        exitCode: 0,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, selfHost });
+
+      expect({
+        executable: mockExeca.mock.calls[0][0],
+        result,
+        remainingClockReadings: readings,
+      }).toEqual({
+        executable,
+        result: expect.objectContaining({
+          success: true,
+          output: 'No-op complete.',
+          exitCode: 0,
+          tokenUsage: { input: 12, cacheRead: 4, output: 7, numTurns: 1 },
+          observedIntervals: [{ startedAtMs: 2_000, durationMs: 40 }],
+          authentication: {
+            provider: 'codex',
+            source: 'cached-login',
+            state: 'ready',
+          },
+        }),
+        remainingClockReadings: [],
+      });
+    },
+  );
+
+  it.each([
+    {
+      name: 'operator-interactive completion',
+      invoke: (subject: CodexProvider) =>
+        subject.invokeInteractive({ ...baseOptions, interactive: true }),
+      response: { stdout: 'Done!', stderr: '', exitCode: 0 },
+      expected: { success: true },
+    },
+    {
+      name: 'ordinary non-zero exit',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      response: { stdout: '', stderr: 'build failed', exitCode: 1 },
+      expected: { success: false },
+    },
+    {
+      name: 'automatic permission rejection',
+      invoke: (subject: CodexProvider) =>
+        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+      response: {
+        stdout: '',
+        stderr: 'Codex automatic review denied the permission request.',
+        exitCode: 1,
+      },
+      expected: { success: false, permissionDenied: true },
+    },
+    {
+      name: 'authentication rejection',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      response: {
+        stdout: '',
+        stderr: 'Authentication required. Please run codex login.',
+        exitCode: 1,
+      },
+      expected: { success: false, authFailure: true },
+    },
+    {
+      name: 'rate-limit rejection',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      response: {
+        stdout: '',
+        stderr: 'Error 429: rate limit exceeded; retry after 45 seconds',
+        exitCode: 1,
+      },
+      expected: { success: false, rateLimited: true },
+    },
+  ])('retains one subprocess interval for $name', async ({ invoke, response, expected }) => {
+    const readings = [3_000, 3_075];
+    const clock: IntervalClock = {
+      nowMs: () =>
+        readings.shift() ??
+        (() => {
+          throw new Error('scripted clock exhausted');
+        })(),
+    };
+    const timedProvider = new CodexProvider(
+      vi.fn(async () => readyDoctorResult()),
+      'codex',
+      clock,
+    );
+    mockExeca.mockResolvedValue(response as any);
+
+    const result = await invoke(timedProvider);
+
+    expect(result).toMatchObject({
+      ...expected,
+      observedIntervals: [{ startedAtMs: 3_000, durationMs: 75 }],
+    });
   });
 
   it('prepares only the selected API-key auth for an isolated Codex home', async () => {
@@ -729,6 +861,7 @@ describe('CodexProvider', () => {
       readiness: expect.objectContaining({ state: 'missing' }),
       execCalls: 0,
     });
+    expect(result).not.toHaveProperty('observedIntervals');
   });
 
   it.each([

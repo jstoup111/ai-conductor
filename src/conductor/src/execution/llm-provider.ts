@@ -1,3 +1,5 @@
+import type { ObservedInterval } from './observed-interval.js';
+
 export interface TokenUsage {
   input: number;
   output: number;
@@ -58,6 +60,8 @@ export interface InvokeResult {
   success: boolean;
   output: string;
   exitCode: number;
+  /** Engine-observed provider subprocess intervals, separate from provider-reported usage. */
+  observedIntervals?: readonly ObservedInterval[];
   rateLimited?: boolean;
   waitSeconds?: number;
   /**

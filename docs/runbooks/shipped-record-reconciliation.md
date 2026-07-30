@@ -110,7 +110,10 @@ conduct-ts shipped-record --slug <slug> --pr <implementation-pr-url>
    `.docs/stories/<slug>.md`) into `spec_hash`.
 3. Renders the record, appending a Cost block when a cost rollup is available: `input`,
    `output`, `cache_read`, `cache_creation`, `cost_usd`, `dispatches`, `retries`, `halts`,
-   `unmetered`, and a per-provider breakdown.
+   `unmetered`, and a per-provider breakdown; then appends a `## Time` block computed
+   independently from `.pipeline/events.jsonl` (`state: measured|partial|unavailable`, with
+   `active_ms`/`provider_active_ms`/`no_provider_active_ms` when measured). A missing or corrupt
+   event ledger never blocks the Cost block or the commit.
 4. Writes `.docs/shipped/<slug>.md`, `git add`s it, and commits `shipped record: <slug>` with
    `--no-verify` — but **only if the staged diff is non-empty**. Re-running with identical
    content prints `✓ shipped record already committed: <path>` and creates no duplicate commit.

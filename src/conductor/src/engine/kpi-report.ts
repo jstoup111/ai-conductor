@@ -12,6 +12,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseShippedRecord } from './shipped-record.js';
+import type { TimingRollup } from './timing-rollup.js';
 
 export interface KpiCostFields {
   input: number;
@@ -36,6 +37,42 @@ export interface KpiProviderCostFields {
   costUsd: number;
   dispatches: number;
   costUnmetered: number;
+}
+
+export type KpiTimeFields = TimingRollup;
+
+/**
+ * Parse the independently rendered `## Time` section. Cost fields are never
+ * consulted, so timing remains reportable when cost evidence is absent.
+ */
+function parseTimeBlock(content: string): KpiTimeFields {
+  const match = /^## Time\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
+  if (!match) return { state: 'unavailable' };
+
+  const body = match[1];
+  const num = (name: string): number | undefined => {
+    const field = new RegExp(`^${name}:\\s*([\\-0-9.]+)\\s*$`, 'm').exec(body);
+    const value = field ? Number(field[1]) : undefined;
+    return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
+  };
+  const activeMs = num('active_ms');
+  const providerActiveMs = num('provider_active_ms');
+  const noProviderActiveMs = num('no_provider_active_ms');
+
+  if (/^state:\s*unavailable\s*$/m.test(body)) {
+    return { state: 'unavailable' };
+  }
+  if (
+    /^state:\s*measured\s*$/m.test(body) &&
+    activeMs !== undefined &&
+    providerActiveMs !== undefined &&
+    noProviderActiveMs !== undefined &&
+    providerActiveMs + noProviderActiveMs === activeMs
+  ) {
+    return { state: 'measured', activeMs, providerActiveMs, noProviderActiveMs };
+  }
+
+  return activeMs === undefined ? { state: 'partial' } : { state: 'partial', activeMs };
 }
 
 /**
@@ -123,6 +160,7 @@ function parseProviderCostFields(body: string): Record<string, KpiProviderCostFi
 interface FeatureKpi {
   slug: string;
   cost: KpiCostFields | null;
+  time: KpiTimeFields;
   /**
    * Engine build that shipped this feature. `unknown` for records written
    * before engine-version stamping — reported explicitly rather than omitted
@@ -130,6 +168,134 @@ interface FeatureKpi {
    * blending into the stamped ones.
    */
   engineVersion: string;
+}
+
+interface TimingAggregate {
+  measured: number;
+  partial: number;
+  unavailable: number;
+  activeMs: number;
+  providerActiveMs: number;
+  noProviderActiveMs: number;
+}
+
+interface CostAggregate {
+  input: number;
+  output: number;
+  costUsd: number;
+  tokenCounted: number;
+  costCounted: number;
+}
+
+interface ReportAggregate {
+  cost: CostAggregate;
+  timing: TimingAggregate;
+}
+
+function formatFeatureTiming(time: TimingRollup): string {
+  if (time.state === 'measured') {
+    return (
+      ` time=measured active_ms=${time.activeMs}` +
+      ` provider_active_ms=${time.providerActiveMs}` +
+      ` no_provider_active_ms=${time.noProviderActiveMs}`
+    );
+  }
+  if (time.state === 'partial') {
+    return ` time=partial${time.activeMs === undefined ? '' : ` active_ms=${time.activeMs}`}`;
+  }
+  return ' time=unavailable';
+}
+
+function addTiming(aggregate: TimingAggregate, time: TimingRollup): void {
+  aggregate[time.state] += 1;
+  if (time.state !== 'measured') return;
+  aggregate.activeMs += time.activeMs;
+  aggregate.providerActiveMs += time.providerActiveMs;
+  aggregate.noProviderActiveMs += time.noProviderActiveMs;
+}
+
+function formatTimingAggregate(aggregate: TimingAggregate): string {
+  let output =
+    `; timing measured=${aggregate.measured}` +
+    ` partial=${aggregate.partial} unavailable=${aggregate.unavailable}`;
+  if (aggregate.measured === 0) return output;
+  output +=
+    ` avg_active_ms=${aggregate.activeMs / aggregate.measured}` +
+    ` avg_provider_active_ms=${aggregate.providerActiveMs / aggregate.measured}` +
+    ` avg_no_provider_active_ms=${aggregate.noProviderActiveMs / aggregate.measured}`;
+  return output;
+}
+
+function createReportAggregate(): ReportAggregate {
+  return {
+    cost: { input: 0, output: 0, costUsd: 0, tokenCounted: 0, costCounted: 0 },
+    timing: {
+      measured: 0,
+      partial: 0,
+      unavailable: 0,
+      activeMs: 0,
+      providerActiveMs: 0,
+      noProviderActiveMs: 0,
+    },
+  };
+}
+
+function addCost(aggregate: CostAggregate, cost: KpiCostFields | null): void {
+  if (!cost || cost.unmeteredCount > 0) return;
+  aggregate.input += cost.input;
+  aggregate.output += cost.output;
+  aggregate.tokenCounted += 1;
+  if (cost.costUnmetered > 0) return;
+  aggregate.costUsd += cost.costUsd;
+  aggregate.costCounted += 1;
+}
+
+function renderProviderLines(providers: Record<string, KpiProviderCostFields>): string[] {
+  return Object.entries(providers).map(([provider, cost]) => {
+    const tokens = cost.input + cost.output;
+    const costUsd = cost.costUnmetered > 0 ? 'unavailable' : cost.costUsd;
+    return (
+      `  - ${provider}: input=${cost.input} output=${cost.output} ` +
+      `tokens=${tokens} cost_usd=${costUsd} ` +
+      `cost_unmetered=${cost.costUnmetered} dispatches=${cost.dispatches}`
+    );
+  });
+}
+
+function renderFeatureLines(feature: FeatureKpi): string[] {
+  const timing = formatFeatureTiming(feature.time);
+  if (!feature.cost) {
+    return [
+      `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)${timing}`,
+    ];
+  }
+  const cost = feature.cost;
+  const unmetered = cost.unmeteredCount > 0;
+  const costUnmetered = cost.costUnmetered > 0;
+  const marker = unmetered
+    ? ' [PARTIAL — unmetered dispatches present]'
+    : costUnmetered ? ' [COST-PARTIAL — cost-unmetered dispatches present]' : '';
+  const costUsd = costUnmetered ? 'unavailable' : cost.costUsd;
+  const featureLine =
+    `- ${feature.slug}: engine=${feature.engineVersion} ` +
+    `input=${cost.input} output=${cost.output} tokens=${cost.input + cost.output} ` +
+    `cache_read=${cost.cacheRead} cache_creation=${cost.cacheCreation} ` +
+    `dispatches=${cost.dispatches} retries=${cost.retries} halts=${cost.halts} ` +
+    `duration_ms=${cost.unmeteredDurationMs} cost_usd=${costUsd}${marker}${timing}`;
+  return [featureLine, ...renderProviderLines(cost.providers)];
+}
+
+function renderAggregateLine(aggregate: ReportAggregate): string {
+  const { cost } = aggregate;
+  const costUsd = cost.costCounted > 0
+    ? Math.round(cost.costUsd * 10000) / 10000
+    : 'unavailable';
+  return (
+    `Aggregate / trend across ${cost.tokenCounted} feature(s): ` +
+    `total tokens=${cost.input + cost.output} ` +
+    `(input=${cost.input}, output=${cost.output}), total cost_usd=${costUsd}` +
+    formatTimingAggregate(aggregate.timing)
+  );
 }
 
 async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
@@ -151,7 +317,12 @@ async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
     const parsed = parseShippedRecord(content);
     const slug = 'slug' in parsed ? parsed.slug : file.replace(/\.md$/, '');
     const engineVersion = ('engineVersion' in parsed ? parsed.engineVersion : undefined) ?? 'unknown';
-    features.push({ slug, cost: parseCostBlock(content), engineVersion });
+    features.push({
+      slug,
+      cost: parseCostBlock(content),
+      time: parseTimeBlock(content),
+      engineVersion,
+    });
   }
 
   return features;
@@ -170,69 +341,14 @@ export async function renderKpi(root: string): Promise<string> {
     return 'No shipped features yet — .docs/shipped/ is empty or does not exist.\n';
   }
 
-  const lines: string[] = [];
-  lines.push('KPI report — tokens per shipped feature\n');
-
-  let totalInput = 0;
-  let totalOutput = 0;
-  let totalCostUsd = 0;
-  let counted = 0;
-  let costCounted = 0;
-
+  const lines = ['KPI report — tokens per shipped feature\n'];
+  const aggregate = createReportAggregate();
   for (const feature of features) {
-    if (!feature.cost) {
-      lines.push(
-        `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)`,
-      );
-      continue;
-    }
-    const tokens = feature.cost.input + feature.cost.output;
-    const unmetered = feature.cost.unmeteredCount > 0;
-    const costUnmetered = feature.cost.costUnmetered > 0;
-    const marker = unmetered
-      ? ' [PARTIAL — unmetered dispatches present]'
-      : costUnmetered
-        ? ' [COST-PARTIAL — cost-unmetered dispatches present]'
-        : '';
-    const cost = costUnmetered ? 'unavailable' : feature.cost.costUsd;
-    lines.push(
-      `- ${feature.slug}: engine=${feature.engineVersion} ` +
-        `input=${feature.cost.input} output=${feature.cost.output} ` +
-        `tokens=${tokens} cache_read=${feature.cost.cacheRead} ` +
-        `cache_creation=${feature.cost.cacheCreation} dispatches=${feature.cost.dispatches} ` +
-        `retries=${feature.cost.retries} halts=${feature.cost.halts} ` +
-        `duration_ms=${feature.cost.unmeteredDurationMs} cost_usd=${cost}${marker}`,
-    );
-    for (const [provider, providerCost] of Object.entries(feature.cost.providers)) {
-      const providerTokens = providerCost.input + providerCost.output;
-      const providerUsd = providerCost.costUnmetered > 0 ? 'unavailable' : providerCost.costUsd;
-      lines.push(
-        `  - ${provider}: input=${providerCost.input} output=${providerCost.output} ` +
-          `tokens=${providerTokens} cost_usd=${providerUsd} ` +
-          `cost_unmetered=${providerCost.costUnmetered} dispatches=${providerCost.dispatches}`,
-      );
-    }
-    if (unmetered) {
-      continue;
-    }
-    totalInput += feature.cost.input;
-    totalOutput += feature.cost.output;
-    counted += 1;
-    if (!costUnmetered) {
-      totalCostUsd += feature.cost.costUsd;
-      costCounted += 1;
-    }
+    lines.push(...renderFeatureLines(feature));
+    addCost(aggregate.cost, feature.cost);
+    addTiming(aggregate.timing, feature.time);
   }
-
-  const totalTokens = totalInput + totalOutput;
-  lines.push('');
-  const aggregateCost = costCounted > 0
-    ? Math.round(totalCostUsd * 10000) / 10000
-    : 'unavailable';
-  lines.push(
-    `Aggregate / trend across ${counted} feature(s): total tokens=${totalTokens} ` +
-      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`,
-  );
+  lines.push('', renderAggregateLine(aggregate));
 
   return lines.join('\n') + '\n';
 }

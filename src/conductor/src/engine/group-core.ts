@@ -24,6 +24,7 @@ import type { ConductorEvent } from "../types/events.js";
 import type { HarnessConfig } from "../types/config.js";
 import type { ProviderSessionScope } from "./provider-session.js";
 import type { AuthenticationReadiness } from "../execution/llm-provider.js";
+import type { ObservedInterval } from "../execution/observed-interval.js";
 
 /** The three possible verdicts a validator branch can produce. */
 export type Verdict = "pass" | "fail" | "blocked";
@@ -36,6 +37,7 @@ export interface VerdictOutcome {
   kind: "verdict";
   verdict: Verdict;
   authentication?: AuthenticationReadiness;
+  observedIntervals?: readonly ObservedInterval[];
 }
 
 /**
@@ -49,6 +51,7 @@ export interface NoVerdictOutcome {
   kind: "no-verdict";
   reason: string;
   authentication?: AuthenticationReadiness;
+  observedIntervals?: readonly ObservedInterval[];
 }
 
 /** A provider denied a required action under its unattended permission policy. */
@@ -57,6 +60,7 @@ export interface PermissionDeniedOutcome {
   provider: string;
   reason: string;
   authentication?: Pick<AuthenticationReadiness, "provider" | "source" | "state">;
+  observedIntervals?: readonly ObservedInterval[];
 }
 
 /**
@@ -82,15 +86,27 @@ export type BranchOutcome =
 export function makeVerdictOutcome(
   verdict: Verdict,
   authentication?: AuthenticationReadiness,
+  observedIntervals?: readonly ObservedInterval[],
 ): VerdictOutcome {
-  return { kind: "verdict", verdict, ...(authentication ? { authentication } : {}) };
+  return {
+    kind: "verdict",
+    verdict,
+    ...(authentication ? { authentication } : {}),
+    ...(observedIntervals ? { observedIntervals } : {}),
+  };
 }
 
 export function makeNoVerdictOutcome(
   reason: string,
   authentication?: AuthenticationReadiness,
+  observedIntervals?: readonly ObservedInterval[],
 ): NoVerdictOutcome {
-  return { kind: "no-verdict", reason, ...(authentication ? { authentication } : {}) };
+  return {
+    kind: "no-verdict",
+    reason,
+    ...(authentication ? { authentication } : {}),
+    ...(observedIntervals ? { observedIntervals } : {}),
+  };
 }
 
 export function makeSkippedOutcome(): SkippedOutcome {
@@ -452,12 +468,19 @@ async function runGroupBranchInner(
   }
 
   let lastOutput = "";
+  const observedIntervals: ObservedInterval[] = [];
+  const accumulatedObservedIntervals = () =>
+    observedIntervals.length > 0 ? observedIntervals : undefined;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     // Task 8: check before every dispatch — an abort observed while queued
     // behind the semaphore, or between retries, must stop the branch from
     // issuing another stepRunner.run() call.
     if (deps.signal?.aborted) {
-      return makeNoVerdictOutcome("aborted");
+      return makeNoVerdictOutcome(
+        "aborted",
+        undefined,
+        accumulatedObservedIntervals(),
+      );
     }
 
     await deps.onMemberEvent?.({
@@ -485,9 +508,16 @@ async function runGroupBranchInner(
       lastOutput = err instanceof Error ? err.message : String(err);
       continue;
     }
+    if (result.observedIntervals) {
+      observedIntervals.push(...result.observedIntervals);
+    }
 
     if (result.success) {
-      return makeVerdictOutcome("pass", result.authentication);
+      return makeVerdictOutcome(
+        "pass",
+        result.authentication,
+        accumulatedObservedIntervals(),
+      );
     }
 
     // Rate limit: enter the shared episode with the parsed deadline (or a
@@ -505,7 +535,11 @@ async function runGroupBranchInner(
       // (not because the rate limit actually cleared) — exit cleanly with
       // a recorded outcome instead of looping back into another dispatch.
       if (deps.signal?.aborted) {
-        return makeNoVerdictOutcome("aborted");
+        return makeNoVerdictOutcome(
+          "aborted",
+          undefined,
+          accumulatedObservedIntervals(),
+        );
       }
 
       attempt -= 1;
@@ -531,7 +565,11 @@ async function runGroupBranchInner(
     // no-verdict outcome carrying the "authFailure" reason so the core can
     // route it to halt/park handling instead of silently retrying it.
     if (result.authFailure) {
-      return makeNoVerdictOutcome("authFailure", result.authentication);
+      return makeNoVerdictOutcome(
+        "authFailure",
+        result.authentication,
+        accumulatedObservedIntervals(),
+      );
     }
 
     if (result.permissionDenied) {
@@ -548,11 +586,18 @@ async function runGroupBranchInner(
               },
             }
           : {}),
+        ...(accumulatedObservedIntervals()
+          ? { observedIntervals: accumulatedObservedIntervals() }
+          : {}),
       };
     }
 
     lastOutput = result.output ?? lastOutput;
   }
 
-  return makeNoVerdictOutcome(lastOutput || "retries exhausted");
+  return makeNoVerdictOutcome(
+    lastOutput || "retries exhausted",
+    undefined,
+    accumulatedObservedIntervals(),
+  );
 }

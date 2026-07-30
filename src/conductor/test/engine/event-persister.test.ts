@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventPersister, EventPersistError } from '../../src/engine/event-persister.js';
+import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
@@ -10,6 +11,14 @@ describe('EventPersister', () => {
   let tempDir: string;
   let eventsPath: string;
   let emitter: ConductorEventEmitter;
+
+  const scriptedClock = (...values: number[]): IntervalClock => ({
+    nowMs: () => {
+      const value = values.shift();
+      if (value === undefined) throw new Error('scripted clock exhausted');
+      return value;
+    },
+  });
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'event-persister-test-'));
@@ -145,10 +154,239 @@ describe('EventPersister', () => {
     expect(line.tokenUsage).toBeUndefined();
   });
 
+  it.each([
+    {
+      terminal: { type: 'step_completed', step: 'bootstrap', status: 'done' },
+      expectedType: 'step_completed',
+    },
+    {
+      terminal: { type: 'step_failed', step: 'bootstrap', error: 'boom', retryCount: 0 },
+      expectedType: 'step_failed',
+    },
+  ] satisfies Array<{ terminal: ConductorEvent; expectedType: string }>)(
+    'persists an explicit active interval on the first matching $expectedType event',
+    async ({ terminal, expectedType }) => {
+      const persister = new EventPersister(eventsPath, emitter, scriptedClock(1_000, 1_025));
+      persister.start();
+
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit(terminal);
+      await emitter.emit(terminal);
+      persister.stop();
+
+      const records = (await readFile(eventsPath, 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const terminals = records.filter((record) => record.type === expectedType);
+      expect(terminals.map((record) => record.activeInterval)).toEqual([
+        { startedAtMs: 1_000, durationMs: 25 },
+        undefined,
+      ]);
+    },
+  );
+
+  it('leaves a start open when a different step emits a terminal event', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(5_000, 5_020));
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_failed', step: 'explore', error: 'boom', retryCount: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'step_failed' || record.type === 'step_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      undefined,
+      { startedAtMs: 5_000, durationMs: 20 },
+    ]);
+  });
+
+  it('measures sequential steps without including the idle gap or deriving duration from ts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2030-01-02T03:04:05.000Z'));
+    const persister = new EventPersister(
+      eventsPath,
+      emitter,
+      scriptedClock(100, 140, 10_000, 10_030),
+    );
+    try {
+      persister.start();
+
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+      await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
+      persister.stop();
+
+      const records = (await readFile(eventsPath, 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .filter((record) => record.type === 'step_completed');
+      expect(records.map(({ activeInterval, ts }) => ({ activeInterval, ts }))).toEqual([
+        {
+          activeInterval: { startedAtMs: 100, durationMs: 40 },
+          ts: '2030-01-02T03:04:05.000Z',
+        },
+        {
+          activeInterval: { startedAtMs: 10_000, durationMs: 30 },
+          ts: '2030-01-02T03:04:05.000Z',
+        },
+      ]);
+    } finally {
+      persister.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it('persists an active interval on the first matching parallel terminal event', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(2_000, 2_075));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({
+      type: 'parallel_completed',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records[1].activeInterval).toEqual({ startedAtMs: 2_000, durationMs: 75 });
+  });
+
+  it('closes a failed parallel group once when several branches fail', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(3_000, 3_040));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({
+      type: 'parallel_failure',
+      step: 'manual_test',
+      branch: 'manual_test',
+      error: 'manual test failed',
+    });
+    await emitter.emit({
+      type: 'parallel_failure',
+      step: 'manual_test',
+      branch: 'prd_audit',
+      error: 'PRD audit failed',
+    });
+    persister.stop();
+
+    const failures = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'parallel_failure');
+    expect(failures.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 3_000, durationMs: 40 },
+      undefined,
+    ]);
+  });
+
+  it('tracks overlapping serial and parallel records independently', async () => {
+    const persister = new EventPersister(
+      eventsPath,
+      emitter,
+      scriptedClock(100, 120, 150, 180),
+    );
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'manual_test', index: 0 });
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({
+      type: 'parallel_completed',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({ type: 'step_completed', step: 'manual_test', status: 'done' });
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'parallel_completed' || record.type === 'step_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 120, durationMs: 30 },
+      { startedAtMs: 100, durationMs: 80 },
+    ]);
+  });
+
+  it('does not attach a second interval to duplicate parallel terminal events', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(4_000, 4_010));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    const terminal = {
+      type: 'parallel_completed',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    } satisfies ConductorEvent;
+    await emitter.emit(terminal);
+    await emitter.emit(terminal);
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'parallel_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 4_000, durationMs: 10 },
+      undefined,
+    ]);
+  });
+
+  it('preserves an unmatched parallel start as detectable incomplete evidence', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(5_000));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    persister.stop();
+
+    const record = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toMatchObject({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+  });
+
   it('persists provider attempts, fallback diagnostics, and completed-step attribution', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
 
+    const observedIntervals = [{ startedAtMs: 100, durationMs: 25 }];
     const providerEvents = [
       {
         type: 'provider_attempt',
@@ -159,6 +397,7 @@ describe('EventPersister', () => {
         reason: 'executable not found',
         model: 'gpt-5.6-sol',
         invoked: true,
+        observedIntervals,
       },
       {
         type: 'provider_fallback',
@@ -175,6 +414,15 @@ describe('EventPersister', () => {
         model: 'sonnet',
         tokenUsage: { input: 120, output: 30 },
         invoked: true,
+        observedIntervals,
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        reason: 'cached unavailable',
+        invoked: false,
       },
       {
         type: 'step_completed',
@@ -182,6 +430,7 @@ describe('EventPersister', () => {
         status: 'done',
         preferredProvider: 'codex',
         actualProvider: 'claude',
+        observedIntervals,
       },
     ] satisfies ConductorEvent[];
 
@@ -196,6 +445,24 @@ describe('EventPersister', () => {
         return event;
       });
     expect(records).toEqual(providerEvents);
+  });
+
+  it('persists provider intervals on a failed scalar terminal event', async () => {
+    const observedIntervals = [{ startedAtMs: 200, durationMs: 30 }];
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'step_failed',
+      step: 'plan',
+      error: 'failed',
+      retryCount: 1,
+      observedIntervals,
+    });
+    persister.stop();
+
+    const record = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record.observedIntervals).toEqual(observedIntervals);
   });
 
   // ─── Task 6: creates parent directories ───────────────────────────────────

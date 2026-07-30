@@ -282,7 +282,7 @@ describe('OTel Observability — Phase 1 acceptance', () => {
       persister.stop();
       const withDisabled = await readFile(eventsPath, 'utf-8');
 
-      // ts fields differ; compare structure line-for-line minus ts.
+      // Timing fields differ; compare the remaining structure line-for-line.
       const strip = (s: string) =>
         s
           .trim()
@@ -290,6 +290,7 @@ describe('OTel Observability — Phase 1 acceptance', () => {
           .map((l) => {
             const o = JSON.parse(l);
             delete o.ts;
+            delete o.activeInterval;
             return JSON.stringify(o);
           });
       expect(strip(withDisabled)).toEqual(strip(baseline));

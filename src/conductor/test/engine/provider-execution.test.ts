@@ -30,6 +30,10 @@ interface PreferredExecutionResult extends InvokeResult {
       input: number;
       output: number;
     };
+    observedIntervals?: Array<{
+      startedAtMs: number;
+      durationMs: number;
+    }>;
     outcome?: 'success' | 'failure' | 'unavailable';
     reason?: string;
     fallbackReason?: string;
@@ -1696,6 +1700,8 @@ describe('executeProviderCandidates', () => {
   });
 
   it('attributes failed preferred-provider and successful fallback usage to their own ordered attempts', async () => {
+    const failedInterval = { startedAtMs: 100, durationMs: 10 };
+    const fallbackInterval = { startedAtMs: 120, durationMs: 20 };
     const codexInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: false,
       output: 'codex executable missing',
@@ -1704,12 +1710,14 @@ describe('executeProviderCandidates', () => {
       providerUnavailable: true,
       providerUnavailableScope: 'run',
       providerUnavailableReason: 'codex executable missing',
+      observedIntervals: [failedInterval],
     }));
     const claudeInvoke = vi.fn(async (): Promise<InvokeResult> => ({
       success: true,
       output: 'fallback completed',
       exitCode: 0,
       tokenUsage: { input: 20, output: 8 },
+      observedIntervals: [fallbackInterval],
     }));
     const provider = (
       invoke: (options: InvokeOptions) => Promise<InvokeResult>,
@@ -1749,6 +1757,7 @@ describe('executeProviderCandidates', () => {
       output: 'fallback completed',
       exitCode: 0,
       tokenUsage: { input: 20, output: 8 },
+      observedIntervals: [failedInterval, fallbackInterval],
       preferredProvider: 'codex',
       actualProvider: 'claude',
       resolvedModel: 'sonnet',
@@ -1758,6 +1767,7 @@ describe('executeProviderCandidates', () => {
           provider: 'codex',
           model: 'gpt-5.6-terra',
           tokenUsage: { input: 3, output: 1 },
+          observedIntervals: [failedInterval],
           outcome: 'unavailable',
           reason: 'codex executable missing',
           fallbackReason: 'codex executable missing',
@@ -1767,11 +1777,98 @@ describe('executeProviderCandidates', () => {
           provider: 'claude',
           model: 'sonnet',
           tokenUsage: { input: 20, output: 8 },
+          observedIntervals: [fallbackInterval],
           outcome: 'success',
           invoked: true,
         },
       ],
     });
+  });
+
+  it('attributes every model-fallback interval to its single provider attempt', async () => {
+    const intervals = [
+      { startedAtMs: 200, durationMs: 10 },
+      { startedAtMs: 220, durationMs: 20 },
+    ];
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        output: 'primary model unavailable',
+        exitCode: 1,
+        modelUnavailable: true,
+        observedIntervals: [intervals[0]],
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'fallback model completed',
+        exitCode: 0,
+        observedIntervals: [intervals[1]],
+      });
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes: new ProviderRuntimeSet([
+        runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+      ]),
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('model-fallback-session')),
+      options: { prompt: 'Execute the step.', cwd: '/workspace/feature' },
+    });
+
+    expect({
+      intervals: result.observedIntervals,
+      attemptIntervals: result.attempts[0]?.observedIntervals,
+    }).toEqual({
+      intervals,
+      attemptIntervals: intervals,
+    });
+  });
+
+  it('keeps provider intervals scoped to each retry result', async () => {
+    const intervals = [
+      { startedAtMs: 300, durationMs: 30 },
+      { startedAtMs: 350, durationMs: 40 },
+    ];
+    const invoke = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        output: 'retryable failure',
+        exitCode: 1,
+        observedIntervals: [intervals[0]],
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        output: 'retry completed',
+        exitCode: 0,
+        observedIntervals: [intervals[1]],
+      });
+    const runtimes = new ProviderRuntimeSet([
+      runtime('codex', { invoke, invokeInteractive: vi.fn(async () => {}) }),
+    ]);
+    const sessions = new ProviderSessionScope(vi.fn().mockReturnValue('retry-session'));
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const first = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes,
+      sessions,
+      options: { prompt: 'First attempt.', cwd: '/workspace/feature' },
+    });
+    const retry = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['codex'],
+      runtimes,
+      sessions,
+      attempt: 2,
+      options: { prompt: 'Retry.', cwd: '/workspace/feature' },
+    });
+
+    expect([
+      first.attempts[0]?.observedIntervals,
+      retry.attempts[0]?.observedIntervals,
+    ]).toEqual([[intervals[0]], [intervals[1]]]);
   });
 
   it('fails with one diagnostic entry per configured provider when every candidate is unavailable', async () => {
@@ -1856,6 +1953,7 @@ describe('executeProviderCandidates', () => {
       },
     });
 
+    expect(result?.attempts?.[1]).not.toHaveProperty('observedIntervals');
     expect({ calls, unlistedCalls: unlistedInvoke.mock.calls, warnings, result })
       .toEqual({
         calls: [

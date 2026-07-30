@@ -962,6 +962,9 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.authentication
         ? { authentication: result.authentication }
         : {}),
+      ...(result.observedIntervals
+        ? { observedIntervals: result.observedIntervals }
+        : {}),
     };
   }
 
@@ -1037,6 +1040,9 @@ export class DefaultStepRunner implements StepRunner {
         ? { authentication: result.authentication }
         : {}),
       ...(result.tokenUsage ? { tokenUsage: result.tokenUsage } : {}),
+      ...(result.observedIntervals
+        ? { observedIntervals: result.observedIntervals }
+        : {}),
       ...(result.resolvedModel ? { model: result.resolvedModel } : {}),
       preferredProvider: result.preferredProvider,
       ...(result.actualProvider
@@ -1087,6 +1093,9 @@ export class DefaultStepRunner implements StepRunner {
       cwd: this.projectDir,
     });
     this.callCount++;
+    const observedIntervals = result.observedIntervals
+      ? { observedIntervals: result.observedIntervals }
+      : {};
 
     // Auth failure: operator's OAuth token is expired or invalid.
     // Report it — the conductor will halt and report the auth failure.
@@ -1098,6 +1107,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...observedIntervals,
       };
     }
 
@@ -1109,6 +1119,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...observedIntervals,
       };
     }
 
@@ -1125,6 +1136,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...observedIntervals,
       };
     }
 
@@ -1138,6 +1150,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...observedIntervals,
       };
     }
 
@@ -1163,6 +1176,7 @@ export class DefaultStepRunner implements StepRunner {
         ...(result.authentication
           ? { authentication: result.authentication }
           : {}),
+        ...observedIntervals,
       };
     }
 
@@ -1174,6 +1188,7 @@ export class DefaultStepRunner implements StepRunner {
         success: false,
         output: `${result.output} (model fallback ladder exhausted, tried: ${attemptedModels.join(', ')})`,
         model: effectiveModel,
+        ...observedIntervals,
       };
     }
 
@@ -1184,6 +1199,7 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.authentication
         ? { authentication: result.authentication }
         : {}),
+      ...observedIntervals,
     };
   }
 
@@ -1740,9 +1756,13 @@ export class DefaultStepRunner implements StepRunner {
     }
     this.callCount++;
     const withProviderMetadata = (r: StepRunResult): StepRunResult =>
-      providerResult
-        ? {
-            ...r,
+      ({
+        ...r,
+        ...(result.observedIntervals
+          ? { observedIntervals: result.observedIntervals }
+          : {}),
+        ...(providerResult
+          ? {
             ...this.providerAttribution(providerResult),
             ...(providerResult.resolvedModel
               ? { model: providerResult.resolvedModel }
@@ -1751,7 +1771,8 @@ export class DefaultStepRunner implements StepRunner {
               ? { tokenUsage: providerResult.tokenUsage }
               : {}),
           }
-        : r;
+          : {}),
+      });
     const finalize = (r: StepRunResult): StepRunResult =>
       withBaseFreshness(withProviderMetadata(r));
 

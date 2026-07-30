@@ -4,6 +4,7 @@ import { basename, dirname, join } from 'node:path';
 import type { BacklogTreeSource } from './backlog-tree-source.js';
 import type { CostRollup } from './cost-rollup.js';
 import { versionIdFromEngineDir } from './engine-version-id.js';
+import type { TimingRollup } from './timing-rollup.js';
 
 /**
  * Result of hashing a plan/stories pair into a canonical spec identity.
@@ -205,6 +206,36 @@ export function renderShippedRecordWithCost(
     `unmetered: count: ${rollup.unmetered.count}, duration_ms: ${rollup.unmetered.durationMs}\n` +
     `cost_unmetered: count: ${rollup.costUnmetered?.count ?? 0}\n` +
     (providerLines.length > 0 ? `providers:\n${providerLines.join('')}` : '')
+  );
+}
+
+/**
+ * Append durable feature-time evidence after any existing shipped-record
+ * content. Frontmatter and Cost bytes are left untouched so timing remains an
+ * additive, independently computed shipment concern.
+ */
+export function appendTimingSection(
+  existingContent: string,
+  timing: TimingRollup,
+): string {
+  const separator = existingContent.endsWith('\n') ? '\n' : '\n\n';
+  const activeLine =
+    'activeMs' in timing && timing.activeMs !== undefined
+      ? `active_ms: ${Math.round(timing.activeMs)}\n`
+      : '';
+  const measuredLines =
+    timing.state === 'measured'
+      ? `provider_active_ms: ${Math.round(timing.providerActiveMs)}\n` +
+        `no_provider_active_ms: ${Math.round(timing.noProviderActiveMs)}\n`
+      : '';
+
+  return (
+    existingContent +
+    separator +
+    `## Time\n` +
+    `state: ${timing.state}\n` +
+    activeLine +
+    measuredLines
   );
 }
 

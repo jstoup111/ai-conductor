@@ -67,9 +67,10 @@ quantifiable and safely prioritizable.
 
 **Files:**
 - `src/conductor/src/execution/observed-interval.ts`
+- `src/conductor/src/execution/epoch-clock.ts`
 - `src/conductor/test/execution/observed-interval.test.ts`
 
-**Wired-into:** `src/conductor/src/execution/claude-provider.ts#ClaudeProvider.runClaude, src/conductor/src/execution/codex-provider.ts#CodexProvider.invoke, src/conductor/src/engine/event-persister.ts#EventPersister.persist`
+**Wired-into:** `src/conductor/src/execution/observed-interval.ts#createEpochAnchoredMonotonicClock, src/conductor/src/execution/claude-provider.ts#observeInterval, src/conductor/src/execution/codex-provider.ts#observeInterval, src/conductor/src/engine/event-persister.ts#epochAnchoredMonotonicClock`
 **Dependencies:** none
 
 ### Task 2: Capture successful Claude subprocess intervals
@@ -92,7 +93,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/execution/claude-provider.ts`
 - `src/conductor/test/execution/claude-provider.test.ts`
 
-**Wired-into:** `src/conductor/src/execution/claude-provider.ts#ClaudeProvider.invoke`
+**Wired-into:** `src/conductor/src/engine/model-availability.ts#invokeWithLadderResolved`
 **Dependencies:** Task 1
 
 ### Task 3: Preserve Claude timing on interactive and unsuccessful outcomes
@@ -116,7 +117,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/test/execution/claude-provider.test.ts`
 - `src/conductor/test/execution/claude-provider-token-usage.test.ts`
 
-**Wired-into:** `src/conductor/src/execution/claude-provider.ts#ClaudeProvider.invokeInteractive, src/conductor/src/execution/claude-provider.ts#ClaudeProvider.classifyCompletion`
+**Wired-into:** same as Task 2
 **Dependencies:** Task 2
 
 ### Task 4: Capture successful Codex and self-host subprocess intervals
@@ -138,7 +139,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/execution/codex-provider.ts`
 - `src/conductor/test/execution/codex-provider.test.ts`
 
-**Wired-into:** `src/conductor/src/execution/codex-provider.ts#CodexProvider.invoke`
+**Wired-into:** same as Task 2
 **Dependencies:** Task 1
 
 ### Task 5: Preserve Codex timing on interactive, failure, and skip paths
@@ -161,7 +162,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/execution/codex-provider.ts`
 - `src/conductor/test/execution/codex-provider.test.ts`
 
-**Wired-into:** `src/conductor/src/execution/codex-provider.ts#CodexProvider.invokeInteractive, src/conductor/src/execution/codex-provider.ts#CodexProvider.classifyCompletion`
+**Wired-into:** same as Task 4
 **Dependencies:** Task 4
 
 ### Task 6: Accumulate every model-ladder interval
@@ -184,7 +185,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/model-availability.ts`
 - `src/conductor/test/engine/model-availability.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#DefaultStepRunner.runAutonomous, src/conductor/src/engine/provider-execution.ts#invokeProviderCandidate`
+**Wired-into:** `src/conductor/src/engine/provider-execution.ts#invokeProviderCandidate`
 **Dependencies:** Task 3, Task 5
 
 ### Task 7: Attribute intervals across provider candidates and skips
@@ -230,7 +231,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/step-runners.ts`
 - `src/conductor/test/engine/step-runners.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#DefaultStepRunner.toStepRunResult, src/conductor/src/engine/conductor.ts#Conductor.run`
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#toStepRunResult, src/conductor/src/engine/conductor.ts#emitTracked`
 **Dependencies:** Task 7
 
 ### Task 9: Close grouped and auxiliary propagation gaps
@@ -255,7 +256,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/test/engine/step-runners.test.ts`
 - `src/conductor/test/engine/conductor.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run, src/conductor/src/engine/group-core.ts#runGroupBranch`
+**Wired-into:** `src/conductor/src/engine/group-core.ts#runGroupBranch`
 **Dependencies:** Task 8
 
 ### Task 10: Persist provider intervals on existing feature events
@@ -280,7 +281,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/test/engine/event-persister.test.ts`
 - `src/conductor/test/integration/daemon-provider-event-persistence.integration.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/event-persister.ts#EventPersister.persist`
+**Wired-into:** `src/conductor/src/daemon-cli.ts#beginFeatureRun, src/conductor/src/engine/conductor.ts#emitTracked, src/conductor/src/engine/event-persister.ts#persist`
 **Dependencies:** Task 9
 
 ### Task 11: Record explicit serial active-step intervals
@@ -325,7 +326,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/test/engine/event-persister.test.ts`
 - `src/conductor/test/acceptance/parallel-validation-phase-fan-out-manual-test-prd-.acceptance.test.ts`
 
-**Wired-into:** `same as Task 11`
+**Wired-into:** same as Task 11
 **Dependencies:** Task 11
 
 ### Task 13: Implement deterministic interval union
@@ -345,9 +346,10 @@ quantifiable and safely prioritizable.
 
 **Files:**
 - `src/conductor/src/engine/timing-rollup.ts`
+- `src/conductor/src/engine/interval-algebra.ts`
 - `src/conductor/test/engine/timing-rollup.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/timing-rollup.ts#computeTimingRollup`
+**Wired-into:** `src/conductor/src/engine/timing-rollup.ts#unionIntervals, src/conductor/src/engine/timing-rollup.ts#intersectIntervalUnions`
 **Dependencies:** Task 1
 
 ### Task 14: Compute a measured feature-time partition
@@ -393,7 +395,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/timing-rollup.ts`
 - `src/conductor/test/engine/timing-rollup.test.ts`
 
-**Wired-into:** `same as Task 14`
+**Wired-into:** same as Task 14
 **Dependencies:** Task 14
 
 ### Task 16: Render an additive shipment Time section
@@ -483,7 +485,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/kpi-report.ts`
 - `src/conductor/test/engine/kpi-report.test.ts`
 
-**Wired-into:** `same as Task 18`
+**Wired-into:** same as Task 18
 **Dependencies:** Task 18
 
 ### Task 20: Prove ship-to-report durability after workspace removal
@@ -508,7 +510,7 @@ quantifiable and safely prioritizable.
 - `src/conductor/src/engine/shipped-record-cli.ts`
 - `src/conductor/src/engine/kpi-report.ts`
 
-**Wired-into:** `none (no new production surface)`
+**Wired-into:** none (no new production surface)
 **Dependencies:** Task 17, Task 19
 
 ## Task Dependency Graph

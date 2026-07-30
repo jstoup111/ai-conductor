@@ -17,6 +17,7 @@ import { join, isAbsolute, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
 import {
+  appendTimingSection,
   specHash,
   renderShippedRecord,
   renderShippedRecordWithCost,
@@ -24,6 +25,7 @@ import {
   writeShippedRecord,
 } from './shipped-record.js';
 import { computeCostRollup } from './cost-rollup.js';
+import { computeTimingRollup } from './timing-rollup.js';
 import { withEngineCommitEnv } from './engine-commit-env.js';
 import { resolveShipmentIdentity } from './shipment-identity.js';
 
@@ -141,6 +143,23 @@ export async function dispatchShippedRecord(
         }`,
       );
       recordBody = renderShippedRecord(fields);
+    }
+
+    // Timing has an independent degrade-never-block boundary: a missing or
+    // unreadable ledger must not discard a safe Cost result, and a Cost
+    // failure must not prevent timing from being computed and committed.
+    try {
+      recordBody = appendTimingSection(
+        recordBody,
+        await computeTimingRollup(cwd),
+      );
+    } catch (err) {
+      console.error(
+        `timing rollup failed — shipped record written with unavailable Time for ${identity.slug}: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+      recordBody = appendTimingSection(recordBody, { state: 'unavailable' });
     }
     await writeShippedRecord(join(cwd, relPath), recordBody);
 

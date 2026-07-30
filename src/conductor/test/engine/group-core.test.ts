@@ -694,6 +694,35 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
     expect(classifyOutcome(outcome)).toBe("verdict:pass");
   });
 
+  it("retains ordered observed intervals from unsuccessful scalar attempts followed by success", async () => {
+    const firstInterval = { startedAtMs: 100, durationMs: 10 };
+    const secondInterval = { startedAtMs: 200, durationMs: 20 };
+    const runner = spyRunner([
+      {
+        success: false,
+        output: "transient failure",
+        observedIntervals: [firstInterval],
+      },
+      {
+        success: true,
+        observedIntervals: [secondInterval],
+      },
+    ]);
+    const member: GroupMember = {
+      name: "manual_test",
+      skill: "manual-test",
+      outcome: makeSkippedOutcome(),
+    };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 2);
+
+    expect(outcome).toEqual({
+      kind: "verdict",
+      verdict: "pass",
+      observedIntervals: [firstInterval, secondInterval],
+    });
+  });
+
   it("the shared runner session id is unchanged after a group run", async () => {
     const runner = spyRunner([{ success: true }]);
     const member: GroupMember = { name: "manual_test" as unknown as string, skill: "manual-test", outcome: makeSkippedOutcome() };
@@ -714,6 +743,36 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
 
     expect(runner.calls).toHaveLength(2);
     expect(classifyOutcome(outcome)).toBe("no-verdict");
+  });
+
+  it("retains ordered observed intervals from every scalar attempt when retries are exhausted", async () => {
+    const firstInterval = { startedAtMs: 300, durationMs: 30 };
+    const secondInterval = { startedAtMs: 400, durationMs: 40 };
+    const runner = spyRunner([
+      {
+        success: false,
+        output: "fail 1",
+        observedIntervals: [firstInterval],
+      },
+      {
+        success: false,
+        output: "fail 2",
+        observedIntervals: [secondInterval],
+      },
+    ]);
+    const member: GroupMember = {
+      name: "manual_test",
+      skill: "manual-test",
+      outcome: makeSkippedOutcome(),
+    };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 2);
+
+    expect(outcome).toEqual({
+      kind: "no-verdict",
+      reason: "fail 2",
+      observedIntervals: [firstInterval, secondInterval],
+    });
   });
 });
 
