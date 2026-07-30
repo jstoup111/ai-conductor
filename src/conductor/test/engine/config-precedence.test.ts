@@ -121,6 +121,54 @@ const PRECEDENCE_CASES = [
   },
 ];
 
+const DEFAULT_CASES = [
+  {
+    name: 'ci_watch',
+    select: (config: Record<string, unknown>) => config.ci_watch,
+    expected: { enabled: true },
+  },
+  {
+    name: 'build_review',
+    select: (config: Record<string, unknown>) => config.build_review,
+    expected: { enabled: true },
+  },
+  {
+    name: 'auto_restart_on_stale_engine',
+    select: (config: Record<string, unknown>) => config.auto_restart_on_stale_engine,
+    expected: false,
+  },
+  {
+    name: 'engine_refresh_min_interval_seconds',
+    select: (config: Record<string, unknown>) =>
+      config.engine_refresh_min_interval_seconds,
+    expected: 300,
+  },
+  {
+    name: 'attribution_audit_sample_pct',
+    select: (config: Record<string, unknown>) => config.attribution_audit_sample_pct,
+    expected: 10,
+  },
+  {
+    name: 'build_progress_halt',
+    select: (config: Record<string, unknown>) => config.build_progress_halt,
+    expected: {
+      enabled: true,
+      attempt_ceiling: 30,
+      dispatch_ceiling: 20,
+    },
+  },
+  {
+    name: 'kickback_escalation',
+    select: (config: Record<string, unknown>) => config.kickback_escalation,
+    expected: { enabled: true },
+  },
+  {
+    name: 'retry_routing',
+    select: (config: Record<string, unknown>) => config.retry_routing,
+    expected: { enabled: true },
+  },
+];
+
 describe('loadMergedConfig precedence', () => {
   it.each(PRECEDENCE_CASES)(
     'preserves user-only $name when the project omits it',
@@ -151,4 +199,37 @@ describe('loadMergedConfig precedence', () => {
       expect(result.ok ? select(result.config) : result).toEqual(projectExpected);
     },
   );
+
+  it.each(DEFAULT_CASES)(
+    'materializes the effective $name default when both scopes omit it',
+    async ({ select, expected }) => {
+      const projectRoot = await makeConfigPair(undefined);
+      const result = await loadMergedConfig(projectRoot);
+
+      expect(result.ok ? select(result.config) : result).toEqual(expected);
+    },
+  );
+
+  it('emits a project normalization warning only once across both validation passes', async () => {
+    const projectRoot = await makeConfigPair(
+      undefined,
+      'attribution_audit_sample_pct: 150\n',
+    );
+
+    const result = await loadMergedConfig(projectRoot);
+
+    expect(
+      result.ok
+        ? {
+            value: result.config.attribution_audit_sample_pct,
+            warnings: result.warnings,
+          }
+        : result,
+    ).toEqual({
+      value: 100,
+      warnings: [
+        'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
+      ],
+    });
+  });
 });
