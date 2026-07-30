@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -272,6 +272,70 @@ describe('loadMergedConfig precedence', () => {
       warnings: [
         'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
       ],
+    });
+  });
+
+  it('rejects malformed project retry_routing before it can expose the user value', async () => {
+    const userYaml = 'retry_routing:\n  enabled: false\n';
+    const projectYaml = 'retry_routing:\n  enabled: banana\n';
+    const projectRoot = await makeConfigPair(userYaml, projectYaml);
+
+    const result = await loadMergedConfig(projectRoot);
+    const [projectAfter, userAfter] = await Promise.all([
+      readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'),
+      readFile(userConfigFixture.path, 'utf8'),
+    ]);
+
+    expect({
+      outcome: result.ok
+        ? { effective: result.config.retry_routing }
+        : {
+            type: result.error.type,
+            message: result.error.message,
+          },
+      sources: { projectAfter, userAfter },
+    }).toEqual({
+      outcome: {
+        type: 'validation_error',
+        message: 'retry_routing.enabled must be a boolean',
+      },
+      sources: {
+        projectAfter: projectYaml,
+        userAfter: userYaml,
+      },
+    });
+  });
+
+  it('keeps a normalized project attribution clamp authoritative over the user value', async () => {
+    const userYaml = 'attribution_audit_sample_pct: 25\n';
+    const projectYaml = 'attribution_audit_sample_pct: 150\n';
+    const projectRoot = await makeConfigPair(userYaml, projectYaml);
+
+    const result = await loadMergedConfig(projectRoot);
+    const [projectAfter, userAfter] = await Promise.all([
+      readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'),
+      readFile(userConfigFixture.path, 'utf8'),
+    ]);
+
+    expect({
+      outcome: result.ok
+        ? {
+            value: result.config.attribution_audit_sample_pct,
+            warnings: result.warnings,
+          }
+        : result,
+      sources: { projectAfter, userAfter },
+    }).toEqual({
+      outcome: {
+        value: 100,
+        warnings: [
+          'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
+        ],
+      },
+      sources: {
+        projectAfter: projectYaml,
+        userAfter: userYaml,
+      },
     });
   });
 });
