@@ -41,7 +41,10 @@ import {
   validateRegisteredProviderSelections,
 } from './engine/provider-selection.js';
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
-import { Conductor } from './engine/conductor.js';
+import {
+  Conductor,
+  type OperatorParkedTermination,
+} from './engine/conductor.js';
 import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
@@ -1064,7 +1067,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     const parked = await isOperatorParked(projectRoot, item.slug);
     if (parked) {
       featureLog(`re-kick resume ${item.slug}: skipped — operator-parked (sentinel preserved)`);
-      return;
+      const termination: OperatorParkedTermination = {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      };
+      return termination;
     }
     const resume = await resumeRebaseFirst({
       worktreePath: wt.path,
