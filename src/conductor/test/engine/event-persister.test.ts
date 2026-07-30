@@ -244,6 +244,144 @@ describe('EventPersister', () => {
     }
   });
 
+  it('persists an active interval on the first matching parallel terminal event', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(2_000, 2_075));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({
+      type: 'parallel_completed',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records[1].activeInterval).toEqual({ startedAtMs: 2_000, durationMs: 75 });
+  });
+
+  it('closes a failed parallel group once when several branches fail', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(3_000, 3_040));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({
+      type: 'parallel_failure',
+      step: 'manual_test',
+      branch: 'manual_test',
+      error: 'manual test failed',
+    });
+    await emitter.emit({
+      type: 'parallel_failure',
+      step: 'manual_test',
+      branch: 'prd_audit',
+      error: 'PRD audit failed',
+    });
+    persister.stop();
+
+    const failures = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'parallel_failure');
+    expect(failures.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 3_000, durationMs: 40 },
+      undefined,
+    ]);
+  });
+
+  it('tracks overlapping serial and parallel records independently', async () => {
+    const persister = new EventPersister(
+      eventsPath,
+      emitter,
+      scriptedClock(100, 120, 150, 180),
+    );
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'manual_test', index: 0 });
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({
+      type: 'parallel_completed',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    await emitter.emit({ type: 'step_completed', step: 'manual_test', status: 'done' });
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'parallel_completed' || record.type === 'step_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 120, durationMs: 30 },
+      { startedAtMs: 100, durationMs: 80 },
+    ]);
+  });
+
+  it('does not attach a second interval to duplicate parallel terminal events', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(4_000, 4_010));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    const terminal = {
+      type: 'parallel_completed',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    } satisfies ConductorEvent;
+    await emitter.emit(terminal);
+    await emitter.emit(terminal);
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'parallel_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      { startedAtMs: 4_000, durationMs: 10 },
+      undefined,
+    ]);
+  });
+
+  it('preserves an unmatched parallel start as detectable incomplete evidence', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(5_000));
+    persister.start();
+
+    await emitter.emit({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+    persister.stop();
+
+    const record = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toMatchObject({
+      type: 'parallel_started',
+      step: 'manual_test',
+      branches: ['manual_test', 'prd_audit'],
+    });
+  });
+
   it('persists provider attempts, fallback diagnostics, and completed-step attribution', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();

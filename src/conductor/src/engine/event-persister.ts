@@ -36,6 +36,7 @@ export class EventPersister {
   private readonly handler: EventHandler;
   private readonly clock: IntervalClock;
   private readonly openSteps = new Map<string, number>();
+  private readonly openGroups = new Map<string, number>();
   private dirEnsured = false;
 
   constructor(
@@ -79,15 +80,21 @@ export class EventPersister {
       const step = 'step' in event && typeof event.step === 'string'
         ? event.step
         : undefined;
-      const startedAtMs = step !== undefined
-        ? this.openSteps.get(step)
-        : undefined;
-      const closesStep = startedAtMs !== undefined && (
+      const closesStep = (
         event.type === 'step_completed'
         || event.type === 'step_failed'
       );
+      const closesGroup = (
+        event.type === 'parallel_completed'
+        || event.type === 'parallel_failure'
+      );
+      const openIntervals = closesGroup ? this.openGroups : this.openSteps;
+      const startedAtMs = step !== undefined && (closesStep || closesGroup)
+        ? openIntervals.get(step)
+        : undefined;
       const activeInterval = closesStep
-        ? {
+        || closesGroup
+        ? startedAtMs === undefined ? undefined : {
             startedAtMs,
             durationMs: Math.max(0, this.clock.nowMs() - startedAtMs),
           }
@@ -100,8 +107,10 @@ export class EventPersister {
       appendFileSync(this.filePath, record + '\n', 'utf-8');
       if (event.type === 'step_started') {
         this.openSteps.set(event.step, this.clock.nowMs());
-      } else if (closesStep && step !== undefined) {
-        this.openSteps.delete(step);
+      } else if (event.type === 'parallel_started') {
+        this.openGroups.set(event.step, this.clock.nowMs());
+      } else if (startedAtMs !== undefined && step !== undefined) {
+        openIntervals.delete(step);
       }
     } catch (err) {
       throw new EventPersistError(this.filePath, err);
