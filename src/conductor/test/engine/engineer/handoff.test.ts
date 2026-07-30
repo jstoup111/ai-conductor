@@ -137,7 +137,11 @@ describe('openSpecPr', () => {
 
     expect(trace).toEqual([
       { command: 'git', args: ['push', '-u', 'origin', branch], cwd: tempDir },
-      { command: 'gh', args: ['pr', 'create', '--head', branch, '--fill'], cwd: tempDir },
+      {
+        command: 'gh',
+        args: ['pr', 'create', '--head', branch, '--fill', '--label', 'spec'],
+        cwd: tempDir,
+      },
     ]);
   });
 

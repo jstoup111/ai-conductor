@@ -199,8 +199,9 @@ conduct-ts engineer handoff \
   --source-ref <owner/repo#N>
 ```
 
-`handoff` runs `git push -u origin <branch>` and `gh pr create` from inside the per-idea worktree,
-so the PR opens for `spec/<slug>`. On success you should see one of:
+`handoff` runs `git push -u origin <branch>` and `gh pr create --label spec` from inside the
+per-idea worktree, so the PR opens for `spec/<slug>` with the `spec` label. On success you should
+see one of:
 
 | Output | Meaning |
 | --- | --- |

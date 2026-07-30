@@ -178,7 +178,11 @@ describe('engineer handoff — branch evidence recording on local-commit/pr-skip
 
     expect(trace).toEqual([
       { command: 'git', args: ['push', '-u', 'origin', branch], cwd: worktree },
-      { command: 'gh', args: ['pr', 'create', '--head', branch, '--fill'], cwd: worktree },
+      {
+        command: 'gh',
+        args: ['pr', 'create', '--head', branch, '--fill', '--label', 'spec'],
+        cwd: worktree,
+      },
     ]);
   });
 
