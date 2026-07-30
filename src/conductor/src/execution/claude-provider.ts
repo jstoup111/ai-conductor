@@ -4,6 +4,7 @@ import {
   epochAnchoredMonotonicClock,
   observeInterval,
   type IntervalClock,
+  type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 
@@ -553,10 +554,7 @@ export class ClaudeProvider implements LLMProvider {
         }),
     );
 
-    const completion = this.classifyCompletion(observed.value, true);
-    return completion.success
-      ? { ...completion, observedIntervals: [observed.interval] }
-      : completion;
+    return this.classifyCompletion(observed.value, true, observed.interval);
   }
 
   /**
@@ -587,17 +585,19 @@ export class ClaudeProvider implements LLMProvider {
 
     // Capture while inheriting output so classification remains available only
     // after the visibly streamed process completes.
-    const result = await this.runClaude(args, {
-      stdin: options.interactive ? 'inherit' : 'ignore',
-      reject: false,
-      env: this.buildEnv(options),
-      cwd: options.cwd,
-      diagnosticLog: options.diagnosticLog,
-      onActivity: options.onActivity,
-      onSpawn: options.onSpawn,
-    });
+    const observed = await observeInterval(this.intervalClock, () =>
+      this.runClaude(args, {
+        stdin: options.interactive ? 'inherit' : 'ignore',
+        reject: false,
+        env: this.buildEnv(options),
+        cwd: options.cwd,
+        diagnosticLog: options.diagnosticLog,
+        onActivity: options.onActivity,
+        onSpawn: options.onSpawn,
+      }),
+    );
 
-    return this.classifyCompletion(result, false);
+    return this.classifyCompletion(observed.value, false, observed.interval);
   }
 
   private classifyCompletion(
@@ -608,6 +608,7 @@ export class ClaudeProvider implements LLMProvider {
       code?: string;
     },
     jsonOutput: boolean,
+    observedInterval: ObservedInterval,
   ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
@@ -632,6 +633,7 @@ export class ClaudeProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
+        observedIntervals: [observedInterval],
       };
     }
 
@@ -677,6 +679,7 @@ export class ClaudeProvider implements LLMProvider {
       tokenUsage: parsed.tokenUsage,
       waitSeconds,
       deadline,
+      observedIntervals: [observedInterval],
     };
   }
 
