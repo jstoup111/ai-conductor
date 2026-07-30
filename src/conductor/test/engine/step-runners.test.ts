@@ -2979,6 +2979,26 @@ TIER: M`,
       return git;
     }
 
+    it('preserves observed intervals through the build-review scalar adapter', async () => {
+      const observedIntervals = [{ startedAtMs: 500, durationMs: 45 }];
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: '{"verdict":"PASS"}',
+        exitCode: 0,
+        observedIntervals,
+      });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        { gitRunner: scriptedGit(), planPath },
+      );
+
+      const result = await runner.run('build_review', emptyState);
+
+      expect(result.observedIntervals?.[0]).toBe(observedIntervals[0]);
+    });
+
     it('dispatches with a fresh uuid and resume:false, never the constructor session', async () => {
       const invoke = vi.fn().mockResolvedValue({ success: true, output: '{"verdict":"PASS"}', exitCode: 0 });
       const provider: LLMProvider = { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) };

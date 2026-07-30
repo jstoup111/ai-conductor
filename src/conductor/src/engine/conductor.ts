@@ -468,6 +468,7 @@ export interface StepRunResult {
 export interface SpotAuditDispatchResult {
   success: boolean;
   output?: string;
+  observedIntervals?: readonly ObservedInterval[];
   authFailure?: boolean;
   authentication?: AuthenticationReadiness;
 }
@@ -479,6 +480,9 @@ export function toSpotAuditVerifierResult(
   return {
     success: result.success,
     output: result.output ?? '',
+    ...(result.observedIntervals
+      ? { observedIntervals: result.observedIntervals }
+      : {}),
     ...(result.authFailure !== undefined ? { authFailure: result.authFailure } : {}),
     ...(result.authentication ? { authentication: result.authentication } : {}),
   };

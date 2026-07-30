@@ -1756,9 +1756,13 @@ export class DefaultStepRunner implements StepRunner {
     }
     this.callCount++;
     const withProviderMetadata = (r: StepRunResult): StepRunResult =>
-      providerResult
-        ? {
-            ...r,
+      ({
+        ...r,
+        ...(result.observedIntervals
+          ? { observedIntervals: result.observedIntervals }
+          : {}),
+        ...(providerResult
+          ? {
             ...this.providerAttribution(providerResult),
             ...(providerResult.resolvedModel
               ? { model: providerResult.resolvedModel }
@@ -1767,7 +1771,8 @@ export class DefaultStepRunner implements StepRunner {
               ? { tokenUsage: providerResult.tokenUsage }
               : {}),
           }
-        : r;
+          : {}),
+      });
     const finalize = (r: StepRunResult): StepRunResult =>
       withBaseFreshness(withProviderMetadata(r));
 

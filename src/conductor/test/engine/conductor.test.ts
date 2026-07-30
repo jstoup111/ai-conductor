@@ -134,6 +134,74 @@ describe('engine/conductor', () => {
     });
   });
 
+  it('preserves observed intervals through the spot-audit verifier adapter', async () => {
+    const observedIntervals = [{ startedAtMs: 600, durationMs: 50 }];
+    const module = await import('../../src/engine/conductor.js') as {
+      toSpotAuditVerifierResult?: (result: unknown) => {
+        observedIntervals?: readonly unknown[];
+      };
+    };
+
+    const result = module.toSpotAuditVerifierResult?.({
+      success: false,
+      output: 'verifier unavailable',
+      observedIntervals,
+    });
+
+    expect(result?.observedIntervals?.[0]).toBe(observedIntervals[0]);
+  });
+
+  it('preserves observed intervals through a successful grouped validation branch', async () => {
+    const observedIntervals = [{ startedAtMs: 700, durationMs: 55 }];
+    const stepRunner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true, observedIntervals }),
+    };
+    const member: GroupMember = {
+      name: 'manual_test',
+      skill: 'manual-test',
+      outcome: { kind: 'skipped' },
+    };
+
+    const outcome = await runGroupBranch(member, {}, { stepRunner }, 1);
+
+    expect((outcome as { observedIntervals?: readonly unknown[] }).observedIntervals?.[0])
+      .toBe(observedIntervals[0]);
+  });
+
+  it('preserves terminal intervals after a grouped session-expired retry', async () => {
+    const expiredIntervals = [{ startedAtMs: 800, durationMs: 15 }];
+    const terminalIntervals = [{ startedAtMs: 900, durationMs: 60 }];
+    const run = vi.fn()
+      .mockResolvedValueOnce({
+        success: false,
+        sessionExpired: true,
+        observedIntervals: expiredIntervals,
+      })
+      .mockResolvedValueOnce({
+        success: false,
+        output: 'terminal failure',
+        observedIntervals: terminalIntervals,
+      });
+    const member: GroupMember = {
+      name: 'manual_test',
+      skill: 'manual-test',
+      outcome: { kind: 'skipped' },
+    };
+
+    const outcome = await runGroupBranch(member, {}, { stepRunner: { run } }, 1);
+
+    expect({
+      kind: outcome.kind,
+      calls: run.mock.calls.length,
+      interval: (outcome as { observedIntervals?: readonly unknown[] })
+        .observedIntervals?.[0],
+    }).toEqual({
+      kind: 'no-verdict',
+      calls: 2,
+      interval: terminalIntervals[0],
+    });
+  });
+
   it('does not re-open a mocked-success SHIP round at the finish fence', async () => {
     const conductor = new Conductor({
       stateFilePath: statePath,
