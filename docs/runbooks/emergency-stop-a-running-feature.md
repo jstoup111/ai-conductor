@@ -87,9 +87,11 @@ A park is honored in two places: the daemon re-checks it immediately before ever
 (closing the selection-to-dispatch race), and the HALT re-kick sweep checks it **first**, ahead
 of everything else, so a parked feature survives every base-branch advance.
 
-> **Known limitation.** A park does not interrupt a dispatch that has already started. The
-> in-flight build runs to its own conclusion; the park takes effect at the next dispatch
-> boundary. To stop work already in progress, continue to step 2.
+For an in-flight feature, parking drains exactly the active scheduling unit. A serial step reaches
+its natural terminal status; a parallel group lets every started member settle and completes its
+join. After those statuses are durable, the daemon logs the last settled boundary and starts no
+later step or group. Parking does not cancel work inside the active unit and does not manufacture a
+HALT. If you must interrupt the active unit itself, continue to step 2.
 
 ### 2. Pause or stop the daemon
 
