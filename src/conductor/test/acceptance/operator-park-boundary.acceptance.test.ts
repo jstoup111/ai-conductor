@@ -259,10 +259,7 @@ describe('boundary-aware operator parking acceptance', () => {
     expect(outcome).toMatchObject({ slug: FEATURE_SLUG, status: 'parked' });
     expect(readOutcome).not.toHaveBeenCalled();
     expect(markProcessed).not.toHaveBeenCalled();
-    expect(teardownWorktree).toHaveBeenCalledWith(
-      expect.objectContaining({ branch: 'feat/boundary' }),
-      true,
-    );
+    expect(teardownWorktree).not.toHaveBeenCalled();
   });
 
   it('FR-6: same-process unpark resumes from durable state without rerunning the settled unit', async () => {
@@ -279,6 +276,7 @@ describe('boundary-aware operator parking acceptance', () => {
     const deps: DaemonDeps = {
       discoverBacklog: async () => [item],
       isParked: async () => durablePark,
+      isHalted: async () => false,
       runFeature: async () => {
         featureRuns += 1;
         if (!settled) {
@@ -353,6 +351,54 @@ describe('boundary-aware operator parking acceptance', () => {
     expect(resumedRuns).toBe(1);
     expect(settledDispatches).toBe(1);
     expect(restartedRun.processed.map((outcome) => outcome.status)).toEqual(['done']);
+  });
+
+  it('FR-6: resume preserves done/skipped state while failed and stale units remain selectable', async () => {
+    const root = await makeRoot('operator-park-state-resume-');
+    const statePath = join(root, 'conduct-state.json');
+    const state = {
+      complexity_tier: 'M',
+      track: 'product',
+      feature_desc: FEATURE_SLUG,
+    } as ConductState;
+    const resolvedBeforeBuild: StepName[] = [
+      'worktree',
+      'memory',
+      'explore',
+      'complexity',
+      'prd',
+      'architecture_diagram',
+      'architecture_review',
+      'stories',
+      'conflict_check',
+      'plan',
+      'coherence_check',
+    ];
+    for (const step of resolvedBeforeBuild) state[step] = 'done';
+    state.acceptance_specs = 'failed';
+    state.build = 'stale';
+    state.wiring_check = 'skipped';
+    await writeState(statePath, state);
+
+    const calls: StepName[] = [];
+    const conductor = makeConductor(
+      root,
+      statePath,
+      {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          return { success: true };
+        }),
+      },
+      { resume: true },
+    );
+
+    await conductor.run();
+
+    expect(calls[0]).toBe('acceptance_specs');
+    expect(calls).toContain('build');
+    expect(calls).not.toContain('memory');
+    expect(calls).not.toContain('wiring_check');
   });
 
   it('FR-9: an interactive run ignores the same repo-root park marker and preserves its ordinary sequence', async () => {
