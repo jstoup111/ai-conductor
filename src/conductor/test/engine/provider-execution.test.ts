@@ -1373,7 +1373,9 @@ describe('executeProviderCandidates', () => {
     });
     const fullSessions = new ProviderSessionScope(
       vi.fn()
-        .mockReturnValueOnce('full-codex-session')
+        .mockReturnValueOnce('full-codex-sol-session')
+        .mockReturnValueOnce('full-codex-terra-session')
+        .mockReturnValueOnce('full-codex-luna-session')
         .mockReturnValueOnce('full-claude-session'),
     );
     const full = await execute?.({
@@ -1398,9 +1400,9 @@ describe('executeProviderCandidates', () => {
         result: partial,
       },
       exhausted: {
-        codexModels: fullCodex.calls
+        codexCalls: fullCodex.calls
           .slice(0, CODEX_MODEL_POLICY.modelFallbackLadder.length)
-          .map(({ model }) => model),
+          .map(({ model, sessionId, resume }) => ({ model, sessionId, resume })),
         claudeCalls: fullClaude.calls,
         sessions: {
           codex: fullSessions.current('codex'),
@@ -1447,7 +1449,11 @@ describe('executeProviderCandidates', () => {
         },
       },
       exhausted: {
-        codexModels: ['gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'],
+        codexCalls: [
+          { model: 'gpt-5.6-sol', sessionId: 'full-codex-sol-session', resume: false },
+          { model: 'gpt-5.6-terra', sessionId: 'full-codex-terra-session', resume: false },
+          { model: 'gpt-5.6-luna', sessionId: 'full-codex-luna-session', resume: false },
+        ],
         claudeCalls: [
           {
             prompt: 'Execute the step.',
@@ -1459,7 +1465,7 @@ describe('executeProviderCandidates', () => {
           },
         ],
         sessions: {
-          codex: { id: 'full-codex-session' },
+          codex: { id: 'full-codex-luna-session' },
           claude: { id: 'full-claude-session' },
         },
         result: {
@@ -1823,6 +1829,42 @@ describe('executeProviderCandidates', () => {
       intervals,
       attemptIntervals: intervals,
     });
+  });
+
+  it('mints a new cold-start session when Claude falls back from Fable to Opus', async () => {
+    const calls: Array<Pick<InvokeOptions, 'model' | 'sessionId' | 'resume'>> = [];
+    const claude: LLMProvider = {
+      invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+        calls.push({
+          model: options.model,
+          sessionId: options.sessionId,
+          resume: options.resume,
+        });
+        return options.model === 'fable'
+          ? { success: false, output: 'Fable unavailable', exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'Opus completed', exitCode: 0 };
+      }),
+      invokeInteractive: vi.fn(async () => {}),
+    };
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['claude'],
+      runtimes: new ProviderRuntimeSet([runtime('claude', claude)]),
+      sessions: new ProviderSessionScope(
+        vi.fn()
+          .mockReturnValueOnce('fable-session-id')
+          .mockReturnValueOnce('opus-session-id'),
+      ),
+      modelOverride: 'fable',
+      options: { prompt: 'Execute the step.', cwd: '/workspace/feature' },
+    });
+
+    expect(calls).toEqual([
+      { model: 'fable', sessionId: 'fable-session-id', resume: false },
+      { model: 'opus', sessionId: 'opus-session-id', resume: false },
+    ]);
   });
 
   it('keeps provider intervals scoped to each retry result', async () => {

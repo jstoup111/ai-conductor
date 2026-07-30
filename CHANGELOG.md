@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Model fallback attempts now mint a fresh provider session, preventing a fallback model from receiving a session ID that is already active on the prior model and causing the daemon to spin on repeated `sessionExpired` retries ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Claude monthly-spend exhaustion now enters the existing model/provider fallback ladder instead of being treated as an ordinary step failure and retrying the unavailable host until HALT ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Keep daemon feature worktrees intact through `finish` and open-PR review by reserving automatic cleanup for the mergeable sweep after the shipped record reaches the default branch; interactive local-merge and confirmed-discard outcomes retain their proof-gated cleanup paths ([implementation PR #1200](https://github.com/jstoup111/ai-conductor/pull/1200)).
 - Daemon triage now treats `.pipeline/phase-active` and daemon status as advisory context that can warn but never block read-only recovery diagnosis, while every recovery mutation still requires individual operator approval ([implementation PR #1193](https://github.com/jstoup111/ai-conductor/pull/1193)).
