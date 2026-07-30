@@ -38,6 +38,46 @@ export interface KpiProviderCostFields {
   costUnmetered: number;
 }
 
+export interface KpiTimeFields {
+  state: 'measured';
+  activeMs: number;
+  providerActiveMs: number;
+  noProviderActiveMs: number;
+}
+
+/**
+ * Parse the independently rendered `## Time` section. Cost fields are never
+ * consulted, so timing remains reportable when cost evidence is absent.
+ */
+export function parseTimeBlock(content: string): KpiTimeFields | null {
+  const match = /^## Time\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
+  if (!match) return null;
+
+  const body = match[1];
+  const num = (name: string): number | undefined => {
+    const field = new RegExp(`^${name}:\\s*([\\-0-9.]+)`, 'm').exec(body);
+    return field ? Number(field[1]) : undefined;
+  };
+  const activeMs = num('active_ms');
+  const providerActiveMs = num('provider_active_ms');
+  const noProviderActiveMs = num('no_provider_active_ms');
+
+  if (
+    !/^state:\s*measured\s*$/m.test(body) ||
+    activeMs === undefined ||
+    providerActiveMs === undefined ||
+    noProviderActiveMs === undefined ||
+    ![activeMs, providerActiveMs, noProviderActiveMs].every(
+      (value) => Number.isFinite(value) && value >= 0,
+    ) ||
+    providerActiveMs + noProviderActiveMs !== activeMs
+  ) {
+    return null;
+  }
+
+  return { state: 'measured', activeMs, providerActiveMs, noProviderActiveMs };
+}
+
 /**
  * Tolerant parser for the `## Cost` block emitted by
  * renderShippedRecordWithCost. Accepts reasonable formatting variance (extra
@@ -123,6 +163,7 @@ function parseProviderCostFields(body: string): Record<string, KpiProviderCostFi
 interface FeatureKpi {
   slug: string;
   cost: KpiCostFields | null;
+  time: KpiTimeFields | null;
   /**
    * Engine build that shipped this feature. `unknown` for records written
    * before engine-version stamping — reported explicitly rather than omitted
@@ -151,7 +192,12 @@ async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
     const parsed = parseShippedRecord(content);
     const slug = 'slug' in parsed ? parsed.slug : file.replace(/\.md$/, '');
     const engineVersion = ('engineVersion' in parsed ? parsed.engineVersion : undefined) ?? 'unknown';
-    features.push({ slug, cost: parseCostBlock(content), engineVersion });
+    features.push({
+      slug,
+      cost: parseCostBlock(content),
+      time: parseTimeBlock(content),
+      engineVersion,
+    });
   }
 
   return features;
@@ -178,11 +224,26 @@ export async function renderKpi(root: string): Promise<string> {
   let totalCostUsd = 0;
   let counted = 0;
   let costCounted = 0;
+  let timeCounted = 0;
+  let totalActiveMs = 0;
+  let totalProviderActiveMs = 0;
+  let totalNoProviderActiveMs = 0;
 
   for (const feature of features) {
+    const timing = feature.time
+      ? ` time=${feature.time.state} active_ms=${feature.time.activeMs}` +
+        ` provider_active_ms=${feature.time.providerActiveMs}` +
+        ` no_provider_active_ms=${feature.time.noProviderActiveMs}`
+      : '';
+    if (feature.time) {
+      timeCounted += 1;
+      totalActiveMs += feature.time.activeMs;
+      totalProviderActiveMs += feature.time.providerActiveMs;
+      totalNoProviderActiveMs += feature.time.noProviderActiveMs;
+    }
     if (!feature.cost) {
       lines.push(
-        `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)`,
+        `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)${timing}`,
       );
       continue;
     }
@@ -201,7 +262,7 @@ export async function renderKpi(root: string): Promise<string> {
         `tokens=${tokens} cache_read=${feature.cost.cacheRead} ` +
         `cache_creation=${feature.cost.cacheCreation} dispatches=${feature.cost.dispatches} ` +
         `retries=${feature.cost.retries} halts=${feature.cost.halts} ` +
-        `duration_ms=${feature.cost.unmeteredDurationMs} cost_usd=${cost}${marker}`,
+        `duration_ms=${feature.cost.unmeteredDurationMs} cost_usd=${cost}${marker}${timing}`,
     );
     for (const [provider, providerCost] of Object.entries(feature.cost.providers)) {
       const providerTokens = providerCost.input + providerCost.output;
@@ -229,10 +290,17 @@ export async function renderKpi(root: string): Promise<string> {
   const aggregateCost = costCounted > 0
     ? Math.round(totalCostUsd * 10000) / 10000
     : 'unavailable';
-  lines.push(
+  let aggregate =
     `Aggregate / trend across ${counted} feature(s): total tokens=${totalTokens} ` +
-      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`,
-  );
+      `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`;
+  if (timeCounted > 0) {
+    aggregate +=
+      `; timing measured=${timeCounted}` +
+      ` avg_active_ms=${totalActiveMs / timeCounted}` +
+      ` avg_provider_active_ms=${totalProviderActiveMs / timeCounted}` +
+      ` avg_no_provider_active_ms=${totalNoProviderActiveMs / timeCounted}`;
+  }
+  lines.push(aggregate);
 
   return lines.join('\n') + '\n';
 }

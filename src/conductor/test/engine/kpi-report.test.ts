@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { parseCostBlock, renderKpi } from '../../src/engine/kpi-report.js';
+import { parseCostBlock, parseTimeBlock, renderKpi } from '../../src/engine/kpi-report.js';
 
 let root: string;
 
@@ -106,7 +106,46 @@ describe('parseCostBlock', () => {
   });
 });
 
+describe('parseTimeBlock', () => {
+  it('does not classify an impossible elapsed-time partition as measured', () => {
+    expect(parseTimeBlock(
+      '## Time\nstate: measured\nactive_ms: 100\nprovider_active_ms: 70\nno_provider_active_ms: 40\n',
+    )).toBeNull();
+  });
+});
+
 describe('renderKpi', () => {
+  it('reports measured timing partitions and measured-only aggregate averages', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(root, '.docs/shipped/feat-a.md'),
+      record('feat-a', COST_LINES) +
+        '\n## Time\nstate: measured\nactive_ms: 1200\nprovider_active_ms: 800\nno_provider_active_ms: 400\n',
+    );
+    await writeFile(
+      join(root, '.docs/shipped/feat-b.md'),
+      record('feat-b', COST_LINES) +
+        '\n## Time\nstate: measured\nactive_ms: 800\nprovider_active_ms: 200\nno_provider_active_ms: 600\n',
+    );
+    await writeFile(join(root, '.docs/shipped/legacy.md'), record('legacy', COST_LINES));
+
+    const report = await renderKpi(root);
+
+    expect(report).toContain(
+      '- feat-a: engine=unknown input=1000 output=200 tokens=1200 cache_read=0 ' +
+        'cache_creation=0 dispatches=3 retries=0 halts=0 duration_ms=0 cost_usd=0.1 ' +
+        'time=measured active_ms=1200 provider_active_ms=800 no_provider_active_ms=400\n' +
+        '- feat-b: engine=unknown input=1000 output=200 tokens=1200 cache_read=0 ' +
+        'cache_creation=0 dispatches=3 retries=0 halts=0 duration_ms=0 cost_usd=0.1 ' +
+        'time=measured active_ms=800 provider_active_ms=200 no_provider_active_ms=600\n' +
+        '- legacy: engine=unknown input=1000 output=200 tokens=1200 cache_read=0 ' +
+        'cache_creation=0 dispatches=3 retries=0 halts=0 duration_ms=0 cost_usd=0.1\n' +
+        '\nAggregate / trend across 3 feature(s): total tokens=3600 ' +
+        '(input=3000, output=600), total cost_usd=0.3; timing measured=2 ' +
+        'avg_active_ms=1000 avg_provider_active_ms=500 avg_no_provider_active_ms=500',
+    );
+  });
+
   it('renders per-provider attribution and cache-related Cost fields', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(
