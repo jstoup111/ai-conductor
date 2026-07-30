@@ -122,6 +122,47 @@ describe('conductor opens a draft implementation PR at SHIP-phase start', () => 
     expect(gitCalls.filter((c) => c[0] === 'push')).toHaveLength(1);
   });
 
+  it('uses the daemon caller worktree branch when persisted state lacks it', async () => {
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        acceptance_specs: 'done',
+        build: 'done',
+        build_review: 'done',
+        wiring_check: 'done',
+        test_suite: 'done',
+        feature_desc: 'widget import flow',
+      }),
+      'utf8',
+    );
+    const { gh, git, ghCalls } = fakes();
+    const runner: StepRunner = {
+      run: async (): Promise<StepRunResult> => ({ success: false, output: 'stop after first SHIP dispatch' }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      config: {} as never,
+      fromStep: 'manual_test',
+      mode: 'default',
+      daemon: true,
+      gh,
+      git,
+      baseBranch: 'main',
+      worktreeBranch: BRANCH,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    const create = ghCalls.find((call) => call[1] === 'create');
+    const head = create?.[create.indexOf('--head') + 1];
+    expect(head).toBe(BRANCH);
+  });
+
   it('does not publish while the run is still in BUILD-phase steps', async () => {
     await writeFile(statePath, JSON.stringify({ plan: 'done', worktree_branch: BRANCH }), 'utf8');
     const { gh, git, ghCalls, gitCalls } = fakes();
