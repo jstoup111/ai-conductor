@@ -90,4 +90,57 @@ describe('deterministic BUILD verification group', () => {
       test_suite: 'done',
     });
   });
+
+  it('uses the shared concurrency cap to run native checks in declared order', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-cap-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({ build: 'done' }));
+
+    const timeline: string[] = [];
+    const stepRunner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'wiring_check') {
+          timeline.push('wiring:start');
+          timeline.push('wiring:end');
+          return { success: true };
+        }
+        if (step === 'build_review') {
+          timeline.push('review:start');
+          return { success: false, output: 'stop after assertion boundary' };
+        }
+        throw new Error(`unexpected step dispatch: ${step}`);
+      }),
+    };
+    const verifier = {
+      inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+      ensure: vi.fn(async () => {
+        timeline.push('suite:start');
+        timeline.push('suite:end');
+        return { status: 'REUSED' as const, evidence: {} as never };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      maxRetries: 1,
+      config: { validation_concurrency: 1 },
+      fullSuiteVerifier: verifier,
+      onRecovery: async () => 'quit',
+    });
+
+    await conductor.run();
+
+    expect(timeline).toEqual([
+      'wiring:start',
+      'wiring:end',
+      'suite:start',
+      'suite:end',
+      'review:start',
+    ]);
+  });
 });
