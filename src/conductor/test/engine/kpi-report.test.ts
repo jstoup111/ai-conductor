@@ -110,11 +110,67 @@ describe('parseTimeBlock', () => {
   it('does not classify an impossible elapsed-time partition as measured', () => {
     expect(parseTimeBlock(
       '## Time\nstate: measured\nactive_ms: 100\nprovider_active_ms: 70\nno_provider_active_ms: 40\n',
-    )).toBeNull();
+    )).toEqual({ state: 'partial', activeMs: 100 });
   });
 });
 
 describe('renderKpi', () => {
+  it('reports historical and corrupt timing explicitly without polluting measured averages', async () => {
+    await mkdir(join(root, '.docs/shipped'), { recursive: true });
+    const fixtures: Record<string, string> = {
+      measured: 'state: measured\nactive_ms: 100\nprovider_active_ms: 60\nno_provider_active_ms: 40\nfuture_work_ms: 900\n',
+      partial: 'state: partial\nactive_ms: 80\n',
+      unavailable: 'state: unavailable\n',
+      malformed: 'state: measured\nactive_ms: nope\nprovider_active_ms: 17\nno_provider_active_ms: 13\n',
+      missing: 'state: measured\nactive_ms: 100\nno_provider_active_ms: 7\n',
+    };
+    for (const [slug, time] of Object.entries(fixtures)) {
+      await writeFile(
+        join(root, `.docs/shipped/${slug}.md`),
+        record(slug, COST_LINES) + `\n## Time\n${time}`,
+      );
+    }
+    await writeFile(join(root, '.docs/shipped/legacy.md'), record('legacy', COST_LINES));
+    await writeFile(
+      join(root, '.docs/shipped/mixed-version.md'),
+      record('mixed-version', COST_LINES, '20260701T000000Z-oldengine'),
+    );
+
+    const report = await renderKpi(root);
+    const featureLines = report.split('\n').filter((line) => line.startsWith('- '));
+    const timingBySlug = Object.fromEntries(featureLines.map((line) => {
+      const slug = /^- ([^:]+):/.exec(line)?.[1] ?? '';
+      return [slug, line.slice(line.indexOf('time='))];
+    }));
+    const aggregate = report.split('\n').find((line) => line.startsWith('Aggregate')) ?? '';
+
+    expect({
+      timingBySlug,
+      costPreserved: featureLines.every((line) => /tokens=1200.*cost_usd=0\.1/.test(line)),
+      mixedVersionPreserved: featureLines.some(
+        (line) => line.includes('mixed-version: engine=20260701T000000Z-oldengine'),
+      ),
+      aggregate,
+    }).toEqual({
+      timingBySlug: {
+        measured: 'time=measured active_ms=100 provider_active_ms=60 no_provider_active_ms=40',
+        partial: 'time=partial active_ms=80',
+        unavailable: 'time=unavailable',
+        malformed: 'time=partial',
+        missing: 'time=partial active_ms=100',
+        legacy: 'time=unavailable',
+        'mixed-version': 'time=unavailable',
+      },
+      costPreserved: true,
+      mixedVersionPreserved: true,
+      aggregate:
+        'Aggregate / trend across 7 feature(s): total tokens=8400 ' +
+        '(input=7000, output=1400), total cost_usd=0.7; timing measured=1 ' +
+        'partial=3 unavailable=3 avg_active_ms=100 avg_provider_active_ms=60 ' +
+        'avg_no_provider_active_ms=40',
+    });
+  });
+
   it('reports measured timing partitions and measured-only aggregate averages', async () => {
     await mkdir(join(root, '.docs/shipped'), { recursive: true });
     await writeFile(
@@ -139,9 +195,9 @@ describe('renderKpi', () => {
         'cache_creation=0 dispatches=3 retries=0 halts=0 duration_ms=0 cost_usd=0.1 ' +
         'time=measured active_ms=800 provider_active_ms=200 no_provider_active_ms=600\n' +
         '- legacy: engine=unknown input=1000 output=200 tokens=1200 cache_read=0 ' +
-        'cache_creation=0 dispatches=3 retries=0 halts=0 duration_ms=0 cost_usd=0.1\n' +
+        'cache_creation=0 dispatches=3 retries=0 halts=0 duration_ms=0 cost_usd=0.1 time=unavailable\n' +
         '\nAggregate / trend across 3 feature(s): total tokens=3600 ' +
-        '(input=3000, output=600), total cost_usd=0.3; timing measured=2 ' +
+        '(input=3000, output=600), total cost_usd=0.3; timing measured=2 partial=0 unavailable=1 ' +
         'avg_active_ms=1000 avg_provider_active_ms=500 avg_no_provider_active_ms=500',
     );
   });

@@ -38,44 +38,48 @@ export interface KpiProviderCostFields {
   costUnmetered: number;
 }
 
-export interface KpiTimeFields {
-  state: 'measured';
-  activeMs: number;
-  providerActiveMs: number;
-  noProviderActiveMs: number;
-}
+export type KpiTimeFields =
+  | {
+      state: 'measured';
+      activeMs: number;
+      providerActiveMs: number;
+      noProviderActiveMs: number;
+    }
+  | { state: 'partial'; activeMs?: number }
+  | { state: 'unavailable' };
 
 /**
  * Parse the independently rendered `## Time` section. Cost fields are never
  * consulted, so timing remains reportable when cost evidence is absent.
  */
-export function parseTimeBlock(content: string): KpiTimeFields | null {
+export function parseTimeBlock(content: string): KpiTimeFields {
   const match = /^## Time\s*$([\s\S]*?)(?=^##\s|(?![\s\S]))/m.exec(content);
-  if (!match) return null;
+  if (!match) return { state: 'unavailable' };
 
   const body = match[1];
   const num = (name: string): number | undefined => {
-    const field = new RegExp(`^${name}:\\s*([\\-0-9.]+)`, 'm').exec(body);
-    return field ? Number(field[1]) : undefined;
+    const field = new RegExp(`^${name}:\\s*([\\-0-9.]+)\\s*$`, 'm').exec(body);
+    const value = field ? Number(field[1]) : undefined;
+    return value !== undefined && Number.isFinite(value) && value >= 0 ? value : undefined;
   };
   const activeMs = num('active_ms');
   const providerActiveMs = num('provider_active_ms');
   const noProviderActiveMs = num('no_provider_active_ms');
 
+  if (/^state:\s*unavailable\s*$/m.test(body)) {
+    return { state: 'unavailable' };
+  }
   if (
-    !/^state:\s*measured\s*$/m.test(body) ||
-    activeMs === undefined ||
-    providerActiveMs === undefined ||
-    noProviderActiveMs === undefined ||
-    ![activeMs, providerActiveMs, noProviderActiveMs].every(
-      (value) => Number.isFinite(value) && value >= 0,
-    ) ||
-    providerActiveMs + noProviderActiveMs !== activeMs
+    /^state:\s*measured\s*$/m.test(body) &&
+    activeMs !== undefined &&
+    providerActiveMs !== undefined &&
+    noProviderActiveMs !== undefined &&
+    providerActiveMs + noProviderActiveMs === activeMs
   ) {
-    return null;
+    return { state: 'measured', activeMs, providerActiveMs, noProviderActiveMs };
   }
 
-  return { state: 'measured', activeMs, providerActiveMs, noProviderActiveMs };
+  return activeMs === undefined ? { state: 'partial' } : { state: 'partial', activeMs };
 }
 
 /**
@@ -163,7 +167,7 @@ function parseProviderCostFields(body: string): Record<string, KpiProviderCostFi
 interface FeatureKpi {
   slug: string;
   cost: KpiCostFields | null;
-  time: KpiTimeFields | null;
+  time: KpiTimeFields;
   /**
    * Engine build that shipped this feature. `unknown` for records written
    * before engine-version stamping — reported explicitly rather than omitted
@@ -225,21 +229,29 @@ export async function renderKpi(root: string): Promise<string> {
   let counted = 0;
   let costCounted = 0;
   let timeCounted = 0;
+  let timePartial = 0;
+  let timeUnavailable = 0;
   let totalActiveMs = 0;
   let totalProviderActiveMs = 0;
   let totalNoProviderActiveMs = 0;
 
   for (const feature of features) {
-    const timing = feature.time
-      ? ` time=${feature.time.state} active_ms=${feature.time.activeMs}` +
+    const timing = feature.time.state === 'measured'
+      ? ` time=measured active_ms=${feature.time.activeMs}` +
         ` provider_active_ms=${feature.time.providerActiveMs}` +
         ` no_provider_active_ms=${feature.time.noProviderActiveMs}`
-      : '';
-    if (feature.time) {
+      : feature.time.state === 'partial'
+        ? ` time=partial${feature.time.activeMs === undefined ? '' : ` active_ms=${feature.time.activeMs}`}`
+        : ' time=unavailable';
+    if (feature.time.state === 'measured') {
       timeCounted += 1;
       totalActiveMs += feature.time.activeMs;
       totalProviderActiveMs += feature.time.providerActiveMs;
       totalNoProviderActiveMs += feature.time.noProviderActiveMs;
+    } else if (feature.time.state === 'partial') {
+      timePartial += 1;
+    } else {
+      timeUnavailable += 1;
     }
     if (!feature.cost) {
       lines.push(
@@ -293,9 +305,10 @@ export async function renderKpi(root: string): Promise<string> {
   let aggregate =
     `Aggregate / trend across ${counted} feature(s): total tokens=${totalTokens} ` +
       `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`;
+  aggregate +=
+    `; timing measured=${timeCounted} partial=${timePartial} unavailable=${timeUnavailable}`;
   if (timeCounted > 0) {
     aggregate +=
-      `; timing measured=${timeCounted}` +
       ` avg_active_ms=${totalActiveMs / timeCounted}` +
       ` avg_provider_active_ms=${totalProviderActiveMs / timeCounted}` +
       ` avg_no_provider_active_ms=${totalNoProviderActiveMs / timeCounted}`;
