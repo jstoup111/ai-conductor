@@ -344,6 +344,42 @@ artifact is byte-identical to the base-branch tip.
 3. Clear `HALT` and `HALT.class` using the next procedure. If the cause remains, verification
    refuses again before dispatch.
 
+**The edit is intentional and operator-approved (e.g. a feature's own `.docs/architecture/<slug>.md`
+was refined mid-build to match what was actually implemented).** The engine has no automatic path
+for this — a feature-authored change never rotates on its own, by design, so there is no default
+action to take here without a human reading the diff first. Do not hand-edit
+`.pipeline/protected-artifact-seal.json` (malformed JSON or a wrong fingerprint silently breaks
+verification for every other artifact in the seal). Instead, review the diff, and only after
+approving it, call the engine's own rotation function so it recomputes real fingerprints instead of
+guessing at them:
+
+```bash
+npx tsx - <<'EOF'
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { rotateProtectedArtifactSeal } from '<projectRoot>/src/conductor/src/engine/protected-artifact-seal.js';
+
+const projectRoot = '<projectRoot>';
+const sealPath = join(projectRoot, '.pipeline/protected-artifact-seal.json');
+const seal = JSON.parse(await readFile(sealPath, 'utf8'));
+
+await rotateProtectedArtifactSeal({
+  projectRoot,
+  seal,
+  toCommit: '<current HEAD sha>',
+  trigger: 'operator-approved-manual-review',
+  paths: ['<path under .docs/... that was reviewed and approved>'],
+});
+EOF
+```
+
+Run from that worktree's `src/conductor` directory (`npx tsx` needs its `node_modules`). This writes
+a new baseline at the given commit and appends a `rebaselines` entry recording the trigger, so the
+override is auditable rather than silent. Never invent a trigger string that implies engine
+automation (`proactive-rebase`, `defensive-history-rewrite` are reserved for the engine's own call
+sites) — use a distinct, honest label like `operator-approved-manual-review` so a later reader can
+tell a human, not the engine, vouched for this rotation.
+
 ### Clear a halt and let the feature resume
 
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
