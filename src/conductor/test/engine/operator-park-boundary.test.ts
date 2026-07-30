@@ -341,6 +341,115 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('joins a configured parallel group before parking at its durable owner boundary', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const alphaStarted = deferred();
+    const betaStarted = deferred();
+    const releaseAlpha = deferred();
+    const releaseBeta = deferred();
+    const alphaSettled = deferred();
+    const parkObserved = deferred();
+    const timeline: string[] = [];
+    let parked = false;
+    let settledMembers = 0;
+    let boundaryObservation:
+      | {
+          event: ConductorEvent;
+          alpha: unknown;
+          beta: unknown;
+          owner: ConductState['memory'];
+        }
+      | undefined;
+    const events = new ConductorEventEmitter();
+    events.on('operator_park_boundary', (event) => {
+      void (async () => {
+        const state = await readState(statePath);
+        if (state.ok) {
+          const raw = state.value as unknown as Record<string, unknown>;
+          boundaryObservation = {
+            event,
+            alpha: raw['memory__alpha'],
+            beta: raw['memory__beta'],
+            owner: state.value.memory,
+          };
+        }
+        parkObserved.resolve();
+      })();
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (String(step) === 'alpha') {
+        timeline.push('alpha-started');
+        alphaStarted.resolve();
+        await releaseAlpha.promise;
+        timeline.push('alpha-settled');
+        settledMembers += 1;
+        alphaSettled.resolve();
+      } else if (String(step) === 'beta') {
+        timeline.push('beta-started');
+        betaStarted.resolve();
+        await releaseBeta.promise;
+        timeline.push('beta-settled');
+        settledMembers += 1;
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: {
+        validation_concurrency: 2,
+        steps: {
+          memory: {
+            parallel: [{ name: 'alpha' }, { name: 'beta' }],
+          },
+        },
+      },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const resultPromise = conductor.run();
+    await Promise.all([alphaStarted.promise, betaStarted.promise]);
+    releaseAlpha.resolve();
+    await alphaSettled.promise;
+    parked = true;
+    releaseBeta.resolve();
+    const result = await resultPromise;
+    await parkObserved.promise;
+
+    expect({
+      result,
+      timeline,
+      boundaryObservation,
+      laterSerialDispatches: run.mock.calls.filter(([step]) => step === 'explore').length,
+      settledMembers,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'group', name: 'memory' },
+      },
+      timeline: ['alpha-started', 'beta-started', 'alpha-settled', 'beta-settled'],
+      boundaryObservation: {
+        event: {
+          type: 'operator_park_boundary',
+          featureSlug: 'operator-park-boundary',
+          boundary: { kind: 'group', name: 'memory' },
+        },
+        alpha: 'done',
+        beta: 'done',
+        owner: 'done',
+      },
+      laterSerialDispatches: 0,
+      settledMembers: 2,
+    });
+  });
+
   it('fails closed before the first pending unit when the operator park boundary cannot be read', async () => {
     await writeState(statePath, stateWithPending('memory'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
