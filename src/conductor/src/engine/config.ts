@@ -1739,7 +1739,7 @@ export async function loadMergedConfig(
 
   const merged = mergeConfigs(userResult.config, projectResult.config);
   // 'merged' source: the anti-leak guard already fired on the raw project file
-  // inside loadConfig above. Here a spec_owner can only have come from the USER
+  // inside loadProjectConfig above. Here a spec_owner can only have come from the USER
   // config, which is its legitimate home — so the guard must NOT reject it.
   const validated = validateConfig(merged, projectRoot, { source: 'merged' });
   if (!validated.ok) return validated;
