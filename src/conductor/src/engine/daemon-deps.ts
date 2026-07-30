@@ -23,6 +23,7 @@ import { makeGitRunner } from './rebase.js';
 import { surfaceQuarantine } from './setup-triage.js';
 import type { SetupFailureError } from './worktree-prepare.js';
 import type { TriageOutcome } from './setup-triage.js';
+import type { OperatorParkedTermination } from './conductor.js';
 
 export interface RealDepsConfig {
   /** The main checkout the daemon runs from. */
@@ -38,7 +39,7 @@ export interface RealDepsConfig {
     providerExecution?: ProviderExecutionContext,
     featureEvents?: ConductorEventEmitter,
     log?: (message: string) => void,
-  ) => Promise<void>;
+  ) => Promise<void | OperatorParkedTermination>;
   /** Legacy narrative provider when provider-aware feature execution is absent. */
   provider?: LLMProvider;
   providerExecution?: () => ProviderExecutionContext;

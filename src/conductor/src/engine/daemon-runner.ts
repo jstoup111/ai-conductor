@@ -31,6 +31,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { writeHaltMarker } from './halt-marker.js';
+import type { OperatorParkedTermination } from './conductor.js';
 
 /**
  * Outcome of running the gate loop inside a feature's worktree, read from the
@@ -98,7 +99,7 @@ export interface FeatureRunnerDeps {
     providerExecution?: ProviderExecutionContext,
     events?: ConductorEventEmitter,
     log?: (message: string) => void,
-  ) => Promise<void>;
+  ) => Promise<void | OperatorParkedTermination>;
   /** Read the loop outcome from the worktree's markers. */
   readOutcome: (worktree: FeatureWorktree) => Promise<WorktreeOutcome>;
   /**
