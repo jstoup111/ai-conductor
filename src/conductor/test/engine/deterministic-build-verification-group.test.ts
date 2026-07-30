@@ -212,7 +212,9 @@ describe('deterministic BUILD verification group', () => {
         type: 'kickback',
         from: failedMember,
         to: 'build',
-        evidence: diagnostic,
+        evidence: failedMember === 'test_suite'
+          ? `full-suite verification failed (test_failure): ${diagnostic}\nEvidence: .pipeline/test-suite-evidence.json`
+          : diagnostic,
         count: 1,
       }]);
     },
@@ -276,7 +278,9 @@ describe('deterministic BUILD verification group', () => {
       type: 'kickback',
       from: 'wiring_check',
       to: 'build',
-      evidence: 'wiring diagnostic\nsuite diagnostic',
+      evidence:
+        'wiring diagnostic\nfull-suite verification failed (test_failure): suite diagnostic\n' +
+        'Evidence: .pipeline/test-suite-evidence.json',
       count: 1,
     }]);
     const ledger = await readKickbackLedger(projectRoot);
