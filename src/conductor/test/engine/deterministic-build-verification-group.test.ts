@@ -19,6 +19,7 @@ describe('deterministic BUILD verification group', () => {
   const dirs: string[] = [];
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
@@ -363,6 +364,126 @@ describe('deterministic BUILD verification group', () => {
         test_suite: 'pending',
         build_review: undefined,
       },
+    });
+  });
+
+  it('persists a settled native sibling across interruption and retries only the absent sibling on resume', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-interruption-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    const completedBeforeVerification = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      prd: 'done',
+      architecture_diagram: 'done',
+      architecture_review: 'done',
+      stories: 'done',
+      conflict_check: 'done',
+      plan: 'done',
+      coherence_check: 'done',
+      acceptance_specs: 'done',
+      build: 'done',
+    };
+    await writeFile(stateFilePath, JSON.stringify(completedBeforeVerification));
+
+    const suite = deferred<{ status: 'REUSED'; evidence: never }>();
+    const firstDispatches: string[] = [];
+    let sigintHandler: (() => Promise<void>) | undefined;
+    const processOn = vi.spyOn(process, 'on').mockImplementation(((
+      event: string,
+      handler: (...args: unknown[]) => void,
+    ) => {
+      if (event === 'SIGINT') sigintHandler = handler as () => Promise<void>;
+      return process;
+    }) as typeof process.on);
+    const processExit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+
+    const interrupted = new Conductor({
+      stateFilePath,
+      stepRunner: {
+        run: vi.fn(async (step) => {
+          firstDispatches.push(step);
+          if (step === 'wiring_check') return { success: true };
+          if (step === 'build_review') {
+            return { success: false, output: 'stop after cleanup boundary' };
+          }
+          throw new Error(`unexpected dispatch: ${step}`);
+        }),
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      maxRetries: 1,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: {
+        inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+        ensure: vi.fn(() => suite.promise),
+      },
+      onRecovery: async () => 'quit',
+    });
+
+    const interruptedRun = interrupted.run();
+    await vi.waitFor(() => expect(sigintHandler).toBeDefined());
+    await vi.waitFor(() => expect(firstDispatches).toEqual(['wiring_check']));
+    await new Promise((resolve) => setImmediate(resolve));
+    await sigintHandler!();
+
+    const interruptedState = JSON.parse(await readFile(stateFilePath, 'utf8'));
+    expect(interruptedState).toMatchObject({
+      wiring_check: 'done',
+      build_verification__wiring_check: 'done',
+    });
+    expect(interruptedState).not.toHaveProperty('test_suite', 'done');
+    expect(interruptedState).not.toHaveProperty(
+      'build_verification__test_suite',
+      'done',
+    );
+
+    // Let the simulated interrupted process drain before cleanup, then restore
+    // the exact snapshot that would have survived a real process exit.
+    suite.resolve({ status: 'REUSED', evidence: {} as never });
+    await interruptedRun;
+    await writeFile(stateFilePath, JSON.stringify(interruptedState));
+    processOn.mockRestore();
+    processExit.mockRestore();
+
+    const resumedDispatches: string[] = [];
+    const resumedVerifier = {
+      inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+      ensure: vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never })),
+    };
+    const resumed = new Conductor({
+      stateFilePath,
+      stepRunner: {
+        run: vi.fn(async (step) => {
+          resumedDispatches.push(step);
+          if (step === 'build_review') {
+            return { success: false, output: 'stop after resume assertion boundary' };
+          }
+          throw new Error(`unexpected redispatch: ${step}`);
+        }),
+      },
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      resume: true,
+      mode: 'auto',
+      maxRetries: 1,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: resumedVerifier,
+      onRecovery: async () => 'quit',
+    });
+
+    await resumed.run();
+
+    expect(resumedVerifier.ensure).toHaveBeenCalledTimes(1);
+    expect(resumedDispatches).toEqual(['build_review']);
+    expect(firstDispatches.filter((step) => step === 'wiring_check')).toHaveLength(1);
+    expect(JSON.parse(await readFile(stateFilePath, 'utf8'))).toMatchObject({
+      wiring_check: 'done',
+      test_suite: 'done',
     });
   });
 });
