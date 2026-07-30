@@ -486,4 +486,103 @@ describe('deterministic BUILD verification group', () => {
       test_suite: 'done',
     });
   });
+
+  it.each([
+    ['locked', false, { status: 'REUSED', evidence: {} as never }],
+    [
+      'cancelled',
+      true,
+      {
+        status: 'FAILED',
+        reason: 'signal',
+        message: 'suite execution cancelled after process-tree cleanup',
+      },
+    ],
+  ] as const)(
+    'keeps the native suite branch terminal-owned when execution is %s',
+    async (_outcome, interrupt, terminalResult) => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-terminal-'));
+      dirs.push(projectRoot);
+      const stateFilePath = join(projectRoot, 'conduct-state.json');
+      await writeFile(stateFilePath, JSON.stringify({ plan: 'done', build: 'done' }));
+
+      const suite = deferred<typeof terminalResult>();
+      const starts: string[] = [];
+      const review = vi.fn(async () => ({
+        success: false,
+        output: 'stop after terminal join',
+      }));
+      const build = vi.fn(async () => ({
+        success: false,
+        output: 'stop after cancelled suite rewind',
+      }));
+      let sigintHandler: (() => Promise<void>) | undefined;
+      const processOn = vi.spyOn(process, 'on').mockImplementation(((
+        event: string,
+        handler: (...args: unknown[]) => void,
+      ) => {
+        if (event === 'SIGINT') sigintHandler = handler as () => Promise<void>;
+        return process;
+      }) as typeof process.on);
+      const processExit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+      const verifier = {
+        inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+        ensure: vi.fn(() => {
+          starts.push('test_suite');
+          return suite.promise;
+        }),
+      };
+      const conductor = new Conductor({
+        stateFilePath,
+        stepRunner: {
+          run: vi.fn(async (step) => {
+            if (step === 'wiring_check') {
+              starts.push(step);
+              return { success: true };
+            }
+            if (step === 'build_review') return review();
+            if (step === 'build') return build();
+            throw new Error(`unexpected dispatch: ${step}`);
+          }),
+        },
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        fromStep: 'wiring_check',
+        mode: 'auto',
+        maxRetries: 1,
+        config: { validation_concurrency: 2 },
+        fullSuiteVerifier: verifier,
+        onRecovery: async () => 'quit',
+      });
+
+      const run = conductor.run();
+      await vi.waitFor(() => expect(starts).toEqual(['wiring_check', 'test_suite']));
+      await vi.waitFor(() => expect(sigintHandler).toBeDefined());
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+      expect(review).not.toHaveBeenCalled();
+      expect(build).not.toHaveBeenCalled();
+
+      let stateAtInterruption: string | undefined;
+      if (interrupt) {
+        await sigintHandler!();
+        stateAtInterruption = await readFile(stateFilePath, 'utf8');
+      }
+
+      suite.resolve(terminalResult);
+      await run;
+
+      expect(verifier.ensure).toHaveBeenCalledTimes(1);
+      if (interrupt) {
+        expect(review).not.toHaveBeenCalled();
+        expect(build).not.toHaveBeenCalled();
+        expect(await readFile(stateFilePath, 'utf8')).toBe(stateAtInterruption);
+      } else {
+        expect(review).toHaveBeenCalledTimes(1);
+        expect(build).not.toHaveBeenCalled();
+      }
+
+      processOn.mockRestore();
+      processExit.mockRestore();
+    },
+  );
 });
