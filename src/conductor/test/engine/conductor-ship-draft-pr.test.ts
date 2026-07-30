@@ -6,7 +6,7 @@
  * injected at the `gh`/`git` boundary; no real binary runs.
  */
 
-import { mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -120,6 +120,86 @@ describe('conductor opens a draft implementation PR at SHIP-phase start', () => 
 
     expect(ghCalls.filter((c) => c[1] === 'create')).toHaveLength(1);
     expect(gitCalls.filter((c) => c[0] === 'push')).toHaveLength(1);
+  });
+
+  it('uses the daemon caller worktree branch when persisted state lacks it', async () => {
+    await writeFile(
+      statePath,
+      JSON.stringify({
+        acceptance_specs: 'done',
+        build: 'done',
+        build_review: 'done',
+        wiring_check: 'done',
+        test_suite: 'done',
+        feature_desc: 'widget import flow',
+      }),
+      'utf8',
+    );
+    const { gh, git, ghCalls } = fakes();
+    const runner: StepRunner = {
+      run: async (): Promise<StepRunResult> => ({ success: false, output: 'stop after first SHIP dispatch' }),
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      config: {} as never,
+      fromStep: 'manual_test',
+      mode: 'default',
+      daemon: true,
+      gh,
+      git,
+      baseBranch: 'main',
+      worktreeBranch: BRANCH,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    const create = ghCalls.find((call) => call[1] === 'create');
+    const head = create?.[create.indexOf('--head') + 1];
+    expect(head).toBe(BRANCH);
+  });
+
+  it('persists the daemon caller worktree branch before the first SHIP dispatch', async () => {
+    await writeFile(
+      statePath,
+      JSON.stringify({ ...buildDone, worktree_branch: 'feat/stale-branch' }),
+      'utf8',
+    );
+    const { gh, git } = fakes();
+    let persistedBranchAtDispatch: string | undefined;
+    const runner: StepRunner = {
+      run: async (): Promise<StepRunResult> => {
+        const persistedState = JSON.parse(await readFile(statePath, 'utf8')) as {
+          worktree_branch?: string;
+        };
+        persistedBranchAtDispatch = persistedState.worktree_branch;
+        return { success: false, output: 'sentinel: stop after first SHIP dispatch' };
+      },
+    };
+
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      config: {} as never,
+      fromStep: 'manual_test',
+      mode: 'default',
+      daemon: true,
+      gh,
+      git,
+      baseBranch: 'main',
+      worktreeBranch: BRANCH,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    expect(persistedBranchAtDispatch).toBe(BRANCH);
   });
 
   it('does not publish while the run is still in BUILD-phase steps', async () => {
