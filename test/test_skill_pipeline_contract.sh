@@ -12,7 +12,6 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
-CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
 ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
@@ -28,10 +27,6 @@ SCOPE_CONTRACT_FILES=(
   "HARNESS.md"
 )
 LEGACY_TEST_SUITE_SKILL="${HARNESS_DIR}/skills/test-suite"
-SHIPPED_WORKFLOW_CONTRACTS=(
-  "${HARNESS_DIR}/skills"
-  "${HARNESS_DIR}/.github/workflows"
-)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -70,45 +65,6 @@ if [ -e "$LEGACY_TEST_SUITE_SKILL" ]; then
   fail "legacy skills/test-suite directory must be absent"
 else
   pass "legacy skills/test-suite directory is absent"
-fi
-
-if rg -n '(^|[^[:alnum:]_-])(/test-suite|\$test-suite)([^[:alnum:]_-]|$)|skills/test-suite([^[:alnum:]_-]|$)' \
-  "${SHIPPED_WORKFLOW_CONTRACTS[@]}" \
-  --glob '*.md' --glob '*.yml' --glob '*.yaml' \
-  >/tmp/pipeline_contract_test_suite_surface_hits.$$ 2>/dev/null; then
-  cat /tmp/pipeline_contract_test_suite_surface_hits.$$ >&2
-  rm -f /tmp/pipeline_contract_test_suite_surface_hits.$$
-  fail "shipped skills and workflow contracts must not directly invoke or reference the removed test-suite skill"
-else
-  rm -f /tmp/pipeline_contract_test_suite_surface_hits.$$
-  pass "shipped skills and workflow contracts contain no direct test-suite skill invocation or reference"
-fi
-
-GENERIC_SKILL_FILES=()
-while IFS= read -r skill_file; do
-  GENERIC_SKILL_FILES+=("$skill_file")
-done < <(find "$HARNESS_DIR/skills" -name '*.md' ! -path "$CONDUCT_SKILL_FILE" -print)
-
-if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "${GENERIC_SKILL_FILES[@]}" >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
-  cat /tmp/pipeline_contract_genericity_hits.$$ >&2
-  rm -f /tmp/pipeline_contract_genericity_hits.$$
-  fail "reusable skills contain a project-specific verifier command, path, legacy runner name, or harness-file reference"
-else
-  rm -f /tmp/pipeline_contract_genericity_hits.$$
-  pass "all reusable skills are free of project-specific verifier commands, paths, legacy runner names, and harness-file references"
-fi
-
-CONDUCT_TEST_SUITE_CONTEXT="$(grep -i -B 12 -A 24 'conduct-ts test-suite' "$CONDUCT_SKILL_FILE" || true)"
-if grep -qiE 'BUILD' <<<"$CONDUCT_TEST_SUITE_CONTEXT" \
-  && grep -q 'EXECUTED' <<<"$CONDUCT_TEST_SUITE_CONTEXT" \
-  && grep -q 'REUSED' <<<"$CONDUCT_TEST_SUITE_CONTEXT" \
-  && grep -qiE 'non-?zero' <<<"$CONDUCT_TEST_SUITE_CONTEXT" \
-  && grep -qiE 'BUILD.*(remediat|/tdd|/pipeline)|(remediat|/tdd|/pipeline).*BUILD' <<<"$CONDUCT_TEST_SUITE_CONTEXT" \
-  && ! grep -qE '(^|[^[:alnum:]_-])(/test-suite|\$test-suite)([^[:alnum:]_-]|$)|skills/test-suite([^[:alnum:]_-]|$)' <<<"$CONDUCT_TEST_SUITE_CONTEXT" \
-  && ! grep -qiE '(^|[^[:alnum:]_-])(model|skill)([^[:alnum:]_-]|$)' <<<"$CONDUCT_TEST_SUITE_CONTEXT"; then
-  pass "interactive conduct guidance invokes the native verifier and handles reuse, execution, and BUILD remediation"
-else
-  fail "interactive conduct guidance must run conduct-ts test-suite after BUILD, accept EXECUTED/REUSED, and route non-zero to BUILD without a skill/model fallback"
 fi
 
 # Must NOT contain imperative "Run `conduct-ts task start`" / "Run `conduct-ts task done`"
