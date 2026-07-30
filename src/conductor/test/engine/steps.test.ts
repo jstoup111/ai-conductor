@@ -16,6 +16,8 @@ import {
   tryGetStepIndex,
   validateFromStep,
   __resetCustomStepRegistrations,
+  STEP_GROUPS,
+  getGroupForStep,
 } from '../../src/engine/steps.js';
 import { phaseForStep } from '../../src/engine/resolved-config.js';
 import { isGatingStep } from '../../src/engine/gates.js';
@@ -381,6 +383,33 @@ describe('engine/steps', () => {
     });
   });
 
+  describe('built-in scheduling group inventory', () => {
+    it('mechanically maps every registered member to exactly one contiguous built-in group', () => {
+      const owners = new Map<StepName, string>();
+
+      for (const group of Object.values(STEP_GROUPS)) {
+        const indexes = group.members.map((member) => getStepIndex(member));
+        expect(indexes).toEqual(
+          Array.from({ length: indexes.length }, (_, offset) => indexes[0]! + offset),
+        );
+
+        for (const member of group.members) {
+          expect(owners.has(member)).toBe(false);
+          owners.set(member, group.name);
+          expect(getGroupForStep(member)).toBe(group);
+        }
+      }
+
+      expect(Object.fromEntries(owners)).toEqual({
+        wiring_check: 'build_verification',
+        test_suite: 'build_verification',
+        manual_test: 'validation',
+        prd_audit: 'validation',
+        architecture_review_as_built: 'validation',
+      });
+    });
+  });
+
   // --- shouldSkipForTrack ---
 
   describe('shouldSkipForTrack', () => {
@@ -476,11 +505,18 @@ describe('engine/steps', () => {
       expect(getPrerequisites('build')).toEqual(['plan']);
     });
 
-    it('test_suite requires build and manual_test requires test_suite', () => {
+    it('joins deterministic verification before build_review and then proceeds to manual_test', () => {
       expect({
+        wiringCheck: getPrerequisites('wiring_check'),
         testSuite: getPrerequisites('test_suite'),
         manualTest: getPrerequisites('manual_test'),
-      }).toEqual({ testSuite: ['build'], manualTest: ['test_suite'] });
+        buildReview: getPrerequisites('build_review'),
+      }).toEqual({
+        wiringCheck: ['build'],
+        testSuite: ['build'],
+        buildReview: ['wiring_check', 'test_suite'],
+        manualTest: ['test_suite'],
+      });
     });
 
     it('rebase requires the joined validation tail through retro', () => {

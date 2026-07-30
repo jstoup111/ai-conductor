@@ -178,7 +178,7 @@ describe('operator park boundary contract', () => {
   });
 
   it('keeps a failed gate diagnostic authoritative when parking becomes active during bounded recovery', async () => {
-    await writeState(statePath, stateWithPending('build_review', 'wiring_check'));
+    await writeState(statePath, stateWithPending('build_review'));
     let parked = false;
     const events = new ConductorEventEmitter();
     const failed: Array<{ step: StepName; error: string; retryCount: number }> = [];
@@ -241,7 +241,7 @@ describe('operator park boundary contract', () => {
         },
       ],
       parkedBoundaries: [],
-      persisted: { buildReview: 'failed', wiringCheck: 'pending' },
+      persisted: { buildReview: 'failed', wiringCheck: 'done' },
     });
   });
 
@@ -594,6 +594,121 @@ describe('operator park boundary contract', () => {
         },
       },
       laterUnitDispatches: 0,
+    });
+  });
+
+  it('joins the deterministic BUILD verification group before parking and blocks build review', async () => {
+    await writeState(statePath, {
+      ...stateWithPending('wiring_check', 'test_suite', 'build_review'),
+      track: 'technical',
+      complexity_tier: 'M',
+    });
+    const members = ['wiring_check', 'test_suite'] as const;
+    const wiringStarted = deferred();
+    const suiteStarted = deferred();
+    const releaseWiring = deferred();
+    const releaseSuite = deferred();
+    const settled: StepName[] = [];
+    let parked = false;
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === 'wiring_check') {
+        wiringStarted.resolve();
+        await releaseWiring.promise;
+        settled.push(step);
+      } else if (step === 'test_suite') {
+        suiteStarted.resolve();
+        await releaseSuite.promise;
+        settled.push(step);
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      config: { validation_concurrency: 2 },
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+      ...noExternalIo(),
+    });
+
+    const resultPromise = conductor.run();
+    await Promise.all([wiringStarted.promise, suiteStarted.promise]);
+    releaseSuite.resolve();
+    await Promise.resolve();
+    parked = true;
+    releaseWiring.resolve();
+    const result = await resultPromise;
+    const persisted = await readState(statePath);
+    const raw = persisted.ok
+      ? (persisted.value as unknown as Record<string, unknown>)
+      : {};
+
+    expect({
+      result,
+      settled,
+      memberStatuses: Object.fromEntries(members.map((member) => [member, raw[member]])),
+      syntheticStatuses: Object.fromEntries(
+        members.map((member) => [
+          `build_verification__${member}`,
+          raw[`build_verification__${member}`],
+        ]),
+      ),
+      buildReviewDispatches: run.mock.calls.filter(([step]) => step === 'build_review').length,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'group', name: 'build_verification' },
+      },
+      settled: ['test_suite', 'wiring_check'],
+      memberStatuses: { wiring_check: 'done', test_suite: 'done' },
+      syntheticStatuses: {
+        build_verification__wiring_check: 'done',
+        build_verification__test_suite: 'done',
+      },
+      buildReviewDispatches: 0,
+    });
+  });
+
+  it.each([
+    {
+      name: 'one dispatchable BUILD member',
+      pending: ['wiring_check', 'build_review'] as StepName[],
+    },
+    {
+      name: 'zero dispatchable BUILD members',
+      pending: ['build_review'] as StepName[],
+    },
+  ])('keeps $name semantics while parking blocks the next unit', async ({ pending }) => {
+    await writeState(statePath, stateWithPending(...pending));
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: pending[0],
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => true,
+      ...noExternalIo(),
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      },
+      runnerCalls: [],
     });
   });
 
