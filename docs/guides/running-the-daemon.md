@@ -341,8 +341,11 @@ It never reads as "not merged".
 
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
 is unset or `true`), a `merged` slug with a `.docs/shipped/<slug>.md` record on `origin/main` is
-reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked
-— with no in-progress resume for that slug. The shipped record is never authority for the deletion
+reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked.
+The record on `origin/main` is what settles completion here, so a worktree whose local
+`.pipeline/conduct-state.json` still reads mid-build — the normal state for anything built before
+`feature_status` existed, or for a `finish` that pushed and then died — does not block cleanup.
+The shipped record is never authority for the deletion
 itself; every local branch for the slug must first be proven to hold no commit that deleting it would
 drop, by **either** of two proofs:
 
@@ -356,7 +359,18 @@ drop, by **either** of two proofs:
 
 If neither proof holds for some branch — a stale local branch, work that landed on it after the
 merge, or simply no `gh` available to ask — cleanup is refused with `not-ancestor` and nothing is
-deleted, even though the slug still classifies `merged`. A merged slug with no shipped
+deleted, even though the slug still classifies `merged`. Once a proof holds, the branch is deleted
+with `git branch -D`: the reconciler, not git, is the authority that no commit is dropped, and git's
+own `-d` merge check is structurally false forever for a squash-merged branch.
+
+Worktree removal tolerates one more real-world shape. Some `.worktrees/<slug>` paths exist on disk
+without ever having been registered as git worktrees, and `git worktree remove` rejects those with
+"is not a working tree" rather than a missing-path error. The reconciler checks `git worktree list
+--porcelain` and, when the path is genuinely unregistered, deletes the leftover directory directly
+instead of refusing. A removal failure on a path git *does* own — locked, dirty, permissions — still
+refuses with `worktree-remove-failed`, and so does an unreadable worktree listing.
+
+A merged slug with no shipped
 record yet is left parked and,
 when a merged PR can be found, gets an ST-916 record-repair PR requested on its behalf; it
 reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cleanup: false` to

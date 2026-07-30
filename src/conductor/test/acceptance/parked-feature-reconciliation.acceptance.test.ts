@@ -415,6 +415,31 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await isOperatorParked(projectRoot, slug)).toBe(false);
   });
 
+  it('S2 happy: a leftover .worktrees/<slug> directory git never registered is removed rather than refused', async () => {
+    const slug = 'unregistered-leftover-dir';
+    await seedParkedFeature(slug, { merged: true, record: true });
+    const worktree = join(projectRoot, '.worktrees', slug);
+
+    // Deregister the worktree but leave a plain directory behind — the shape
+    // real repositories end up in, where `git worktree remove` fails with
+    // "is not a working tree" rather than a missing-path error.
+    await git(['worktree', 'remove', '--force', worktree]);
+    await mkdir(worktree, { recursive: true });
+    await writeFile(join(worktree, 'leftover.txt'), 'stale contents\n');
+    expect(await worktreeExists(slug)).toBe(true);
+
+    const result = await sweep({
+      projectRoot,
+      runGit: realGit,
+      runGh: ghWithMergedPr(slug, 'https://example.test/pr/1'),
+    });
+
+    expect(await worktreeExists(slug)).toBe(false);
+    expect(await branchExists(slug)).toBe(false);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(false);
+    expect(result.counts.reconciled).toBe(1);
+  });
+
   it('S2 negative (b): a park whose branch is NOT an ancestor of origin/main leaves worktree, branch sha, and marker byte-identical', async () => {
     const slug = 'still-in-flight';
     await seedParkedFeature(slug, { merged: false, record: false });
@@ -485,7 +510,11 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(result.counts.reconciled).toBe(0);
   });
 
-  it('S2 negative (d): a merged, record-backed park with an IN-FLIGHT .pipeline run keeps its worktree — the reason is logged', async () => {
+  it('S2 (d): a merged, record-backed park is reconciled even when its .pipeline state still reads in-flight', async () => {
+    // The shipped record on origin/main is the durable, stronger proof of
+    // completion; local per-worktree state that never recorded
+    // `feature_status: complete` is the normal shape for older builds and for a
+    // `finish` that pushed and then died, and must not block cleanup.
     const slug = 'parked-over-live-run';
     await seedParkedFeature(slug, { merged: true, record: true });
     await seedInFlightPipeline(slug);
@@ -498,11 +527,10 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
       log: (m) => log.push(m),
     });
 
-    expect(await worktreeExists(slug)).toBe(true);
-    expect(await exists(join(projectRoot, '.worktrees', slug, '.pipeline', 'conduct-state.json'))).toBe(true);
-    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
-    expect(result.counts.reconciled).toBe(0);
-    expect(log.some((l) => l.includes(slug) && /in.?flight|in.?progress|\.pipeline/i.test(l))).toBe(true);
+    expect(await worktreeExists(slug)).toBe(false);
+    expect(await isOperatorParked(projectRoot, slug)).toBe(false);
+    expect(result.counts.reconciled).toBe(1);
+    expect(log.some((l) => /in.?flight|in.?progress/i.test(l))).toBe(false);
   });
 
   it('S2 negative: a park with NO feature branch at all makes no ancestry claim and is never treated as merged', async () => {
