@@ -1,8 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { EventPersister, EventPersistError } from '../../src/engine/event-persister.js';
+import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 
@@ -10,6 +11,14 @@ describe('EventPersister', () => {
   let tempDir: string;
   let eventsPath: string;
   let emitter: ConductorEventEmitter;
+
+  const scriptedClock = (...values: number[]): IntervalClock => ({
+    nowMs: () => {
+      const value = values.shift();
+      if (value === undefined) throw new Error('scripted clock exhausted');
+      return value;
+    },
+  });
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), 'event-persister-test-'));
@@ -143,6 +152,96 @@ describe('EventPersister', () => {
     const line = JSON.parse(content.trim());
     expect(line.type).toBe('step_completed');
     expect(line.tokenUsage).toBeUndefined();
+  });
+
+  it.each([
+    {
+      terminal: { type: 'step_completed', step: 'bootstrap', status: 'done' },
+      expectedType: 'step_completed',
+    },
+    {
+      terminal: { type: 'step_failed', step: 'bootstrap', error: 'boom', retryCount: 0 },
+      expectedType: 'step_failed',
+    },
+  ] satisfies Array<{ terminal: ConductorEvent; expectedType: string }>)(
+    'persists an explicit active interval on the first matching $expectedType event',
+    async ({ terminal, expectedType }) => {
+      const persister = new EventPersister(eventsPath, emitter, scriptedClock(1_000, 1_025));
+      persister.start();
+
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit(terminal);
+      await emitter.emit(terminal);
+      persister.stop();
+
+      const records = (await readFile(eventsPath, 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      const terminals = records.filter((record) => record.type === expectedType);
+      expect(terminals.map((record) => record.activeInterval)).toEqual([
+        { startedAtMs: 1_000, durationMs: 25 },
+        undefined,
+      ]);
+    },
+  );
+
+  it('leaves a start open when a different step emits a terminal event', async () => {
+    const persister = new EventPersister(eventsPath, emitter, scriptedClock(5_000, 5_020));
+    persister.start();
+
+    await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+    await emitter.emit({ type: 'step_failed', step: 'explore', error: 'boom', retryCount: 0 });
+    await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+    persister.stop();
+
+    const terminals = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line))
+      .filter((record) => record.type === 'step_failed' || record.type === 'step_completed');
+    expect(terminals.map((record) => record.activeInterval)).toEqual([
+      undefined,
+      { startedAtMs: 5_000, durationMs: 20 },
+    ]);
+  });
+
+  it('measures sequential steps without including the idle gap or deriving duration from ts', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2030-01-02T03:04:05.000Z'));
+    const persister = new EventPersister(
+      eventsPath,
+      emitter,
+      scriptedClock(100, 140, 10_000, 10_030),
+    );
+    try {
+      persister.start();
+
+      await emitter.emit({ type: 'step_started', step: 'bootstrap', index: 0 });
+      await emitter.emit({ type: 'step_completed', step: 'bootstrap', status: 'done' });
+      await emitter.emit({ type: 'step_started', step: 'explore', index: 1 });
+      await emitter.emit({ type: 'step_completed', step: 'explore', status: 'done' });
+      persister.stop();
+
+      const records = (await readFile(eventsPath, 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line))
+        .filter((record) => record.type === 'step_completed');
+      expect(records.map(({ activeInterval, ts }) => ({ activeInterval, ts }))).toEqual([
+        {
+          activeInterval: { startedAtMs: 100, durationMs: 40 },
+          ts: '2030-01-02T03:04:05.000Z',
+        },
+        {
+          activeInterval: { startedAtMs: 10_000, durationMs: 30 },
+          ts: '2030-01-02T03:04:05.000Z',
+        },
+      ]);
+    } finally {
+      persister.stop();
+      vi.useRealTimers();
+    }
   });
 
   it('persists provider attempts, fallback diagnostics, and completed-step attribution', async () => {

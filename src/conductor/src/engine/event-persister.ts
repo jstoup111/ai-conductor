@@ -1,5 +1,9 @@
 import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import {
+  epochAnchoredMonotonicClock,
+  type IntervalClock,
+} from '../execution/observed-interval.js';
 import type { ConductorEvent } from '../types/index.js';
 import { ConductorEventEmitter, type EventHandler } from '../ui/events.js';
 import { persistedEventTypes } from './event-sinks.js';
@@ -30,11 +34,18 @@ export class EventPersister {
   private readonly filePath: string;
   private readonly emitter: ConductorEventEmitter;
   private readonly handler: EventHandler;
+  private readonly clock: IntervalClock;
+  private readonly openSteps = new Map<string, number>();
   private dirEnsured = false;
 
-  constructor(filePath: string, emitter: ConductorEventEmitter) {
+  constructor(
+    filePath: string,
+    emitter: ConductorEventEmitter,
+    clock: IntervalClock = epochAnchoredMonotonicClock,
+  ) {
     this.filePath = filePath;
     this.emitter = emitter;
+    this.clock = clock;
 
     this.handler = (event: ConductorEvent): void => {
       this.persist(event);
@@ -65,8 +76,33 @@ export class EventPersister {
         mkdirSync(dirname(this.filePath), { recursive: true });
         this.dirEnsured = true;
       }
-      const record = JSON.stringify({ ...event, ts: new Date().toISOString() });
+      const step = 'step' in event && typeof event.step === 'string'
+        ? event.step
+        : undefined;
+      const startedAtMs = step !== undefined
+        ? this.openSteps.get(step)
+        : undefined;
+      const closesStep = startedAtMs !== undefined && (
+        event.type === 'step_completed'
+        || event.type === 'step_failed'
+      );
+      const activeInterval = closesStep
+        ? {
+            startedAtMs,
+            durationMs: Math.max(0, this.clock.nowMs() - startedAtMs),
+          }
+        : undefined;
+      const record = JSON.stringify({
+        ...event,
+        ...(activeInterval ? { activeInterval } : {}),
+        ts: new Date().toISOString(),
+      });
       appendFileSync(this.filePath, record + '\n', 'utf-8');
+      if (event.type === 'step_started') {
+        this.openSteps.set(event.step, this.clock.nowMs());
+      } else if (closesStep && step !== undefined) {
+        this.openSteps.delete(step);
+      }
     } catch (err) {
       throw new EventPersistError(this.filePath, err);
     }

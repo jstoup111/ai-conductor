@@ -27,8 +27,8 @@ async function emitBasicRun(emitter: ConductorEventEmitter): Promise<void> {
   await emitter.emit({ type: 'feature_complete', featureDesc: 'otel-noop-test' });
 }
 
-/** Strip ts field, then compare JSON structure line-by-line. */
-function stripTs(content: string): string[] {
+/** Strip nondeterministic timing fields, then compare JSON structure line-by-line. */
+function stripTiming(content: string): string[] {
   return content
     .trim()
     .split('\n')
@@ -36,6 +36,7 @@ function stripTs(content: string): string[] {
     .map((line) => {
       const obj = JSON.parse(line);
       delete obj.ts;
+      delete obj.activeInterval;
       return JSON.stringify(obj);
     });
 }
@@ -89,7 +90,7 @@ describe('FR-1: no-op when disabled', () => {
     const baseline = await readFile(basePath, 'utf-8');
     const withDisabled = await readFile(testPath, 'utf-8');
 
-    expect(stripTs(withDisabled)).toEqual(stripTs(baseline));
+    expect(stripTiming(withDisabled)).toEqual(stripTiming(baseline));
   });
 
   it('no OtelVisualizer is constructed when otel is absent (constructor spy)', () => {
