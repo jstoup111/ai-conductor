@@ -453,8 +453,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -462,22 +463,22 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const build = await readVerdict(dir, 'build');
     expect(build?.satisfied).toBe(false);
     expect(build?.kickback?.from).toBe('rebase');
-    // wiring_check (Task 6) sits between build_review and manual_test and
-    // must be invalidated the same way — a file-changing rebase can falsify
-    // reachability evidence just as easily as build_review's grading
-    // (Task 11).
+    // The deterministic BUILD group must be invalidated before build_review —
+    // a file-changing rebase can falsify both reachability and aggregate-suite
+    // evidence just as easily as build_review's grading.
     const wiringCheck = await readVerdict(dir, 'wiring_check');
     expect(wiringCheck?.satisfied).toBe(false);
     expect(wiringCheck?.kickback?.from).toBe('rebase');
   });
 
-  it('changed but manual_test did not run (featureSurface uncomputable) → build/build_review/wiring_check/audits kicked back, manual_test excluded', async () => {
+  it('changed but manual_test did not run (featureSurface uncomputable) → build/deterministic group/build_review/audits kicked back, manual_test excluded', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const r = await applyRebaseVerdicts(dir, outcome, false);
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'prd_audit',
       'architecture_review_as_built',
     ]);
@@ -505,8 +506,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.satisfied).toBe(true);
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -518,7 +520,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(build?.kickback?.from).toBe('rebase');
   });
 
-  it('changed + preVerify(build) returns done:true → build re-verified, build_review/manual_test kicked back', async () => {
+  it('changed + preVerify(build) returns done:true → build re-verified, deterministic group/build_review/manual_test kicked back', async () => {
     // Pre-seed a stale build verdict so we can verify checkedAt is newer
     const staleTime = Date.now() - 10000;
     await writeVerdict(dir, 'build', {
@@ -543,8 +545,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // build is reverified, NOT in kickedBack (featureSurface uncomputable —
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -585,8 +588,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // fail-closed set, includes the judged audits per the ADR amendment)
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -629,8 +633,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too — fail-closed set includes the judged audits)
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -654,7 +659,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(manualTest?.kickback?.from).toBe('rebase');
   });
 
-  it('Task 6.1: changed + ranManualTest: false + preVerify(build) done:true → build_review only kicked back (no manual_test)', async () => {
+  it('Task 6.1: changed + ranManualTest: false + preVerify(build) done:true → deterministic group/build_review kicked back (no manual_test)', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const preVerify = async (step: string) => {
       if (step === 'build') {
@@ -673,8 +678,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // uncomputable here too, so the fail-closed set still includes the
     // judged audits (ADR amendment) regardless of ranManualTest.
     expect(r.kickedBack).toEqual([
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'prd_audit',
       'architecture_review_as_built',
     ]);
@@ -695,7 +701,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(manualTest).toBeNull();
   });
 
-  it('Task 6.2: changed + ranManualTest: false + preVerify(build) done:false → build and build_review kicked back (no manual_test)', async () => {
+  it('Task 6.2: changed + ranManualTest: false + preVerify(build) done:false → build/deterministic group/build_review kicked back (no manual_test)', async () => {
     const outcome: RebaseOutcome = { kind: 'changed', changedCodePaths: ['src/a.ts'] };
     const preVerify = async (step: string) => {
       if (step === 'build') {
@@ -714,8 +720,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // audits (featureSurface uncomputable, ADR amendment).
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'prd_audit',
       'architecture_review_as_built',
     ]);
@@ -760,10 +767,16 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, outcome, true);
 
     expect(r.satisfied).toBe(true);
-    // build_review ('any-codetest') and wiring_check/manual_test
+    // build_review/test_suite ('any-codetest') and wiring_check/manual_test
     // ('all-runtime', foreignSrc non-empty) are invalidated; the two
     // feature-runtime audits are preserved (featureSrc is empty).
-    expect(r.kickedBack).toEqual(['build', 'build_review', 'wiring_check', 'manual_test']);
+    expect(r.kickedBack).toEqual([
+      'build',
+      'build_review',
+      'test_suite',
+      'wiring_check',
+      'manual_test',
+    ]);
     expect(r.kickedBack).not.toContain('prd_audit');
     expect(r.kickedBack).not.toContain('architecture_review_as_built');
 
@@ -790,7 +803,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     // Same delta as the Task 6 fixture above: feature surface is
     // src/feature.ts only; the rebase delta touches a foreign runtime file
     // (src/foreign.ts) and a feature test file (src/feature.test.ts). That
-    // invalidates build_review ('any-codetest') and wiring_check/manual_test
+    // invalidates build_review/test_suite ('any-codetest') and wiring_check/manual_test
     // ('all-runtime', foreignSrc non-empty), while preserving the
     // feature-runtime-scoped audits (featureSrc is empty).
     const outcome: RebaseOutcome = {
@@ -811,7 +824,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     const byGate = Object.fromEntries(invalidated.map((e) => [e.gate, e.matchedPaths]));
     expect(Object.keys(byGate).sort()).toEqual(
-      ['build_review', 'manual_test', 'wiring_check'].sort(),
+      ['build_review', 'test_suite', 'manual_test', 'wiring_check'].sort(),
     );
     // wiring_check/manual_test are 'all-runtime' — matchedPaths is
     // featureSrc ∪ foreignSrc (foreignSrc: src/foreign.ts; featureSrc empty).
@@ -819,6 +832,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(byGate.manual_test).toEqual(['src/foreign.ts']);
     // build_review is 'any-codetest' — matchedPaths is the full delta.
     expect(byGate.build_review).toEqual(['src/feature.test.ts', 'src/foreign.ts']);
+    expect(byGate.test_suite).toEqual(['src/feature.test.ts', 'src/foreign.ts']);
     // Preserved audits must not appear at all.
     expect(byGate.prd_audit).toBeUndefined();
     expect(byGate.architecture_review_as_built).toBeUndefined();
@@ -891,6 +905,7 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     expect(r.kickedBack).toEqual([
       'build',
       'build_review',
+      'test_suite',
       'wiring_check',
       'manual_test',
       'prd_audit',
@@ -929,8 +944,9 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
 
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -1584,8 +1600,9 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -1638,8 +1655,9 @@ describe('engine/rebase — Task 10: fail-closed on uncomputable F (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
@@ -1716,8 +1734,9 @@ describe('engine/rebase — Task 11: fail-closed on uncomputable D (real git)', 
     // audits, not just the pre-#655 fixed four.
     expect(r.kickedBack).toEqual([
       'build',
-      'build_review',
       'wiring_check',
+      'test_suite',
+      'build_review',
       'manual_test',
       'prd_audit',
       'architecture_review_as_built',
