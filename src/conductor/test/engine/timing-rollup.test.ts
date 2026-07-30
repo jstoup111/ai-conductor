@@ -1,9 +1,36 @@
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it } from 'vitest';
 import {
+  computeTimingRollup,
   intersectIntervalUnions,
   intervalUnionDurationMs,
   unionIntervals,
 } from '../../src/engine/timing-rollup.js';
+
+const temporaryDirectories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(
+    temporaryDirectories.splice(0).map((directory) =>
+      rm(directory, { recursive: true, force: true }),
+    ),
+  );
+});
+
+async function writeFeatureEvents(events: readonly object[]): Promise<string> {
+  const directory = await mkdtemp(join(tmpdir(), 'timing-rollup-'));
+  temporaryDirectories.push(directory);
+  const pipelineDirectory = join(directory, '.pipeline');
+  await mkdir(pipelineDirectory, { recursive: true });
+  await writeFile(
+    join(pipelineDirectory, 'events.jsonl'),
+    `${events.map((event) => JSON.stringify(event)).join('\n')}\n`,
+    'utf8',
+  );
+  return directory;
+}
 
 describe('unionIntervals', () => {
   it.each([
@@ -111,6 +138,74 @@ describe('intersectIntervalUnions', () => {
         { startedAtMs: 45, durationMs: 5 },
       ],
       invalidIntervals: [],
+    });
+  });
+});
+
+describe('computeTimingRollup', () => {
+  it('partitions overlapping active and provider intervals exactly', async () => {
+    const directory = await writeFeatureEvents([
+      {
+        type: 'step_completed',
+        step: 'manual_test',
+        activeInterval: { startedAtMs: 100, durationMs: 200.6 },
+        observedIntervals: [
+          { startedAtMs: 120, durationMs: 70.4 },
+          { startedAtMs: 160, durationMs: 80.2 },
+        ],
+      },
+      {
+        type: 'parallel_completed',
+        step: 'ship_validation',
+        activeInterval: { startedAtMs: 250, durationMs: 150 },
+        observedIntervals: [{ startedAtMs: 275, durationMs: 60 }],
+      },
+    ]);
+
+    const result = await computeTimingRollup(directory);
+
+    expect(result).toEqual({
+      state: 'measured',
+      activeMs: 300,
+      providerActiveMs: 180,
+      noProviderActiveMs: 120,
+    });
+  });
+
+  it('includes failed and retried provider occupancy in the measured partition', async () => {
+    const directory = await writeFeatureEvents([
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        outcome: 'failure',
+        invoked: true,
+        observedIntervals: [{ startedAtMs: 10, durationMs: 30 }],
+      },
+      {
+        type: 'step_failed',
+        step: 'plan',
+        retryCount: 1,
+        activeInterval: { startedAtMs: 0, durationMs: 50 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        outcome: 'success',
+        invoked: true,
+        observedIntervals: [{ startedAtMs: 60, durationMs: 20 }],
+      },
+      {
+        type: 'step_completed',
+        step: 'plan',
+        activeInterval: { startedAtMs: 50, durationMs: 50 },
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'measured',
+      activeMs: 100,
+      providerActiveMs: 50,
+      noProviderActiveMs: 50,
     });
   });
 });

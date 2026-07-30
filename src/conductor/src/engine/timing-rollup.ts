@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { ObservedInterval } from '../execution/observed-interval.js';
 
 export interface IntervalUnionResult {
@@ -8,6 +10,13 @@ export interface IntervalUnionResult {
 export interface IntervalUnionDurationResult {
   durationMs: number;
   invalidIntervals: unknown[];
+}
+
+export interface MeasuredTimingRollup {
+  state: 'measured';
+  activeMs: number;
+  providerActiveMs: number;
+  noProviderActiveMs: number;
 }
 
 function intervalEndMs(interval: ObservedInterval): number {
@@ -104,5 +113,52 @@ export function intersectIntervalUnions(
   return {
     intervals: intersections,
     invalidIntervals: [...left.invalidIntervals, ...right.invalidIntervals],
+  };
+}
+
+export async function computeTimingRollup(
+  worktreeDir: string,
+): Promise<MeasuredTimingRollup> {
+  const raw = await readFile(
+    join(worktreeDir, '.pipeline', 'events.jsonl'),
+    'utf8',
+  );
+  const activeIntervals: unknown[] = [];
+  const providerIntervals: unknown[] = [];
+
+  for (const line of raw.split('\n')) {
+    if (line.trim().length === 0) continue;
+    const event = JSON.parse(line) as Record<string, unknown>;
+    if ('activeInterval' in event) {
+      activeIntervals.push(event.activeInterval);
+    }
+    if (Array.isArray(event.observedIntervals)) {
+      providerIntervals.push(...event.observedIntervals);
+    }
+  }
+
+  const activeUnion = unionIntervals(activeIntervals);
+  const providerWithinActive = intersectIntervalUnions(
+    activeUnion.intervals,
+    providerIntervals,
+  );
+  const activeMs = Math.round(
+    activeUnion.intervals.reduce(
+      (total, interval) => total + interval.durationMs,
+      0,
+    ),
+  );
+  const providerActiveMs = Math.round(
+    providerWithinActive.intervals.reduce(
+      (total, interval) => total + interval.durationMs,
+      0,
+    ),
+  );
+
+  return {
+    state: 'measured',
+    activeMs,
+    providerActiveMs,
+    noProviderActiveMs: activeMs - providerActiveMs,
   };
 }
