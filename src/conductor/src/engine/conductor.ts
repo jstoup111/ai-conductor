@@ -918,6 +918,8 @@ export class Conductor {
   private stateFilePath: string;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
+  private featureSlug?: string;
+  private operatorParkBoundary?: () => Promise<boolean>;
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
@@ -1294,6 +1296,8 @@ export class Conductor {
     this.stateFilePath = opts.stateFilePath;
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
+    this.featureSlug = opts.featureSlug;
+    this.operatorParkBoundary = opts.operatorParkBoundary;
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
@@ -2718,6 +2722,7 @@ export class Conductor {
       breadcrumb.lastEventType = ev.type;
       return this.events.emit(ev);
     };
+    let lastSettledSerialStep: StepName | undefined;
     try {
       for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
@@ -3868,6 +3873,25 @@ export class Conductor {
             process.off('SIGTERM', sigterm);
             return;
           }
+        }
+
+        if (
+          this.daemon &&
+          this.featureSlug !== undefined &&
+          this.operatorParkBoundary &&
+          await this.operatorParkBoundary()
+        ) {
+          const boundary: SchedulingUnitRef = lastSettledSerialStep
+            ? { kind: 'step', name: lastSettledSerialStep }
+            : { kind: 'pre-first-unit' };
+          await emitTracked({
+            type: 'operator_park_boundary',
+            featureSlug: this.featureSlug,
+            boundary,
+          });
+          process.off('SIGINT', sigintHandler);
+          process.off('SIGTERM', sigterm);
+          return { kind: 'operator-parked', boundary };
         }
 
         // Mark in_progress before running
@@ -6294,6 +6318,7 @@ export class Conductor {
             await saveStepStatus(this.stateFilePath, step.name, 'done');
           }
           state[step.name] = 'done';
+          lastSettledSerialStep = step.name;
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
           await emitTracked({
             type: 'step_completed',
