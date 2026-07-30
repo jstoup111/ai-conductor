@@ -338,4 +338,50 @@ describe('loadMergedConfig precedence', () => {
       },
     });
   });
+
+  it('preserves deep-merge semantics alongside project block normalization', async () => {
+    const projectRoot = await makeConfigPair(
+      [
+        'defaults:',
+        '  effort: low',
+        '  max_retries: 2',
+        'validation_concurrency: 1',
+        'model_fallback_ladder: [fable, opus]',
+        'ci_watch:',
+        '  enabled: false',
+        '',
+      ].join('\n'),
+      [
+        'defaults:',
+        '  model: opus',
+        '  effort: high',
+        'validation_concurrency: 3',
+        'model_fallback_ladder: [sonnet]',
+        'ci_watch: {}',
+        '',
+      ].join('\n'),
+    );
+
+    const result = await loadMergedConfig(projectRoot);
+
+    expect(
+      result.ok
+        ? {
+            defaults: result.config.defaults,
+            validation_concurrency: result.config.validation_concurrency,
+            model_fallback_ladder: result.config.model_fallback_ladder,
+            ci_watch: result.config.ci_watch,
+          }
+        : result,
+    ).toEqual({
+      defaults: {
+        effort: 'high',
+        max_retries: 2,
+        model: 'opus',
+      },
+      validation_concurrency: 3,
+      model_fallback_ladder: ['sonnet'],
+      ci_watch: { enabled: true },
+    });
+  });
 });
