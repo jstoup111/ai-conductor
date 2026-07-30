@@ -205,6 +205,36 @@ describe('computeTimingRollup', () => {
     });
   });
 
+  it('measures a failed parallel group once when several branches emit failures', async () => {
+    const directory = await writeFeatureEvents([
+      {
+        type: 'parallel_started',
+        step: 'ship_validation',
+        branches: ['manual_test', 'prd_audit'],
+      },
+      {
+        type: 'parallel_failure',
+        step: 'ship_validation',
+        branch: 'manual_test',
+        error: 'manual test failed',
+        activeInterval: { startedAtMs: 100, durationMs: 80 },
+      },
+      {
+        type: 'parallel_failure',
+        step: 'ship_validation',
+        branch: 'prd_audit',
+        error: 'PRD audit failed',
+      },
+    ]);
+
+    expect(await computeTimingRollup(directory)).toEqual({
+      state: 'measured',
+      activeMs: 80,
+      providerActiveMs: 0,
+      noProviderActiveMs: 80,
+    });
+  });
+
   it.each([
     {
       name: 'an invoked provider attempt without observed intervals',
@@ -243,6 +273,35 @@ describe('computeTimingRollup', () => {
     {
       name: 'an unmatched step start',
       events: [{ type: 'step_started', step: 'plan' }],
+      expected: { state: 'partial' },
+    },
+    {
+      name: 'an unmatched parallel failure',
+      events: [
+        {
+          type: 'parallel_failure',
+          step: 'ship_validation',
+          branch: 'manual_test',
+          error: 'manual test failed',
+        },
+      ],
+      expected: { state: 'partial' },
+    },
+    {
+      name: 'a parallel lifecycle whose terminal is missing active evidence',
+      events: [
+        {
+          type: 'parallel_started',
+          step: 'ship_validation',
+          branches: ['manual_test'],
+        },
+        {
+          type: 'parallel_failure',
+          step: 'ship_validation',
+          branch: 'manual_test',
+          error: 'manual test failed',
+        },
+      ],
       expected: { state: 'partial' },
     },
     {

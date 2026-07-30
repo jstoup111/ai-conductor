@@ -107,6 +107,7 @@ interface TimingEvidence {
   activeIntervals: unknown[];
   providerIntervals: unknown[];
   openExecutions: Map<string, number>;
+  closedParallelExecutions: Set<string>;
   activeEvidenceIncomplete: boolean;
   providerEvidenceIncomplete: boolean;
 }
@@ -143,17 +144,34 @@ function collectExecutionEvidence(
 
   if (startKind && step) {
     const key = `${startKind}:${step}`;
+    if (startKind === 'parallel') evidence.closedParallelExecutions.delete(key);
     evidence.openExecutions.set(key, (evidence.openExecutions.get(key) ?? 0) + 1);
   }
   if (terminalKind) {
-    if (!step || !('activeInterval' in event)) evidence.activeEvidenceIncomplete = true;
-    if (step) {
-      const key = `${terminalKind}:${step}`;
-      const count = evidence.openExecutions.get(key) ?? 0;
-      if (count > 1) evidence.openExecutions.set(key, count - 1);
-      else evidence.openExecutions.delete(key);
+    const key = step ? `${terminalKind}:${step}` : undefined;
+    const closesKnownParallelExecution =
+      terminalKind === 'parallel'
+      && key !== undefined
+      && !evidence.openExecutions.has(key)
+      && evidence.closedParallelExecutions.has(key);
+    const hasActiveInterval = 'activeInterval' in event;
+    if (!step || (!hasActiveInterval && !closesKnownParallelExecution)) {
+      evidence.activeEvidenceIncomplete = true;
     }
-    if ('activeInterval' in event) evidence.activeIntervals.push(event.activeInterval);
+    if (step) {
+      const executionKey = `${terminalKind}:${step}`;
+      const count = evidence.openExecutions.get(executionKey) ?? 0;
+      if (count > 1) evidence.openExecutions.set(executionKey, count - 1);
+      else evidence.openExecutions.delete(executionKey);
+      if (
+        terminalKind === 'parallel'
+        && count <= 1
+        && (count > 0 || hasActiveInterval)
+      ) {
+        evidence.closedParallelExecutions.add(executionKey);
+      }
+    }
+    if (hasActiveInterval) evidence.activeIntervals.push(event.activeInterval);
   }
   return terminalKind;
 }
@@ -191,6 +209,7 @@ function collectTimingEvidence(events: readonly Record<string, unknown>[]): Timi
     activeIntervals,
     providerIntervals,
     openExecutions,
+    closedParallelExecutions: new Set(),
     activeEvidenceIncomplete: false,
     providerEvidenceIncomplete: false,
   };
