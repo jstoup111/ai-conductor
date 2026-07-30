@@ -219,6 +219,47 @@ complexity:
       });
     });
 
+    it('isolates returned nested objects and arrays from caller-owned references', () => {
+      const input = {
+        defaults: { model: 'sonnet' },
+        model_fallback_ladder: ['fable', 'opus'],
+      };
+      const snapshot = structuredClone(input);
+      const originalDefaults = input.defaults;
+      const originalFallbackLadder = input.model_fallback_ladder;
+
+      const result = validateConfig(input);
+      if (!result.ok) throw new Error(result.error.message);
+      if (!result.config.defaults || !result.config.model_fallback_ladder) {
+        throw new Error('expected normalized nested configuration');
+      }
+
+      const returnedDefaults = result.config.defaults;
+      const returnedFallbackLadder = result.config.model_fallback_ladder;
+      returnedDefaults.model = 'haiku';
+      returnedFallbackLadder.push('sonnet');
+
+      expect({
+        original: input,
+        identities: {
+          originalDefaultsRetained: input.defaults === originalDefaults,
+          originalFallbackLadderRetained:
+            input.model_fallback_ladder === originalFallbackLadder,
+          returnedDefaultsIsolated: returnedDefaults !== originalDefaults,
+          returnedFallbackLadderIsolated:
+            returnedFallbackLadder !== originalFallbackLadder,
+        },
+      }).toEqual({
+        original: snapshot,
+        identities: {
+          originalDefaultsRetained: true,
+          originalFallbackLadderRetained: true,
+          returnedDefaultsIsolated: true,
+          returnedFallbackLadderIsolated: true,
+        },
+      });
+    });
+
     it('rejects steps.<name> if not an object', () => {
       const result = validateConfig({
         steps: { memory: 'haiku' },
