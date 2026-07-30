@@ -161,6 +161,45 @@ describe('engine/daemon — runDaemon', () => {
     expect(parked?.reason).toBeUndefined();
   });
 
+  it('keeps an intentional park blocked until durable unpark, then reuses the slug', async () => {
+    let operatorParked = false;
+    let dispatches = 0;
+    let idlePolls = 0;
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(1)),
+      isParked: async () => operatorParked,
+      isHalted: async () => false,
+      runFeature: async (item) => {
+        dispatches += 1;
+        if (dispatches === 1) {
+          operatorParked = true;
+          return { slug: item.slug, status: 'parked' };
+        }
+        return { slug: item.slug, status: 'done' };
+      },
+      sleep: async () => {
+        idlePolls += 1;
+        if (idlePolls === 2) operatorParked = false;
+      },
+    };
+
+    const result = await runDaemon(deps, {
+      concurrency: 1,
+      once: false,
+      maxIdlePolls: 4,
+    });
+
+    expect({
+      dispatches,
+      statuses: result.processed.map((outcome) => outcome.status),
+      idlePollsBeforeResume: idlePolls,
+    }).toEqual({
+      dispatches: 2,
+      statuses: ['parked', 'done'],
+      idlePollsBeforeResume: 2,
+    });
+  });
+
   it('classifies a daemon-runner terminal triage HALT without changing its diagnostic body', async () => {
     const worktree = await mkdtemp(join(tmpdir(), 'daemon-terminal-triage-'));
     const diagnostic = 'working tree left dirty after setup';

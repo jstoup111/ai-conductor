@@ -888,6 +888,12 @@ export async function runDaemon(
       }
     }
     if (outcome.status === 'parked') {
+      // Keep the slug eligible for the existing durable-marker resume path.
+      // `pickEligible` first consults the repo-root operator park marker; once
+      // an explicit unpark clears it, the ordinary HALT/state checks decide
+      // whether the preserved worktree can resume. No lifecycle status is
+      // manufactured or cleared here.
+      parked.add(slug);
       (deps.featureLog?.(slug) ?? log)(
         `${chalk.yellow('■')} parked ${chalk.bold(slug)}: ${chalk.yellow('parked')} — intentional operator stop`,
       );
