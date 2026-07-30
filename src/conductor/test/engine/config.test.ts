@@ -115,6 +115,42 @@ complexity:
   });
 
   describe('validateConfig', () => {
+    it('returns top-level and nested defaults without mutating the caller input', () => {
+      const input = {
+        harness_version: '>=1.0.0',
+        mergeable_autoresolve: { enabled: true },
+      };
+      const snapshot = structuredClone(input);
+
+      const result = validateConfig(input);
+
+      expect({
+        normalized: result.ok
+          ? {
+              auto_restart_on_stale_engine: result.config.auto_restart_on_stale_engine,
+              mergeable_autoresolve: result.config.mergeable_autoresolve,
+            }
+          : result,
+        original: input,
+        originalHasTopLevelDefault: Object.hasOwn(input, 'auto_restart_on_stale_engine'),
+        originalHasNestedDefault: Object.hasOwn(
+          input.mergeable_autoresolve,
+          'cooldownMinutes',
+        ),
+      }).toEqual({
+        normalized: {
+          auto_restart_on_stale_engine: false,
+          mergeable_autoresolve: {
+            enabled: true,
+            cooldownMinutes: 60,
+          },
+        },
+        original: snapshot,
+        originalHasTopLevelDefault: false,
+        originalHasNestedDefault: false,
+      });
+    });
+
     it('rejects steps.<name> if not an object', () => {
       const result = validateConfig({
         steps: { memory: 'haiku' },

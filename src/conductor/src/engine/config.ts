@@ -207,7 +207,7 @@ export function validateConfig(
     };
   }
 
-  const obj = raw as Record<string, unknown>;
+  const obj = structuredClone(raw) as Record<string, unknown>;
   const warnings: ConfigWarning[] = [];
 
   const knownTopLevelKeys = new Set([
