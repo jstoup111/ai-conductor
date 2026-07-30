@@ -4,8 +4,8 @@ The complete step vocabulary the engine executes: names, order, phase, enforceme
 artifacts, and the skill each step dispatches. These names are what `conduct-ts inline --from <step>` accepts.
 
 There are 26 step names: 22 sequential steps in `ALL_STEPS` and 4 out-of-band steps in
-`OUT_OF_BAND_STEPS`. `validation` is a step *group* wrapping three existing SHIP steps, not a step —
-you cannot pass it to `--from`.
+`OUT_OF_BAND_STEPS`. `validation` and `build_verification` are step *groups* wrapping existing steps,
+not steps themselves — neither can be passed to `--from`.
 
 Tables on this page are source-ordered (the order of `ALL_STEPS`), not alphabetized. The order of that
 array *is* the flow.
@@ -46,9 +46,9 @@ The 22 steps of `ALL_STEPS`, in execution order. "Skips" lists tier and track ex
 | 10 | `coherence_check` | DECIDE | gating | `plan` | tier S | `/coherence-check` |
 | 11 | `acceptance_specs` | BUILD | gating | `plan` | tier S | `/writing-system-tests` |
 | 12 | `build` | BUILD | structural | `plan` | — | `/pipeline` |
-| 13 | `build_review` | BUILD | gating | `build` | — | engine-native |
-| 14 | `wiring_check` | BUILD | gating | `build_review` | — | engine-native |
-| 15 | `test_suite` | BUILD | gating | `wiring_check` | — | engine-native |
+| 13 | `wiring_check` | BUILD | gating | `build` | — | engine-native |
+| 14 | `test_suite` | BUILD | gating | `build` | — | engine-native |
+| 15 | `build_review` | BUILD | gating | `wiring_check`, `test_suite` | — | engine-native |
 | 16 | `manual_test` | SHIP | gating | `test_suite` | tier S | `/manual-test` |
 | 17 | `prd_audit` | SHIP | gating | `manual_test` | track `technical` | `/prd-audit` |
 | 18 | `architecture_review_as_built` | SHIP | gating | `prd_audit` | tier S; also when `architecture_review` was skipped | `/architecture-review --as-built` |
@@ -99,6 +99,20 @@ The group only fans out when all of these hold:
 Fan-out width is capped by the `validation_concurrency` config key (default 2; see
 [configuration](configuration.md)). Branches never write `conduct-state.json` or `.pipeline/gates/*` —
 only the loop thread does, after every branch settles.
+
+## The build verification group
+
+`build_verification` is a `StepGroup` over two members already present in `ALL_STEPS`: `wiring_check`
+and `test_suite`. Both dispatch no skill — each is a deterministic function of the tree — and both list
+`build` as their only prerequisite, so they fan out together immediately after `build` and join before
+`build_review`. Like `validation`, this is a wrapper: it does not remove, replace, or reorder the
+members' own `StepDefinition`s, and it shares the same fan-out mechanics (auto mode only, width-1
+degrades to the serial path, capped by `validation_concurrency`, single-writer join).
+
+Because both members are deterministic rather than model-judged, the join classifies a member as failed
+whenever its outcome is a no-verdict (other than an auth failure, which parks and retries) or a
+passing dispatch whose recomputed gate verdict is not `satisfied` — there is no ambiguous or
+partial-credit outcome to reconcile, unlike the SHIP-tail `validation` group.
 
 ## Tier skips
 

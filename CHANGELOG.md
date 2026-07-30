@@ -446,6 +446,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   `test-suite` skill, and `bin/install --update` reconciles the now-obsolete harness-owned skill
   links from both active catalogs (`~/.claude/skills` and `~/.agents/skills`) while preserving
   foreign entries ({{IMPLEMENTATION_PR}}).
+  foreign entries. The legacy `~/.codex/skills` directory is no longer Codex's active catalog
+  ({{IMPLEMENTATION_PR}}).
 
 ## Migration
 

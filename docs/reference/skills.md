@@ -76,7 +76,6 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `code-review` | gating | build | opus | none — pipeline batch boundary | Blocking in place |
 | `simplify` | gating | build | sonnet | none — pipeline batch boundary | Blocking in place |
 | `debugging` | gating | build | fable | none — on demand | Neither |
-| `test-suite` | gating | build | — | `test_suite` (15) — engine-native | Blocking |
 | `manual-test` | gating | ship | — | `manual_test` (16) | Blocking |
 | `prd-audit` | gating | ship | opus | `prd_audit` (17) | Blocking |
 | `remediate` | gating | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
@@ -468,20 +467,13 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   by an approved decision, the output is a conformance finding, not a patch. Three failed fixes escalate
   to the operator.
 
-### test-suite
-
-> Run the mandatory aggregate verification gate between BUILD and SHIP.
-
-- **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: true`, `requires: []`, no model
-  pin.
-- **Engine step** — `test_suite` (index 15, BUILD, prerequisite `wiring_check`). The step is
-  **engine-native**: it dispatches no skill. This SKILL.md documents the contract; execution runs
-  through the engine's full-suite verifier.
-- **Inputs** — repository configuration: the declared aggregate verifier, working directory, and timeout.
-- **Outputs** — the engine writes `.pipeline/test-suite-evidence.json`.
-- **Gate role** — blocking. It cannot be tier-skipped and cannot be satisfied by a scoped result.
-  Missing, malformed, stale, timed-out, and non-zero all count as failure; presence of the evidence file
-  alone never satisfies the gate.
+`test-suite` and `wiring-check` have no `SKILL.md` — both `test_suite` (index 14) and `wiring_check`
+(index 13) are **engine-native** BUILD steps: they dispatch no skill. Together they form the
+`build_verification` step group (see [The build verification group](steps.md#the-build-verification-group)),
+fanning out after `build` and joining before `build_review`. `test_suite` obtains a current result from
+the repository-configured aggregate verifier; `wiring_check` runs the deterministic reachability probe.
+The engine writes `.pipeline/test-suite-evidence.json` and `.pipeline/wiring-evidence.json`
+respectively. Both are blocking and cannot be tier-skipped or satisfied by a scoped result.
 
 ## SHIP-phase skills
 
