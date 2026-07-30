@@ -42,7 +42,10 @@ import {
   detectShippedRecordCommand,
   dispatchShippedRecord,
 } from '../../src/engine/shipped-record-cli.js';
+import { EventPersister } from '../../src/engine/event-persister.js';
 import { renderKpi } from '../../src/engine/kpi-report.js';
+import { observeInterval, type IntervalClock } from '../../src/execution/observed-interval.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const execFile = promisify(execFileCb);
 const SLUG = 'no-durable-llm-time-vs-code-execution-time-breakdo';
@@ -103,8 +106,47 @@ async function shippedRecord(): Promise<string> {
   return readFile(join(repo, '.docs', 'shipped', `${SLUG}.md`), 'utf8');
 }
 
+async function writeCompatibilityRecords(): Promise<void> {
+  const shippedDir = join(repo, '.docs', 'shipped');
+  await mkdir(shippedDir, { recursive: true });
+  await writeFile(
+    join(shippedDir, 'historical.md'),
+    [
+      '---', 'slug: historical', 'spec_hash: historical-hash', 'pr: local',
+      'shipped: 2026-07-01', '---', '', '## Cost', 'input: 11', 'output: 4', '',
+    ].join('\n'),
+  );
+  await writeFile(
+    join(shippedDir, 'malformed-time.md'),
+    [
+      '---', 'slug: malformed-time', 'spec_hash: malformed-hash', 'pr: local',
+      'shipped: 2026-07-02', '---', '', '## Time', 'state: measured',
+      'active_ms: nope', 'provider_active_ms: 80', '',
+    ].join('\n'),
+  );
+  await writeFile(
+    join(shippedDir, 'future-additive.md'),
+    [
+      '---', 'slug: future-additive', 'spec_hash: future-hash', 'pr: local',
+      'shipped: 2026-07-03', '---', '', '## Time', 'state: measured',
+      'active_ms: 100', 'provider_active_ms: 40', 'no_provider_active_ms: 60',
+      'tests_ms: 25', 'cumulative_provider_work_ms: 45', '',
+    ].join('\n'),
+  );
+}
+
 function expectTimingField(content: string, name: string, value: number): void {
   expect(content).toMatch(new RegExp(`^${name}:\\s*${value}$`, 'm'));
+}
+
+function scriptedClock(...values: number[]): IntervalClock {
+  return {
+    nowMs: () => {
+      const value = values.shift();
+      if (value === undefined) throw new Error('scripted acceptance clock exhausted');
+      return value;
+    },
+  };
 }
 
 beforeEach(async () => {
@@ -126,46 +168,56 @@ afterEach(async () => {
 
 describe('acceptance: durable provider-time attribution (#1101)', () => {
   it('commits an overlap-safe measured partition and reports it after transient workspace removal', async () => {
-    await writeEventsLedger([
-      {
-        type: 'step_completed',
-        step: 'build',
-        status: 'done',
-        activeInterval: { startedAtMs: 100, durationMs: 400 },
-      },
-      {
-        type: 'step_completed',
-        step: 'manual_test',
-        status: 'done',
-        activeInterval: { startedAtMs: 450, durationMs: 250 },
-      },
-      {
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(
+      join(repo, '.pipeline', 'events.jsonl'),
+      events,
+      scriptedClock(100, 700),
+    );
+    const claude = await observeInterval(scriptedClock(120, 300), async () => ({
+      success: true,
+      tokenUsage: { input: 10, output: 2, durationMs: 999 },
+    }));
+    const codex = await observeInterval(scriptedClock(250, 450), async () => ({
+      success: false,
+      tokenUsage: { input: 5, output: 1 },
+    }));
+    persister.start();
+    try {
+      await events.emit({ type: 'step_started', step: 'build', index: 0 });
+      await events.emit({
         type: 'provider_attempt',
         step: 'build',
         provider: 'claude',
         outcome: 'success',
         invoked: true,
-        observedIntervals: [{ startedAtMs: 120, durationMs: 180 }],
-        tokenUsage: { input: 10, output: 2, durationMs: 999 },
-      },
-      {
+        observedIntervals: [claude.interval],
+        tokenUsage: claude.value.tokenUsage,
+      });
+      await events.emit({
         type: 'provider_attempt',
         step: 'build',
         provider: 'codex',
         outcome: 'failure',
         invoked: true,
-        observedIntervals: [{ startedAtMs: 250, durationMs: 200 }],
-        tokenUsage: { input: 5, output: 1 },
-      },
-      {
+        observedIntervals: [codex.interval],
+        tokenUsage: codex.value.tokenUsage,
+      });
+      await events.emit({
         type: 'provider_attempt',
         step: 'build',
         provider: 'codex',
         outcome: 'unavailable',
         invoked: false,
-        providerInvocationSkipped: true,
-      },
-    ]);
+      });
+      await events.emit({
+        type: 'step_completed',
+        step: 'build',
+        status: 'done',
+      });
+    } finally {
+      persister.stop();
+    }
 
     await ship();
     const record = await shippedRecord();
@@ -178,12 +230,23 @@ describe('acceptance: durable provider-time attribution (#1101)', () => {
     expect(record).toMatch(/^## Cost$/m);
     expect(record).toMatch(/^input:\s*15$/m);
     expect(record).toMatch(/^output:\s*3$/m);
+    expect(record).toMatch(/^unmetered:\s*count:\s*1,\s*duration_ms:\s*0$/m);
     expect(await git(['status', '--porcelain', '--', '.docs/shipped'])).toBe('');
+    expect(await git(['show', `HEAD:.docs/shipped/${SLUG}.md`])).toContain(
+      'provider_active_ms: 330',
+    );
 
     await rm(join(repo, '.pipeline'), { recursive: true, force: true });
+    expect(await git(['ls-files', '.pipeline'])).toBe('');
+    await writeCompatibilityRecords();
+    await git(['add', '.docs/shipped']);
+    await git(['commit', '-q', '-m', 'add compatibility records']);
     const report = await renderKpi(repo);
 
     expect(report).toContain(SLUG);
+    expect(report).toContain('historical');
+    expect(report).toContain('malformed-time');
+    expect(report).toContain('future-additive');
     expect(report).toMatch(/measured/i);
     expect(report).toMatch(/active(?:_ms)?[=:]\s*600/i);
     expect(report).toMatch(/provider(?:[_-]active)?(?:_ms)?[=:]\s*330/i);
@@ -229,61 +292,7 @@ describe('acceptance: durable provider-time attribution (#1101)', () => {
   });
 
   it('renders historical, malformed, and future-additive records without substituting unavailable timing with zero', async () => {
-    const shippedDir = join(repo, '.docs', 'shipped');
-    await mkdir(shippedDir, { recursive: true });
-    await writeFile(
-      join(shippedDir, 'historical.md'),
-      [
-        '---',
-        'slug: historical',
-        'spec_hash: historical-hash',
-        'pr: local',
-        'shipped: 2026-07-01',
-        '---',
-        '',
-        '## Cost',
-        'input: 11',
-        'output: 4',
-        '',
-      ].join('\n'),
-    );
-    await writeFile(
-      join(shippedDir, 'malformed-time.md'),
-      [
-        '---',
-        'slug: malformed-time',
-        'spec_hash: malformed-hash',
-        'pr: local',
-        'shipped: 2026-07-02',
-        '---',
-        '',
-        '## Time',
-        'state: measured',
-        'active_ms: nope',
-        'provider_active_ms: 80',
-        '',
-      ].join('\n'),
-    );
-    await writeFile(
-      join(shippedDir, 'future-additive.md'),
-      [
-        '---',
-        'slug: future-additive',
-        'spec_hash: future-hash',
-        'pr: local',
-        'shipped: 2026-07-03',
-        '---',
-        '',
-        '## Time',
-        'state: measured',
-        'active_ms: 100',
-        'provider_active_ms: 40',
-        'no_provider_active_ms: 60',
-        'tests_ms: 25',
-        'cumulative_provider_work_ms: 45',
-        '',
-      ].join('\n'),
-    );
+    await writeCompatibilityRecords();
 
     const report = await renderKpi(repo);
     const historicalLine = report.split('\n').find((line) => line.includes('historical')) ?? '';
