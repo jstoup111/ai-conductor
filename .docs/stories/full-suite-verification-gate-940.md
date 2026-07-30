@@ -10,72 +10,79 @@ supersede the unconditional batch-boundary full-suite criterion in
 verification remains; ownership of the one reusable aggregate run moves to the
 explicit pre-SHIP gate.
 
+> **Amended 2026-07-29:**
+> `.docs/stories/deterministic-test-suite-step.md` moves `wiring_check` and
+> `test_suite` into a joined deterministic group immediately after `build`,
+> defers `build_review` until both pass, and replaces the direct skill surface
+> with the deterministic `conduct-ts test-suite` adapter. All proof and
+> BUILD-to-SHIP safety outcomes below remain authoritative.
+
 ## Story 1: Automated delivery gates SHIP on the aggregate suite
 
 **Requirements:** FR-1, FR-7
 
 As an autonomous-build operator, I want the project's aggregate suite verified
-after BUILD quality checks and before SHIP begins so regressions return to
-implementation without paying for downstream validation first.
+before model review and SHIP begin so regressions return to implementation
+without paying for downstream validation first.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given BUILD, build review, and wiring checks pass, when automated delivery
-  advances toward SHIP, then it evaluates an explicit full-suite gate before
-  dispatching manual test, PRD audit, or as-built architecture review.
-- Given the aggregate suite passes, when the gate records that result, then the
-  feature may advance to the applicable SHIP validators.
+- Given BUILD completes, when automated delivery advances, then it evaluates
+  wiring and aggregate verification as a joined deterministic group before
+  dispatching build review, manual test, PRD audit, or as-built architecture
+  review.
+- Given wiring and aggregate verification pass, when build review also passes,
+  then the feature may advance to the applicable SHIP validators.
 
 #### Negative Paths
 
-- Given any BUILD quality check is still unsatisfied, when the selector
-  evaluates progression, then the full-suite gate does not run early and no
-  SHIP validator dispatches.
+- Given `build` is still unsatisfied, when the selector evaluates progression,
+  then neither deterministic verifier runs and no later validator dispatches.
 - Given the aggregate suite fails, when the gate finishes, then no SHIP
-  validator dispatches and automated delivery returns to BUILD with the
-  actionable failure output.
+  validator or build-review model dispatches and automated delivery returns to
+  BUILD with the actionable failure output.
 
 ### Done When
 
-- [ ] Engine flow evidence shows `build → build_review → wiring_check →
-      test_suite → manual_test` for an applicable Medium feature.
+- [ ] Engine flow evidence shows `build → {wiring_check, test_suite} →
+      build_review → manual_test` for an applicable Medium feature.
 - [ ] An automated failing-suite scenario asserts BUILD is reopened and every
       SHIP validator remains undispatched.
 
-## Story 2: Direct Claude enforces the same pre-SHIP boundary
+## Story 2: Interactive verification enforces the same pre-SHIP boundary
 
 **Requirements:** FR-2, FR-8
 
-As a direct-Claude operator, I want an explicit full-suite step at the same
-BUILD-to-SHIP boundary so guided delivery cannot bypass the automated flow's
-safety guarantee.
+As an interactive operator, I want the deterministic full-suite adapter at the
+same BUILD-to-SHIP boundary so guided delivery cannot bypass the automated
+flow's safety guarantee or require model judgment to run tests.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
-- Given direct-Claude BUILD work and its quality reviews are complete, when the
-  operator follows conduct guidance, then the next required verification is
-  `/test-suite` before `/manual-test` or any other SHIP activity.
-- Given `/test-suite` observes a current passing aggregate result, when it
+- Given interactive BUILD work is complete, when the operator follows conduct
+  guidance, then wiring and `conduct-ts test-suite` verification precede build
+  review, manual test, or any other SHIP activity.
+- Given `conduct-ts test-suite` observes a current passing aggregate result, when it
   completes, then direct Claude reports whether it executed or reused the proof
   and permits progression to SHIP.
 
 #### Negative Paths
 
-- Given `/test-suite` has not produced a current pass, when the operator asks to
+- Given `conduct-ts test-suite` has not produced a current pass, when the operator asks to
   proceed to SHIP, then guidance blocks progression rather than treating the
   step as optional.
-- Given `/test-suite` observes a failure, when it reports the result, then it
+- Given `conduct-ts test-suite` observes a failure, when it reports the result, then it
   names the failing evidence and directs work back to `/tdd` or `/pipeline`
-  without invoking a legacy Bash flow.
+  without invoking a skill, model, or legacy Bash flow.
 
 ### Done When
 
-- [ ] Direct conduct guidance visibly orders `/test-suite` after BUILD and
-      before `/manual-test`.
+- [ ] Interactive conduct guidance visibly orders the deterministic verifier
+      after BUILD and before build review and `/manual-test`.
 - [ ] Direct failure guidance blocks SHIP and names `/tdd` or `/pipeline` as the
       remediation route.
 

@@ -1,7 +1,7 @@
 # ADR: Direct Claude uses the configured verifier interface
 
 **Date:** 2026-07-25
-**Status:** APPROVED (operator-approved 2026-07-25)
+**Status:** SUPERSEDED by `adr-2026-07-29-deterministic-build-verification-fanout`
 **Deciders:** James Stoup (operator), Codex architecture review for issue #940
 **Supersedes:** `adr-2026-07-25-content-addressed-full-suite-proof` direct-Claude invocation details only
 
@@ -15,6 +15,11 @@ CLI, while direct Claude is intended to use its host integration rather than a
 Bash or literal CLI workflow.
 
 ## Decision
+
+> **Supersession notice (2026-07-29):** The configured-verifier proof semantics
+> remain implemented by `FullSuiteVerifier`, but the test-suite skill surface
+> described here is removed. Interactive verification uses the provider-neutral
+> `conduct-ts test-suite` adapter directly.
 
 Direct `/test-suite` and permitted BUILD fallbacks use the host-provided,
 repository-configured aggregate verifier interface. The interface resolves the

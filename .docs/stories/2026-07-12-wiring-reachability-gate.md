@@ -124,21 +124,20 @@ contract always exists for the gate, whatever the tier.
 
 ---
 
-## Story: wiring_check step joins the gate loop between build_review and manual_test
+## Story: wiring_check joins the deterministic BUILD gate group
 
 **Requirement:** ADR wiring-check-gate (step placement)
 
-As the conductor, I want `wiring_check` as a gating loop member after `build_review` so an
-unwired feature can never advance to manual_test.
+As the conductor, I want `wiring_check` as a gating loop member immediately after `build` so an
+unwired feature can never spend build-review tokens or advance to manual test.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given a build whose `build_review` gate is satisfied, when the selector picks the next
-  unsatisfied gate, then `wiring_check` is evaluated before `manual_test` (its `prerequisites`
-  are `['build_review']` and `manual_test.prerequisites` now reads `['wiring_check']`).
+- Given a build gate is satisfied, when the selector enters deterministic BUILD verification,
+  then `wiring_check` is evaluated beside `test_suite` before `build_review` or `manual_test`.
 - Given a fully wired feature, when `wiring_check` evaluates, then the verdict is
-  `satisfied:true` and the tail proceeds to `manual_test` with no operator interaction.
+  `satisfied:true` and the joined group may proceed once `test_suite` also passes.
 - Given ANY complexity tier including Small, when the step topology is derived, then
   `wiring_check` is present (`skippableForTiers: []`).
 
@@ -169,16 +168,14 @@ unwired feature can never advance to manual_test.
   preserved on a test/docs-only delta — a strict narrowing of the trigger condition that
   keeps the gate's protective intent unchanged (established precedent: this story's own
   amendment of the #420 pinned enumeration).
-- Given the shipped build-review story's registry test asserting
-  `manual_test.prerequisites === ['build_review']`, when this feature repoints the field, then
-  that registry test is updated in the same commit to assert `['wiring_check']` AND that
-  `wiring_check.prerequisites === ['build_review']` (build_review remains strictly upstream —
-  original intent preserved, adjacency assertion amended).
+- Given an older registry assertion pins `wiring_check` after `build_review`, when the
+  deterministic-group topology is installed, then the assertion is updated to prove both
+  deterministic gates join before `build_review` and `manual_test` remains downstream.
 
 ### Done When
-- [ ] `steps.ts` contains the new StepDefinition; `manual_test.prerequisites` repointed.
-- [ ] Selector/advanceTail integration test: unsatisfied wiring_check blocks manual_test;
-      satisfied wiring_check unblocks it.
+- [ ] `steps.ts` keeps the `wiring_check` StepDefinition in the deterministic BUILD group.
+- [ ] Selector/advanceTail integration test: unsatisfied wiring_check blocks build review and
+      manual test; both deterministic gates passing unblock build review.
 - [ ] Kickback path test proves no `.pipeline/HALT` on a plain wiring gap.
 
 ---

@@ -39,9 +39,10 @@ change a mismatch discards the evidence and re-derives the verdict deterministic
 the current HEAD. Stale evidence is therefore *never trusted* in either design — the fix removes a
 wasted dispatch, it does not widen what counts as fresh, and it is not an unconditional accept.
 
-Out of scope (explicitly rejected upstream, not re-litigated here): converting `wiring_check` to
-an engine-native no-dispatch step (PR #891, issue #879), and reordering it relative to
-`build_review`. The LLM dispatch that remediates reachability gaps is retained unchanged.
+> **Amended 2026-07-29:** the later deterministic BUILD fan-out decision makes
+> `wiring_check` an engine-native no-dispatch step and places it before
+> `build_review`. This story's stale-evidence re-derivation and strict freshness
+> outcomes remain authoritative; its former orchestration boundary does not.
 
 ---
 
