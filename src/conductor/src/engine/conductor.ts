@@ -22,6 +22,7 @@ import type {
   InvokeResult,
   TokenUsage,
 } from '../execution/llm-provider.js';
+import type { ObservedInterval } from '../execution/observed-interval.js';
 import type { ConductState } from '../types/index.js';
 import type {
   StepName,
@@ -379,6 +380,8 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
+  observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
   fullSuiteVerification?: FullSuiteVerifierResult;
   /** Provider routing identity and ordered candidate-attempt accounting. */

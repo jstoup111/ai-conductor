@@ -60,6 +60,109 @@ function interactiveRuntime(
 const emptyState: ConductState = {};
 
 describe('DefaultStepRunner', () => {
+  it.each([
+    {
+      name: 'autonomous scalar conversion',
+      run: async () => {
+        const observedIntervals = [{ startedAtMs: 100, durationMs: 25 }];
+        const provider: LLMProvider = {
+          invoke: vi.fn(async (): Promise<InvokeResult> => ({
+            success: true,
+            output: 'done',
+            exitCode: 0,
+            observedIntervals,
+          })),
+          invokeInteractive: vi.fn(async () => undefined),
+        };
+        const runner = new DefaultStepRunner(provider, 'session', '/tmp/project');
+
+        return { observedIntervals, result: await runner.run('build', emptyState) };
+      },
+    },
+    {
+      name: 'provider-aware success conversion',
+      run: async () => {
+        const observedIntervals = [{ startedAtMs: 200, durationMs: 30 }];
+        const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
+          success: true,
+          output: 'done',
+          exitCode: 0,
+          observedIntervals,
+          preferredProvider: 'codex',
+          actualProvider: 'codex',
+          attempts: [],
+        }));
+        const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+          providerExecution: {
+            configuredProviders: ['codex'],
+            runtimes: new ProviderRuntimeSet([
+              interactiveRuntime('codex', vi.fn(async () => undefined)),
+            ]),
+            sessions: new ProviderSessionStore(),
+            executor: providerExecutor,
+          },
+        });
+
+        return { observedIntervals, result: await runner.run('build', emptyState) };
+      },
+    },
+    {
+      name: 'provider-aware failure conversion',
+      run: async () => {
+        const observedIntervals = [{ startedAtMs: 300, durationMs: 35 }];
+        const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
+          success: false,
+          output: 'failed',
+          exitCode: 1,
+          observedIntervals,
+          preferredProvider: 'claude',
+          attempts: [],
+        }));
+        const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+          providerExecution: {
+            configuredProviders: ['claude'],
+            runtimes: new ProviderRuntimeSet([
+              interactiveRuntime('claude', vi.fn(async () => undefined)),
+            ]),
+            sessions: new ProviderSessionStore(),
+            executor: providerExecutor,
+          },
+        });
+
+        return { observedIntervals, result: await runner.run('build', emptyState) };
+      },
+    },
+    {
+      name: 'streaming conversion',
+      run: async () => {
+        const observedIntervals = [{ startedAtMs: 400, durationMs: 40 }];
+        const runtime = interactiveRuntime(
+          'claude',
+          vi.fn(async (): Promise<InvokeResult> => ({
+            success: true,
+            output: 'streamed',
+            exitCode: 0,
+            observedIntervals,
+          })),
+        );
+        const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+          providerExecution: {
+            configuredProviders: ['claude'],
+            runtimes: new ProviderRuntimeSet([runtime]),
+            sessions: new ProviderSessionStore(),
+          },
+        });
+        await runner.resetSession('explore');
+
+        return { observedIntervals, result: await runner.run('explore', emptyState) };
+      },
+    },
+  ])('preserves observed intervals through $name', async ({ run }) => {
+    const { observedIntervals, result } = await run();
+
+    expect(result.observedIntervals?.[0]).toBe(observedIntervals[0]);
+  });
+
   it('forwards task-local attribution to provider-aware normal dispatch', async () => {
     const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
       success: true,
