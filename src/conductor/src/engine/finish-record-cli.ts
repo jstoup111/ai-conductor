@@ -7,6 +7,10 @@ import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh, makeProductionGit } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { readState, writeState } from './state.js';
+// Single source of truth for the daemon's own branch shape (`feat/daemon-<slug>`,
+// cut by `daemon-deps.ts` createWorktree). Reused rather than re-hardcoded here so
+// the prefix literal cannot drift between the halt-PR sweep and finish-record.
+import { featureSlugFromDaemonBranch } from './halt-pr-reconciliation.js';
 import {
   evaluateShipmentEvidence,
   resolveImplementationPrBinding,
@@ -243,11 +247,23 @@ export async function dispatchFinishRecord(
       );
       return 1;
     }
+    // Three sanctioned worktree-branch shapes, all recorded verbatim into
+    // conduct-state.json at worktree-creation time:
+    //   spec/<slug>, feature/<slug>  — interactive `WorktreeManager.create()`
+    //   feat/daemon-<slug>           — daemon `createWorktree` (daemon-deps.ts)
+    // Note `feat/` alone is NOT a sanctioned prefix: `feat/some-hand-cut-branch`
+    // is a legitimate human branch name whose slug we must refuse to guess. The
+    // distinguishing literal is the full `feat/daemon-`.
     const worktreeBranch = stateResult.value.worktree_branch;
-    const branchSlug = worktreeBranch?.match(/^(?:spec|feature)\/(.+)$/)?.[1];
+    const branchSlug =
+      worktreeBranch === undefined
+        ? undefined
+        : (worktreeBranch.match(/^(?:spec|feature)\/(.+)$/)?.[1] ??
+          featureSlugFromDaemonBranch(worktreeBranch) ??
+          undefined);
     if (worktreeBranch !== undefined && !branchSlug) {
       console.error(
-        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug> or feature/<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
+        `finish-record: worktree_branch "${worktreeBranch}" is not a valid spec/<slug>, feature/<slug>, or feat/daemon-<slug> branch identity — refusing to record PR ${cmd.prUrl}`,
       );
       return 1;
     }
