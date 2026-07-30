@@ -151,12 +151,10 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
-    // Judgement gate at the build → manual_test seam: an objective, non-human
-    // reviewer verdict on the just-built code before it reaches manual test.
-    // Gating loop member so a non-passing verdict can block the tail; sits
-    // strictly between build and manual_test.
-    name: 'build_review',
-    label: 'Build Review',
+    // Wiring reachability is one branch of the deterministic BUILD
+    // verification group. The joined result gates model review below.
+    name: 'wiring_check',
+    label: 'Wiring Check',
     phase: 'BUILD',
     enforcement: 'gating',
     prerequisites: ['build'],
@@ -165,28 +163,25 @@ export const ALL_STEPS: StepDefinition[] = [
     loopGate: true,
   },
   {
-    // Wiring reachability gate: sits strictly between build_review and
-    // test_suite, verifying newly-built code is actually reachable/wired
-    // in before manual test exercises it. Gating loop member like its
-    // upstream neighbor build_review.
-    name: 'wiring_check',
-    label: 'Wiring Check',
-    phase: 'BUILD',
-    enforcement: 'gating',
-    prerequisites: ['build_review'],
-    skippableForTiers: [],
-    isCheckpoint: false,
-    loopGate: true,
-  },
-  {
-    // Native aggregate verification gate: serially blocks the BUILD-to-SHIP
-    // boundary after wiring reachability and before the validation group.
+    // Native aggregate verification is the other deterministic BUILD branch.
     // Task 16 wires execution through FullSuiteVerifier.
     name: 'test_suite',
     label: 'Test Suite',
     phase: 'BUILD',
     enforcement: 'gating',
-    prerequisites: ['wiring_check'],
+    prerequisites: ['build'],
+    skippableForTiers: [],
+    isCheckpoint: false,
+    loopGate: true,
+  },
+  {
+    // Judgement begins only after the deterministic BUILD group joins, so a
+    // mechanically invalid build never spends model-review tokens.
+    name: 'build_review',
+    label: 'Build Review',
+    phase: 'BUILD',
+    enforcement: 'gating',
+    prerequisites: ['wiring_check', 'test_suite'],
     skippableForTiers: [],
     isCheckpoint: false,
     loopGate: true,
@@ -345,9 +340,19 @@ export const OUT_OF_BAND_STEPS: Record<string, StepDefinition> = {
 };
 
 /**
+ * Deterministic BUILD verification group: wiring_check and test_suite run
+ * after build and join before build_review. This wraps the existing members
+ * without removing or reordering their individual StepDefinitions.
+ */
+export const BUILD_VERIFICATION_GROUP: StepGroup = {
+  name: 'build_verification',
+  members: ['wiring_check', 'test_suite'],
+};
+
+/**
  * The SHIP-tail validation group (adr-2026-07-10-validation-group-join.md,
  * Decision-1): manual_test, prd_audit, architecture_review_as_built, in that
- * order, positioned immediately after the serial test_suite gate. This is a WRAPPER over
+ * order, positioned immediately after build_review. This is a WRAPPER over
  * the members' existing `StepDefinition`s in `ALL_STEPS` — it does not
  * remove, replace, or reorder them. Fan-out dispatch, join logic, and the
  * auto-mode-only engagement guard are built in later tasks (14+); this
@@ -364,6 +369,7 @@ export const VALIDATION_GROUP: StepGroup = {
  * the members of a declared group appear in `stepToGroupMap` below.
  */
 export const STEP_GROUPS: Record<string, StepGroup> = {
+  [BUILD_VERIFICATION_GROUP.name]: BUILD_VERIFICATION_GROUP,
   [VALIDATION_GROUP.name]: VALIDATION_GROUP,
 };
 
