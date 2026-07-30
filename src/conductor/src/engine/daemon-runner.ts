@@ -390,13 +390,10 @@ export function makeRunFeature(
         featureLog,
       );
       if (conductorTermination?.kind === 'operator-parked') {
-        // FeatureStatus gains its explicit `parked` member at the daemon-pool
-        // boundary in Task 13. Until then, preserve the runtime classification
-        // without reading marker authority or triggering terminal side effects.
         return {
           slug: item.slug,
           status: 'parked',
-        } as unknown as FeatureOutcome;
+        };
       }
       const outcome = await deps.readOutcome(worktree);
 

@@ -167,7 +167,7 @@ export async function pickEligible(
   return undefined;
 }
 
-export type FeatureStatus = 'done' | 'halted' | 'error';
+export type FeatureStatus = 'done' | 'halted' | 'error' | 'parked';
 
 export interface FeatureOutcome {
   slug: string;
@@ -887,6 +887,13 @@ export async function runDaemon(
         });
       }
     }
+    if (outcome.status === 'parked') {
+      (deps.featureLog?.(slug) ?? log)(
+        `${chalk.yellow('■')} parked ${chalk.bold(slug)}: ${chalk.yellow('parked')} — intentional operator stop`,
+      );
+      return;
+    }
+
     const ok = outcome.status === 'done';
     const marker = ok ? chalk.green('■') : chalk.red('■');
     const status = ok ? chalk.green(outcome.status) : chalk.red(outcome.status);

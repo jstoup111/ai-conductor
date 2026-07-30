@@ -119,6 +119,48 @@ describe('engine/daemon — runDaemon', () => {
     expect(res.processed[0].reason).toBe('needs human');
   });
 
+  it('collects an intentional parked outcome normally while siblings continue', async () => {
+    const watchHaltCleared = vi.fn(() => vi.fn());
+    const onHaltWritten = vi.fn(async () => {});
+    const logs: string[] = [];
+    const dispatches: string[] = [];
+    const deps: DaemonDeps = {
+      discoverBacklog: staticBacklog(items(2)),
+      runFeature: async (item) => {
+        dispatches.push(item.slug);
+        return item.slug === 'f0'
+          ? { slug: item.slug, status: 'parked' }
+          : { slug: item.slug, status: 'done' };
+      },
+      watchHaltCleared,
+      onHaltWritten,
+      featureLog: (slug) => (message) => logs.push(`${slug}:${message}`),
+    };
+
+    const result = await runDaemon(deps, {
+      concurrency: 1,
+      once: true,
+    });
+    const parked = result.processed.find((outcome) => outcome.slug === 'f0');
+
+    expect({
+      dispatches,
+      parked,
+      statuses: result.processed.map((outcome) => outcome.status),
+      watchRegistrations: watchHaltCleared.mock.calls.length,
+      haltCallbacks: onHaltWritten.mock.calls.length,
+      parkedLog: logs.find((line) => line.includes('intentional operator stop')),
+    }).toEqual({
+      dispatches: ['f0', 'f1'],
+      parked: { slug: 'f0', status: 'parked' },
+      statuses: ['parked', 'done'],
+      watchRegistrations: 0,
+      haltCallbacks: 0,
+      parkedLog: expect.stringMatching(/f0:.*parked.*intentional operator stop/),
+    });
+    expect(parked?.reason).toBeUndefined();
+  });
+
   it('classifies a daemon-runner terminal triage HALT without changing its diagnostic body', async () => {
     const worktree = await mkdtemp(join(tmpdir(), 'daemon-terminal-triage-'));
     const diagnostic = 'working tree left dirty after setup';
