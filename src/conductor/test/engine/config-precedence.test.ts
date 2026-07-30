@@ -384,4 +384,38 @@ describe('loadMergedConfig precedence', () => {
       ci_watch: { enabled: true },
     });
   });
+
+  it('rejects project spec_owner before merge without mutating either source', async () => {
+    const userYaml = 'spec_owner: user-owner\n';
+    const projectYaml = 'spec_owner: project-owner\n';
+    const projectRoot = await makeConfigPair(userYaml, projectYaml);
+
+    const result = await loadMergedConfig(projectRoot);
+    const [projectAfter, userAfter] = await Promise.all([
+      readFile(join(projectRoot, '.ai-conductor', 'config.yml'), 'utf8'),
+      readFile(userConfigFixture.path, 'utf8'),
+    ]);
+
+    expect({
+      outcome: result.ok
+        ? { effectiveOwner: result.config.spec_owner }
+        : {
+            type: result.error.type,
+            message: result.error.message,
+          },
+      sources: { projectAfter, userAfter },
+    }).toEqual({
+      outcome: {
+        type: 'validation_error',
+        message:
+          `spec_owner must not be set in a project config (${join(projectRoot, '.ai-conductor', 'config.yml')}): ` +
+          'it would leak your operator identity to everyone who pulls the repo. ' +
+          'Move spec_owner to your user config at ~/.ai-conductor/config.yml.',
+      },
+      sources: {
+        projectAfter: projectYaml,
+        userAfter: userYaml,
+      },
+    });
+  });
 });
