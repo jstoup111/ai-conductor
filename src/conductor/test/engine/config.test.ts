@@ -151,6 +151,74 @@ complexity:
       });
     });
 
+    it('preserves inputs across clamping, fallback, and unknown-key rejection', () => {
+      const clampedInput = {
+        attribution_audit_sample_pct: 150,
+        defaults: { model: 'sonnet' },
+      };
+      const fallbackInput = {
+        build_review: { enabled: 'banana' },
+        defaults: { effort: 'medium' },
+      };
+      const topLevelRejectionInput = {
+        defaults: { model: 'sonnet' },
+        unknown_key: 'value',
+      };
+      const nestedRejectionInput = {
+        steps: { memory: { model: 'haiku', bogus_key: 1 } },
+      };
+      const snapshots = structuredClone({
+        clampedInput,
+        fallbackInput,
+        topLevelRejectionInput,
+        nestedRejectionInput,
+      });
+
+      const clampedResult = validateConfig(clampedInput);
+      const fallbackResult = validateConfig(fallbackInput);
+      const topLevelRejectionResult = validateConfig(topLevelRejectionInput);
+      const nestedRejectionResult = validateConfig(nestedRejectionInput);
+
+      expect({
+        outcomes: {
+          clamped:
+            clampedResult.ok && clampedResult.config.attribution_audit_sample_pct === 100
+              ? clampedResult.warnings
+              : clampedResult,
+          fallback:
+            fallbackResult.ok && fallbackResult.config.build_review?.enabled === true
+              ? fallbackResult.warnings
+              : fallbackResult,
+          topLevelRejection:
+            !topLevelRejectionResult.ok && topLevelRejectionResult.error.type === 'validation_error'
+              ? topLevelRejectionResult.error.message.includes('unknown_key')
+              : topLevelRejectionResult,
+          nestedRejection:
+            !nestedRejectionResult.ok && nestedRejectionResult.error.type === 'validation_error'
+              ? nestedRejectionResult.error.message.includes('bogus_key')
+              : nestedRejectionResult,
+        },
+        inputs: {
+          clampedInput,
+          fallbackInput,
+          topLevelRejectionInput,
+          nestedRejectionInput,
+        },
+      }).toEqual({
+        outcomes: {
+          clamped: [
+            'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
+          ],
+          fallback: [
+            'build_review.enabled has invalid value "banana", falling back to enabled.',
+          ],
+          topLevelRejection: true,
+          nestedRejection: true,
+        },
+        inputs: snapshots,
+      });
+    });
+
     it('rejects steps.<name> if not an object', () => {
       const result = validateConfig({
         steps: { memory: 'haiku' },
