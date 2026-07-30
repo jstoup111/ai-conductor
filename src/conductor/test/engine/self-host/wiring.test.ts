@@ -154,7 +154,9 @@ describe('self-host wiring — default bundle members forward to the real primit
     );
     const text = await readFile(conductorSrc, 'utf-8');
     const start = text.indexOf('runSelfBuildDispatch');
-    const end = text.indexOf('async run(): Promise<void>');
+    const end = text.indexOf(
+      'async run(): Promise<OperatorParkedTermination | undefined>',
+    );
 
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
@@ -525,7 +527,9 @@ describe('self-host wired path — non-autonomy (TR-12, ADR-005/ADR-010)', () =>
     const text = await readFile(conductorSrc, 'utf-8');
     // Scope to the self-build region (helpers added in Phase 6).
     const start = text.indexOf('runSelfBuildDispatch');
-    const end = text.indexOf('async run(): Promise<void>');
+    const end = text.indexOf(
+      'async run(): Promise<OperatorParkedTermination | undefined>',
+    );
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const region = text.slice(start, end);
