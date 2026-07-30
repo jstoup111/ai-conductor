@@ -112,6 +112,50 @@ complexity:
       expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
     });
+
+    it('keeps public project-only loading runtime-ready while the pre-merge pass defers defaults', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
+
+      const ordinary = await loadConfig(tmpDir);
+      const deferred = validateConfig({}, tmpDir, {
+        source: 'project',
+        materializeDefaults: false,
+      });
+
+      expect({
+        ordinary: ordinary.ok
+          ? {
+              auto_restart_on_stale_engine:
+                ordinary.config.auto_restart_on_stale_engine,
+              build_review: ordinary.config.build_review,
+              build_progress_halt: ordinary.config.build_progress_halt,
+            }
+          : ordinary,
+        deferred: deferred.ok
+          ? {
+              auto_restart_on_stale_engine:
+                deferred.config.auto_restart_on_stale_engine,
+              build_review: deferred.config.build_review,
+              build_progress_halt: deferred.config.build_progress_halt,
+            }
+          : deferred,
+      }).toEqual({
+        ordinary: {
+          auto_restart_on_stale_engine: false,
+          build_review: { enabled: true },
+          build_progress_halt: {
+            enabled: true,
+            attempt_ceiling: 30,
+            dispatch_ceiling: 20,
+          },
+        },
+        deferred: {
+          auto_restart_on_stale_engine: undefined,
+          build_review: undefined,
+          build_progress_halt: undefined,
+        },
+      });
+    });
   });
 
   describe('validateConfig', () => {
