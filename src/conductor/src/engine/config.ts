@@ -126,6 +126,14 @@ export async function loadConfig(
   projectRoot: string,
   harnessVersion?: string,
 ): Promise<ConfigResult> {
+  return loadProjectConfig(projectRoot, harnessVersion, true);
+}
+
+async function loadProjectConfig(
+  projectRoot: string,
+  harnessVersion: string | undefined,
+  materializeDefaults: boolean,
+): Promise<ConfigResult> {
   // One-shot: relocate legacy .harness/config.yml into .ai-conductor/ on first
   // call. Idempotent — no-op if the new location already exists or legacy is
   // absent.
@@ -161,7 +169,10 @@ export async function loadConfig(
     return { ok: false, error: { type: 'parse_error', message } };
   }
 
-  const validation = validateConfig(parsed, projectRoot, { source: 'project' });
+  const validation = validateConfig(parsed, projectRoot, {
+    source: 'project',
+    materializeDefaults,
+  });
   if (!validation.ok) return validation;
 
   if (harnessVersion && validation.config.harness_version) {
@@ -1691,7 +1702,7 @@ export async function loadMergedConfig(
   projectRoot: string,
   harnessVersion?: string,
 ): Promise<ConfigResult> {
-  const projectResult = await loadConfig(projectRoot, harnessVersion);
+  const projectResult = await loadProjectConfig(projectRoot, harnessVersion, false);
   if (!projectResult.ok) return projectResult;
 
   const userResult = await readUserConfig();
