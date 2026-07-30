@@ -1,7 +1,7 @@
 # ADR: wiring_check gate — deterministic reachability verification with layered probe
 
 **Date:** 2026-07-12
-**Status:** SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout` (BUILD-tail ordering only)
+**Status:** SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout` (BUILD-tail ordering only) and `adr-2026-07-30-contract-aware-same-file-wiring` (same-file composition exception only)
 **Deciders:** James Stoup (operator), engineer session (intake jstoup111/ai-conductor#462)
 
 ## Context
