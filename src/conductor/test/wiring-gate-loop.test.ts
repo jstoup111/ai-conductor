@@ -417,7 +417,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     }).toEqual({ checkBeforeBudget: true, captureBeforeNavigate: true });
   });
 
-  it('replays an identical joined wiring gap to the D1 cap without reaching review or SHIP', async () => {
+  it('halts an identical joined wiring gap at D2 before charging D1 again or reaching review or SHIP', async () => {
     await writeState(statePath, { ...frontDone(), track: 'technical', run_started_at: 1 });
     const gapEvidence = JSON.stringify({
       schema: 1,
@@ -494,9 +494,9 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
       haltClass: await readHaltClass(dir),
     }).toEqual({
-      secondKickbackCounts: [2],
+      secondKickbackCounts: [],
       downstreamDispatches: [],
-      halt: expect.stringMatching(/wiring_check.*cap 2/i),
+      halt: expect.stringMatching(/wiring_check kickback-to-build no-op/i),
       haltClass: 'needs-human',
     });
   });
