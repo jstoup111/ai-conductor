@@ -189,6 +189,7 @@ export async function loadConfig(
  */
 export interface ValidateConfigOpts {
   source?: 'project' | 'merged';
+  materializeDefaults?: boolean;
 }
 
 export function validateConfig(
@@ -196,6 +197,8 @@ export function validateConfig(
   projectRoot?: string,
   opts: ValidateConfigOpts = {},
 ): ConfigResult {
+  const materializeDefaults = opts.materializeDefaults ?? true;
+
   if (raw === null || raw === undefined) {
     return { ok: true, config: {}, warnings: [] };
   }
@@ -608,7 +611,7 @@ export function validateConfig(
     if (typeof obj.reconcile_parked_auto_cleanup !== 'boolean') {
       return errVal('reconcile_parked_auto_cleanup must be a boolean');
     }
-  } else {
+  } else if (materializeDefaults) {
     obj.reconcile_parked_auto_cleanup = true;
   }
 
@@ -720,7 +723,7 @@ export function validateConfig(
       );
       obj.attribution_audit_sample_pct = clamped;
     }
-  } else {
+  } else if (materializeDefaults) {
     // Absent → default to 10
     obj.attribution_audit_sample_pct = 10;
   }
@@ -790,7 +793,7 @@ export function validateConfig(
       );
       obj.auto_restart_on_stale_engine = false;
     }
-  } else {
+  } else if (obj.auto_restart_on_stale_engine === null || materializeDefaults) {
     // C1: absent or null → false without warning
     obj.auto_restart_on_stale_engine = false;
   }
@@ -819,7 +822,7 @@ export function validateConfig(
       );
       obj.engine_refresh_min_interval_seconds = 300;
     }
-  } else {
+  } else if (obj.engine_refresh_min_interval_seconds === null || materializeDefaults) {
     // C1: absent or null → 300 without warning
     obj.engine_refresh_min_interval_seconds = 300;
   }
@@ -898,7 +901,7 @@ export function validateConfig(
       );
       obj.build_review = { enabled: true };
     }
-  } else {
+  } else if (obj.build_review === null || materializeDefaults) {
     obj.build_review = { enabled: true };
   }
 
@@ -924,7 +927,7 @@ export function validateConfig(
     } else {
       obj.ci_watch = { enabled: true };
     }
-  } else {
+  } else if (obj.ci_watch === null || materializeDefaults) {
     obj.ci_watch = { enabled: true };
   }
 
@@ -936,7 +939,9 @@ export function validateConfig(
         : FALLBACK_RETRIES;
     const err = validateBuildProgressHaltBlock(obj.build_progress_halt, resolvedMaxRetries);
     if (err) return { ok: false, error: err };
-    obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+    if (obj.build_progress_halt !== undefined || materializeDefaults) {
+      obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+    }
   }
 
   // kickback_escalation — kickback→build no-op escalation (D2).
@@ -961,7 +966,7 @@ export function validateConfig(
     } else {
       obj.kickback_escalation = { enabled: true };
     }
-  } else {
+  } else if (obj.kickback_escalation === null || materializeDefaults) {
     obj.kickback_escalation = { enabled: true };
   }
 
@@ -969,7 +974,9 @@ export function validateConfig(
   {
     const err = validateRetryRoutingBlock(obj.retry_routing);
     if (err) return { ok: false, error: err };
-    obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
+    if (obj.retry_routing !== undefined || materializeDefaults) {
+      obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
+    }
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };

@@ -260,6 +260,54 @@ complexity:
       });
     });
 
+    it('defers absent project defaults while ordinary validation materializes them', () => {
+      const input = {
+        mergeable_autoresolve: { enabled: true },
+      };
+
+      const deferred = validateConfig(structuredClone(input), '/repo', {
+        source: 'project',
+        materializeDefaults: false,
+      });
+      const ordinary = validateConfig(structuredClone(input));
+
+      expect({
+        deferred: deferred.ok
+          ? {
+              auto_restart_on_stale_engine:
+                deferred.config.auto_restart_on_stale_engine,
+              build_review: deferred.config.build_review,
+              mergeable_autoresolve: deferred.config.mergeable_autoresolve,
+            }
+          : deferred,
+        ordinary: ordinary.ok
+          ? {
+              auto_restart_on_stale_engine:
+                ordinary.config.auto_restart_on_stale_engine,
+              build_review: ordinary.config.build_review,
+              mergeable_autoresolve: ordinary.config.mergeable_autoresolve,
+            }
+          : ordinary,
+      }).toEqual({
+        deferred: {
+          auto_restart_on_stale_engine: undefined,
+          build_review: undefined,
+          mergeable_autoresolve: {
+            enabled: true,
+            cooldownMinutes: 60,
+          },
+        },
+        ordinary: {
+          auto_restart_on_stale_engine: false,
+          build_review: { enabled: true },
+          mergeable_autoresolve: {
+            enabled: true,
+            cooldownMinutes: 60,
+          },
+        },
+      });
+    });
+
     it('rejects steps.<name> if not an object', () => {
       const result = validateConfig({
         steps: { memory: 'haiku' },
