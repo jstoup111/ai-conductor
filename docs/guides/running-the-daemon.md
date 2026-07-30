@@ -342,10 +342,21 @@ It never reads as "not merged".
 By default ([`reconcile_parked_auto_cleanup`](../reference/configuration.md#reconcile_parked_auto_cleanup)
 is unset or `true`), a `merged` slug with a `.docs/shipped/<slug>.md` record on `origin/main` is
 reconciled automatically: its worktree is removed, any branch for it is deleted, and it is unparked
-— with no in-progress resume for that slug. Branch ancestry remains the sole authority for the
-deletion itself: if a branch for the slug exists and is *not* contained in `origin/main` (a stale
-local branch, or work that landed on it after the merge), cleanup is refused with `not-ancestor` and
-nothing is deleted, even though the slug still classifies `merged`. A merged slug with no shipped
+— with no in-progress resume for that slug. The shipped record is never authority for the deletion
+itself; every local branch for the slug must first be proven to hold no commit that deleting it would
+drop, by **either** of two proofs:
+
+- **Ancestry.** `git merge-base --is-ancestor <branch> origin/main` succeeds (fast-forward or
+  merge-commit merge).
+- **Merged-PR head identity.** A `MERGED` pull request for that branch reports the branch's *current*
+  tip as the commit it merged (`gh pr list --head <branch> --state merged --json headRefOid`). This
+  covers the squash- and rebase-merge case, where the merge rewrites the commits and ancestry is
+  structurally false forever even for a branch carrying nothing beyond what landed. One extra local
+  commit moves the tip, the SHAs diverge, and this proof fails.
+
+If neither proof holds for some branch — a stale local branch, work that landed on it after the
+merge, or simply no `gh` available to ask — cleanup is refused with `not-ancestor` and nothing is
+deleted, even though the slug still classifies `merged`. A merged slug with no shipped
 record yet is left parked and,
 when a merged PR can be found, gets an ST-916 record-repair PR requested on its behalf; it
 reconciles on a later tick once the record lands. Set `reconcile_parked_auto_cleanup: false` to

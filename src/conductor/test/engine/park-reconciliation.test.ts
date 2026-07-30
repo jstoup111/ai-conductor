@@ -24,6 +24,8 @@ interface GitWorld {
   branches?: readonly string[];
   /** Subset of `branches` contained in origin/main. */
   merged?: readonly string[];
+  /** Current tip SHA per branch, for `git rev-parse <branch>`. */
+  tips?: Readonly<Record<string, string>>;
   /** Refs whose ancestry probe fails with a non-1 exit (broken repo state). */
   ancestryBroken?: readonly string[];
   /** `git for-each-ref` itself fails. */
@@ -56,6 +58,11 @@ function makeGit(world: GitWorld = {}): {
       return { stdout: `${shipped.map((stem) => `${stem}.md`).join('\n')}\n` };
     }
     if (verb === 'rev-parse') {
+      if (args[1] !== '--verify') {
+        const tip = world.tips?.[args[1]];
+        if (tip === undefined) throw gitFailure(128, `fatal: bad revision ${args[1]}`);
+        return { stdout: `${tip}\n` };
+      }
       if (shipped === 'unavailable') {
         throw gitFailure(128, 'fatal: Needed a single revision');
       }
@@ -200,10 +207,133 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       branches: [`spec/${slug}`],
       merged: [],
     });
+    // No merged PR reports this head, so nothing can prove the branch carries
+    // only what landed — the ancestry refusal must stand.
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
     try {
       await writeOperatorPark(projectRoot, slug);
 
-      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run });
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        deleted: [],
+        parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('deletes a squash-merged branch whose tip matches the merged PR head oid', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'squash-merged';
+    const tip = 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678';
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`fix/${slug}`],
+      merged: [],
+      tips: { [`fix/${slug}`]: tip },
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({
+      stdout: `[{"headRefOid":"${tip}"}]`,
+    });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect({
+        outcome,
+        deleted,
+        ghCalls: runGh.mock.calls,
+        parked: await isOperatorParked(projectRoot, slug),
+      }).toEqual({
+        outcome: { slug, steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+        deleted: [`fix/${slug}`],
+        ghCalls: [
+          [
+            ['pr', 'list', '--head', `fix/${slug}`, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
+            { cwd: projectRoot },
+          ],
+        ],
+        parked: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a squash-merged branch that gained commits after the merge', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'post-merge-commit';
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({
+      stdout: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+    });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        deleted: [],
+        parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { name: 'the PR lookup itself is unavailable', gh: () => Promise.reject(new Error('gh unavailable')) },
+    { name: 'the PR lookup returns unparsable output', gh: async () => ({ stdout: 'not json' }) },
+  ])('keeps the ancestry refusal when $name', async ({ gh }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'offline-refusal';
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [],
+      tips: { [`feat/${slug}`]: 'abcabcabcabcabcabcabcabcabcabcabcabcabca' },
+    });
+    const runGh = vi.fn<GhRunner>().mockImplementation(gh);
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        deleted: [],
+        parked: true,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when a squash-merge candidate branch tip cannot be resolved', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'unresolvable-tip';
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      merged: [],
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({
+      stdout: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+    });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
         outcome: { slug, steps: [], refusal: 'not-ancestor' },

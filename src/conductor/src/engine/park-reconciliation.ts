@@ -96,9 +96,12 @@ function undatedStem(stem: string): string {
  *   branch-derived check permanently unanswerable, and it survives a
  *   squash/rebase merge that leaves the local branch tip outside `origin/main`.
  * - `mergedBranches` — local branches for the slug that `merge-base
- *   --is-ancestor` proves are contained in `origin/main`. This remains the
- *   ONLY authority for deleting a branch (see `reconcileMergedPark`), because
- *   deleting a branch that is not an ancestor would drop commits.
+ *   --is-ancestor` proves are contained in `origin/main`. Ancestry is one of
+ *   the two deletion proofs `reconcileMergedPark` accepts; the other is
+ *   head-oid identity against a merged PR (`isSquashMergedAtTip`), needed
+ *   because a squash merge makes ancestry permanently false for the source
+ *   branch. A shipped record is never a deletion proof on its own — it says
+ *   nothing about commits added to the branch after the merge.
  *
  * `branches` carries every local branch whose final path segment is the slug,
  * whatever its prefix. Branch prefixes are not uniform (`feat/`, `spec/`,
@@ -198,6 +201,48 @@ async function isContainedInMain(
     return true;
   } catch (error) {
     return (error as { code?: unknown }).code === 1 ? false : null;
+  }
+}
+
+/**
+ * `true` when a MERGED pull request for `ref` reports exactly this branch's
+ * current tip as its head commit — the squash/rebase-merge equivalent of
+ * ancestry.
+ *
+ * A squash merge rewrites the branch's commits into one new commit on the base
+ * branch, so `merge-base --is-ancestor` is permanently `false` for the source
+ * branch even when that branch carries nothing beyond what was merged. Ancestry
+ * alone therefore refuses every squash-merged branch forever (the same
+ * squash-merge blind spot #1157 fixed for the worktree reap).
+ *
+ * The head-oid comparison answers the question ancestry was asked for — "does
+ * deleting this ref drop a commit?" — without weakening it: GitHub recorded
+ * which commit it merged, and if the local tip still equals that commit then
+ * every commit on the branch is contained in the squash. One extra local commit
+ * moves the tip, the SHAs diverge, and this returns `false`.
+ *
+ * Fails closed: an unavailable `gh`, a non-JSON payload, no merged PR, or an
+ * unresolvable tip all return `false`, leaving ancestry as the only authority
+ * exactly as before.
+ */
+async function isSquashMergedAtTip(
+  runGit: GitRunner,
+  runGh: GhRunner,
+  projectRoot: string,
+  ref: string,
+): Promise<boolean> {
+  try {
+    const { stdout } = await runGh(
+      ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
+      { cwd: projectRoot },
+    );
+    const prs = JSON.parse(stdout) as Array<{ headRefOid?: unknown }>;
+    const headRefOid = prs[0]?.headRefOid;
+    if (typeof headRefOid !== 'string' || headRefOid.trim() === '') return false;
+    const { stdout: tip } = await runGit(['rev-parse', ref], { cwd: projectRoot });
+    return tip.trim() === headRefOid.trim();
+  } catch {
+    return false;
   }
 }
 
@@ -366,14 +411,26 @@ export async function reconcileMergedPark(
   }
 
   // Deletion gate, unchanged in strength by the record signal: EVERY local
-  // branch carrying this slug must be ancestry-proven before anything is
-  // deleted. A shipped record proves the work shipped, but it says nothing
+  // branch carrying this slug must be proven to hold no commit that deleting it
+  // would drop. A shipped record proves the work shipped, but it says nothing
   // about commits that landed on the branch afterwards — including work that
-  // raced this very sweep. Ancestry stays the sole deletion authority, so a
-  // record-backed park whose branch is not contained in origin/main is
-  // classified `merged` (it is) and refused for cleanup (it must be).
-  if (evidence.mergedBranches.length !== evidence.branches.length) {
-    return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
+  // raced this very sweep.
+  //
+  // Two independent proofs, either of which is sufficient per branch:
+  //   (a) ancestry — the branch is contained in origin/main (fast-forward or
+  //       merge-commit merge);
+  //   (b) head-oid identity — a MERGED PR for the branch reports the branch's
+  //       current tip as the commit it merged (squash/rebase merge, where (a)
+  //       is structurally always false).
+  // Neither proof available ⇒ refuse, exactly as before.
+  const unproven = evidence.branches.filter((ref) => !evidence.mergedBranches.includes(ref));
+  if (unproven.length > 0) {
+    const runGh = opts.runGh ?? makeProductionGh();
+    for (const ref of unproven) {
+      if (!(await isSquashMergedAtTip(runGit, runGh, opts.projectRoot, ref))) {
+        return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
+      }
+    }
   }
 
   if (!evidence.shippedRecordOnMain) {
