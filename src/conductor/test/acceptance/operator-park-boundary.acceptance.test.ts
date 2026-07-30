@@ -18,6 +18,7 @@ import { ALL_STEPS, STEP_GROUPS } from '../../src/engine/steps.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { renderReport } from '../../src/engine/report-renderer.js';
 
 const FEATURE_SLUG = 'boundary-aware-operator-parking';
 
@@ -229,6 +230,100 @@ describe('boundary-aware operator parking acceptance', () => {
       'architecture_review_as_built',
     ]);
     expect(groups).toContainEqual(['wiring_check', 'test_suite']);
+  });
+
+  it.each([
+    {
+      label: 'SHIP',
+      pending: [
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+        'rebase',
+      ] as StepName[],
+      expectedMembers: [
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ] as StepName[],
+      expectedGroup: 'validation',
+      later: 'rebase' as StepName,
+    },
+    {
+      label: 'BUILD',
+      pending: [
+        'wiring_check',
+        'test_suite',
+        'build_review',
+      ] as StepName[],
+      expectedMembers: ['wiring_check', 'test_suite'] as StepName[],
+      expectedGroup: 'build_verification',
+      later: 'build_review' as StepName,
+    },
+  ])('FR-8: $label built-in group joins before the accepted park boundary', async ({
+    pending,
+    expectedMembers,
+    expectedGroup,
+    later,
+  }) => {
+    const root = await makeRoot(`operator-park-${expectedGroup}-`);
+    const statePath = join(root, 'conduct-state.json');
+    await seedPending(statePath, pending);
+    const calls: StepName[] = [];
+    let parked = false;
+    const conductor = makeConductor(
+      root,
+      statePath,
+      {
+        run: vi.fn(async (step: StepName) => {
+          calls.push(step);
+          parked = true;
+          return { success: true };
+        }),
+      },
+      {
+        fromStep: expectedMembers[0],
+        config: { validation_concurrency: 2 },
+        operatorParkBoundary: async () => parked,
+      },
+    );
+
+    const result = await conductor.run();
+    const state = await readState(statePath);
+
+    expect(new Set(calls)).toEqual(new Set(expectedMembers));
+    expect(calls).not.toContain(later);
+    expect(result).toMatchObject({
+      kind: 'operator-parked',
+      boundary: { kind: 'group', name: expectedGroup },
+    });
+    expect(
+      expectedMembers.every(
+        (member) => state.ok && state.value[member] === 'done',
+      ),
+    ).toBe(true);
+  });
+
+  it('FR-10: persisted reporting names the exact accepted scheduling boundary', async () => {
+    const root = await makeRoot('operator-park-report-');
+    const eventsPath = join(root, 'events.jsonl');
+    await writeFile(
+      eventsPath,
+      `${JSON.stringify({
+        type: 'operator_park_boundary',
+        featureSlug: FEATURE_SLUG,
+        boundary: { kind: 'group', name: 'build_verification' },
+        timestamp: '2026-07-30T00:00:00.000Z',
+      })}\n`,
+      'utf8',
+    );
+
+    const report = renderReport(eventsPath);
+
+    expect(report).toContain(FEATURE_SLUG);
+    expect(report).toContain('build_verification');
+    expect(report).toContain('group');
+    expect(report).not.toMatch(/\bDONE\b|\bHALT\b|generic error/i);
   });
 
   it('FR-5: classifies the typed conductor stop before marker inference and forbidden completion side effects', async () => {
