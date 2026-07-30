@@ -56,7 +56,7 @@ catalog removal, interactive CLI guidance, and the consumer migration.
 
 **Files:** `src/conductor/src/engine/steps.ts`, `src/conductor/test/engine/conductor.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#BUILD_VERIFICATION_GROUP`
 
 **Dependencies:** none
 
@@ -75,7 +75,7 @@ catalog removal, interactive CLI guidance, and the consumer migration.
 
 **Files:** `src/conductor/src/engine/group-core.ts`, `src/conductor/test/engine/group-core.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#runNativeGroupBranch`
 
 **Dependencies:** Task 1
 
@@ -114,7 +114,7 @@ catalog removal, interactive CLI guidance, and the consumer migration.
 
 **Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/deterministic-build-verification-group.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#runNativeGroupBranch`
 
 **Dependencies:** Task 3
 
