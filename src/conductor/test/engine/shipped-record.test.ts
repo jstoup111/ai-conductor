@@ -14,6 +14,17 @@ import {
 } from '../../src/engine/shipped-record.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
+import type { TimingRollup } from '../../src/engine/timing-rollup.js';
+import * as shippedRecordModule from '../../src/engine/shipped-record.js';
+
+function appendTimingSection(content: string, timing: TimingRollup): string {
+  const renderer = (
+    shippedRecordModule as typeof shippedRecordModule & {
+      appendTimingSection?: (existing: string, rollup: TimingRollup) => string;
+    }
+  ).appendTimingSection;
+  return renderer?.(content, timing) ?? content;
+}
 
 /** Minimal fake tree source for exercising listShippedRecords in isolation. */
 function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {
@@ -304,6 +315,86 @@ describe('parseShippedRecord', () => {
     const parsed = parseShippedRecord('# Not a shipped record\n\njust prose.\n');
 
     expect(parsed).toMatchObject({ malformed: true });
+  });
+});
+
+describe('appendTimingSection', () => {
+  const fields = {
+    slug: 'billing-export',
+    specHash: 'abc123',
+    pr: 'https://github.com/acme/repo/pull/42',
+    shipped: '2026-07-01',
+  };
+  const rollup: CostRollup = {
+    tokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
+    costUsd: 0.01,
+    dispatches: 1,
+    retries: 0,
+    halts: 0,
+    unmetered: { count: 1, durationMs: 9876 },
+    providers: {
+      claude: {
+        tokens: { input: 10, output: 5, cacheRead: 0, cacheCreation: 0 },
+        costUsd: 0.01,
+        dispatches: 1,
+        unmetered: { count: 1, durationMs: 9876 },
+      },
+    },
+  };
+
+  it.each([
+    {
+      state: 'measured',
+      timing: {
+        state: 'measured',
+        activeMs: 100,
+        providerActiveMs: 40,
+        noProviderActiveMs: 60,
+      } satisfies TimingRollup,
+      expected:
+        '## Time\n' +
+        'state: measured\n' +
+        'active_ms: 100\n' +
+        'provider_active_ms: 40\n' +
+        'no_provider_active_ms: 60\n',
+    },
+    {
+      state: 'partial',
+      timing: { state: 'partial', activeMs: 100 } satisfies TimingRollup,
+      expected: '## Time\nstate: partial\nactive_ms: 100\n',
+    },
+    {
+      state: 'unavailable',
+      timing: { state: 'unavailable' } satisfies TimingRollup,
+      expected: '## Time\nstate: unavailable\n',
+    },
+  ])('appends the explicit $state Time block', ({ timing, expected }) => {
+    const rendered = appendTimingSection(
+      renderShippedRecordWithCost(fields, rollup),
+      timing,
+    );
+
+    expect(rendered.endsWith(`\n${expected}`)).toBe(true);
+  });
+
+  it('leaves frontmatter and Cost/provider-duration content byte-stable', () => {
+    const before = renderShippedRecordWithCost(fields, rollup);
+    const after = appendTimingSection(before, {
+      state: 'measured',
+      activeMs: 100,
+      providerActiveMs: 40,
+      noProviderActiveMs: 60,
+    });
+
+    expect({
+      prefix: after.slice(0, before.length),
+      parsed: parseShippedRecord(after),
+      providerDuration: /unmetered: count: 1, duration_ms: 9876/.test(after),
+    }).toEqual({
+      prefix: before,
+      parsed: parseShippedRecord(before),
+      providerDuration: true,
+    });
   });
 });
 
