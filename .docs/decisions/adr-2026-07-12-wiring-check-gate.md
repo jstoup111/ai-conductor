@@ -1,7 +1,7 @@
 # ADR: wiring_check gate — deterministic reachability verification with layered probe
 
 **Date:** 2026-07-12
-**Status:** APPROVED
+**Status:** SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout` (BUILD-tail ordering only)
 **Deciders:** James Stoup (operator), engineer session (intake jstoup111/ai-conductor#462)
 
 ## Context
@@ -43,6 +43,11 @@ deterministic gate that verifies it. Constraints verified in source:
 - **Cons:** two code paths to maintain; the TS layer is the repo's first import-graph tooling.
 
 ## Decision
+
+> **Ordering amendment (2026-07-29):** The deterministic fan-out ADR moves
+> `wiring_check` into a concurrent BUILD verification group with `test_suite`,
+> immediately after `build` and before `build_review`. The probe, evidence,
+> kickback, and completion contracts below remain authoritative.
 
 **Option C**, as a new step + predicate + probe:
 

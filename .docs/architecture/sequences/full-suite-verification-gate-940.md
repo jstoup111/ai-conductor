@@ -1,111 +1,76 @@
-# Sequence: Shared full-suite verification and reuse (#940)
+# Sequence: Deterministic BUILD verification fan-out
 
-**Last updated:** 2026-07-25
-**Scope:** Automated and direct-Claude entry, current-proof reuse, failure
-kickback, finish fallback, and independent PR/CI behavior.
+**Last updated:** 2026-07-29
+**Scope:** Concurrent wiring and aggregate-suite verification, single-writer join, deferred model review, BUILD remediation, and proof reuse.
 
 ## Diagram
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant FLOW as Conductor test_suite gate<br/>or direct /test-suite
-    participant VERIFY as Shared configured verifier
-    participant CFG as .ai-conductor/config.yml
-    participant INPUT as Git/worktree + declared env
-    participant PROOF as .pipeline/test-suite-evidence.json
-    participant RUN as Authoritative suite process
+    participant FLOW as Conductor BUILD tail
+    participant WIRE as Wiring probe
+    participant VERIFY as FullSuiteVerifier
+    participant RUN as Aggregate suite process
+    participant JOIN as Deterministic join
+    participant REVIEW as build_review
     participant BUILD as BUILD remediation
     participant SHIP as SHIP validators
     participant FIN as finish
-    participant PR as /pr
     participant CI as CI
 
-    Note over FLOW,VERIFY: test_suite is after build_review + wiring_check<br/>and before the first SHIP validator
-    FLOW->>VERIFY: ensure current full-suite PASS
-    VERIFY->>CFG: resolve aggregate command and inputs
-
-    alt config/command/input resolution is indeterminate
-        VERIFY->>PROOF: atomically record blocking reason
-        VERIFY-->>FLOW: FAIL closed
-        alt automated conductor
-            FLOW->>BUILD: kick back with actionable evidence
-        else direct Claude
-            FLOW-->>FLOW: block SHIP and route to /tdd or /pipeline
-        end
-    else inputs resolvable
-        VERIFY->>INPUT: calculate content fingerprint
-        VERIFY->>PROOF: read prior result
-        alt prior PASS has identical fingerprint
-            PROOF-->>VERIFY: current PASS
-            VERIFY-->>FLOW: REUSED with proof timestamp
-        else proof missing, failed, or stale
-            VERIFY->>RUN: execute aggregate project suite
-            alt exit 0 before timeout
-                RUN-->>VERIFY: PASS + bounded output
-                VERIFY->>PROOF: atomically record PASS + fingerprint
-                VERIFY-->>FLOW: EXECUTED PASS
-            else launch error, timeout, or non-zero exit
-                RUN-->>VERIFY: failure + bounded output
-                VERIFY->>PROOF: atomically record FAIL + reason
-                VERIFY-->>FLOW: FAIL closed
-                alt automated conductor
-                    FLOW->>BUILD: kick back with failure evidence
-                else direct Claude
-                    FLOW-->>FLOW: block SHIP and route to /tdd or /pipeline
-                end
-            end
+    Note over FLOW,JOIN: No model review is dispatched before both deterministic branches settle
+    par Wiring verification
+        FLOW->>WIRE: inspect reachability
+        WIRE-->>JOIN: PASS or actionable FAIL
+    and Aggregate verification
+        FLOW->>VERIFY: ensure current full-suite PASS
+        alt current content-addressed PASS exists
+            VERIFY-->>JOIN: REUSED PASS
+        else proof missing, stale, or failed
+            VERIFY->>RUN: execute configured aggregate suite
+            RUN-->>VERIFY: exit result and bounded diagnostics
+            VERIFY-->>JOIN: EXECUTED PASS or actionable FAIL
         end
     end
 
-    opt gate passed
-        FLOW->>SHIP: begin manual_test / PRD audit / as-built review
-        SHIP->>FIN: completion verification
-        FIN->>VERIFY: ensure current full-suite PASS
-        alt proof still current
-            VERIFY-->>FIN: REUSED without process launch
-        else proof missing or stale
-            VERIFY->>RUN: fallback execution
-            RUN-->>VERIFY: PASS or blocking FAIL
-            VERIFY->>PROOF: replace evidence
-            VERIFY-->>FIN: result
+    alt either deterministic branch failed
+        JOIN-->>FLOW: fail-closed joined result
+        FLOW->>BUILD: kick back with deterministic evidence
+    else both deterministic branches passed
+        JOIN-->>FLOW: joined PASS
+        FLOW->>REVIEW: dispatch model-judged build review
+        alt build review failed
+            REVIEW-->>FLOW: blocking verdict
+            FLOW->>BUILD: kick back with review evidence
+        else build review passed
+            REVIEW-->>FLOW: PASS
+            FLOW->>SHIP: begin validation group
+            SHIP->>FIN: completion verification
+            FIN->>VERIFY: re-inspect current suite proof
+            VERIFY-->>FIN: REUSED or blocking result
+            FIN->>CI: push path retains independent CI authority
         end
-        FIN->>PR: chosen completion path
-        Note over PR: no local suite execution
-        PR->>CI: push / open or update PR
-        CI->>RUN: independent authoritative CI suite
     end
 ```
 
-## Earlier full-suite fallback
+## Join contract
 
-When scoped-test selection is unsafe or impossible during BUILD, the workflow
-uses the host's repository-configured verifier interface instead of calling the
-project's aggregate command directly. A successful fallback therefore writes the same proof. At
-the explicit `test_suite` gate, unchanged inputs produce `REUSED`, not a second
-execution.
+- Both deterministic branches are allowed to settle; neither writes conductor state directly.
+- The join is the sole state, gate, and event writer for the fan-out round.
+- A failed aggregate suite and a failed wiring probe retain their existing reason classifications and BUILD kickback targets.
+- `build_review` is never launched on a joined deterministic failure.
+- Cancellation or interruption preserves settled branch evidence and leaves incomplete branches retryable without converting absence into success.
+- The aggregate suite may write ignored ephemeral outputs such as coverage data, but it does not mutate fingerprinted project inputs or wiring-probe inputs; both branches therefore observe the same completed build.
 
-Ordinary TDD cycles, batch boundaries, parallel joins, and `build_review`
-continue to execute only their scoped or impacted test sets.
+## Standalone verification
 
-## Invalidation behavior
-
-- The verifier recalculates the fingerprint on every gate/CLI/finish call, so
-  source, test, configuration, dependency, migration, test-infrastructure,
-  declared environment, and relevant uncommitted changes become stale without
-  relying solely on step state or `HEAD`.
-- Documentation-only changes do not alter the fingerprint.
-- A post-PASS BUILD kickback or rebase may preserve the proof only when the
-  recalculated fingerprint is identical. Any indeterminate comparison forces a
-  new run or blocks if the suite cannot be run.
-- A resumed completed state performs the same current-proof check before it is
-  accepted; stale completion metadata does not bypass verification.
-- Status reporting distinguishes `EXECUTED`, `REUSED`, `STALE`, and `FAILED`
-  and includes the invalidation/failure reason.
+`conduct-ts test-suite` invokes `FullSuiteVerifier` directly and reports the same current, stale, executed, reused, and failed outcomes. It is a deterministic command surface, not a skill invocation.
 
 ## Change Log
 
 | Date | Change | Reason |
 |------|--------|--------|
 | 2026-07-25 | Initial generation | DECIDE phase for issue #940 |
-| 2026-07-25 | Added completed-state resume behavior and confirmed plan Tasks 10–20 preserve the sequence | Plan-update architecture pass |
+| 2026-07-25 | Added completed-state resume behavior | Issue #940 plan update |
+| 2026-07-29 | Replaced the serial skill-facing flow with deterministic BUILD fan-out and deferred model review | Deterministic test-suite step specification |

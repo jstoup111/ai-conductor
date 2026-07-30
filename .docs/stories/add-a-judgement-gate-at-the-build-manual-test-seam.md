@@ -5,17 +5,22 @@
 **Source:** intake jstoup111/ai-conductor#324 · ADR `adr-2026-07-07-build-review-judgement-gate.md` (APPROVED) · technical track, tier M.
 All stories testable with an **injected fake grader / fake StepRunner** (gate-loop test pattern) — no live model calls. All tests use an isolated tmpdir `projectRoot` (never cwd `.pipeline/` writes, per #252 convention).
 
+> **Amended 2026-07-29:** build review remains the mandatory model-judged BUILD
+> gate, but the joined deterministic `wiring_check` and `test_suite` group now
+> sits between `build` and `build_review`. Exact adjacency and prerequisite
+> assertions below follow that newer ordering; grader semantics are unchanged.
+
 ## Story: build_review is a first-class loop member gating manual_test
 
 **Requirement:** TS-1 (ADR decisions 1)
 
-As the conductor engine, I want `build_review` registered as a first-class loopGate step between `build` and `manual_test` so that the gate-driven tail treats it as a loop region member.
+As the conductor engine, I want `build_review` registered as a first-class loopGate step after deterministic BUILD verification and before `manual_test` so that the gate-driven tail treats it as a loop region member.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the static registry, when `ALL_STEPS` is loaded, then `build_review` exists with `phase: 'BUILD'`, `enforcement: 'gating'`, `prerequisites: ['build']`, `loopGate: true`, and `manual_test.prerequisites` equals `['build_review']`.
-- Given a conduct run with `verifyArtifacts: true` and `build_review` enabled, when `build` completes and its gate satisfies, then the selector's next unsatisfied gate is `build_review` (never `manual_test` directly).
+- Given the static registry, when `ALL_STEPS` is loaded, then `build_review` exists with `phase: 'BUILD'`, `enforcement: 'gating'`, the joined deterministic group as its prerequisite, `loopGate: true`, and `manual_test` remains downstream of `build_review`.
+- Given a conduct run with `verifyArtifacts: true` and `build_review` enabled, when `build` and both deterministic gates satisfy, then the selector's next unsatisfied gate is `build_review` (never `manual_test` directly).
 - Given `deriveGateTopology`, when topology is derived, then `build_review` appears in `verdictSteps` and `firstLoopIndex` is unchanged for existing projects.
 
 #### Negative Paths
@@ -26,7 +31,7 @@ As the conductor engine, I want `build_review` registered as a first-class loopG
 
 ### Done When
 - [ ] `build_review` entry present in `ALL_STEPS` with the exact fields above; `StepName` union extended.
-- [ ] `manual_test.prerequisites === ['build_review']` asserted by a registry test.
+- [ ] Registry tests assert the deterministic group before `build_review` and `manual_test` after it.
 - [ ] Rows exist in every exhaustive per-step map + regenerated model table; `test/generate-model-table.test.ts` and `test_harness_integrity.sh` pass.
 - [ ] Selector/topology tests cover ordering and loop-membership above.
 
@@ -40,8 +45,8 @@ As a project operator, I want `build_review` off unless I opt in via config so t
 
 #### Happy Path
 - Given no `build_review` key in `.ai-conductor/config.yml`, when the conductor starts, then the resolved flag is off and the step is marked `skipped` (with a skip event emitted).
-- Given the step is `skipped`, when `manual_test`'s gate is checked, then the `build_review` prerequisite counts as satisfied and the run proceeds `build → manual_test` exactly as today.
-- Given `build_review.enabled: true`, when the conductor starts, then the step is active and dispatched after `build`.
+- Given the step is `skipped`, when `manual_test`'s gate is checked, then the `build_review` prerequisite counts as satisfied only after both deterministic gates pass.
+- Given `build_review.enabled: true`, when the conductor starts, then the step is active and dispatched after joined deterministic verification.
 
 #### Negative Paths
 - Given `build_review.enabled: false` explicitly, when resolved, then behavior is identical to the absent-key case (no distinction between absent and false).
@@ -51,8 +56,8 @@ As a project operator, I want `build_review` off unless I opt in via config so t
 
 ### Done When
 - [ ] Top-level `build_review` config type + safe-by-default resolver (absent/false/malformed → off) with unit tests for all three.
-- [ ] Gate-loop integration test: flag off ⇒ step skipped, `manual_test` selected directly after `build`, zero grader dispatches.
-- [ ] Gate-loop integration test: flag on ⇒ `build_review` dispatched between `build` and `manual_test`.
+- [ ] Gate-loop integration test: flag off ⇒ step skipped, `manual_test` selected only after deterministic verification, zero grader dispatches.
+- [ ] Gate-loop integration test: flag on ⇒ `build_review` dispatched between deterministic verification and `manual_test`.
 
 ## Story: grader runs input-starved in a fresh one-shot session
 

@@ -1,7 +1,7 @@
 # ADR: Content-addressed full-suite proof at the BUILD-to-SHIP boundary
 
 **Date:** 2026-07-25
-**Status:** SUPERSEDED in part by `adr-2026-07-25-direct-claude-configured-verifier-interface` (direct-Claude invocation details only)
+**Status:** SUPERSEDED in part by `adr-2026-07-29-deterministic-build-verification-fanout` (BUILD-tail ordering and skill surface); previously superseded in part by `adr-2026-07-25-direct-claude-configured-verifier-interface`
 **Deciders:** James Stoup (operator), Codex architecture review for issue #940
 **Relates to:** `adr-2026-07-12-wiring-check-gate.md`,
 `adr-2026-07-20-post-rebase-delta-aware-invalidation.md`, and
@@ -57,6 +57,13 @@ cannot see uncommitted working-tree or declared environment changes.
   command runner, CLI adapter, and explicit migration for existing projects.
 
 ## Decision
+
+> **Ordering and interface amendment (2026-07-29):** The deterministic fan-out
+> ADR places `test_suite` beside `wiring_check` immediately after `build`, with
+> `build_review` starting only after their joined pass. The engine and
+> standalone CLI use `FullSuiteVerifier` directly; there is no test-suite skill.
+> All proof, configuration, fingerprint, execution, evidence, and failure
+> semantics below remain authoritative.
 
 Choose **Option C**.
 
