@@ -83,6 +83,16 @@ else
   pass "legacy skills/test-suite directory is absent"
 fi
 
+if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' \
+  | grep -vF "${CONDUCT_SKILL_FILE}:255:" >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
+  cat /tmp/pipeline_contract_genericity_hits.$$ >&2
+  rm -f /tmp/pipeline_contract_genericity_hits.$$
+  fail "reusable skills contain a project-specific verifier command, path, legacy runner name, or harness-file reference"
+else
+  rm -f /tmp/pipeline_contract_genericity_hits.$$
+  pass "all reusable skills are free of project-specific verifier commands, paths, legacy runner names, and harness-file references"
+fi
+
 if [ ! -f "$CONDUCT_SKILL_FILE" ]; then
   fail "skills/conduct/SKILL.md exists for deterministic suite guidance"
 else
