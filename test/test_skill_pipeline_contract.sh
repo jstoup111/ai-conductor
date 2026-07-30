@@ -29,6 +29,10 @@ SCOPE_CONTRACT_FILES=(
   "HARNESS.md"
 )
 LEGACY_TEST_SUITE_SKILL="${HARNESS_DIR}/skills/test-suite"
+SHIPPED_WORKFLOW_CONTRACTS=(
+  "${HARNESS_DIR}/skills"
+  "${HARNESS_DIR}/.github/workflows"
+)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
