@@ -135,6 +135,31 @@ from it — the call sites named there become the `path#symbol` (or inheritance/
 forms on the corresponding tasks. Do not invent `Wired-into:` values ad hoc when a
 `## Wiring Surface` section exists; transcribe/refine what it already states.
 
+**Mechanical validation — BLOCKING.** Grammar prose is not enforcement: an anchor form
+that the wiring machinery cannot resolve produces no authoring-time error at all, and the
+build then never advances a task past `pending` — a 19-task plan once spun for hours at
+0/19 completed while the work was actually landing. Do not hand-check anchors. Once every
+task's `Wired-into:` line is written, run:
+
+```bash
+conduct-ts validate-wired-into <path to the plan file>
+```
+
+It resolves each declared anchor through the *same* machinery BUILD-time per-task
+completion verification uses (`same as Task N` inheritance is resolved first, `none (...)`
+forms are skipped), and prints a per-task `PASS`/`FAIL`/`SKIP` report, exiting non-zero on
+any failure. Any `FAIL` **hard-blocks the plan** — the same way `/verify-claims`'
+`ASSUMPTIONS_PENDING` gate blocks on an unconfirmed load-bearing assumption. Two
+resolutions, no third:
+
+1. **Fix the anchor.** The usual cause is an anchor that names a definition rather than a
+   call site (e.g. a class member that no line in the declared file literally writes).
+   Name the file and symbol the new surface is actually *called from*.
+2. **Escalate.** If the anchor is genuinely correct and the validator still rejects it, the
+   parser or the verification layer is the defect. Surface it to the operator (HALT if
+   autonomous) — do not weaken the anchor to something that merely passes, and never
+   present the plan as complete with a `FAIL` outstanding.
+
 **Small-tier fallback:** Small-tier features skip architecture-review entirely (see
 its Lightweight Mode section), so there is no `## Wiring Surface` section to derive
 from. In that case `/plan` self-authors reasonable `Wired-into:` lines directly,
@@ -302,5 +327,8 @@ any code is written. The full flow from here is:
 - [ ] Every task that touches new production-surface files carries a `**Wired-into:**`
       line (declared call site(s), `same as Task N`, or a `none (...)` form) — BLOCKS
       the plan's own verification if missing
+- [ ] `conduct-ts validate-wired-into <plan file>` run against the saved plan and reporting
+      zero `FAIL` rows — any `FAIL` HARD-BLOCKS; fix the anchor or escalate (see 5c). Never
+      present the plan as complete with an unresolved anchor
 - [ ] Plan saved to `.docs/plans/`
 - [ ] Coverage mapping presented to user
