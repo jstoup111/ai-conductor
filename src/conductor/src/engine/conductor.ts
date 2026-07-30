@@ -3139,6 +3139,42 @@ export class Conductor {
               });
             }
 
+            const deterministicFailureIdxs =
+              builtinGroup.name === BUILD_VERIFICATION_GROUP.name
+                ? outcomes
+                  .map((outcome, idx) =>
+                    outcome.kind === 'no-verdict' && outcome.reason !== 'authFailure' ? idx : -1,
+                  )
+                  .filter((idx) => idx !== -1)
+                : [];
+            if (deterministicFailureIdxs.length === 1) {
+              const failureIdx = deterministicFailureIdxs[0]!;
+              const failedMember = membership.dispatchable[failureIdx]!;
+              const failedOutcome = outcomes[failureIdx] as NoVerdictOutcome;
+              const evidence = failedOutcome.reason;
+              const kickback = await consumeKickbackBudget(failedMember.name as StepName, evidence);
+              if (!kickback.exhausted) {
+                await emitTracked({
+                  type: 'kickback',
+                  from: failedMember.name as StepName,
+                  to: 'build',
+                  evidence,
+                  count: kickback.entry.count,
+                });
+                pendingRetryHints.set(
+                  'build',
+                  `${failedMember.name} failed deterministic BUILD verification:\n${evidence}`,
+                );
+                await captureKickbackToBuildContext(failedMember.name as StepName);
+                const nav = navigateBack(state, 'build', steps);
+                state = nav.state;
+                (state as Record<string, unknown>)[failedMember.name] = 'stale';
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1;
+                continue;
+              }
+            }
+
             const permissionDeniedIdx = outcomes.findIndex(
               (outcome) => outcome.kind === 'permission-denied',
             );
