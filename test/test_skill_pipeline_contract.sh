@@ -13,6 +13,7 @@ SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
+CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
 AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
 CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
@@ -42,6 +43,21 @@ pass() {
   echo -e "  ${GREEN}PASS${NC} $1"
 }
 
+# This is a machine-consumed conduct contract, so inspect the entire skill rather
+# than coupling the assertion to a section heading or source-file position.
+conduct_suite_guidance_contract_holds() {
+  local skill_file="$1"
+
+  grep -qF 'conduct-ts test-suite' "$skill_file" \
+    && grep -qF 'EXECUTED PASS' "$skill_file" \
+    && grep -qF 'REUSED PASS' "$skill_file" \
+    && grep -qiE 'non-zero exit.*BLOCKS' "$skill_file" \
+    && grep -qF 'BUILD remediation' "$skill_file" \
+    && grep -qF '/tdd' "$skill_file" \
+    && grep -qF '/pipeline' "$skill_file" \
+    && ! grep -qiE '(^|[^[:alnum:]_-])[/\$]test-suite\b|test-suite[[:space:]]+(skill|model)|(skill|model)[[:space:]]+test-suite' "$skill_file"
+}
+
 if [ ! -f "$SKILL_FILE" ]; then
   fail "skills/pipeline/SKILL.md exists"
   exit 1
@@ -58,6 +74,31 @@ if [ -e "$LEGACY_TEST_SUITE_SKILL" ]; then
   fail "legacy skills/test-suite directory must be absent"
 else
   pass "legacy skills/test-suite directory is absent"
+fi
+
+if [ ! -f "$CONDUCT_SKILL_FILE" ]; then
+  fail "skills/conduct/SKILL.md exists for deterministic suite guidance"
+else
+  mutated_conduct_skill="$(mktemp "${TMPDIR:-/tmp}/conduct-suite-guidance.XXXXXX")"
+  trap 'rm -f "$mutated_conduct_skill"' EXIT
+
+  # Negative control: remove every required guidance statement from an isolated
+  # copy. The semantic predicate must reject that copy before it accepts the
+  # production skill.
+  sed -E '/conduct-ts test-suite|EXECUTED PASS|REUSED PASS|non-zero exit BLOCKS|BUILD remediation|`\/tdd` or `\/pipeline`/d' \
+    "$CONDUCT_SKILL_FILE" >"$mutated_conduct_skill"
+
+  if conduct_suite_guidance_contract_holds "$mutated_conduct_skill"; then
+    fail "deterministic suite guidance predicate rejects an absent-guidance fixture"
+  else
+    pass "deterministic suite guidance predicate rejects an absent-guidance fixture"
+  fi
+
+  if conduct_suite_guidance_contract_holds "$CONDUCT_SKILL_FILE"; then
+    pass "conduct uses deterministic suite CLI, accepts proof reuse, blocks failures, and has no skill/model fallback"
+  else
+    fail "conduct must use deterministic suite CLI, accept proof reuse, block failures, and forbid skill/model fallback"
+  fi
 fi
 
 # Must NOT contain imperative "Run `conduct-ts task start`" / "Run `conduct-ts task done`"
