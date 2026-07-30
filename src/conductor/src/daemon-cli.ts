@@ -1016,6 +1016,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       modelPolicy: selectedRuntime.policy,
       providerExecution,
       projectRoot: wt.path,
+      worktreeBranch: wt.branch,
       log: featureLog,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon
       // is building the harness itself. `baseBranch` feeds the release-artifact
