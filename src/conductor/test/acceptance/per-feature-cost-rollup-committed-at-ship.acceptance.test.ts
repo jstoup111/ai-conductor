@@ -113,6 +113,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         provider: 'codex',
         outcome: 'unavailable',
         invoked: true,
+        observedIntervals: [{ startedAtMs: 10, durationMs: 20 }],
         tokenUsage: {
           input: 40,
           output: 10,
@@ -134,6 +135,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         provider: 'claude',
         outcome: 'success',
         invoked: true,
+        observedIntervals: [{ startedAtMs: 40, durationMs: 30 }],
         tokenUsage: {
           input: 100,
           output: 20,
@@ -146,6 +148,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         type: 'step_completed',
         step: 'plan',
         status: 'done',
+        activeInterval: { startedAtMs: 0, durationMs: 100 },
         preferredProvider: 'codex',
         actualProvider: 'claude',
         tokenUsage: {
@@ -160,7 +163,9 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
 
     await runShippedRecord();
     const body = await shippedRecordBody();
-    const costOutput = body.slice(body.indexOf('## Cost'));
+    const costStart = body.indexOf('## Cost');
+    const timeStart = body.indexOf('\n## Time');
+    const costOutput = body.slice(costStart, timeStart).trimEnd();
 
     expect(costOutput).toBe(
       `## Cost\n` +
@@ -176,8 +181,19 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
         `cost_unmetered: count: 0\n` +
         `providers:\n` +
         `  codex: input: 40, output: 10, cache_read: 4, cache_creation: 1, cost_usd: 0.02, dispatches: 1, cost_unmetered: 0\n` +
-        `  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1, cost_unmetered: 0\n`,
+        `  claude: input: 100, output: 20, cache_read: 10, cache_creation: 2, cost_usd: 0.05, dispatches: 1, cost_unmetered: 0`,
     );
+    expect(body.slice(timeStart + 1)).toBe(
+      `## Time\n` +
+        `state: measured\n` +
+        `active_ms: 100\n` +
+        `provider_active_ms: 50\n` +
+        `no_provider_active_ms: 50\n`,
+    );
+
+    const commitCount = await git(['rev-list', '--count', 'HEAD']);
+    expect(await runShippedRecord()).toBe(0);
+    expect(await git(['rev-list', '--count', 'HEAD'])).toBe(commitCount);
   });
 
   it('happy: metered events.jsonl -> a "## Cost" block summing tokens/cost_usd/dispatch counts lands in the committed shipped record', async () => {
@@ -220,6 +236,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
     // fabricated zero-cost clean rollup.
     expect(body).toMatch(/##\s*Cost/i);
     expect(body).toMatch(/unmetered:\s*(?:\{\s*)?count:\s*[1-9]\d*/i);
+    expect(body).toContain('## Time\nstate: unavailable\n');
   });
 
   it('negative: a partial/corrupt events.jsonl (unparseable line mixed with good ones) still ships — partial data folded into unmetered, never a crash', async () => {
@@ -239,5 +256,7 @@ describe('acceptance: per-feature cost rollup is committed at ship (Story 3, #53
     if (/##\s*Cost/i.test(body)) {
       expect(body).toMatch(/unmetered/i);
     }
+    expect(body).toContain('## Time\nstate: partial\n');
+    expect(await git(['status', '--porcelain', '--', '.docs/shipped'])).toBe('');
   });
 });
