@@ -263,6 +263,63 @@ complexity:
       });
     });
 
+    it('returns validation errors without mutating non-cloneable inputs', () => {
+      const unknownValue = () => 'unknown';
+      const nestedValue = () => 'invalid';
+      const nestedBlock = { enabled: nestedValue };
+      const topLevelInput = { unknown_key: unknownValue };
+      const nestedInput = { retry_routing: nestedBlock };
+
+      const topLevelResult = validateConfig(topLevelInput);
+      const nestedResult = validateConfig(nestedInput);
+
+      expect({
+        results: {
+          topLevel: topLevelResult.ok
+            ? topLevelResult.config
+            : {
+                type: topLevelResult.error.type,
+                message: topLevelResult.error.message,
+              },
+          nested: nestedResult.ok
+            ? nestedResult.config
+            : {
+                type: nestedResult.error.type,
+                message: nestedResult.error.message,
+              },
+        },
+        inputs: {
+          topLevelInput,
+          nestedInput,
+        },
+        identities: {
+          unknownValueRetained: topLevelInput.unknown_key === unknownValue,
+          nestedBlockRetained: nestedInput.retry_routing === nestedBlock,
+          nestedValueRetained: nestedInput.retry_routing.enabled === nestedValue,
+        },
+      }).toEqual({
+        results: {
+          topLevel: {
+            type: 'validation_error',
+            message: 'Unknown top-level key: "unknown_key"',
+          },
+          nested: {
+            type: 'validation_error',
+            message: 'retry_routing.enabled must be a boolean',
+          },
+        },
+        inputs: {
+          topLevelInput: { unknown_key: unknownValue },
+          nestedInput: { retry_routing: { enabled: nestedValue } },
+        },
+        identities: {
+          unknownValueRetained: true,
+          nestedBlockRetained: true,
+          nestedValueRetained: true,
+        },
+      });
+    });
+
     it('isolates returned nested objects and arrays from caller-owned references', () => {
       const input = {
         defaults: { model: 'sonnet' },

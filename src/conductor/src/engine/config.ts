@@ -221,7 +221,7 @@ export function validateConfig(
     };
   }
 
-  const obj = structuredClone(raw) as Record<string, unknown>;
+  const obj = cloneForValidation(raw) as Record<string, unknown>;
   const warnings: ConfigWarning[] = [];
 
   const knownTopLevelKeys = new Set([
@@ -1668,6 +1668,57 @@ function validateByTier(raw: unknown, path: string): ConfigError | null {
 
 function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
+}
+
+function cloneForValidation<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return cloneValidationGraph(value, new WeakMap<object, unknown>());
+  }
+}
+
+function cloneValidationGraph<T>(value: T, seen: WeakMap<object, unknown>): T {
+  if (value === null || typeof value !== 'object') return value;
+  const existing = seen.get(value);
+  if (existing !== undefined) return existing as T;
+
+  if (value instanceof Date) {
+    const copy = new Date(value.getTime());
+    seen.set(value, copy);
+    return copy as T;
+  }
+  if (value instanceof RegExp) {
+    const copy = new RegExp(value.source, value.flags);
+    copy.lastIndex = value.lastIndex;
+    seen.set(value, copy);
+    return copy as T;
+  }
+  if (value instanceof ArrayBuffer) {
+    const copy = value.slice(0);
+    seen.set(value, copy);
+    return copy as T;
+  }
+  const copy: Record<string, unknown> | unknown[] = Array.isArray(value)
+    ? new Array(value.length)
+    : {};
+  seen.set(value, copy);
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return copy as T;
+  }
+  for (const key of keys) {
+    let entry: unknown;
+    try {
+      entry = (value as Record<string, unknown>)[key];
+    } catch {
+      entry = undefined;
+    }
+    (copy as Record<string, unknown>)[key] = cloneValidationGraph(entry, seen);
+  }
+  return copy as T;
 }
 
 /**
