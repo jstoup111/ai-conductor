@@ -3132,42 +3132,6 @@ export class Conductor {
               });
             }
 
-            const deterministicFailureIdxs =
-              builtinGroup.name === BUILD_VERIFICATION_GROUP.name
-                ? outcomes
-                  .map((outcome, idx) =>
-                    outcome.kind === 'no-verdict' && outcome.reason !== 'authFailure' ? idx : -1,
-                  )
-                  .filter((idx) => idx !== -1)
-                : [];
-            if (deterministicFailureIdxs.length === 1) {
-              const failureIdx = deterministicFailureIdxs[0]!;
-              const failedMember = membership.dispatchable[failureIdx]!;
-              const failedOutcome = outcomes[failureIdx] as NoVerdictOutcome;
-              const evidence = failedOutcome.reason;
-              const kickback = await consumeKickbackBudget(failedMember.name as StepName, evidence);
-              if (!kickback.exhausted) {
-                await emitTracked({
-                  type: 'kickback',
-                  from: failedMember.name as StepName,
-                  to: 'build',
-                  evidence,
-                  count: kickback.entry.count,
-                });
-                pendingRetryHints.set(
-                  'build',
-                  `${failedMember.name} failed deterministic BUILD verification:\n${evidence}`,
-                );
-                await captureKickbackToBuildContext(failedMember.name as StepName);
-                const nav = navigateBack(state, 'build', steps);
-                state = nav.state;
-                (state as Record<string, unknown>)[failedMember.name] = 'stale';
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1;
-                continue;
-              }
-            }
-
             const permissionDeniedIdx = outcomes.findIndex(
               (outcome) => outcome.kind === 'permission-denied',
             );
@@ -3222,6 +3186,86 @@ export class Conductor {
                   await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
                 );
               }
+            }
+
+            const deterministicFailureIdxs =
+              builtinGroup.name === BUILD_VERIFICATION_GROUP.name
+                ? outcomes
+                  .map((outcome, idx) =>
+                    (outcome.kind === 'no-verdict' && outcome.reason !== 'authFailure') ||
+                    (outcome.kind === 'verdict' &&
+                      outcome.verdict === 'pass' &&
+                      this.verifyArtifacts &&
+                      !gateVerdicts.get(membership.dispatchable[idx]!.name)?.satisfied)
+                      ? idx
+                      : -1,
+                  )
+                  .filter((idx) => idx !== -1)
+                : [];
+            if (deterministicFailureIdxs.length > 0) {
+              const deterministicFailures = [] as Array<{
+                member: typeof membership.dispatchable[number];
+                evidence: string;
+              }>;
+              for (const failureIdx of deterministicFailureIdxs) {
+                deterministicFailures.push({
+                  member: membership.dispatchable[failureIdx]!,
+                  evidence: outcomes[failureIdx]!.kind === 'no-verdict'
+                    ? (outcomes[failureIdx] as NoVerdictOutcome).reason
+                    : (gateVerdicts.get(membership.dispatchable[failureIdx]!.name)?.reason ??
+                      'deterministic BUILD verification gate unsatisfied')
+                      .replace(/^wiring-reachability gaps found:\n/, ''),
+                });
+              }
+              const kickbacks = [] as Awaited<ReturnType<typeof consumeKickbackBudget>>[];
+              for (const failure of deterministicFailures) {
+                kickbacks.push(
+                  await consumeKickbackBudget(failure.member.name as StepName, failure.evidence),
+                );
+              }
+              if (kickbacks.every((kickback) => !kickback.exhausted)) {
+                const evidence = deterministicFailures.map((failure) => failure.evidence).join('\n');
+                const from = deterministicFailures.length === 1
+                  ? deterministicFailures[0]!.member.name as StepName
+                  : step.name;
+                await emitTracked({
+                  type: 'kickback',
+                  from,
+                  to: 'build',
+                  evidence,
+                  count: Math.max(...kickbacks.map((kickback) => kickback.entry.count)),
+                });
+                pendingRetryHints.set(
+                  'build',
+                  `${deterministicFailures.map((failure) => failure.member.name).join(', ')} ` +
+                    `failed deterministic BUILD verification:\n${evidence}`,
+                );
+                for (const failure of deterministicFailures) {
+                  await captureKickbackToBuildContext(failure.member.name as StepName);
+                }
+                const nav = navigateBack(state, 'build', steps);
+                state = nav.state;
+                for (const failure of deterministicFailures) {
+                  (state as Record<string, unknown>)[failure.member.name] = 'stale';
+                }
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1;
+                continue;
+              }
+              const exhausted = deterministicFailures.find(
+                (_, idx) => kickbacks[idx]!.exhausted,
+              )!;
+              const exhaustedKickback = kickbacks[deterministicFailures.indexOf(exhausted)]!;
+              const reason =
+                `${exhausted.member.name} failure unresolved after ${exhaustedKickback.entry.count} ` +
+                `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${exhaustedKickback.entry.lastReason}`;
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              if (!this.daemon) process.off('SIGTERM', sigterm);
+              return;
             }
 
             // manual_test's own gate is satisfied merely by the results

@@ -56,7 +56,9 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
       architecture_review: 'skipped',
       acceptance_specs: 'skipped',
       build: 'done',
-      ...(gate === 'wiring_check' ? { build_review: 'skipped' } : {}),
+      ...(gate === 'wiring_check'
+        ? { build_review: 'skipped' }
+        : { wiring_check: 'done', test_suite: 'done' }),
     });
 
     const runner: StepRunner = {
@@ -75,7 +77,7 @@ describe('conductor kickback ledger lifecycle (Task 7, #984)', () => {
               findings: lastReason === '' ? {} : { tautology: [lastReason] },
             }),
           );
-        } else if (step === 'wiring_check') {
+        } else if (step === 'wiring_check' && gate === 'wiring_check') {
           await writeFile(
             join(dir, '.pipeline/wiring-evidence.json'),
             JSON.stringify({

@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { Conductor } from '../test-conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
+import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -207,4 +208,72 @@ describe('deterministic BUILD verification group', () => {
       }]);
     },
   );
+
+  it('joins reversed dual failures into one ordered BUILD rewind and charges both gate budgets', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-dual-failure-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({ plan: 'done', build: 'done' }));
+
+    const wiring = deferred<{ success: false; output: string }>();
+    const suite = deferred<{ status: 'FAILED'; reason: never; message: string }>();
+    const starts: string[] = [];
+    const dispatches: string[] = [];
+    const stepRunner: StepRunner = {
+      run: vi.fn((step) => {
+        dispatches.push(step);
+        if (step === 'wiring_check') {
+          starts.push('wiring');
+          return wiring.promise;
+        }
+        if (step === 'build') return Promise.resolve({ success: false, output: 'stop after rewind' });
+        throw new Error(`unexpected model or SHIP dispatch: ${step}`);
+      }),
+    };
+    const verifier = {
+      inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+      ensure: vi.fn(() => {
+        starts.push('suite');
+        return suite.promise;
+      }),
+    };
+    const events = new ConductorEventEmitter();
+    const kickbacks: Array<{ from: string; to: string; evidence?: string; count: number }> = [];
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner,
+      events,
+      projectRoot,
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      maxRetries: 1,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: verifier,
+      onRecovery: async () => 'quit',
+    });
+
+    const run = conductor.run();
+    await vi.waitFor(() => expect(starts).toEqual(['wiring', 'suite']));
+    suite.resolve({ status: 'FAILED', reason: 'test_failure' as never, message: 'suite diagnostic' });
+    await Promise.resolve();
+    wiring.resolve({ success: false, output: 'wiring diagnostic' });
+    await run;
+
+    expect(dispatches).toEqual(['wiring_check', 'build']);
+    expect(kickbacks).toEqual([{
+      type: 'kickback',
+      from: 'wiring_check',
+      to: 'build',
+      evidence: 'wiring diagnostic\nsuite diagnostic',
+      count: 1,
+    }]);
+    const ledger = await readKickbackLedger(projectRoot);
+    expect({
+      wiring: ledger.gates.wiring_check?.count,
+      suite: ledger.gates.test_suite?.count,
+    }).toEqual({ wiring: 1, suite: 1 });
+  });
 });
