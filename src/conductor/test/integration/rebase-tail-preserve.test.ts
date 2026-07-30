@@ -22,7 +22,7 @@ import { currentCommitSha } from '../../src/engine/project-prelude.js';
 // verdict written) because the rebase delta never touched the feature's own
 // runtime surface. This test drives a REAL git rebase whose delta is
 // foreign-runtime-only (`src/foreign-only.ts`, a path the feature branch
-// never touched) — `wiring_check`/`build_review`/`manual_test` must be
+// never touched) — `wiring_check`/`test_suite`/`build_review`/`manual_test` must be
 // re-opened and re-dispatched (their surface includes foreign runtime), but
 // `prd_audit`/`architecture_review_as_built` (feature-runtime-scoped surface,
 // D_featureSrc empty) must remain `done` and NEVER be re-dispatched.
