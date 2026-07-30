@@ -62,13 +62,24 @@ Merge multiple parallel worktrees back sequentially:
 
 ### Cleanup
 
-Remove worktrees after merge/PR:
+Cleanup is proof-gated. The caller MUST supply the applicable proof.
+MUST refuse cleanup when a PR is open or unmerged unless a discard was explicitly confirmed.
+
+Cleanup is authorized only after one of these proofs:
+
+1. Proof that a local merge completed successfully, with the shipped record on the local default branch
+2. Proof that a discard was explicitly confirmed
+
+Remote-default shipment cleanup is owned only by the engine mergeable sweep; worktree-manager MUST refuse it.
+If none is supplied and verified, report `BLOCKED` without changing the worktree, database, or branch.
+After verifying an authorized proof case:
 
 1. `git worktree remove <path>` for each completed worktree
-2. Drop worktree-specific database if it exists (e.g., `bin/rails db:drop` in worktree context)
-3. Delete the feature branch if merged: `git branch -d <branch>`
-4. Prune stale worktree references: `git worktree prune`
-5. Report: what was cleaned up (worktree, database, branch)
+2. For an explicitly confirmed discard, delete the unmerged branch with `git branch -D <branch>`; never force-delete a branch for any other proof case.
+3. Drop worktree-specific database if it exists (e.g., `bin/rails db:drop` in worktree context)
+4. For a completed local merge, delete the merged feature branch with `git branch -d <branch>`
+5. Prune stale worktree references: `git worktree prune`
+6. Report: what was cleaned up (worktree, database, branch)
 
 ### Status
 
@@ -84,6 +95,7 @@ You will receive in your prompt:
 - The operation to perform (create, merge, cleanup, status)
 - The feature description (for branch naming)
 - The base branch name (main, master, develop)
+- For cleanup: the proof case and evidence that authorizes it
 - For parallel: the task batch assignments
 
 You have full git access. You do NOT need permission to create branches or worktrees.
@@ -95,6 +107,7 @@ You have full git access. You do NOT need permission to create branches or workt
 - If merge conflicts can't be resolved confidently, report BLOCKED and let the user decide
 - Worktree paths must be under `.worktrees/` inside the project (gitignored)
 - Branch names must be valid git refs (no spaces, special chars)
+- Refuse cleanup unless the caller supplies one of the two authorized proof cases
 - Clean up is non-destructive by default — use `git worktree remove`, not `rm -rf`
 - Always generate `.env.local` with unique infrastructure namespaces when creating worktrees
 - Never share a database name or Redis namespace between worktrees

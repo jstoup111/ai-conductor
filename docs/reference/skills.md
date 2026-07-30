@@ -588,10 +588,11 @@ records but never blocks. **Neither** means it has no gate role in the flow.
   finish record is not written — the absent marker *is* the refusal signal the engine watches for,
   and must never be hand-written. A failed staleness proof or a failed `--force-with-lease` must never
   be retried with `--force`.
-- **Dispatches** — none. On the Push & PR path, `finish` authors and publishes the PR **inline**
-  (§5a of the skill) so the same turn reaches `conduct-ts finish-record`. It retains the feature
-  worktree; the daemon's mergeable sweep owns cleanup after the shipped record is proven on the
-  default branch.
+- **Dispatches** — `agents/worktree-manager.md` only after an interactive merge-local outcome has
+  landed its shipped record on the local default branch, or after an interactive discard is
+  explicitly confirmed. On the Push & PR path, `finish` authors and publishes the PR **inline**
+  (§5a of the skill), records the outcome, and retains the feature worktree; the daemon's mergeable
+  sweep owns cleanup after the shipped record is proven on the remote default branch.
 
 ### pr
 
@@ -676,7 +677,7 @@ subagent facility, not by the engine — the engine dispatches skills, and skill
 | `domain-reviewer.md` | Domain integrity reviewer with veto authority over tests and implementations | `tdd` at both DOMAIN phases, `code-review` |
 | `prd-auditor.md` | Audits one `FR-N` against shipped code; finding authority, never fixes | `prd-audit` |
 | `remediation-planner.md` | Emits per-gap dispositions and concrete tasks; planning authority, never edits code | `remediate` |
-| `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, cleanup | `pipeline` |
+| `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline`; `finish` after interactive merge-local or confirmed discard only |
 | `planner.md` | Expands brief requirements into implementable specs | Nothing — see below |
 | `cto-security.md` | Authn/authz, input validation, OWASP top 10, vulnerability surface | `assess` |
 | `cto-data-integrity.md` | Transactions, event sourcing, race conditions, migrations | `assess` |

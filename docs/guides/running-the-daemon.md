@@ -392,8 +392,10 @@ record is proven present on `origin/main` — the same signal
 [parked-feature reconciliation](#parked-feature-reconciliation) uses to define "shipped". Until
 then the worktree is retained on disk, one sweep tick at a time:
 
-The `finish` session records and publishes the outcome but performs no worktree cleanup. Opening,
-updating, or marking the implementation PR ready therefore cannot bypass this sweep-owned gate.
+The daemon/auto `finish` session records and publishes the outcome but performs no worktree cleanup.
+Opening, updating, or marking the implementation PR ready therefore cannot bypass this sweep-owned
+gate. Interactive local-merge and explicitly confirmed discard outcomes use their separate,
+proof-gated cleanup paths.
 
 - **`MERGED`, record not yet on `origin/main`.** Logged as `retained <slug> — reason:
   record-not-yet-on-main`, re-checked on the next tick. This is the normal window between merge and
@@ -621,7 +623,7 @@ A feature the daemon itself finished is deduped from both sides: discovery skips
 record is on the base branch (post-merge) *and* once the record is committed on the feature's own
 branch (`feat/daemon-<slug>`, pre-merge). The pre-merge half exists because a finish that records the
 ship but then reports failure would otherwise leave a completed feature eligible for re-dispatch,
-re-running `finish` against a worktree the finished run already tore down.
+re-running `finish` and duplicating publication work while the original worktree remains retained.
 
 **A step fails with `Cannot dispatch '<step>': its working directory … does not exist`.** The
 feature's worktree was removed while the run was in flight. The engine refuses the dispatch before

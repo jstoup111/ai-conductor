@@ -30,9 +30,10 @@ One or more of:
   engine's dispatch preflight refused to launch a provider into a path that is gone, and halted the
   run instead of retrying into it. Nothing was written back into the missing path — recreating
   `.pipeline/` there would leave a stub that makes the next `git worktree add` fail 128. If the
-  worktree disappeared mid-run (a finish-time cleanup is the usual cause), check the branch for a
-  shipped record before recovering: a feature whose ship is already recorded needs the PR merged,
-  not a rebuilt worktree.
+  worktree disappeared mid-run, treat that as premature cleanup unless a shipped record is already
+  proven on the default branch. Check the branch before recovering: a feature whose ship is already
+  recorded needs shipment reconciliation, while any other feature needs its worktree and evidence
+  recovered.
 
 ### Why losing the directory costs you
 

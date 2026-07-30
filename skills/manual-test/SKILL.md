@@ -167,12 +167,12 @@ which is what the conductor's freshness check needs (the file's mtime must be
 newer than the current session's start; a committed copy from a prior run
 would defeat that).
 
-**Daemon mode — record to the worktree, before cleanup.** When the daemon runs
-manual-test, the feature's `.pipeline` lives in the *worktree*. Run
+**Daemon mode — record to the retained worktree.** Daemon/auto Push & PR outcomes retain the
+feature worktree through manual testing; only the engine mergeable sweep cleans it after the
+shipped record is proven on `origin/<default>`. The feature's `.pipeline` lives in that worktree. Run
 `manual-test-record` against the **absolute worktree `.pipeline` path** (the conductor
-supplies it in the step's system prompt) — never a relative `.pipeline/...` path — and do
-so before any cleanup step, exactly as `/finish` does for `finish-record`. A relative write
-can land in the wrong checkout and the gate (which reads the worktree) never sees it.
+supplies it in the step's system prompt) — never a relative `.pipeline/...` path. A relative write
+can land in the wrong checkout and the gate (which reads the retained worktree) never sees it.
 
 **Refusal contract:** `manual-test-record` is the sole intended writer of
 `.pipeline/manual-test-results.md` — never hand-write, append to, or fabricate that file. If

@@ -374,8 +374,8 @@ conductor reads.
 - Determine the base branch (main, master, develop)
 - Merge the feature branch
 - Run tests again after merge to verify no merge issues
-- Delete the feature branch after successful merge
-- Write `merge-local` to `.pipeline/finish-choice`
+- Prove `.docs/shipped/<slug>.md` landed on the local default branch
+- Write `merge-local` to `.pipeline/finish-choice` before requesting worktree cleanup
 
 **Option 2: Push & PR**
 - **Author and publish the PR INLINE — never delegate.** Do the push and the
@@ -553,18 +553,31 @@ Explain what failed and what to do next:
 
 **Option 4: Discard**
 - Require explicit confirmation: "Are you sure? This deletes all work on this branch."
-- If confirmed: checkout base branch, delete feature branch, write `discard` to
-  `.pipeline/finish-choice`
+- If confirmed: write `discard` to `.pipeline/finish-choice` before requesting worktree cleanup
 - If not confirmed: return to options (do NOT write the marker)
 
 ### 6. Worktree Retention Boundary
 
 Finish is never a worktree deletion owner.
 Daemon/auto Push & PR outcomes retain the feature worktree.
-Finish has no worktree lifecycle authority.
+Interactive Option 2 Push & PR outcomes retain the feature worktree.
+Finish has no daemon/auto or Push & PR worktree lifecycle authority.
 Only the engine mergeable sweep owns worktree cleanup after the shipped record is proven on `origin/<default>`.
 
 After executing the chosen option:
+- After Option 1's local merge completes successfully, delegate cleanup to worktree-manager.
+  First prove the shipped record landed on the local default branch and record `merge-local` in
+  `.pipeline/finish-choice`; then use the selected host's available subagent facility for delegation.
+  Include this proof bundle in the subagent prompt:
+  Pass worktree-manager the proof case and evidence for Option 1: completed local merge, shipped record on the local default branch, and recorded `merge-local` outcome.
+- After Option 4's discard is explicitly confirmed, delegate cleanup to worktree-manager.
+  First record `discard` in `.pipeline/finish-choice`; then use the selected host's available
+  subagent facility for delegation.
+  Include this proof bundle in the subagent prompt:
+  Pass worktree-manager the proof case and evidence for Option 4: explicitly confirmed discard and recorded `discard` outcome.
+- Claude Code only: delegate worktree-manager cleanup through the Agent tool with model="haiku".
+- Other supported hosts delegate worktree-manager cleanup through their provider-native subagent facility and configured provider policy.
+- **Option 3 keep:** retain the feature worktree for later.
 - Suggest next step: `/manual-test` → `/retro`
 
 ## Verification
@@ -598,4 +611,5 @@ After executing the chosen option:
 - [ ] `.pipeline/finish-choice` written with the chosen outcome
 - [ ] If Option 2 (PR): `pr_url` written to `.pipeline/conduct-state.json`
 - [ ] Daemon/auto Push & PR retained the feature worktree for the engine mergeable sweep
+- [ ] Interactive Option 1/4 cleanup was delegated only after its required proof and outcome marker
 - [ ] Manual-test suggested as next step
