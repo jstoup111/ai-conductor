@@ -46,6 +46,7 @@ import { formatProviderCapabilityGapMessages } from './provider-execution.js';
 import type { ParallelBranch } from '../types/config.js';
 import {
   runGroupBranch,
+  runNativeGroupBranch,
   runWithConcurrency,
   makeSkippedOutcome,
   makeNoVerdictOutcome,
@@ -101,6 +102,7 @@ import {
   shouldSkipForUpstreamSkip,
   getGroupForStep,
   getStepDefinition,
+  BUILD_VERIFICATION_GROUP,
   VALIDATION_GROUP,
 } from './steps.js';
 import type { StepGroup } from '../types/index.js';
@@ -3009,8 +3011,26 @@ export class Conductor {
             );
             const dispatchGroupRound = (members: typeof membership.dispatchable) =>
               runWithConcurrency(
-                members.map((member) => () =>
-                  runGroupBranch(
+                members.map((member) => () => {
+                  if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
+                    return runNativeGroupBranch(
+                      member,
+                      () =>
+                        member.name === 'wiring_check'
+                          ? this.runWiringCheckStep(state)
+                          : this.runTestSuiteStep(),
+                      {
+                        onMemberEvent: (event) => {
+                          if (event.phase === 'result' && event.outcome === 'verdict:pass') {
+                            const syntheticKey = `${builtinGroup.name}__${event.member}`;
+                            inFlightGroupCompletions![event.member] = 'done';
+                            inFlightGroupCompletions![syntheticKey] = 'done';
+                          }
+                        },
+                      },
+                    );
+                  }
+                  return runGroupBranch(
                     member,
                     state,
                     {
@@ -3042,8 +3062,8 @@ export class Conductor {
                       },
                     },
                     1,
-                  ),
-                ),
+                  );
+                }),
                 cap,
               );
 
@@ -6328,6 +6348,10 @@ export class Conductor {
       output: `Full test suite ${verification.status}`,
       fullSuiteVerification: verification,
     };
+  }
+
+  private async runWiringCheckStep(state: ConductState): Promise<StepRunResult> {
+    return this.stepRunner.run('wiring_check', state);
   }
 
   /**
