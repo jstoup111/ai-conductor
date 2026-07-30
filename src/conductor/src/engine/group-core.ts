@@ -468,13 +468,19 @@ async function runGroupBranchInner(
   }
 
   let lastOutput = "";
-  let lastObservedIntervals: readonly ObservedInterval[] | undefined;
+  const observedIntervals: ObservedInterval[] = [];
+  const accumulatedObservedIntervals = () =>
+    observedIntervals.length > 0 ? observedIntervals : undefined;
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     // Task 8: check before every dispatch — an abort observed while queued
     // behind the semaphore, or between retries, must stop the branch from
     // issuing another stepRunner.run() call.
     if (deps.signal?.aborted) {
-      return makeNoVerdictOutcome("aborted");
+      return makeNoVerdictOutcome(
+        "aborted",
+        undefined,
+        accumulatedObservedIntervals(),
+      );
     }
 
     await deps.onMemberEvent?.({
@@ -502,13 +508,15 @@ async function runGroupBranchInner(
       lastOutput = err instanceof Error ? err.message : String(err);
       continue;
     }
-    lastObservedIntervals = result.observedIntervals;
+    if (result.observedIntervals) {
+      observedIntervals.push(...result.observedIntervals);
+    }
 
     if (result.success) {
       return makeVerdictOutcome(
         "pass",
         result.authentication,
-        result.observedIntervals,
+        accumulatedObservedIntervals(),
       );
     }
 
@@ -527,7 +535,11 @@ async function runGroupBranchInner(
       // (not because the rate limit actually cleared) — exit cleanly with
       // a recorded outcome instead of looping back into another dispatch.
       if (deps.signal?.aborted) {
-        return makeNoVerdictOutcome("aborted");
+        return makeNoVerdictOutcome(
+          "aborted",
+          undefined,
+          accumulatedObservedIntervals(),
+        );
       }
 
       attempt -= 1;
@@ -556,7 +568,7 @@ async function runGroupBranchInner(
       return makeNoVerdictOutcome(
         "authFailure",
         result.authentication,
-        result.observedIntervals,
+        accumulatedObservedIntervals(),
       );
     }
 
@@ -574,8 +586,8 @@ async function runGroupBranchInner(
               },
             }
           : {}),
-        ...(result.observedIntervals
-          ? { observedIntervals: result.observedIntervals }
+        ...(accumulatedObservedIntervals()
+          ? { observedIntervals: accumulatedObservedIntervals() }
           : {}),
       };
     }
@@ -586,6 +598,6 @@ async function runGroupBranchInner(
   return makeNoVerdictOutcome(
     lastOutput || "retries exhausted",
     undefined,
-    lastObservedIntervals,
+    accumulatedObservedIntervals(),
   );
 }

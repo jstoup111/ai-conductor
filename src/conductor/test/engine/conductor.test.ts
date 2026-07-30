@@ -168,7 +168,7 @@ describe('engine/conductor', () => {
       .toBe(observedIntervals[0]);
   });
 
-  it('preserves terminal intervals after a grouped session-expired retry', async () => {
+  it('preserves all ordered intervals after a grouped session-expired retry', async () => {
     const expiredIntervals = [{ startedAtMs: 800, durationMs: 15 }];
     const terminalIntervals = [{ startedAtMs: 900, durationMs: 60 }];
     const run = vi.fn()
@@ -193,12 +193,12 @@ describe('engine/conductor', () => {
     expect({
       kind: outcome.kind,
       calls: run.mock.calls.length,
-      interval: (outcome as { observedIntervals?: readonly unknown[] })
-        .observedIntervals?.[0],
+      intervals: (outcome as { observedIntervals?: readonly unknown[] })
+        .observedIntervals,
     }).toEqual({
       kind: 'no-verdict',
       calls: 2,
-      interval: terminalIntervals[0],
+      intervals: [...expiredIntervals, ...terminalIntervals],
     });
   });
 
