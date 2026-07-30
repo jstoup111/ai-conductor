@@ -3997,12 +3997,15 @@ export class Conductor {
           }
         }
 
+        let operatorParkRequested = false;
         if (
           this.daemon &&
           this.featureSlug !== undefined &&
-          this.operatorParkBoundary &&
-          await this.operatorParkBoundary()
+          this.operatorParkBoundary
         ) {
+          operatorParkRequested = await this.operatorParkBoundary().catch(() => true);
+        }
+        if (operatorParkRequested && this.featureSlug !== undefined) {
           const boundary: SchedulingUnitRef = lastSettledSerialStep
             ? { kind: 'step', name: lastSettledSerialStep }
             : { kind: 'pre-first-unit' };
