@@ -1,6 +1,6 @@
 ---
 name: finish
-description: "Use when implementation is complete and all tests pass. Verifies with fresh evidence, presents completion options (merge, PR, keep, discard), and cleans up."
+description: "Use when implementation is complete and all tests pass. Verifies with fresh evidence, presents completion options (merge, PR, keep, discard), and records the outcome."
 enforcement: gating
 phase: ship
 standalone: true
@@ -10,7 +10,7 @@ requires: []
 ## Purpose
 
 Ensures that completion claims are backed by fresh evidence — not cached results or assumptions.
-Presents structured options for integrating the work and handles cleanup.
+Presents structured options for integrating the work and records the selected outcome.
 
 ## Practices
 
@@ -306,15 +306,11 @@ The conductor's finish completion gate (artifacts.ts) requires a fresh
 `.pipeline/finish-choice` (and, for `pr`, `state.pr_url`); without it the
 feature is left "complete-but-unshipped" and the loop stalls.
 
-**Daemon mode — write markers to the worktree, before cleanup.** When the daemon
-runs finish, the feature's `.pipeline` lives in the *worktree*, but branch/PR/
-worktree cleanup (the worktree-manager agent) `cd`s into the *main* repo — so a
-relative `.pipeline/...` write can land in the wrong repo and the gate (which
-reads the worktree) never sees it. Write `finish-choice` and the `pr_url` in
-`conduct-state.json` to the **absolute worktree `.pipeline` path** (the conductor
-supplies it in the step's system prompt) and do so **before** any merge/cleanup
-step — never from inside a `cd`'d main checkout. If a PR for the branch already
-exists, reuse it (`gh pr view --json url -q .url`) rather than failing.
+**Daemon mode — write markers to the worktree.** The feature's `.pipeline` lives
+in the feature worktree. Write `finish-choice` and the `pr_url` in
+`conduct-state.json` to the **absolute worktree `.pipeline` path** supplied in
+the step's system prompt. If a PR for the branch already exists, reuse it
+(`gh pr view --json url -q .url`) rather than failing.
 
 **Reusing a PR never means reusing its body.** A reused PR — especially one born
 as a `needs-remediation` halt PR — must still get a real, freshly authored title and
@@ -378,8 +374,8 @@ conductor reads.
 - Determine the base branch (main, master, develop)
 - Merge the feature branch
 - Run tests again after merge to verify no merge issues
-- Delete the feature branch after successful merge
-- Write `merge-local` to `.pipeline/finish-choice`
+- Prove `.docs/shipped/<slug>.md` landed on the local default branch
+- Write `merge-local` to `.pipeline/finish-choice` before requesting worktree cleanup
 
 **Option 2: Push & PR**
 - **Author and publish the PR INLINE — never delegate.** Do the push and the
@@ -403,8 +399,7 @@ conductor reads.
 #### 5a. Inline PR Authoring — Do This Yourself
 
 Run all of the following in the current turn. Do not spawn a subagent and do not
-invoke another skill for any of it; the only sanctioned delegation in this skill is
-the post-record `worktree-manager` cleanup in §6.
+invoke another skill for any of it.
 
 1. **Gather context** (base branch, log, stat, diff):
    ```bash
@@ -558,23 +553,31 @@ Explain what failed and what to do next:
 
 **Option 4: Discard**
 - Require explicit confirmation: "Are you sure? This deletes all work on this branch."
-- If confirmed: checkout base branch, delete feature branch, write `discard` to
-  `.pipeline/finish-choice`
+- If confirmed: write `discard` to `.pipeline/finish-choice` before requesting worktree cleanup
 - If not confirmed: return to options (do NOT write the marker)
 
-### 6. Cleanup
+### 6. Worktree Retention Boundary
+
+Finish is never a worktree deletion owner.
+Daemon/auto Push & PR outcomes retain the feature worktree.
+Interactive Option 2 Push & PR outcomes retain the feature worktree.
+Finish has no daemon/auto or Push & PR worktree lifecycle authority.
+Only the engine mergeable sweep owns worktree cleanup after the shipped record is proven on `origin/<default>`.
 
 After executing the chosen option:
-- **Worktree merge/cleanup:** Use the selected host's available subagent facility to delegate the
-  `worktree-manager` responsibilities (see `agents/worktree-manager.md`). Preserve the cleanup
-  outcome below regardless of host; do not replace it with a host-specific shortcut.
-  **Claude Code only:** dispatch the `worktree-manager` through the Agent tool with
-  `model="haiku"` in Claude Code. Other supported hosts use their provider-native subagent facility and
-  configured provider policy, without translating the Claude Agent-tool or model instruction.
-  - Options 1 (merge) and 2 (PR): agent merges the feature branch, runs post-merge tests,
-    then removes the worktree and prunes the branch
-  - Option 4 (discard): agent removes the worktree and deletes the branch
-  - Option 3 (keep): no cleanup — worktree stays for later
+- After Option 1's local merge completes successfully, delegate cleanup to worktree-manager.
+  First prove the shipped record landed on the local default branch and record `merge-local` in
+  `.pipeline/finish-choice`; then use the selected host's available subagent facility for delegation.
+  Include this proof bundle in the subagent prompt:
+  Pass worktree-manager the proof case and evidence for Option 1: completed local merge, shipped record on the local default branch, and recorded `merge-local` outcome.
+- After Option 4's discard is explicitly confirmed, delegate cleanup to worktree-manager.
+  First record `discard` in `.pipeline/finish-choice`; then use the selected host's available
+  subagent facility for delegation.
+  Include this proof bundle in the subagent prompt:
+  Pass worktree-manager the proof case and evidence for Option 4: explicitly confirmed discard and recorded `discard` outcome.
+- Claude Code only: delegate worktree-manager cleanup through the Agent tool with model="haiku".
+- Other supported hosts delegate worktree-manager cleanup through their provider-native subagent facility and configured provider policy.
+- **Option 3 keep:** retain the feature worktree for later.
 - Suggest next step: `/manual-test` → `/retro`
 
 ## Verification
@@ -607,5 +610,6 @@ After executing the chosen option:
 - [ ] Option presented to user and their choice executed
 - [ ] `.pipeline/finish-choice` written with the chosen outcome
 - [ ] If Option 2 (PR): `pr_url` written to `.pipeline/conduct-state.json`
-- [ ] Cleanup completed (worktrees, pipeline state)
+- [ ] Daemon/auto Push & PR retained the feature worktree for the engine mergeable sweep
+- [ ] Interactive Option 1/4 cleanup was delegated only after its required proof and outcome marker
 - [ ] Manual-test suggested as next step
