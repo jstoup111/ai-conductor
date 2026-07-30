@@ -230,8 +230,42 @@ export function renderReport(eventsJsonlPath: string): string {
   sections.push(renderDurations(events));
   sections.push(renderRetries(events));
   sections.push(renderTokenSpend(events));
+  sections.push(renderOperatorParkBoundaries(events));
 
   return sections.join('\n\n');
+}
+
+// ─── Section: Operator Park Boundaries ──────────────────────────────────────
+
+function renderOperatorParkBoundaries(events: ParsedEvent[]): string {
+  const lines: string[] = ['## Operator Park Boundaries', ''];
+  const rows: string[][] = [];
+
+  for (const event of events) {
+    if (event.type !== 'operator_park_boundary') continue;
+    if (typeof event.featureSlug !== 'string') continue;
+    if (typeof event.boundary !== 'object' || event.boundary === null) continue;
+
+    const boundary = event.boundary as Record<string, unknown>;
+    if (boundary.kind === 'pre-first-unit') {
+      rows.push([event.featureSlug, 'pre-first-unit', '—']);
+    } else if (
+      (boundary.kind === 'step' || boundary.kind === 'group') &&
+      typeof boundary.name === 'string'
+    ) {
+      rows.push([event.featureSlug, boundary.kind, boundary.name]);
+    }
+  }
+
+  if (rows.length === 0) {
+    lines.push('No operator park boundaries recorded');
+    return lines.join('\n');
+  }
+
+  lines.push(padRow(['Feature', 'Boundary Type', 'Settled Unit']));
+  lines.push(padRow(['-------', '-------------', '------------']));
+  for (const row of rows) lines.push(padRow(row));
+  return lines.join('\n');
 }
 
 // ─── Section: Step Durations ──────────────────────────────────────────────────

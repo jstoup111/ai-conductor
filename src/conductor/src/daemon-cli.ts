@@ -2127,6 +2127,16 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
       break;
+    case 'operator_park_boundary': {
+      const boundary =
+        event.boundary.kind === 'pre-first-unit'
+          ? 'before first scheduling unit'
+          : `settled after ${event.boundary.kind} ${event.boundary.name}`;
+      log(
+        `${dot} ${chalk.cyan('⏸')} ${chalk.cyan(`operator park[${event.featureSlug}]: ${boundary}`)}`,
+      );
+      break;
+    }
     case 'verdict_freshness': {
       const artifact = basename(event.artifact);
       if (event.outcome === 'stale_invalidated') {
