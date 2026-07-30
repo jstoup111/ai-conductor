@@ -3179,6 +3179,11 @@ export class Conductor {
           // non-entry member reaching this code falls through to the
           // ordinary serial dispatch below.
           if (groupEntryName === step.name && membership.dispatchable.length > 1) {
+            const preDispatchPark = await stopAtOperatorParkBoundary();
+            if (preDispatchPark) {
+              return preDispatchPark;
+            }
+
             // Task 4 (#788): this fan-out lane dispatches its members
             // (manual_test/prd_audit/architecture_review_as_built — all
             // SHIP-phase) OUTSIDE the ordinary per-step dispatch below, so
@@ -3601,6 +3606,11 @@ export class Conductor {
                 step: step.name,
                 branches: membership.dispatchable.map((m) => m.name),
               });
+              lastSettledUnit = { kind: 'group', name: builtinGroup.name };
+              const postJoinPark = await stopAtOperatorParkBoundary();
+              if (postJoinPark) {
+                return postJoinPark;
+              }
               continue;
             }
 
