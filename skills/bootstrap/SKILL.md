@@ -16,6 +16,13 @@ memory, and documentation artifacts.
 Works for both **new projects** (empty or freshly scaffolded) and **existing projects** (with
 code, tests, and history already in place).
 
+**Path resolution:** every `templates/*.template` and `tech-context/*` path referenced below is
+relative to the harness root (the directory containing this skill's parent `skills/`, plus
+`templates/`, `tech-context/`, and `HARNESS.md`) — never relative to this skill's own directory,
+which contains only `SKILL.md`. Resolve the harness root by following the symlink at your own
+skill path, e.g. `readlink ~/.claude/skills/bootstrap` → `<harness-root>/skills/bootstrap`, then
+go up two directories.
+
 ## Practices
 
 ### 1. Determine Bootstrap Mode
@@ -302,6 +309,10 @@ Add to `.gitignore` (idempotent — don't duplicate):
 - `.pipeline/` — runtime state, not source
 - `.daemon/` — daemon pidfile + activity log (`daemon.log`), not source
 - `.worktrees/` — git worktrees for parallel feature development
+- `.memory` — **no trailing slash.** It's always a symlink (see above), and git's trailing-slash
+  gitignore patterns match real directories only, not symlinks-to-directories — `.memory/` looks
+  right but silently fails to match, which would let a machine-local symlink (its target embeds
+  the operator's absolute home path) get committed.
 - `.env` — local environment (not committed; `.env.example` is the committed reference)
 - `.env.local` — worktree-specific environment overrides
 
@@ -482,7 +493,8 @@ a real failure and must be surfaced.
 - [ ] `.env.example` generated with shared/worktree-specific boundary sections
 - [ ] `.env` generated from `.env.example` with real defaults
 - [ ] `.env.local` generated with worktree-specific overrides
-- [ ] `.pipeline/`, `.daemon/`, `.worktrees/`, `.env`, and `.env.local` added to `.gitignore`
+- [ ] `.pipeline/`, `.daemon/`, `.worktrees/`, `.memory` (no trailing slash), `.env`, and
+      `.env.local` added to `.gitignore`
 - [ ] Process manager detected (or noted as absent)
 - [ ] Smoke test passed
 - [ ] Git initialized on `main` with a seed commit (new/fresh projects)
