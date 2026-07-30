@@ -12,6 +12,11 @@ import type {
   SelfHostAuthPreparation,
   TokenUsage,
 } from './llm-provider.js';
+import {
+  epochAnchoredMonotonicClock,
+  observeInterval,
+  type IntervalClock,
+} from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
@@ -138,6 +143,7 @@ export class CodexProvider implements LLMProvider {
   constructor(
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
     executable = process.env.CODEX_EXECUTABLE ?? 'codex',
+    private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
   ) {
     this.authentication = this.selectAuthentication();
     this.executable = executable;
@@ -188,20 +194,25 @@ export class CodexProvider implements LLMProvider {
     const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
     const prompt = this.composePrompt(options);
 
-    const subprocess = execa(options.selfHost?.executable ?? this.executable, args, {
-      reject: false,
-      input: prompt,
-      stdout: 'pipe',
-      stderr: 'pipe',
-      cwd: options.cwd,
-      env: this.invocationEnv(options, authentication),
+    const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
+      const subprocess = execa(options.selfHost?.executable ?? this.executable, args, {
+        reject: false,
+        input: prompt,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        cwd: options.cwd,
+        env: this.invocationEnv(options, authentication),
+      });
+      this.wireActivityWatchdog(subprocess, options);
+      return subprocess;
     });
-    this.wireActivityWatchdog(subprocess, options);
-    const result = await subprocess;
 
     this.logDiagnostics(result, options.diagnosticLog);
 
-    return this.classifyCompletion(result, true, authentication, true);
+    const completion = this.classifyCompletion(result, true, authentication, true);
+    return completion.success
+      ? { ...completion, observedIntervals: [interval] }
+      : completion;
   }
 
   /**

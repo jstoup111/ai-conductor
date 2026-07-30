@@ -7,6 +7,7 @@ import {
   parseCodexJsonl,
 } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
 // This is a fake Codex CLI boundary: no test invokes a locally installed Codex.
@@ -67,6 +68,68 @@ describe('CodexProvider', () => {
       ),
     );
   });
+
+  it.each([
+    {
+      name: 'ordinary executable',
+      executable: 'codex',
+      selfHost: undefined,
+    },
+    {
+      name: 'self-host executable',
+      executable: '/isolated/bin/codex',
+      selfHost: {
+        executable: '/isolated/bin/codex',
+        env: { CODEX_HOME: '/isolated/codex-home' },
+        args: ['--config', 'project_doc_max_bytes=0'],
+        teardown: async () => {},
+      },
+    },
+  ])(
+    'returns one successful subprocess interval for the $name without changing JSONL output or usage',
+    async ({ executable, selfHost }) => {
+      const readings = [2_000, 2_040];
+      const clock: IntervalClock = {
+        nowMs: () =>
+          readings.shift() ??
+          (() => {
+            throw new Error('scripted clock exhausted');
+          })(),
+      };
+      const runDoctor = vi.fn(async () => {
+        expect(readings).toHaveLength(2);
+        return readyDoctorResult();
+      });
+      provider = new CodexProvider(runDoctor, 'codex', clock);
+      mockExeca.mockResolvedValue({
+        stdout: jsonlMessage('No-op complete.'),
+        exitCode: 0,
+      } as any);
+
+      const result = await provider.invoke({ ...baseOptions, selfHost });
+
+      expect({
+        executable: mockExeca.mock.calls[0][0],
+        result,
+        remainingClockReadings: readings,
+      }).toEqual({
+        executable,
+        result: expect.objectContaining({
+          success: true,
+          output: 'No-op complete.',
+          exitCode: 0,
+          tokenUsage: { input: 12, cacheRead: 4, output: 7, numTurns: 1 },
+          observedIntervals: [{ startedAtMs: 2_000, durationMs: 40 }],
+          authentication: {
+            provider: 'codex',
+            source: 'cached-login',
+            state: 'ready',
+          },
+        }),
+        remainingClockReadings: [],
+      });
+    },
+  );
 
   it('prepares only the selected API-key auth for an isolated Codex home', async () => {
     const priorKey = process.env.CODEX_API_KEY;
