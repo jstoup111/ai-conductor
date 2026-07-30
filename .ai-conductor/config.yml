@@ -86,7 +86,7 @@ wiring:
 # Vitest's test/**/*.test.ts inclusion, covering ordinary and acceptance tests
 # in one operation. Harness integrity remains a separate self-host gate.
 test_suite:
-  command: npm test
+  command: npm test:changed
   working_directory: src/conductor
   timeout_seconds: 1800
 
