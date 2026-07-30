@@ -80,12 +80,31 @@ require_pattern 'code review retains fresh-context evaluator review' \
   'fresh context' "$HARNESS_DIR/skills/code-review/SKILL.md"
 require_pattern 'finish retains fresh verification before completion' \
   'fresh.*(verification|evidence)|verify.*fresh' "$HARNESS_DIR/skills/finish/SKILL.md"
-require_pattern 'finish delegates cleanup through the selected host facility' \
-  'selected host.{0,80}(available )?subagent facility|selected provider.{0,80}(available )?subagent facility' \
-  "$HARNESS_DIR/skills/finish/SKILL.md"
-require_pattern 'finish scopes worktree-manager Agent-tool and model mechanics to Claude' \
-  'Claude.{0,140}(Agent tool|worktree-manager|haiku)|(Agent tool|worktree-manager|haiku).{0,140}Claude' \
-  "$HARNESS_DIR/skills/finish/SKILL.md"
+if grep -qiE '(daemon|auto(matic)?).*(PR|pull request).*(retain|keep|leave).*(feature )?worktree' \
+    "$HARNESS_DIR/skills/finish/SKILL.md" \
+  && grep -qiE '(only|solely).*engine.*sweep|engine.*sweep.*(only|solely)' \
+    "$HARNESS_DIR/skills/finish/SKILL.md" \
+  && grep -qiE 'shipped[- ]record.*(origin/(default|<default>)|origin default|default branch)' \
+    "$HARNESS_DIR/skills/finish/SKILL.md" \
+  && ! grep -qi 'worktree-manager' "$HARNESS_DIR/skills/finish/SKILL.md" \
+  && ! awk '{
+    line = tolower($0)
+    removes_worktree = line ~ /(remove|reap|delete)[^[:cntrl:]]*worktree/ \
+      || line ~ /worktree[^[:cntrl:]]*(remove|reap|delete)/
+    if (cleanup_window > 0 && removes_worktree) forbidden = 1
+    assigns_pr_cleanup = line ~ /(option 2|options? 1.*and 2|push[[:space:]]*&[[:space:]]*pr|pull request)/
+    if (assigns_pr_cleanup) {
+      cleanup_window = 4
+      if (removes_worktree) forbidden = 1
+    } else if (cleanup_window > 0) {
+      cleanup_window--
+    }
+  }
+  END { exit(forbidden ? 0 : 1) }' "$HARNESS_DIR/skills/finish/SKILL.md"; then
+  pass 'finish retains auto/daemon PR worktrees until the engine sweep proves shipment on origin/default'
+else
+  fail 'finish retains auto/daemon PR worktrees until the engine sweep proves shipment on origin/default'
+fi
 require_pattern 'finish preserves merge-local completion choice' \
   'Option 1: Merge locally' "$HARNESS_DIR/skills/finish/SKILL.md"
 require_pattern 'finish preserves PR completion choice' \

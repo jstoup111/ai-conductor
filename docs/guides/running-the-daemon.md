@@ -392,6 +392,9 @@ record is proven present on `origin/main` — the same signal
 [parked-feature reconciliation](#parked-feature-reconciliation) uses to define "shipped". Until
 then the worktree is retained on disk, one sweep tick at a time:
 
+The `finish` session records and publishes the outcome but performs no worktree cleanup. Opening,
+updating, or marking the implementation PR ready therefore cannot bypass this sweep-owned gate.
+
 - **`MERGED`, record not yet on `origin/main`.** Logged as `retained <slug> — reason:
   record-not-yet-on-main`, re-checked on the next tick. This is the normal window between merge and
   the shipped-record commit landing.
