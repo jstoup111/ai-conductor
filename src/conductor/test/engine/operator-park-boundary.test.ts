@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rename, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -709,6 +709,62 @@ describe('operator park boundary contract', () => {
         boundary: { kind: 'pre-first-unit' },
       },
       runnerCalls: [],
+    });
+  });
+
+  it('keeps interactive dispatch and checkpoint sequences identical with a repo-root park marker', async () => {
+    const runInteractive = async (parked: boolean) => {
+      const caseRoot = join(projectRoot, parked ? 'parked' : 'baseline');
+      const caseStatePath = join(caseRoot, 'conduct-state.json');
+      await mkdir(caseRoot, { recursive: true });
+      await writeState(caseStatePath, stateWithPending('build', 'wiring_check'));
+      if (parked) {
+        const markerDir = join(caseRoot, '.daemon', 'parked');
+        await mkdir(markerDir, { recursive: true });
+        await writeFile(join(markerDir, 'interactive-feature'), 'operator\n');
+      }
+
+      const dispatched: StepName[] = [];
+      const checkpoints: StepName[] = [];
+      const operatorParkBoundaries: ConductorEvent[] = [];
+      const caseEvents = new ConductorEventEmitter();
+      caseEvents.on('operator_park_boundary', (event) => {
+        operatorParkBoundaries.push(event);
+      });
+      const conductor = new Conductor({
+        projectRoot: caseRoot,
+        stateFilePath: caseStatePath,
+        stepRunner: {
+          run: async (step) => {
+            dispatched.push(step);
+            return { success: true };
+          },
+        },
+        events: caseEvents,
+        fromStep: 'build',
+        mode: 'interactive',
+        daemon: false,
+        verifyArtifacts: false,
+        onCheckpoint: async (step) => {
+          checkpoints.push(step);
+          return 'quit';
+        },
+        ...noExternalIo(),
+      });
+
+      const result = await conductor.run();
+      return { result, dispatched, checkpoints, operatorParkBoundaries };
+    };
+
+    const baseline = await runInteractive(false);
+    const withParkMarker = await runInteractive(true);
+
+    expect(withParkMarker).toEqual(baseline);
+    expect(baseline).toEqual({
+      result: undefined,
+      dispatched: ['build'],
+      checkpoints: ['build'],
+      operatorParkBoundaries: [],
     });
   });
 

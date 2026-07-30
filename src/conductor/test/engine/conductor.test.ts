@@ -117,6 +117,16 @@ describe('engine/conductor', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it('keeps the interactive CLI constructor free of daemon operator-park options', async () => {
+    const source = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
+    const constructor = source.match(
+      /const conductor = new Conductor\(\{[\s\S]*?\n  \}\);/,
+    )?.[0];
+
+    expect(constructor).toBeDefined();
+    expect(constructor).not.toMatch(/operatorParkBoundary|featureSlug/);
+  });
+
   it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
     const module = await import('../../src/engine/conductor.js') as {
       toSpotAuditVerifierResult?: (result: unknown) => unknown;
