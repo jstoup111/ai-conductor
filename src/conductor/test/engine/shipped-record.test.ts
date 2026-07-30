@@ -11,20 +11,11 @@ import {
   writeShippedRecord,
   listShippedRecords,
   makeIsProcessed,
+  appendTimingSection,
 } from '../../src/engine/shipped-record.js';
 import type { BacklogTreeSource } from '../../src/engine/daemon-backlog.js';
 import type { CostRollup } from '../../src/engine/cost-rollup.js';
 import type { TimingRollup } from '../../src/engine/timing-rollup.js';
-import * as shippedRecordModule from '../../src/engine/shipped-record.js';
-
-function appendTimingSection(content: string, timing: TimingRollup): string {
-  const renderer = (
-    shippedRecordModule as typeof shippedRecordModule & {
-      appendTimingSection?: (existing: string, rollup: TimingRollup) => string;
-    }
-  ).appendTimingSection;
-  return renderer?.(content, timing) ?? content;
-}
 
 /** Minimal fake tree source for exercising listShippedRecords in isolation. */
 function fakeTreeSource(files: Record<string, string>): BacklogTreeSource & {

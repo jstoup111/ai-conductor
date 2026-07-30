@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   computeTimingRollup,
   intersectIntervalUnions,
-  intervalUnionDurationMs,
   unionIntervals,
 } from '../../src/engine/timing-rollup.js';
 
@@ -112,18 +111,6 @@ describe('unionIntervals', () => {
       intervals: [{ startedAtMs: 0, durationMs: 10 }],
       invalidIntervals: [reversed, nonFinite],
     });
-  });
-});
-
-describe('intervalUnionDurationMs', () => {
-  it('sums only the non-overlapping union', () => {
-    expect(
-      intervalUnionDurationMs([
-        { startedAtMs: 0, durationMs: 20 },
-        { startedAtMs: 10, durationMs: 20 },
-        { startedAtMs: 50, durationMs: 5 },
-      ]),
-    ).toEqual({ durationMs: 35, invalidIntervals: [] });
   });
 });
 

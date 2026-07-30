@@ -12,6 +12,7 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parseShippedRecord } from './shipped-record.js';
+import type { TimingRollup } from './timing-rollup.js';
 
 export interface KpiCostFields {
   input: number;
@@ -38,15 +39,7 @@ export interface KpiProviderCostFields {
   costUnmetered: number;
 }
 
-export type KpiTimeFields =
-  | {
-      state: 'measured';
-      activeMs: number;
-      providerActiveMs: number;
-      noProviderActiveMs: number;
-    }
-  | { state: 'partial'; activeMs?: number }
-  | { state: 'unavailable' };
+export type KpiTimeFields = TimingRollup;
 
 /**
  * Parse the independently rendered `## Time` section. Cost fields are never
@@ -177,6 +170,49 @@ interface FeatureKpi {
   engineVersion: string;
 }
 
+interface TimingAggregate {
+  measured: number;
+  partial: number;
+  unavailable: number;
+  activeMs: number;
+  providerActiveMs: number;
+  noProviderActiveMs: number;
+}
+
+function formatFeatureTiming(time: TimingRollup): string {
+  if (time.state === 'measured') {
+    return (
+      ` time=measured active_ms=${time.activeMs}` +
+      ` provider_active_ms=${time.providerActiveMs}` +
+      ` no_provider_active_ms=${time.noProviderActiveMs}`
+    );
+  }
+  if (time.state === 'partial') {
+    return ` time=partial${time.activeMs === undefined ? '' : ` active_ms=${time.activeMs}`}`;
+  }
+  return ' time=unavailable';
+}
+
+function addTiming(aggregate: TimingAggregate, time: TimingRollup): void {
+  aggregate[time.state] += 1;
+  if (time.state !== 'measured') return;
+  aggregate.activeMs += time.activeMs;
+  aggregate.providerActiveMs += time.providerActiveMs;
+  aggregate.noProviderActiveMs += time.noProviderActiveMs;
+}
+
+function formatTimingAggregate(aggregate: TimingAggregate): string {
+  let output =
+    `; timing measured=${aggregate.measured}` +
+    ` partial=${aggregate.partial} unavailable=${aggregate.unavailable}`;
+  if (aggregate.measured === 0) return output;
+  output +=
+    ` avg_active_ms=${aggregate.activeMs / aggregate.measured}` +
+    ` avg_provider_active_ms=${aggregate.providerActiveMs / aggregate.measured}` +
+    ` avg_no_provider_active_ms=${aggregate.noProviderActiveMs / aggregate.measured}`;
+  return output;
+}
+
 async function loadFeatures(shippedDir: string): Promise<FeatureKpi[]> {
   let files: string[];
   try {
@@ -228,31 +264,18 @@ export async function renderKpi(root: string): Promise<string> {
   let totalCostUsd = 0;
   let counted = 0;
   let costCounted = 0;
-  let timeCounted = 0;
-  let timePartial = 0;
-  let timeUnavailable = 0;
-  let totalActiveMs = 0;
-  let totalProviderActiveMs = 0;
-  let totalNoProviderActiveMs = 0;
+  const timingAggregate: TimingAggregate = {
+    measured: 0,
+    partial: 0,
+    unavailable: 0,
+    activeMs: 0,
+    providerActiveMs: 0,
+    noProviderActiveMs: 0,
+  };
 
   for (const feature of features) {
-    const timing = feature.time.state === 'measured'
-      ? ` time=measured active_ms=${feature.time.activeMs}` +
-        ` provider_active_ms=${feature.time.providerActiveMs}` +
-        ` no_provider_active_ms=${feature.time.noProviderActiveMs}`
-      : feature.time.state === 'partial'
-        ? ` time=partial${feature.time.activeMs === undefined ? '' : ` active_ms=${feature.time.activeMs}`}`
-        : ' time=unavailable';
-    if (feature.time.state === 'measured') {
-      timeCounted += 1;
-      totalActiveMs += feature.time.activeMs;
-      totalProviderActiveMs += feature.time.providerActiveMs;
-      totalNoProviderActiveMs += feature.time.noProviderActiveMs;
-    } else if (feature.time.state === 'partial') {
-      timePartial += 1;
-    } else {
-      timeUnavailable += 1;
-    }
+    const timing = formatFeatureTiming(feature.time);
+    addTiming(timingAggregate, feature.time);
     if (!feature.cost) {
       lines.push(
         `- ${feature.slug}: engine=${feature.engineVersion} no Cost data available (skipped)${timing}`,
@@ -305,14 +328,7 @@ export async function renderKpi(root: string): Promise<string> {
   let aggregate =
     `Aggregate / trend across ${counted} feature(s): total tokens=${totalTokens} ` +
       `(input=${totalInput}, output=${totalOutput}), total cost_usd=${aggregateCost}`;
-  aggregate +=
-    `; timing measured=${timeCounted} partial=${timePartial} unavailable=${timeUnavailable}`;
-  if (timeCounted > 0) {
-    aggregate +=
-      ` avg_active_ms=${totalActiveMs / timeCounted}` +
-      ` avg_provider_active_ms=${totalProviderActiveMs / timeCounted}` +
-      ` avg_no_provider_active_ms=${totalNoProviderActiveMs / timeCounted}`;
-  }
+  aggregate += formatTimingAggregate(timingAggregate);
   lines.push(aggregate);
 
   return lines.join('\n') + '\n';
