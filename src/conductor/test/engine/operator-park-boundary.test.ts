@@ -25,6 +25,17 @@ function stateWithPending(...pending: StepName[]): ConductState {
   } as ConductState;
 }
 
+function deferred(): {
+  promise: Promise<void>;
+  resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((settle) => {
+    resolve = settle;
+  });
+  return { promise, resolve };
+}
+
 describe('operator park boundary contract', () => {
   let projectRoot: string;
   let statePath: string;
@@ -147,6 +158,120 @@ describe('operator park boundary contract', () => {
       boundaryChecks: 2,
       boundaryObservation: { memory: 'done', explore: 'pending' },
       persisted: { memory: 'done', explore: 'pending' },
+    });
+  });
+
+  it('observes a park requested while the active serial step settles and does not dispatch the next step', async () => {
+    await writeState(statePath, stateWithPending('memory', 'explore'));
+    const started = deferred();
+    const release = deferred();
+    let parked = false;
+    let settlements = 0;
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      if (step === 'memory') {
+        started.resolve();
+        await release.promise;
+        settlements += 1;
+      }
+      return { success: true };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => parked,
+    });
+
+    const resultPromise = conductor.run();
+    await started.promise;
+    parked = true;
+    release.resolve();
+    const result = await resultPromise;
+
+    expect({
+      result,
+      runnerSteps: run.mock.calls.map(([step]) => step),
+      settlements,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'step', name: 'memory' },
+      },
+      runnerSteps: ['memory'],
+      settlements: 1,
+    });
+  });
+
+  it('fails closed before the first pending unit when the operator park boundary cannot be read', async () => {
+    await writeState(statePath, stateWithPending('memory'));
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => {
+        throw Object.assign(new Error('park state is unreadable'), { code: 'EACCES' });
+      },
+    });
+
+    const result = await conductor.run();
+
+    expect({ result, runnerCalls: run.mock.calls }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      },
+      runnerCalls: [],
+    });
+  });
+
+  it('consults parking only at the first pending unit after tier-skipped entries', async () => {
+    await writeState(statePath, {
+      ...stateWithPending('coherence_check', 'acceptance_specs', 'build'),
+      complexity_tier: 'S',
+    });
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const operatorParkBoundary = vi.fn<
+      NonNullable<ConductorOptions['operatorParkBoundary']>
+    >(async () => true);
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'coherence_check',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary,
+    });
+
+    const result = await conductor.run();
+
+    expect({
+      result,
+      boundaryChecks: operatorParkBoundary.mock.calls.length,
+      runnerCalls: run.mock.calls,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      },
+      boundaryChecks: 1,
+      runnerCalls: [],
     });
   });
 });
