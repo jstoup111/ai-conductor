@@ -6,6 +6,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
+import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
@@ -157,6 +158,11 @@ export type ConductorEvent =
   | { type: 'rate_limit'; waitSeconds: number }
   | { type: 'session_reset'; reason: string }
   | { type: 'credentials_park'; reason: string }
+  | {
+      type: 'operator_park_boundary';
+      featureSlug: string;
+      boundary: SchedulingUnitRef;
+    }
   | {
       /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
       type: 'credentials_park_progress';

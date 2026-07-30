@@ -36,6 +36,7 @@ import type {
   ComplexityTier,
   RecoveryOption,
   RecoveryContext,
+  SchedulingUnitRef,
 } from '../types/index.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 import type { ProviderSessionScope } from './provider-session.js';
@@ -264,10 +265,7 @@ import { resolveShipmentIdentity } from './shipment-identity.js';
 
 export type CheckpointResponse = 'continue' | 'back' | 'quit';
 
-export type SchedulingUnitRef =
-  | { kind: 'step'; name: StepName }
-  | { kind: 'group'; name: string }
-  | { kind: 'pre-first-unit' };
+export type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 
 export interface OperatorParkedTermination {
   kind: 'operator-parked';
