@@ -42,6 +42,23 @@ async function waitForFile(path: string, timeoutMs = 10_000, intervalMs = 25): P
   throw new Error(`waitForFile: ${path} did not appear within ${timeoutMs}ms`);
 }
 
+async function waitForFileContent(
+  path: string,
+  predicate: (content: string) => boolean,
+  timeoutMs = 10_000,
+  intervalMs = 25,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(path)) {
+      const content = (await readFile(path, 'utf-8')).trim();
+      if (predicate(content)) return content;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+  throw new Error(`waitForFileContent: ${path} did not contain expected content within ${timeoutMs}ms`);
+}
+
 describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
   let workDir: string;
 
@@ -69,6 +86,7 @@ describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
       const pidFile = join(workDir, 'pid-a.txt');
       const triggerFile = join(workDir, 'trigger.txt');
       const resultFile = join(workDir, 'result.json');
+      const freshResultFile = join(workDir, 'fresh-result.txt');
 
       // Stub "build" for version A: a long-lived entrypoint that (1) records
       // its own pid, (2) waits for a trigger file (so the dynamic import
@@ -109,7 +127,7 @@ describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
       );
 
       // Stub "build" for version B: a short-lived entrypoint that just
-      // prints a version marker and exits — proves a FRESH launcher
+      // writes a version marker and exits — proves a FRESH launcher
       // invocation resolves the new version.
       const stubB = join(workDir, 'stub-b.mjs');
       await writeFile(
@@ -120,7 +138,7 @@ describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
           'const outDirIdx = args.indexOf("--out-dir");',
           'const outDir = args[outDirIdx + 1];',
           'await mkdir(outDir, { recursive: true });',
-          'await writeFile(`${outDir}/index.js`, "console.log(\'VERSION_B\');\\nprocess.exit(0);\\n");',
+          'await writeFile(`${outDir}/index.js`, "import { writeFile } from \'node:fs/promises\';\\nawait writeFile(process.env.SMOKE_FRESH_RESULT_FILE, \'VERSION_B\');\\n");',
           '',
         ].join('\n'),
         'utf-8',
@@ -149,8 +167,7 @@ describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
 
       try {
         // Long-lived process is up and has recorded its pid.
-        await waitForFile(pidFile);
-        const recordedPid = (await readFile(pidFile, 'utf-8')).trim();
+        const recordedPid = await waitForFileContent(pidFile, (content) => /^\d+$/.test(content));
         expect(recordedPid).toMatch(/^\d+$/);
 
         // 3. REAL publish creates version B WHILE A is still running,
@@ -176,9 +193,19 @@ describe('engine-store — real-binary #215 smoke (Task 8, FR-13)', () => {
 
         // 5. A FRESH launcher invocation (started after the flip) resolves
         // version B.
-        const freshInvocation = await execa(launcherPath, [], { reject: false });
+        const freshInvocation = await execa(launcherPath, [], {
+          reject: false,
+          env: {
+            ...process.env,
+            SMOKE_FRESH_RESULT_FILE: freshResultFile,
+          },
+        });
         expect(freshInvocation.exitCode).toBe(0);
-        expect(freshInvocation.stdout).toContain('VERSION_B');
+        const freshResult = await waitForFileContent(
+          freshResultFile,
+          (content) => content === 'VERSION_B',
+        );
+        expect(freshResult).toBe('VERSION_B');
 
         // Sanity: B really is what `dist` now points at.
         expect(dirB).toBe(join(conductorRoot, 'dist-versions', versionB));
