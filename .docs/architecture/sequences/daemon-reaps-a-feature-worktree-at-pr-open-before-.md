@@ -55,7 +55,7 @@ sequenceDiagram
             S->>S: continue sweep with next entry
         else state NOTFOUND
             S->>REG: prune entry
-            S->>L: retained «slug» — reason: pr-not-found, reclaimable
+            S->>L: [mergeable-sweep] pruning «prUrl» (state: NOTFOUND)
             S->>L: dashboard lists «slug» under retained worktrees
         else state OPEN
             S->>L: retained «slug» — reason: pr-open-awaiting-main

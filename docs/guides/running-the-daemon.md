@@ -376,8 +376,9 @@ then the worktree is retained on disk, one sweep tick at a time:
   automatically.
 - **Record proven present.** Logged as `reaped <slug> — reason: shipped-record-on-main`, and the
   worktree is torn down. A teardown failure logs `reap failed <slug> (<prUrl>) — reason:
-  shipped-record-on-main — error: <detail>` and leaves the worktree in place; the sweep retries on
-  the next tick rather than throwing.
+  shipped-record-on-main — error: <detail>`, leaves the worktree in place for operator recovery,
+  and prunes the watch entry. The failure is isolated from the rest of the sweep and is not retried
+  by later ticks.
 
 `conduct-ts daemon status`'s startup dashboard groups every retained worktree under
 `RETAINED WORKTREES (<n>)`, each line reading `<slug> — <reason>` where `<reason>` is
@@ -395,8 +396,9 @@ conduct-ts daemon reclaim-worktree <slug>
 
 It refuses a slug with a resume in progress, refuses anything but a single plain slug (no globs, no
 paths, no lists), and is a no-op when the worktree is already gone. It never touches the branch —
-only [`daemon reconcile-parked`](#parked-feature-reconciliation) and the automatic sweep above
-delete branches, and both do so only once ancestry proves the work landed on `origin/main`.
+both manual reclaim and the automatic sweep remove only the worktree. The automatic sweep never
+deletes the feature branch, and its reap gate is shipped-record presence on `origin/main`, not
+branch ancestry.
 
 ## Operator safety rules
 
