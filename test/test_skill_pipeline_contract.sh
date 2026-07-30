@@ -25,6 +25,11 @@ SCOPE_CONTRACT_FILES=(
   "skills/conduct/SKILL.md"
   "HARNESS.md"
 )
+LEGACY_TEST_SUITE_SKILL="${HARNESS_DIR}/skills/test-suite"
+SHIPPED_WORKFLOW_CONTRACTS=(
+  "${HARNESS_DIR}/skills"
+  "${HARNESS_DIR}/.github/workflows"
+)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -52,6 +57,24 @@ if [ ! -f "$FINISH_SKILL_FILE" ]; then
   exit 1
 fi
 pass "skills/finish/SKILL.md exists"
+
+if [ -e "$LEGACY_TEST_SUITE_SKILL" ]; then
+  fail "legacy skills/test-suite directory must be absent"
+else
+  pass "legacy skills/test-suite directory is absent"
+fi
+
+if rg -n '(^|[^[:alnum:]_-])(/test-suite|\$test-suite)([^[:alnum:]_-]|$)|skills/test-suite([^[:alnum:]_-]|$)' \
+  "${SHIPPED_WORKFLOW_CONTRACTS[@]}" \
+  --glob '*.md' --glob '*.yml' --glob '*.yaml' \
+  >/tmp/pipeline_contract_test_suite_surface_hits.$$ 2>/dev/null; then
+  cat /tmp/pipeline_contract_test_suite_surface_hits.$$ >&2
+  rm -f /tmp/pipeline_contract_test_suite_surface_hits.$$
+  fail "shipped skills and workflow contracts must not directly invoke or reference the removed test-suite skill"
+else
+  rm -f /tmp/pipeline_contract_test_suite_surface_hits.$$
+  pass "shipped skills and workflow contracts contain no direct test-suite skill invocation or reference"
+fi
 
 if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2

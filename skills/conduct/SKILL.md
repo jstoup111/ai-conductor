@@ -52,7 +52,7 @@ Step 10: /plan                  → DECIDE (technical implementation plan, groun
 Step 10b: /coherence-check       → DECIDE (Medium/Large traceability gate after plan)
 Step 11: /writing-system-tests  → BUILD (skipped for Small)
 Step 12: /pipeline or /tdd      → BUILD (pipeline evaluator satisfies code-review gate)
-Step 13: /test-suite            → BUILD (repository-configured aggregate verification gate)
+Step 13: Engine-native configured-verifier gate → BUILD (repository-configured aggregate verification)
        ── CHECKPOINT ──         → User reviews build output, can go back or continue
 Step 14: /manual-test           → SHIP (validate stories, bug loop via /tdd — auto-skip for non-endpoint features)
        ── CHECKPOINT ──         → User reviews test results, can go back or continue
@@ -240,7 +240,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - Say: "DRAFT ADRs remain unapproved — [list files]. All ADRs must be APPROVED before BUILD."
 - Present DRAFT ADRs for review. Only APPROVED ADRs are binding on implementation.
 
-**After build (before suggesting /test-suite):**
+**After build (before the engine-native configured-verifier gate):**
 - Run the union of affected tests for the BUILD diff and verify it passes
 - If a known scoped test fails, BLOCK this BUILD activity and fix it here; do
   not defer it to the later aggregate gate
@@ -251,7 +251,7 @@ Before suggesting the next step, verify that the previous step's **quality gates
 - If tests fail or tree is dirty, BLOCK
 - Say: "Build incomplete — [N] tests failing / uncommitted changes exist."
 
-**After /test-suite (before suggesting /manual-test):**
+**After the engine-native configured-verifier gate (before suggesting /manual-test):**
 - Require current PASS evidence from the repository-configured aggregate verifier.
 - If the verifier fails, BLOCK progression to SHIP and return to `/tdd` or `/pipeline` for remediation.
 

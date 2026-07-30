@@ -16,6 +16,7 @@ import { execa, type ResultPromise } from 'execa';
 import { spawnSync } from 'node:child_process';
 import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
 import {
+  access,
   mkdir,
   mkdtemp,
   readFile,
@@ -173,7 +174,7 @@ describe('Story 1 — automated pre-SHIP gate (FR-1, FR-7)', () => {
       name: 'test_suite',
       phase: 'BUILD',
       enforcement: 'gating',
-      prerequisites: ['wiring_check'],
+      prerequisites: ['build'],
       skippableForTiers: [],
     });
     expect(VALIDATION_GROUP.members).not.toContain('test_suite');
@@ -204,29 +205,19 @@ describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () =>
     expect(conduct).not.toMatch(/skills\/test-suite/i);
   });
 
-  it('guides direct conduct runs through the dedicated configured-verifier gate before manual testing', async () => {
-    const [conduct, testSuite] = await Promise.all([
-      readFile(join(REPO_ROOT, 'skills/conduct/SKILL.md'), 'utf8'),
-      readFile(join(REPO_ROOT, 'skills/test-suite/SKILL.md'), 'utf8'),
-    ]);
+  it('removes the interactive skill while preserving the engine gate and real verifier CLI', async () => {
+    await expect(access(join(REPO_ROOT, 'skills/test-suite/SKILL.md'))).rejects.toThrow();
 
-    expect({
-      conductPlacesTestSuiteBeforeManualTest:
-        /\/test-suite[\s\S]*\/manual-test/i.test(conduct),
-      suiteRequiresConfiguredAggregateVerifier:
-        /repository-configured aggregate verifier/i.test(testSuite),
-      suiteBlocksShipOnFailure: /(?:fail|failure)[\s\S]*(?:block|stop)[\s\S]*SHIP/i.test(testSuite),
-      suiteRoutesRemediationToBuild:
-        /\/(?:tdd|pipeline)/i.test(testSuite),
-      suiteAvoidsLegacyInvocation:
-        !/conduct-ts test-suite|(?:^|\n)\s*(?:bash|sh)\b/im.test(testSuite),
-    }).toEqual({
-      conductPlacesTestSuiteBeforeManualTest: true,
-      suiteRequiresConfiguredAggregateVerifier: true,
-      suiteBlocksShipOnFailure: true,
-      suiteRoutesRemediationToBuild: true,
-      suiteAvoidsLegacyInvocation: true,
+    expect(ALL_STEPS.find((step) => step.name === 'test_suite')).toMatchObject({
+      name: 'test_suite',
+      phase: 'BUILD',
+      enforcement: 'gating',
     });
+
+    const result = invokeRealSuite();
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(await readCount()).toBe(1);
   });
 });
 
@@ -564,7 +555,7 @@ describe('Task 25 thin automated delivery proof (FR-1, FR-4, FR-13, FR-14)', () 
         name: 'test_suite',
         phase: 'BUILD',
         enforcement: 'gating',
-        prerequisites: ['wiring_check'],
+        prerequisites: ['build'],
       }),
       gateExitCode: 0,
       gateOutput: expect.stringMatching(/EXECUTED.*PASS/is),
