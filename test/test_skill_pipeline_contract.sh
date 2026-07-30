@@ -12,7 +12,6 @@ HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SKILL_FILE="${HARNESS_DIR}/skills/pipeline/SKILL.md"
 CODE_REVIEW_SKILL="${HARNESS_DIR}/skills/code-review/SKILL.md"
 FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
-CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
 ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
 CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
@@ -30,10 +29,6 @@ SCOPE_CONTRACT_FILES=(
   "HARNESS.md"
 )
 LEGACY_TEST_SUITE_SKILL="${HARNESS_DIR}/skills/test-suite"
-SHIPPED_WORKFLOW_CONTRACTS=(
-  "${HARNESS_DIR}/skills"
-  "${HARNESS_DIR}/.github/workflows"
-)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
