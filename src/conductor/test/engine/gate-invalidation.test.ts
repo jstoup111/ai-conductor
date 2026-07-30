@@ -29,6 +29,7 @@ describe('GATE_SURFACE', () => {
         'build_review',
         'manual_test',
         'prd_audit',
+        'test_suite',
         'wiring_check',
       ].sort(),
     );
@@ -72,6 +73,7 @@ describe('classifyGateInvalidation', () => {
         'manual_test',
         'prd_audit',
         'architecture_review_as_built',
+        'test_suite',
       ].sort(),
     );
   });
@@ -85,7 +87,7 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       ['wiring_check', 'manual_test', 'prd_audit', 'architecture_review_as_built'].sort(),
     );
-    expect(result.invalidated).toEqual(['build_review']);
+    expect(result.invalidated.sort()).toEqual(['build_review', 'test_suite'].sort());
   });
 
   it('when manual_test never ran, it is excluded from both lists on a test-only delta', () => {
@@ -110,6 +112,7 @@ describe('classifyGateInvalidation', () => {
         'wiring_check',
         'manual_test',
         'prd_audit',
+        'test_suite',
         'architecture_review_as_built',
       ].sort(),
     );
@@ -125,6 +128,8 @@ describe('classifyGateInvalidation', () => {
     expect(result.preserved.sort()).toEqual(
       ['prd_audit', 'architecture_review_as_built'].sort(),
     );
-    expect(result.invalidated.sort()).toEqual(['build_review', 'wiring_check', 'manual_test'].sort());
+    expect(result.invalidated.sort()).toEqual(
+      ['build_review', 'wiring_check', 'test_suite', 'manual_test'].sort(),
+    );
   });
 });

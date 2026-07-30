@@ -268,6 +268,55 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
 
   // ── Story 3: post-rebase kickback verdicts are honored on resume ──────────
   describe('Story 3: post-rebase kickback verdicts steer the resume entry', () => {
+    it.each([
+      { staleGate: 'wiring_check' as const },
+      { staleGate: 'test_suite' as const },
+    ])('a stale $staleGate proof resumes before build_review', async ({ staleGate }) => {
+      const seed = seedDoneThrough('manual_test');
+      seed.build = 'done';
+      seed.wiring_check = staleGate === 'wiring_check' ? 'stale' : 'done';
+      seed.test_suite = staleGate === 'test_suite' ? 'stale' : 'done';
+      seed.build_review = 'stale';
+      await writeState(statePath, seed as ConductState);
+      await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'wiring_check', {
+        satisfied: staleGate !== 'wiring_check',
+        checkedAt: 1,
+        ...(staleGate === 'wiring_check' ? { kickback } : {}),
+      });
+      await writeVerdict(dir, 'test_suite', {
+        satisfied: staleGate !== 'test_suite',
+        checkedAt: 1,
+        ...(staleGate === 'test_suite' ? { kickback } : {}),
+      });
+      await writeVerdict(dir, 'build_review', { satisfied: false, checkedAt: 1, kickback });
+
+      const sentinel = new Error(`observed:${staleGate}`);
+      const observed: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          observed.push(step);
+          if (step === staleGate) throw sentinel;
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events, resume: true,
+        fullSuiteVerifier: {
+          ensure: async () => {
+            observed.push('test_suite');
+            if (staleGate === 'test_suite') throw sentinel;
+            return { status: 'REUSED', evidence: {} as never };
+          },
+          inspect: async () => ({ status: 'CURRENT', evidence: {} as never }),
+        },
+      });
+      await conductor.run();
+
+      expect(observed[0]).toBe(staleGate);
+      expect(observed).not.toContain('build_review');
+    });
+
     it('three post-navigateBack kickback verdicts resume at build (earliest kicked-back gate)', async () => {
       const seed = seedDoneThrough('finish');
       // Post-kickback disk state exactly as navigateBack (the in-loop
@@ -312,10 +361,14 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
     it('a stale step is selected even though its own verdict still says satisfied', async () => {
       const seed = seedDoneThrough('build');
       seed.build = 'done';
+      seed.wiring_check = 'done';
+      seed.test_suite = 'done';
       seed.build_review = 'stale';
       seed.rebase = 'done';
       await writeState(statePath, seed as ConductState);
       await writeVerdict(dir, 'build', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'wiring_check', { satisfied: true, checkedAt: 1 });
+      await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: 1 });
       // Stale but the on-disk verdict lies and says satisfied — state must win.
       await writeVerdict(dir, 'build_review', { satisfied: true, checkedAt: 1 });
       await writeVerdict(dir, 'rebase', { satisfied: true, checkedAt: 1 });

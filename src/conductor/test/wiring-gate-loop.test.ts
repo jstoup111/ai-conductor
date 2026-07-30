@@ -73,45 +73,50 @@ function input(
 const VSAT: GateVerdict = { satisfied: true, checkedAt: 1 };
 const VUNSAT: GateVerdict = { satisfied: false, checkedAt: 1, reason: 'wiring gap' };
 
-describe('selector — wiring_check gates the build_review -> manual_test seam', () => {
-  it('an unsatisfied wiring_check verdict blocks manual_test from being selected next', () => {
+describe('selector — the deterministic BUILD verification group gates build_review', () => {
+  it.each([
+    { staleGate: 'wiring_check' as const },
+    { staleGate: 'test_suite' as const },
+  ])('an unsatisfied $staleGate verdict blocks build_review', ({ staleGate }) => {
     const state: ConductState = {
       ...frontDone(),
       build: 'done',
-      build_review: 'done',
-      wiring_check: 'pending',
+      wiring_check: staleGate === 'wiring_check' ? 'stale' : 'done',
+      test_suite: staleGate === 'test_suite' ? 'stale' : 'done',
+      build_review: 'pending',
       manual_test: 'pending',
     };
+    const verdicts = {
+      build: VSAT,
+      wiring_check: staleGate === 'wiring_check' ? VUNSAT : VSAT,
+      test_suite: staleGate === 'test_suite' ? VUNSAT : VSAT,
+    };
     const d = selectNextGate(
-      input(state, { build: VSAT, build_review: VSAT, wiring_check: VUNSAT }),
+      input(state, verdicts),
     );
     expect(d.kind).toBe('run');
     if (d.kind === 'run') {
-      expect(d.step).toBe('wiring_check');
-      expect(d.step).not.toBe('manual_test');
+      expect(d.step).toBe(staleGate);
+      expect(d.step).not.toBe('build_review');
     }
   });
 
-  it('a satisfied wiring_check verdict unblocks manual_test', () => {
+  it('current wiring_check and test_suite proofs unblock build_review', () => {
     const state: ConductState = {
       ...frontDone(),
-      // M tier: S-tier legitimately skips manual_test (D5), which would
-      // make wiring_check's downstream neighbor prd_audit, not manual_test —
-      // defeating the point of this test (proving wiring_check unblocks
-      // manual_test specifically).
       complexity_tier: 'M',
       build: 'done',
-      build_review: 'done',
       wiring_check: 'done',
-      test_suite: 'pending',
+      test_suite: 'done',
+      build_review: 'pending',
       manual_test: 'pending',
     };
     const d = selectNextGate(
-      input(state, { build: VSAT, build_review: VSAT, wiring_check: VSAT, test_suite: VSAT }),
+      input(state, { build: VSAT, wiring_check: VSAT, test_suite: VSAT }),
     );
     expect(d.kind).toBe('run');
     if (d.kind === 'run') {
-      expect(d.step).toBe('manual_test');
+      expect(d.step).toBe('build_review');
     }
   });
 
@@ -260,7 +265,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     });
   }
 
-  it('dispatches build_review, wiring_check, test_suite, then manual_test in a real Conductor run', async () => {
+  it('joins wiring_check and test_suite before build_review, then enters SHIP', async () => {
     await writeState(statePath, {
       ...frontDone(),
       complexity_tier: 'M',
@@ -282,9 +287,11 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     const testSuiteIdx = ran.indexOf('test_suite');
     const manualIdx = ran.indexOf('manual_test');
     expect(reviewIdx).toBeGreaterThan(-1);
-    expect(wiringIdx).toBeGreaterThan(reviewIdx);
-    expect(testSuiteIdx).toBeGreaterThan(wiringIdx);
-    expect(manualIdx).toBeGreaterThan(testSuiteIdx);
+    expect(wiringIdx).toBeGreaterThan(-1);
+    expect(testSuiteIdx).toBeGreaterThan(-1);
+    expect(reviewIdx).toBeGreaterThan(wiringIdx);
+    expect(reviewIdx).toBeGreaterThan(testSuiteIdx);
+    expect(manualIdx).toBeGreaterThan(reviewIdx);
   });
 
   it.each([
@@ -410,7 +417,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     }).toEqual({ checkBeforeBudget: true, captureBeforeNavigate: true });
   });
 
-  it('replays the identical wiring gap across dispatches and D2 HALTs before a second D1 budget consumption', async () => {
+  it('replays an identical joined wiring gap to the D1 cap without reaching review or SHIP', async () => {
     await writeState(statePath, { ...frontDone(), track: 'technical', run_started_at: 1 });
     const gapEvidence = JSON.stringify({
       schema: 1,
@@ -437,12 +444,36 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     });
 
     await first.run();
+    await writeState(statePath, {
+      ...frontDone(),
+      track: 'technical',
+      run_started_at: 1,
+      build: 'done',
+      wiring_check: 'pending',
+      test_suite: 'pending',
+      build_review: 'pending',
+    }, { allowPrUrlClear: true });
 
     const secondEvents = new ConductorEventEmitter();
     const secondKickbackCounts: number[] = [];
+    const downstreamDispatches: string[] = [];
+    const downstream = new Set([
+      'build_review',
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+      'retro',
+      'rebase',
+      'finish',
+    ]);
     secondEvents.on('kickback', (event) => {
       if (event.type === 'kickback' && event.from === 'wiring_check') {
         secondKickbackCounts.push(event.count);
+      }
+    });
+    secondEvents.on('step_started', (event) => {
+      if (event.type === 'step_started' && downstream.has(event.step)) {
+        downstreamDispatches.push(event.step);
       }
     });
     const second = makeConductor({
@@ -459,11 +490,13 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
 
     expect({
       secondKickbackCounts,
+      downstreamDispatches,
       halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8'),
       haltClass: await readHaltClass(dir),
     }).toEqual({
-      secondKickbackCounts: [],
-      halt: expect.stringMatching(/wiring_check kickback-to-build no-op/i),
+      secondKickbackCounts: [2],
+      downstreamDispatches: [],
+      halt: expect.stringMatching(/wiring_check.*cap 2/i),
       haltClass: 'needs-human',
     });
   });

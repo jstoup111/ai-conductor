@@ -6575,16 +6575,12 @@ export class Conductor {
         await this.events.emit({ type: 'loop_halt', reason });
         return 'halt';
       }
-      // FR-5: a file-changing rebase invalidated build (+build_review,
-      // +wiring_check, +manual_test) via kickback-shaped verdicts. Those
+      // FR-5: a file-changing rebase invalidated build (+wiring_check,
+      // +test_suite, +build_review, +manual_test) via kickback-shaped verdicts. Those
       // gates aren't `kickbackTarget` steps, so emit the kickback event(s)
-      // here; the selector below routes back to them. build_review sits
-      // between build and manual_test in the tail (Task 18) — it grades the
-      // diff that the rebase just changed, so it must re-verify before
-      // manual_test is selectable again, same as build and manual_test.
-      // wiring_check (Task 6) sits between build_review and manual_test —
-      // it re-verifies reachability of the diff, invalidated the same way
-      // on a file-changing rebase (Task 11).
+      // here; the selector below routes back to them. wiring_check and
+      // test_suite form the deterministic BUILD group before build_review;
+      // every invalidated member must re-verify before review or SHIP.
       if (this.lastRebaseOutcome?.kind === 'changed') {
         const verdicts = await readAllVerdicts(this.projectRoot);
         // Task 7 (ADR-2026-07-20): a judged gate that classifyGateInvalidation
@@ -6614,12 +6610,14 @@ export class Conductor {
         // them here, their step STATE never flips back to `pending` — the
         // verdict alone re-opens the gate's own predicate, but the selector
         // still sees `done` and never re-dispatches. Order matches the
-        // ALL_STEPS tail (wiring_check → manual_test → prd_audit →
+        // ALL_STEPS tail (wiring_check → test_suite → build_review →
+        // manual_test → prd_audit →
         // architecture_review_as_built).
         for (const target of [
           'build',
-          'build_review',
           'wiring_check',
+          'test_suite',
+          'build_review',
           'manual_test',
           'prd_audit',
           'architecture_review_as_built',
