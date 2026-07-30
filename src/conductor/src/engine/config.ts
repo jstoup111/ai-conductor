@@ -1683,39 +1683,9 @@ function cloneValidationGraph<T>(value: T, seen: WeakMap<object, unknown>): T {
   const existing = seen.get(value);
   if (existing !== undefined) return existing as T;
 
-  if (value instanceof Date) {
-    const copy = new Date(value.getTime());
-    seen.set(value, copy);
-    return copy as T;
-  }
-  if (value instanceof RegExp) {
-    const copy = new RegExp(value.source, value.flags);
-    copy.lastIndex = value.lastIndex;
-    seen.set(value, copy);
-    return copy as T;
-  }
-  if (value instanceof ArrayBuffer) {
-    const copy = value.slice(0);
-    seen.set(value, copy);
-    return copy as T;
-  }
-  const copy: Record<string, unknown> | unknown[] = Array.isArray(value)
-    ? new Array(value.length)
-    : {};
+  const copy: Record<string, unknown> | unknown[] = Array.isArray(value) ? [] : {};
   seen.set(value, copy);
-  let keys: string[];
-  try {
-    keys = Object.keys(value);
-  } catch {
-    return copy as T;
-  }
-  for (const key of keys) {
-    let entry: unknown;
-    try {
-      entry = (value as Record<string, unknown>)[key];
-    } catch {
-      entry = undefined;
-    }
+  for (const [key, entry] of Object.entries(value)) {
     (copy as Record<string, unknown>)[key] = cloneValidationGraph(entry, seen);
   }
   return copy as T;
