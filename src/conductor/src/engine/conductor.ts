@@ -1052,7 +1052,6 @@ export class Conductor {
   private retainedFullSuiteInspection:
     | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
     | undefined;
-  private retainedFullSuiteFailure: FullSuiteVerifierResult | undefined;
   private featureDesc?: string;
   private worktreeBranch?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -3418,21 +3417,15 @@ export class Conductor {
                   .filter((idx) => idx !== -1)
                 : [];
             if (deterministicFailureIdxs.length > 0) {
-              const fullSuiteFailure = this.retainedFullSuiteFailure;
-              this.retainedFullSuiteFailure = undefined;
               const deterministicFailures = [] as Array<{
                 member: typeof membership.dispatchable[number];
                 evidence: string;
               }>;
               for (const failureIdx of deterministicFailureIdxs) {
-                const member = membership.dispatchable[failureIdx]!;
                 deterministicFailures.push({
-                  member,
-                  evidence: member.name === 'test_suite' && fullSuiteFailure?.status === 'FAILED'
-                    ? `full-suite verification failed (${fullSuiteFailure.reason}): ` +
-                      `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`
-                    : outcomes[failureIdx]!.kind === 'no-verdict'
-                      ? (outcomes[failureIdx] as NoVerdictOutcome).reason
+                  member: membership.dispatchable[failureIdx]!,
+                  evidence: outcomes[failureIdx]!.kind === 'no-verdict'
+                    ? (outcomes[failureIdx] as NoVerdictOutcome).reason
                     : (gateVerdicts.get(membership.dispatchable[failureIdx]!.name)?.reason ??
                       'deterministic BUILD verification gate unsatisfied')
                       .replace(/^wiring-reachability gaps found:\n/, ''),
@@ -3498,7 +3491,6 @@ export class Conductor {
                   for (const member of membership.dispatchable) {
                     (state as Record<string, unknown>)[member.name] = 'pending';
                   }
-                  if (fullSuiteFailure?.status === 'FAILED') state.test_suite = 'failed';
                 } else {
                   for (const failure of deterministicFailures) {
                     (state as Record<string, unknown>)[failure.member.name] = 'stale';
@@ -3515,14 +3507,7 @@ export class Conductor {
               const reason =
                 `${exhausted.member.name} failure unresolved after ${exhaustedKickback.entry.count} ` +
                 `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${exhaustedKickback.entry.lastReason}`;
-              const mechanical = exhausted.member.name === 'test_suite' &&
-                fullSuiteFailure?.status === 'FAILED';
-              if (mechanical) state.test_suite = 'failed';
-              await writeHaltMarker(
-                this.projectRoot,
-                reason + '\n',
-                mechanical ? 'mechanical' : 'needs-human',
-              );
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
@@ -6692,14 +6677,12 @@ export class Conductor {
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
     this.retainedFullSuiteInspection = undefined;
-    this.retainedFullSuiteFailure = undefined;
     const inspection = await this.fullSuiteVerifier.inspect();
     if (inspection.status === 'STALE') {
       await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
     }
     const verification = await this.fullSuiteVerifier.ensure();
     if (verification.status === 'FAILED') {
-      this.retainedFullSuiteFailure = verification;
       return {
         success: false,
         output: verification.message,
