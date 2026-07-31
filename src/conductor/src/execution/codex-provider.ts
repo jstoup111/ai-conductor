@@ -205,7 +205,9 @@ export class CodexProvider implements LLMProvider {
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const readiness = await this.readiness(options.spawnPermit);
-    if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+    if (readiness.state === 'missing' || readiness.state === 'unusable') {
+      return this.readinessFailure(readiness);
+    }
 
     const authentication = this.authentication;
     const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
@@ -331,7 +333,7 @@ export class CodexProvider implements LLMProvider {
     jsonOutput: boolean,
     authenticationSelection: SelectedAuthentication,
     automaticReview = true,
-    readyReadiness?: Extract<AuthenticationReadiness, { state: 'ready' }>,
+    readyReadiness?: Extract<AuthenticationReadiness, { state: 'ready' | 'probe-failed' }>,
   ): InvokeResult {
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;

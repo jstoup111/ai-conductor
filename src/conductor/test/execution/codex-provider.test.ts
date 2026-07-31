@@ -1084,6 +1084,50 @@ describe('CodexProvider', () => {
     expect(result).not.toHaveProperty('observedIntervals');
   });
 
+  it('runs exactly one ordinary invocation after a failed readiness probe without synthesizing recovery metadata', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
+    const degradedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Real invocation completed.'), exitCode: 0 } as any);
+
+    const result = await degradedProvider.invoke(baseOptions);
+
+    expect({
+      substantiveExecCalls: mockExeca.mock.calls.length,
+      result: {
+        success: result.success,
+        output: result.output,
+        authFailure: result.authFailure,
+        rateLimited: result.rateLimited,
+        modelUnavailable: result.modelUnavailable,
+        providerUnavailable: result.providerUnavailable,
+        providerUnavailableScope: result.providerUnavailableScope,
+        sessionExpired: result.sessionExpired,
+        authentication: result.authentication,
+      },
+    }).toEqual({
+      substantiveExecCalls: 1,
+      result: {
+        success: true,
+        output: 'Real invocation completed.',
+        authFailure: undefined,
+        rateLimited: undefined,
+        modelUnavailable: undefined,
+        providerUnavailable: undefined,
+        providerUnavailableScope: undefined,
+        sessionExpired: undefined,
+        authentication: {
+          provider: 'codex',
+          source: 'cached-login',
+          state: 'probe-failed',
+          probeFailure: {
+            kind: 'unparseable-output',
+            facts: { stdoutBytes: 17, parserRejection: 'invalid-json' },
+          },
+        },
+      },
+    });
+  });
+
   it.each([
     ['missing', 'no Codex credentials were found', 'missing'],
     ['unusable', 'cached credentials expired', 'unusable'],
