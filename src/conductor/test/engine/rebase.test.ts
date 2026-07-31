@@ -8,6 +8,7 @@ import {
   resolveBase,
   resolveBaseCore,
   resolveFreshBase,
+  classifyProspectiveMerge,
   isBranchCurrent,
   isCodeOrTestPath,
   filterCodeOrTestPaths,
@@ -47,6 +48,39 @@ function fakeGit(
   };
   return { git, calls };
 }
+
+describe('engine/rebase — classifyProspectiveMerge (Task 1)', () => {
+  it('runs the quiet prospective merge command and classifies exit 0 as clean', async () => {
+    const { git, calls } = fakeGit([
+      { match: ['merge-tree', '--write-tree', '--quiet', 'origin/main', 'HEAD'], result: { exitCode: 0 } },
+    ]);
+
+    await expect(classifyProspectiveMerge(git, 'origin/main')).resolves.toBe('clean');
+    expect(calls).toEqual([['merge-tree', '--write-tree', '--quiet', 'origin/main', 'HEAD']]);
+  });
+
+  it('classifies exit 1 as conflicting without reading command output', async () => {
+    const { git } = fakeGit([
+      {
+        match: ['merge-tree', '--write-tree', '--quiet', 'origin/main', 'HEAD'],
+        result: { exitCode: 1, stdout: 'unexpected output', stderr: 'conflict output' },
+      },
+    ]);
+
+    await expect(classifyProspectiveMerge(git, 'origin/main')).resolves.toBe('conflicting');
+  });
+
+  it('classifies every other exit status as indeterminate without reading command output', async () => {
+    const { git } = fakeGit([
+      {
+        match: ['merge-tree', '--write-tree', '--quiet', 'origin/main', 'HEAD'],
+        result: { exitCode: 2, stdout: 'unexpected output', stderr: 'fatal output' },
+      },
+    ]);
+
+    await expect(classifyProspectiveMerge(git, 'origin/main')).resolves.toBe('indeterminate');
+  });
+});
 
 describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
   it('discovers origin default, fetches it, returns origin/<default>', async () => {

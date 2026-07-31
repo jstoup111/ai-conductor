@@ -40,6 +40,25 @@ export interface GitResult {
   stderr: string;
 }
 
+/** Result of checking whether merging the base into HEAD would conflict. */
+export type ProspectiveMergeResult = 'clean' | 'conflicting' | 'indeterminate';
+
+/**
+ * Classify Git's prospective merge result without modifying the worktree.
+ *
+ * `merge-tree --write-tree` uses exit 0 for a clean merge and 1 for conflicts;
+ * every other exit is an operational failure whose mergeability is unknown.
+ */
+export async function classifyProspectiveMerge(
+  git: GitRunner,
+  baseRef: string,
+): Promise<ProspectiveMergeResult> {
+  const { exitCode } = await git(['merge-tree', '--write-tree', '--quiet', baseRef, 'HEAD']);
+  if (exitCode === 0) return 'clean';
+  if (exitCode === 1) return 'conflicting';
+  return 'indeterminate';
+}
+
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
   return async (args: string[], opts?: { input?: string }): Promise<GitResult> => {
