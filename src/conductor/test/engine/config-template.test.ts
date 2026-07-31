@@ -169,8 +169,6 @@ describe('templates/project-config.yml.template', () => {
         'harness_self_host',
         'owner_gate_cutover',
         'auto_restart_on_stale_engine',
-        'attribution_enforcement_cutover',
-        'attribution_judge_cutover',
         'attribution_audit_sample_pct',
         'wiring',
         'manual_test',

@@ -8,22 +8,6 @@
 # automatically: worktree removed, branch deleted, unparked.
 reconcile_parked_auto_cleanup: true
 
-# Owner-gate grandfather cutover (harness owner-gate feature).
-#
-# The autonomous spec-build daemon gates un-owned (unstamped) specs by this
-# instant: an un-owned spec whose plan first appeared on the default branch
-# STRICTLY BEFORE the cutover is grandfather-built; one merged on/after it (or
-# with an indeterminate merge time) is skipped. Owner-stamped specs matching the
-# daemon owner build regardless.
-#
-# This repo was daemon-registered on 2026-07-02 (build-to-PR + human merge,
-# issue #174). The cutover grandfathers every spec already on main at
-# registration time, while newly-merged un-owned specs are gated. No
-# spec_owner is committed — operator identity resolves per machine via the
-# gh-login fallback (machine-scoped identity, PR #183), so a committed owner
-# would wrongly apply to every checkout.
-owner_gate_cutover: "2026-07-02T11:00:00Z"
-
 # Self-host guardrails: declared version freeze (PR #262).
 #
 # VERSION is frozen at 0.99.19 until the operator declares 1.0 (v1.0 cutover
@@ -42,11 +26,6 @@ harness_self_host:
 # → lock release → same-tmux-session respawn. Default-inert engine-side; armed
 # here. Read at daemon startup; restart once to apply.
 auto_restart_on_stale_engine: true
-
-# Attribution judge cutover (#520, PR #525). RETIRED 2026-07-22 (#773): the semantic
-# trailer-citation rating lane is the wedge machinery being deleted; absent = disabled,
-# so no semantic judge gate runs.
-# attribution_judge_cutover: "2026-07-11T18:30:00Z"
 
 # Spot-audit sampling percentage (telemetry only; inert now the judge cutover is retired,
 # kept for when attribution telemetry is consumed).

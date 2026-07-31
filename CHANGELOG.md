@@ -460,6 +460,27 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   and `docs/reference/steps.md` already documented both flags as non-functional — that documentation
   is now removed along with the flags ([#1013](https://github.com/jstoup111/ai-conductor/issues/1013)).
 - Preserve user-level values for all defaulted configuration keys when a project omits them, while keeping explicit project policy, validation diagnostics, merge semantics, and effective defaults authoritative ([implementation PR #1199](https://github.com/jstoup111/ai-conductor/pull/1199)).
+- Remove retired attribution cutover settings so configurations reject obsolete keys while attribution telemetry sampling retains its 10% default ([implementation PR #1211](https://github.com/jstoup111/ai-conductor/pull/1211)).
+
+## Migration
+
+`attribution_enforcement_cutover` and `attribution_judge_cutover` are no longer accepted
+top-level config keys — a `.ai-conductor/config.yml` or `~/.ai-conductor/config.yml` that still
+sets either now fails to load with `Unknown top-level key`. `attribution_audit_sample_pct` is
+unaffected and keeps its default of `10`. Strip both retired keys from every config file that sets
+them, leaving every other line unchanged:
+
+```bash migration
+for f in .ai-conductor/config.yml ~/.ai-conductor/config.yml; do
+  [ -f "$f" ] || continue
+  if grep -Eq '^(attribution_enforcement_cutover|attribution_judge_cutover):' "$f"; then
+    sed -i.bak -E '/^(attribution_enforcement_cutover|attribution_judge_cutover):/d' "$f"
+    echo "Removed retired attribution cutover keys from $f (backup: $f.bak)."
+  else
+    echo "$f has no retired attribution cutover keys — nothing to do."
+  fi
+done
+```
 
 ## Migration
 

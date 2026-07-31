@@ -160,8 +160,9 @@ fresh `build_review` plan-versus-diff judgment is the BUILD completion authority
 Before every BUILD dispatch, the engine best-effort seeds
 `.pipeline/task-status.json` from the selected plan. Missing or unwritable telemetry
 warns and continues; it is never a lifecycle gate. The retired
-`attribution_enforcement_cutover` config key remains accepted as a no-op so older
-consumer configs continue to load.
+`attribution_enforcement_cutover` and `attribution_judge_cutover` config keys are no
+longer accepted — a config file still setting either fails to load with an unknown
+top-level key error.
 
 **Task status tracking:** `.pipeline/task-status.json` is owned entirely by the engine and its
 session hooks — you (the orchestrator) do NOT hand-edit this file, and you do NOT run

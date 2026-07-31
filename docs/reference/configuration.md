@@ -32,7 +32,7 @@ user file.
 
 ## Load order and precedence
 
-`loadMergedConfig()` (`config.ts:1722-1749`) runs four steps in this order:
+`loadMergedConfig()` (`config.ts:1707-1734`) runs four steps in this order:
 
 1. Read and YAML-parse the project file, then validate its explicit values with absent defaults
    deferred (`loadProjectConfig(..., false)`). Project-source errors and normalizations still occur
@@ -40,10 +40,10 @@ user file.
 2. `readUserConfig()` — read `~/.ai-conductor/config.yml`. No schema validation runs on the user file at
    this stage (`user-config.ts:31-70`).
 3. `mergeConfigs(user, project)` — deep merge with the explicit project values as the winner
-   (`config.ts:1697-1718`).
+   (`config.ts:1682-1703`).
 4. `validateConfig(merged, root, { source: 'merged' })`.
 
-Merge semantics (`deepMerge`, `config.ts:1702-1718`): plain objects merge key by key, recursively.
+Merge semantics (`deepMerge`, `config.ts:1687-1703`): plain objects merge key by key, recursively.
 Scalars **and arrays** from the project config replace the user value outright — arrays never concatenate.
 
 Validation normalizes a deep clone, never the caller-owned value. During step 1, defaults for absent
@@ -55,8 +55,8 @@ scopes. This applies uniformly to every defaulted key, including `attribution_au
 `build_progress_halt`, `kickback_escalation`, and `retry_routing`.
 
 > **Known limitation.** `loadMergedConfig`'s own docstring says "User-config parse errors become warnings,
-> not hard failures" (`config.ts:1715-1720`), but the code returns a hard `parse_error`
-> (`config.ts:1730-1739`). A malformed `~/.ai-conductor/config.yml` blocks every project on the machine.
+> not hard failures" (`config.ts:1700-1705`), but the code returns a hard `parse_error`
+> (`config.ts:1715-1724`). A malformed `~/.ai-conductor/config.yml` blocks every project on the machine.
 > Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
 For how a *step's* `model`, `effort`, and `max_retries` resolve across config, provider policy, and CLI
@@ -104,9 +104,7 @@ the `build_review` normalizer (`:850,859,865`).
 | `build_progress` | object | see section | [build_progress](#build_progress) |
 | `spec_owner` | string | none | [spec_owner](#spec_owner) |
 | `owner_gate_cutover` | ISO-8601 string | `null` | [owner_gate_cutover](#owner_gate_cutover) |
-| `attribution_enforcement_cutover` | ISO-8601 string | deprecated no-op | [attribution telemetry compatibility](#attribution-telemetry-compatibility) |
-| `attribution_judge_cutover` | ISO-8601 string | none | [attribution cutovers](#attribution-cutovers) |
-| `attribution_audit_sample_pct` | number | `10` | [attribution cutovers](#attribution-cutovers) |
+| `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
 | `validation_concurrency` | number | `2` | [validation_concurrency](#validation_concurrency) |
 | `harness_self_host` | object | see section | [harness_self_host](#harness_self_host) |
@@ -129,7 +127,7 @@ the `build_review` normalizer (`:850,859,865`).
 Minimum harness version this config requires. Optional string. Checked only when `loadConfig` receives a
 `harnessVersion` argument (`config.ts:167-177`). A mismatch returns `{ type: 'version_mismatch' }`.
 
-`satisfiesVersion` (`config.ts:1745-1750`) matches exactly one grammar: `>=X.Y.Z` with three numeric
+`satisfiesVersion` (`config.ts:1730-1735`) matches exactly one grammar: `>=X.Y.Z` with three numeric
 components.
 
 > **Known limitation.** Any constraint string that does not match `/^>=(\d+\.\d+\.\d+)$/` returns `true`.
@@ -144,7 +142,7 @@ repo's current pre-1.0 `VERSION`. (Formerly shipped an unsatisfiable `">=1.0.0"`
 ## defaults
 
 Baseline knobs applied to every step that does not override them. Validated by
-`validateEffortAndModelBag` (`config.ts:1549-1584`); an unknown key inside the block is a hard error.
+`validateEffortAndModelBag` (`config.ts:1534-1569`); an unknown key inside the block is a hard error.
 
 | Key | Type | Allowed values | Default | Effect |
 | --- | --- | --- | --- | --- |
@@ -232,7 +230,7 @@ other key declares a custom step. `steps` must be an object, and each value must
 
 ### by_tier
 
-Tier-scoped overrides, validated by `validateByTier` (`config.ts:1586-1635`). Tier keys must be `S`,
+Tier-scoped overrides, validated by `validateByTier` (`config.ts:1571-1620`). Tier keys must be `S`,
 `M`, or `L`; anything else is a hard error. Each tier object accepts exactly three keys — `model`,
 `effort`, `max_retries` — and rejects the rest. `escalate` is deliberately not tier-scopable.
 
@@ -402,7 +400,7 @@ its `mtimeMs` must be at or above the attempt or session freshness floor; a stal
 > semantics in `src/conductor/src/types/config.ts:134-146` and read by `buildStepRegistry`
 > (`steps.ts:607-608`), but neither is in `knownStepKeys` (`config.ts:334-350`). Setting either fails
 > the load with `Unknown key in steps.<n>: "gate"` / `"kickback_target"`. The legacy adapter
-> `customStepEntries()` (`config.ts:1780-1800`) also drops both fields. A custom step's loop-gate
+> `customStepEntries()` (`config.ts:1765-1785`) also drops both fields. A custom step's loop-gate
 > membership can only be inherited from its `after` target, and it can never be a kickback target.
 > Tracked in
 > [#1025](https://github.com/jstoup111/ai-conductor/issues/1025).
@@ -425,12 +423,12 @@ For what does resolve a tier, see
 
 ## conductor
 
-Update-channel state. Validated by `validateConductorBlock` (`config.ts:1074-1108`); an unknown key
+Update-channel state. Validated by `validateConductorBlock` (`config.ts:1059-1093`); an unknown key
 inside the block is a hard error.
 
 | Key | Type | Allowed | Written by |
 | --- | --- | --- | --- |
-| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1088-1097`) | `bin/install` |
+| `conductor.update_channel` | string | `tagged` or `main` only; anything else is a hard error (`config.ts:1073-1082`) | `bin/install` |
 | `conductor.auto_check` | boolean | — | `bin/install` |
 | `conductor.current_version` | string | — | `bin/install` (machine state) |
 | `conductor.last_checked_at` | string | ISO-8601 UTC | update check (machine state) |
@@ -445,7 +443,7 @@ Legacy `~/.claude/ai-conductor.config.json` is translated camelCase to snake_cas
 
 ## markdown_viewer and mermaid_renderer
 
-Two blocks with identical shape, validated at `config.ts:1460-1501` and `:1503-1547`. Allow-list for
+Two blocks with identical shape, validated at `config.ts:1443-1485` and `:1486-1530`. Allow-list for
 both: `preset`, `command`, `args`, `mode`. An unknown key is a hard error.
 
 | Key | Type | Validation |
@@ -480,13 +478,13 @@ Mermaid renderer presets (`src/conductor/src/engine/mermaid-renderer-presets.ts:
 
 > **Known limitation.** `MarkdownViewerConfig` and `MermaidRendererConfig` declare `command`, `args`, and
 > `mode` as required (`src/conductor/src/types/config.ts:217-219, 231-233`), but every validator check is
-> guarded by `!== undefined` (`config.ts:1474-1499, 1517-1545`). A block containing only `preset` passes
+> guarded by `!== undefined` (`config.ts:1459-1484, 1502-1530`). A block containing only `preset` passes
 > validation. Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
 ## assess
 
 Staleness thresholds for the codebase assessment. Validated by `validateAssessBlock`
-(`config.ts:1110-1133`); an unknown key is a hard error.
+(`config.ts:1095-1118`); an unknown key is a hard error.
 
 | Key | Type | Validation | Default | Consumer |
 | --- | --- | --- | --- | --- |
@@ -516,14 +514,14 @@ The leading `*/` is the monorepo idiom for "any immediate subdirectory."
 ## test_suite
 
 The project-owned aggregate verification command run by the pre-SHIP `test_suite` gate. Validated by
-`validateTestSuiteBlock` (`config.ts:1135-1211`); an unknown key inside the block is a hard error.
+`validateTestSuiteBlock` (`config.ts:1120-1196`); an unknown key inside the block is a hard error.
 
 | Key | Type | Required | Validation | Default |
 | --- | --- | --- | --- | --- |
-| `test_suite.command` | string | Yes, when the block exists | Non-empty after trim (`config.ts:1153-1158`) | — |
-| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1160-1183`) | project root |
-| `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1185-1195`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
-| `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1197-1208`) | none |
+| `test_suite.command` | string | Yes, when the block exists | Non-empty after trim (`config.ts:1138-1143`) | — |
+| `test_suite.working_directory` | string | No | Must be relative and resolve inside the project root. Absolute paths, `..` escapes, and symlinks whose realpath escapes the root are hard errors. A non-ENOENT/ENOTDIR realpath error fails closed (`config.ts:1145-1168`) | project root |
+| `test_suite.timeout_seconds` | number | No | Finite and `> 0` (`config.ts:1170-1180`) | 1800 s (`DEFAULT_FULL_SUITE_TIMEOUT_MS`, `src/conductor/src/engine/full-suite-executor.ts:7`) |
+| `test_suite.inputs` | string[] | No | Array of strings (`config.ts:1182-1193`) | none |
 | `test_suite.environment` | string[] | No | Array of strings | none |
 
 `environment` holds environment variable **names**, not values. Each value is HMAC'd into the full-suite
@@ -540,7 +538,7 @@ and the run HALTs. The gate itself is described in [gates](../explanation/gates.
 Which provider host runs each step. Optional `string` or `string[]`; absent resolves to `['claude']`
 (`src/conductor/src/engine/provider-selection.ts:5-8`).
 
-Validation (`config.ts:1705-1743`): a non-empty string, or a non-empty array of non-empty unique strings.
+Validation (`config.ts:1690-1728`): a non-empty string, or a non-empty array of non-empty unique strings.
 Duplicates are rejected. An unregistered provider name is not caught at load — it **throws** at run start
 with a list of available providers (`provider-selection.ts:52-66`).
 
@@ -564,13 +562,13 @@ Not schema-validated — the key is allow-listed only. An unknown name makes `re
 ## memory_provider
 
 Plugin name for the memory store. Optional string, default `local`. Resolved by `resolveMemoryProvider`
-(`config.ts:1833-1867`), called at `src/conductor/src/daemon-cli.ts:835`.
+(`config.ts:1818-1852`), called at `src/conductor/src/daemon-cli.ts:835`.
 
 | Input | Result |
 | --- | --- |
 | Absent, empty, or non-string | `local`, no warning |
 | A valid, installed provider name | That provider |
-| A valid name that is not installed | `local` plus one warning per bad name per run (`config.ts:1856-1864`) |
+| A valid name that is not installed | `local` plus one warning per bad name per run (`config.ts:1841-1849`) |
 
 Not schema-validated.
 
@@ -600,7 +598,7 @@ endpoint yields `{ enabled: false, error: "otel exporter='otlp' requires an 'end
 ## build_progress
 
 Intra-step progress-event cadence during a build. Validated by `validateBuildProgressBlock`
-(`config.ts:1246-1303`), which rejects nonsense outright rather than coercing it. An unknown key inside
+(`config.ts:1231-1288`), which rejects nonsense outright rather than coercing it. An unknown key inside
 the block is a hard error.
 
 | Key | Type | Validation | Default |
@@ -610,7 +608,7 @@ the block is a hard error.
 | `build_progress.heartbeat_minutes` | number | Finite and `> 0` | `5` |
 | `build_progress.enabled` | boolean | Boolean | `true` |
 
-Cross-field rule (`config.ts:1289-1300`): `poll_seconds` must not exceed `quiet_minutes * 60`. Violating
+Cross-field rule (`config.ts:1274-1285`): `poll_seconds` must not exceed `quiet_minutes * 60`. Violating
 it is a hard error naming both values — otherwise a step could be declared stalled before it was polled
 once.
 
@@ -619,14 +617,14 @@ watcher at `src/conductor/src/engine/conductor.ts:3712`.
 
 ## build_progress_halt
 
-Whether a build that stops making progress halts or parks. Validated at `config.ts:1319-1361`; the
+Whether a build that stops making progress halts or parks. Validated at `config.ts:1304-1346`; the
 resolved block is written back into the config object (`config.ts:908`). An unknown key inside the block
 is a hard error.
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
 | `build_progress_halt.enabled` | boolean | Boolean | `true` |
-| `build_progress_halt.attempt_ceiling` | integer | Finite, positive integer, **and `>= resolvedMaxRetries`** (`config.ts:1350-1358`) | `30` |
+| `build_progress_halt.attempt_ceiling` | integer | Finite, positive integer, **and `>= resolvedMaxRetries`** (`config.ts:1335-1343`) | `30` |
 | `build_progress_halt.dispatch_ceiling` | integer | Finite, positive integer | `20` |
 
 `resolvedMaxRetries` is `defaults.max_retries` when numeric, otherwise `FALLBACK_RETRIES` (3)
@@ -635,8 +633,8 @@ with `build_progress_halt.attempt_ceiling (30) must not be below the resolved ma
 
 > **Known limitation.** The floor check fires only when `attempt_ceiling` is explicitly set. When the
 > `build_progress_halt` block is absent, or is present but omits `attempt_ceiling`,
-> `validateBuildProgressHaltBlock` returns early (`config.ts:1325`) and the resolver installs the default
-> 30 without rechecking (`config.ts:1363-1380`). A config with `defaults.max_retries: 40` and no
+> `validateBuildProgressHaltBlock` returns early (`config.ts:1310`) and the resolver installs the default
+> 30 without rechecking (`config.ts:1348-1365`). A config with `defaults.max_retries: 40` and no
 > `build_progress_halt` block loads clean and runs with a ceiling below its own retry budget — the exact
 > state the check exists to prevent. Set `attempt_ceiling` explicitly whenever you raise
 > `defaults.max_retries`. Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
@@ -648,7 +646,7 @@ block; see [Load order and precedence](#load-order-and-precedence).
 ## retry_routing
 
 Kill-switch for classifying a retry as a rerun versus a route to another step. Validated at
-`config.ts:1395-1411`; the resolved block is written back (`config.ts:941`).
+`config.ts:1380-1396`; the resolved block is written back (`config.ts:941`).
 
 | Key | Type | Validation | Default |
 | --- | --- | --- | --- |
@@ -692,7 +690,7 @@ wiring:
 ## harness_self_host
 
 Guardrails that apply when the build target is the harness checkout itself. Validated by
-`validateSelfHostBlock` (`config.ts:987-1034`). An unknown key inside the block is a hard error —
+`validateSelfHostBlock` (`config.ts:972-1019`). An unknown key inside the block is a hard error —
 deliberately, so a typo'd gate name surfaces instead of silently leaving that gate enabled.
 
 Resolution is safe-by-default (`resolveSelfHostConfig`, `resolved-config.ts:550-575`): an absent block, or
@@ -705,10 +703,10 @@ any omitted field, yields auto-detection with every gate enabled.
 | `sandbox_build_env` | boolean | — | `true` | Runs the self-build under a throwaway `CLAUDE_CONFIG_DIR` |
 | `version_approval_gate` | boolean | — | `true` | Halts for operator VERSION-bump approval before `finish` |
 | `release_artifact_gate` | boolean | — | `true` | Halts on an integrity, CHANGELOG, or migration-block failure |
-| `version_freeze` | string | Non-empty after trim, else hard error (`config.ts:1000-1008`) | `null` | While it equals the repo `VERSION`, the approval gate self-satisfies. Blank or whitespace normalizes to `null` |
-| `auth_park_timeout_minutes` | number | Must be a number, else hard error (`config.ts:1023-1028`) | `60` | OAuth park-and-poll timeout. `0` means an immediate credentials-specific halt |
-| `build_auth.mode` | string | `daemon-token`, `api-key`; empty string rejected (`config.ts:1050-1064`) | `daemon-token` | Selects the self-build auth source |
-| `build_auth.token_path` | string | Must be a string (`config.ts:1065-1070`) | `~/.ai-conductor/build-auth` | `~` is expanded; blank or whitespace falls back to the default |
+| `version_freeze` | string | Non-empty after trim, else hard error (`config.ts:985-993`) | `null` | While it equals the repo `VERSION`, the approval gate self-satisfies. Blank or whitespace normalizes to `null` |
+| `auth_park_timeout_minutes` | number | Must be a number, else hard error (`config.ts:1008-1013`) | `60` | OAuth park-and-poll timeout. `0` means an immediate credentials-specific halt |
+| `build_auth.mode` | string | `daemon-token`, `api-key`; empty string rejected (`config.ts:1035-1049`) | `daemon-token` | Selects the self-build auth source |
+| `build_auth.token_path` | string | Must be a string (`config.ts:1050-1055`) | `~/.ai-conductor/build-auth` | `~` is expanded; blank or whitespace falls back to the default |
 
 A declared `version_freeze` never approves an actual bump: any `VERSION` other than the frozen value
 still halts.
@@ -776,7 +774,7 @@ apply when the project omits this key.
 
 ## mergeable_autoresolve
 
-Automatic conflict resolution on open PRs. Validated at `config.ts:1420-1458`; an unknown key inside the
+Automatic conflict resolution on open PRs. Validated at `config.ts:1405-1443`; an unknown key inside the
 block is a hard error.
 
 | Key | Type | Validation | Default |
@@ -944,25 +942,20 @@ Validation (`config.ts:652-662`): must be a string and `Date.parse` must succeed
 **rejected, never silently defaulted** — an un-owned spec must not be misclassified because of a
 fat-fingered date. The error names the value and shows the expected form.
 
-Absent resolves to `null` at the wiring site (`src/conductor/src/daemon-cli.ts:1229`): no grandfather
-window, so un-owned specs are indeterminate and skipped. An un-owned spec whose plan first reached the
-default branch strictly before the cutover is built; one merged on or after it is skipped.
+Absent resolves to `null` at the wiring site (`src/conductor/src/daemon-cli.ts:1229`), so un-owned
+specs default-build. With a cutover, an un-owned spec whose plan first reached the default branch
+strictly before it is labeled grandfathered; specs merged on or after it also default-build.
 
-## Attribution telemetry compatibility
+## Attribution telemetry
 
-Three related keys. Inline attribution enforcement was retired in #773; the former
-enforcement key remains accepted only so existing config files continue to load.
+`attribution_audit_sample_pct` controls the percentage of attribution telemetry audit events sampled.
+It is an optional number: validation requires a number, clamps values outside `[0,100]` with a warning,
+and defaults an absent value to `10`. Attribution telemetry consumes the resolved value at
+`src/conductor/src/engine/attribution-telemetry.ts`; a user-level value applies when the project omits
+the key. See [Load order and precedence](#load-order-and-precedence).
 
-| Key | Type | Validation | Absent |
-| --- | --- | --- | --- |
-| `attribution_enforcement_cutover` | ISO-8601 string | String and `Date.parse` must succeed | Deprecated no-op; does not gate builds, commits, or mutations |
-| `attribution_judge_cutover` | ISO-8601 string | Same (`config.ts:685-695`) | Judgment disabled (`config.ts:971-977`) |
-| `attribution_audit_sample_pct` | number | Must be a number (`config.ts:701-704`); outside `[0,100]` is clamped with a warning and the clamped value written back (`config.ts:706-712`) | Defaults to `10`, injected into the config object |
-
-A judge cutover in the past is active; a future one is inactive. `attribution_audit_sample_pct` is inert while
-`attribution_judge_cutover` is absent, and is consumed at
-`src/conductor/src/engine/attribution-telemetry.ts` (`?? 10`). Its user-level value applies when the
-project omits the key; see [Load order and precedence](#load-order-and-precedence).
+The retired `attribution_enforcement_cutover` and `attribution_judge_cutover` keys are not valid
+configuration keys. Remove either key before updating.
 
 ## rebase_resolution_attempts
 
@@ -984,10 +977,10 @@ Consumed at `src/conductor/src/engine/autoresolve.ts:208`,
 ## validation_concurrency
 
 Bounds the validation-phase fan-out. Optional number, default `2`
-(`DEFAULT_VALIDATION_CONCURRENCY`, `config.ts:1895`).
+(`DEFAULT_VALIDATION_CONCURRENCY`, `config.ts:1899`).
 
 A non-number is a hard error (`config.ts:720-724`). Zero, negative, and `NaN` pass validation, but
-`resolveValidationConcurrency` (`config.ts:1906-1918`) silently substitutes `2`.
+`resolveValidationConcurrency` (`config.ts:1891-1903`) silently substitutes `2`.
 
 Consumed at `src/conductor/src/engine/conductor.ts:1263`, then clamped to the branch count at `:6357`.
 
@@ -1005,7 +998,7 @@ fails the load.
 | `steps.<custom>.kickback_target` | `types/config.ts:141-146` | `Unknown key in steps.<n>: "kickback_target"` |
 
 > **Known limitation.** `gate_code_validity` is a fully wired kill-switch: `resolveGateCodeValidityConfig`
-> (`config.ts:1926-1934`) is called from six sites — `src/conductor/src/engine/artifacts.ts:365, 1587,
+> (`config.ts:1911-1919`) is called from six sites — `src/conductor/src/engine/artifacts.ts:365, 1587,
 > 1753, 1847, 1955` and `src/conductor/src/engine/step-runners.ts:1687` — and the absent block resolves
 > to `{ enabled: true }`. Because the key is not in `knownTopLevelKeys` (`config.ts:213-269`), it can
 > never be set from a config file, so the gate is permanently on. There is no workaround.

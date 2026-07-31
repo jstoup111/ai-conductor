@@ -758,7 +758,7 @@ describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', (
   let dir: string;
   let statePath: string;
   let events: ConductorEventEmitter;
-  const PAST_CUTOVER = { attribution_enforcement_cutover: '2026-01-01T00:00:00Z' } as HarnessConfig;
+  const CONFIG = {} as HarnessConfig;
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'unattributed-dispatch-wiring-'));
@@ -817,7 +817,7 @@ describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', (
       stepRunner: runner,
       events,
       projectRoot: dir,
-      config: PAST_CUTOVER,
+      config: CONFIG,
     });
 
     await conductor.run();
@@ -857,7 +857,7 @@ describe('unattributed-dispatch loud signal at the build seam (Task 3, #671)', (
       stepRunner: runner,
       events,
       projectRoot: dir,
-      config: PAST_CUTOVER,
+      config: CONFIG,
     });
 
     await conductor.run();
