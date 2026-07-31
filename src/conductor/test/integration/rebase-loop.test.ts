@@ -19,6 +19,19 @@ import {
   makeGitRunner as makeRebaseGitRunner,
 } from '../../src/engine/rebase.js';
 
+const gitCommandSpy = vi.hoisted(() => vi.fn());
+
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      gitCommandSpy(...args);
+      return actual.execa(...args);
+    },
+  };
+});
+
 // END-TO-END acceptance specs for the Phase 9.0 daemon rebase-on-latest step.
 //
 // These drive the REAL Conductor over a REAL git repo in a tmpdir. Git is core
@@ -169,6 +182,7 @@ describe('integration/rebase-loop', () => {
   }
 
   beforeEach(async () => {
+    gitCommandSpy.mockClear();
     dir = await mkdtemp(join(tmpdir(), 'rebase-loop-'));
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -658,6 +672,9 @@ describe('integration/rebase-loop', () => {
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
     expect(await rebaseInProgress()).toBe(true);
+    expect(gitCommandSpy.mock.calls.filter(
+      ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
+    )).toEqual([]);
   });
 
   it('re-parks when the rebase is paused but staged-without-continue (no unmerged paths) (FR-9 hardening)', async () => {
@@ -710,6 +727,9 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(false);
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
+    expect(gitCommandSpy.mock.calls.filter(
+      ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
+    )).toEqual([]);
   });
 
   // ── #655: delta-aware post-rebase gate invalidation ─────────────────────
