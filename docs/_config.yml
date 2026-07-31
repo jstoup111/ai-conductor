@@ -1,0 +1,7 @@
+title: AI Conductor Documentation
+url: https://jstoup111.github.io
+baseurl: /ai-conductor
+remote_theme: just-the-docs/just-the-docs@v0.12.0
+nav_enabled: true
+aux_links:
+  Repository: https://github.com/jstoup111/ai-conductor

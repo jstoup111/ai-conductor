@@ -1,3 +1,9 @@
+---
+title: Settings and hooks
+parent: Reference
+nav_order: 6
+---
+
 # Settings and hooks
 
 Every `settings.json` file the harness writes, every JSON key path it touches, and every hook it wires

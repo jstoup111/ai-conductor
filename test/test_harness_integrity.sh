@@ -1068,6 +1068,57 @@ else
   assert "test/check_halt_writers.sh exists" 1
 fi
 
+# ── 17. Hosted documentation contracts ─────────────────────────────────────
+# The navigation suite first exercises complete and invalid fixture trees, then
+# checks the real repository tree. Its site-contract mode intentionally stops
+# before the README front-door assertion, which Task 14 owns separately.
+check_17_docs_site_contracts() {
+  echo ""
+  echo -e "${BOLD}17. Hosted documentation contracts${NC}"
+
+  local docs_navigation_test="${HARNESS_DIR}/test/test_docs_navigation.sh"
+  if [ -f "$docs_navigation_test" ]; then
+    local docs_navigation_output
+    local docs_navigation_exit
+    set +e
+    docs_navigation_output=$(bash "$docs_navigation_test" --site-contract 2>&1)
+    docs_navigation_exit=$?
+    set -e
+
+    if [ "$docs_navigation_exit" -eq 0 ]; then
+      assert "test/test_docs_navigation.sh — fixture and real-tree navigation contracts pass" 0
+    else
+      echo "$docs_navigation_output" | sed 's/^/    /'
+      assert "test/test_docs_navigation.sh — fixture and real-tree navigation contracts pass" 1
+    fi
+  else
+    assert "test/test_docs_navigation.sh exists" 1
+  fi
+  # This runs only the deterministic acceptance suite, which replaces gh and
+  # curl at the process boundary. The real Pages probe remains opt-in and is
+  # never invoked from integrity or the aggregate test path.
+  local docs_pages_smoke_test="${HARNESS_DIR}/test/test_docs_pages_smoke.sh"
+  if [ -f "$docs_pages_smoke_test" ]; then
+    local docs_pages_smoke_output
+    local docs_pages_smoke_exit
+    set +e
+    docs_pages_smoke_output=$(bash "$docs_pages_smoke_test" 2>&1)
+    docs_pages_smoke_exit=$?
+    set -e
+
+    if [ "$docs_pages_smoke_exit" -eq 0 ]; then
+      assert "test/test_docs_pages_smoke.sh — deterministic Pages adapter contracts pass" 0
+    else
+      echo "$docs_pages_smoke_output" | sed 's/^/    /'
+      assert "test/test_docs_pages_smoke.sh — deterministic Pages adapter contracts pass" 1
+    fi
+  else
+    assert "test/test_docs_pages_smoke.sh exists" 1
+  fi
+}
+
+check_17_docs_site_contracts
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

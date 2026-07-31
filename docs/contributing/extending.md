@@ -1,3 +1,9 @@
+---
+title: Extending the harness
+parent: Contributing
+nav_order: 2
+---
+
 # Extending the harness
 
 The exact files to change, the registration points, the validation that catches a mistake, and the tests

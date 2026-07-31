@@ -1,3 +1,9 @@
+---
+title: Releases
+parent: Contributing
+nav_order: 3
+---
+
 # Releases
 
 How a change in this repository becomes a tagged release: the `VERSION` file, the CHANGELOG contract,

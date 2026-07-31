@@ -1,3 +1,9 @@
+---
+title: Code organization
+parent: Contributing
+nav_order: 1
+---
+
 # Code organization
 
 The module map of the engine — the TypeScript conductor under `src/conductor/` — plus what each layer

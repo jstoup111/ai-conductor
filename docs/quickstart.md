@@ -1,3 +1,8 @@
+---
+title: Quickstart
+nav_order: 2
+---
+
 # Quickstart
 
 Install the harness, register a project, and run one feature through the SDLC pipeline. For

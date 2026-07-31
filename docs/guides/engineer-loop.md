@@ -1,3 +1,9 @@
+---
+title: The engineer loop
+parent: Guides
+nav_order: 2
+---
+
 # The engineer loop
 
 Turn one raw idea into a merged-ready spec PR in the right repo. This guide walks the engineer loop

@@ -1,3 +1,9 @@
+---
+title: Stalled or stuck feature
+parent: Runbooks
+nav_order: 4
+---
+
 # Stalled or stuck feature
 
 Diagnose and clear a feature that is dispatched but not progressing: no-task-progress stalls,

@@ -1,3 +1,9 @@
+---
+title: Shipped record reconciliation
+parent: Runbooks
+nav_order: 3
+---
+
 # Shipped record reconciliation
 
 Land the missing `.docs/shipped/<slug>.md` for work that already shipped, so the daemon stops

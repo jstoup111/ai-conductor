@@ -1,3 +1,9 @@
+---
+title: Steps
+parent: Reference
+nav_order: 8
+---
+
 # Steps
 
 The complete step vocabulary the engine executes: names, order, phase, enforcement, skip rules,

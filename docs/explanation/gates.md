@@ -1,3 +1,9 @@
+---
+title: Gates
+parent: Explanation
+nav_order: 3
+---
+
 # Gates
 
 What a gate is in this harness, the four enforcement levels, the gates that can block a feature, and the

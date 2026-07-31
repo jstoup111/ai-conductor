@@ -1,3 +1,9 @@
+---
+title: Worktree and evidence recovery
+parent: Runbooks
+nav_order: 5
+---
+
 # Worktree and evidence recovery
 
 Recreate a feature's worktree from its branch and backfill the run state that went with it,

@@ -1,3 +1,9 @@
+---
+title: Configuration reference
+parent: Reference
+nav_order: 3
+---
+
 # Configuration reference
 
 Every key the engine reads from `.ai-conductor/config.yml`, with its type, default, allowed values, the

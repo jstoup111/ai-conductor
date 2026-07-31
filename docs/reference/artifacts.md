@@ -1,3 +1,9 @@
+---
+title: Artifacts and state files
+parent: Reference
+nav_order: 1
+---
+
 # Artifacts and state files
 
 Every file the harness writes, file by file: what creates it, what reads it, whether it is committed,

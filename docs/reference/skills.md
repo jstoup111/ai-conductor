@@ -1,3 +1,9 @@
+---
+title: Skills
+parent: Reference
+nav_order: 7
+---
+
 # Skills
 
 The catalog of all 32 skills: 29 under `skills/` and 3 repository-local ones under `.agents/skills/`.

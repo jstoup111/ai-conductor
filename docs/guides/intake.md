@@ -1,3 +1,9 @@
+---
+title: Filing intake issues
+parent: Guides
+nav_order: 3
+---
+
 # Filing intake issues
 
 File an issue that a zero-context engineer can start debugging from, and that seeds the DECIDE phase

@@ -1,3 +1,9 @@
+---
+title: Evidence model
+parent: Explanation
+nav_order: 2
+---
+
 # Evidence model
 
 Why this harness proves progress with artifacts instead of accepting an agent's word for it, what counts as
