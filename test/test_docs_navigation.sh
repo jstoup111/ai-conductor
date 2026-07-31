@@ -211,23 +211,48 @@ if [ "${1:-}" = '--landing-contract' ]; then
   exit 0
 fi
 
-REAL_OUTPUT="$(run_checker "$REPO_ROOT")"
-REAL_STATUS=$?
-record "the maintained repository tree has no missing or ambiguous navigation membership" \
-  "$([ "$REAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
-if [ "$REAL_STATUS" -ne 0 ]; then
-  printf '%s\n' "$REAL_OUTPUT"
-fi
-
 MISSING_METADATA="$FIXTURE_ROOT/missing-metadata"
 cp -R "$VALID_ROOT" "$MISSING_METADATA"
 sed -i '/^---$/,/^---$/d' "$MISSING_METADATA/docs/guides/first-feature.md"
-expect_checker_failure "a topic without navigation metadata names the topic" "$MISSING_METADATA" "docs/guides/first-feature.md"
+expect_checker_failure "missing front matter names the topic" "$MISSING_METADATA" \
+  "docs/guides/first-feature.md"
+
+MISSING_TITLE="$FIXTURE_ROOT/missing-title"
+cp -R "$VALID_ROOT" "$MISSING_TITLE"
+sed -i '/^title: First Feature$/d' "$MISSING_TITLE/docs/guides/first-feature.md"
+expect_checker_failure "missing title names the topic" "$MISSING_TITLE" \
+  "docs/guides/first-feature.md"
+
+EMPTY_TITLE="$FIXTURE_ROOT/empty-title"
+cp -R "$VALID_ROOT" "$EMPTY_TITLE"
+sed -i 's/^title: First Feature$/title:/' "$EMPTY_TITLE/docs/guides/first-feature.md"
+expect_checker_failure "an empty title names the topic" "$EMPTY_TITLE" \
+  "docs/guides/first-feature.md"
+
+MISSING_PARENT="$FIXTURE_ROOT/missing-parent"
+cp -R "$VALID_ROOT" "$MISSING_PARENT"
+sed -i '/^parent: Guides$/d' "$MISSING_PARENT/docs/guides/first-feature.md"
+expect_checker_failure "a nested topic without a parent names the topic" "$MISSING_PARENT" \
+  "docs/guides/first-feature.md"
+
+UNKNOWN_PARENT="$FIXTURE_ROOT/unknown-parent"
+cp -R "$VALID_ROOT" "$UNKNOWN_PARENT"
+sed -i 's/^parent: Guides$/parent: Missing Guide Section/' \
+  "$UNKNOWN_PARENT/docs/guides/first-feature.md"
+expect_checker_failure "an unknown parent names the topic" "$UNKNOWN_PARENT" \
+  "docs/guides/first-feature.md"
 
 ORPHAN="$FIXTURE_ROOT/orphan"
 cp -R "$VALID_ROOT" "$ORPHAN"
-printf '# Unregistered topic\n' > "$ORPHAN/docs/guides/orphan.md"
-expect_checker_failure "an orphaned topic fails with its repository path" "$ORPHAN" "docs/guides/orphan.md"
+cat > "$ORPHAN/docs/orphan.md" <<'MARKDOWN'
+---
+title: Unregistered Topic
+nav_order: 99
+---
+
+# Unregistered Topic
+MARKDOWN
+expect_checker_failure "an orphaned topic fails with its repository path" "$ORPHAN" "docs/orphan.md"
 
 AMBIGUOUS="$FIXTURE_ROOT/ambiguous"
 cp -R "$VALID_ROOT" "$AMBIGUOUS"
@@ -241,6 +266,22 @@ nav_order: 2
 # Duplicate
 MARKDOWN
 expect_checker_failure "duplicate sibling membership is rejected by path" "$AMBIGUOUS" "docs/guides/duplicate.md"
+
+if [ "${1:-}" = '--navigation-contract' ]; then
+  printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
+  if [ "$FAIL" -gt 0 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+REAL_OUTPUT="$(run_checker "$REPO_ROOT")"
+REAL_STATUS=$?
+record "the maintained repository tree has no missing or ambiguous navigation membership" \
+  "$([ "$REAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
+if [ "$REAL_STATUS" -ne 0 ]; then
+  printf '%s\n' "$REAL_OUTPUT"
+fi
 
 printf '\n=== Story 8: repository front door retains both hosted and source navigation ===\n'
 
