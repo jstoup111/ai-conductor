@@ -318,6 +318,18 @@ record "remaining contributing topics and Quickstart have unique stable navigati
     source_has_contributing_destination 'validation.md' 'Validation' 5 && \
     source_has_top_level_destination 'quickstart.md' 'Quickstart' 2 && echo 0 || echo 1 )"
 
+integrity_runs_full_navigation_contract() {
+  local integrity_path="$REPO_ROOT/test/test_harness_integrity.sh"
+
+  [ -f "$integrity_path" ] && \
+    grep -Fq 'docs_navigation_test="${HARNESS_DIR}/test/test_docs_navigation.sh"' "$integrity_path" && \
+    grep -Fq 'docs_navigation_output=$(bash "$docs_navigation_test" --site-contract 2>&1)' "$integrity_path" && \
+    awk '/navigation-contract/ { fixture_contract_line = NR } /REAL_OUTPUT=/ { real_tree_line = NR } /site-contract/ { site_contract_line = NR } END { exit !(fixture_contract_line > 0 && real_tree_line > fixture_contract_line && site_contract_line > real_tree_line) }' "$0"
+}
+
+record "integrity runs the fixture-driven navigation test through its real-tree check" \
+  "$( integrity_runs_full_navigation_contract && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
@@ -425,6 +437,14 @@ record "the maintained repository tree has no missing or ambiguous navigation me
   "$([ "$REAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
 if [ "$REAL_STATUS" -ne 0 ]; then
   printf '%s\n' "$REAL_OUTPUT"
+fi
+
+if [ "${1:-}" = '--site-contract' ]; then
+  printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
+  if [ "$FAIL" -gt 0 ]; then
+    exit 1
+  fi
+  exit 0
 fi
 
 printf '\n=== Story 8: repository front door retains both hosted and source navigation ===\n'

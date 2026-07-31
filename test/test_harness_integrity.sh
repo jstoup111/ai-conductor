@@ -1068,6 +1068,30 @@ else
   assert "test/check_halt_writers.sh exists" 1
 fi
 
+# ── 17. Hosted documentation navigation ────────────────────────────────────
+# The navigation suite first exercises complete and invalid fixture trees, then
+# checks the real repository tree. Its site-contract mode intentionally stops
+# before the README front-door assertion, which Task 14 owns separately.
+echo ""
+echo -e "${BOLD}17. Hosted documentation navigation${NC}"
+
+docs_navigation_test="${HARNESS_DIR}/test/test_docs_navigation.sh"
+if [ -f "$docs_navigation_test" ]; then
+  set +e
+  docs_navigation_output=$(bash "$docs_navigation_test" --site-contract 2>&1)
+  docs_navigation_exit=$?
+  set -e
+
+  if [ "$docs_navigation_exit" -eq 0 ]; then
+    assert "test/test_docs_navigation.sh — fixture and real-tree navigation contracts pass" 0
+  else
+    echo "$docs_navigation_output" | sed 's/^/    /'
+    assert "test/test_docs_navigation.sh — fixture and real-tree navigation contracts pass" 1
+  fi
+else
+  assert "test/test_docs_navigation.sh exists" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
