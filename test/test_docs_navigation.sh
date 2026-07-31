@@ -313,6 +313,11 @@ record "core contributing topics have unique titles, the Contributing parent, an
     source_has_contributing_destination 'extending.md' 'Extending the harness' 2 && \
     source_has_contributing_destination 'releases.md' 'Releases' 3 && echo 0 || echo 1 )"
 
+record "remaining contributing topics and Quickstart have unique stable navigation" \
+  "$( source_has_contributing_destination 'testing.md' 'Testing' 4 && \
+    source_has_contributing_destination 'validation.md' 'Validation' 5 && \
+    source_has_top_level_destination 'quickstart.md' 'Quickstart' 2 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then

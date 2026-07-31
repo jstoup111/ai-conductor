@@ -1,3 +1,9 @@
+---
+title: Testing
+parent: Contributing
+nav_order: 4
+---
+
 # Testing
 
 Every test tier in this repo, the command that runs it, and the isolation policy that decides which tier

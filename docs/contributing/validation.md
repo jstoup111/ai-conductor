@@ -1,3 +1,9 @@
+---
+title: Validation
+parent: Contributing
+nav_order: 5
+---
+
 # Validation
 
 The structural integrity suite — `test/test_harness_integrity.sh` — check by check: what each one
