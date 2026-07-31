@@ -1,4 +1,4 @@
-import { isAbsolute, posix } from 'node:path';
+import { posix, win32 } from 'node:path';
 
 const STORIES_LINE = /^\s*\*\*Stories:\*\*\s*(.*?)\s*$/im;
 const MARKDOWN_LINK = /^\[[^\]]+\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)$/;
@@ -29,8 +29,8 @@ export function resolvePlanStoriesPath(
   if (markdown) reference = markdown[1];
   if (!reference || /^\[[^\]]+\]\(/.test(reference)) return null;
 
+  if (posix.isAbsolute(reference) || win32.isAbsolute(reference)) return null;
   reference = reference.replaceAll('\\', '/');
-  if (isAbsolute(reference)) return null;
 
   let repoPath: string;
   if (reference.startsWith('.docs/')) {
