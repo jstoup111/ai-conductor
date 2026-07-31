@@ -27,6 +27,7 @@ import { readState } from '../../src/engine/state.js';
 import { checkAndAutoPark } from '../../src/engine/daemon-auto-park.js';
 import { isOperatorParked, __resetResolveCacheForTests, reconcileStrandedParkMarkers } from '../../src/engine/park-marker.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFileAsync = promisify(execFileCb);
 const SHA_B = 'b'.repeat(40);
@@ -769,6 +770,45 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
       (await fileExists(join(dir, '.git/rebase-merge'))) ||
       (await fileExists(join(dir, '.git/rebase-apply')));
     expect(inProgress).toBe(true);
+  });
+
+  it('a stale seal before rebase halts as a seal error without claiming a rebase conflict', async () => {
+    await initFeatureRepo();
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(join(dir, '.docs/plans/foo.md'), '# Original plan\n');
+    await git('add', '.docs/plans/foo.md');
+    await git('commit', '-m', 'decide: original plan');
+    const sealedHead = await git('rev-parse', 'HEAD');
+    await createProtectedArtifactSeal({ projectRoot: dir, baselineCommit: sealedHead });
+
+    await writeFile(join(dir, '.docs/plans/foo.md'), '# Approved amended plan\n');
+    await git('add', '.docs/plans/foo.md');
+    await git('commit', '-m', 'decide: approved plan amendment');
+    await git('checkout', 'main');
+    await writeFile(join(dir, 'SIBLING.md'), '# merged\n');
+    await git('add', 'SIBLING.md');
+    await git('commit', '-m', 'sibling merged');
+    await git('checkout', 'feature/foo');
+    await writeSentinel();
+
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+    });
+    const halt = await readFile(join(dir, HALT_MARKER), 'utf8');
+    const rebaseActive =
+      (await fileExists(join(dir, '.git/rebase-merge'))) ||
+      (await fileExists(join(dir, '.git/rebase-apply')));
+
+    expect({ res, halt, rebaseActive }).toEqual({
+      res: 'halted',
+      halt: expect.stringMatching(
+        /^protected-artifact seal error[\s\S]*audited reseal[\s\S]*does not start a git rebase/m,
+      ),
+      rebaseActive: false,
+    });
   });
 
   // #300: a conflict reached via the re-kick play-forward must get the SAME

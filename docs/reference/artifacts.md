@@ -133,6 +133,11 @@ when its baseline is no longer an ancestor of `HEAD`. Both paths require every c
 artifact to equal the blob at `HEAD` and every `HEAD` blob to equal the base-branch tip. The engine
 records each rotation in `rebaselines` and logs the trigger, old and new commits, and paths.
 
+An operator-approved plan or architecture amendment committed after first BUILD leaves this
+baseline stale by design. The amendment must be reviewed and then resealed through the engine-owned
+rotation function before the feature is re-queued. The audited rotation records the old and new
+commits, trigger, and reviewed paths; editing the JSON directly is never a valid reseal.
+
 Verification also tolerates these cases without halting:
 
 - **Own-feature amendment** — a changed artifact whose filename stem names the current feature
@@ -149,6 +154,10 @@ for, any addition the base branch does not contain, and any deletion the base br
 Tolerance requires the base branch name and seal baseline to be resolvable — when either is not,
 the seal remains fully protected. Do not delete or hand-edit the seal to recover from a halt; follow the
 [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md).
+
+A seal rejection raised before a re-kick rebase is reported as `protected-artifact seal error`.
+Because git has not started a rebase, its recovery procedure is review plus audited resealing—not
+conflict resolution or `git rebase --continue`.
 
 ## Step to artifact map
 

@@ -116,6 +116,12 @@ read its condition and path, then follow the
 [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#the-halt-is-a-protected-artifact-violation).
 Never delete or rewrite `.pipeline/protected-artifact-seal.json` by hand.
 
+An approved plan or architecture amendment after first BUILD intentionally makes the existing seal
+baseline stale. Review and reseal the approved paths with the runbook's audited engine rotation
+before clearing the HALT. If the refusal occurs during REKICK before git starts, the HALT begins
+`protected-artifact seal error`; it is not a rebase conflict and must not be sent through
+`git rebase --continue`.
+
 ### Provider attribution and result summaries
 
 Three line kinds tell you what a step actually did, which provider ran it, and what the feature

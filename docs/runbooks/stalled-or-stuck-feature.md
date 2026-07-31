@@ -344,8 +344,9 @@ artifact is byte-identical to the base-branch tip.
 3. Clear `HALT` and `HALT.class` using the next procedure. If the cause remains, verification
    refuses again before dispatch.
 
-**The edit is intentional and operator-approved (e.g. a feature's own `.docs/architecture/<slug>.md`
-was refined mid-build to match what was actually implemented).** The engine has no automatic path
+**The edit is intentional and operator-approved (e.g. a feature's plan or architecture was amended
+mid-build after the first BUILD seal was created).** The committed amendment makes the existing
+seal baseline stale. The engine has no automatic path
 for this — a feature-authored change never rotates on its own, by design, so there is no default
 action to take here without a human reading the diff first. Do not hand-edit
 `.pipeline/protected-artifact-seal.json` (malformed JSON or a wrong fingerprint silently breaks
@@ -379,6 +380,11 @@ override is auditable rather than silent. Never invent a trigger string that imp
 automation (`proactive-rebase`, `defensive-history-rewrite` are reserved for the engine's own call
 sites) — use a distinct, honest label like `operator-approved-manual-review` so a later reader can
 tell a human, not the engine, vouched for this rotation.
+
+If REKICK encounters this refusal before starting git, the HALT begins
+`protected-artifact seal error` and explicitly says no rebase is active. Do not use the rebase
+resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
+and re-queue.
 
 ### Clear a halt and let the feature resume
 
