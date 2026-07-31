@@ -174,6 +174,31 @@ sed -i 's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs@v0X12Y
 expect_checker_failure "a wrong theme pin names its configuration and key" "$WRONG_PIN" \
   "docs/_config.yml" "remote_theme"
 
+printf '\n=== Stories 1-3, 5-7: maintained site source ===\n'
+
+SOURCE_CONFIG="$REPO_ROOT/docs/_config.yml"
+SOURCE_LANDING="$REPO_ROOT/docs/index.md"
+
+record "source configuration pins the approved Pages theme and URL" \
+  "$( [ -f "$SOURCE_CONFIG" ] && \
+    grep -Fxq 'remote_theme: just-the-docs/just-the-docs@v0.12.0' "$SOURCE_CONFIG" && \
+    grep -Fxq 'url: https://jstoup111.github.io' "$SOURCE_CONFIG" && \
+    grep -Fxq 'baseurl: /ai-conductor' "$SOURCE_CONFIG" && echo 0 || echo 1 )"
+record "source configuration identifies AI Conductor and enables navigation" \
+  "$( [ -f "$SOURCE_CONFIG" ] && \
+    grep -Fxq 'title: AI Conductor Documentation' "$SOURCE_CONFIG" && \
+    grep -Fxq 'nav_enabled: true' "$SOURCE_CONFIG" && \
+    grep -Fxq 'aux_links:' "$SOURCE_CONFIG" && \
+    grep -Fxq '  Repository: https://github.com/jstoup111/ai-conductor' "$SOURCE_CONFIG" && echo 0 || echo 1 )"
+record "source landing links every top-level documentation taxonomy" \
+  "$( [ -f "$SOURCE_LANDING" ] && \
+    grep -Fxq -- '- [Quickstart](quickstart.md)' "$SOURCE_LANDING" && \
+    grep -Fxq -- '- [Guides](guides/)' "$SOURCE_LANDING" && \
+    grep -Fxq -- '- [Reference](reference/)' "$SOURCE_LANDING" && \
+    grep -Fxq -- '- [Explanation](explanation/)' "$SOURCE_LANDING" && \
+    grep -Fxq -- '- [Runbooks](runbooks/)' "$SOURCE_LANDING" && \
+    grep -Fxq -- '- [Contributing](contributing/)' "$SOURCE_LANDING" && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
