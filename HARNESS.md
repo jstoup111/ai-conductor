@@ -49,7 +49,7 @@ downstream blast radius are out of scope.
 Skills chain via artifacts in `.docs/`. No skill orchestrates another internally.
 
 ```
-UNDERSTAND → DECIDE → BUILD(test-suite) → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, retro, finish)
+UNDERSTAND → DECIDE → BUILD(engine-native configured-verifier gate) → ✓checkpoint → SHIP(manual-test) → ✓checkpoint → SHIP(prd-audit, architecture-review --as-built, retro, finish)
 ```
 
 In daemon/auto runs the three SHIP validators (manual-test, prd-audit,
@@ -63,7 +63,7 @@ shown above.
 | ALL | **conduct** (orchestrator) | Status dashboard, gate enforcement, checkpoints |
 | UNDERSTAND | bootstrap, memory, assess | CLAUDE.md, .memory/, .docs/decisions/technical-assessment-*.md |
 | DECIDE | explore (track) → complexity → prd (product track only) → architecture-diagram → architecture-review → stories → conflict-check → plan → coherence-check (M/L only, skipped for S) | .docs/track/, .docs/specs/, .docs/complexity/, .docs/architecture/, .docs/decisions/, .docs/stories/, .docs/conflicts/, .docs/plans/, .docs/coherence/ |
-| BUILD | writing-system-tests → tdd/pipeline, debugging, code-review → test-suite | Acceptance specs, code, unit tests, aggregate verifier evidence, .pipeline/ |
+| BUILD | writing-system-tests → tdd/pipeline, debugging, code-review → engine-native configured-verifier gate | Acceptance specs, code, unit tests, aggregate verifier evidence, .pipeline/ |
 | CHECKPOINT | User validation after build | Harness pause — continue, go back, or quit |
 | SHIP | manual-test, prd-audit, architecture-review --as-built, retro, finish/pr | .pipeline/manual-test-results.md, .pipeline/prd-audit.md, .pipeline/architecture-review-as-built.md (run evidence, gitignored), .docs/retros/ |
 | CHECKPOINT | User validation after manual-test | Harness pause — continue, go back, or quit |
@@ -73,8 +73,8 @@ shown above.
 Plan tasks own implementation behavior and its scoped RED/GREEN tests. A plan must not append a
 terminal catch-all task that proves the completed feature as a whole or promises to repair
 unspecified findings. `writing-system-tests` owns story-level acceptance specs at BUILD entry before
-implementation; `test-suite` and the SHIP validators own completed-feature validation. Aggregate
-`test-suite` failures and `/manual-test` failures return directly to BUILD for scoped repair.
+implementation; the engine-native configured-verifier gate and the SHIP validators own completed-feature
+validation. Aggregate verifier failures and `/manual-test` failures return directly to BUILD for scoped repair.
 Blockers from `/prd-audit`, as-built `/architecture-review`, and `/finish` route through `/remediate`
 to the appropriate SDLC step or a required human decision. Neither path is pre-authored as
 speculative implementation work.
