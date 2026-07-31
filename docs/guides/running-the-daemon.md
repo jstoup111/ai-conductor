@@ -546,6 +546,17 @@ A typo'd sub-verb — anything outside `status`, `logs`, `park`, `unpark`, `reco
 `start`, `stop`, `restart`, `connect`, `debug`, `pause`, `resume` — prints `conduct daemon: unknown
 subcommand '<token>'.` followed by the daemon help, and exits 1.
 
+## Finish-time mergeability
+
+At the daemon-only `rebase` step immediately before `finish`, the engine first checks whether the
+feature can merge cleanly with the current base. A clean result records `rebase_mergeable_skip` and
+continues to `finish` without rewriting the feature branch or reopening downstream gate evidence.
+This check uses the configured local base when no usable `origin` is available.
+
+A conflicting or indeterminate result keeps the established rebase and recovery path: the engine
+attempts the real rebase, uses the bounded resolver when configured, and parks the feature if it
+cannot finish safely.
+
 ## How a halted feature resumes
 
 When a feature halts, the daemon leaves `.pipeline/HALT` in its worktree and stops dispatching it.
@@ -574,7 +585,9 @@ once; a lock loser never runs it and never touches worktrees.
 
 ### Post-rebase gate invalidation on resume
 
-Honouring the `REKICK` sentinel rebases the feature onto the advanced base before any gate resumes.
+Honouring the `REKICK` sentinel always rebases the feature onto the advanced base before any gate
+resumes, even when it is cleanly mergeable. This play-forward path is intentionally different from
+normal finish: the pending gate must observe the advanced base in its worktree.
 When that rebase changes code or test paths, the downstream judged gates — `build_review`,
 `wiring_check`, and (when they ran) `manual_test`, `prd_audit`,
 `architecture_review_as_built` — are re-opened, because their verdicts graded the pre-rebase diff.
