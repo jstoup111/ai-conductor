@@ -1,3 +1,9 @@
+---
+title: Daemon recovery
+parent: Runbooks
+nav_order: 1
+---
+
 # Daemon recovery
 
 Recover a daemon that will not start, will not stop, holds a stale lock, spins on the same

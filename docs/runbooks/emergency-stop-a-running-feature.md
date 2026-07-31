@@ -1,3 +1,9 @@
+---
+title: Emergency stop a running feature
+parent: Runbooks
+nav_order: 2
+---
+
 # Emergency stop a running feature
 
 Stop one feature — or the whole daemon — mid-flight without corrupting state. For operators

@@ -279,6 +279,24 @@ record "explanation topics have unique titles, the Explanation parent, and stabl
     source_has_explanation_destination 'gates.md' 'Gates' 3 && \
     source_has_explanation_destination 'sdlc-phases.md' 'SDLC phases' 4 && echo 0 || echo 1 )"
 
+source_has_runbook_destination() {
+  local path=$1
+  local title=$2
+  local order=$3
+
+  [ -f "$REPO_ROOT/docs/runbooks/$path" ] && \
+    grep -Fxq "title: $title" "$REPO_ROOT/docs/runbooks/$path" && \
+    grep -Fxq 'parent: Runbooks' "$REPO_ROOT/docs/runbooks/$path" && \
+    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/runbooks/$path"
+}
+
+record "runbooks have unique titles, the Runbooks parent, and stable order" \
+  "$( source_has_runbook_destination 'daemon-recovery.md' 'Daemon recovery' 1 && \
+    source_has_runbook_destination 'emergency-stop-a-running-feature.md' 'Emergency stop a running feature' 2 && \
+    source_has_runbook_destination 'shipped-record-reconciliation.md' 'Shipped record reconciliation' 3 && \
+    source_has_runbook_destination 'stalled-or-stuck-feature.md' 'Stalled or stuck feature' 4 && \
+    source_has_runbook_destination 'worktree-and-evidence-recovery.md' 'Worktree and evidence recovery' 5 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
