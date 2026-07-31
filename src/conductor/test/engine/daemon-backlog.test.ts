@@ -1223,7 +1223,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(backlog.map((b) => b.slug).sort()).toEqual(['one', 'two']);
     const noCutover = logs.filter((l) => /no owner_gate_cutover configured/i.test(l));
     expect(noCutover).toHaveLength(0);
-    expect(logs.filter((l) => /spec is un-owned; defaulting to build/i)).toHaveLength(2);
+    expect(logs.filter((l) => /spec is un-owned; defaulting to build/i.test(l))).toHaveLength(2);
   });
 
   it('surfaces the identity-unresolved notice ONCE across scans when the warned-marker hooks are wired', async () => {
@@ -1306,7 +1306,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     // there is no per-spec GATED entry for it.
     expect(gated).toEqual([]);
     expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
-    expect(logs.filter((l) => /spec is un-owned; defaulting to build/i)).toHaveLength(1);
+    expect(logs.filter((l) => /spec is un-owned; defaulting to build/i.test(l))).toHaveLength(1);
   });
 
   it('Task 5 (NP-3): cutover set + all specs owned → zero repo-level GATED entries', async () => {
