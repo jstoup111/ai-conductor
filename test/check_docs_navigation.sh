@@ -61,6 +61,15 @@ declare -A TITLE_BY_PATH
 declare -A PARENT_BY_PATH
 declare -A TITLE_PATHS
 declare -A SIBLING_PATHS
+declare -A LANDING_ROOT_PATHS=(
+  ['docs/index.md']=1
+  ['docs/quickstart.md']=1
+  ['docs/guides/index.md']=1
+  ['docs/reference/index.md']=1
+  ['docs/explanation/index.md']=1
+  ['docs/runbooks/index.md']=1
+  ['docs/contributing/index.md']=1
+)
 
 fail_navigation() {
   local relative_path=$1
@@ -83,6 +92,7 @@ while IFS= read -r -d '' markdown_path; do
   first_line=''
   title=''
   parent=''
+  nav_order=''
   front_matter_closed=0
 
   IFS= read -r first_line < "$markdown_path" || true
@@ -99,6 +109,7 @@ while IFS= read -r -d '' markdown_path; do
     case "$front_matter_line" in
       title:*) title="$(trim_yaml_value "${front_matter_line#title:}")" ;;
       parent:*) parent="$(trim_yaml_value "${front_matter_line#parent:}")" ;;
+      nav_order:*) nav_order="$(trim_yaml_value "${front_matter_line#nav_order:}")" ;;
     esac
   done < <(tail -n +2 "$markdown_path")
 
@@ -108,6 +119,10 @@ while IFS= read -r -d '' markdown_path; do
 
   if [ -z "$title" ]; then
     fail_navigation "$relative_path" 'published Markdown requires a non-empty title'
+  fi
+
+  if [ -z "$nav_order" ]; then
+    fail_navigation "$relative_path" 'published Markdown requires a non-empty nav_order'
   fi
 
   topic_path=${relative_path#docs/}
@@ -148,4 +163,26 @@ for relative_path in "${!TITLE_BY_PATH[@]}"; do
   if [ "$parent_count" -ne 1 ]; then
     fail_navigation "$relative_path" "parent '$parent' is ambiguous"
   fi
+done
+
+for relative_path in "${!TITLE_BY_PATH[@]}"; do
+  current_path=$relative_path
+  declare -A visited_paths=()
+
+  while :; do
+    if [ -n "${visited_paths[$current_path]+set}" ]; then
+      fail_navigation "$current_path" 'navigation parent graph contains a cycle'
+    fi
+    visited_paths["$current_path"]=1
+
+    parent=${PARENT_BY_PATH["$current_path"]}
+    if [ -z "$parent" ]; then
+      if [ -z "${LANDING_ROOT_PATHS[$current_path]+set}" ]; then
+        fail_navigation "$current_path" 'top-level topic is not a landing navigation destination'
+      fi
+      break
+    fi
+
+    current_path="$(printf '%s' "${TITLE_PATHS[$parent]}" | sed '/^$/d')"
+  done
 done

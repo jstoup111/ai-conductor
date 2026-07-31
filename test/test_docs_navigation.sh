@@ -385,6 +385,12 @@ sed -i 's/^title: First Feature$/title:/' "$EMPTY_TITLE/docs/guides/first-featur
 expect_checker_failure "an empty title names the topic" "$EMPTY_TITLE" \
   "docs/guides/first-feature.md"
 
+MISSING_NAV_ORDER="$FIXTURE_ROOT/missing-nav-order"
+cp -R "$VALID_ROOT" "$MISSING_NAV_ORDER"
+sed -i '/^nav_order: 1$/d' "$MISSING_NAV_ORDER/docs/guides/first-feature.md"
+expect_checker_failure "a missing nav_order names the topic" "$MISSING_NAV_ORDER" \
+  "docs/guides/first-feature.md" "nav_order"
+
 MISSING_PARENT="$FIXTURE_ROOT/missing-parent"
 cp -R "$VALID_ROOT" "$MISSING_PARENT"
 sed -i '/^parent: Guides$/d' "$MISSING_PARENT/docs/guides/first-feature.md"
@@ -422,6 +428,35 @@ nav_order: 2
 # Duplicate
 MARKDOWN
 expect_checker_failure "duplicate sibling membership is rejected by path" "$AMBIGUOUS" "docs/guides/duplicate.md"
+
+CYCLE="$FIXTURE_ROOT/cycle"
+cp -R "$VALID_ROOT" "$CYCLE"
+sed -i '/^title: Guides$/a parent: First Feature' "$CYCLE/docs/guides/index.md"
+expect_checker_failure "a cyclic navigation parent graph is rejected" "$CYCLE" \
+  "navigation parent graph contains a cycle"
+
+DISCONNECTED="$FIXTURE_ROOT/disconnected"
+cp -R "$VALID_ROOT" "$DISCONNECTED"
+mkdir -p "$DISCONNECTED/docs/rogue"
+cat > "$DISCONNECTED/docs/rogue/index.md" <<'MARKDOWN'
+---
+title: Rogue
+nav_order: 99
+---
+
+# Rogue
+MARKDOWN
+cat > "$DISCONNECTED/docs/rogue/topic.md" <<'MARKDOWN'
+---
+title: Disconnected Topic
+parent: Rogue
+nav_order: 1
+---
+
+# Disconnected Topic
+MARKDOWN
+expect_checker_failure "a disconnected navigation subtree names its root" "$DISCONNECTED" \
+  "docs/rogue/index.md" "not a landing navigation destination"
 
 if [ "${1:-}" = '--navigation-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
