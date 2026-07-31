@@ -859,25 +859,34 @@ describe('CodexProvider', () => {
       },
     ],
   ] as const)(
-    'classifies supported ready auth evidence with %s without leaking doctor diagnostics',
+    'keeps supported ready auth evidence authorized with %s without leaking doctor diagnostics',
     async (_name, overallStatus, expected) => {
-      const readiness = await new CodexProvider(
-        vi.fn().mockResolvedValue({
-          stdout: JSON.stringify({
-            schemaVersion: 1,
-            overallStatus,
-            checks: {
-              'auth.credentials': {
-                status: 'ok',
-                summary: 'credentials available; reachability probe failed at https://internal.example',
-              },
+      const runDoctor = vi.fn().mockResolvedValue({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus,
+          checks: {
+            'auth.credentials': {
+              status: 'ok',
+              summary: 'credentials available; reachability probe failed at https://internal.example',
             },
-          }),
-          exitCode: overallStatus === 'ok' ? 0 : 1,
+          },
         }),
-      ).readiness();
+        exitCode: overallStatus === 'ok' ? 0 : 1,
+      });
+      mockExeca.mockResolvedValue({ stdout: jsonlMessage('Authorized.'), exitCode: 0 } as any);
 
-      expect(readiness).toEqual(expected);
+      const result = await new CodexProvider(runDoctor).invoke(baseOptions);
+
+      expect({
+        readiness: result.authentication,
+        substantiveExecCalls: mockExeca.mock.calls.length,
+      }).toEqual({
+        readiness: expected,
+        substantiveExecCalls: 1,
+      });
+      expect(result).toMatchObject({ success: true, output: 'Authorized.' });
+      expect(runDoctor).toHaveBeenCalledOnce();
     },
   );
 

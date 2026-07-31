@@ -218,7 +218,7 @@ export class CodexProvider implements LLMProvider {
 
     this.logDiagnostics(result, options.diagnosticLog);
 
-    const completion = this.classifyCompletion(result, true, authentication, true);
+    const completion = this.classifyCompletion(result, true, authentication, true, readiness);
     return { ...completion, observedIntervals: [interval] };
   }
 
@@ -273,10 +273,10 @@ export class CodexProvider implements LLMProvider {
     // A real interactive session leaves authorization to the operator. Auto
     // streaming still uses this method, but is explicitly marked noninteractive
     // by the runner and must prove readiness for every dispatch.
-    if (!options.interactive) {
-      const readiness = await this.readiness(options.spawnPermit);
-      if (readiness.state !== 'ready') return this.readinessFailure(readiness);
-    }
+    const readiness = options.interactive
+      ? undefined
+      : await this.readiness(options.spawnPermit);
+    if (readiness && readiness.state !== 'ready') return this.readinessFailure(readiness);
 
     const authentication = this.authentication;
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
@@ -295,7 +295,7 @@ export class CodexProvider implements LLMProvider {
     this.logDiagnostics(result, options.diagnosticLog);
 
     return {
-      ...this.classifyCompletion(result, false, authentication, !options.interactive),
+      ...this.classifyCompletion(result, false, authentication, !options.interactive, readiness),
       observedIntervals: [interval],
     };
   }
@@ -324,6 +324,7 @@ export class CodexProvider implements LLMProvider {
     jsonOutput: boolean,
     authenticationSelection: SelectedAuthentication,
     automaticReview = true,
+    readyReadiness?: Extract<AuthenticationReadiness, { state: 'ready' }>,
   ): InvokeResult {
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
@@ -374,10 +375,9 @@ export class CodexProvider implements LLMProvider {
       !authFailure &&
       !sessionExpired &&
       CODEX_PERMISSION_DECISION_RE.test(rawOutput);
-    const authentication = this.authenticationResult(
-      source,
-      authFailure ? 'unusable' : 'ready',
-    );
+    const authentication = authFailure
+      ? this.authenticationResult(source, 'unusable')
+      : readyReadiness ?? this.authenticationResult(source, 'ready');
 
     return {
       success: exitCode === 0,
@@ -443,7 +443,9 @@ export class CodexProvider implements LLMProvider {
           provider: 'codex',
           source: authentication.source,
           state: 'ready',
-          unrelatedHealth: evidence.unrelatedHealth,
+          ...(evidence.unrelatedHealth
+            ? { unrelatedHealth: evidence.unrelatedHealth }
+            : {}),
         };
       }
       return this.nonReadyReadiness(authentication.source, evidence.state);
