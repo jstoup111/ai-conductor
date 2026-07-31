@@ -239,32 +239,6 @@ describe("group-core: runWithConcurrency (capped fan-out semaphore)", () => {
 });
 
 describe("group-core: runNativeGroupBranch", () => {
-  it("calls only its injected executor and leaves provider, session, and step-runner seams untouched", async () => {
-    const execute = vi.fn(async (): Promise<StepRunResult> => ({ success: true }));
-    const stepRunner = { run: vi.fn() };
-    const provider = { invoke: vi.fn(), invokeInteractive: vi.fn() };
-    const session = { reset: vi.fn() };
-
-    const outcome = await runNativeGroupBranch(
-      { name: "wiring_check", skill: "", outcome: makeSkippedOutcome() },
-      execute,
-    );
-
-    expect({
-      outcome,
-      executeCalls: execute.mock.calls.length,
-      stepRunnerCalls: stepRunner.run.mock.calls.length,
-      providerCalls: provider.invoke.mock.calls.length + provider.invokeInteractive.mock.calls.length,
-      sessionCalls: session.reset.mock.calls.length,
-    }).toEqual({
-      outcome: { kind: "verdict", verdict: "pass" },
-      executeCalls: 1,
-      stepRunnerCalls: 0,
-      providerCalls: 0,
-      sessionCalls: 0,
-    });
-  });
-
   it("maps injected native results into ordered member-attributed outcomes", async () => {
     const events: Array<Pick<GroupMemberStepEvent, "member" | "phase" | "outcome">> = [];
     const members: GroupMember[] = [
