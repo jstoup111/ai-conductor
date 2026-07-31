@@ -57,3 +57,53 @@
 ## Blocking Issues
 
 None.
+
+## Amendment Review — 2026-07-31 scoped tmux remediation
+
+**Input reviewed:** approved plan commit `3bbd817a5`, Story 4 cleanup preservation, Task 19's
+operator-approved reliability amendment, repository test-isolation rules, the existing injected
+tmux runner seam, and the current deterministic leak-guard tests
+
+**Verdict:** APPROVED WITH CONDITIONS — unchanged from the original review
+
+**Operator approval:** Approved 2026-07-31.
+
+### Feasibility
+
+- `rem-tmux-001` restores one deterministic injected-runner regression in the existing ordinary
+  test file and removes an excluded smoke experiment. It requires no real tmux process, package
+  command, CI job, service, schema, port, or shared state.
+- The existing `TmuxRunner` seam can model the pre-existing session set, stale temporary session,
+  operator daemon, and kill calls synchronously without timing or environment probes.
+- The focused test, test-inclusive typecheck, and configured lint are existing verification paths.
+
+### Alignment
+
+- The task preserves the approved full-suite cleanup and worktree-isolation contracts without
+  changing the deterministic BUILD group, group core, verifier, or production wiring.
+- Removing the unused real-tmux smoke file eliminates an unowned execution path rather than
+  introducing a second test topology.
+- No production surface changes, so the existing Wiring Surface and architecture diagrams remain
+  complete.
+
+### Verify-Claims Ledger
+
+#### Claims
+
+- [verified] The accepted architecture preserves existing verifier cleanup semantics but does not
+  require real-tmux CI infrastructure.
+- [verified] `tmux-leak-guard.test.ts` already injects `TmuxRunner` for session listing, cwd
+  classification, kill decisions, and operator-daemon preservation.
+- [verified] The scoped plan touches test files only and explicitly forbids package, CI,
+  documentation, and production changes.
+
+#### Assumptions
+
+- None. The accepted story, approved plan decision, test-isolation contract, and existing injected
+  seam fully determine the repair.
+
+**Verify-claims verdict:** CLEAR
+
+### Risks and ADRs
+
+No new risks and no new or superseded ADRs. The original four conditions remain authoritative.
