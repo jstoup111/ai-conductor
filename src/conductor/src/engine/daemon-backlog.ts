@@ -636,7 +636,7 @@ export async function discoverBacklog(
     await opts.markWarned?.(slug);
   };
 
-  // Reserved warned-marker keys for the two GLOBAL (non-slug) owner-gate notices.
+  // Reserved warned-marker key for the GLOBAL (non-slug) owner-gate notice.
   // Routing them through `warnOnce` reuses the same `.daemon/warned/` dedup as the
   // per-slug merged-spec skips, so in production they surface ONCE and are then
   // suppressed across poll ticks — instead of re-logging on every scan forever.
@@ -645,7 +645,6 @@ export async function discoverBacklog(
   // unset (tests, legacy), each notice still logs at most once per pass (never
   // per-spec), preserving prior behavior.
   const IDENTITY_UNRESOLVED_WARN_KEY = '__owner-gate-identity-unresolved__';
-  const NO_CUTOVER_WARN_KEY = '__owner-gate-no-cutover__';
 
   // Fail-CLOSED notice (D3 / Story 3): when a `daemonOwner` is supplied but
   // UNRESOLVED (no user-config spec_owner and no gh login), the daemon builds
@@ -664,23 +663,6 @@ export async function discoverBacklog(
       'daemon identity unresolved: no spec_owner in ~/.ai-conductor/config.yml and no ' +
         'gh login — building NOTHING (fail-closed). Set spec_owner in ' +
         '~/.ai-conductor/config.yml or authenticate gh; logged once.',
-    );
-  };
-
-  // No-cutover notice (Observability NFR): when the gate is ACTIVE (a resolved
-  // daemon owner) but NO grandfather `owner_gate_cutover` is configured, every
-  // un-owned spec skips as indeterminate. That skip-default is operator-accepted
-  // but easy to miss, so surface it once — distinct from the gate-inactive line
-  // and the per-slug ownership skips. Does NOT change any build/skip decision.
-  // Silent when a cutover IS set or the gate is inactive.
-  let gateNoCutoverWarned = false;
-  const warnGateNoCutoverOnce = async (): Promise<void> => {
-    if (gateNoCutoverWarned) return;
-    gateNoCutoverWarned = true;
-    await warnOnce(
-      NO_CUTOVER_WARN_KEY,
-      'owner-gate active but no owner_gate_cutover configured — un-owned specs will be ' +
-        'skipped; set owner_gate_cutover to grandfather pre-existing specs.',
     );
   };
 
@@ -950,9 +932,6 @@ export async function discoverBacklog(
     // (legacy behavior).
     const daemonOwner = opts.daemonOwner;
     if (daemonOwner?.resolved) {
-      // Gate active — flag the operator-accepted skip-default once per pass when
-      // no grandfather cutover is set (observability only; no decision change).
-      if ((opts.cutover ?? null) === null) await warnGateNoCutoverOnce();
       const stamp = opts.readStamp ? await opts.readStamp(slug) : { present: false as const };
       const mergeTime = opts.readMergeTime ? await opts.readMergeTime(slug) : null;
       const decision = decideSpecGate({

@@ -1207,52 +1207,23 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.filter((l) => /identity unresolved/i.test(l))).toHaveLength(0);
   });
 
-  // Observability NFR — warn-once when the gate is ACTIVE but no grandfather
-  // cutover is configured (the operator-accepted skip-default is easy to miss).
-  // Distinct from the gate-inactive line; changes NO build/skip decision.
-  it('warns exactly once per pass when the gate is active but no cutover is configured', async () => {
+  it('default-builds un-owned specs with their per-spec notice but no false no-cutover warning', async () => {
     await writeSpec('one');
     await writeSpec('two');
     const logs: string[] = [];
     const { items: backlog } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
       treeSource: fsSource(dir),
       daemonOwner: { resolved: true, id: 'alice' },
-      readStamp: async () => ({ present: true as const, id: 'alice' }),
+      readStamp: async () => ({ present: false as const }),
       readMergeTime: async () => null,
       cutover: null, // no grandfather window
     });
-    // The gate is ACTIVE — both owned specs still build (no decision change).
+    // The gate is ACTIVE — both un-owned specs default-build. The accurate,
+    // actionable notice remains scoped to each affected spec.
     expect(backlog.map((b) => b.slug).sort()).toEqual(['one', 'two']);
     const noCutover = logs.filter((l) => /no owner_gate_cutover configured/i.test(l));
-    expect(noCutover).toHaveLength(1); // once per pass, not per-spec
-    expect(noCutover[0]).not.toMatch(/gate inactive/i); // distinct line
-  });
-
-  it('surfaces the no-cutover notice ONCE across scans when the warned-marker hooks are wired', async () => {
-    await writeSpec('one');
-    await writeSpec('two');
-    const warned = new Set<string>();
-    const opts = {
-      treeSource: fsSource(dir),
-      daemonOwner: { resolved: true as const, id: 'alice' },
-      readStamp: async () => ({ present: true as const, id: 'alice' }),
-      readMergeTime: async () => null,
-      cutover: null, // no grandfather window
-      hasWarned: async (slug: string) => warned.has(slug),
-      markWarned: async (slug: string) => {
-        warned.add(slug);
-      },
-    };
-    const logs: string[] = [];
-    const log = (m: string) => logs.push(m);
-
-    // Three consecutive scans (simulating poll ticks) — the notice logs once, not
-    // once per tick, once the persistent marker is set.
-    await discoverBacklog(dir, undefined, log, opts);
-    await discoverBacklog(dir, undefined, log, opts);
-    await discoverBacklog(dir, undefined, log, opts);
-
-    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(1);
+    expect(noCutover).toHaveLength(0);
+    expect(logs.filter((l) => /spec is un-owned; defaulting to build/i)).toHaveLength(2);
   });
 
   it('surfaces the identity-unresolved notice ONCE across scans when the warned-marker hooks are wired', async () => {
@@ -1317,11 +1288,10 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.some((l) => /owner-gate/i.test(l))).toBe(false);
   });
 
-  // Task 5 (S3 HP-1) — the gate is active (resolved daemon owner), no
-  // grandfather cutover is configured, and an un-owned spec is encountered: a
-  // single repo-scoped `no-cutover` GATED entry surfaces alongside (not instead
-  // of) the existing `warnGateNoCutoverOnce` log line.
-  it('Task 5 (FR-3): active gate + no cutover + an un-owned spec encountered → default-builds, no per-spec GATED entry (plus the existing log line)', async () => {
+  // Task 5 (S3 HP-1) — with a resolved owner and no retired cutover, an
+  // un-owned spec default-builds and remains observable through its accurate
+  // per-spec notice rather than a contradictory global warning.
+  it('Task 5 (FR-3): active gate + no cutover + an un-owned spec default-builds with no global warning', async () => {
     await writeSpec('un-owned');
     const logs: string[] = [];
     const { items, gated } = await discoverBacklog(dir, undefined, (m) => logs.push(m), {
@@ -1335,9 +1305,8 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     // An un-owned spec now default-builds (FR-3) — it never gates out, so
     // there is no per-spec GATED entry for it.
     expect(gated).toEqual([]);
-    // The pre-existing "gate active, no cutover configured" observability log
-    // line is unchanged, not replaced.
-    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(1);
+    expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
+    expect(logs.filter((l) => /spec is un-owned; defaulting to build/i)).toHaveLength(1);
   });
 
   it('Task 5 (NP-3): cutover set + all specs owned → zero repo-level GATED entries', async () => {
@@ -1353,7 +1322,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(gated).toEqual([]);
   });
 
-  it('is SILENT about the missing cutover when a cutover IS set', async () => {
+  it('does not emit the retired no-cutover warning when a cutover is set', async () => {
     await writeSpec('with-cutover');
     const logs: string[] = [];
     await discoverBacklog(dir, undefined, (m) => logs.push(m), {
@@ -1366,7 +1335,7 @@ describe('engine/daemon-backlog — owner-gate integration', () => {
     expect(logs.filter((l) => /no owner_gate_cutover configured/i.test(l))).toHaveLength(0);
   });
 
-  it('is SILENT about the missing cutover when the owner is unresolved (fail-closed short-circuit)', async () => {
+  it('does not emit the retired no-cutover warning when the owner is unresolved (fail-closed short-circuit)', async () => {
     await writeSpec('inactive');
     const logs: string[] = [];
     await discoverBacklog(dir, undefined, (m) => logs.push(m), {
