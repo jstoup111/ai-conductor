@@ -450,6 +450,19 @@ fi
 printf '\n=== Story 8: repository front door retains both hosted and source navigation ===\n'
 
 README_PATH="$REPO_ROOT/README.md"
+README_DOCUMENTATION_SECTION="$(awk '
+  /^## Documentation$/ { capture = 1; next }
+  capture && /^## / { exit }
+  capture { print }
+' "$README_PATH")"
+record "README Documentation starts with the hosted landing while retaining categorized source links" \
+  "$( [ "$(printf '%s\n' "$README_DOCUMENTATION_SECTION" | sed '/^$/d' | head -n 1)" = '[Browse the hosted documentation](https://jstoup111.github.io/ai-conductor/)' ] && \
+    printf '%s\n' "$README_DOCUMENTATION_SECTION" | grep -Fxq -- '- [Quickstart](docs/quickstart.md) — prerequisites, install, and your first working run' && \
+    printf '%s\n' "$README_DOCUMENTATION_SECTION" | grep -Fxq '**Guides** — task-oriented procedures' && \
+    printf '%s\n' "$README_DOCUMENTATION_SECTION" | grep -Fxq '**Reference** — exact interfaces' && \
+    printf '%s\n' "$README_DOCUMENTATION_SECTION" | grep -Fxq '**Explanation** — how and why the system is shaped this way' && \
+    printf '%s\n' "$README_DOCUMENTATION_SECTION" | grep -Fxq '**Runbooks** — when something breaks' && \
+    printf '%s\n' "$README_DOCUMENTATION_SECTION" | grep -Fxq '**Contributing** — modifying the harness itself' && echo 0 || echo 1 )"
 record "README prominently links the public documentation root" \
   "$(grep -qF 'https://jstoup111.github.io/ai-conductor/' "$README_PATH" && echo 0 || echo 1)"
 record "README retains direct in-repository documentation links" \
