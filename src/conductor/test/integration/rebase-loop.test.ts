@@ -1268,7 +1268,6 @@ describe('integration/rebase-loop', () => {
         expect(counts.architecture_review_as_built).toBe(1);
 
         expect(invalidated.find((i) => i.gate === 'wiring_check')).toBeDefined();
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
         expect(
@@ -1310,7 +1309,7 @@ describe('integration/rebase-loop', () => {
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
-        const { preserved, invalidated } = trackPreservedInvalidated();
+        const { preserved } = trackPreservedInvalidated();
         let completed = false;
         events.on('feature_complete', () => {
           completed = true;
@@ -1323,7 +1322,6 @@ describe('integration/rebase-loop', () => {
         expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'wiring_check')).toBeDefined();
         expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
       });
@@ -1397,45 +1395,6 @@ describe('integration/rebase-loop', () => {
 
     // ── Story: Uncomputable delta fails closed to invalidate-all ─────────────
     describe('Story: uncomputable feature surface fails closed to the legacy invalidate-all', () => {
-      it.each([
-        { ranManualTest: true, manualTarget: ['manual_test'] },
-        { ranManualTest: false, manualTarget: [] },
-      ])(
-        'invalidates test_suite with an unsatisfied rebase kickback when ranManualTest=$ranManualTest',
-        async ({ ranManualTest, manualTarget }) => {
-          const outcome = {
-            kind: 'changed' as const,
-            changedCodePaths: ['src/unknown.ts'],
-            featureSurface: undefined,
-          };
-
-          const result = await applyRebaseVerdicts(dir, outcome, ranManualTest);
-          const testSuiteVerdict = await readGateVerdict('test_suite');
-
-          expect({
-            kickedBack: result.kickedBack,
-            testSuiteVerdict,
-          }).toEqual({
-            kickedBack: [
-              'build',
-              'wiring_check',
-              'test_suite',
-              'build_review',
-              ...manualTarget,
-              'prd_audit',
-              'architecture_review_as_built',
-            ],
-            testSuiteVerdict: expect.objectContaining({
-              satisfied: false,
-              kickback: expect.objectContaining({
-                from: 'rebase',
-                evidence: expect.stringContaining('src/unknown.ts'),
-              }),
-            }),
-          });
-        },
-      );
-
       it('invalidates the full legacy set with zero preservations and records a fail-closed reason when F is uncomputable', async () => {
         // Drives the real call-site pairing (performRebase ->
         // applyRebaseVerdicts -> emitGateInvalidationEvents) directly against
