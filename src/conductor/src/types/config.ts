@@ -570,6 +570,12 @@ export interface HarnessConfig {
    */
   engine_refresh_min_interval_seconds?: number;
   /**
+   * Maximum time, in seconds, to wait for `codex doctor` before treating the
+   * readiness check as unavailable. Must be a finite positive number.
+   * Omitted → 10.
+   */
+  codex_doctor_timeout_seconds?: number;
+  /**
    * Auto-resolve merge conflicts on open harness PRs. Extends rebase-resolution
    * beyond finish-time by dispatching a daemon task that polls for and resolves
    * conflicts on previously-built PRs. Absent → disabled (default safe posture).

@@ -170,6 +170,43 @@ describe('engine_refresh_min_interval_seconds config field', () => {
   });
 });
 
+describe('codex_doctor_timeout_seconds config field', () => {
+  it('defaults to 10 when unset', () => {
+    const result = validateConfig({});
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: { codex_doctor_timeout_seconds: 10 },
+      warnings: [],
+    });
+  });
+
+  it('accepts a finite positive fractional custom timeout', () => {
+    const result = validateConfig({ codex_doctor_timeout_seconds: 0.5 });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: { codex_doctor_timeout_seconds: 0.5 },
+      warnings: [],
+    });
+  });
+
+  it.each([
+    ['zero', 0],
+    ['a negative number', -1],
+    ['a string', '10'],
+    ['NaN', NaN],
+    ['infinity', Infinity],
+  ])('rejects %s with a field-specific diagnostic', (_name, value) => {
+    const result = validateConfig({ codex_doctor_timeout_seconds: value });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { message: expect.stringMatching(/codex_doctor_timeout_seconds/i) },
+    });
+  });
+});
+
 describe('step_heartbeat_stall_minutes config field', () => {
   it('accepts the deprecated compatibility no-op without granting termination authority', () => {
     const result = validateConfig({ step_heartbeat_stall_minutes: 15 });
