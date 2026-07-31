@@ -14,7 +14,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 - Restore daemon-log visibility for the deterministic BUILD verification group, showing the
   `wiring_check` and `test_suite` boundary between build and build review
-  ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
+  ([implementation PR #1216](https://github.com/jstoup111/ai-conductor/pull/1216)).
 - Anchor daemon management and direct launches at the main repository root, preventing an invocation
   from a nested package or linked worktree from creating a second `.daemon/` state tree whose log
   churn trips the self-host live-checkout boundary ([implementation PR #1214](https://github.com/jstoup111/ai-conductor/pull/1214)).
