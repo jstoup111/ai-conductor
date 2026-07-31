@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
 
+import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
@@ -29,33 +30,8 @@ import { HALT_MARKER } from '../../src/engine/halt-marker.js';
 import { readRegradeCount } from '../../src/engine/build-review-disposition.js';
 import { assembleBuildReviewInputs } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
-import { Conductor } from '../test-conductor.js';
 
 const execFile = promisify(execFileCb);
-
-function withPassingBuildVerification(repo: string, runner: StepRunner): StepRunner {
-  return {
-    ...runner,
-    run: async (step, state, opts) => {
-      if (step === 'wiring_check') {
-        const { stdout } = await execFile('git', ['rev-parse', 'HEAD'], { cwd: repo });
-        await writeFile(
-          join(repo, '.pipeline/wiring-evidence.json'),
-          JSON.stringify({
-            schema: 1,
-            base: 'fixture-base',
-            head: stdout.trim(),
-            layer2: { applicable: false },
-            waivers: [],
-            tasks: [{ id: 'fixture', contract: 'none (fixture)', gaps: [] }],
-          }),
-        );
-        return { success: true };
-      }
-      return runner.run(step, state, opts);
-    },
-  };
-}
 
 async function seedToBuildReview(
   statePath: string,
@@ -141,7 +117,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(repo, runner),
+      stepRunner: runner,
       events,
       projectRoot: repo,
       mode: 'auto',
@@ -186,7 +162,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     const conductor2 = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(repo, runner),
+      stepRunner: runner,
       events,
       projectRoot: repo,
       mode: 'auto',
@@ -254,7 +230,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(repo, runner),
+      stepRunner: runner,
       events,
       projectRoot: repo,
       mode: 'auto',
@@ -382,7 +358,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(repo, runner),
+      stepRunner: runner,
       events,
       projectRoot: repo,
       mode: 'auto',
@@ -473,7 +449,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(repo, runner),
+      stepRunner: runner,
       events,
       projectRoot: repo,
       mode: 'auto',
@@ -571,7 +547,7 @@ describe('engine/conductor — build_review scope-FAIL disposition wiring (Task 
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(repo, runner),
+      stepRunner: runner,
       events,
       projectRoot: repo,
       mode: 'auto',

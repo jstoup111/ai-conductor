@@ -220,66 +220,6 @@ describe('deterministic BUILD verification group', () => {
     },
   );
 
-  it('halts a repeated wiring failure after a no-op BUILD re-entry before charging the wiring budget again', async () => {
-    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-wiring-noop-'));
-    dirs.push(projectRoot);
-    const stateFilePath = join(projectRoot, 'conduct-state.json');
-    await writeFile(stateFilePath, JSON.stringify({ plan: 'done', build: 'done' }));
-
-    const dispatches: string[] = [];
-    const stepRunner: StepRunner = {
-      run: vi.fn(async (step) => {
-        dispatches.push(step);
-        if (step === 'wiring_check') {
-          return { success: false, output: 'unchanged wiring diagnostic' };
-        }
-        if (step === 'build') return { success: true };
-        throw new Error(`unexpected review or SHIP dispatch: ${step}`);
-      }),
-    };
-    const events = new ConductorEventEmitter();
-    const kickbackCounts: number[] = [];
-    let haltReason: string | undefined;
-    events.on('kickback', (event) => {
-      if (event.type === 'kickback' && event.from === 'wiring_check') {
-        kickbackCounts.push(event.count);
-      }
-    });
-    events.on('loop_halt', (event) => {
-      if (event.type === 'loop_halt') haltReason = event.reason;
-    });
-    const conductor = new Conductor({
-      stateFilePath,
-      stepRunner,
-      events,
-      projectRoot,
-      fromStep: 'wiring_check',
-      mode: 'auto',
-      maxRetries: 1,
-      config: { validation_concurrency: 2 },
-      fullSuiteVerifier: {
-        inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
-        ensure: vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never })),
-      },
-      onRecovery: async () => 'quit',
-    });
-
-    await conductor.run();
-
-    const ledger = await readKickbackLedger(projectRoot);
-    expect({
-      dispatches,
-      kickbackCounts,
-      wiringBudget: ledger.gates.wiring_check?.count,
-      haltReason,
-    }).toEqual({
-      dispatches: ['wiring_check', 'build', 'wiring_check'],
-      kickbackCounts: [1],
-      wiringBudget: 1,
-      haltReason: expect.stringMatching(/wiring_check kickback-to-build no-op/),
-    });
-  });
-
   it('joins reversed dual failures into one ordered BUILD rewind and charges both gate budgets', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-dual-failure-'));
     dirs.push(projectRoot);

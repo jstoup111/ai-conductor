@@ -33,6 +33,7 @@ import type { ConductState } from '../../../src/types/index.js';
 import type { StepName } from '../../../src/types/index.js';
 import { ConductorEventEmitter } from '../../../src/ui/events.js';
 import { writeState } from '../../../src/engine/state.js';
+import { Conductor } from '../../../src/engine/conductor.js';
 import type { StepRunner } from '../../../src/engine/conductor.js';
 import type { SelfHostGuardrails } from '../../../src/engine/self-host/wiring.js';
 import type { SandboxBuildEnv } from '../../../src/engine/self-host/sandbox-build-env.js';
@@ -40,7 +41,6 @@ import {
   runReleaseArtifactGate,
   type ReleaseGateOptions,
 } from '../../../src/engine/self-host/release-gate.js';
-import { Conductor } from '../../test-conductor.js';
 
 const NOOP_ESCALATION = async () => ({});
 const SANDBOX_DIR = '/tmp/harness-selfbuild-TESTDIR';
@@ -191,7 +191,6 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     opts: { selfHost?: boolean; daemon?: boolean; config?: Record<string, unknown> } = {},
   ): Conductor {
     const configuredSteps = (opts.config?.steps ?? {}) as Record<string, unknown>;
-    const configuredSelfHost = (opts.config?.harness_self_host ?? {}) as Record<string, unknown>;
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -206,10 +205,6 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       escalateBuildFailure: NOOP_ESCALATION,
       config: {
         ...opts.config,
-        harness_self_host: {
-          build_auth: { mode: 'api-key' },
-          ...configuredSelfHost,
-        },
         steps: {
           manual_test: { disable: true },
           ...configuredSteps,
@@ -394,7 +389,6 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       maxRetries: 1,
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
-      config: { harness_self_host: { build_auth: { mode: 'api-key' } } },
     });
 
     await conductor.run();
@@ -493,12 +487,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       fromStep: 'build',
       selfHostGuardrails: guardrails,
       escalateBuildFailure: NOOP_ESCALATION,
-      config: {
-        harness_self_host: {
-          sandbox_build_env: false,
-          build_auth: { mode: 'api-key' },
-        },
-      },
+      config: { harness_self_host: { sandbox_build_env: false } },
     }).run();
 
     expect(guardrails.relink).not.toHaveBeenCalled();
