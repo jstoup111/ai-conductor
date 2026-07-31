@@ -174,6 +174,29 @@ describe('ProviderRuntimeSet', () => {
     expect(custom.readiness).not.toHaveBeenCalled();
   });
 
+  it('keeps the Codex recovery seam available after an inconclusive probe', async () => {
+    const probeFailed: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'probe-failed',
+      probeFailure: {
+        kind: 'unparseable-output',
+        facts: { parserRejection: 'invalid-json' },
+      },
+    };
+    const codex = {
+      ...provider(),
+      readiness: vi.fn(async () => probeFailed),
+    };
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'codex', codex);
+    registry.markInitialized();
+
+    const readiness = (await loadRuntimeSetFactory())?.(registry).readinessFor('codex', probeFailed);
+
+    await expect(readiness?.()).resolves.toEqual(probeFailed);
+  });
+
   it('constructs every frozen-registry provider with isolated per-run state', async () => {
     const claude = provider();
     const codex = provider();
