@@ -111,14 +111,23 @@ MARKDOWN
 expect_checker_failure() {
   local description=$1
   local root=$2
-  local expected=$3
   local output
   local status
+  local expected
+  local expected_output=0
+
+  shift 2
 
   output="$(run_checker "$root")"
   status=$?
 
-  if [ "$status" -ne 0 ] && printf '%s' "$output" | grep -qF "$expected"; then
+  for expected in "$@"; do
+    if ! printf '%s' "$output" | grep -qF "$expected"; then
+      expected_output=1
+    fi
+  done
+
+  if [ "$status" -ne 0 ] && [ "$expected_output" -eq 0 ]; then
     record "$description" 0
   else
     printf '%s\n' "$output"
@@ -141,22 +150,45 @@ if [ "$VALID_STATUS" -ne 0 ]; then
   printf '%s\n' "$VALID_OUTPUT"
 fi
 
-REAL_OUTPUT="$(run_checker "$REPO_ROOT")"
-REAL_STATUS=$?
-record "the maintained repository tree has no missing or ambiguous navigation membership" "$([ "$REAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
-if [ "$REAL_STATUS" -ne 0 ]; then
-  printf '%s\n' "$REAL_OUTPUT"
-fi
-
 MISSING_CONFIG="$FIXTURE_ROOT/missing-config"
 cp -R "$VALID_ROOT" "$MISSING_CONFIG"
 rm "$MISSING_CONFIG/docs/_config.yml"
-expect_checker_failure "missing site configuration names docs/_config.yml" "$MISSING_CONFIG" "docs/_config.yml"
+expect_checker_failure "missing site configuration names its path and key" "$MISSING_CONFIG" \
+  "docs/_config.yml" "remote_theme"
+
+MISSING_THEME="$FIXTURE_ROOT/missing-theme"
+cp -R "$VALID_ROOT" "$MISSING_THEME"
+sed -i '/^remote_theme:/d' "$MISSING_THEME/docs/_config.yml"
+expect_checker_failure "a missing theme names its configuration and key" "$MISSING_THEME" \
+  "docs/_config.yml" "remote_theme"
 
 MOVING_THEME="$FIXTURE_ROOT/moving-theme"
 cp -R "$VALID_ROOT" "$MOVING_THEME"
 sed -i 's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs#' "$MOVING_THEME/docs/_config.yml"
-expect_checker_failure "an unpinned presentation dependency is rejected" "$MOVING_THEME" "remote_theme"
+expect_checker_failure "a moving theme reference names its configuration and key" "$MOVING_THEME" \
+  "docs/_config.yml" "remote_theme"
+
+WRONG_PIN="$FIXTURE_ROOT/wrong-pin"
+cp -R "$VALID_ROOT" "$WRONG_PIN"
+sed -i 's#just-the-docs/just-the-docs@v0.12.0#just-the-docs/just-the-docs@v0X12Y0#' "$WRONG_PIN/docs/_config.yml"
+expect_checker_failure "a wrong theme pin names its configuration and key" "$WRONG_PIN" \
+  "docs/_config.yml" "remote_theme"
+
+if [ "${1:-}" = '--config-contract' ]; then
+  printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
+  if [ "$FAIL" -gt 0 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+REAL_OUTPUT="$(run_checker "$REPO_ROOT")"
+REAL_STATUS=$?
+record "the maintained repository tree has no missing or ambiguous navigation membership" \
+  "$([ "$REAL_STATUS" -eq 0 ] && echo 0 || echo 1)"
+if [ "$REAL_STATUS" -ne 0 ]; then
+  printf '%s\n' "$REAL_OUTPUT"
+fi
 
 MISSING_SECTION="$FIXTURE_ROOT/missing-section"
 cp -R "$VALID_ROOT" "$MISSING_SECTION"
