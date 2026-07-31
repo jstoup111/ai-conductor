@@ -435,7 +435,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   correct, functional way to start a run at a specific step; it is unchanged. `docs/reference/cli.md`
   and `docs/reference/steps.md` already documented both flags as non-functional — that documentation
   is now removed along with the flags ([#1013](https://github.com/jstoup111/ai-conductor/issues/1013)).
-- Preserve user-level values for all defaulted configuration keys when a project omits them, while keeping explicit project policy, validation diagnostics, merge semantics, and effective defaults authoritative ({{IMPLEMENTATION_PR}}).
+- Preserve user-level values for all defaulted configuration keys when a project omits them, while keeping explicit project policy, validation diagnostics, merge semantics, and effective defaults authoritative ([implementation PR #1199](https://github.com/jstoup111/ai-conductor/pull/1199)).
 
 ## Migration
 
