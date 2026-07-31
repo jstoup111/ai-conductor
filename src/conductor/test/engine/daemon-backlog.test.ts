@@ -388,6 +388,29 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(backlog[0]).toEqual({ slug: 'feature-a' });
   });
 
+  it('includes a feature whose Stories reference is a relative Markdown link', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/feature-link.md'),
+      planWithDeps('[feature stories](../stories/feature-link.md)'),
+    );
+    await writeFile(join(dir, '.docs/stories/feature-link.md'), APPROVED_STORIES);
+    await writeCoherence('feature-link');
+
+    const backlog = await discover();
+    expect(backlog.map((item) => item.slug)).toEqual(['feature-link']);
+  });
+
+  it('excludes an absolute Stories reference because checkout roots are not stable identity', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/absolute-ref.md'),
+      planWithDeps(join(dir, '.docs/stories/absolute-ref.md')),
+    );
+    await writeFile(join(dir, '.docs/stories/absolute-ref.md'), APPROVED_STORIES);
+
+    const backlog = await discover();
+    expect(backlog).toEqual([]);
+  });
+
   it('falls back to a same-stem stories file when no **Stories:** line', async () => {
     await writeFile(join(dir, '.docs/plans/feature-b.md'), planWithDeps());
     await writeFile(join(dir, '.docs/stories/feature-b.md'), APPROVED_STORIES);
