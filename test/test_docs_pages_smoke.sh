@@ -69,6 +69,9 @@ case "$jq_filter" in
   *)
     if [ "$mode" = "deployment-missing" ] && [[ "$*" == *build* || "$*" == *deployment* ]]; then
       printf '[]\n'
+    elif [ "$mode" = "deployment-spaced" ]; then
+      printf '{\n  "status" : "%s",\n  "state" : "%s",\n  "source" : { "branch" : "%s", "path" : "%s" }\n}\n' \
+        "$status" "$status" "$branch" "$path"
     else
       printf '{"status":"%s","state":"%s","source":{"branch":"%s","path":"%s"},"html_url":"https://jstoup111.github.io/ai-conductor/"}\n' \
         "$status" "$status" "$branch" "$path"
@@ -176,6 +179,14 @@ record "the probe obtains deployment evidence through the fake GitHub boundary" 
 record "the probe obtains hosted content through the fake HTTP boundary" \
   "$(grep -q '^curl ' "$CALLS_FILE" && echo 0 || echo 1)"
 
+SPACED_OUTPUT="$(run_probe deployment-spaced)"
+SPACED_STATUS=$?
+record "a whitespace-formatted successful deployment is accepted" \
+  "$( [ "$SPACED_STATUS" -eq 0 ] && echo 0 || echo 1 )"
+if [ "$SPACED_STATUS" -ne 0 ]; then
+  printf '%s\n' "$SPACED_OUTPUT"
+fi
+
 printf '\n=== Stories 1 and 9: failed delivery stays visible ===\n'
 
 expect_probe_failure root-non-200 \
@@ -199,6 +210,12 @@ expect_probe_failure topic-mismatch \
 expect_probe_failure source-wrong \
   "a non-default publication source is rejected" \
   'source|branch|main|default'
+
+INTEGRITY_TEST="$REPO_ROOT/test/test_harness_integrity.sh"
+record "integrity executes the deterministic fake-adapter smoke suite" \
+  "$( [ -f "$INTEGRITY_TEST" ] && \
+    grep -Fq 'docs_pages_smoke_test="${HARNESS_DIR}/test/test_docs_pages_smoke.sh"' "$INTEGRITY_TEST" && \
+    grep -Fq 'docs_pages_smoke_output=$(bash "$docs_pages_smoke_test" 2>&1)' "$INTEGRITY_TEST" && echo 0 || echo 1 )"
 
 printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
 if [ "$FAIL" -gt 0 ]; then

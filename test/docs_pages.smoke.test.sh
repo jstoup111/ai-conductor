@@ -105,7 +105,10 @@ check_deployment() {
     return
   fi
 
-  status="$(printf '%s\n' "$deployments" | sed -n 's/.*"status":"\([^"]*\)".*/\1/p' | head -n 1)"
+  status="$(printf '%s\n' "$deployments" | sed -nE 's/.*"status"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -n 1)"
+  if [ -z "$status" ]; then
+    status="$(printf '%s\n' "$deployments" | sed -nE 's/.*"state"[[:space:]]*:[[:space:]]*"([^"]*)".*/\1/p' | head -n 1)"
+  fi
   case "$status" in
     built|success|completed) ;;
     *) fail "Pages deployment check failed: expected successful build, got $status" ;;

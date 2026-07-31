@@ -1092,6 +1092,30 @@ else
   assert "test/test_docs_navigation.sh exists" 1
 fi
 
+# ── 18. Hosted documentation fake-adapter smoke suite ──────────────────────
+# This runs only the deterministic acceptance suite, which replaces gh and curl
+# at the process boundary. The real Pages probe remains opt-in and is never
+# invoked from integrity or the aggregate test path.
+echo ""
+echo -e "${BOLD}18. Hosted documentation fake-adapter smoke suite${NC}"
+
+docs_pages_smoke_test="${HARNESS_DIR}/test/test_docs_pages_smoke.sh"
+if [ -f "$docs_pages_smoke_test" ]; then
+  set +e
+  docs_pages_smoke_output=$(bash "$docs_pages_smoke_test" 2>&1)
+  docs_pages_smoke_exit=$?
+  set -e
+
+  if [ "$docs_pages_smoke_exit" -eq 0 ]; then
+    assert "test/test_docs_pages_smoke.sh — deterministic Pages adapter contracts pass" 0
+  else
+    echo "$docs_pages_smoke_output" | sed 's/^/    /'
+    assert "test/test_docs_pages_smoke.sh — deterministic Pages adapter contracts pass" 1
+  fi
+else
+  assert "test/test_docs_pages_smoke.sh exists" 1
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
