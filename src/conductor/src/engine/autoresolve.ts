@@ -611,7 +611,8 @@ export type PushRefreshedResult =
  * Story: "The refresh publishes with a lease and never overwrites unseen work"
  *
  * Execution:
- *   - Pushes the branch using `git push origin <branch> --force-with-lease`
+ *   - Pushes the current resolution `HEAD` to the branch using
+ *     `git push origin HEAD:<branch> --force-with-lease`
  *   - On success (exit 0):
  *     * Logs outcome as "refreshed"
  *     * Returns { pushed: true }
@@ -634,8 +635,9 @@ export async function pushRefreshedBranch(
 ): Promise<PushRefreshedResult> {
   const log = logger ?? console.log;
 
-  // Push the branch with --force-with-lease (lease prevents concurrent overwrites)
-  const pushResult = await git(['push', 'origin', branch, '--force-with-lease']);
+  // Resolution runs in a detached worktree, so publish its rebased HEAD rather
+  // than the stale named branch ref. The lease still prevents unseen overwrites.
+  const pushResult = await git(['push', 'origin', `HEAD:${branch}`, '--force-with-lease']);
 
   // Check if the push succeeded
   if (pushResult.exitCode === 0) {
