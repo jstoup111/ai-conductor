@@ -41,6 +41,32 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 - Use injected predicates, runners, clocks, and temporary directories only. Ordinary tests must not
   launch a daemon, LLM, GitHub, network call, or timeout-ended conductor.
 
+## Plan amendment — 2026-07-31 (operator-approved)
+
+Core operator-park behavior remains in scope and may complete independently.
+Deterministic BUILD-group integration is deferred until the sibling capability is
+complete on the integration base. This feature must not register, reorder, or
+locally emulate that sibling group while the prerequisite is absent.
+
+### Verify-Claims Ledger — plan amendment — 2026-07-31
+
+#### Claims
+
+- [verified] this branch retains the sibling BUILD-group registration after its
+  native executor was reverted; its acceptance suite has four failing cases.
+- [verified] the former prose-only prerequisite did not prevent partial local
+  integration.
+
+#### Assumptions
+
+- [load-bearing, confirmed] Core operator-park behavior may proceed without
+  deterministic BUILD-group integration, while that integration must wait for
+  a complete sibling capability.
+  - Impact if wrong: the amended task dependency and feature scope are wrong.
+  - Confirmed by: operator approval, 2026-07-31 ("yes").
+
+**Verdict: CLEAR.**
+
 ## Tasks
 
 ### Task 1: Define the typed scheduling-boundary contract
@@ -160,22 +186,44 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 **Wired-into:** `same as Task 3`
 **Dependencies:** Tasks 5, 6
 
-### Task 8: Prove the deterministic BUILD group and future groups inherit the gate
+### Task 8: Prove core serial, configured, and SHIP groups inherit the gate
 
-**Story:** Story 8 all criteria, including deterministic BUILD and bypass rejection
+**Story:** Story 8 core criteria and bypass rejection, excluding deferred deterministic BUILD integration
 **Type:** negative-path
 
 **Steps:**
-1. After the sibling implementation is present, write a failing BUILD-group boundary test and a
-   mechanical inventory test for every supported serial/configured/built-in dispatch entry.
-2. Verify the deterministic group or any unguarded entry makes the tests fail (RED).
-3. Route the BUILD group through the same pre-unit gate and remove any group-specific park branch.
-4. Verify configured, SHIP, deterministic BUILD, zero/one-member, and inventory cases pass (GREEN).
-5. Commit with message: `cover all parallel groups with park boundary`.
+1. Write failing boundary and inventory tests for every currently supported
+   serial, configured, and built-in SHIP dispatch entry.
+2. Verify an unguarded currently-supported entry makes the tests fail (RED).
+3. Route each existing entry through the same pre-unit gate and remove any
+   group-specific park branch.
+4. Verify serial, configured, SHIP, zero/one-member, and inventory cases pass
+   (GREEN), without registering or emulating the sibling BUILD group.
+5. Commit with message: `cover current park scheduling boundaries`.
 
-**Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/src/engine/steps.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`, `src/conductor/test/engine/steps.test.ts`
+**Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`
 **Wired-into:** `same as Task 3`
-**Dependencies:** Tasks 6, 7; sibling deterministic BUILD-group implementation
+**Dependencies:** Tasks 6, 7
+
+### Task 8.1: Integrate the landed deterministic BUILD group
+
+**Story:** Story 8 deferred deterministic BUILD criterion
+**Type:** negative-path
+
+**Steps:**
+1. Verify the integration base provides the sibling BUILD group and its native
+   suite-verifier execution path; stop with a recorded prerequisite result when
+   either is absent.
+2. Write a failing BUILD-group boundary test and a mechanical inventory test
+   covering the landed group.
+3. Route the landed group through the same pre-unit gate without changing its
+   topology, registration, or native execution path.
+4. Verify deterministic BUILD and full inventory cases pass (GREEN).
+5. Commit with message: `cover landed build group park boundary`.
+
+**Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`, `src/conductor/test/engine/steps.test.ts`
+**Wired-into:** `same as Task 3`
+**Dependencies:** Task 8; verified sibling deterministic BUILD-verification prerequisite
 
 ### Task 9: Lock interactive behavior to its existing baseline
 
@@ -299,15 +347,15 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 **Wired-into:** `src/conductor/src/daemon-cli.ts#renderDaemonEvent`, `src/conductor/src/engine/report-renderer.ts#renderReport`
 **Dependencies:** Tasks 2, 10
 
-### Task 16: Prove the complete daemon boundary contract through one bounded acceptance seam
+### Task 16: Prove the core daemon boundary contract through one bounded acceptance seam
 
-**Story:** Stories 1-10 — combined observable contract
+**Story:** Stories 1-10 — combined core observable contract, excluding deferred deterministic BUILD integration
 **Type:** infrastructure
 
 **Steps:**
 1. Write the failing acceptance matrix using real internal conductor/runner/pool flow and injected
    step runners plus park reads; pre-resolve all unrelated lifecycle gates.
-2. Verify failures identify uncovered serial, configured, SHIP, BUILD, race, restart, or reporting
+2. Verify failures identify uncovered serial, configured, SHIP, race, restart, or reporting
    behavior (RED).
 3. Make only the smallest integration corrections needed; do not duplicate unit-level machinery.
 4. Run the acceptance file, neighboring engine files, test-inclusive typecheck, and lint (GREEN).
@@ -317,6 +365,24 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 **Wired-into:** `none (no new production surface)`
 **Dependencies:** Tasks 5-15
 
+### Task 16.1: Extend the acceptance contract for the landed BUILD group
+
+**Story:** Story 8 deferred deterministic BUILD criterion
+**Type:** negative-path
+
+**Steps:**
+1. After Task 8.1 verifies the sibling prerequisite, add the deterministic
+   BUILD case to the bounded acceptance matrix.
+2. Verify the case fails if the landed group bypasses the shared park gate.
+3. Make the smallest integration correction without altering sibling group
+   topology or execution ownership.
+4. Verify the complete matrix passes (GREEN).
+5. Commit with message: `accept landed build group park boundary`.
+
+**Files:** `src/conductor/test/acceptance/operator-park-boundary.acceptance.test.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`
+**Wired-into:** none (no new production surface)
+**Dependencies:** Tasks 8.1, 16
+
 ## Task Dependency Graph
 
 ```text
@@ -324,16 +390,20 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
                     └──────────→ 10 → 11 → 12 → 13 → 14
                          2 ─────────────────────────→ 15
 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 ───────────→ 16
+8 → 8.1 → 16.1
+16 ────────→ 16.1
 ```
 
-External prerequisite: the sibling deterministic BUILD-group implementation must precede Task 8.
+External prerequisite: the sibling deterministic BUILD-verification capability
+must be complete on the integration base before Task 8.1 or Task 16.1 begins.
 
 ## Integration Points
 
-- After Task 8: every serial/configured/built-in scheduling unit shares one daemon pre-unit gate.
+- After Task 8: every currently-supported serial/configured/SHIP scheduling unit shares one daemon pre-unit gate.
 - After Task 12: conductor → worktree wrapper → feature runner preserves one typed intentional stop.
 - After Task 14: daemon pool and resume behavior are complete without a HALT watcher or second marker.
-- After Task 16: the full accepted product contract is proven across the minimum real internal path.
+- After Task 16: the core accepted product contract is proven across the minimum real internal path.
+- After Task 16.1: the landed deterministic BUILD group is included in the acceptance contract.
 
 ## Coverage Check
 
