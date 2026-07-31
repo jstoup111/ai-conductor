@@ -14,7 +14,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 - Stop self-host provider startup from hashing generated `src/conductor/dist-versions` snapshots
   during the live-checkout safety fingerprint, while continuing to protect same-named directories
-  elsewhere in the repository ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
+  elsewhere in the repository ([implementation PR #1217](https://github.com/jstoup111/ai-conductor/pull/1217)).
 - Anchor daemon management and direct launches at the main repository root, preventing an invocation
   from a nested package or linked worktree from creating a second `.daemon/` state tree whose log
   churn trips the self-host live-checkout boundary ([implementation PR #1214](https://github.com/jstoup111/ai-conductor/pull/1214)).
