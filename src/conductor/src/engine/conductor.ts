@@ -1049,9 +1049,6 @@ export class Conductor {
   private log?: (message: string) => void;
   private readonly surfacedRebaselineRefusals = new Set<string>();
   private fullSuiteVerifier: Pick<FullSuiteVerifier, 'ensure' | 'inspect'>;
-  private retainedFullSuiteInspection:
-    | Awaited<ReturnType<FullSuiteVerifier['inspect']>>
-    | undefined;
   private featureDesc?: string;
   private worktreeBranch?: string;
   private onCheckpoint: (step: StepName) => Promise<CheckpointResponse>;
@@ -1328,11 +1325,7 @@ export class Conductor {
           gh: this.gh,
           anchor: '',
         }),
-      fullSuiteInspect: async () => {
-        const retained = this.retainedFullSuiteInspection;
-        this.retainedFullSuiteInspection = undefined;
-        return retained ?? this.fullSuiteVerifier.inspect();
-      },
+      fullSuiteInspect: () => this.fullSuiteVerifier.inspect(),
     };
   }
 
@@ -6671,7 +6664,6 @@ export class Conductor {
   }
 
   private async runTestSuiteStep(): Promise<StepRunResult> {
-    this.retainedFullSuiteInspection = undefined;
     const inspection = await this.fullSuiteVerifier.inspect();
     if (inspection.status === 'STALE') {
       await this.events.emit({ type: 'test_suite_verification', freshness: inspection });
@@ -6697,10 +6689,6 @@ export class Conductor {
         fullSuiteVerification: verification,
       };
     }
-    this.retainedFullSuiteInspection = {
-      status: 'CURRENT',
-      evidence: verification.evidence,
-    };
     return {
       success: true,
       output: `Full test suite ${verification.status}`,
