@@ -205,6 +205,7 @@ export class CodexProvider implements LLMProvider {
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const readiness = await this.readiness(options.spawnPermit);
+    this.logReadinessDiagnostic(readiness, options.diagnosticLog);
     if (readiness.state === 'missing' || readiness.state === 'unusable') {
       return this.readinessFailure(readiness);
     }
@@ -285,6 +286,7 @@ export class CodexProvider implements LLMProvider {
     const readiness = options.interactive
       ? undefined
       : await this.readiness(options.spawnPermit);
+    if (readiness) this.logReadinessDiagnostic(readiness, options.diagnosticLog);
     if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
       return this.readinessFailure(readiness);
     }
@@ -323,6 +325,26 @@ export class CodexProvider implements LLMProvider {
         diagnosticLog(summarizeProviderDiagnostic('codex', output));
       }
     }
+  }
+
+  private logReadinessDiagnostic(
+    readiness: AuthenticationReadiness,
+    diagnosticLog: InvokeOptions['diagnosticLog'],
+  ): void {
+    if (!diagnosticLog || readiness.state !== 'probe-failed') return;
+
+    const { facts, kind } = readiness.probeFailure;
+    const renderedFacts = [
+      facts.processErrorCode && `processErrorCode=${facts.processErrorCode}`,
+      facts.exitCode !== undefined && `exitCode=${facts.exitCode}`,
+      facts.signal && `signal=${facts.signal}`,
+      facts.timeoutMs !== undefined && `timeoutMs=${facts.timeoutMs}`,
+      facts.stdoutBytes !== undefined && `stdoutBytes=${facts.stdoutBytes}`,
+      facts.stderrBytes !== undefined && `stderrBytes=${facts.stderrBytes}`,
+    ].filter((fact): fact is string => typeof fact === 'string');
+    diagnosticLog(
+      `Codex readiness probe failed: ${kind}${renderedFacts.length > 0 ? ` (${renderedFacts.join(', ')})` : ''}.`,
+    );
   }
 
   private classifyCompletion(
@@ -648,24 +670,50 @@ export class CodexProvider implements LLMProvider {
     source: AuthenticationSource,
     error: unknown,
   ): AuthenticationReadiness {
+    const facts = this.executionProbeFacts(error);
     if (typeof error === 'object' && error !== null && (error as { timedOut?: unknown }).timedOut === true) {
       return this.probeFailedReadiness(source, {
         kind: 'timeout',
-        facts: { timeoutMs: CODEX_DOCTOR_TIMEOUT_MS },
+        facts: { timeoutMs: CODEX_DOCTOR_TIMEOUT_MS, ...facts },
       });
     }
 
+    return this.probeFailedReadiness(source, { kind: 'exec-error', facts });
+  }
+
+  private executionProbeFacts(error: unknown): CodexProbeFailure['facts'] {
     const facts: CodexProbeFailure['facts'] = {};
-    const code = typeof error === 'object' && error !== null
-      ? (error as { code?: unknown }).code
-      : undefined;
+    if (typeof error !== 'object' || error === null) return facts;
+    const record = error as Record<string, unknown>;
+    const code = record.code;
     if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
       facts.processErrorCode = code;
     } else if (code !== undefined) {
       facts.processErrorCode = 'UNKNOWN';
     }
+    const exitCode = record.exitCode;
+    if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0) {
+      facts.exitCode = exitCode;
+    }
+    const signal = record.signal;
+    if (
+      signal === 'SIGABRT' || signal === 'SIGALRM' || signal === 'SIGHUP' || signal === 'SIGINT' ||
+      signal === 'SIGKILL' || signal === 'SIGPIPE' || signal === 'SIGQUIT' || signal === 'SIGTERM'
+    ) {
+      facts.signal = signal;
+    } else if (signal !== undefined) {
+      facts.signal = 'UNKNOWN';
+    }
+    const stdoutBytes = this.outputByteLength(record.stdout);
+    if (stdoutBytes !== undefined) facts.stdoutBytes = stdoutBytes;
+    const stderrBytes = this.outputByteLength(record.stderr);
+    if (stderrBytes !== undefined) facts.stderrBytes = stderrBytes;
+    return facts;
+  }
 
-    return this.probeFailedReadiness(source, { kind: 'exec-error', facts });
+  private outputByteLength(output: unknown): number | undefined {
+    if (typeof output === 'string' || Buffer.isBuffer(output)) return Buffer.byteLength(output);
+    return undefined;
   }
 
   private probeFailedReadiness(

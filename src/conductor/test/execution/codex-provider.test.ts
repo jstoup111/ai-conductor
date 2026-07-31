@@ -1437,7 +1437,10 @@ describe('CodexProvider', () => {
         stdout: 'sk-live-secret',
         stderr: '/private/codex/auth.json',
       }),
-      probeFailure: { kind: 'exec-error', facts: { processErrorCode: 'ENOENT' } },
+      probeFailure: {
+        kind: 'exec-error',
+        facts: { processErrorCode: 'ENOENT', stdoutBytes: 14, stderrBytes: 24 },
+      },
     },
     {
       name: 'doctor timeout',
@@ -1446,7 +1449,10 @@ describe('CodexProvider', () => {
         stdout: 'sk-live-secret',
         stderr: '/private/codex/auth.json',
       }),
-      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+      probeFailure: {
+        kind: 'timeout',
+        facts: { timeoutMs: 10_000, stdoutBytes: 14, stderrBytes: 24 },
+      },
     },
   ] as const)('classifies injected $name without exposing runner diagnostics', async ({ error, probeFailure }) => {
     const runDoctor = vi.fn().mockRejectedValue(error);
@@ -1469,6 +1475,62 @@ describe('CodexProvider', () => {
     } finally {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
       else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
+
+  it.each([
+    {
+      name: 'exec error',
+      kind: 'exec-error',
+      error: Object.assign(new Error('spawn /private/codex/auth.json sk-live-secret hash:deadbeef'), {
+        code: 'ENOENT',
+        exitCode: 126,
+        signal: 'SIGTERM',
+        stdout: 'stdout sk-live-secret /private/codex/auth.json',
+        stderr: 'stderr sk-live-secret CODEX_API_KEY=sk-live-secret',
+        path: '/private/codex/auth.json',
+      }),
+      expectedDiagnostic: 'Codex readiness probe failed: exec-error (processErrorCode=ENOENT, exitCode=126, signal=SIGTERM, stdoutBytes=46, stderrBytes=50).',
+    },
+    {
+      name: 'timeout',
+      kind: 'timeout',
+      error: Object.assign(new Error('timed out at /private/codex/auth.json sk-live-secret hash:deadbeef'), {
+        timedOut: true,
+        stdout: 'stdout sk-live-secret /private/codex/auth.json',
+        stderr: 'stderr sk-live-secret CODEX_API_KEY=sk-live-secret',
+        path: '/private/codex/auth.json',
+      }),
+      expectedDiagnostic: 'Codex readiness probe failed: timeout (timeoutMs=10000, stdoutBytes=46, stderrBytes=50).',
+    },
+  ] as const)('emits only secret-safe $name readiness diagnostics for every unattended invocation', async ({ error, kind, expectedDiagnostic }) => {
+    const runDoctor = vi.fn().mockRejectedValue(error);
+    const featureLog = vi.fn();
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Authorized.'), exitCode: 0 } as any);
+    const diagnosticText = () => featureLog.mock.calls.map(([message]) => message).join('\n');
+
+    for (const invoke of [
+      (provider: CodexProvider) => provider.invoke({ ...baseOptions, diagnosticLog: featureLog }),
+      (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog }),
+    ]) {
+      featureLog.mockClear();
+      const result = await invoke(new CodexProvider(runDoctor));
+
+      expect(result.authentication).toMatchObject({
+        state: 'probe-failed',
+        probeFailure: expect.objectContaining({ kind }),
+      });
+      expect(diagnosticText()).toContain(expectedDiagnostic);
+      for (const forbidden of [
+        'sk-live-secret',
+        '/private/codex/auth.json',
+        'CODEX_API_KEY=',
+        'hash:deadbeef',
+        'spawn ',
+        'timed out at',
+      ]) {
+        expect(JSON.stringify({ readiness: result.authentication, diagnostic: diagnosticText() })).not.toContain(forbidden);
+      }
     }
   });
 
