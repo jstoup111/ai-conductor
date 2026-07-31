@@ -20,6 +20,7 @@ import {
 } from '../../src/engine/rebase.js';
 
 const gitCommandSpy = vi.hoisted(() => vi.fn());
+const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
 
 vi.mock('execa', async (importOriginal) => {
   const actual = await importOriginal<typeof import('execa')>();
@@ -27,6 +28,18 @@ vi.mock('execa', async (importOriginal) => {
     ...actual,
     execa: (...args: Parameters<typeof actual.execa>) => {
       gitCommandSpy(...args);
+      if (
+        prospectiveMergeFixture.forceIndeterminate &&
+        args[0] === 'git' &&
+        Array.isArray(args[1]) &&
+        args[1][0] === 'merge-tree'
+      ) {
+        return Promise.resolve({
+          exitCode: 2,
+          stdout: '',
+          stderr: 'fixture: prospective merge classification unavailable',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
       return actual.execa(...args);
     },
   };
@@ -183,6 +196,7 @@ describe('integration/rebase-loop', () => {
 
   beforeEach(async () => {
     gitCommandSpy.mockClear();
+    prospectiveMergeFixture.forceIndeterminate = false;
     dir = await mkdtemp(join(tmpdir(), 'rebase-loop-'));
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -192,6 +206,12 @@ describe('integration/rebase-loop', () => {
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
+
+  function forceIndeterminateProspectiveMerge(): void {
+    // Keep the fixture's actual git rebase real while making only the
+    // read-only prospective assessment fail closed into the existing path.
+    prospectiveMergeFixture.forceIndeterminate = true;
+  }
 
   function conductorWith(runner: StepRunner): Conductor {
     const fakeGit: GitRunner = async (args) =>
@@ -1025,6 +1045,7 @@ describe('integration/rebase-loop', () => {
           [{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }],
           { alsoForeignRuntime: true },
         );
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1049,9 +1070,17 @@ describe('integration/rebase-loop', () => {
         expect(archVerdict?.satisfied).toBe(true);
         expect(archVerdict?.kickback).toBeUndefined();
 
-        // A clean prospective merge never produces a rebase delta, so no
-        // preservation/invalidation events are emitted from this finish path.
-        expect(preserved).toEqual([]);
+        // Audit trail: a rebase_gate_preserved event per preserved gate, with
+        // a non-empty declared surface and an EMPTY feature-src delta that
+        // justified the preservation.
+        const prdPreserved = preserved.find((p) => p.gate === 'prd_audit');
+        const archPreserved = preserved.find((p) => p.gate === 'architecture_review_as_built');
+        expect(prdPreserved).toBeDefined();
+        expect(prdPreserved!.surface.length).toBeGreaterThan(0);
+        expect(prdPreserved!.deltaConsidered).toEqual([]);
+        expect(archPreserved).toBeDefined();
+        expect(archPreserved!.surface.length).toBeGreaterThan(0);
+        expect(archPreserved!.deltaConsidered).toEqual([]);
       });
 
       it('does NOT falsely preserve a judged gate that was not already satisfied before the rebase', async () => {
@@ -1108,6 +1137,7 @@ describe('integration/rebase-loop', () => {
         await advanceBaseWithDivergentEditToSharedFile([
           { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
         ]);
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1119,8 +1149,10 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.prd_audit).toBe(1);
-        expect(counts.architecture_review_as_built).toBe(1);
+        // Re-run, NOT preserved: a single feature-owned runtime path in D
+        // defeats preservation — both audits dispatch a second time.
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
       });
     });
 
@@ -1133,6 +1165,7 @@ describe('integration/rebase-loop', () => {
         // D; base and feature must each make a real, non-overlapping edit.
         await initRepoOnFeatureBranchWithSharedRuntimeFile();
         await advanceBaseWithDivergentEditToSharedFile();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1152,18 +1185,27 @@ describe('integration/rebase-loop', () => {
         }).run();
 
         expect(completed).toBe(true);
-        expect(counts.prd_audit).toBe(1);
-        expect(counts.architecture_review_as_built).toBe(1);
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
         const prdVerdictAtKickback = await readGateVerdict('prd_audit');
-        // A normal finish skips a clean prospective merge before a rebase
-        // delta can invalidate any audit gate.
+        // The FINAL verdict (post re-dispatch) is satisfied again, but the
+        // decision must have applied a real kickback-shaped invalidation in
+        // between — assert the audit-trail event carries the matched paths.
         expect(prdVerdictAtKickback?.satisfied).toBe(true);
         const prdInvalidated = invalidated.find((i) => i.gate === 'prd_audit');
         const archInvalidated = invalidated.find(
           (i) => i.gate === 'architecture_review_as_built',
         );
-        expect(prdInvalidated).toBeUndefined();
-        expect(archInvalidated).toBeUndefined();
+        expect(prdInvalidated).toBeDefined();
+        expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
+        expect(archInvalidated).toBeDefined();
+        expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
+        expect(
+          Math.max(
+            dispatches.lastIndexOf('prd_audit'),
+            dispatches.lastIndexOf('architecture_review_as_built'),
+          ),
+        ).toBeLessThan(dispatches.indexOf('finish'));
       });
 
       it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {
@@ -1181,6 +1223,7 @@ describe('integration/rebase-loop', () => {
         await advanceBaseCoincidentally([
           { path: '.docs/feature-notes.md', content: '# notes\n' },
         ]);
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1206,6 +1249,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignRuntimeOnly();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1218,13 +1262,18 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.wiring_check).toBe(1);
-        expect(counts.manual_test).toBe(1);
+        expect(counts.wiring_check).toBe(2);
+        expect(counts.manual_test).toBe(2);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
 
-        expect(invalidated).toEqual([]);
-        expect(preserved).toEqual([]);
+        expect(invalidated.find((i) => i.gate === 'wiring_check')).toBeDefined();
+        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
+        expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
+        expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
+        expect(
+          preserved.find((p) => p.gate === 'architecture_review_as_built'),
+        ).toBeDefined();
       });
 
       it('does not invalidate manual_test when it never ran for this feature (ranManualTest = false)', async () => {
@@ -1233,6 +1282,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignRuntimeOnly();
+        forceIndeterminateProspectiveMerge();
 
         // manual_test pre-seeded 'skipped' for this feature.
         await writeState(statePath, { ...FRONT_DONE_M, manual_test: 'skipped' });
@@ -1256,6 +1306,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignTestOnly();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1272,8 +1323,9 @@ describe('integration/rebase-loop', () => {
         expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
-        expect(invalidated).toEqual([]);
-        expect(preserved).toEqual([]);
+        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
+        expect(preserved.find((p) => p.gate === 'wiring_check')).toBeDefined();
+        expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
       });
     });
 
@@ -1298,6 +1350,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignRuntimeOnly();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1309,7 +1362,10 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.manual_test).toBe(1);
+        // manual_test WAS re-opened (invalidated, re-dispatched)...
+        expect(counts.manual_test).toBe(2);
+        // ...but the downstream-stale sweep must not have re-swept the
+        // preserved judged gates: each ran exactly once, never re-selected.
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
       });
@@ -1320,6 +1376,7 @@ describe('integration/rebase-loop', () => {
         // D; base and feature must each make a real, non-overlapping edit.
         await initRepoOnFeatureBranchWithSharedRuntimeFile();
         await advanceBaseWithDivergentEditToSharedFile();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1331,8 +1388,10 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.prd_audit).toBe(1);
-        expect(counts.architecture_review_as_built).toBe(1);
+        // The delta-gating must not accidentally preserve a gate the
+        // decision genuinely invalidated — it's re-dispatched.
+        expect(counts.prd_audit).toBe(2);
+        expect(counts.architecture_review_as_built).toBe(2);
       });
     });
 

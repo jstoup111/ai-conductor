@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -12,6 +12,30 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
+
+const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
+
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      if (
+        prospectiveMergeFixture.forceIndeterminate &&
+        args[0] === 'git' &&
+        Array.isArray(args[1]) &&
+        args[1][0] === 'merge-tree'
+      ) {
+        return Promise.resolve({
+          exitCode: 2,
+          stdout: '',
+          stderr: 'fixture: prospective merge classification unavailable',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
+      return actual.execa(...args);
+    },
+  };
+});
 
 // Task 7 (#655, adr-2026-07-20-post-rebase-delta-aware-invalidation): the
 // `advanceTail` rebase branch (conductor.ts ~5291) re-opens invalidated tail
@@ -94,6 +118,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
   }
 
   beforeEach(async () => {
+    prospectiveMergeFixture.forceIndeterminate = false;
     dir = await mkdtemp(join(tmpdir(), 'rebase-tail-preserve-'));
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -103,6 +128,10 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
+
+  function forceIndeterminateProspectiveMerge(): void {
+    prospectiveMergeFixture.forceIndeterminate = true;
+  }
 
   function conductorWith(runner: StepRunner): Conductor {
     const fakeGit: GitRunner = async (args) =>
@@ -201,12 +230,13 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     };
   }
 
-  it('keeps every resolved tail gate undispatched when the finish branch is cleanly mergeable', async () => {
+  it('preserves prd_audit/architecture_review_as_built (not re-dispatched) while re-opening build_review/wiring_check/manual_test on a foreign-runtime-only rebase delta', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
     });
     await advanceBaseForeignRuntimeOnly();
+    forceIndeterminateProspectiveMerge();
 
     await writeState(statePath, { ...FRONT_DONE_M });
     const counts: Record<string, number> = {};
@@ -225,10 +255,14 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     expect(counts.prd_audit).toBe(1);
     expect(counts.architecture_review_as_built).toBe(1);
 
-    // A normal finish skips a clean prospective merge before it derives a
-    // rebase delta, leaving every resolved tail gate at its original pass.
-    expect(counts.wiring_check).toBe(1);
-    expect(counts.manual_test).toBe(1);
+    // Re-run gates: the foreign runtime delta touches their surface, so each
+    // must have been re-dispatched a second time after the rebase kickback.
+    // (build_review is disabled by default config in this fixture, so it
+    // never dispatches at all here — the wiring/manual_test pair is enough
+    // to prove the invalidated set actually re-runs while the preserved
+    // judged gates above do not.)
+    expect(counts.wiring_check).toBeGreaterThanOrEqual(2);
+    expect(counts.manual_test).toBeGreaterThanOrEqual(2);
 
     // Final state confirms the preserved gates never left 'done' (no
     // stale/pending bounce) even though manual_test — their immediate
