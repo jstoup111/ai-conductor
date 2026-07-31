@@ -56,6 +56,7 @@ type DoctorEvidence =
     kind: 'documented';
     state: Exclude<AuthenticationReadiness['state'], 'probe-failed'>;
     unrelatedHealth?: AuthenticationReadiness['unrelatedHealth'];
+    facts: CodexProbeFailure['facts'];
   }
   | {
     kind: 'legacy';
@@ -63,7 +64,12 @@ type DoctorEvidence =
     configured: boolean;
     authenticated: boolean;
     rejected?: boolean;
+    facts: CodexProbeFailure['facts'];
   };
+
+type ParsedDoctorEvidence =
+  | { kind: 'evidence'; evidence: DoctorEvidence }
+  | { kind: 'rejected'; probeFailure: CodexProbeFailure };
 
 export interface CodexDoctorRunnerOptions {
   reject: false;
@@ -432,9 +438,16 @@ export class CodexProvider implements LLMProvider {
     result: DoctorCommandResult,
     authentication: SelectedAuthentication,
   ): AuthenticationReadiness {
-    const evidence = this.parseDoctorEvidence(result.stdout);
-    if (!evidence || (evidence.kind === 'legacy' && evidence.source !== authentication.source)) {
-      return this.probeFailedReadiness(authentication.source);
+    const parsed = this.parseDoctorEvidence(result.stdout);
+    if (parsed.kind === 'rejected') {
+      return this.probeFailedReadiness(authentication.source, parsed.probeFailure);
+    }
+    const { evidence } = parsed;
+    if (evidence.kind === 'legacy' && evidence.source !== authentication.source) {
+      return this.probeFailedReadiness(authentication.source, {
+        kind: 'unparseable-output',
+        facts: { ...evidence.facts, parserRejection: 'conflicting-source-evidence' },
+      });
     }
 
     const exitCode = result.exitCode ?? 1;
@@ -474,20 +487,33 @@ export class CodexProvider implements LLMProvider {
     ) {
       return this.nonReadyReadiness(authentication.source, 'unusable');
     }
-    return this.probeFailedReadiness(authentication.source);
+    return this.probeFailedReadiness(authentication.source, {
+      kind: 'unparseable-output',
+      facts: { ...evidence.facts, parserRejection: 'ambiguous-credential-evidence' },
+    });
   }
 
-  private parseDoctorEvidence(stdout: unknown): DoctorEvidence | undefined {
-    if (typeof stdout !== 'string') return undefined;
+  private parseDoctorEvidence(stdout: unknown): ParsedDoctorEvidence {
+    if (typeof stdout !== 'string') return this.parserRejected('unrecognized-envelope');
+    const stdoutBytes = Buffer.byteLength(stdout);
     try {
       const parsed: unknown = JSON.parse(stdout);
-      if (!parsed || typeof parsed !== 'object') return undefined;
+      if (!parsed || typeof parsed !== 'object') {
+        return this.parserRejected('unrecognized-envelope', { stdoutBytes });
+      }
       const record = parsed as Record<string, unknown>;
-      if (record.schemaVersion !== 1) return undefined;
+      if (record.schemaVersion !== 1) {
+        return this.parserRejected('unsupported-schema', {
+          stdoutBytes,
+          ...(typeof record.schemaVersion === 'number' ? { schemaVersion: record.schemaVersion } : {}),
+        });
+      }
 
       const hasDocumentedShape = 'overallStatus' in record || 'checks' in record;
       const hasLegacyShape = 'auth' in record || 'transport' in record;
-      if (hasDocumentedShape && hasLegacyShape) return undefined;
+      if (hasDocumentedShape && hasLegacyShape) {
+        return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+      }
 
       if (hasDocumentedShape) {
         // `codex doctor` reports three envelope statuses: ok / warning / fail.
@@ -504,31 +530,49 @@ export class CodexProvider implements LLMProvider {
           typeof checks !== 'object' ||
           Array.isArray(checks)
         ) {
-          return undefined;
+          return this.parserRejected('unrecognized-envelope', this.documentedShapeFacts(record, stdoutBytes));
         }
         const credentials = (checks as Record<string, unknown>)['auth.credentials'];
-        if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) return undefined;
+        if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) {
+          return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+        }
         const { status, summary } = credentials as Record<string, unknown>;
-        if (typeof summary !== 'string') return undefined;
+        if (typeof summary !== 'string') {
+          return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+        }
         if (status === 'ok') {
-          return {
+          return { kind: 'evidence', evidence: {
             kind: 'documented',
             state: 'ready',
             unrelatedHealth: overallStatus === 'ok' ? undefined : 'degraded',
-          };
+            facts: this.documentedShapeFacts(record, stdoutBytes),
+          } };
         }
-        if (status !== 'fail') return undefined;
+        if (status !== 'fail') {
+          return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+        }
         if (/(?:no codex credentials were found|codex credentials are missing)/i.test(summary)) {
-          return { kind: 'documented', state: 'missing' };
+          return { kind: 'evidence', evidence: {
+            kind: 'documented', state: 'missing', facts: this.documentedShapeFacts(record, stdoutBytes),
+          } };
         }
         if (/invalid|rejected|unauthorized|expired/i.test(summary)) {
-          return { kind: 'documented', state: 'unusable' };
+          return { kind: 'evidence', evidence: {
+            kind: 'documented', state: 'unusable', facts: this.documentedShapeFacts(record, stdoutBytes),
+          } };
         }
-        return undefined;
+        return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
       }
 
       const { auth, transport } = record;
-      if (!auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') return undefined;
+      if (!auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') {
+        return this.parserRejected('unrecognized-envelope', {
+          stdoutBytes,
+          schemaVersion: 1,
+          envelopeStatus: 'unknown',
+          credentialCheck: 'unknown',
+        });
+      }
       const { selectedMode, configured, rejected } = auth as Record<string, unknown>;
       const { authenticated } = transport as Record<string, unknown>;
       if (
@@ -537,12 +581,48 @@ export class CodexProvider implements LLMProvider {
         typeof authenticated !== 'boolean' ||
         (rejected !== undefined && typeof rejected !== 'boolean')
       ) {
-        return undefined;
+        return this.parserRejected('ambiguous-credential-evidence', { stdoutBytes, schemaVersion: 1 });
       }
-      return { kind: 'legacy', source: selectedMode, configured, authenticated, rejected };
+      return { kind: 'evidence', evidence: {
+        kind: 'legacy', source: selectedMode, configured, authenticated, rejected,
+        facts: { stdoutBytes, schemaVersion: 1 },
+      } };
     } catch {
-      return undefined;
+      return this.parserRejected('invalid-json', { stdoutBytes });
     }
+  }
+
+  private parserRejected(
+    parserRejection: Extract<CodexProbeFailure['facts']['parserRejection'], string>,
+    facts: CodexProbeFailure['facts'] = {},
+  ): ParsedDoctorEvidence {
+    return {
+      kind: 'rejected',
+      probeFailure: { kind: 'unparseable-output', facts: { ...facts, parserRejection } },
+    };
+  }
+
+  private documentedShapeFacts(record: Record<string, unknown>, stdoutBytes: number): CodexProbeFailure['facts'] {
+    const overallStatus = record.overallStatus;
+    const checks = record.checks;
+    const credentials = checks && typeof checks === 'object' && !Array.isArray(checks)
+      ? (checks as Record<string, unknown>)['auth.credentials']
+      : undefined;
+    const status = credentials && typeof credentials === 'object' && !Array.isArray(credentials)
+      ? (credentials as Record<string, unknown>).status
+      : undefined;
+    return {
+      stdoutBytes,
+      schemaVersion: 1,
+      envelopeStatus: overallStatus === 'ok' || overallStatus === 'warning' || overallStatus === 'fail'
+        ? overallStatus
+        : 'unknown',
+      credentialCheck: credentials === undefined
+        ? 'absent'
+        : status === 'ok' || status === 'fail'
+          ? status
+          : 'unknown',
+    };
   }
 
   private nonReadyReadiness(

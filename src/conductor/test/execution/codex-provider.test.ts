@@ -987,6 +987,83 @@ describe('CodexProvider', () => {
     });
   });
 
+  it.each([
+    {
+      name: 'invalid JSON',
+      stdout: '{"schemaVersion":',
+      facts: {
+        stdoutBytes: 17,
+        parserRejection: 'invalid-json',
+      },
+    },
+    {
+      name: 'unsupported schema',
+      stdout: JSON.stringify({ schemaVersion: 2 }),
+      facts: {
+        stdoutBytes: 19,
+        schemaVersion: 2,
+        parserRejection: 'unsupported-schema',
+      },
+    },
+    {
+      name: 'unrecognized envelope',
+      stdout: JSON.stringify({ schemaVersion: 1, response: 'unknown' }),
+      facts: {
+        stdoutBytes: 40,
+        schemaVersion: 1,
+        envelopeStatus: 'unknown',
+        credentialCheck: 'unknown',
+        parserRejection: 'unrecognized-envelope',
+      },
+    },
+    {
+      name: 'conflicting selected-source evidence',
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'api-key', configured: true },
+        transport: { authenticated: true },
+      }),
+      facts: {
+        stdoutBytes: 106,
+        schemaVersion: 1,
+        parserRejection: 'conflicting-source-evidence',
+      },
+    },
+    {
+      name: 'ambiguous evidence',
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      }),
+      facts: {
+        stdoutBytes: 214,
+        schemaVersion: 1,
+        envelopeStatus: 'ok',
+        credentialCheck: 'ok',
+        parserRejection: 'ambiguous-credential-evidence',
+      },
+    },
+  ] as const)(
+    'classifies $name as a closed parser rejection without a credential verdict',
+    async ({ stdout, facts }) => {
+      const readiness = await new CodexProvider(
+        vi.fn().mockResolvedValue({ stdout, exitCode: 0 }),
+      ).readiness();
+
+      expect(readiness).toEqual({
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: { kind: 'unparseable-output', facts },
+      });
+      expect(readiness.state).not.toBe('missing');
+      expect(readiness.state).not.toBe('unusable');
+    },
+  );
+
   it('blocks an unattended invocation when its fresh readiness check is not ready', async () => {
     const runDoctor = vi.fn().mockResolvedValue({
       stdout: JSON.stringify({
