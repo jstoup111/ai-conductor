@@ -207,8 +207,14 @@ project gets deterministic protection.
 - Given a new exported symbol referenced ONLY from `*.test.ts` / `test/` / `__tests__/` paths,
   when the backstop runs, then the gap reads `«symbol» exported but referenced by no production
   code (N test-only references excluded)` — test-only callers never satisfy the gate.
-- Given a new exported symbol referenced only from its own defining file, when the backstop
-  runs, then it is a named gap (self-reference is not wiring).
+- Given a new exported symbol referenced only from its own defining file and lacking the
+  contract-aware symbol plus root proof defined by
+  `adr-2026-07-30-contract-aware-same-file-wiring`, when the backstop runs, then it is a named
+  gap (an own-file reference alone is not wiring).
+- Given a new exported symbol is referenced by its declared caller in the same file and Layer 2
+  proves that module reachable from a production root, when the joined exception runs, then the
+  Layer 1 gap is replaced by typed `same-file-composition` proof. This narrowly supersedes the
+  unconditional external-file requirement; all other Layer 1 outcomes remain unchanged.
 - Given a task adding new exports whose contract is `none (no new production surface)`, when
   Layer 1 runs, then the gap names the contradiction: the symbols added vs the declared-none
   contract (undeclared surface).
@@ -231,7 +237,9 @@ project gets deterministic protection.
 - [ ] New-symbol extraction reuses the evidence-range base ladder (no new base derivation).
 - [ ] Every gap message asserts symbol + searched-scope in tests (adversarial fixtures per
       review condition 5).
-- [ ] Layer 1 lands and gates independently of Layer 2 (condition 1 sequencing).
+- [ ] Layer 1's cross-file path lands and gates independently of Layer 2; only a same-file
+      candidate joins Layer 1 and Layer 2 under
+      `adr-2026-07-30-contract-aware-same-file-wiring`.
 
 ---
 
