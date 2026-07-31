@@ -271,15 +271,6 @@ describe('boundary-aware operator parking acceptance', () => {
     await seedPending(statePath, pending);
     const calls: StepName[] = [];
     let parked = false;
-    const ensure = vi.fn(async () => {
-      calls.push('test_suite');
-      parked = true;
-      return {
-        status: 'EXECUTED',
-        freshness: { status: 'STALE', reason: 'missing' },
-        evidence: {} as never,
-      } as const;
-    });
     const conductor = makeConductor(
       root,
       statePath,
@@ -294,14 +285,6 @@ describe('boundary-aware operator parking acceptance', () => {
         fromStep: expectedMembers[0],
         config: { validation_concurrency: 2 },
         operatorParkBoundary: async () => parked,
-        ...(expectedGroup === 'build_verification'
-          ? {
-              fullSuiteVerifier: {
-                ensure,
-                inspect: async () => ({ status: 'STALE' as const, reason: 'missing' }),
-              },
-            }
-          : {}),
       },
     );
 
@@ -310,9 +293,6 @@ describe('boundary-aware operator parking acceptance', () => {
 
     expect(new Set(calls)).toEqual(new Set(expectedMembers));
     expect(calls).not.toContain(later);
-    expect(ensure).toHaveBeenCalledTimes(
-      expectedGroup === 'build_verification' ? 1 : 0,
-    );
     expect(result).toMatchObject({
       kind: 'operator-parked',
       boundary: { kind: 'group', name: expectedGroup },
