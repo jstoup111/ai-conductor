@@ -2,6 +2,8 @@
 
 # User Stories: Codex Authentication and Autonomous Execution Readiness (#905)
 
+**Amended by #1039:** Criteria that classify an inability to obtain trustworthy readiness evidence as blocking `unverifiable`, or require fresh `ready` before any recovery trial, are superseded by the accepted #1039 stories. Affirmative `ready`, `missing`, and `unusable` criteria and all unrelated #905 stories remain authoritative.
+
 **Source:** Approved PRD FR-1 through FR-22 and the approved provider-neutral auth
 park with source-specific readiness ADR
 

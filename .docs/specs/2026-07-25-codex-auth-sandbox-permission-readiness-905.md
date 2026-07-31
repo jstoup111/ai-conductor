@@ -6,6 +6,8 @@
 **Track:** Product
 **Complexity:** Medium
 
+**Amended by:** `codex-readiness-distinguishes-unavailable-doctor-p` (approved 2026-07-30). That amendment replaces FR-7, FR-8, and FR-9 only for inability-to-obtain-evidence outcomes. Affirmative `ready`, `missing`, and `unusable` behavior and all other requirements remain authoritative.
+
 ## Problem / Background
 
 The harness can select Codex for interactive and unattended work, and installation
