@@ -1,3 +1,9 @@
+---
+title: Model and effort resolution
+parent: Reference
+nav_order: 5
+---
+
 # Model and effort resolution
 
 How the engine picks a model, a reasoning effort, a retry budget, and a review mode for every step, and

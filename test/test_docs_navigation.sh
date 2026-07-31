@@ -256,6 +256,12 @@ record "core reference topics have unique titles, the Reference parent, and stab
     source_has_reference_destination 'configuration.md' 'Configuration reference' 3 && \
     source_has_reference_destination 'environment.md' 'Environment variables' 4 && echo 0 || echo 1 )"
 
+record "remaining reference topics have unique titles, the Reference parent, and stable order" \
+  "$( source_has_reference_destination 'models.md' 'Model and effort resolution' 5 && \
+    source_has_reference_destination 'settings-and-hooks.md' 'Settings and hooks' 6 && \
+    source_has_reference_destination 'skills.md' 'Skills' 7 && \
+    source_has_reference_destination 'steps.md' 'Steps' 8 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
