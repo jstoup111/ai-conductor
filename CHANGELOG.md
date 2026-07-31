@@ -16,6 +16,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   retains its worktree; eligibility now checks whether a feature run is actively in flight for that
   slug instead of treating any retained worktree as a concurrent prepare in progress
   ([implementation PR #1213](https://github.com/jstoup111/ai-conductor/pull/1213)).
+- Make engineer landing and daemon backlog discovery share one plan-to-stories resolver, so the
+  plan skill's canonical relative Markdown link lands only when it resolves to the exact Accepted
+  stories artifact the daemon will dispatch; malformed, mismatched, traversing, and absolute
+  references now fail closed ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Reduce parked-reconciliation daemon noise to one actionable aggregate line with a compact `[daemon][parked-reconciliation]` prefix ([implementation PR #1221](https://github.com/jstoup111/ai-conductor/pull/1221)).
 - Preserve aggregate-gate repair context across repeated feature rebases so `build_review` can
   judge base-induced compatibility and stale-expectation repairs separately from feature scope,

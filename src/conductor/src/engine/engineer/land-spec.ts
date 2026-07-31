@@ -33,7 +33,7 @@
 //      branch is the worktree's branch — never deleted here.
 
 import { access, readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { execFile as execFileCb } from 'node:child_process';
 import { promisify } from 'node:util';
 import { TargetPathMissingError } from './target.js';
@@ -51,6 +51,7 @@ import {
 import { runCoherenceGate } from './coherence-validator.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
+import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
 
 const execFile = promisify(execFileCb);
 
@@ -236,6 +237,22 @@ export async function landSpec(
   }
   validateArtifactContent('stories', storiesContent, idea);
   validateArtifactContent('plan', planContent, idea);
+
+  // Land and daemon discovery must agree on the exact stories artifact. Resolve
+  // the plan's reference with the same machinery backlog discovery uses, then
+  // compare it to the idea-scoped artifact selected above. This prevents a
+  // valid but unrelated stories file from allowing an undispatchable plan to
+  // land (including malformed Markdown-link references).
+  const planRepoPath = relative(worktreePath, planFile).replaceAll('\\', '/');
+  const storiesRepoPath = relative(worktreePath, storiesFile).replaceAll('\\', '/');
+  const referencedStoriesPath = resolvePlanStoriesPath(planRepoPath, planContent);
+  if (referencedStoriesPath !== storiesRepoPath) {
+    throw new Error(
+      `landSpec: plan Stories reference does not resolve to the selected stories artifact ` +
+        `"${storiesRepoPath}" (resolved: ${referencedStoriesPath ?? 'invalid'}). ` +
+        'Use a repo-relative path or a Markdown link whose target resolves to that artifact.',
+    );
+  }
 
   // 4c. Stories MUST carry the canonical approval marker — not merely "not DRAFT".
   // validateArtifactContent only rejects DRAFT/empty/stub, so a stories file with

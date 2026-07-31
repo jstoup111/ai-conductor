@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-30
 **Design:** [2026-07-30-browsable-documentation-site](../specs/2026-07-30-browsable-documentation-site.md)
-**Stories:** [browsable-documentation-site](../stories/browsable-documentation-site.md)
+**Stories:** `.docs/stories/browsable-documentation-site.md`
 **Architecture:** [adr-2026-07-30-pinned-remote-theme-for-pages-navigation](../decisions/adr-2026-07-30-pinned-remote-theme-for-pages-navigation.md)
 **Conflict check:** Clean as of 2026-07-30
 
