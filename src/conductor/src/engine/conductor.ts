@@ -210,6 +210,8 @@ import {
   emitGateInvalidationEvents,
   recordRebaseStepCompletion,
   writeHalt,
+  writeSealHalt,
+  ProtectedArtifactSealRejection,
   originDefaultBranch,
   type RebaseOutcome,
   type ResolutionContext,
@@ -978,6 +980,7 @@ export class Conductor {
    * `conflict_halt` outcome here drives the loop to HALT.
    */
   private lastRebaseOutcome: RebaseOutcome | null = null;
+  private lastRebaseSealError: string | null = null;
 
   /**
    * Injected command runner for the acceptance_specs RED-evidence self-heal
@@ -6425,6 +6428,10 @@ export class Conductor {
     // rebase as satisfied, so we skip the recompute for it. A conflict_halt
     // outcome stops the loop.
     if (step.name === 'rebase') {
+      if (this.lastRebaseSealError) {
+        await this.events.emit({ type: 'loop_halt', reason: this.lastRebaseSealError });
+        return 'halt';
+      }
       if (this.lastRebaseOutcome?.kind === 'conflict_halt') {
         const reason = `rebase conflict — parked for human resolution: ${this.lastRebaseOutcome.reason}`;
         // writeHalt already wrote .pipeline/HALT in runRebaseStep.
@@ -6887,16 +6894,23 @@ export class Conductor {
           );
 
     let outcome: RebaseOutcome;
+    let sealRejectionReason: string | null = null;
     try {
       outcome = await performRebase(git, this.projectRoot, localBase, { translateAfterRebase });
     } catch (err) {
-      // A truly unexpected git failure parks for a human rather than shipping
-      // an unverified branch.
-      outcome = {
-        kind: 'conflict_halt',
-        conflicts: [],
-        reason: err instanceof Error ? err.message : String(err),
-      };
+      if (err instanceof ProtectedArtifactSealRejection) {
+        sealRejectionReason = err.message;
+        this.lastRebaseSealError = `protected-artifact seal error: ${err.message}`;
+        outcome = { kind: 'conflict_halt', conflicts: [], reason: err.message };
+      } else {
+        // A truly unexpected git failure parks for a human rather than shipping
+        // an unverified branch.
+        outcome = {
+          kind: 'conflict_halt',
+          conflicts: [],
+          reason: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
 
     // ── Gated conflict-resolution sub-loop (feat/rebase-resolution-skill) ────
@@ -6906,23 +6920,25 @@ export class Conductor {
     // from pre-resolution behavior (FR-7). The same helper backs the daemon
     // re-kick play-forward path (`resumeRebaseFirst`) so both routes resolve
     // identically (#300).
-    outcome = await runGatedRebaseResolution({
-      git,
-      projectRoot: this.projectRoot,
-      outcome,
-      cap: resolveRebaseResolutionAttempts(this.config),
-      resolve: this.stepRunner.resolveRebaseConflict
-        ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
-        : undefined,
-      onAttempt: (index, cap) =>
-        this.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
-      onSettled: (kind) =>
-        this.events.emit(
-          kind === 'exhausted'
-            ? { type: 'rebase_resolution_exhausted' }
-            : { type: 'rebase_resolution_succeeded' },
-        ),
-    });
+    if (!sealRejectionReason) {
+      outcome = await runGatedRebaseResolution({
+        git,
+        projectRoot: this.projectRoot,
+        outcome,
+        cap: resolveRebaseResolutionAttempts(this.config),
+        resolve: this.stepRunner.resolveRebaseConflict
+          ? (ctx) => this.stepRunner.resolveRebaseConflict!(ctx)
+          : undefined,
+        onAttempt: (index, cap) =>
+          this.events.emit({ type: 'rebase_resolution_attempt', index, cap }),
+        onSettled: (kind) =>
+          this.events.emit(
+            kind === 'exhausted'
+              ? { type: 'rebase_resolution_exhausted' }
+              : { type: 'rebase_resolution_succeeded' },
+          ),
+      });
+    }
 
     this.lastRebaseOutcome = outcome;
 
@@ -6965,9 +6981,13 @@ export class Conductor {
     // matched delta paths that justified invalidating THAT gate.
     await emitGateInvalidationEvents(this.events, outcome, ranManualTest);
 
-    await emitRebaseEvent(this.events, outcome);
+    if (sealRejectionReason) {
+      await writeSealHalt(this.projectRoot, sealRejectionReason);
+    } else {
+      await emitRebaseEvent(this.events, outcome);
+    }
 
-    if (outcome.kind === 'conflict_halt') {
+    if (outcome.kind === 'conflict_halt' && !sealRejectionReason) {
       await writeHalt(this.projectRoot, outcome.conflicts, outcome.reason);
     }
 

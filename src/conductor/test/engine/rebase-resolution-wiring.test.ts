@@ -21,7 +21,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
-import { mkdtemp, rm, writeFile, access, readFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile, access, readFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
@@ -29,7 +29,7 @@ import { promisify } from 'node:util';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { writeState } from '../../src/engine/state.js';
+import { readState, writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { ResolutionContext, ResolutionAttempt } from '../../src/engine/rebase.js';
@@ -199,6 +199,45 @@ describe('runRebaseStep wiring — gated resolution sub-loop (daemon:true, real 
     // HALT file written (same as pre-resolution behavior)
     const haltExists = await access(join(repo, '.pipeline/HALT')).then(() => true, () => false);
     expect(haltExists).toBe(true);
+  });
+
+  it('finish-time pre-rebase seal refusal bypasses conflict resolution and writes seal recovery', async () => {
+    await mkdir(join(repo, '.docs/plans'), { recursive: true });
+    await writeFile(join(repo, '.docs/plans/foo.md'), '# Approved amended plan\n');
+    await g(['add', '.docs/plans/foo.md']);
+    await g(['commit', '-q', '-m', 'decide: approved plan amendment']);
+
+    const resolver = vi.fn().mockResolvedValue({ resolved: true });
+    const runner: StepRunner = {
+      run: vi.fn().mockResolvedValue({ success: true } satisfies StepRunResult),
+      resolveRebaseConflict: resolver,
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: repo,
+      daemon: true,
+      mode: 'auto',
+    });
+    const runRebaseStep = conductor as unknown as {
+      runRebaseStep(state: ConductState): Promise<StepRunResult>;
+    };
+
+    const result = await runRebaseStep.runRebaseStep(await (async () => {
+      const state = await readState(statePath);
+      if (!state.ok) throw new Error(state.error.message);
+      return state.value;
+    })());
+    const halt = await readFile(join(repo, '.pipeline/HALT'), 'utf8');
+
+    expect({ result, resolverCalls: resolver.mock.calls.length, halt }).toEqual({
+      result: { success: true },
+      resolverCalls: 0,
+      halt: expect.stringMatching(
+        /^protected-artifact seal error[\s\S]*audited reseal[\s\S]*do not run git rebase --continue/m,
+      ),
+    });
   });
 
   // ── Test 3 ───────────────────────────────────────────────────────────────
