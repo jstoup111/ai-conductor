@@ -1,5 +1,12 @@
 import type { StepName } from '../types/steps.js';
 
+// These steps retain exhaustive provider-policy placeholders for StepName
+// type safety, but execute entirely in-process and never dispatch a model.
+export const MODEL_FREE_ENGINE_STEPS = [
+  'wiring_check',
+  'test_suite',
+] as const satisfies readonly StepName[];
+
 // ────────────────────────────────────────────────────────────────────────────
 // Model-table metadata
 //
@@ -39,7 +46,7 @@ export const STEP_RATIONALE: Record<StepName, string> = {
   build_review:
     'Fresh-session grader judging a maker\'s diff for test tautology, scope creep, and root-cause fixes vs band-aids — adversarial code review demands the deepest reasoning tier, same class of judgement as prd_audit/code-review.',
   wiring_check:
-    'Deterministic reachability probe (git diff + import graph, Layer 1/2) between build_review and test_suite — mechanical evidence gathering, no generative judgement required.',
+    'Deterministic reachability probe (git diff + import graph, Layer 1/2) that joins test_suite before build_review — mechanical evidence gathering, no generative judgement required.',
   test_suite:
     'Mechanical aggregate test gate that obtains a current full-suite proof from the shared verifier before SHIP; no generative judgement required.',
   manual_test: 'Structured validation against stories — pattern-following.',

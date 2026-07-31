@@ -1139,17 +1139,9 @@ export async function applyRebaseVerdicts(
     }
   }
 
-  // build_review sits between build and manual_test — a build change must
-  // invalidate it too (it grades the diff that just changed), or the
-  // selector could jump straight to manual_test on a stale build_review
-  // verdict. Included unconditionally: even if build_review is disabled
-  // for this project the verdict file is inert, but when it IS enabled the
-  // stale state must exist before manual_test is re-selectable.
-  //
-  // wiring_check (Task 6) sits between build_review and manual_test — it
-  // asserts new code is actually reachable from an entry point, which a
-  // file-changing rebase can falsify just as easily as build_review's
-  // grading, so it must be invalidated the same way (Task 11).
+  // wiring_check and test_suite form the deterministic BUILD group after
+  // build; build_review follows their join. A file-changing rebase can stale
+  // any of those proofs, so each must be invalidated before SHIP can resume.
   // Task 6 (ADR-2026-07-20): when the feature's claimed surface (F) is
   // available, select the invalidation set via classifyGateInvalidation
   // instead of the fixed set — a delta that never touches the feature's own
@@ -1175,16 +1167,18 @@ export async function applyRebaseVerdicts(
       : ranManualTest
         ? ([
             'build',
-            'build_review',
             'wiring_check',
+            'test_suite',
+            'build_review',
             'manual_test',
             'prd_audit',
             'architecture_review_as_built',
           ] as StepName[])
         : ([
             'build',
-            'build_review',
             'wiring_check',
+            'test_suite',
+            'build_review',
             'prd_audit',
             'architecture_review_as_built',
           ] as StepName[]);

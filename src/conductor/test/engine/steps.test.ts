@@ -152,7 +152,7 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(true);
     });
 
-    it('wiring_check is a BUILD/gating member of the deterministic verification group', () => {
+    it('wiring_check is a BUILD/gating loop gate in the deterministic group after build', () => {
       const s = ALL_STEPS[13];
       expect(s.name).toBe('wiring_check');
       expect(s.phase).toBe('BUILD');
@@ -163,7 +163,7 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('test_suite is the other deterministic BUILD verification member', () => {
+    it('test_suite is a native non-disableable BUILD/gating loop gate in the deterministic group after build', () => {
       const s = ALL_STEPS[14];
       expect(s).toEqual({
         name: 'test_suite',
@@ -177,7 +177,7 @@ describe('engine/steps', () => {
       });
     });
 
-    it('build_review runs after the joined deterministic BUILD verification group', () => {
+    it('build_review is a BUILD/gating loop gate after the deterministic group join', () => {
       const s = ALL_STEPS[15];
       expect(s.name).toBe('build_review');
       expect(s.phase).toBe('BUILD');
@@ -257,7 +257,7 @@ describe('engine/steps', () => {
       expect(s.isCheckpoint).toBe(false);
     });
 
-    it('build → deterministic verification group → build_review → validation tail topology', () => {
+    it('build → wiring_check → test_suite → build_review → manual_test → prd_audit → architecture_review_as_built → retro → rebase → finish loop-tail topology', () => {
       const names = ALL_STEPS.map((s) => s.name);
       const tail = names.slice(names.indexOf('build'));
       expect(tail).toEqual([

@@ -1135,6 +1135,33 @@ owned_harness_link() {
   prior_harness_root "$target" >/dev/null 2>&1
 }
 
+# Remove catalog links for skills no longer shipped, but only when the
+# catalog's HARNESS.md proves a complete prior harness root and the link points
+# to that root's same-named skill. Foreign links and non-links are untouched.
+reconcile_obsolete_skill_links() {
+  local client=$1 skills_dir=$2
+  local prior_root candidate candidate_name skill supported current
+
+  prior_root=$(prior_harness_root "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
+  [ -n "$prior_root" ] || return 0
+
+  while IFS= read -r -d '' candidate; do
+    candidate_name="${candidate##*/}"
+    [ "$candidate_name" = "HARNESS.md" ] && continue
+    supported=false
+    for skill in "${SKILLS[@]}"; do
+      [ "$candidate_name" = "$skill" ] && supported=true && break
+    done
+    [ "$supported" = true ] && continue
+
+    current=$(readlink -f "$candidate" 2>/dev/null || echo "")
+    if [ "$current" = "${prior_root}/skills/${candidate_name}" ]; then
+      rm -- "$candidate" ||
+        warn "${client} skill: ${candidate_name} — obsolete symlink removal failed"
+    fi
+  done < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -type l -print0)
+}
+
 # Once the active Codex catalog is established in ~/.agents/skills, remove only
 # exact harness-owned links left at Codex's former discovery location. A prior
 # complete harness catalog is ownership proof here too: a legacy installation
@@ -1188,7 +1215,6 @@ install() {
   local installed=0
   local updated=0
   local skills_dir client skill source target current harness_target
-  local prior_harness prior_root candidate candidate_name supported
   for client in Claude Codex; do
     if [ "$client" = Claude ]; then
       skills_dir="$CLAUDE_SKILLS_DIR"
@@ -1196,31 +1222,7 @@ install() {
       skills_dir="$CODEX_SKILLS_DIR"
     fi
 
-    if [ "$client" = Codex ] && [ -L "${skills_dir}/HARNESS.md" ]; then
-      prior_harness=$(readlink -f "${skills_dir}/HARNESS.md" 2>/dev/null || echo "")
-      prior_root="${prior_harness%/HARNESS.md}"
-      if [ "$prior_harness" = "${prior_root}/HARNESS.md" ] &&
-         [ -f "${prior_root}/HARNESS.md" ] && [ -f "${prior_root}/VERSION" ] &&
-         [ -d "${prior_root}/skills" ]; then
-        while IFS= read -r -d '' candidate; do
-          candidate_name="${candidate##*/}"
-          [ "$candidate_name" = "HARNESS.md" ] && continue
-          supported=false
-          for skill in "${SKILLS[@]}"; do
-            [ "$candidate_name" = "$skill" ] && supported=true && break
-          done
-          [ "$supported" = true ] && continue
-          current=$(readlink -- "$candidate" 2>/dev/null || echo "")
-          if [[ "$current" != /* ]]; then
-            current="${candidate%/*}/${current}"
-          fi
-          current=$(realpath -m -- "$current" 2>/dev/null || echo "")
-          if [ "$current" = "${prior_root}/skills/${candidate_name}" ]; then
-            rm -- "$candidate" || warn "Codex skill: ${candidate_name} — obsolete symlink removal failed"
-          fi
-        done < <(find "$skills_dir" -mindepth 1 -maxdepth 1 -type l -print0)
-      fi
-    fi
+    reconcile_obsolete_skill_links "$client" "$skills_dir"
 
     for skill in "${SKILLS[@]}"; do
       source="${HARNESS_DIR}/skills/${skill}"

@@ -27,6 +27,7 @@ import { phaseForStep, resolveStepConfig } from '../../src/engine/resolved-confi
 import { escalateAttempt } from '../../src/engine/escalation.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { dispatchAttributionVerifier } from '../../src/engine/attribution-lane.js';
+import { MODEL_FREE_ENGINE_STEPS } from '../../src/engine/model-table-metadata.js';
 import { buildPinsJson, renderModelTable } from '../../src/tools/generate-model-table.js';
 import type { ComplexityTier, StepName } from '../../src/types/index.js';
 import type { EffortLevel, HarnessConfig, TierOverride } from '../../src/types/config.js';
@@ -522,7 +523,10 @@ describe('#902 generated provider documentation', () => {
     expect(table).toMatch(
       /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,
     );
-    expect(table.match(/\| autonomous engine \|/g)).toHaveLength(Object.keys(CLAUDE_MODELS).length);
+    expect(table.match(/\| autonomous engine \|/g)).toHaveLength(
+      Object.keys(CLAUDE_MODELS).length - MODEL_FREE_ENGINE_STEPS.length,
+    );
+    expect(table.match(/\| engine machinery \|/g)).toHaveLength(MODEL_FREE_ENGINE_STEPS.length);
 
     const pins = buildPinsJson();
     expect(pins.rebase).toEqual({ expected: 'opus' });

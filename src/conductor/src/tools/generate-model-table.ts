@@ -16,6 +16,7 @@ import {
 } from '../engine/provider-model-policy.js';
 import {
   STEP_RATIONALE,
+  MODEL_FREE_ENGINE_STEPS,
   EXTRA_MODEL_TABLE_ROWS,
   SKILL_STEP_MAP,
   PIN_EXEMPT_SKILLS,
@@ -304,15 +305,31 @@ export function buildEngineRows(
   claudePolicy: ProviderModelPolicy = CLAUDE_MODEL_POLICY,
   codexPolicy: ProviderModelPolicy = CODEX_MODEL_POLICY,
 ): ModelTableRow[] {
-  return (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => ({
-    name: stepDisplayName(step),
-    executionPath: 'autonomous engine',
-    claudeModel: renderTieredField(claudePolicy, 'Claude', step, 'model'),
-    claudeEffort: renderTieredField(claudePolicy, 'Claude', step, 'effort'),
-    codexModel: renderTieredField(codexPolicy, 'Codex', step, 'model'),
-    codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
-    why: STEP_RATIONALE[step],
-  }));
+  const modelFreeSteps = new Set<StepName>(MODEL_FREE_ENGINE_STEPS);
+
+  return (Object.keys(STEP_RATIONALE) as StepName[]).map((step) => {
+    if (modelFreeSteps.has(step)) {
+      return {
+        name: stepDisplayName(step),
+        executionPath: 'engine machinery',
+        claudeModel: '—',
+        claudeEffort: '—',
+        codexModel: '—',
+        codexEffort: '—',
+        why: STEP_RATIONALE[step],
+      };
+    }
+
+    return {
+      name: stepDisplayName(step),
+      executionPath: 'autonomous engine',
+      claudeModel: renderTieredField(claudePolicy, 'Claude', step, 'model'),
+      claudeEffort: renderTieredField(claudePolicy, 'Claude', step, 'effort'),
+      codexModel: renderTieredField(codexPolicy, 'Codex', step, 'model'),
+      codexEffort: renderTieredField(codexPolicy, 'Codex', step, 'effort'),
+      why: STEP_RATIONALE[step],
+    };
+  });
 }
 
 const CLAUDE_NATIVE_MODEL_ALIAS = /\b(?:haiku|sonnet|opus|fable)\b/i;

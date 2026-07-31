@@ -406,6 +406,58 @@ export interface BranchExecutorDeps {
   onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
 }
 
+/** Dependencies for an engine-native group branch (no step/provider dispatch). */
+export interface NativeBranchExecutorDeps {
+  onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
+}
+
+const NATIVE_BRANCH_FAILURE_REASON_LIMIT = 1_024;
+
+function nativeBranchFailureReason(error: unknown): string {
+  const detail = error instanceof Error
+    ? error.message
+    : typeof error === "string"
+      ? error
+      : "unknown error";
+  return detail.length <= NATIVE_BRANCH_FAILURE_REASON_LIMIT
+    ? detail
+    : `${detail.slice(0, NATIVE_BRANCH_FAILURE_REASON_LIMIT - 3)}...`;
+}
+
+/**
+ * Executes one injected engine-native branch and maps its result through the
+ * shared branch-outcome/event contracts used by dispatched group members.
+ */
+export async function runNativeGroupBranch(
+  member: GroupMember,
+  execute: () => Promise<StepRunResult>,
+  deps: NativeBranchExecutorDeps = {},
+): Promise<BranchOutcome> {
+  await deps.onMemberEvent?.({
+    type: "group_member_step",
+    member: member.name,
+    skill: member.skill,
+    phase: "dispatch",
+  });
+  let outcome: BranchOutcome;
+  try {
+    const result = await execute();
+    outcome = result.success
+      ? makeVerdictOutcome("pass", result.authentication)
+      : makeNoVerdictOutcome(result.output ?? "native branch failed", result.authentication);
+  } catch (error) {
+    outcome = makeNoVerdictOutcome(nativeBranchFailureReason(error));
+  }
+  await deps.onMemberEvent?.({
+    type: "group_member_step",
+    member: member.name,
+    skill: member.skill,
+    phase: "result",
+    outcome: classifyOutcome(outcome),
+  });
+  return outcome;
+}
+
 /**
  * Runs a single concurrent-group branch to completion: creates one detached
  * provider-session scope when the runner supports provider routing, otherwise

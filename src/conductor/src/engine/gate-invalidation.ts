@@ -44,6 +44,9 @@ export type GateSurfaceKind = 'feature-runtime' | 'all-runtime' | 'any-codetest'
 export const GATE_SURFACE: Record<string, GateSurfaceKind> = {
   // Grades the diff; any code/test path (including test-only) re-grades it.
   build_review: 'any-codetest',
+  // Aggregate verification proves the exact tree; any code/test delta makes
+  // that proof stale, while an empty delta preserves it.
+  test_suite: 'any-codetest',
   wiring_check: 'all-runtime',
   // Runtime behavior can be affected by foreign main-side runtime changes;
   // only a test/docs-only delta is safe to preserve (ADR-2026-07-20).
@@ -100,7 +103,7 @@ export function partitionDelta(D: string[], F: string[]): DeltaPartition {
  *   iff `featureSrc` is empty.
  * - 'all-runtime' (wiring_check, manual_test): preserved iff both
  *   `featureSrc` and `foreignSrc` are empty.
- * - 'any-codetest' (build_review): preserved iff `D` is entirely empty
+ * - 'any-codetest' (build_review, test_suite): preserved iff `D` is entirely empty
  *   (test ∪ featureSrc ∪ foreignSrc all empty).
  */
 export function classifyGateInvalidation(
