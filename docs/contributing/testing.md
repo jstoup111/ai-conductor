@@ -281,16 +281,25 @@ gate on top. There is no `npm run smoke` — run each file directly.
 
 ## Bash test scripts
 
-33 `.sh` files live under `test/`. Only three ever execute:
+40 `.sh` files live under `test/`. Only six ever execute:
 
 - `test/test_harness_integrity.sh`, run by CI and by the self-host release gate. See
   [validation](validation.md).
 - `test/test_ci_detect_docs_only.sh` and `test/test_provider_skill_contracts.sh`, executed by the
   integrity suite as checks 13 and 14.
+- `test/test_docs_navigation.sh` and `test/test_docs_pages_smoke.sh`, executed by the integrity
+  suite as check 17. `test_docs_navigation.sh` in turn shells out to `test/check_docs_navigation.sh`,
+  the offline contract checker it validates against fixture and real-tree cases.
 
-> **Known limitation.** The other 30 scripts — `test_bin_update.sh`, `test_conduct_worktree.sh`, the five
+`test/docs_pages.smoke.test.sh` is a real, opt-in Pages probe — run it by hand after a default-branch
+deployment; it is never invoked from integrity or CI. `test/run_browsable_documentation_site_acceptance.sh`
+runs `test_docs_navigation.sh` and `test_docs_pages_smoke.sh` together as the deterministic acceptance
+suite for the hosted documentation site story; nothing invokes it automatically.
+
+> **Known limitation.** The rest — `test_bin_update.sh`, `test_conduct_worktree.sh`, the five
 > `test_install_*.sh`, the ten `test_examples_*.sh`, `test_skill_pipeline_contract.sh`,
-> `test_release_unreleased_state.sh` and the rest — are statically checked only: `bash -n` by integrity
+> `test_release_unreleased_state.sh`, `docs_pages.smoke.test.sh`, and
+> `run_browsable_documentation_site_acceptance.sh` — are statically checked only: `bash -n` by integrity
 > check 1 and ShellCheck by check 1b. Nothing *executes* them, in CI or locally, and no documented
 > command runs them as a suite. Static analysis raises the floor but does not make them tests: a
 > behavioral regression in `bin/install`, `bin/update`, or `bin/setup` is still caught by no automated
