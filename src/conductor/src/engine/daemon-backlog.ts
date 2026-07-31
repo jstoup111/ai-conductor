@@ -1,5 +1,5 @@
 import { execFile as execFileCb } from 'node:child_process';
-import { basename, isAbsolute, relative, join as pathJoin } from 'node:path';
+import { basename, join as pathJoin } from 'node:path';
 import { promisify } from 'node:util';
 import { rm } from 'node:fs/promises';
 import type { BacklogItem } from './daemon.js';
@@ -19,6 +19,7 @@ import type { BlockerResolver, BlockerVerdict } from './blocker-resolver.js';
 import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
 import type { BacklogTreeSource } from './backlog-tree-source.js';
+import { resolvePlanStoriesPath } from './plan-stories-reference.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -736,7 +737,7 @@ export async function discoverBacklog(
     const planContent = await tree.readFile(planRel);
     if (planContent === null) continue;
 
-    const storiesRel = await resolveStoriesRef(projectRoot, tree, slug, planContent);
+    const storiesRel = await resolveStoriesRef(tree, slug, planContent);
     if (!storiesRel) continue; // no stories on the base branch → not eligible
 
     if (await isProcessed(slug)) continue;
@@ -1070,35 +1071,13 @@ function unownedDefaultedMessage(slug: string, defaultedOwner: string): string {
  * present on the base branch.
  */
 async function resolveStoriesRef(
-  projectRoot: string,
   tree: BacklogTreeSource,
   slug: string,
   planContent: string,
 ): Promise<string | null> {
-  const m = planContent.match(/^\s*\*\*Stories:\*\*\s*`?([^\s`]+)`?/im);
-  if (m) {
-    const ref = toRepoRelative(projectRoot, m[1]);
-    if (ref && (await tree.readFile(ref)) !== null) return ref;
-  }
-
-  // Fallback: a stories file with the same stem as the plan.
-  const candidate = `.docs/stories/${slug}.md`;
-  if ((await tree.readFile(candidate)) !== null) return candidate;
-
-  return null;
-}
-
-/**
- * Normalize a `**Stories:**` reference to a repo-relative POSIX path suitable for
- * `git show <branch>:<path>`. Absolute paths under projectRoot are made relative;
- * absolute paths outside it are rejected (null). Relative paths pass through.
- */
-function toRepoRelative(projectRoot: string, ref: string): string | null {
-  let rel = ref;
-  if (isAbsolute(ref)) {
-    const r = relative(projectRoot, ref);
-    if (r.startsWith('..')) return null; // outside the repo → not a base-branch path
-    rel = r;
-  }
-  return rel.split('\\').join('/'); // git tree paths use forward slashes
+  const candidate = resolvePlanStoriesPath(
+    `.docs/plans/${slug}.md`,
+    planContent,
+  );
+  return candidate && (await tree.readFile(candidate)) !== null ? candidate : null;
 }

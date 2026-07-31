@@ -822,6 +822,38 @@ describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', (
 });
 
 describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
+  it('rejects a plan whose Stories link does not resolve to the selected stories artifact', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      PLAN_WITH_DEPS.replace(
+        '.docs/stories/dep-bump.md',
+        '[missing stories](../stories/not-dep-bump.md)',
+      ),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/Stories reference.*selected stories artifact/i);
+  });
+
+  it('rejects an absolute Stories reference because it cannot survive checkout relocation', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      PLAN_WITH_DEPS.replace(
+        '.docs/stories/dep-bump.md',
+        join(dir, '.docs', 'stories', 'dep-bump.md'),
+      ),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/Stories reference.*selected stories artifact/i);
+  });
+
   it('rejects a product-track worktree whose .docs/specs/ holds only a legacy spec committed on main', async () => {
     // Legacy spec committed on `main` BEFORE the worktree is created — not
     // attributable to the idea. Product track defaults (no track marker), so
