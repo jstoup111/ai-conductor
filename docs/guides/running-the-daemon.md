@@ -48,6 +48,9 @@ either prompts to run `bin/install --update` (interactive) or throws (non-intera
 install means newly added skills are unregistered and would fail silently mid-build.
 
 On success it creates a tmux session and auto-attaches **read-only**. Detach with `Ctrl-b d`.
+You may invoke daemon management or a direct daemon run from any directory inside the repository:
+the daemon resolves the main repository root first, so runtime files always live in the root
+`.daemon/` directory rather than in a nested package or linked worktree.
 
 | Variant | Result |
 | --- | --- |

@@ -194,6 +194,18 @@ export async function buildDaemonModeOptions(
 }
 
 /**
+ * Daemon state belongs to the main repository, never to the package or linked
+ * worktree directory from which the CLI happened to be invoked.
+ */
+export async function resolveDaemonProjectRoot(startCwd: string): Promise<string> {
+  const resolved = await resolveMainRepoRoot(startCwd);
+  if ('error' in resolved) {
+    throw new Error(resolved.error);
+  }
+  return resolved.root;
+}
+
+/**
  * Construct an OtelVisualizer with production wiring (FR-8).
  *
  * Bridges `onWarning` to a `renderer_error` ConductorEvent on the shared bus so
@@ -641,7 +653,8 @@ async function main(): Promise<void> {
   const daemonSupervisorCmd = detectDaemonSupervisorCommand(process.argv);
   if (daemonSupervisorCmd) {
     const { dispatchDaemonSupervisor } = await import('./engine/daemon-supervisor-cli.js');
-    const code = await dispatchDaemonSupervisor(daemonSupervisorCmd);
+    const projectRoot = await resolveDaemonProjectRoot(process.cwd());
+    const code = await dispatchDaemonSupervisor(daemonSupervisorCmd, { cwd: projectRoot });
     process.exit(code);
   }
 
@@ -665,7 +678,7 @@ async function main(): Promise<void> {
   const daemonCmd = detectDaemonCommand(process.argv);
   if (daemonCmd) {
     const { runDaemonMode } = await import('./daemon-cli.js');
-    const projectRoot = process.cwd();
+    const projectRoot = await resolveDaemonProjectRoot(process.cwd());
     const daemonModeOptions = await buildDaemonModeOptions(projectRoot, daemonCmd);
     await runDaemonMode(daemonModeOptions);
     process.exit(0);

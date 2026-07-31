@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Anchor daemon management and direct launches at the main repository root, preventing an invocation
+  from a nested package or linked worktree from creating a second `.daemon/` state tree whose log
+  churn trips the self-host live-checkout boundary ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Report protected-artifact seal refusals encountered before a REKICK rebase as seal errors with
   audited resealing recovery, instead of falsely labeling them rebase conflicts and prescribing
   `git rebase --continue`; document resealing after approved mid-build plan or architecture changes.

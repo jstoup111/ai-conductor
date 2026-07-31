@@ -313,7 +313,9 @@ conduct-ts daemon resume [<name>…] [--all]
 ```
 
 These drive a tmux-hosted supervisor. All exit 0 on success and 1 on any error, including tmux not
-being installed.
+being installed. Management verbs and direct daemon runs resolve the main repository root from the
+current directory before launch; daemon logs, PID files, and other runtime state therefore stay
+under the root `.daemon/` directory even when invoked from a nested package or linked worktree.
 
 | Verb | Behavior |
 | --- | --- |
