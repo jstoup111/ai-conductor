@@ -199,6 +199,27 @@ record "source landing links every top-level documentation taxonomy" \
     grep -Fxq -- '- [Runbooks](runbooks/)' "$SOURCE_LANDING" && \
     grep -Fxq -- '- [Contributing](contributing/)' "$SOURCE_LANDING" && echo 0 || echo 1 )"
 
+source_has_top_level_destination() {
+  local path=$1
+  local title=$2
+  local order=$3
+  local has_children=${4:-false}
+
+  [ -f "$REPO_ROOT/docs/$path" ] && \
+    grep -Fxq "title: $title" "$REPO_ROOT/docs/$path" && \
+    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/$path" && \
+    ! grep -q '^parent:' "$REPO_ROOT/docs/$path" && \
+    { [ "$has_children" = false ] || grep -Fxq 'has_children: true' "$REPO_ROOT/docs/$path"; }
+}
+
+record "source top-level destinations have unique titles and stable order" \
+  "$( source_has_top_level_destination 'quickstart.md' 'Quickstart' 2 && \
+    source_has_top_level_destination 'guides/index.md' 'Guides' 3 true && \
+    source_has_top_level_destination 'reference/index.md' 'Reference' 4 true && \
+    source_has_top_level_destination 'explanation/index.md' 'Explanation' 5 true && \
+    source_has_top_level_destination 'runbooks/index.md' 'Runbooks' 6 true && \
+    source_has_top_level_destination 'contributing/index.md' 'Contributing' 7 true && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
