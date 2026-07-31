@@ -557,6 +557,71 @@ describe('conductor auth-park: daemon-token mode', () => {
     }).toEqual({ buildAttempts: [1, 1, 2], readinessCalls: 1 });
   });
 
+  it.each([
+    { label: 'initial serial adapter', step: 'build' as const, completed: {} },
+    {
+      label: 'judged adapter',
+      step: 'build_review' as const,
+      completed: { build: 'done', wiring_check: 'done', test_suite: 'done' } as Partial<ConductState>,
+    },
+  ])('keeps the selected source and actual non-auth result authoritative after a probe-failed $label', async ({ step, completed }) => {
+    await writeState(statePath, { ...READY_STATE, ...completed });
+    const selectedReadiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const fallbackReadiness = vi.fn();
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: selectedReadiness },
+        policy: CODEX_MODEL_POLICY, builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      },
+      {
+        key: 'claude',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: fallbackReadiness },
+        policy: CLAUDE_MODEL_POLICY, builtIn: true,
+        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+      },
+    ]);
+    let calls = 0;
+    const runner: StepRunner = { run: vi.fn(async (currentStep) => {
+      if (currentStep !== step) return { success: true };
+      calls += 1;
+      if (calls === 1) return codexCachedLoginFailure();
+      if (calls === 2) {
+        return {
+          success: false,
+          output: 'actual non-auth result',
+          actualProvider: 'codex',
+          authentication: { provider: 'codex', source: 'cached-login', state: 'ready' },
+        };
+      }
+      return { success: true, actualProvider: 'codex' };
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: step, mode: 'auto', maxRetries: 3, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
+    });
+
+    await conductor.run();
+
+    expect({
+      attempts: (runner.run as ReturnType<typeof vi.fn>).mock.calls
+        .filter(([currentStep]) => currentStep === step).map(([, , options]) => options?.attempt),
+      selectedReadinessCalls: selectedReadiness.mock.calls.length,
+      fallbackReadinessCalls: fallbackReadiness.mock.calls.length,
+    }).toEqual({
+      attempts: [1, 1, 2],
+      selectedReadinessCalls: 1,
+      fallbackReadinessCalls: 0,
+    });
+  });
+
   it('grouped dispatch timeout preserves completed siblings and never redispatches or falls back', async () => {
     await writeState(statePath, {
       ...READY_STATE, build: 'done', build_review: 'done', wiring_check: 'done', test_suite: 'done',
