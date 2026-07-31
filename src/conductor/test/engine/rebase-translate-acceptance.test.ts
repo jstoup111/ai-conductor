@@ -26,7 +26,7 @@
  * path, which remain live machinery.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { execFile as execFileCb } from 'node:child_process';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -44,6 +44,33 @@ import { resumeRebaseFirst, REKICK_SENTINEL } from '../../src/engine/daemon-reki
 import { createProtectedArtifactSeal } from '../../src/engine/protected-artifact-seal.js';
 
 const execFile = promisify(execFileCb);
+const indeterminateMergeTreeRepos = vi.hoisted(() => new Set<string>());
+
+// The normal finish policy skips a clean prospective merge. These specs need
+// the existing actual-rebase path, so only its read-only assessment is made
+// indeterminate; every other Git command, including `git rebase`, stays real.
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: any[]) => {
+      const [command, gitArgs, options] = args;
+      if (
+        command === 'git' &&
+        Array.isArray(gitArgs) &&
+        gitArgs[0] === 'merge-tree' &&
+        indeterminateMergeTreeRepos.has(String(options?.cwd ?? ''))
+      ) {
+        return Promise.resolve({
+          exitCode: 128,
+          stdout: '',
+          stderr: 'fixture: prospective merge assessment unavailable',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
+      return (actual.execa as (...argv: any[]) => ReturnType<typeof actual.execa>)(...args);
+    },
+  };
+});
 
 async function fileExists(p: string): Promise<boolean> {
   return access(p).then(
@@ -71,7 +98,10 @@ async function seedPreRebaseState(statePath: string): Promise<void> {
 }
 
 /** Drives the finish-time site: a real `Conductor.run({ fromStep: 'rebase' })`. */
-async function runFinishTimeRebase(repo: string): Promise<void> {
+async function runFinishTimeRebase(
+  repo: string,
+  { forceIndeterminateProspectiveMerge = false }: { forceIndeterminateProspectiveMerge?: boolean } = {},
+): Promise<void> {
   const statePath = join(repo, 'conduct-state.json');
   await seedPreRebaseState(statePath);
   const baselineCommit = (
@@ -94,7 +124,12 @@ async function runFinishTimeRebase(repo: string): Promise<void> {
     mode: 'auto',
     fromStep: 'rebase',
   } as never);
-  await conductor.run();
+  if (forceIndeterminateProspectiveMerge) indeterminateMergeTreeRepos.add(repo);
+  try {
+    await conductor.run();
+  } finally {
+    indeterminateMergeTreeRepos.delete(repo);
+  }
 }
 
 interface Scratch {
@@ -221,7 +256,7 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
       const { g, c1Sha, c2Sha } = scratch;
       await seedStores(repo, c1Sha, c2Sha);
 
-      await runFinishTimeRebase(repo);
+      await runFinishTimeRebase(repo, { forceIndeterminateProspectiveMerge: true });
 
       const newC1Sha = await shaForSubject(g, 'feat', 'feat: a1');
       const newC2Sha = await shaForSubject(g, 'feat', 'feat: work');
@@ -339,7 +374,7 @@ describe('rebase-translate acceptance (#535) — real call sites, real scratch g
         JSON.stringify(evidence, null, 2),
       );
 
-      await runFinishTimeRebase(repo);
+      await runFinishTimeRebase(repo, { forceIndeterminateProspectiveMerge: true });
 
       // Sanity: the dup.ts commit really was dropped by git (equivalent
       // upstream) — a genuine patch-id-unmatched pre-image, not a test bug.
