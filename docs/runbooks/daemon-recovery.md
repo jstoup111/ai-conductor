@@ -221,6 +221,10 @@ The feature is quarantined: `.pipeline/QUARANTINE` in the worktree and a
 `wip/setup-quarantine-<slug>` branch holding the evidence. Fix `bin/setup` in the repo, not in
 the worktree — every new worktree re-runs it.
 
+Setup triage treats Docker services as shared across worktrees. It starts missing containers with
+`docker compose up -d --no-recreate`; it does not stop, restart, recreate, or tear down containers
+that are already running.
+
 #### A feature that already shipped keeps being re-dispatched
 
 That is not a daemon fault. It is a missing shipped record — see

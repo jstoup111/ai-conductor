@@ -3289,6 +3289,8 @@ TIER: M`,
       expect(opts.prompt).toContain('npm ERR! Something went wrong');
       // System prompt must be present
       expect(opts.systemPrompt).toBeTruthy();
+      expect(opts.systemPrompt).toContain('docker compose up -d --no-recreate');
+      expect(opts.systemPrompt).toContain('Do not stop, restart, or tear down Docker');
     });
 
     it('respects the AI_CONDUCTOR_NO_REAL_EXEC kill-switch in tests', async () => {
