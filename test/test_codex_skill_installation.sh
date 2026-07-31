@@ -106,6 +106,20 @@ snapshot_current_catalog() {
   done < <(find "$catalog" -mindepth 1 -maxdepth 1 -print | sort)
 }
 
+install_complete_prior_catalog() {
+  local fake_home=$1
+  local catalog=$2
+  local source skill
+
+  mkdir -p "$fake_home/$catalog"
+  ln -s "$OLD_CHECKOUT/HARNESS.md" "$fake_home/$catalog/HARNESS.md"
+  for source in "$OLD_CHECKOUT"/skills/*/SKILL.md; do
+    [ -f "$source" ] || continue
+    skill=$(basename "$(dirname "$source")")
+    ln -s "$OLD_CHECKOUT/skills/$skill" "$fake_home/$catalog/$skill"
+  done
+}
+
 legacy_catalog_has_no_owned_entries() {
   local fake_home=$1
   local skill source target
@@ -151,6 +165,8 @@ cp "$CHECKOUT/HARNESS.md" "$CHECKOUT/VERSION" "$OLD_CHECKOUT/"
 printf '%s\n' 'old workflow revision' > "$OLD_CHECKOUT/skills/tdd/SKILL.md"
 mkdir -p "$OLD_CHECKOUT/skills/retired-workflow"
 printf '%s\n' 'retired workflow revision' > "$OLD_CHECKOUT/skills/retired-workflow/SKILL.md"
+mkdir -p "$OLD_CHECKOUT/skills/test-suite"
+printf '%s\n' 'obsolete test-suite revision' > "$OLD_CHECKOUT/skills/test-suite/SKILL.md"
 ln -s "$OLD_CHECKOUT/HARNESS.md" "$UPDATE_HOME/.agents/skills/HARNESS.md"
 ln -s "$OLD_CHECKOUT/skills/tdd" "$UPDATE_HOME/.agents/skills/tdd"
 ln -s "$OLD_CHECKOUT/skills/retired-workflow" "$UPDATE_HOME/.agents/skills/retired-workflow"
@@ -168,6 +184,71 @@ check 'updated catalog matches the complete current source catalog' \
   owned_catalog_is_current "$UPDATE_HOME"
 check 'update removes an obsolete current-scope skill owned by the prior harness checkout' \
   test ! -e "$UPDATE_HOME/.agents/skills/retired-workflow"
+
+# Task 17: the removed test-suite skill must be cleaned from both supported
+# discovery catalogs only when a complete prior harness root proves ownership.
+OBSOLETE_SKILL_HOME="$TMP_ROOT/home-obsolete-test-suite"
+install_complete_prior_catalog "$OBSOLETE_SKILL_HOME" ".claude/skills"
+install_complete_prior_catalog "$OBSOLETE_SKILL_HOME" ".agents/skills"
+OBSOLETE_UPDATES_OK=1
+run_install "$OBSOLETE_SKILL_HOME" --update --providers claude,codex \
+  >"$TMP_ROOT/obsolete-test-suite-1.out" 2>&1 \
+  || OBSOLETE_UPDATES_OK=0
+check 'update removes the owned obsolete test-suite link from Claude discovery' \
+  test ! -e "$OBSOLETE_SKILL_HOME/.claude/skills/test-suite"
+check 'update removes the owned obsolete test-suite link from Codex discovery' \
+  test ! -e "$OBSOLETE_SKILL_HOME/.agents/skills/test-suite"
+check 'update preserves an unrelated current Claude skill while removing test-suite' \
+  test -r "$OBSOLETE_SKILL_HOME/.claude/skills/tdd/SKILL.md"
+check 'update preserves an unrelated current Codex skill while removing test-suite' \
+  test -r "$OBSOLETE_SKILL_HOME/.agents/skills/tdd/SKILL.md"
+run_install "$OBSOLETE_SKILL_HOME" --update --providers claude,codex \
+  >"$TMP_ROOT/obsolete-test-suite-2.out" 2>&1 \
+  || OBSOLETE_UPDATES_OK=0
+check 'repeated update is idempotent when obsolete test-suite links are already absent' \
+  test "$OBSOLETE_UPDATES_OK" -eq 1
+check 'repeated update leaves obsolete test-suite absent from both catalogs' \
+  bash -c 'test ! -e "$1/.claude/skills/test-suite" && test ! -e "$1/.agents/skills/test-suite"' \
+  _ "$OBSOLETE_SKILL_HOME"
+
+FOREIGN_OBSOLETE_HOME="$TMP_ROOT/home-foreign-test-suite"
+install_complete_prior_catalog "$FOREIGN_OBSOLETE_HOME" ".claude/skills"
+install_complete_prior_catalog "$FOREIGN_OBSOLETE_HOME" ".agents/skills"
+FOREIGN_TEST_SUITE_ROOT="$TMP_ROOT/foreign-test-suite"
+mkdir -p "$FOREIGN_TEST_SUITE_ROOT"
+printf '%s\n' 'operator-owned test-suite skill' > "$FOREIGN_TEST_SUITE_ROOT/SKILL.md"
+rm -f "$FOREIGN_OBSOLETE_HOME/.claude/skills/test-suite" \
+  "$FOREIGN_OBSOLETE_HOME/.agents/skills/test-suite"
+ln -s "$FOREIGN_TEST_SUITE_ROOT" "$FOREIGN_OBSOLETE_HOME/.claude/skills/test-suite"
+printf '%s\n' 'operator-owned Codex test-suite file' \
+  > "$FOREIGN_OBSOLETE_HOME/.agents/skills/test-suite"
+FOREIGN_TEST_SUITE_LINK=$(readlink "$FOREIGN_OBSOLETE_HOME/.claude/skills/test-suite")
+FOREIGN_TEST_SUITE_HASH=$(sha256sum "$FOREIGN_OBSOLETE_HOME/.agents/skills/test-suite" | awk '{print $1}')
+FOREIGN_OBSOLETE_UPDATE_OK=1
+run_install "$FOREIGN_OBSOLETE_HOME" --update --providers claude,codex \
+  >"$TMP_ROOT/foreign-test-suite-update.out" 2>&1 \
+  || FOREIGN_OBSOLETE_UPDATE_OK=0
+check 'update completes while preserving foreign test-suite collisions' \
+  test "$FOREIGN_OBSOLETE_UPDATE_OK" -eq 1
+check 'update preserves a foreign test-suite symlink in Claude discovery' \
+  test "$(readlink "$FOREIGN_OBSOLETE_HOME/.claude/skills/test-suite")" = "$FOREIGN_TEST_SUITE_LINK"
+check 'update preserves a foreign test-suite regular file in Codex discovery' \
+  test "$(sha256sum "$FOREIGN_OBSOLETE_HOME/.agents/skills/test-suite" | awk '{print $1}')" = \
+  "$FOREIGN_TEST_SUITE_HASH"
+check 'foreign test-suite collisions do not disturb unrelated current skills' \
+  bash -c 'test -r "$1/.claude/skills/tdd/SKILL.md" && test -r "$1/.agents/skills/tdd/SKILL.md"' \
+  _ "$FOREIGN_OBSOLETE_HOME"
+
+SPLIT_ANCHOR_HOME="$TMP_ROOT/home-split-anchor-test-suite"
+install_complete_prior_catalog "$SPLIT_ANCHOR_HOME" ".claude/skills"
+mkdir -p "$CHECKOUT/skills/test-suite"
+rm -f "$SPLIT_ANCHOR_HOME/.claude/skills/test-suite"
+ln -s "$CHECKOUT/skills/test-suite" "$SPLIT_ANCHOR_HOME/.claude/skills/test-suite"
+run_install "$SPLIT_ANCHOR_HOME" --update --providers claude \
+  >"$TMP_ROOT/split-anchor-test-suite-update.out" 2>&1
+check 'update preserves an obsolete link that does not match its catalog ownership anchor' \
+  test "$(readlink "$SPLIT_ANCHOR_HOME/.claude/skills/test-suite")" = \
+  "$CHECKOUT/skills/test-suite"
 
 # Legacy ownership uses the same complete-prior-harness proof as the active
 # catalog. An older, valid legacy catalog must converge, while the foreign
@@ -432,6 +513,87 @@ check 'Unreleased Codex installation notes name the active catalog, legacy scope
     && grep -q "bash migration" "$2" \
     && grep -A 2 "bash migration" "$2" | grep -q "./bin/install --update"' \
   _ "$CODEX_UNRELEASED" "$HARNESS_DIR/CHANGELOG.md"
+
+# Task 18: the published migration is executable, not merely descriptive.
+# Execute only the Unreleased fenced migration in an isolated checkout/home.
+MIGRATION_SCRIPT="$TMP_ROOT/unreleased-migration.sh"
+awk '
+  /^## \[Unreleased\]$/ { in_unreleased=1; next }
+  in_unreleased && /^## \[/ { exit }
+  in_unreleased && /^```bash migration$/ { in_migration=1; next }
+  in_migration && /^```$/ { exit }
+  in_migration { print }
+' "$HARNESS_DIR/CHANGELOG.md" > "$MIGRATION_SCRIPT"
+
+MIGRATION_HOME="$TMP_ROOT/home-changelog-migration"
+install_complete_prior_catalog "$MIGRATION_HOME" ".claude/skills"
+install_complete_prior_catalog "$MIGRATION_HOME" ".agents/skills"
+MIGRATION_FOREIGN_ROOT="$TMP_ROOT/migration-foreign-skill"
+mkdir -p "$MIGRATION_FOREIGN_ROOT"
+printf '%s\n' 'operator-owned workflow' > "$MIGRATION_FOREIGN_ROOT/SKILL.md"
+ln -s "$MIGRATION_FOREIGN_ROOT" "$MIGRATION_HOME/.claude/skills/operator-workflow"
+printf '%s\n' 'operator-owned Codex workflow' \
+  > "$MIGRATION_HOME/.agents/skills/operator-workflow"
+MIGRATION_FOREIGN_LINK=$(readlink "$MIGRATION_HOME/.claude/skills/operator-workflow")
+MIGRATION_FOREIGN_HASH=$(sha256sum \
+  "$MIGRATION_HOME/.agents/skills/operator-workflow" | awk '{print $1}')
+MIGRATION_VERSION_HASH=$(sha256sum "$CHECKOUT/VERSION" | awk '{print $1}')
+MIGRATION_EXTERNAL_CALLS="$TMP_ROOT/migration-external-calls"
+MIGRATION_STUBS="$TMP_ROOT/migration-stubs"
+mkdir -p "$MIGRATION_STUBS"
+for tool in curl wget; do
+  printf '#!/usr/bin/env bash\nprintf "%s called\\n" >> %q\nexit 91\n' "$tool" \
+    "$MIGRATION_EXTERNAL_CALLS" > "$MIGRATION_STUBS/$tool"
+  chmod +x "$MIGRATION_STUBS/$tool"
+done
+printf '#!/usr/bin/env bash\nroot=%q\nlog=%q\nif [ "$1" = "-C" ] && [ "$2" = "$root" ] && [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ] && [ "$6" = "HEAD" ] && [ "$#" -eq 6 ]; then\n  printf "allowed describe\\n" >> "$log"\n  exit 1\nfi\nif [ "$1" = "-C" ] && [ "$2" = "$root" ] && [ "$3" = "rev-parse" ] && [ "$4" = "--short" ] && [ "$5" = "HEAD" ] && [ "$#" -eq 5 ]; then\n  printf "allowed rev-parse\\n" >> "$log"\n  printf "deadbee\\n"\n  exit 0\nfi\nprintf "forbidden git %%s\\n" "$*" >> "$log"\nexit 91\n' \
+  "$CHECKOUT" "$MIGRATION_EXTERNAL_CALLS" > "$MIGRATION_STUBS/git"
+chmod +x "$MIGRATION_STUBS/git"
+
+MIGRATION_RUNS_OK=1
+grep -Eq '^[[:space:]]*\./bin/install --update([[:space:]]|$)' \
+  "$MIGRATION_SCRIPT" || MIGRATION_RUNS_OK=0
+(
+  cd "$CHECKOUT" || exit 1
+  HOME="$MIGRATION_HOME" PATH="$MIGRATION_STUBS:$STUBS:/usr/bin:/bin" \
+    timeout 15s bash "$MIGRATION_SCRIPT" </dev/null
+) >"$TMP_ROOT/changelog-migration-1.out" 2>&1 || MIGRATION_RUNS_OK=0
+check 'Unreleased migration removes the exactly-owned Claude test-suite link' \
+  test ! -e "$MIGRATION_HOME/.claude/skills/test-suite"
+check 'Unreleased migration removes the exactly-owned Codex test-suite link' \
+  test ! -e "$MIGRATION_HOME/.agents/skills/test-suite"
+check 'Unreleased migration preserves a foreign Claude skill' \
+  test "$(readlink "$MIGRATION_HOME/.claude/skills/operator-workflow")" = \
+  "$MIGRATION_FOREIGN_LINK"
+check 'Unreleased migration preserves a foreign Codex file' \
+  test "$(sha256sum "$MIGRATION_HOME/.agents/skills/operator-workflow" | awk '{print $1}')" = \
+  "$MIGRATION_FOREIGN_HASH"
+
+ln -s "$MIGRATION_FOREIGN_ROOT" "$MIGRATION_HOME/.claude/skills/test-suite"
+printf '%s\n' 'operator-owned Codex test-suite collision' \
+  > "$MIGRATION_HOME/.agents/skills/test-suite"
+MIGRATION_FOREIGN_TEST_SUITE_HASH=$(sha256sum \
+  "$MIGRATION_HOME/.agents/skills/test-suite" | awk '{print $1}')
+(
+  cd "$CHECKOUT" || exit 1
+  HOME="$MIGRATION_HOME" PATH="$MIGRATION_STUBS:$STUBS:/usr/bin:/bin" \
+    timeout 15s bash "$MIGRATION_SCRIPT" </dev/null
+) >"$TMP_ROOT/changelog-migration-2.out" 2>&1 || MIGRATION_RUNS_OK=0
+check 'Unreleased migration is repeat-idempotent in the isolated home' \
+  test "$MIGRATION_RUNS_OK" -eq 1
+check 'repeated migration preserves a foreign Claude test-suite symlink' \
+  test "$(readlink "$MIGRATION_HOME/.claude/skills/test-suite")" = \
+  "$MIGRATION_FOREIGN_ROOT"
+check 'repeated migration preserves a foreign Codex test-suite file' \
+  test "$(sha256sum "$MIGRATION_HOME/.agents/skills/test-suite" | awk '{print $1}')" = \
+  "$MIGRATION_FOREIGN_TEST_SUITE_HASH"
+check 'migration uses only read-only git version detection and no network clients' \
+  bash -c '[ "$(grep -c "^allowed describe$" "$1")" -eq 2 ] \
+    && ! grep -qE "^(forbidden git|curl called|wget called)" "$1"' \
+  _ "$MIGRATION_EXTERNAL_CALLS"
+check 'migration leaves VERSION unchanged' \
+  test "$(sha256sum "$CHECKOUT/VERSION" | awk '{print $1}')" = \
+  "$MIGRATION_VERSION_HASH"
 
 printf '\nCodex installation acceptance: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

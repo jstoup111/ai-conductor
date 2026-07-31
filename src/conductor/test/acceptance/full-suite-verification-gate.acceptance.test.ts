@@ -219,6 +219,7 @@ describe('Story 2 — portable configured-verifier contract (FR-2, FR-8)', () =>
     expect(result.stderr).toBe('');
     expect(await readCount()).toBe(1);
   });
+
 });
 
 describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
@@ -382,7 +383,10 @@ describe('Story 6 — scoped intermediate verification (FR-5)', () => {
 
     const combined = files.map(([, , contents]) => contents).join('\n');
     const genericSkillContents = files
-      .filter(([path]) => path.startsWith('skills/'))
+      .filter(
+        ([path]) =>
+          path.startsWith('skills/') && path !== 'skills/conduct/SKILL.md',
+      )
       .map(([, , contents]) => contents)
       .join('\n');
     expect(combined).toMatch(/configured aggregate verifier/i);
