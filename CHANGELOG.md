@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Stop self-host provider startup from hashing generated `src/conductor/dist-versions` snapshots
+  during the live-checkout safety fingerprint, while continuing to protect same-named directories
+  elsewhere in the repository ([implementation PR #1217](https://github.com/jstoup111/ai-conductor/pull/1217)).
 - Restore daemon-log visibility for the deterministic BUILD verification group, showing the
   `wiring_check` and `test_suite` boundary between build and build review
   ([implementation PR #1216](https://github.com/jstoup111/ai-conductor/pull/1216)).

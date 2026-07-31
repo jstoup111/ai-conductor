@@ -39,6 +39,10 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  *                  this SUBTREE deliberately: `.claude/settings.json` and
  *                  `.claude/hooks/` are harness state the guard must protect,
  *                  and excluding all of `.claude` would blind it to them.
+ *   `src/conductor/dist-versions`
+ *                — generated versioned distribution snapshots. Scoped to this
+ *                  exact subtree so same-named source directories elsewhere
+ *                  remain fingerprinted.
  *   `node_modules` — dependency and tool-cache trees at any nesting depth. The
  *                    exact directory basename is excluded; lookalikes remain
  *                    fingerprinted, and `.gitignore` is deliberately not used.
@@ -52,6 +56,7 @@ export interface LiveBoundarySnapshot { readonly surfaces: readonly Surface[]; }
  */
 const LIVE_CHECKOUT_VOLATILE: readonly string[] = [
   '.git', '.daemon', '.worktrees', '.pipeline', '.claude/worktrees',
+  'src/conductor/dist-versions',
 ];
 const LIVE_CHECKOUT_VOLATILE_DIRECTORY_BASENAMES: readonly string[] = ['node_modules'];
 
