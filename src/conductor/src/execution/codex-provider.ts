@@ -342,6 +342,10 @@ export class CodexProvider implements LLMProvider {
       facts.timeoutMs !== undefined && `timeoutMs=${facts.timeoutMs}`,
       facts.stdoutBytes !== undefined && `stdoutBytes=${facts.stdoutBytes}`,
       facts.stderrBytes !== undefined && `stderrBytes=${facts.stderrBytes}`,
+      facts.schemaVersion !== undefined && `schemaVersion=${facts.schemaVersion}`,
+      facts.envelopeStatus && `envelopeStatus=${facts.envelopeStatus}`,
+      facts.credentialCheck && `credentialCheck=${facts.credentialCheck}`,
+      facts.parserRejection && `parserRejection=${facts.parserRejection}`,
     ].filter((fact): fact is string => typeof fact === 'string');
     diagnosticLog(
       `Codex readiness probe failed: ${kind}${renderedFacts.length > 0 ? ` (${renderedFacts.join(', ')})` : ''}.`,

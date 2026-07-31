@@ -1548,6 +1548,46 @@ describe('CodexProvider', () => {
     }
   });
 
+  it('logs only bounded parser shape facts and still invokes when no diagnostic sink is supplied', async () => {
+    const sensitivePayload = 'sk-live-parser-secret /private/codex/auth.json hash:deadbeef';
+    const doctorOutput = JSON.stringify({
+      schemaVersion: 1,
+      overallStatus: 'unexpected',
+      checks: {
+        'auth.credentials': { status: 'ok', summary: sensitivePayload },
+        'unknown.check': { rawPayload: sensitivePayload },
+      },
+      unknownField: sensitivePayload,
+    });
+    const runDoctor = vi.fn().mockResolvedValue({ stdout: doctorOutput, exitCode: 0 });
+    const featureLog = vi.fn();
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Completed after failed probe.'), exitCode: 0 } as any);
+
+    const logged = await new CodexProvider(runDoctor).invoke({ ...baseOptions, diagnosticLog: featureLog });
+    const sinkless = await new CodexProvider(runDoctor).invoke(baseOptions);
+    const diagnostic = featureLog.mock.calls.map(([message]) => String(message)).join('\n');
+
+    expect(logged.authentication).toMatchObject({
+      state: 'probe-failed',
+      probeFailure: {
+        kind: 'unparseable-output',
+        facts: {
+          stdoutBytes: Buffer.byteLength(doctorOutput),
+          schemaVersion: 1,
+          envelopeStatus: 'unknown',
+          credentialCheck: 'ok',
+          parserRejection: 'unrecognized-envelope',
+        },
+      },
+    });
+    expect(diagnostic).toContain(
+      `stdoutBytes=${Buffer.byteLength(doctorOutput)}, schemaVersion=1, envelopeStatus=unknown, credentialCheck=ok, parserRejection=unrecognized-envelope`,
+    );
+    expect(`${JSON.stringify(logged.authentication)}\n${diagnostic}`).not.toContain(sensitivePayload);
+    expect(sinkless).toMatchObject({ success: true, output: 'Completed after failed probe.' });
+    expect(mockExeca).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     ['missing binary', { stdout: '', stderr: 'spawn codex ENOENT', exitCode: 127 }, 'output'],
     ['authentication failure', { stdout: '', stderr: 'Authentication required. Please run codex login.', exitCode: 1 }, 'authFailure'],
