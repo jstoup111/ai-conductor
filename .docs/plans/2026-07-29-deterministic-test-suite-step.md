@@ -9,9 +9,9 @@
 
 Replace the shipped test-suite skill surface with a provider-neutral engine
 group that runs `wiring_check` and `test_suite` under the existing concurrency
-core before `build_review`. Nineteen small TDD tasks cover registry topology,
+core before `build_review`. Twenty small TDD tasks cover registry topology,
 native branch execution, joined failure state, interruption, proof preservation,
-catalog removal, interactive CLI guidance, and the consumer migration.
+catalog removal, interactive CLI guidance, the consumer migration, and one scoped remediation task.
 
 ## Plan amendment — 2026-07-31 (operator-approved)
 
@@ -46,6 +46,38 @@ verification — without changing a story, dependency, or acceptance criterion.
   - Confirmed by: operator approval, 2026-07-31 ("all approved").
 
 **Verdict: CLEAR.**
+
+## Plan remediation — 2026-07-31 (operator scope correction)
+
+Build review correctly found that Task 19 removed deterministic tmux leak-guard coverage and left an
+excluded smoke file lint-red and assertion-free. Its proposed new package command, CI smoke job, and
+documentation lane are not required by the accepted stories or the operator-approved Task 19
+amendment, so they remain out of scope. The repair restores deterministic injected-runner coverage
+in the ordinary suite and removes the unused real-tmux smoke file.
+
+### Verify-Claims Ledger — scoped tmux remediation — 2026-07-31
+
+#### Claims
+
+- [verified] The accepted deterministic BUILD stories preserve existing cleanup contracts but do
+  not require a new real-tmux smoke execution lane.
+- [verified] The approved Task 19 amendment names aggregate-safe fixture isolation and configured
+  lint; it does not authorize a package command, CI job, or documentation surface.
+- [verified] Repository test guidance requires real-executable tests to remain smoke-only but does
+  not require every smoke experiment to become a permanent CI lane.
+- [verified] The deleted pre-existing-session/no-leak behavior can be proved deterministically with
+  the existing injected runner seam in `tmux-leak-guard.test.ts`.
+
+#### Assumptions
+
+- [load-bearing, confirmed] Real-tmux CI infrastructure is outside this feature; deterministic
+  injected-runner coverage is the accepted repair.
+  - Impact if wrong: the plan would omit a new CI capability.
+  - Confirmed by: operator approval, 2026-07-31.
+
+**Verdict: CLEAR.**
+
+**Operator approval:** Approved 2026-07-31.
 
 ## Technical Approach
 
@@ -456,11 +488,31 @@ verification — without changing a story, dependency, or acceptance criterion.
 
 **Dependencies:** Tasks 16, 18
 
+### Task rem-tmux-001: Restore deterministic tmux leak-guard coverage
+**Story:** Story 4 cleanup preservation; Task 19 aggregate-suite reliability amendment
+**Type:** negative-path
+
+**Steps:**
+1. Add a failing injected-runner regression proving a pre-existing session snapshot/reap reports no
+   leaks while preserving operator daemon sessions.
+2. Verify the focused ordinary test fails without the removed regression (RED).
+3. Restore the deterministic regression in `tmux-leak-guard.test.ts` and remove the unused,
+   assertion-free real-tmux smoke file; do not add a package command, CI job, or documentation lane.
+4. Run the focused tmux leak-guard test, test-covering typecheck, and configured lint; confirm all
+   pass (GREEN).
+5. Commit with message: "test: restore deterministic tmux leak guard".
+
+**Files:** `src/conductor/test/engine/tmux-leak-guard.test.ts`, `src/conductor/test/smoke/tmux-leak-guard.smoke.test.ts`
+
+**Wired-into:** none (no new production surface)
+
+**Dependencies:** Task 19
+
 ## Task Dependency Graph
 
 ```text
 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9 → 10 → 11 → 12 → 13 → 14 → 15 → 16 ┐
-                                                               └→ 17 → 18 ┴→ 19
+                                                               └→ 17 → 18 ┴→ 19 → rem-tmux-001
 ```
 
 ## Integration Points
@@ -469,7 +521,8 @@ verification — without changing a story, dependency, or acceptance criterion.
 - After Task 9: all join failure and interruption state is deterministic.
 - After Task 13: lifecycle ordering, resume, and invalidation agree end to end.
 - After Task 18: source catalog, installed catalogs, and release migration agree.
-- After Task 19: all story outcomes are pinned at the narrowest credible seams.
+- After Task rem-tmux-001: all story outcomes and aggregate-safe tmux cleanup guarantees are pinned
+  at deterministic seams.
 
 ## Coverage Mapping
 
@@ -482,7 +535,7 @@ verification — without changing a story, dependency, or acceptance criterion.
 | S3 happy: engine-native execution, CLI, two-host migration | 3, 14, 16, 17, 18 |
 | S3 negative: no provider dispatch, no stale catalog refs, idempotency, CLI failure | 3, 14, 15, 16, 17, 18 |
 | S4 happy: proof reuse/execute, coverage output, finish reuse | 10, 11, 19 |
-| S4 negative: fail-closed taxonomy, unsafe input mutation contract, lock, cleanup | 8, 11, 12, 19 |
+| S4 negative: fail-closed taxonomy, unsafe input mutation contract, lock, cleanup | 8, 11, 12, 19, rem-tmux-001 |
 
 ## Verification
 
