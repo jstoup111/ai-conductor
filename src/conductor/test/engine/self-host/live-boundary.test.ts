@@ -251,6 +251,26 @@ describe('live self-host boundary', () => {
     finally { await rm(root, { recursive: true, force: true }); }
   });
 
+  it('excludes src/conductor/dist-versions without excluding nested lookalikes', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'live-boundary-dist-versions-'));
+    const live = join(root, 'live'); const provider = join(root, 'provider');
+    await Promise.all([
+      mkdir(join(live, 'src', 'conductor', 'dist-versions', 'v1'), { recursive: true }),
+      mkdir(join(live, 'packages', 'engine', 'dist-versions', 'v1'), { recursive: true }),
+      mkdir(provider),
+    ]);
+    await writeFile(join(live, 'sentinel'), 'harness source');
+    await writeFile(join(live, 'src', 'conductor', 'dist-versions', 'v1', 'generated.js'), 'generated');
+    await writeFile(join(live, 'packages', 'engine', 'dist-versions', 'v1', 'lookalike.js'), 'source');
+    try {
+      const fingerprint = await fingerprintLiveBoundary({ liveCheckout: live, unrelatedProviderState: provider });
+      expect(fingerprint.surfaces[0].manifest.map(entry => entry.path)).toEqual([
+        'packages/engine/dist-versions/v1/lookalike.js',
+        'sentinel',
+      ]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+
   it('still trips on .claude harness state beside the excluded worktrees subtree', async () => {
     const root = await mkdtemp(join(tmpdir(), 'live-boundary-claude-state-'));
     const live = join(root, 'live'); const provider = join(root, 'provider');
