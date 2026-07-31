@@ -170,9 +170,7 @@ describe('mergeability-first daemon finish', () => {
         sealPreserved: await readFile(sealPath, 'utf8'),
         translationCalls: translateAfterRebase.mock.calls.length,
         rebaseState: finalState.rebase,
-        hasDistinctSkipEvent: eventTypes.some(
-          (type) => type.includes('mergeable') && type.includes('skip'),
-        ),
+        hasExactMergeableSkipEvent: eventTypes.includes('rebase_mergeable_skip'),
       }).toEqual({
         success: true,
         outcome: 'mergeable_skip',
@@ -183,7 +181,7 @@ describe('mergeability-first daemon finish', () => {
         sealPreserved: sealBefore,
         translationCalls: 0,
         rebaseState: 'done',
-        hasDistinctSkipEvent: true,
+        hasExactMergeableSkipEvent: true,
       });
     },
     30_000,
