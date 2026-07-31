@@ -64,3 +64,57 @@ The advisory scan reports broad historical overlap on `src/conductor/src/engine/
 ## Blocking Issues
 
 None.
+
+## Amendment Review — 2026-07-31 build-review completeness remediation
+
+**Input reviewed:** approved remediation plan commit `4c72ae3e7`, Story 8, the current scheduler
+dispatch seams, the approved operator-park ADR, and the existing sequence diagram
+
+**Verdict:** APPROVED WITH CONDITIONS — unchanged from the original review
+
+**Operator approval:** Approved 2026-07-31.
+
+### Feasibility
+
+- The three `rem-test-*` tasks add focused Vitest coverage in the existing
+  `operator-park-boundary.test.ts` suite. They require no package, service, schema, shared resource,
+  or production-code prerequisite.
+- The mechanical inventory can enumerate the three existing dispatch shapes without adding a
+  runtime registry or changing scheduler behavior.
+- Zero-member and one-member fixtures exercise the current membership and serial-degradation paths
+  with injected runners, so they retain worktree isolation and third-party test boundaries.
+
+### Alignment
+
+- `rem-test-001` directly enforces ADR Decision 3 (one shared pre-unit gate) and Decision 10 (every
+  parallel group inherits it).
+- `rem-test-002` pins the existing all-skipped path without treating skipped members as dispatched
+  work or adding a group-specific park branch.
+- `rem-test-003` pins width-one degradation through the ordinary serial gate without introducing a
+  second executor.
+- All three tasks are verify-only and add no production surface; the existing Wiring Surface remains
+  complete. The sequence diagram remains accurate because runtime flow is unchanged.
+
+### Verify-Claims Ledger
+
+#### Claims
+
+- [verified] The approved ADR requires one shared pre-unit gate and explicitly covers zero/one
+  applicable group membership through the ordinary scheduler contract.
+- [verified] The revised plan limits all three remediation tasks to
+  `src/conductor/test/engine/operator-park-boundary.test.ts`.
+- [verified] Current scheduler control flow has distinct configured-group, built-in-group, and
+  ordinary serial dispatch seams, with all-skipped and width-one branches before fan-out.
+- [verified] The focused advisory overlap scan reports no open blocker for the remediation test file.
+
+#### Assumptions
+
+- None. The approved ADR, accepted story, current plan, and inspected scheduler paths settle the
+  architecture and test boundaries.
+
+**Verify-claims verdict:** CLEAR
+
+### Risks and ADRs
+
+No new risks and no new or superseded ADRs. The original risk register and six implementation
+conditions remain authoritative.
