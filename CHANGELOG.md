@@ -464,6 +464,26 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## Migration
 
+`attribution_enforcement_cutover` and `attribution_judge_cutover` are no longer accepted
+top-level config keys — a `.ai-conductor/config.yml` or `~/.ai-conductor/config.yml` that still
+sets either now fails to load with `Unknown top-level key`. `attribution_audit_sample_pct` is
+unaffected and keeps its default of `10`. Strip both retired keys from every config file that sets
+them, leaving every other line unchanged:
+
+```bash migration
+for f in .ai-conductor/config.yml ~/.ai-conductor/config.yml; do
+  [ -f "$f" ] || continue
+  if grep -Eq '^(attribution_enforcement_cutover|attribution_judge_cutover):' "$f"; then
+    sed -i.bak -E '/^(attribution_enforcement_cutover|attribution_judge_cutover):/d' "$f"
+    echo "Removed retired attribution cutover keys from $f (backup: $f.bak)."
+  else
+    echo "$f has no retired attribution cutover keys — nothing to do."
+  fi
+done
+```
+
+## Migration
+
 `--output` and `--step <step>` are no longer accepted by `conduct-ts` — passing either now fails
 argument parsing with `error: unknown option`. Neither flag ever changed run behavior (see Removed,
 above), so no config or state migration is needed; the only action is removing them from any script,
