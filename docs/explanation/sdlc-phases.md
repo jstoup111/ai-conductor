@@ -1,3 +1,9 @@
+---
+title: SDLC phases
+parent: Explanation
+nav_order: 4
+---
+
 # SDLC phases
 
 Why the flow has five phases, what each one is for, and what makes a phase boundary mean something. The

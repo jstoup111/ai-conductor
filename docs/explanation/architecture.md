@@ -1,3 +1,9 @@
+---
+title: Architecture
+parent: Explanation
+nav_order: 1
+---
+
 # Architecture
 
 The roles in this harness — engine, daemon, engineer loop, host agent, operator — what each owns, and how

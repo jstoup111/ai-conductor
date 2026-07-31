@@ -262,6 +262,23 @@ record "remaining reference topics have unique titles, the Reference parent, and
     source_has_reference_destination 'skills.md' 'Skills' 7 && \
     source_has_reference_destination 'steps.md' 'Steps' 8 && echo 0 || echo 1 )"
 
+source_has_explanation_destination() {
+  local path=$1
+  local title=$2
+  local order=$3
+
+  [ -f "$REPO_ROOT/docs/explanation/$path" ] && \
+    grep -Fxq "title: $title" "$REPO_ROOT/docs/explanation/$path" && \
+    grep -Fxq 'parent: Explanation' "$REPO_ROOT/docs/explanation/$path" && \
+    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/explanation/$path"
+}
+
+record "explanation topics have unique titles, the Explanation parent, and stable order" \
+  "$( source_has_explanation_destination 'architecture.md' 'Architecture' 1 && \
+    source_has_explanation_destination 'evidence-model.md' 'Evidence model' 2 && \
+    source_has_explanation_destination 'gates.md' 'Gates' 3 && \
+    source_has_explanation_destination 'sdlc-phases.md' 'SDLC phases' 4 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
