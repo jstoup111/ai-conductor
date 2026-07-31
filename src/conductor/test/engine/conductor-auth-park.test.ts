@@ -136,6 +136,76 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(park).toEqual({ disposition: 'recovered' });
   });
 
+  it('authorizes one trial when a cached-login recovery probe becomes unavailable', async () => {
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const invoke = vi.fn();
+    const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
+    const eventsSeen: unknown[] = [];
+    events.on('credentials_park_progress', (event) => { eventsSeen.push(event); });
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async (delay: number) => { clockOffset += delay; });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke, invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 3,
+      sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
+    });
+
+    try {
+      const park = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+
+      expect({
+        park,
+        readinessCalls: readiness.mock.calls.length,
+        providerInvocations: invoke.mock.calls.length,
+        runnerCalls: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length,
+        sleepCalls: sleepFn.mock.calls.length,
+        progress: eventsSeen,
+      }).toEqual({
+        park: { disposition: 'trial-required' },
+        readinessCalls: 1,
+        providerInvocations: 0,
+        runnerCalls: 0,
+        sleepCalls: 0,
+        progress: [expect.objectContaining({
+          provider: 'codex',
+          source: 'cached-login',
+          readiness: 'probe-failed',
+          degradation: 'probe-failure',
+          failureKind: 'timeout',
+          elapsedSeconds: 0,
+          nextDisposition: 'trial-required',
+        })],
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('resumes only the auth-failed grouped member after its scheduled Codex readiness recheck', async () => {
     await writeState(statePath, {
       ...READY_STATE,

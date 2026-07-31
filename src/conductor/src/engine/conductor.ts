@@ -1623,7 +1623,7 @@ export class Conductor {
 
         let retryDelayMs = 1_000;
         let lastProgress:
-          | { readiness: typeof authentication.state; degradation: 'credential-failure' | 'unrelated-diagnostic-degradation'; emittedAt: number }
+          | { readiness: typeof authentication.state; degradation: 'credential-failure' | 'unrelated-diagnostic-degradation' | 'probe-failure'; emittedAt: number }
           | undefined;
         for (;;) {
           const current = await readiness();
@@ -1633,11 +1633,17 @@ export class Conductor {
             current.provider === authentication.provider &&
             current.source === authentication.source &&
             current.state === 'ready';
+          const probeFailed =
+            current.provider === authentication.provider &&
+            current.source === authentication.source &&
+            current.state === 'probe-failed';
           const timedOut = elapsedMs >= timeoutMs;
-          const nextDelayMs = isReady || timedOut
+          const nextDelayMs = isReady || probeFailed || timedOut
             ? 0
             : Math.min(retryDelayMs, timeoutMs - elapsedMs);
-          const degradation = current.unrelatedHealth === 'degraded'
+          const degradation = probeFailed
+            ? 'probe-failure' as const
+            : current.unrelatedHealth === 'degraded'
             ? 'unrelated-diagnostic-degradation' as const
             : 'credential-failure' as const;
           const previousProgress = lastProgress;
@@ -1647,7 +1653,7 @@ export class Conductor {
             previousProgress.degradation !== degradation;
 
           if (stateChanged || now - previousProgress.emittedAt >= 60_000) {
-            await this.events.emit({
+            const progress = {
               type: 'credentials_park_progress',
               provider: 'codex',
               source: authentication.source,
@@ -1658,14 +1664,23 @@ export class Conductor {
               ),
               nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
               degradation,
-            });
+              ...(probeFailed
+                ? {
+                    failureKind: current.probeFailure.kind,
+                    nextDisposition: 'trial-required' as const,
+                  }
+                : {}),
+            } as const;
+            // Task 17 widens the persisted event contract for these closed facts.
+            await this.events.emit(progress as Parameters<typeof this.events.emit>[0]);
             lastProgress = { readiness: current.state, degradation, emittedAt: now };
           }
 
-          if (
-            isReady
-          ) {
+          if (isReady) {
             return { disposition: 'recovered' };
+          }
+          if (probeFailed) {
+            return { disposition: 'trial-required' };
           }
           if (timedOut) {
             return timedOutResult;
