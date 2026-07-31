@@ -1042,6 +1042,51 @@ describe('CodexProvider', () => {
     },
   );
 
+  it.each([
+    {
+      name: 'missing selected-source evidence despite a failed mixed doctor result',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      evidence: {
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      },
+      exitCode: 1,
+      state: 'missing',
+    },
+    {
+      name: 'rejected selected-source evidence despite a successful mixed doctor result',
+      invoke: (subject: CodexProvider) =>
+        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+      evidence: {
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: true, rejected: true },
+        transport: { authenticated: false },
+      },
+      exitCode: 0,
+      state: 'unusable',
+    },
+  ] as const)(
+    'preserves $state as a blocking verdict for $name',
+    async ({ invoke, evidence, exitCode, state }) => {
+      const runDoctor = vi.fn().mockResolvedValue({
+        stdout: JSON.stringify(evidence),
+        exitCode,
+      });
+
+      const result = await invoke(new CodexProvider(runDoctor));
+
+      expect({
+        readiness: result.authentication,
+        substantiveExecCalls: mockExeca.mock.calls.length,
+      }).toEqual({
+        readiness: expect.objectContaining({ state }),
+        substantiveExecCalls: 0,
+      });
+      expect(result.authentication?.state).not.toBe('probe-failed');
+    },
+  );
+
   it('checks readiness again before a resumed unattended dispatch', async () => {
     const runDoctor = vi.fn().mockResolvedValue(readyDoctorResult());
     const gatedProvider = new CodexProvider(runDoctor);

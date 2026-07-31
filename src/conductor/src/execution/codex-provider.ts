@@ -462,16 +462,14 @@ export class CodexProvider implements LLMProvider {
     if (
       evidence.configured === false &&
       evidence.authenticated === false &&
-      evidence.rejected !== true &&
-      exitCode === 0
+      evidence.rejected !== true
     ) {
       return this.nonReadyReadiness(authentication.source, 'missing');
     }
     if (
       evidence.configured === true &&
       evidence.authenticated === false &&
-      evidence.rejected === true &&
-      exitCode !== 0
+      evidence.rejected === true
     ) {
       return this.nonReadyReadiness(authentication.source, 'unusable');
     }
