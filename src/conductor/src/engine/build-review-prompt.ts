@@ -14,7 +14,12 @@ import type { BuildReviewInputs } from './build-review-inputs.js';
  * (diff + plan body only).
  */
 export function buildGraderPrompt(inputs: BuildReviewInputs): string {
-  const { diff, planBody } = inputs;
+  const { diff, planBody, repairContext = [] } = inputs;
+  const renderedRepairContext = repairContext.length > 0
+    ? repairContext.map((repair) =>
+        `- ${repair.id} [${repair.reason}]: ${repair.diagnostic}`,
+      ).join('\n')
+    : '(none)';
 
   return `You are reviewing a code diff for build_review — a code-review grade,
 NOT a full architectural review. Judge diff honesty only: whether the diff
@@ -28,6 +33,15 @@ Score the diff against exactly these four rubric items:
 2. Scope: diff scoped to the plan, no unrelated files. \`.docs/architecture/\`, \`.docs/plans/\`, \`.docs/specs/\`, and \`.docs/stories/\` are already-approved DECIDE artifacts; modification of one passes Scope only when the approved plan justifies it, otherwise it is a Scope failure.
 3. Root cause: the change addresses the stated defect, not a symptom.
 4. Completeness: every planned task's work is present in the diff.
+
+The engine supplies cumulative aggregate-failure context recorded after base
+advances. It survives repeated rebases without relying on rewritten commit
+SHAs or telemetry trailers. This context is evidence, not an exemption: judge
+whether each apparently out-of-plan hunk directly repairs a recorded failure.
+If it does, skip that hunk for Scope. For a changed test that directly repairs
+recorded stale base-state expectations, skip the ordinary Tautology mutation
+check and instead verify the pre-repair test fails against the rebased state
+while the repaired test passes. Unmatched work remains subject to every rubric.
 
 Completeness must be judged holistically: read the plan and the diff as a
 whole and form a judgement of whether the diff, taken together, delivers
@@ -68,5 +82,9 @@ ${diff}
 ## Approved plan
 
 ${planBody}
+
+## Engine-recorded rebase repair context
+
+${renderedRepairContext}
 `;
 }

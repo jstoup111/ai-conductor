@@ -47,6 +47,24 @@ describe('buildGraderPrompt', () => {
     );
   });
 
+  it('asks the grader to judge recorded rebase repairs separately without granting an automatic exemption', () => {
+    const prompt = buildGraderPrompt({
+      ...inputs,
+      repairContext: [{
+        id: 'repair-abc123def456',
+        reason: 'command_failed',
+        diagnostic: 'stale aggregate command expectation',
+        rebaseInvalidatedAt: 101,
+      }],
+    });
+
+    expect(prompt).toMatch(/context is evidence, not an exemption/i);
+    expect(prompt).toMatch(/judge[\s\S]*directly repairs/i);
+    expect(prompt).toMatch(/skip that hunk for Scope/i);
+    expect(prompt).toMatch(/skip the ordinary Tautology mutation/i);
+    expect(prompt).toContain('repair-abc123def456');
+  });
+
   it('states the all-or-FAIL rule', () => {
     const prompt = buildGraderPrompt(inputs);
 
@@ -99,6 +117,7 @@ describe('buildGraderPrompt', () => {
     expect(prompt).toContain(inputs.diff);
     expect(prompt).toContain(inputs.planBody);
   });
+
 
   it('never references task-status, maker summary, or maker internal state', () => {
     const prompt = buildGraderPrompt(inputs);

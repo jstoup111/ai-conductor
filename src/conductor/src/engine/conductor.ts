@@ -9,6 +9,9 @@ import {
 } from 'node:fs/promises';
 import { existsSync, readdirSync, rmdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
+import {
+  recordTestSuiteRemediation,
+} from './test-suite-remediation.js';
 import { relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import {
@@ -185,6 +188,7 @@ import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
+  readVerdict,
   recordSkipVerdict,
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
@@ -1703,6 +1707,13 @@ export class Conductor {
       }
       return { success: false, output: haltReason };
     }
+  }
+
+  private async recordTestSuiteRebaseRepair(
+    failure: { reason: string; message: string },
+  ): Promise<Awaited<ReturnType<typeof recordTestSuiteRemediation>>> {
+    const buildReviewVerdict = await readVerdict(this.projectRoot, 'build_review');
+    return recordTestSuiteRemediation(this.projectRoot, failure, buildReviewVerdict);
   }
 
   /**
@@ -3250,6 +3261,12 @@ export class Conductor {
               const wiringFailure = deterministicFailures.find(
                 (failure) => failure.member.name === 'wiring_check',
               );
+              const testSuiteFailure = deterministicFailures.find(
+                (failure) => failure.member.name === 'test_suite',
+              );
+              const remediationRecord = testSuiteFailure && fullSuiteFailure?.status === 'FAILED'
+                ? await this.recordTestSuiteRebaseRepair(fullSuiteFailure)
+                : undefined;
               if (wiringFailure) {
                 const escalation = await checkKickbackToBuildEscalation('wiring_check');
                 if (escalation.halt) {
@@ -3287,7 +3304,10 @@ export class Conductor {
                 pendingRetryHints.set(
                   'build',
                   `${deterministicFailures.map((failure) => failure.member.name).join(', ')} ` +
-                    `failed deterministic BUILD verification:\n${evidence}`,
+                    `failed deterministic BUILD verification:\n${evidence}` +
+                    (remediationRecord
+                      ? `\nRecorded rebase-repair context: ${remediationRecord.id}`
+                      : ''),
                 );
                 for (const failure of deterministicFailures) {
                   await captureKickbackToBuildContext(failure.member.name as StepName);
@@ -5293,6 +5313,7 @@ export class Conductor {
               const evidence =
                 `full-suite verification failed (${fullSuiteFailure.reason}): ` +
                 `${fullSuiteFailure.message}\nEvidence: .pipeline/test-suite-evidence.json`;
+              const remediationRecord = await this.recordTestSuiteRebaseRepair(fullSuiteFailure);
               const kickback = await consumeKickbackBudget('test_suite', evidence);
               const count = kickback.entry.count;
               if (!kickback.exhausted) {
@@ -5306,6 +5327,9 @@ export class Conductor {
                 pendingRetryHints.set(
                   'build',
                   `test_suite failed:\n${evidence}\n` +
+                    (remediationRecord
+                      ? `Recorded rebase-repair context: ${remediationRecord.id}\n`
+                      : '') +
                     'Fix and commit the failure before the suite is re-run.',
                 );
                 if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
