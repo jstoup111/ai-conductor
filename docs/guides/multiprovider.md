@@ -1,3 +1,9 @@
+---
+title: Choose and configure the LLM host
+parent: Guides
+nav_order: 4
+---
+
 # Choose and configure the LLM host
 
 Select which host executes your steps — `claude`, `codex`, or an ordered fallback between them —

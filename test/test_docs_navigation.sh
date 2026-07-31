@@ -220,6 +220,25 @@ record "source top-level destinations have unique titles and stable order" \
     source_has_top_level_destination 'runbooks/index.md' 'Runbooks' 6 true && \
     source_has_top_level_destination 'contributing/index.md' 'Contributing' 7 true && echo 0 || echo 1 )"
 
+source_has_guide_destination() {
+  local path=$1
+  local title=$2
+  local order=$3
+
+  [ -f "$REPO_ROOT/docs/guides/$path" ] && \
+    grep -Fxq "title: $title" "$REPO_ROOT/docs/guides/$path" && \
+    grep -Fxq 'parent: Guides' "$REPO_ROOT/docs/guides/$path" && \
+    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/guides/$path"
+}
+
+record "source guides have unique titles, the Guides parent, and stable order" \
+  "$( source_has_guide_destination 'first-feature.md' 'Ship your first feature' 1 && \
+    source_has_guide_destination 'engineer-loop.md' 'The engineer loop' 2 && \
+    source_has_guide_destination 'intake.md' 'Filing intake issues' 3 && \
+    source_has_guide_destination 'multiprovider.md' 'Choose and configure the LLM host' 4 && \
+    source_has_guide_destination 'running-the-daemon.md' 'Running the daemon' 5 && \
+    source_has_guide_destination 'self-hosting.md' 'Self-hosting the harness' 6 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then

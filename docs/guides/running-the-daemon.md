@@ -1,3 +1,9 @@
+---
+title: Running the daemon
+parent: Guides
+nav_order: 5
+---
+
 # Running the daemon
 
 Start, observe, pause, park, and stop the background build loop that drains a repo's spec backlog.

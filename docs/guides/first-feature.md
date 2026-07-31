@@ -1,3 +1,9 @@
+---
+title: Ship your first feature
+parent: Guides
+nav_order: 1
+---
+
 # Ship your first feature
 
 Take one idea from a sentence to a merged implementation PR: author a spec, merge it, let the

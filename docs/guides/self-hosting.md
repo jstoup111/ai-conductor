@@ -1,3 +1,9 @@
+---
+title: Self-hosting the harness
+parent: Guides
+nav_order: 6
+---
+
 # Self-hosting the harness
 
 Run the harness on the ai-conductor repository itself, so the daemon builds harness features with the
