@@ -10,6 +10,7 @@ import {
   resolveFreshBase,
   classifyProspectiveMerge,
   isBranchCurrent,
+  rebaseStateActive,
   isCodeOrTestPath,
   filterCodeOrTestPaths,
   unreleasedAdditions,
@@ -111,6 +112,64 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
       });
     } finally {
       await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cleanly skips a behind feature without mutating its Git state (Task 3, real git)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-readonly-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@t.com']);
+      await g(['config', 'user.name', 'T']);
+      await g(['config', 'commit.gpgsign', 'false']);
+      await writeFile(join(repo, 'shared.txt'), 'initial\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'init']);
+
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(repo, 'feature-only.txt'), 'feature\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'feature change']);
+
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'base-only.txt'), 'base\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'base advance']);
+      await g(['checkout', '-q', 'feature']);
+
+      // A clean checkout would let an accidental index/worktree rewrite hide
+      // behind empty snapshots. Make both surfaces meaningful before testing
+      // the finish-policy's explicitly read-only path.
+      await writeFile(join(repo, 'staged.txt'), 'staged\n');
+      await g(['add', 'staged.txt']);
+      await writeFile(join(repo, 'feature-only.txt'), 'dirty feature\n');
+
+      const git = (await import('../../src/engine/rebase.js')).makeGitRunner(repo);
+      const snapshot = async () => ({
+        featureRef: (await g(['rev-parse', 'refs/heads/feature'])).stdout.trim(),
+        head: (await g(['rev-parse', 'HEAD'])).stdout.trim(),
+        indexTree: (await g(['write-tree'])).stdout.trim(),
+        worktreeDiff: (await g(['diff', '--binary'])).stdout,
+        cachedDiff: (await g(['diff', '--cached', '--binary'])).stdout,
+        commitList: (await g(['rev-list', '--all', '--parents', '--topo-order'])).stdout,
+        status: (await g(['status', '--porcelain=v2', '--branch', '--untracked-files=all'])).stdout,
+        rebaseStateActive: await rebaseStateActive(git, repo),
+      });
+      const before = await snapshot();
+      expect(before.worktreeDiff).not.toBe('');
+      expect(before.cachedDiff).not.toBe('');
+
+      const outcome = await performRebase(git, repo, 'main', {
+        finishMergeabilityCheck: true,
+      });
+
+      expect({ outcome, after: await snapshot() }).toEqual({
+        outcome: { kind: 'mergeable_skip' },
+        after: before,
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
     }
   });
 });
