@@ -1355,15 +1355,23 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
   it('emits the matching event per outcome', async () => {
     const events = new ConductorEventEmitter();
     const seen: string[] = [];
-    for (const t of ['rebase_noop', 'rebase_changed', 'rebase_changelog_resolved', 'rebase_conflict_halt'] as const) {
+    for (const t of [
+      'rebase_noop',
+      'rebase_mergeable_skip',
+      'rebase_changed',
+      'rebase_changelog_resolved',
+      'rebase_conflict_halt',
+    ] as const) {
       events.on(t, (e) => { seen.push(e.type); });
     }
     await emitRebaseEvent(events, { kind: 'noop' });
+    await emitRebaseEvent(events, { kind: 'mergeable_skip' });
     await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['src/a.ts'] });
     await emitRebaseEvent(events, { kind: 'changelog_resolved' });
     await emitRebaseEvent(events, { kind: 'conflict_halt', conflicts: ['x'], reason: 'r' });
     expect(seen).toEqual([
       'rebase_noop',
+      'rebase_mergeable_skip',
       'rebase_changed',
       'rebase_changelog_resolved',
       'rebase_conflict_halt',

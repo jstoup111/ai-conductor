@@ -96,6 +96,7 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   loop_halt: 'friction-mapped',
   loop_converged: 'not-audited-by-design',
   rebase_noop: 'not-audited-by-design',
+  rebase_mergeable_skip: 'not-audited-by-design',
   rebase_changed: 'not-audited-by-design',
   rebase_gate_reverified: 'not-audited-by-design',
   rebase_gate_preserved: 'not-audited-by-design',
@@ -231,6 +232,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
   loop_halt: { type: 'loop_halt', reason: 'kickback cap exceeded' },
   loop_converged: { type: 'loop_converged' },
   rebase_noop: { type: 'rebase_noop' },
+  rebase_mergeable_skip: { type: 'rebase_mergeable_skip' },
   rebase_changed: { type: 'rebase_changed', changedPaths: ['a.ts'] },
   rebase_gate_reverified: { type: 'rebase_gate_reverified', step: 'build_review', skippedDispatch: false },
   rebase_gate_preserved: {

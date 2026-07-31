@@ -122,6 +122,13 @@ describe('renderDaemonEvent', () => {
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
   });
 
+  it('renders a mergeable skip distinctly from an already-current branch', () => {
+    expect(lines({ type: 'rebase_noop' })).toEqual([]);
+    expect(lines({ type: 'rebase_mergeable_skip' } as unknown as ConductorEvent)).toEqual([
+      '· ✓ rebase skipped — cleanly mergeable with base',
+    ]);
+  });
+
   it('renders ci_failed event with ✋ halt-monitor marker', () => {
     expect(
       lines({
@@ -302,6 +309,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'loop_halt', reason: 'stuck' },
       { type: 'loop_converged' },
       { type: 'rebase_noop' },
+      { type: 'rebase_mergeable_skip' } as unknown as ConductorEvent,
       { type: 'rebase_changed', changedPaths: ['a.ts'] },
       { type: 'rebase_changelog_resolved' },
       { type: 'rebase_conflict_halt', reason: 'conflict', conflicts: ['a.ts'] },
@@ -352,6 +360,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'build_review_base',
       'parallel_started',
       'parallel_completed',
+      'rebase_mergeable_skip',
     ]);
 
     expect(renderingTypes).toEqual(expected);

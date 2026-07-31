@@ -82,6 +82,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'protected_artifact_rebaseline_refused',
   'parallel_started',
   'parallel_completed',
+  'rebase_mergeable_skip',
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
@@ -96,8 +97,8 @@ const deliberatelyNotPersisted = {
 void deliberatelyNotPersisted;
 
 describe('event sink subscriptions', () => {
-  it('is total over all 62 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(62);
+  it('is total over all 63 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(63);
   });
 
   it('routes verdict_freshness to every sink', () => {

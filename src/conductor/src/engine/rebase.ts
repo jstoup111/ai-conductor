@@ -1311,6 +1311,9 @@ export async function emitRebaseEvent(
       case 'noop':
         await events.emit({ type: 'rebase_noop' });
         break;
+      case 'mergeable_skip':
+        await events.emit({ type: 'rebase_mergeable_skip' });
+        break;
       case 'changed':
         await events.emit({
           type: 'rebase_changed',
