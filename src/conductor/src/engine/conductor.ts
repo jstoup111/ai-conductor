@@ -3369,6 +3369,31 @@ export class Conductor {
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
               if (signalExitRequested) return;
+
+              if (park.disposition === 'trial-required') {
+                const failedTrialIdx = retryIdxs.find((_, retryIdx) => {
+                  const outcome = retryOutcomes[retryIdx]!;
+                  return outcome.kind === 'no-verdict' && outcome.reason === 'authFailure';
+                });
+                if (failedTrialIdx !== undefined) {
+                  const failedMember = membership.dispatchable[failedTrialIdx]!;
+                  // The recovery trial is the bounded fallback for an
+                  // unavailable probe. Never route an auth-failed trial back
+                  // through parkOnAuthFailure; do not include provider output
+                  // in this secret-safe diagnostic.
+                  const haltReason =
+                    `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
+                    'failed authentication after the readiness probe was unavailable.\n' +
+                    'Refresh the Codex login, then re-queue this feature.';
+                  await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(haltReason);
+                  await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  if (!this.daemon) process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
               retryIdxs.forEach((idx, k) => {
                 outcomes[idx] = retryOutcomes[k]!;
               });

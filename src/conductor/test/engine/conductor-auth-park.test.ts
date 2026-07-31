@@ -595,6 +595,168 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
   });
 
+  it('returns a successful grouped recovery trial while leaving completed siblings undispatched', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done', build_review: 'done', wiring_check: 'done',
+      retro: 'done', rebase: 'done', finish: 'done',
+    });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    let manualTestCalls = 0;
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        if (step === 'manual_test') {
+          manualTestCalls++;
+          if (manualTestCalls === 1) return codexCachedLoginFailure();
+          await writeFile(join(dir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
+        }
+        if (step === 'prd_audit') {
+          await writeFile(join(dir, '.pipeline/prd-audit.md'), '| FR | Verdict | Gap-class | Evidence | Accepted? |\n|--|--|--|--|--|\n| FR-1 | ALIGNED | | evidence.ts:1 | yes |\n');
+        }
+        if (step === 'architecture_review_as_built') {
+          await writeFile(join(dir, '.pipeline/architecture-review-as-built.md'), '# As-Built Architecture Review\n\nVerdict: APPROVED\n');
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'manual_test', mode: 'auto', maxRetries: 1, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect({
+      calls: Object.fromEntries(['manual_test', 'prd_audit', 'architecture_review_as_built']
+        .map((step) => [step, calls.filter((call) => call === step).length])),
+      readinessCalls: readiness.mock.calls.length,
+    }).toEqual({
+      calls: { manual_test: 2, prd_audit: 1, architecture_review_as_built: 1 },
+      readinessCalls: 1,
+    });
+  });
+
+  it('routes a non-auth failed grouped recovery trial through the ordinary group result path', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done', build_review: 'done', wiring_check: 'done',
+      retro: 'done', rebase: 'done', finish: 'done',
+    });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        if (step === 'manual_test' && calls.filter((call) => call === step).length === 1) {
+          return codexCachedLoginFailure();
+        }
+        return step === 'manual_test'
+          ? { success: false, output: 'ordinary manual-test failure' }
+          : { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'manual_test', mode: 'auto', maxRetries: 1, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect({
+      calls: Object.fromEntries(['manual_test', 'prd_audit', 'architecture_review_as_built']
+        .map((step) => [step, calls.filter((call) => call === step).length])),
+      readinessCalls: readiness.mock.calls.length,
+    }).toEqual({
+      calls: { manual_test: 2, prd_audit: 1, architecture_review_as_built: 1 },
+      readinessCalls: 1,
+    });
+  });
+
+  it('halts an auth-failed grouped recovery trial without a second probe or sibling redispatch', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done', build_review: 'done', wiring_check: 'done',
+      retro: 'done', rebase: 'done', finish: 'done',
+    });
+    const readiness = vi.fn()
+      .mockResolvedValueOnce({
+        provider: 'codex', source: 'cached-login', state: 'probe-failed',
+        probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+      })
+      .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'unusable' });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        return step === 'manual_test' ? codexCachedLoginFailure() : { success: true };
+      }),
+    };
+    const halts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
+    const realNow = Date.now();
+    let clockOffset = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+    const sleepFn = vi.fn(async (delay: number) => { clockOffset += delay; });
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'manual_test', mode: 'auto', maxRetries: 1, sleepFn,
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    try {
+      await conductor.run();
+
+      expect({
+        calls: Object.fromEntries(['manual_test', 'prd_audit', 'architecture_review_as_built']
+          .map((step) => [step, calls.filter((call) => call === step).length])),
+        readinessCalls: readiness.mock.calls.length,
+        halts,
+      }).toEqual({
+        calls: { manual_test: 2, prd_audit: 1, architecture_review_as_built: 1 },
+        readinessCalls: 1,
+        halts: [expect.stringMatching(/Codex cached-login recovery trial for grouped member "manual_test" failed authentication/i)],
+      });
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
+
   it('judged build_review dispatch timeout halts without retry, escalation, or alternate provider use', async () => {
     await writeState(statePath, {
       ...READY_STATE,
