@@ -13,6 +13,40 @@ core before `build_review`. Nineteen small TDD tasks cover registry topology,
 native branch execution, joined failure state, interruption, proof preservation,
 catalog removal, interactive CLI guidance, and the consumer migration.
 
+## Plan amendment — 2026-07-31 (operator-approved)
+
+The operator approved the following scope corrections after `build_review` identified
+them. They preserve the approved outcome — deterministic, aggregate-safe BUILD
+verification — without changing a story, dependency, or acceptance criterion.
+
+- **Tasks 1, 2, and 4:** their `Wired-into:` labels name the real production
+  call sites, `BUILD_VERIFICATION_GROUP` and `runNativeGroupBranch`, rather than
+  the obsolete `Conductor.run` symbol. This is a contract-label correction only.
+- **Task 19:** owns two aggregate-suite reliability corrections required for a
+  credible deterministic matrix: wait for complete pid/result-file contents in
+  `engine-store-smoke.test.ts`, and isolate the real tmux leak-guard fixture in
+  a dedicated tmux socket in `tmux-leak-guard.test.ts`. Neither change adds a
+  production surface or third-party call.
+
+### Verify-Claims Ledger — plan amendment — 2026-07-31
+
+#### Claims
+
+- [verified] `BUILD_VERIFICATION_GROUP` and `runNativeGroupBranch` are actual
+  call-site symbols in `src/conductor/src/engine/conductor.ts`; the former
+  `Conductor.run` label cannot resolve in the wiring probe.
+- [verified] the two test-file changes are committed on this feature branch
+  with `Task: 19` and make aggregate-suite fixtures deterministic.
+
+#### Assumptions
+
+- [load-bearing, confirmed] The wiring-label correction and both reliability
+  corrections belong to this feature's approved scope.
+  - Impact if wrong: the plan would authorize unrelated work.
+  - Confirmed by: operator approval, 2026-07-31 ("all approved").
+
+**Verdict: CLEAR.**
+
 ## Technical Approach
 
 - Declare a second built-in `StepGroup` for deterministic BUILD verification,
@@ -408,13 +442,15 @@ catalog removal, interactive CLI guidance, and the consumer migration.
    cap-one order, single failure, dual failure, no paid review, and downstream
    SHIP ordering using injected internal fakes.
 2. Verify the acceptance file fails before the final fixture updates (RED).
-3. Make only fixture/contract corrections exposed by the matrix; do not invoke
+3. Make only fixture/contract corrections exposed by the matrix, including the
+   operator-approved aggregate-safe synchronization in `engine-store-smoke.test.ts`
+   and dedicated-socket isolation in `tmux-leak-guard.test.ts`; do not invoke
    real providers or nest the configured aggregate suite inside Vitest.
 4. Run the focused acceptance files, test-covering typecheck, configured lint,
    and confirm all pass (GREEN).
 5. Commit with message: "test: pin deterministic build verification flow"
 
-**Files:** `src/conductor/test/integration/test-suite-gate-loop.acceptance.test.ts`, `src/conductor/test/wiring-gate-loop.test.ts`, `src/conductor/test/acceptance/full-suite-verification-gate.acceptance.test.ts`, `src/conductor/test/engine/deterministic-build-verification-group.test.ts`
+**Files:** `src/conductor/test/integration/test-suite-gate-loop.acceptance.test.ts`, `src/conductor/test/wiring-gate-loop.test.ts`, `src/conductor/test/acceptance/full-suite-verification-gate.acceptance.test.ts`, `src/conductor/test/engine/deterministic-build-verification-group.test.ts`, `src/conductor/test/engine/engine-store-smoke.test.ts`, `src/conductor/test/engine/tmux-leak-guard.test.ts`
 
 **Wired-into:** none (no new production surface)
 
