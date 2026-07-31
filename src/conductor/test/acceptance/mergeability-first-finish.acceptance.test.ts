@@ -183,7 +183,7 @@ describe('mergeability-first daemon finish', () => {
         sealPreserved: sealBefore,
         translationCalls: 0,
         rebaseState: 'done',
-        hasDistinctSkipEvent: false,
+        hasDistinctSkipEvent: true,
       });
     },
     30_000,
