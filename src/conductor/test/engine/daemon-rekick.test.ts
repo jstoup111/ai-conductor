@@ -733,6 +733,44 @@ describe('engine/daemon-rekick — resumeRebaseFirst (FR-12)', () => {
     expect(await fileExists(join(dir, REKICK_SENTINEL))).toBe(false);
   });
 
+  it('play-forwards a cleanly mergeable base commit before the pending gate retries', async () => {
+    await initFeatureRepo();
+    await git('checkout', 'main');
+    await writeFile(
+      join(dir, 'src/pending-gate-input.ts'),
+      'export const requiredByPendingGate = true;\n',
+    );
+    await git('add', 'src/pending-gate-input.ts');
+    await git('commit', '-m', 'base: add pending gate input');
+    const baseSha = await git('rev-parse', 'HEAD');
+    await git('checkout', 'feature/foo');
+    expect(await branchContains(baseSha)).toBe(false);
+
+    await writeSentinel();
+    let pendingGateObservedBaseInput = false;
+    const res = await resumeRebaseFirst({
+      worktreePath: dir,
+      localBase: 'main',
+      events,
+      ranManualTest: false,
+      preVerify: async (step) => {
+        expect(step).toBe('build');
+        expect(await branchContains(baseSha)).toBe(true);
+        await expect(readFile(join(dir, 'src/pending-gate-input.ts'), 'utf8')).resolves.toContain(
+          'requiredByPendingGate',
+        );
+        pendingGateObservedBaseInput = true;
+        return { done: true };
+      },
+    });
+
+    // A finish-only mergeable skip would leave the base commit out of the
+    // worktree and never call this pending-gate retry seam.
+    expect(res).toBe('rebased');
+    expect(pendingGateObservedBaseInput).toBe(true);
+    expect(await branchContains(baseSha)).toBe(true);
+  });
+
   // Branch and base edit the SAME file differently → guaranteed rebase conflict.
   async function initConflictRepo(): Promise<void> {
     await initTestRepo(dir);
