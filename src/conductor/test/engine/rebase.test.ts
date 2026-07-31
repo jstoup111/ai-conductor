@@ -18,6 +18,7 @@ import {
   applyRebaseVerdicts,
   emitRebaseEvent,
   emitGateInvalidationEvents,
+  performRebase,
   type GitRunner,
   type GitResult,
   type RebaseOutcome,
@@ -79,6 +80,38 @@ describe('engine/rebase — classifyProspectiveMerge (Task 1)', () => {
     ]);
 
     await expect(classifyProspectiveMerge(git, 'origin/main')).resolves.toBe('indeterminate');
+  });
+});
+
+describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
+  it('returns mergeable_skip without starting a rebase when a behind feature can merge cleanly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-'));
+    try {
+      const { git, calls } = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
+        {
+          match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'],
+          result: { exitCode: 0 },
+        },
+      ]);
+
+      const outcome = await performRebase(git, root, 'main', {
+        finishMergeabilityCheck: true,
+      });
+
+      expect({
+        outcome,
+        startedRebase: calls.some((args) => args[0] === 'rebase'),
+      }).toEqual({
+        outcome: { kind: 'mergeable_skip' },
+        startedRebase: false,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 });
 

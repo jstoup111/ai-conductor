@@ -549,6 +549,7 @@ export async function writeSealHalt(projectRoot: string, reason: string): Promis
 
 export type RebaseOutcome =
   | { kind: 'noop' }
+  | { kind: 'mergeable_skip' }
   | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
   | { kind: 'changelog_resolved' }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
@@ -566,12 +567,19 @@ export class ProtectedArtifactSealRejection extends Error {
  * conductor's verdict/selector wiring — the caller writes verdicts + events.
  *
  *   noop               → branch already current; nothing to do (FR-4).
+ *   mergeable_skip      → behind but cleanly mergeable at normal finish.
  *   changed            → clean rebase that changed code/test paths (FR-5).
  *   changelog_resolved → CHANGELOG-only conflict auto-resolved (FR-7).
  *   conflict_halt      → any other / mixed conflict (FR-8); rebase left paused.
  */
 /** Optional capabilities injectable into `performRebase` (Task 15). */
 export interface PerformRebaseOpts {
+  /**
+   * Enables the normal-finish-only prospective-merge policy. Omitted callers
+   * retain the mandatory rebase required by recovery/re-kick paths.
+   */
+  finishMergeabilityCheck?: boolean;
+
   /**
    * Post-rebase evidence-citation translation (adr-2026-07-12-rebase-evidence-
    * stamp-translation.md), invoked on ANY clean rebase that actually ran
@@ -625,6 +633,16 @@ export async function performRebase(
   // FR-4: already current → no-op, no re-verification.
   if (await isBranchCurrent(git, base.ref)) {
     return { kind: 'noop' };
+  }
+
+  // Normal finish needs merge readiness, while recovery callers need the base
+  // commit in their worktree. Only the explicit finish policy may skip a real
+  // rebase, and it does so before all rebase-only mutation/preflight work.
+  if (
+    opts?.finishMergeabilityCheck &&
+    (await classifyProspectiveMerge(git, base.ref)) === 'clean'
+  ) {
+    return { kind: 'mergeable_skip' };
   }
 
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
@@ -1068,7 +1086,7 @@ export async function applyRebaseVerdicts(
         ? 'branch already current with base'
         : outcome.kind === 'changelog_resolved'
           ? 'CHANGELOG-only conflict auto-resolved; branch current'
-          : outcome.featureSurface === undefined
+          : outcome.kind === 'changed' && outcome.featureSurface === undefined
             ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
             : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
