@@ -2,7 +2,7 @@
  * Auto-resolve tests for eligibility gate and Tier 2 dispatch.
  *
  * Tests for `isEligibleForResolve` exercise the eligibility gate with
- * injected dependencies (fs module) for deterministic testing.
+ * injected feature-run activity predicates for deterministic testing.
  * Each test case verifies one eligibility condition.
  *
  * Tests for `runTier2` exercise the bounded rebase-conflict resolution
@@ -53,25 +53,18 @@ describe('engine/autoresolve — eligibility gate', () => {
     },
   };
 
-  // Mock fs object with configurable behavior
-  const makeMockFs = (opts: { worktreeExists?: boolean } = {}) => {
-    return {
-      worktreeExists: async (_path: string): Promise<boolean> => {
-        return opts.worktreeExists ?? false;
-      },
-    };
-  };
+  const makeIsFeatureInFlight = (active = false) => (_slug: string): boolean => active;
 
   const now = new Date('2026-01-15T12:00:00Z');
 
   it('happy path: all conditions met → eligible', async () => {
-    // No attempts yet, cooldown not applicable, worktree absent, no labels
+    // No attempts yet, cooldown not applicable, no labels, and the feature run is idle.
     const eligible = await isEligibleForResolve(
       baseEntry,
       basePrState,
       baseConfig,
       now,
-      makeMockFs(),
+      makeIsFeatureInFlight(),
     );
     expect(eligible).toEqual({ eligible: true });
   });
@@ -88,7 +81,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       basePrState,
       config,
       now,
-      makeMockFs(),
+      makeIsFeatureInFlight(),
     );
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('disabled');
@@ -104,7 +97,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       prState,
       baseConfig,
       now,
-      makeMockFs(),
+      makeIsFeatureInFlight(),
     );
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('needs-remediation');
@@ -117,7 +110,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       lastResolveAt: new Date('2026-01-15T11:30:00Z').toISOString(), // 30 min ago
     };
     // Cooldown is 60 minutes, so 30 minutes is not enough
-    const result = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeMockFs());
+    const result = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeIsFeatureInFlight());
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('cooldown');
   });
@@ -129,7 +122,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       resolveAttempts: 3,
       lastResolveAt: new Date('2026-01-01T00:00:00Z').toISOString(), // long ago
     };
-    const result = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeMockFs());
+    const result = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeIsFeatureInFlight());
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('attempt');
   });
@@ -144,7 +137,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       prState,
       baseConfig,
       now,
-      makeMockFs(),
+      makeIsFeatureInFlight(),
     );
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('MERGED');
@@ -160,7 +153,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       prState,
       baseConfig,
       now,
-      makeMockFs(),
+      makeIsFeatureInFlight(),
     );
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('CLOSED');
@@ -176,23 +169,22 @@ describe('engine/autoresolve — eligibility gate', () => {
       prState,
       baseConfig,
       now,
-      makeMockFs(),
+      makeIsFeatureInFlight(),
     );
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('UNKNOWN');
   });
 
-  it('worktree already exists → not eligible', async () => {
-    const mockFs = makeMockFs({ worktreeExists: true });
+  it('active feature run → not eligible', async () => {
     const result = await isEligibleForResolve(
       baseEntry,
       basePrState,
       baseConfig,
       now,
-      mockFs,
+      makeIsFeatureInFlight(true),
     );
     expect(result.eligible).toBe(false);
-    expect(result.reason).toContain('worktree');
+    expect(result.reason).toContain('active feature run');
   });
 
   it('respects custom rebase_resolution_attempts cap', async () => {
@@ -205,7 +197,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       resolveAttempts: 2,
       lastResolveAt: new Date('2026-01-01T00:00:00Z').toISOString(),
     };
-    const result = await isEligibleForResolve(entry, basePrState, config, now, makeMockFs());
+    const result = await isEligibleForResolve(entry, basePrState, config, now, makeIsFeatureInFlight());
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('attempt');
   });
@@ -216,7 +208,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       resolveAttempts: 1,
       lastResolveAt: new Date('2026-01-15T11:00:00Z').toISOString(), // exactly 60 min ago
     };
-    const eligible = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeMockFs());
+    const eligible = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeIsFeatureInFlight());
     expect(eligible.eligible).toBe(true);
   });
 
@@ -226,7 +218,7 @@ describe('engine/autoresolve — eligibility gate', () => {
       resolveAttempts: 1,
       lastResolveAt: new Date('2026-01-15T11:00:01Z').toISOString(), // 59:59 min ago
     };
-    const result = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeMockFs());
+    const result = await isEligibleForResolve(entry, basePrState, baseConfig, now, makeIsFeatureInFlight());
     expect(result.eligible).toBe(false);
     expect(result.reason).toContain('cooldown');
   });

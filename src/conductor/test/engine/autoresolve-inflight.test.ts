@@ -89,9 +89,7 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
     },
   };
 
-  const fs = {
-    worktreeExists: async (_path: string): Promise<boolean> => false,
-  };
+  const isFeatureInFlight = async (_slug: string): Promise<boolean> => false;
 
   async function retainFeatureWorktree(slug: string): Promise<{
     path: string;
@@ -151,7 +149,7 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
       // A different PR (entryB, different slug) must be rejected while pr-1's
       // resolution is in flight — the serial guard is process-wide, not
       // per-slug.
-      elig = await isEligibleForResolve(entryB, prState, cfg, new Date(), fs, (m) => logs.push(m));
+      elig = await isEligibleForResolve(entryB, prState, cfg, new Date(), isFeatureInFlight, (m) => logs.push(m));
       return { ok: true };
     });
 
@@ -165,7 +163,7 @@ describe('engine/autoresolve — in-flight serial guard across ticks (Task 18)',
       ok: true,
     }));
 
-    const elig = await isEligibleForResolve(entryA, prState, cfg, new Date(), fs);
+    const elig = await isEligibleForResolve(entryA, prState, cfg, new Date(), isFeatureInFlight);
     expect(elig.eligible).toBe(true);
   });
 

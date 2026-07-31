@@ -41,16 +41,9 @@ import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js
 const execFile = promisify(execFileCb);
 
 /**
- * File system interface — injected for testability.
- * In production, this wraps node fs.promises.
+ * Read-only feature-run activity predicate injected by the daemon pool.
  */
-export interface AutoresolveFs {
-  /**
-   * Check if a worktree directory exists at the given path.
-   * @param path The worktree path to check (e.g., `.worktrees/<slug>`)
-   */
-  worktreeExists(path: string): Promise<boolean>;
-}
+export type IsFeatureInFlight = (slug: string) => boolean | Promise<boolean>;
 
 /**
  * Result of eligibility check. When `eligible` is false, `reason` explains why.
@@ -96,7 +89,7 @@ export function logOutcome(
  *   3. PR does not have needs-remediation label (sticky)
  *   4. Cooldown time has elapsed since last attempt
  *   5. Attempt count is below the configured cap
- *   6. Worktree does not already exist (avoiding concurrent prepares)
+ *   6. Feature run is not active for this slug
  *
  * Each rejection is logged with a reason. The function returns early on the
  * first rejection for efficiency.
@@ -105,7 +98,7 @@ export function logOutcome(
  * @param prState The current PR merge state (from gh)
  * @param cfg The harness configuration (may be undefined)
  * @param now The current timestamp for cooldown calculation
- * @param fs Injected fs module for testability
+ * @param isFeatureInFlight Injected daemon-pool activity predicate
  * @param logger Optional logging function (default: console.log). When the PR
  *               is deemed ineligible, one `skipped(<reason>)` outcome line
  *               (FR-16) is emitted via {@link logOutcome}.
@@ -115,10 +108,10 @@ export async function isEligibleForResolve(
   prState: PrMergeState,
   cfg: HarnessConfig | undefined,
   now: Date,
-  fs: AutoresolveFs,
+  isFeatureInFlight: IsFeatureInFlight,
   logger?: (msg: string) => void,
 ): Promise<EligibilityResult> {
-  const result = await evaluateEligibilityGates(entry, prState, cfg, now, fs);
+  const result = await evaluateEligibilityGates(entry, prState, cfg, now, isFeatureInFlight);
 
   if (!result.eligible) {
     const log = logger ?? console.log;
@@ -138,7 +131,7 @@ async function evaluateEligibilityGates(
   prState: PrMergeState,
   cfg: HarnessConfig | undefined,
   now: Date,
-  fs: AutoresolveFs,
+  isFeatureInFlight: IsFeatureInFlight,
 ): Promise<EligibilityResult> {
   // Gate 0 (Task 18): process-wide in-flight serial guard. While ANY
   // resolution is running (any slug), no other PR may be dispatched — the
@@ -213,15 +206,12 @@ async function evaluateEligibilityGates(
     };
   }
 
-  // Gate 6: Worktree does not exist
-  // The worktree path follows the pattern `.worktrees/<slug>`.
-  // Extract slug from the entry and construct the expected path.
-  const worktreePath = `.worktrees/${entry.slug}`;
-  const worktreeExists = await fs.worktreeExists(worktreePath);
-  if (worktreeExists) {
+  // Gate 6: no active daemon feature run owns this slug. A retained worktree
+  // is not proof of ownership and must not affect eligibility.
+  if (await isFeatureInFlight(entry.slug)) {
     return {
       eligible: false,
-      reason: `retained build worktree already exists at ${worktreePath}; concurrent prepare in progress`,
+      reason: `active feature run for ${entry.slug}; resolution deferred`,
     };
   }
 
