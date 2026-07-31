@@ -541,9 +541,9 @@ export interface WaitingItem {
  *   `unowned-post-cutover`/`unowned-indeterminate` are no longer produced),
  *   the other operator's id when known, and an operator-actionable remedy
  *   hint.
- * - `kind: 'repo'` — a repo-scoped (non-slug) owner-gate condition: either the
- *   daemon's own identity is unresolved (fail-closed, nothing scanned this
- *   pass) or the gate is active with no grandfather cutover configured.
+ * - `kind: 'repo'` — a repo-scoped (non-slug) owner-gate condition only when
+ *   the daemon's own identity is unresolved (fail-closed, nothing scanned this
+ *   pass). Resolved unowned specs default-build and receive a per-spec log.
  *
  * Populated by later tasks in this plan; `discoverBacklog` returns `gated: []`
  * unconditionally until then (this task only introduces the type + shape).
