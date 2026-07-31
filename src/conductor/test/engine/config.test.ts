@@ -1268,41 +1268,29 @@ complexity:
     });
   });
 
-  // Task 1 (#505): attribution_enforcement_cutover — mirrors owner_gate_cutover's
-  // validation pattern but with its own activation predicate.
-  describe('attribution_enforcement_cutover config field', () => {
-    it('parses and exposes attribution_enforcement_cutover', () => {
-      const result = validateConfig({
-        attribution_enforcement_cutover: '2026-06-30T00:00:00Z',
-      });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.attribution_enforcement_cutover).toBe('2026-06-30T00:00:00Z');
-    });
-
-    it('is optional — absent key parses fine', () => {
-      const result = validateConfig({ harness_version: '>=1.0.0' });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.attribution_enforcement_cutover).toBeUndefined();
-    });
-
-    it('REJECTS a malformed (unparseable) attribution_enforcement_cutover with a clear error', () => {
-      const result = validateConfig({ attribution_enforcement_cutover: 'not-a-date' });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.type).toBe('validation_error');
-      expect(result.error.message).toMatch(/attribution_enforcement_cutover.*not.*parseable/i);
-      expect(result.error.message).toMatch(/not-a-date/);
-    });
-
-    it('rejects a non-string attribution_enforcement_cutover', () => {
-      const result = validateConfig({ attribution_enforcement_cutover: 1234 });
-      expect(result.ok).toBe(false);
-      if (result.ok) return;
-      expect(result.error.message).toMatch(
-        /attribution_enforcement_cutover must be an ISO-8601 date string/,
+  describe('retired attribution cutover config keys', () => {
+    it('rejects retired cutovers as unknown while retaining audit sample resolution', () => {
+      const retiredKeyOutcomes = Object.fromEntries(
+        ['attribution_enforcement_cutover', 'attribution_judge_cutover'].map((key) => {
+          const result = validateConfig({ [key]: '2026-01-01T00:00:00Z' });
+          return [key, result.ok ? 'accepted' : result.error.message];
+        }),
       );
+      const auditSampleResult = validateConfig({ attribution_audit_sample_pct: 25 });
+
+      expect({
+        retiredKeyOutcomes,
+        auditSamplePct: auditSampleResult.ok
+          ? auditSampleResult.config.attribution_audit_sample_pct
+          : auditSampleResult.error.message,
+      }).toEqual({
+        retiredKeyOutcomes: {
+          attribution_enforcement_cutover:
+            'Unknown top-level key: "attribution_enforcement_cutover"',
+          attribution_judge_cutover: 'Unknown top-level key: "attribution_judge_cutover"',
+        },
+        auditSamplePct: 25,
+      });
     });
   });
 

@@ -247,10 +247,6 @@ export function validateConfig(
     // Owner-gate (adr-2026-06-30-*): operator identity + grandfather cutover.
     'spec_owner',
     'owner_gate_cutover',
-    // Deprecated compatibility input. Enforcement retired in #773.
-    'attribution_enforcement_cutover',
-    // Attribution judge cutover + audit sample pct (Task 11): semantic judgment gate.
-    'attribution_judge_cutover',
     'attribution_audit_sample_pct',
     // Rebase auto-resolution attempt cap (rebase-resolution-skill).
     'rebase_resolution_attempts',
@@ -689,39 +685,9 @@ export function validateConfig(
     }
   }
 
-  // Deprecated compatibility input: keep accepting the former ISO-8601 shape
-  // so existing consumer configs continue to load, but it has no effect.
-  if (obj.attribution_enforcement_cutover !== undefined) {
-    if (typeof obj.attribution_enforcement_cutover !== 'string') {
-      return errVal('attribution_enforcement_cutover must be an ISO-8601 date string');
-    }
-    if (Number.isNaN(Date.parse(obj.attribution_enforcement_cutover))) {
-      return errVal(
-        `attribution_enforcement_cutover is not a parseable date: "${obj.attribution_enforcement_cutover}". ` +
-          'Use an ISO-8601 instant (e.g. 2026-06-30T00:00:00Z).',
-      );
-    }
-  }
-
-  // attribution_judge_cutover — the instant on/after which semantic
-  // attribution judgment gates activate (Task 11). Malformed values are a
-  // hard load-time error. Absent → judgment disabled.
-  if (obj.attribution_judge_cutover !== undefined) {
-    if (typeof obj.attribution_judge_cutover !== 'string') {
-      return errVal('attribution_judge_cutover must be an ISO-8601 date string');
-    }
-    if (Number.isNaN(Date.parse(obj.attribution_judge_cutover))) {
-      return errVal(
-        `attribution_judge_cutover is not a parseable date: "${obj.attribution_judge_cutover}". ` +
-          'Use an ISO-8601 instant (e.g. 2026-07-15T00:00:00Z).',
-      );
-    }
-  }
-
   // attribution_audit_sample_pct — audit sampling percentage [0, 100]
   // (Task 11). Numeric type required; out-of-range values are clamped with
-  // a startup warning. Absent → defaults to 10 (audit enabled but sampled).
-  // Inert when attribution_judge_cutover is absent.
+  // a startup warning. Absent → defaults to 10.
   if (obj.attribution_audit_sample_pct !== undefined) {
     if (typeof obj.attribution_audit_sample_pct !== 'number') {
       return errVal('attribution_audit_sample_pct must be a number');
