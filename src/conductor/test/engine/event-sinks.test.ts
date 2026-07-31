@@ -80,6 +80,8 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'verdict_freshness',
   'protected_artifact_rebaseline',
   'protected_artifact_rebaseline_refused',
+  'parallel_started',
+  'parallel_completed',
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;

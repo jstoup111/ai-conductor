@@ -40,6 +40,19 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders deterministic build verification group boundaries', () => {
+    expect(lines({
+      type: 'parallel_started',
+      step: 'build_verification',
+      branches: ['wiring_check', 'test_suite'],
+    })).toEqual(['· ▶ build_verification [wiring_check, test_suite]']);
+    expect(lines({
+      type: 'parallel_completed',
+      step: 'build_verification',
+      branches: ['wiring_check', 'test_suite'],
+    })).toEqual(['·   build_verification [wiring_check, test_suite] ✓ done']);
+  });
+
   it('renders failures', () => {
     expect(lines({ type: 'step_failed', step: 'build', error: 'boom', retryCount: 2 })).toEqual([
       '· ✗ build failed (try 2): boom',
@@ -337,6 +350,8 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'build_no_progress',
       'build_stall',
       'build_review_base',
+      'parallel_started',
+      'parallel_completed',
     ]);
 
     expect(renderingTypes).toEqual(expected);

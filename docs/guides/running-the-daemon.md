@@ -220,7 +220,9 @@ There is no configuration for this; the timing is fixed.
 ## Step heartbeat and the stall watchdog
 
 `daemon.log` records step boundaries, provider activity, build progress, and verdict-freshness
-decisions. For `build_review`, `prd_audit`, `architecture_review_as_built`, and preserved
+decisions. The deterministic BUILD group appears as start/completion lines naming both
+`wiring_check` and `test_suite`, so their execution remains visible before `build_review`. For
+`build_review`, `prd_audit`, `architecture_review_as_built`, and preserved
 `manual_test` evidence, the freshness line names the step and artifact:
 
 ```text
