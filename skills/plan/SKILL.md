@@ -36,6 +36,18 @@ updating ordinary project documentation—even when it accompanies functional wo
 requests belong to `/explore`'s direct delivery route. Plans cover only functional behavior and its
 implementation.
 
+### Amending a sealed plan
+
+The first BUILD entry seals DECIDE artifacts. If an operator approves a plan or architecture
+amendment after that boundary, committing the amendment does not update the existing
+`.pipeline/protected-artifact-seal.json`; the old baseline is intentionally retained until the
+change is reviewed and audited.
+
+Before clearing the resulting seal HALT or re-queueing the feature, review the exact protected
+artifact diff and rotate the seal with the engine-owned reseal procedure in the stalled-feature
+runbook. Record the approved paths and use an honest operator-review trigger. A pre-rebase seal
+refusal is not a git conflict: do not invoke the rebase resolver or run `git rebase --continue`.
+
 ## Practices
 
 ### 1. Validate Preconditions

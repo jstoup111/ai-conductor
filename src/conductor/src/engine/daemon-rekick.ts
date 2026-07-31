@@ -10,6 +10,8 @@ import {
   emitRebaseEvent,
   recordRebaseStepCompletion,
   writeHalt,
+  writeSealHalt,
+  ProtectedArtifactSealRejection,
   type RebaseOutcome,
   type RebaseResolver,
   type GitRunner,
@@ -484,6 +486,11 @@ export async function resumeRebaseFirst(opts: {
   try {
     outcome = await performRebase(git, opts.worktreePath, opts.localBase, { translateAfterRebase });
   } catch (err) {
+    if (err instanceof ProtectedArtifactSealRejection) {
+      await writeSealHalt(opts.worktreePath, err.message);
+      opts.log?.(`re-kick ${basename(opts.worktreePath)}: protected-artifact seal error — re-parked`);
+      return 'halted';
+    }
     outcome = {
       kind: 'conflict_halt',
       conflicts: [],

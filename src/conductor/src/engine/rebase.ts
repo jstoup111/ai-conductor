@@ -513,6 +513,19 @@ export async function writeHalt(
   await writeHaltMarker(projectRoot, note, 'needs-human');
 }
 
+/** Park a seal refusal that happened before git started a rebase. */
+export async function writeSealHalt(projectRoot: string, reason: string): Promise<void> {
+  const note =
+    `protected-artifact seal error\n` +
+    `${reason}\n\n` +
+    `Recovery procedure:\n` +
+    `  1. Review the protected-artifact diff and confirm the amendment is authorized.\n` +
+    `  2. Perform an audited reseal with the engine rotation function.\n` +
+    `  3. Clear .pipeline/HALT and .pipeline/HALT.class, then re-queue the feature.\n\n` +
+    `This refusal happens before and does not start a git rebase; do not run git rebase --continue.\n`;
+  await writeHaltMarker(projectRoot, note, 'needs-human');
+}
+
 // ── Outcome model ────────────────────────────────────────────────────────────
 
 export type RebaseOutcome =
@@ -520,6 +533,14 @@ export type RebaseOutcome =
   | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
   | { kind: 'changelog_resolved' }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
+
+/** A protected-artifact refusal raised before git starts a rebase. */
+export class ProtectedArtifactSealRejection extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = 'ProtectedArtifactSealRejection';
+  }
+}
 
 /**
  * Perform the rebase end to end and return a classified outcome. Pure of the
@@ -596,7 +617,7 @@ export async function performRebase(
       projectRoot,
       baseBranch: base.branch,
     });
-    if (!verdict.ok) throw new Error(verdict.reason);
+    if (!verdict.ok) throw new ProtectedArtifactSealRejection(verdict.reason);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
