@@ -438,7 +438,9 @@ export interface DaemonDeps {
    * knowledge of projectRoot. Best-effort: a throw is caught and logged by
    * `runDaemon`; the daemon loop is never disrupted.
    */
-  sweepMergeableLabels?: () => Promise<void>;
+  sweepMergeableLabels?: (context: {
+    readonly isFeatureInFlight: (slug: string) => boolean;
+  }) => Promise<void>;
 
   // ── Task T28: daemon self-restart at idle boundary ──────────────────────
   /**
@@ -621,7 +623,9 @@ export async function runDaemon(
       log(`[daemon] reconcileParkedFeatures error: ${err instanceof Error ? err.message : String(err)}`);
     }
     try {
-      await deps.sweepMergeableLabels?.();
+      await deps.sweepMergeableLabels?.({
+        isFeatureInFlight: (slug) => inFlight.has(slug),
+      });
     } catch (err) {
       log(`[daemon] sweepMergeableLabels error: ${err instanceof Error ? err.message : String(err)}`);
     }
