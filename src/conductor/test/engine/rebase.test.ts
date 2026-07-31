@@ -215,6 +215,76 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
       await rm(repo, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    {
+      name: 'returns an unexpected prospective-merge exit status',
+      prospective: { exitCode: 128, stderr: 'fatal: merge-tree unavailable' },
+      rebaseStderr: 'fatal: rebase could not start',
+    },
+    {
+      name: 'loses the prospective target ref before it can be assessed',
+      prospective: { exitCode: 128, stderr: "fatal: unknown revision 'main'" },
+      rebaseStderr: "fatal: invalid upstream 'main'",
+    },
+  ])('does not return mergeable_skip when it $name (Task 5)', async ({ prospective, rebaseStderr }) => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-indeterminate-'));
+    try {
+      const { git, calls } = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
+        { match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'], result: prospective },
+        { match: ['rebase', '--autostash', 'main'], result: { exitCode: 2, stderr: rebaseStderr } },
+      ]);
+
+      // An indeterminate assessment must retain the established actual-rebase
+      // failure conversion, rather than claiming the feature is mergeable.
+      await expect(
+        performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
+      ).resolves.toEqual({
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: rebaseStderr,
+      });
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not return mergeable_skip when the prospective-merge runner throws (Task 5)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-indeterminate-'));
+    const calls: string[][] = [];
+    const rebaseStderr = 'fatal: rebase could not start';
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'merge-tree') throw new Error('simulated merge-tree runner failure');
+      if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') {
+        return { exitCode: 0, stdout: 'true\n', stderr: '' };
+      }
+      if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '1\n', stderr: '' };
+      if (args[0] === 'rebase') return { exitCode: 2, stdout: '', stderr: rebaseStderr };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    try {
+      // A thrown assessment is just as indeterminate as an unexpected exit:
+      // it must reach the old rebase failure conversion instead of escaping.
+      await expect(
+        performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
+      ).resolves.toEqual({
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: rebaseStderr,
+      });
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {

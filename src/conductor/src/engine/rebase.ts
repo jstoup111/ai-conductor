@@ -53,10 +53,14 @@ export async function classifyProspectiveMerge(
   git: GitRunner,
   baseRef: string,
 ): Promise<ProspectiveMergeResult> {
-  const { exitCode } = await git(['merge-tree', '--write-tree', '--quiet', baseRef, 'HEAD']);
-  if (exitCode === 0) return 'clean';
-  if (exitCode === 1) return 'conflicting';
-  return 'indeterminate';
+  try {
+    const { exitCode } = await git(['merge-tree', '--write-tree', '--quiet', baseRef, 'HEAD']);
+    if (exitCode === 0) return 'clean';
+    if (exitCode === 1) return 'conflicting';
+    return 'indeterminate';
+  } catch {
+    return 'indeterminate';
+  }
 }
 
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
