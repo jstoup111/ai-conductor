@@ -1129,6 +1129,94 @@ describe('CodexProvider', () => {
   });
 
   it.each([
+    {
+      name: 'initial automatic stream succeeds',
+      resume: false,
+      response: { stdout: 'Real invocation completed.', stderr: '', exitCode: 0 },
+      expected: { success: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports authentication failure',
+      resume: true,
+      response: {
+        stdout: '',
+        stderr: 'Authentication required. Please run codex login.',
+        exitCode: 1,
+      },
+      expected: { success: false, authFailure: true },
+      authenticationState: 'unusable',
+    },
+    {
+      name: 'resumed automatic stream reports unavailable provider',
+      resume: true,
+      response: { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
+      expected: { success: false, providerUnavailable: true },
+      authenticationState: 'ready',
+    },
+    {
+      name: 'resumed automatic stream reports a rate limit',
+      resume: true,
+      response: { stdout: '', stderr: 'Error 429: rate limit exceeded', exitCode: 1 },
+      expected: { success: false, rateLimited: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports a permission denial',
+      resume: true,
+      response: {
+        stdout: '',
+        stderr: 'Codex automatic review denied the permission request.',
+        exitCode: 1,
+      },
+      expected: { success: false, permissionDenied: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports an unavailable model',
+      resume: true,
+      response: { stdout: '', stderr: 'Requested model gpt-nope is not available', exitCode: 1 },
+      expected: { success: false, modelUnavailable: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports an expired session',
+      resume: true,
+      response: { stdout: '', stderr: 'Thread not found; cannot resume this session', exitCode: 1 },
+      expected: { success: false, sessionExpired: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports an ordinary failure',
+      resume: true,
+      response: { stdout: '', stderr: 'ordinary failure', exitCode: 1 },
+      expected: { success: false },
+      authenticationState: 'probe-failed',
+    },
+  ] as const)(
+    'preserves the real result after a failed doctor probe when $name',
+    async ({ resume, response, expected, authenticationState }) => {
+      const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
+      const degradedProvider = new CodexProvider(runDoctor);
+      mockExeca.mockResolvedValue(response as any);
+
+      const result = await degradedProvider.invokeInteractive({
+        ...baseOptions,
+        interactive: false,
+        resume,
+      });
+
+      expect(mockExeca).toHaveBeenCalledOnce();
+      expect(result).toMatchObject(expected);
+      expect(result.authentication).toMatchObject({
+        provider: 'codex',
+        source: 'cached-login',
+        state: authenticationState,
+      });
+    },
+  );
+
+  it.each([
     ['missing', 'no Codex credentials were found', 'missing'],
     ['unusable', 'cached credentials expired', 'unusable'],
   ] as const)(

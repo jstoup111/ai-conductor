@@ -285,7 +285,9 @@ export class CodexProvider implements LLMProvider {
     const readiness = options.interactive
       ? undefined
       : await this.readiness(options.spawnPermit);
-    if (readiness && readiness.state !== 'ready') return this.readinessFailure(readiness);
+    if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
+      return this.readinessFailure(readiness);
+    }
 
     const authentication = this.authentication;
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
