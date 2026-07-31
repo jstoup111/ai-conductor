@@ -126,6 +126,14 @@ export async function loadConfig(
   projectRoot: string,
   harnessVersion?: string,
 ): Promise<ConfigResult> {
+  return loadProjectConfig(projectRoot, harnessVersion, true);
+}
+
+async function loadProjectConfig(
+  projectRoot: string,
+  harnessVersion: string | undefined,
+  materializeDefaults: boolean,
+): Promise<ConfigResult> {
   // One-shot: relocate legacy .harness/config.yml into .ai-conductor/ on first
   // call. Idempotent — no-op if the new location already exists or legacy is
   // absent.
@@ -161,7 +169,10 @@ export async function loadConfig(
     return { ok: false, error: { type: 'parse_error', message } };
   }
 
-  const validation = validateConfig(parsed, projectRoot, { source: 'project' });
+  const validation = validateConfig(parsed, projectRoot, {
+    source: 'project',
+    materializeDefaults,
+  });
   if (!validation.ok) return validation;
 
   if (harnessVersion && validation.config.harness_version) {
@@ -189,6 +200,7 @@ export async function loadConfig(
  */
 export interface ValidateConfigOpts {
   source?: 'project' | 'merged';
+  materializeDefaults?: boolean;
 }
 
 export function validateConfig(
@@ -196,6 +208,8 @@ export function validateConfig(
   projectRoot?: string,
   opts: ValidateConfigOpts = {},
 ): ConfigResult {
+  const materializeDefaults = opts.materializeDefaults ?? true;
+
   if (raw === null || raw === undefined) {
     return { ok: true, config: {}, warnings: [] };
   }
@@ -207,7 +221,7 @@ export function validateConfig(
     };
   }
 
-  const obj = raw as Record<string, unknown>;
+  const obj = cloneForValidation(raw) as Record<string, unknown>;
   const warnings: ConfigWarning[] = [];
 
   const knownTopLevelKeys = new Set([
@@ -608,7 +622,7 @@ export function validateConfig(
     if (typeof obj.reconcile_parked_auto_cleanup !== 'boolean') {
       return errVal('reconcile_parked_auto_cleanup must be a boolean');
     }
-  } else {
+  } else if (materializeDefaults) {
     obj.reconcile_parked_auto_cleanup = true;
   }
 
@@ -720,7 +734,7 @@ export function validateConfig(
       );
       obj.attribution_audit_sample_pct = clamped;
     }
-  } else {
+  } else if (materializeDefaults) {
     // Absent → default to 10
     obj.attribution_audit_sample_pct = 10;
   }
@@ -790,7 +804,7 @@ export function validateConfig(
       );
       obj.auto_restart_on_stale_engine = false;
     }
-  } else {
+  } else if (obj.auto_restart_on_stale_engine === null || materializeDefaults) {
     // C1: absent or null → false without warning
     obj.auto_restart_on_stale_engine = false;
   }
@@ -819,7 +833,7 @@ export function validateConfig(
       );
       obj.engine_refresh_min_interval_seconds = 300;
     }
-  } else {
+  } else if (obj.engine_refresh_min_interval_seconds === null || materializeDefaults) {
     // C1: absent or null → 300 without warning
     obj.engine_refresh_min_interval_seconds = 300;
   }
@@ -898,7 +912,7 @@ export function validateConfig(
       );
       obj.build_review = { enabled: true };
     }
-  } else {
+  } else if (obj.build_review === null || materializeDefaults) {
     obj.build_review = { enabled: true };
   }
 
@@ -924,7 +938,7 @@ export function validateConfig(
     } else {
       obj.ci_watch = { enabled: true };
     }
-  } else {
+  } else if (obj.ci_watch === null || materializeDefaults) {
     obj.ci_watch = { enabled: true };
   }
 
@@ -936,7 +950,9 @@ export function validateConfig(
         : FALLBACK_RETRIES;
     const err = validateBuildProgressHaltBlock(obj.build_progress_halt, resolvedMaxRetries);
     if (err) return { ok: false, error: err };
-    obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+    if (obj.build_progress_halt !== undefined || materializeDefaults) {
+      obj.build_progress_halt = resolveBuildProgressHaltBlock(obj.build_progress_halt);
+    }
   }
 
   // kickback_escalation — kickback→build no-op escalation (D2).
@@ -961,7 +977,7 @@ export function validateConfig(
     } else {
       obj.kickback_escalation = { enabled: true };
     }
-  } else {
+  } else if (obj.kickback_escalation === null || materializeDefaults) {
     obj.kickback_escalation = { enabled: true };
   }
 
@@ -969,7 +985,9 @@ export function validateConfig(
   {
     const err = validateRetryRoutingBlock(obj.retry_routing);
     if (err) return { ok: false, error: err };
-    obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
+    if (obj.retry_routing !== undefined || materializeDefaults) {
+      obj.retry_routing = resolveRetryRoutingBlock(obj.retry_routing);
+    }
   }
 
   return { ok: true, config: obj as HarnessConfig, warnings };
@@ -1652,6 +1670,27 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
 }
 
+function cloneForValidation<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return cloneValidationGraph(value, new WeakMap<object, unknown>());
+  }
+}
+
+function cloneValidationGraph<T>(value: T, seen: WeakMap<object, unknown>): T {
+  if (value === null || typeof value !== 'object') return value;
+  const existing = seen.get(value);
+  if (existing !== undefined) return existing as T;
+
+  const copy: Record<string, unknown> | unknown[] = Array.isArray(value) ? [] : {};
+  seen.set(value, copy);
+  for (const [key, entry] of Object.entries(value)) {
+    (copy as Record<string, unknown>)[key] = cloneValidationGraph(entry, seen);
+  }
+  return copy as T;
+}
+
 /**
  * Deep-merge project config on top of user config. Objects merge key-by-key;
  * scalars and arrays from `project` replace `user`.
@@ -1684,7 +1723,7 @@ export async function loadMergedConfig(
   projectRoot: string,
   harnessVersion?: string,
 ): Promise<ConfigResult> {
-  const projectResult = await loadConfig(projectRoot, harnessVersion);
+  const projectResult = await loadProjectConfig(projectRoot, harnessVersion, false);
   if (!projectResult.ok) return projectResult;
 
   const userResult = await readUserConfig();
@@ -1700,7 +1739,7 @@ export async function loadMergedConfig(
 
   const merged = mergeConfigs(userResult.config, projectResult.config);
   // 'merged' source: the anti-leak guard already fired on the raw project file
-  // inside loadConfig above. Here a spec_owner can only have come from the USER
+  // inside loadProjectConfig above. Here a spec_owner can only have come from the USER
   // config, which is its legitimate home — so the guard must NOT reject it.
   const validated = validateConfig(merged, projectRoot, { source: 'merged' });
   if (!validated.ok) return validated;

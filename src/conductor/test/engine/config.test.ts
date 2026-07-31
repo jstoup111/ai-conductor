@@ -112,9 +112,303 @@ complexity:
       expect(result.config.complexity?.default_tier).toBe('M');
       expect(result.warnings).toEqual([]);
     });
+
+    it('keeps public project-only loading runtime-ready while the pre-merge pass defers defaults', async () => {
+      await writeFile(join(tmpDir, '.ai-conductor', 'config.yml'), '{}\n');
+
+      const ordinary = await loadConfig(tmpDir);
+      const deferred = validateConfig({}, tmpDir, {
+        source: 'project',
+        materializeDefaults: false,
+      });
+
+      expect({
+        ordinary: ordinary.ok
+          ? {
+              auto_restart_on_stale_engine:
+                ordinary.config.auto_restart_on_stale_engine,
+              build_review: ordinary.config.build_review,
+              build_progress_halt: ordinary.config.build_progress_halt,
+            }
+          : ordinary,
+        deferred: deferred.ok
+          ? {
+              auto_restart_on_stale_engine:
+                deferred.config.auto_restart_on_stale_engine,
+              build_review: deferred.config.build_review,
+              build_progress_halt: deferred.config.build_progress_halt,
+            }
+          : deferred,
+      }).toEqual({
+        ordinary: {
+          auto_restart_on_stale_engine: false,
+          build_review: { enabled: true },
+          build_progress_halt: {
+            enabled: true,
+            attempt_ceiling: 30,
+            dispatch_ceiling: 20,
+          },
+        },
+        deferred: {
+          auto_restart_on_stale_engine: undefined,
+          build_review: undefined,
+          build_progress_halt: undefined,
+        },
+      });
+    });
   });
 
   describe('validateConfig', () => {
+    it('returns top-level and nested defaults without mutating the caller input', () => {
+      const input = {
+        harness_version: '>=1.0.0',
+        mergeable_autoresolve: { enabled: true },
+      };
+      const snapshot = structuredClone(input);
+
+      const result = validateConfig(input);
+
+      expect({
+        normalized: result.ok
+          ? {
+              auto_restart_on_stale_engine: result.config.auto_restart_on_stale_engine,
+              mergeable_autoresolve: result.config.mergeable_autoresolve,
+            }
+          : result,
+        original: input,
+        originalHasTopLevelDefault: Object.hasOwn(input, 'auto_restart_on_stale_engine'),
+        originalHasNestedDefault: Object.hasOwn(
+          input.mergeable_autoresolve,
+          'cooldownMinutes',
+        ),
+      }).toEqual({
+        normalized: {
+          auto_restart_on_stale_engine: false,
+          mergeable_autoresolve: {
+            enabled: true,
+            cooldownMinutes: 60,
+          },
+        },
+        original: snapshot,
+        originalHasTopLevelDefault: false,
+        originalHasNestedDefault: false,
+      });
+    });
+
+    it('preserves inputs across clamping, fallback, and unknown-key rejection', () => {
+      const clampedInput = {
+        attribution_audit_sample_pct: 150,
+        defaults: { model: 'sonnet' },
+      };
+      const fallbackInput = {
+        build_review: { enabled: 'banana' },
+        defaults: { effort: 'medium' },
+      };
+      const topLevelRejectionInput = {
+        defaults: { model: 'sonnet' },
+        unknown_key: 'value',
+      };
+      const nestedRejectionInput = {
+        steps: { memory: { model: 'haiku', bogus_key: 1 } },
+      };
+      const snapshots = structuredClone({
+        clampedInput,
+        fallbackInput,
+        topLevelRejectionInput,
+        nestedRejectionInput,
+      });
+
+      const clampedResult = validateConfig(clampedInput);
+      const fallbackResult = validateConfig(fallbackInput);
+      const topLevelRejectionResult = validateConfig(topLevelRejectionInput);
+      const nestedRejectionResult = validateConfig(nestedRejectionInput);
+
+      expect({
+        outcomes: {
+          clamped:
+            clampedResult.ok && clampedResult.config.attribution_audit_sample_pct === 100
+              ? clampedResult.warnings
+              : clampedResult,
+          fallback:
+            fallbackResult.ok && fallbackResult.config.build_review?.enabled === true
+              ? fallbackResult.warnings
+              : fallbackResult,
+          topLevelRejection:
+            !topLevelRejectionResult.ok && topLevelRejectionResult.error.type === 'validation_error'
+              ? topLevelRejectionResult.error.message.includes('unknown_key')
+              : topLevelRejectionResult,
+          nestedRejection:
+            !nestedRejectionResult.ok && nestedRejectionResult.error.type === 'validation_error'
+              ? nestedRejectionResult.error.message.includes('bogus_key')
+              : nestedRejectionResult,
+        },
+        inputs: {
+          clampedInput,
+          fallbackInput,
+          topLevelRejectionInput,
+          nestedRejectionInput,
+        },
+      }).toEqual({
+        outcomes: {
+          clamped: [
+            'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
+          ],
+          fallback: [
+            'build_review.enabled has invalid value "banana", falling back to enabled.',
+          ],
+          topLevelRejection: true,
+          nestedRejection: true,
+        },
+        inputs: snapshots,
+      });
+    });
+
+    it('returns validation errors without mutating non-cloneable inputs', () => {
+      const unknownValue = () => 'unknown';
+      const nestedValue = () => 'invalid';
+      const nestedBlock = { enabled: nestedValue };
+      const topLevelInput = { unknown_key: unknownValue };
+      const nestedInput = { retry_routing: nestedBlock };
+
+      const topLevelResult = validateConfig(topLevelInput);
+      const nestedResult = validateConfig(nestedInput);
+
+      expect({
+        results: {
+          topLevel: topLevelResult.ok
+            ? topLevelResult.config
+            : {
+                type: topLevelResult.error.type,
+                message: topLevelResult.error.message,
+              },
+          nested: nestedResult.ok
+            ? nestedResult.config
+            : {
+                type: nestedResult.error.type,
+                message: nestedResult.error.message,
+              },
+        },
+        inputs: {
+          topLevelInput,
+          nestedInput,
+        },
+        identities: {
+          unknownValueRetained: topLevelInput.unknown_key === unknownValue,
+          nestedBlockRetained: nestedInput.retry_routing === nestedBlock,
+          nestedValueRetained: nestedInput.retry_routing.enabled === nestedValue,
+        },
+      }).toEqual({
+        results: {
+          topLevel: {
+            type: 'validation_error',
+            message: 'Unknown top-level key: "unknown_key"',
+          },
+          nested: {
+            type: 'validation_error',
+            message: 'retry_routing.enabled must be a boolean',
+          },
+        },
+        inputs: {
+          topLevelInput: { unknown_key: unknownValue },
+          nestedInput: { retry_routing: { enabled: nestedValue } },
+        },
+        identities: {
+          unknownValueRetained: true,
+          nestedBlockRetained: true,
+          nestedValueRetained: true,
+        },
+      });
+    });
+
+    it('isolates returned nested objects and arrays from caller-owned references', () => {
+      const input = {
+        defaults: { model: 'sonnet' },
+        model_fallback_ladder: ['fable', 'opus'],
+      };
+      const snapshot = structuredClone(input);
+      const originalDefaults = input.defaults;
+      const originalFallbackLadder = input.model_fallback_ladder;
+
+      const result = validateConfig(input);
+      if (!result.ok) throw new Error(result.error.message);
+      if (!result.config.defaults || !result.config.model_fallback_ladder) {
+        throw new Error('expected normalized nested configuration');
+      }
+
+      const returnedDefaults = result.config.defaults;
+      const returnedFallbackLadder = result.config.model_fallback_ladder;
+      returnedDefaults.model = 'haiku';
+      returnedFallbackLadder.push('sonnet');
+
+      expect({
+        original: input,
+        identities: {
+          originalDefaultsRetained: input.defaults === originalDefaults,
+          originalFallbackLadderRetained:
+            input.model_fallback_ladder === originalFallbackLadder,
+          returnedDefaultsIsolated: returnedDefaults !== originalDefaults,
+          returnedFallbackLadderIsolated:
+            returnedFallbackLadder !== originalFallbackLadder,
+        },
+      }).toEqual({
+        original: snapshot,
+        identities: {
+          originalDefaultsRetained: true,
+          originalFallbackLadderRetained: true,
+          returnedDefaultsIsolated: true,
+          returnedFallbackLadderIsolated: true,
+        },
+      });
+    });
+
+    it('defers absent project defaults while ordinary validation materializes them', () => {
+      const input = {
+        mergeable_autoresolve: { enabled: true },
+      };
+
+      const deferred = validateConfig(structuredClone(input), '/repo', {
+        source: 'project',
+        materializeDefaults: false,
+      });
+      const ordinary = validateConfig(structuredClone(input));
+
+      expect({
+        deferred: deferred.ok
+          ? {
+              auto_restart_on_stale_engine:
+                deferred.config.auto_restart_on_stale_engine,
+              build_review: deferred.config.build_review,
+              mergeable_autoresolve: deferred.config.mergeable_autoresolve,
+            }
+          : deferred,
+        ordinary: ordinary.ok
+          ? {
+              auto_restart_on_stale_engine:
+                ordinary.config.auto_restart_on_stale_engine,
+              build_review: ordinary.config.build_review,
+              mergeable_autoresolve: ordinary.config.mergeable_autoresolve,
+            }
+          : ordinary,
+      }).toEqual({
+        deferred: {
+          auto_restart_on_stale_engine: undefined,
+          build_review: undefined,
+          mergeable_autoresolve: {
+            enabled: true,
+            cooldownMinutes: 60,
+          },
+        },
+        ordinary: {
+          auto_restart_on_stale_engine: false,
+          build_review: { enabled: true },
+          mergeable_autoresolve: {
+            enabled: true,
+            cooldownMinutes: 60,
+          },
+        },
+      });
+    });
+
     it('rejects steps.<name> if not an object', () => {
       const result = validateConfig({
         steps: { memory: 'haiku' },

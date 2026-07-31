@@ -32,31 +32,31 @@ user file.
 
 ## Load order and precedence
 
-`loadMergedConfig()` (`config.ts:1669-1699`) runs four steps in this order:
+`loadMergedConfig()` (`config.ts:1722-1749`) runs four steps in this order:
 
-1. `loadConfig(projectRoot)` — read and YAML-parse the project file, then
-   `validateConfig(parsed, root, { source: 'project' })`.
+1. Read and YAML-parse the project file, then validate its explicit values with absent defaults
+   deferred (`loadProjectConfig(..., false)`). Project-source errors and normalizations still occur
+   before merge.
 2. `readUserConfig()` — read `~/.ai-conductor/config.yml`. No schema validation runs on the user file at
    this stage (`user-config.ts:31-70`).
-3. `mergeConfigs(user, project)` — deep merge with the project as the winner (`config.ts:1645-1660`).
+3. `mergeConfigs(user, project)` — deep merge with the explicit project values as the winner
+   (`config.ts:1697-1718`).
 4. `validateConfig(merged, root, { source: 'merged' })`.
 
-Merge semantics (`deepMerge`, `config.ts:1648-1660`): plain objects merge key by key, recursively.
+Merge semantics (`deepMerge`, `config.ts:1702-1718`): plain objects merge key by key, recursively.
 Scalars **and arrays** from the project config replace the user value outright — arrays never concatenate.
 
-> **Known limitation.** `validateConfig` mutates the object it is given, writing resolved defaults back
-> into it for eight keys: `attribution_audit_sample_pct`, `auto_restart_on_stale_engine`,
-> `engine_refresh_min_interval_seconds`, `build_review`, `ci_watch`, `build_progress_halt`,
-> `kickback_escalation`, and `retry_routing` (`config.ts:711-715, 781-786, 810-815, 853-871, 885-897,
-> 908, 918-934, 941`). Because step 1 validates the project config *before* step 3 merges it on top of
-> the user config, those injected defaults win. Any value you set for one of those eight keys in
-> `~/.ai-conductor/config.yml` is silently discarded, even when the project config never mentions the key.
-> Set them in the project config instead. Tracked in
-> [#1000](https://github.com/jstoup111/ai-conductor/issues/1000).
+Validation normalizes a deep clone, never the caller-owned value. During step 1, defaults for absent
+project values are not materialized, so a user-level value survives whenever the project omits that
+key. Explicit project values remain authoritative, including their existing rejection, fallback,
+clamping, and warning behavior. Step 4 materializes runtime defaults once for values absent from both
+scopes. This applies uniformly to every defaulted key, including `attribution_audit_sample_pct`,
+`auto_restart_on_stale_engine`, `engine_refresh_min_interval_seconds`, `build_review`, `ci_watch`,
+`build_progress_halt`, `kickback_escalation`, and `retry_routing`.
 
 > **Known limitation.** `loadMergedConfig`'s own docstring says "User-config parse errors become warnings,
-> not hard failures" (`config.ts:1665-1667`), but the code returns a hard `parse_error`
-> (`config.ts:1677-1685`). A malformed `~/.ai-conductor/config.yml` blocks every project on the machine.
+> not hard failures" (`config.ts:1715-1720`), but the code returns a hard `parse_error`
+> (`config.ts:1730-1739`). A malformed `~/.ai-conductor/config.yml` blocks every project on the machine.
 > Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
 For how a *step's* `model`, `effort`, and `max_retries` resolve across config, provider policy, and CLI
@@ -642,8 +642,8 @@ with `build_progress_halt.attempt_ceiling (30) must not be below the resolved ma
 > `defaults.max_retries`. Tracked in [#1026](https://github.com/jstoup111/ai-conductor/issues/1026).
 
 Consumed at `src/conductor/src/daemon-cli.ts:429, 462` and
-`src/conductor/src/engine/conductor.ts:4298`. This key is one of the eight that a project config injects
-over the user config — see [Load order and precedence](#load-order-and-precedence).
+`src/conductor/src/engine/conductor.ts:4298`. User-level values apply when the project omits this
+block; see [Load order and precedence](#load-order-and-precedence).
 
 ## retry_routing
 
@@ -757,7 +757,7 @@ Armed only when the build is also classified self-host:
 (`src/conductor/src/daemon-cli.ts:761`; also `:1799`). Read at daemon startup, so a change requires a
 daemon restart.
 
-This key is one of the eight injected over the user config — see
+User-level values apply when the project omits this key; see
 [Load order and precedence](#load-order-and-precedence).
 
 ## engine_refresh_min_interval_seconds
@@ -771,8 +771,8 @@ back (`config.ts:812-815`).
 | Finite and `> 0` | As given |
 | Non-numeric, non-finite, **zero**, or negative | `300` plus one warning; never throws |
 
-Consumed at `src/conductor/src/daemon-cli.ts:1397, 1427` as `(… ?? 300) * 1000`. One of the eight
-injected keys.
+Consumed at `src/conductor/src/daemon-cli.ts:1397, 1427` as `(… ?? 300) * 1000`. User-level values
+apply when the project omits this key.
 
 ## mergeable_autoresolve
 
@@ -961,8 +961,8 @@ enforcement key remains accepted only so existing config files continue to load.
 
 A judge cutover in the past is active; a future one is inactive. `attribution_audit_sample_pct` is inert while
 `attribution_judge_cutover` is absent, and is consumed at
-`src/conductor/src/engine/attribution-telemetry.ts` (`?? 10`). It is one of the eight keys injected
-over the user config — see [Load order and precedence](#load-order-and-precedence).
+`src/conductor/src/engine/attribution-telemetry.ts` (`?? 10`). Its user-level value applies when the
+project omits the key; see [Load order and precedence](#load-order-and-precedence).
 
 ## rebase_resolution_attempts
 
