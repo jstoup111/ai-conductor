@@ -2022,6 +2022,14 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'step_completed':
       log(`${dot}   ${event.step} ${chalk.green('✓')} ${chalk.green(event.status)}`);
       break;
+    case 'parallel_started':
+      log(`${dot} ${chalk.cyan('▶')} ${event.step} [${event.branches.join(', ')}]`);
+      break;
+    case 'parallel_completed':
+      log(
+        `${dot}   ${event.step} [${event.branches.join(', ')}] ${chalk.green('✓')} ${chalk.green('done')}`,
+      );
+      break;
     case 'step_failed':
       log(
         `${dot} ${chalk.red('✗')} ${chalk.red(`${event.step} failed (try ${event.retryCount}): ${event.error}`)}`,
