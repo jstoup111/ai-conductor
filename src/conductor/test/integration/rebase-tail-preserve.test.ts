@@ -201,7 +201,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     };
   }
 
-  it('preserves prd_audit/architecture_review_as_built (not re-dispatched) while re-opening build_review/wiring_check/manual_test on a foreign-runtime-only rebase delta', async () => {
+  it('keeps every resolved tail gate undispatched when the finish branch is cleanly mergeable', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -225,14 +225,10 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
     expect(counts.prd_audit).toBe(1);
     expect(counts.architecture_review_as_built).toBe(1);
 
-    // Re-run gates: the foreign runtime delta touches their surface, so each
-    // must have been re-dispatched a second time after the rebase kickback.
-    // (build_review is disabled by default config in this fixture, so it
-    // never dispatches at all here — the wiring/manual_test pair is enough
-    // to prove the invalidated set actually re-runs while the preserved
-    // judged gates above do not.)
-    expect(counts.wiring_check).toBeGreaterThanOrEqual(2);
-    expect(counts.manual_test).toBeGreaterThanOrEqual(2);
+    // A normal finish skips a clean prospective merge before it derives a
+    // rebase delta, leaving every resolved tail gate at its original pass.
+    expect(counts.wiring_check).toBe(1);
+    expect(counts.manual_test).toBe(1);
 
     // Final state confirms the preserved gates never left 'done' (no
     // stale/pending bounce) even though manual_test — their immediate

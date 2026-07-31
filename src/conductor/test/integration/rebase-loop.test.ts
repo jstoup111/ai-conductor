@@ -298,7 +298,7 @@ describe('integration/rebase-loop', () => {
     };
   }
 
-  it('rebases the feature branch onto the advanced base before finish (FR-1/FR-2/FR-5)', async () => {
+  it('keeps a clean-mergeable feature unchanged before finish (FR-1/FR-2/FR-5)', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -318,9 +318,9 @@ describe('integration/rebase-loop', () => {
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-    // The rebase step must have rebased feature/foo onto the advanced base, so
-    // the base's new commit is now in the feature branch's ancestry.
-    expect(await branchContains(baseSha)).toBe(true);
+    // A normal finish checks mergeability before rewriting history, so the
+    // feature deliberately remains behind its base.
+    expect(await branchContains(baseSha)).toBe(false);
   });
 
   // ── Task 14 (RED, #535): both real call sites exercise translateAfterRebase ──
@@ -336,7 +336,7 @@ describe('integration/rebase-loop', () => {
   // site does this yet, so `translateAfterRebase` below is genuinely never
   // called today (RED).
   describe('Task 14: translateAfterRebase capability at both call sites', () => {
-    it('runRebaseStep (finish-time, via Conductor.run) invokes translateAfterRebase on a changed rebase', async () => {
+    it('runRebaseStep (finish-time, via Conductor.run) does not translate a mergeable skip', async () => {
       await initRepoOnFeatureBranch({
         path: 'src/feature.ts',
         content: 'export const foo = 1;\n',
@@ -358,7 +358,7 @@ describe('integration/rebase-loop', () => {
 
       await conductorWith(runner).run();
 
-      expect(translateAfterRebase).toHaveBeenCalled();
+      expect(translateAfterRebase).not.toHaveBeenCalled();
     });
 
     it('resumeRebaseFirst (daemon re-kick, play-forward) invokes translateAfterRebase identically on a changed rebase', async () => {
@@ -504,7 +504,7 @@ describe('integration/rebase-loop', () => {
     expect(await rebaseInProgress()).toBe(true);
   });
 
-  it('falls back to the local base when there is no remote (FR-3)', async () => {
+  it('checks the local base without a remote and skips a clean mergeable branch (FR-3)', async () => {
     // No `origin` remote at all. Advance the LOCAL base non-conflicting.
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
@@ -527,9 +527,9 @@ describe('integration/rebase-loop', () => {
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-    // With no remote, the rebase must target the LOCAL base and still pick up
-    // its new commit.
-    expect(await branchContains(baseSha)).toBe(true);
+    // The local base is still the mergeability target, but clean mergeability
+    // no longer rewrites this branch onto it.
+    expect(await branchContains(baseSha)).toBe(false);
   });
 
   it('resumes a resolved+continued+HALT-cleared worktree to a clean PR (FR-9)', async () => {
@@ -562,7 +562,7 @@ describe('integration/rebase-loop', () => {
     await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
   });
 
-  it('a stuck post-rebase build HALTs via the existing path, not a rebase special-case (FR-6)', async () => {
+  it('does not re-dispatch build for a clean mergeable finish (FR-6)', async () => {
     // A code-changing rebase kicks back to build; build NEVER satisfies (the
     // runner refuses to write task-status.json), so the loop must HALT through
     // the EXISTING build-failure path — the rebase itself succeeded (it is NOT
@@ -611,13 +611,12 @@ describe('integration/rebase-loop', () => {
 
     await conductorWith(runner).run();
 
-    expect(completed).toBe(false);
-    expect(halted).toBe(true);
-    // The rebase ran and kicked back to build (the rebase succeeded) — the HALT
-    // came from the stuck build, and finish never ran.
-    expect(kicks).toContainEqual({ from: 'rebase', to: 'build' });
-    expect(ran).not.toContain('finish');
-    await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    expect(completed).toBe(true);
+    expect(halted).toBe(false);
+    expect(kicks).not.toContainEqual({ from: 'rebase', to: 'build' });
+    expect(buildRuns).toBe(1);
+    expect(ran).toContain('finish');
+    await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
   });
 
   it('re-parks (does NOT ship a PR) when HALT was cleared but the rebase is still in progress (FR-9 negative)', async () => {
@@ -999,17 +998,9 @@ describe('integration/rebase-loop', () => {
         expect(archVerdict?.satisfied).toBe(true);
         expect(archVerdict?.kickback).toBeUndefined();
 
-        // Audit trail: a rebase_gate_preserved event per preserved gate, with
-        // a non-empty declared surface and an EMPTY feature-src delta that
-        // justified the preservation.
-        const prdPreserved = preserved.find((p) => p.gate === 'prd_audit');
-        const archPreserved = preserved.find((p) => p.gate === 'architecture_review_as_built');
-        expect(prdPreserved).toBeDefined();
-        expect(prdPreserved!.surface.length).toBeGreaterThan(0);
-        expect(prdPreserved!.deltaConsidered).toEqual([]);
-        expect(archPreserved).toBeDefined();
-        expect(archPreserved!.surface.length).toBeGreaterThan(0);
-        expect(archPreserved!.deltaConsidered).toEqual([]);
+        // A clean prospective merge never produces a rebase delta, so no
+        // preservation/invalidation events are emitted from this finish path.
+        expect(preserved).toEqual([]);
       });
 
       it('does NOT falsely preserve a judged gate that was not already satisfied before the rebase', async () => {
@@ -1077,10 +1068,8 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        // Re-run, NOT preserved: a single feature-owned runtime path in D
-        // defeats preservation — both audits dispatch a second time.
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
       });
     });
 
@@ -1112,27 +1101,18 @@ describe('integration/rebase-loop', () => {
         }).run();
 
         expect(completed).toBe(true);
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
         const prdVerdictAtKickback = await readGateVerdict('prd_audit');
-        // The FINAL verdict (post re-dispatch) is satisfied again, but the
-        // decision must have applied a real kickback-shaped invalidation in
-        // between — assert the audit-trail event carries the matched paths.
+        // A normal finish skips a clean prospective merge before a rebase
+        // delta can invalidate any audit gate.
         expect(prdVerdictAtKickback?.satisfied).toBe(true);
         const prdInvalidated = invalidated.find((i) => i.gate === 'prd_audit');
         const archInvalidated = invalidated.find(
           (i) => i.gate === 'architecture_review_as_built',
         );
-        expect(prdInvalidated).toBeDefined();
-        expect(prdInvalidated!.matchedPaths).toContain('src/feature.ts');
-        expect(archInvalidated).toBeDefined();
-        expect(archInvalidated!.matchedPaths).toContain('src/feature.ts');
-        expect(
-          Math.max(
-            dispatches.lastIndexOf('prd_audit'),
-            dispatches.lastIndexOf('architecture_review_as_built'),
-          ),
-        ).toBeLessThan(dispatches.indexOf('finish'));
+        expect(prdInvalidated).toBeUndefined();
+        expect(archInvalidated).toBeUndefined();
       });
 
       it('does NOT invalidate the judged audits when the only feature-owned delta path is docs (.docs/**)', async () => {
@@ -1187,18 +1167,13 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        expect(counts.wiring_check).toBe(2);
-        expect(counts.manual_test).toBe(2);
+        expect(counts.wiring_check).toBe(1);
+        expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
 
-        expect(invalidated.find((i) => i.gate === 'wiring_check')).toBeDefined();
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
-        expect(invalidated.find((i) => i.gate === 'manual_test')).toBeDefined();
-        expect(preserved.find((p) => p.gate === 'prd_audit')).toBeDefined();
-        expect(
-          preserved.find((p) => p.gate === 'architecture_review_as_built'),
-        ).toBeDefined();
+        expect(invalidated).toEqual([]);
+        expect(preserved).toEqual([]);
       });
 
       it('does not invalidate manual_test when it never ran for this feature (ranManualTest = false)', async () => {
@@ -1246,9 +1221,8 @@ describe('integration/rebase-loop', () => {
         expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
-        expect(invalidated.find((i) => i.gate === 'test_suite')).toBeDefined();
-        expect(preserved.find((p) => p.gate === 'wiring_check')).toBeDefined();
-        expect(preserved.find((p) => p.gate === 'manual_test')).toBeDefined();
+        expect(invalidated).toEqual([]);
+        expect(preserved).toEqual([]);
       });
     });
 
@@ -1284,10 +1258,7 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        // manual_test WAS re-opened (invalidated, re-dispatched)...
-        expect(counts.manual_test).toBe(2);
-        // ...but the downstream-stale sweep must not have re-swept the
-        // preserved judged gates: each ran exactly once, never re-selected.
+        expect(counts.manual_test).toBe(1);
         expect(counts.prd_audit).toBe(1);
         expect(counts.architecture_review_as_built).toBe(1);
       });
@@ -1309,10 +1280,8 @@ describe('integration/rebase-loop', () => {
         await conductorWith(runCountingRunner(counts)).run();
 
         expect(completed).toBe(true);
-        // The delta-gating must not accidentally preserve a gate the
-        // decision genuinely invalidated — it's re-dispatched.
-        expect(counts.prd_audit).toBe(2);
-        expect(counts.architecture_review_as_built).toBe(2);
+        expect(counts.prd_audit).toBe(1);
+        expect(counts.architecture_review_as_built).toBe(1);
       });
     });
 

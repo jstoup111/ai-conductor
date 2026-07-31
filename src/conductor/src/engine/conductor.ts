@@ -7095,7 +7095,10 @@ export class Conductor {
     let outcome: RebaseOutcome;
     let sealRejectionReason: string | null = null;
     try {
-      outcome = await performRebase(git, this.projectRoot, localBase, { translateAfterRebase });
+      outcome = await performRebase(git, this.projectRoot, localBase, {
+        finishMergeabilityCheck: true,
+        translateAfterRebase,
+      });
     } catch (err) {
       if (err instanceof ProtectedArtifactSealRejection) {
         sealRejectionReason = err.message;

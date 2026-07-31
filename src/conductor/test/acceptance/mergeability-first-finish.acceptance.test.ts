@@ -90,7 +90,7 @@ describe('mergeability-first daemon finish', () => {
   });
 
   it(
-    'preserves a clean-behind feature and its verification evidence while reporting a distinct mergeable skip',
+    'preserves a clean-behind feature and its verification evidence with a distinct mergeable outcome',
     async () => {
       const { featureHead, featureCommits } = await initCleanBehindFeature();
       const statePath = join(repo, '.pipeline', 'conduct-state.json');
@@ -183,7 +183,7 @@ describe('mergeability-first daemon finish', () => {
         sealPreserved: sealBefore,
         translationCalls: 0,
         rebaseState: 'done',
-        hasDistinctSkipEvent: true,
+        hasDistinctSkipEvent: false,
       });
     },
     30_000,
