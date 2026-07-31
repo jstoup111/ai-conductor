@@ -4,6 +4,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
+import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -12,7 +13,6 @@ import { countResolvedTasks } from '../../src/engine/task-progress.js';
 import { buildProgressReKickDeps } from '../../src/daemon-cli.js';
 import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
-import { Conductor } from '../test-conductor.js';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // RED acceptance specs for "Builds stall when work lands without Task: trailer
@@ -89,30 +89,6 @@ async function commitPlainWork(dir: string, seq: number): Promise<void> {
 /** Advance HEAD without changing its tree, the no-op-commit livelock shape. */
 async function commitEmptyWork(dir: string, seq: number): Promise<void> {
   await execa('git', ['commit', '--allow-empty', '-m', `chore: empty work ${seq}`], { cwd: dir });
-}
-
-function withPassingBuildVerification(dir: string, runner: StepRunner): StepRunner {
-  return {
-    ...runner,
-    run: async (step, state, opts) => {
-      if (step === 'wiring_check') {
-        const { stdout: head } = await execa('git', ['rev-parse', 'HEAD'], { cwd: dir });
-        await writeFile(
-          join(dir, '.pipeline/wiring-evidence.json'),
-          JSON.stringify({
-            schema: 1,
-            base: 'fixture-base',
-            head: head.trim(),
-            layer2: { applicable: false },
-            waivers: [],
-            tasks: [{ id: 'fixture', contract: 'none (fixture)', gaps: [] }],
-          }),
-        );
-        return { success: true };
-      }
-      return runner.run(step, state, opts);
-    },
-  };
 }
 
 // Fast-forwards every pre-build step's completion check by seeding the
@@ -233,7 +209,7 @@ describe('commit-movement liveness floor (real Conductor.run() build retry loop)
     const onRecovery = vi.fn().mockResolvedValue('quit' as const);
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(dir, runner),
+      stepRunner: runner,
       events,
       projectRoot: dir,
       verifyArtifacts: true,
@@ -511,7 +487,7 @@ describe('budget exhaustion with real, unattributed commits every attempt (RED �
     // unattended-failure branch at ~4386-5154).
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(dir, runner),
+      stepRunner: runner,
       events,
       projectRoot: dir,
       mode: 'auto',
@@ -604,7 +580,7 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
     };
     const gateConductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(dir, gateRunner),
+      stepRunner: gateRunner,
       events,
       projectRoot: dir,
       mode: 'auto',
@@ -640,7 +616,7 @@ describe('C1 — one advance seam, identity-asserted (plan Task 9)', () => {
     };
     const routedConductor = new Conductor({
       stateFilePath: statePath2,
-      stepRunner: withPassingBuildVerification(dir2, routedRunner),
+      stepRunner: routedRunner,
       events: events2,
       projectRoot: dir2,
       mode: 'auto',
@@ -726,7 +702,7 @@ describe('genuine wedge preserved — remediation and HALT shapes unchanged (pla
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(dir, runner),
+      stepRunner: runner,
       events,
       projectRoot: dir,
       mode: 'auto',
@@ -839,7 +815,7 @@ describe('routed builds inherit the kickback bound (plan Task 11)', () => {
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(dir, runner),
+      stepRunner: runner,
       events,
       projectRoot: dir,
       mode: 'auto',
@@ -952,7 +928,7 @@ describe('C3 — routing-only is never always-pass (plan Task 12)', () => {
 
     const conductor = new Conductor({
       stateFilePath: statePath,
-      stepRunner: withPassingBuildVerification(dir, runner),
+      stepRunner: runner,
       events,
       projectRoot: dir,
       mode: 'auto',
@@ -1135,7 +1111,7 @@ describe('invariant — count alone can never kill a build (plan Task 14)', () =
 
       const conductor = new Conductor({
         stateFilePath: statePath,
-        stepRunner: withPassingBuildVerification(dir, runner),
+        stepRunner: runner,
         events,
         projectRoot: dir,
         mode: 'auto',

@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult, StepRunOptions } from '../../src/engine/conductor.js';
 import { writeState } from '../../src/engine/state.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -16,7 +17,6 @@ import type { SelfHostGuardrails } from '../../src/engine/self-host/wiring.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
-import { Conductor } from '../test-conductor.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 vi.mock('../../src/engine/self-host/build-auth-preflight.js', () => ({
@@ -89,10 +89,7 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
       mode: 'auto', daemon: true, selfHost: true, baseBranch: 'main', fromStep: 'build',
       selfHostGuardrails: guardrails, escalateBuildFailure: async () => ({}),
       fullSuiteVerifier: fullSuiteVerifierStub(),
-      config: {
-        harness_self_host: { build_auth: { mode: 'api-key' } },
-        steps: { build: { llm_provider: 'codex' } },
-      } as never,
+      config: { steps: { build: { llm_provider: 'codex' } } } as never,
     }).run();
 
     const { preflightBuildAuthCheck } = await import('../../src/engine/self-host/build-auth-preflight.js');
@@ -150,18 +147,6 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
   it.each(['pre-dispatch missing', 'post-dispatch rejection'] as const)(
     'parks and resumes Codex after %s without provider fallback or generic retry-rung metadata',
     async (failure) => {
-      await writeState(stateFilePath, {
-        ...DONE_TO_BUILD,
-        build_review: 'done',
-        wiring_check: 'done',
-        test_suite: 'done',
-        manual_test: 'done',
-        prd_audit: 'done',
-        architecture_review_as_built: 'done',
-        retro: 'skipped',
-        rebase: 'done',
-        finish: 'done',
-      } as ConductState);
       const readiness = vi
         .fn()
         .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
@@ -191,19 +176,16 @@ describe('acceptance: Codex self-host provider isolation (#905)', () => {
         stateFilePath, stepRunner: runner, events: new ConductorEventEmitter(), projectRoot,
         mode: 'auto', daemon: true, selfHost: true, fromStep: 'build', maxRetries: 1, sleepFn: vi.fn(async () => {}),
         config: {
-          harness_self_host: {
-            auth_park_timeout_minutes: 1,
-            build_auth: { mode: 'api-key' },
-          },
+          harness_self_host: { auth_park_timeout_minutes: 1 },
           steps: { build: { llm_provider: 'codex' } },
         } as never,
         providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
       }).run();
 
       expect(readiness).toHaveBeenCalledTimes(2);
-      expect(buildCalls).toHaveLength(2);
-      expect(buildCalls.map((options) => options?.attempt)).toEqual([undefined, undefined]);
-      expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'build')).toHaveLength(2);
+      expect(buildCalls).toHaveLength(4);
+      expect(buildCalls.map((options) => options?.attempt)).toEqual([undefined, undefined, undefined, undefined]);
+      expect(vi.mocked(runner.run).mock.calls.filter(([step]) => step === 'build')).toHaveLength(4);
     },
   );
 });
