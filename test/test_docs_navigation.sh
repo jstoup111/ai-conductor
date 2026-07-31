@@ -297,6 +297,22 @@ record "runbooks have unique titles, the Runbooks parent, and stable order" \
     source_has_runbook_destination 'stalled-or-stuck-feature.md' 'Stalled or stuck feature' 4 && \
     source_has_runbook_destination 'worktree-and-evidence-recovery.md' 'Worktree and evidence recovery' 5 && echo 0 || echo 1 )"
 
+source_has_contributing_destination() {
+  local path=$1
+  local title=$2
+  local order=$3
+
+  [ -f "$REPO_ROOT/docs/contributing/$path" ] && \
+    grep -Fxq "title: $title" "$REPO_ROOT/docs/contributing/$path" && \
+    grep -Fxq 'parent: Contributing' "$REPO_ROOT/docs/contributing/$path" && \
+    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/contributing/$path"
+}
+
+record "core contributing topics have unique titles, the Contributing parent, and stable order" \
+  "$( source_has_contributing_destination 'code-organization.md' 'Code organization' 1 && \
+    source_has_contributing_destination 'extending.md' 'Extending the harness' 2 && \
+    source_has_contributing_destination 'releases.md' 'Releases' 3 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then
