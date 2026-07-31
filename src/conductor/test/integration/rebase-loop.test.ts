@@ -532,6 +532,57 @@ describe('integration/rebase-loop', () => {
     expect(await branchContains(baseSha)).toBe(false);
   });
 
+  it('returns mergeable_skip against an advanced local base without contacting a remote', async () => {
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    const baseSha = await advanceBaseNonConflicting();
+    expect(await git('remote')).toBe('');
+
+    gitCommandSpy.mockClear();
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, {
+      finishMergeabilityCheck: true,
+    });
+
+    expect(outcome).toEqual({ kind: 'mergeable_skip' });
+    expect(await branchContains(baseSha)).toBe(false);
+    const gitArgv = gitCommandSpy.mock.calls
+      .filter(([command]) => command === 'git')
+      .map(([, args]) => args as string[]);
+    expect(gitArgv.flat()).not.toContain('fetch');
+    expect(gitArgv.flat()).not.toContain('ls-remote');
+  });
+
+  it('uses the same local base for conflict recovery when prospective merge conflicts', async () => {
+    await execFileAsync('git', ['init', '-b', BASE, dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const value = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'initial feature file');
+
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const value = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature edit');
+    await git('checkout', BASE);
+    await writeFile(join(dir, 'src/feature.ts'), 'export const value = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'local base edit');
+    await git('checkout', 'feature/foo');
+    expect(await git('remote')).toBe('');
+
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, {
+      finishMergeabilityCheck: true,
+    });
+
+    expect(outcome.kind).toBe('conflict_halt');
+    expect(await rebaseInProgress()).toBe(true);
+  });
+
   it('resumes a resolved+continued+HALT-cleared worktree to a clean PR (FR-9)', async () => {
     // Simulate the operator's post-HALT cleanup: the branch is ALREADY rebased
     // onto the advanced base (conflict resolved + `git rebase --continue`), no
