@@ -54,6 +54,19 @@ export interface EligibilityResult {
 }
 
 /**
+ * Binds the daemon pool's live feature ownership predicate into the
+ * autoresolve eligibility gate used by mergeable-label sweeps.
+ */
+export function makeAutoresolveEligibility(
+  config: HarnessConfig | undefined,
+  isFeatureInFlight: IsFeatureInFlight,
+  log: (message: string) => void,
+): (entry: WatchEntry, state: PrMergeState) => Promise<EligibilityResult> {
+  return (entry, state) =>
+    isEligibleForResolve(entry, state, config, new Date(), isFeatureInFlight, log);
+}
+
+/**
  * Structured outcome logging (FR-16).
  *
  * Story: "one outcome line per concluded attempt — PR identifier, stage

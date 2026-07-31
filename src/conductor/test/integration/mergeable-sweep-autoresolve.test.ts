@@ -20,7 +20,7 @@ import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
-import { makeAutoresolveEligibility } from '../../src/daemon-cli.js';
+import { makeAutoresolveEligibility } from '../../src/engine/autoresolve.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 function prViewJson(mergeable: string): { stdout: string } {
@@ -188,11 +188,9 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
       runGh: makeGh({ [entry.prUrl]: 'CONFLICTING' }),
       autoresolve: {
         enabled: true,
-        isEligible: makeAutoresolveEligibility(config, {
-          isFeatureInFlight: (slug) => {
-            activePredicateCalls.push(slug);
-            return true;
-          },
+        isEligible: makeAutoresolveEligibility(config, (slug) => {
+          activePredicateCalls.push(slug);
+          return true;
         }, (message) => logs.push(message)),
         dispatch: async (candidate) => {
           dispatched.push(candidate);
@@ -205,11 +203,9 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
       runGh: makeGh({ [entry.prUrl]: 'CONFLICTING' }),
       autoresolve: {
         enabled: true,
-        isEligible: makeAutoresolveEligibility(config, {
-          isFeatureInFlight: (slug) => {
-            inactivePredicateCalls.push(slug);
-            return false;
-          },
+        isEligible: makeAutoresolveEligibility(config, (slug) => {
+          inactivePredicateCalls.push(slug);
+          return false;
         }, () => {}),
         dispatch: async (candidate) => {
           dispatched.push(candidate);

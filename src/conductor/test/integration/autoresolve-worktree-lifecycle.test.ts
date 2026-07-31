@@ -19,7 +19,7 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
-import { makeAutoresolveEligibility } from '../../src/daemon-cli.js';
+import { makeAutoresolveEligibility } from '../../src/engine/autoresolve.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
 import type { PrMergeState } from '../../src/engine/pr-labels.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -108,7 +108,7 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     let resolutionAttempted = false;
     const eligibility = await makeAutoresolveEligibility(
       config,
-      { isFeatureInFlight: () => true },
+      () => true,
       (message) => logs.push(message),
     )(entry, state);
 

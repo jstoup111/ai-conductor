@@ -13,6 +13,7 @@ import {
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
 import {
   isEligibleForResolve,
+  makeAutoresolveEligibility,
   resolveConflictingPr,
 } from './engine/autoresolve.js';
 import {
@@ -62,7 +63,7 @@ import {
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
 import type { ComplexityTier } from './types/steps.js';
-import { runDaemon, type BacklogItem, type DaemonSweepContext } from './engine/daemon.js';
+import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
 import {
@@ -163,19 +164,6 @@ export function createDiscoveryLogger(log: (msg: string) => void): DiscoveryLogg
       }
     },
   };
-}
-
-/**
- * Binds the daemon pool's live feature ownership predicate into the
- * autoresolve eligibility gate used by mergeable-label sweeps.
- */
-export function makeAutoresolveEligibility(
-  config: HarnessConfig | undefined,
-  activity: DaemonSweepContext,
-  log: (message: string) => void,
-): (entry: WatchEntry, state: PrMergeState) => Promise<{ eligible: boolean; reason?: string }> {
-  return (entry, state) =>
-    isEligibleForResolve(entry, state, config, new Date(), activity.isFeatureInFlight, log);
 }
 
 /**
@@ -1724,7 +1712,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           // so a disabled/absent config leaves the sweep unchanged (AC4).
           autoresolve: {
             enabled: config?.mergeable_autoresolve?.enabled ?? false,
-            isEligible: makeAutoresolveEligibility(config, activity, log),
+            isEligible: makeAutoresolveEligibility(config, activity.isFeatureInFlight, log),
             dispatch: async (entry) => {
               log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
 
