@@ -43,14 +43,14 @@ describe('renderDaemonEvent', () => {
   it('renders deterministic build verification group boundaries', () => {
     expect(lines({
       type: 'parallel_started',
-      step: 'build_verification',
+      step: 'wiring_check',
       branches: ['wiring_check', 'test_suite'],
-    })).toEqual(['· ▶ build_verification [wiring_check, test_suite]']);
+    })).toEqual(['· ▶ wiring_check [wiring_check, test_suite]']);
     expect(lines({
       type: 'parallel_completed',
-      step: 'build_verification',
+      step: 'wiring_check',
       branches: ['wiring_check', 'test_suite'],
-    })).toEqual(['·   build_verification [wiring_check, test_suite] ✓ done']);
+    })).toEqual(['·   wiring_check [wiring_check, test_suite] ✓ done']);
   });
 
   it('renders failures', () => {
