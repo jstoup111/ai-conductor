@@ -89,13 +89,20 @@ describe('acceptance: Codex readiness park #970', () => {
     ['missing', documentedDoctor('fail', 'fail', 'no Codex credentials were found'), 'missing'],
     ['rejected', documentedDoctor('fail', 'fail', 'credentials unauthorized'), 'unusable'],
     ['ambiguous green envelope', documentedDoctor('ok', 'ok', 42 as never), 'unverifiable'],
-  ] as const)('fails closed for %s auth evidence without a substantive invocation', async (_case, stdout, state) => {
+  ] as const)('classifies %s auth evidence without leaking doctor diagnostics', async (_case, stdout, state) => {
     mockExeca.mockResolvedValueOnce({ stdout, stderr: 'raw doctor diagnostic', exitCode: 1 } as never);
+    if (state === 'unverifiable') {
+      mockExeca.mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+    }
 
     const result = await new CodexProvider().invoke(base);
 
-    expect(result).toMatchObject({ success: false, authentication: { source: 'cached-login', state } });
-    expect(mockExeca).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject(
+      state === 'unverifiable'
+        ? { success: true, authentication: { source: 'cached-login', state: 'probe-failed' } }
+        : { success: false, authentication: { source: 'cached-login', state } },
+    );
+    expect(mockExeca).toHaveBeenCalledTimes(state === 'unverifiable' ? 2 : 1);
     expect(JSON.stringify(result)).not.toContain('raw doctor diagnostic');
   });
 
@@ -115,7 +122,7 @@ describe('acceptance: Codex readiness park #970', () => {
       authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
     });
 
-    expect(result).toEqual({ timedOut: false, haltReason: '' });
+    expect(result).toEqual({ disposition: 'recovered' });
     expect(delays).toEqual([1_000, 2_000, 4_000]);
     expect(readiness).toHaveBeenCalledTimes(4);
   });
@@ -146,5 +153,31 @@ describe('acceptance: Codex readiness park #970', () => {
       source: 'cached-login',
     }));
     expect(JSON.stringify(seen)).not.toMatch(/token|credential path|raw doctor/i);
+  });
+
+  it.each([
+    ['authorizes exactly one trial when the readiness probe fails', 'probe-failed', { disposition: 'trial-required' }],
+    ['halts on conclusive non-ready evidence after the bounded park', 'unusable', { disposition: 'halt' }],
+  ] as const)('bounded recovery %s', async (_case, state, expected) => {
+    const readiness = vi.fn().mockResolvedValue(
+      state === 'probe-failed'
+        ? { provider: 'codex' as const, source: 'cached-login' as const, state, probeFailure: { kind: 'timeout' as const, facts: { timeoutMs: 10_000 } } }
+        : { provider: 'codex' as const, source: 'cached-login' as const, state },
+    );
+    const events = new ConductorEventEmitter();
+    const now = Date.now();
+    let elapsed = 0;
+    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now + elapsed);
+    const conductor = cachedLoginConductor(readiness as never, events, async (delay) => { elapsed += delay; });
+    try {
+      const result = await (conductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+      expect(result).toMatchObject(expected);
+      expect(readiness).toHaveBeenCalledTimes(state === 'probe-failed' ? 1 : 7);
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });
