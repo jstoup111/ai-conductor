@@ -1434,6 +1434,9 @@ export class DefaultStepRunner implements StepRunner {
       'Diagnose the failure and attempt to fix the root cause (e.g., missing dependencies, ' +
       'version conflicts, environment issues). Use the current directory (the worktree) ' +
       'for any diagnostic or remediation commands.\n' +
+      'Docker services are shared across worktrees. Do not stop, restart, or tear down Docker ' +
+      'or any running containers. If required containers are not running, start them with ' +
+      '`docker compose up -d --no-recreate`; leave containers that are already running untouched.\n' +
       'After making fixes, the setup step will be retried automatically.';
 
     const prompt =
