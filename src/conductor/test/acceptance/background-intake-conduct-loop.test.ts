@@ -689,7 +689,6 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('dispatchIntakeLoop({once:true}) dispatches the real loop for exactly one tick using mocked buildIntake/notifier/sleep', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
-
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
@@ -742,7 +741,6 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('Production push transport wiring: sends notification for new ideas', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
-
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
@@ -795,7 +793,6 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('Production push transport wiring: no notification when poll is empty', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
-
     const polled = { count: 0 };
     const fakeAdapter = {
       poll: async () => {
@@ -828,7 +825,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
         now: () => new Date('2026-06-30T00:00:00.000Z'),
         log: () => {},
         printErr: () => {},
-        engineerDir: '/tmp/test-push-no-notification-empty',
+        engineerDir: join(runTmpRoot, 'test-push-no-notification-empty'),
       },
     );
 
@@ -844,7 +841,6 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
   it('dispatchIntakeLoop wires IntakeLoopDeps.reconcile bound to the real ledger/queue + a getIssueState gh capability', async () => {
     const mod = await load(CLI_MOD);
     const dispatch = requireFn(mod, 'dispatchIntakeLoop');
-
     // Fake ledger with one pending github-issues entry backing a closed issue.
     const ledgerEntries = [
       { source: 'github-issues', sourceRef: 'o/a#1', status: 'pending' },
@@ -891,7 +887,7 @@ describe('Task 17 — intake-loop CLI subcommand (production wiring)', () => {
         now: () => new Date('2026-06-30T00:00:00.000Z'),
         log: () => {},
         printErr: () => {},
-        engineerDir: '/tmp/test-reconcile-wiring',
+        engineerDir: join(runTmpRoot, 'test-reconcile-wiring'),
       },
     );
 

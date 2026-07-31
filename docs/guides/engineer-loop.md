@@ -216,6 +216,8 @@ still exits 0.
 
 With `--source-ref`, `handoff` comments the PR URL on the originating issue, adds a non-closing
 `Refs <ref>` to the PR body, applies the `engineer:handled` label, and advances the ledger to `done`.
+The originating issue's assignees remain unchanged from claim through handoff verification and
+cleanup; `engineer:handled` marks completion without changing ownership.
 
 On failure `handoff` exits 1, **keeps** the worktree, prints its path, and records branch evidence in
 the ledger so you can recover with `engineer resolve`.
