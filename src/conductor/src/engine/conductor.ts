@@ -494,6 +494,11 @@ export interface SpotAuditDispatchResult {
   authentication?: AuthenticationReadiness;
 }
 
+type AuthRecoveryDisposition =
+  | { disposition: 'recovered' }
+  | { disposition: 'trial-required' }
+  | { disposition: 'halt'; haltReason: string };
+
 /** Preserve recovery metadata when adapting a verifier dispatch for spot audit. */
 export function toSpotAuditVerifierResult(
   result: SpotAuditDispatchResult,
@@ -1555,7 +1560,7 @@ export class Conductor {
       actualProvider: result.authentication.provider,
       authentication: result.authentication,
     });
-    return park.timedOut ? result : dispatch();
+    return park.disposition === 'recovered' ? dispatch() : result;
   }
 
   /**
@@ -1571,7 +1576,7 @@ export class Conductor {
    */
   private async parkOnAuthFailure(
     failed?: Pick<StepRunResult, 'actualProvider' | 'authentication'>,
-  ): Promise<{ timedOut: boolean; haltReason: string }> {
+  ): Promise<AuthRecoveryDisposition> {
     const shPark = resolveSelfHostConfig(this.config);
 
     const authentication = failed?.authentication;
@@ -1587,7 +1592,7 @@ export class Conductor {
           await this.sleep(1_000);
         }
         return {
-          timedOut: true,
+          disposition: 'halt',
           haltReason:
             'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
             'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.',
@@ -1602,7 +1607,7 @@ export class Conductor {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
         const timedOutResult = {
-          timedOut: true,
+          disposition: 'halt' as const,
           haltReason:
             'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
             'Refresh the Codex login, then re-queue this feature.',
@@ -1660,7 +1665,7 @@ export class Conductor {
           if (
             isReady
           ) {
-            return { timedOut: false, haltReason: '' };
+            return { disposition: 'recovered' };
           }
           if (timedOut) {
             return timedOutResult;
@@ -1673,7 +1678,7 @@ export class Conductor {
 
     if (this.selfHost && shPark.buildAuthMode === 'api-key') {
       return {
-        timedOut: true,
+        disposition: 'halt',
         haltReason:
           `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
           `is missing, invalid, or has insufficient permissions.\n` +
@@ -1702,7 +1707,7 @@ export class Conductor {
 
       if (parkResult.type === 'timeout') {
         return {
-          timedOut: true,
+          disposition: 'halt',
           haltReason:
             `Daemon build token expired and refresh timed out.\n` +
             `Token file: ${tokenPath}\n` +
@@ -1710,7 +1715,7 @@ export class Conductor {
             `Then re-queue this feature.`,
         };
       }
-      return { timedOut: false, haltReason: '' };
+      return { disposition: 'recovered' };
     }
 
     // Operator credentials mode (backward compatibility)
@@ -1735,7 +1740,7 @@ export class Conductor {
     if (parkResult.type === 'timeout') {
       const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
       return {
-        timedOut: true,
+        disposition: 'halt',
         haltReason:
           `Operator credentials expired and refresh timed out.\n` +
           `Credentials file: ${parkResult.credentialsPath}\n` +
@@ -1743,7 +1748,7 @@ export class Conductor {
           `Please refresh your OAuth token and re-queue this feature.`,
       };
     }
-    return { timedOut: false, haltReason: '' };
+    return { disposition: 'recovered' };
   }
 
   /**
@@ -3332,7 +3337,7 @@ export class Conductor {
                   ? { actualProvider: authentication.provider, authentication }
                   : undefined,
               );
-              if (park.timedOut) {
+              if (park.disposition === 'halt') {
                 await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
@@ -4578,7 +4583,7 @@ export class Conductor {
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
             const park = await this.parkOnAuthFailure(result);
-            if (park.timedOut) {
+            if (park.disposition === 'halt') {
               // Task 14: Auth-park timeout → credentials-specific HALT.
               await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
               // Durable signals (HALT marker + state) are written BEFORE escalation

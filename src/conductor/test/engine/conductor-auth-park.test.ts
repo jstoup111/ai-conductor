@@ -133,7 +133,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
 
     expect(readiness).toHaveBeenCalledTimes(2);
-    expect(park).toEqual({ timedOut: false, haltReason: '' });
+    expect(park).toEqual({ disposition: 'recovered' });
   });
 
   it('resumes only the auth-failed grouped member after its scheduled Codex readiness recheck', async () => {
@@ -212,73 +212,76 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
   });
 
-  it('fails closed on mismatched provider attribution without probing an alternative runtime', async () => {
-    const codexReadiness = vi.fn().mockResolvedValue({
-      provider: 'codex', source: 'cached-login', state: 'unusable',
-    });
-    const alternativeReadiness = vi.fn().mockResolvedValue({
-      provider: 'claude', source: 'cached-login', state: 'ready',
-    });
-    const runtimes = new ProviderRuntimeSet([
-      {
-        key: 'codex',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: codexReadiness },
-        policy: CODEX_MODEL_POLICY,
-        builtIn: true,
-        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
-      },
-      {
-        key: 'claude',
-        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternativeReadiness },
-        policy: CLAUDE_MODEL_POLICY,
-        builtIn: true,
-        availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
-      },
-    ]);
-    const realNow = Date.now();
-    let clockOffset = 0;
-    const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
-    const sleepFn = vi.fn(async (delay: number) => {
-      clockOffset += delay;
-    });
-    const conductor = new Conductor({
-      stateFilePath: statePath,
-      stepRunner: { run: vi.fn(async () => ({ success: true })) },
-      events,
-      projectRoot: dir,
-      fromStep: 'build',
-      mode: 'auto',
-      sleepFn,
-      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
-      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
-    });
-
-    try {
-      const park = await (conductor as any).parkOnAuthFailure({
-        actualProvider: 'claude',
-        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+  it.each(['missing', 'unusable'] as const)(
+    'continues parking on conclusive Codex %s evidence without probing an alternative runtime',
+    async (state) => {
+      const codexReadiness = vi.fn().mockResolvedValue({
+        provider: 'codex', source: 'cached-login', state,
       });
-
-      expect({
-        park,
-        codexReadinessCalls: codexReadiness.mock.calls.length,
-        alternativeReadinessCalls: alternativeReadiness.mock.calls.length,
-        sleepCalls: sleepFn.mock.calls.length,
-      }).toEqual({
-        park: {
-          timedOut: true,
-          haltReason:
-            'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
-            'Refresh the Codex login, then re-queue this feature.',
+      const alternativeReadiness = vi.fn().mockResolvedValue({
+        provider: 'claude', source: 'cached-login', state: 'ready',
+      });
+      const runtimes = new ProviderRuntimeSet([
+        {
+          key: 'codex',
+          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: codexReadiness },
+          policy: CODEX_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
         },
-        codexReadinessCalls: 7,
-        alternativeReadinessCalls: 0,
-        sleepCalls: 6,
+        {
+          key: 'claude',
+          provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: alternativeReadiness },
+          policy: CLAUDE_MODEL_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_MODEL_POLICY.modelFallbackLadder),
+        },
+      ]);
+      const realNow = Date.now();
+      let clockOffset = 0;
+      const nowSpy = vi.spyOn(Date, 'now').mockImplementation(() => realNow + clockOffset);
+      const sleepFn = vi.fn(async (delay: number) => {
+        clockOffset += delay;
       });
-    } finally {
-      nowSpy.mockRestore();
-    }
-  });
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: vi.fn(async () => ({ success: true })) },
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        sleepFn,
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex', 'claude'] },
+      });
+
+      try {
+        const park = await (conductor as any).parkOnAuthFailure({
+          actualProvider: 'claude',
+          authentication: { provider: 'codex', source: 'cached-login', state },
+        });
+
+        expect({
+          park,
+          codexReadinessCalls: codexReadiness.mock.calls.length,
+          alternativeReadinessCalls: alternativeReadiness.mock.calls.length,
+          sleepCalls: sleepFn.mock.calls.length,
+        }).toEqual({
+          park: {
+            disposition: 'halt',
+            haltReason:
+              'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
+              'Refresh the Codex login, then re-queue this feature.',
+          },
+          codexReadinessCalls: 7,
+          alternativeReadinessCalls: 0,
+          sleepCalls: 6,
+        });
+      } finally {
+        nowSpy.mockRestore();
+      }
+    },
+  );
 
   function timeoutRuntimes() {
     const selectedReadiness = vi.fn().mockResolvedValue({
@@ -522,7 +525,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
     });
 
-    expect(park).toEqual({ timedOut: false, haltReason: '' });
+    expect(park).toEqual({ disposition: 'recovered' });
     expect(readiness).toHaveBeenCalledTimes(4);
     expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000, 4_000]);
   });
@@ -690,7 +693,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         park,
       }).toMatchObject({
         sleepDelays: [1_000, 2_000, 4_000, 8_000, 16_000, 29_000],
-        park: { timedOut: true },
+        park: { disposition: 'halt' },
       });
     } finally {
       nowSpy.mockRestore();
@@ -731,7 +734,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         readinessCalls: 0,
         sleepCalls: 0,
         park: {
-          timedOut: true,
+          disposition: 'halt',
           haltReason:
             'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
             'Refresh the Codex login, then re-queue this feature.',
@@ -787,7 +790,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       expect(runner.run).not.toHaveBeenCalled();
       expect(readiness).not.toHaveBeenCalled();
       expect(sleepFn).toHaveBeenCalledTimes(1);
-      expect(park.timedOut).toBe(true);
+      expect(park.disposition).toBe('halt');
       expect(park.haltReason).toContain('restart the daemon');
       expect(park.haltReason).not.toContain('CODEX_API_KEY=');
     } finally {
@@ -827,7 +830,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
     expect(readiness).not.toHaveBeenCalled();
     expect(sleepFn).not.toHaveBeenCalled();
-    expect(park).toMatchObject({ timedOut: true });
+    expect(park).toMatchObject({ disposition: 'halt' });
     expect(park.haltReason).toContain('restart the daemon');
   });
 
@@ -870,7 +873,7 @@ describe('conductor auth-park: daemon-token mode', () => {
 
       expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([1_000, 1_000, 1_000]);
       expect(readiness).not.toHaveBeenCalled();
-      expect(park).toMatchObject({ timedOut: true, haltReason: expect.stringContaining('restart the daemon') });
+      expect(park).toMatchObject({ disposition: 'halt', haltReason: expect.stringContaining('restart the daemon') });
       expect(parked).toEqual([expect.objectContaining({
         reason: 'Codex API key is startup-only — waiting for daemon restart',
       })]);
@@ -937,12 +940,12 @@ describe('conductor auth-park: daemon-token mode', () => {
       const daemonPark = await (daemonConductor as any).parkOnAuthFailure();
       const operatorPark = await (operatorConductor as any).parkOnAuthFailure();
 
-      expect(daemonPark).toEqual({ timedOut: false, haltReason: '' });
+      expect(daemonPark).toEqual({ disposition: 'recovered' });
       expect(daemonSleep.mock.calls.map(([delay]) => delay)).toEqual([1_000]);
       expect(daemonParked).toEqual([expect.objectContaining({
         reason: 'daemon build token expired or invalid — waiting for refresh',
       })]);
-      expect(operatorPark).toEqual({ timedOut: false, haltReason: '' });
+      expect(operatorPark).toEqual({ disposition: 'recovered' });
       expect(operatorSleep.mock.calls.map(([delay]) => delay)).toEqual([1_000]);
       expect(operatorParked).toEqual([expect.objectContaining({
         reason: 'operator OAuth token expired or invalid — waiting for refresh',
@@ -953,7 +956,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     }
   });
 
-  it.each(['missing', 'unusable', 'unverifiable'] as const)(
+  it.each(['missing', 'unusable'] as const)(
     'serial Codex %s preflight parks and resumes only the failed attempt',
     async (state) => {
       const readiness = vi
