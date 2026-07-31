@@ -41,16 +41,9 @@ import { prepareWorktree as defaultPrepareWorktree } from './worktree-prepare.js
 const execFile = promisify(execFileCb);
 
 /**
- * File system interface — injected for testability.
- * In production, this wraps node fs.promises.
+ * Read-only feature-run activity predicate injected by the daemon pool.
  */
-export interface AutoresolveFs {
-  /**
-   * Check if a worktree directory exists at the given path.
-   * @param path The worktree path to check (e.g., `.worktrees/<slug>`)
-   */
-  worktreeExists(path: string): Promise<boolean>;
-}
+export type IsFeatureInFlight = (slug: string) => boolean | Promise<boolean>;
 
 /**
  * Result of eligibility check. When `eligible` is false, `reason` explains why.
@@ -58,6 +51,19 @@ export interface AutoresolveFs {
 export interface EligibilityResult {
   eligible: boolean;
   reason?: string;
+}
+
+/**
+ * Binds the daemon pool's live feature ownership predicate into the
+ * autoresolve eligibility gate used by mergeable-label sweeps.
+ */
+export function makeAutoresolveEligibility(
+  config: HarnessConfig | undefined,
+  isFeatureInFlight: IsFeatureInFlight,
+  log: (message: string) => void,
+): (entry: WatchEntry, state: PrMergeState) => Promise<EligibilityResult> {
+  return (entry, state) =>
+    isEligibleForResolve(entry, state, config, new Date(), isFeatureInFlight, log);
 }
 
 /**
@@ -96,7 +102,7 @@ export function logOutcome(
  *   3. PR does not have needs-remediation label (sticky)
  *   4. Cooldown time has elapsed since last attempt
  *   5. Attempt count is below the configured cap
- *   6. Worktree does not already exist (avoiding concurrent prepares)
+ *   6. Feature run is not active for this slug
  *
  * Each rejection is logged with a reason. The function returns early on the
  * first rejection for efficiency.
@@ -105,7 +111,7 @@ export function logOutcome(
  * @param prState The current PR merge state (from gh)
  * @param cfg The harness configuration (may be undefined)
  * @param now The current timestamp for cooldown calculation
- * @param fs Injected fs module for testability
+ * @param isFeatureInFlight Injected daemon-pool activity predicate
  * @param logger Optional logging function (default: console.log). When the PR
  *               is deemed ineligible, one `skipped(<reason>)` outcome line
  *               (FR-16) is emitted via {@link logOutcome}.
@@ -115,10 +121,10 @@ export async function isEligibleForResolve(
   prState: PrMergeState,
   cfg: HarnessConfig | undefined,
   now: Date,
-  fs: AutoresolveFs,
+  isFeatureInFlight: IsFeatureInFlight,
   logger?: (msg: string) => void,
 ): Promise<EligibilityResult> {
-  const result = await evaluateEligibilityGates(entry, prState, cfg, now, fs);
+  const result = await evaluateEligibilityGates(entry, prState, cfg, now, isFeatureInFlight);
 
   if (!result.eligible) {
     const log = logger ?? console.log;
@@ -138,7 +144,7 @@ async function evaluateEligibilityGates(
   prState: PrMergeState,
   cfg: HarnessConfig | undefined,
   now: Date,
-  fs: AutoresolveFs,
+  isFeatureInFlight: IsFeatureInFlight,
 ): Promise<EligibilityResult> {
   // Gate 0 (Task 18): process-wide in-flight serial guard. While ANY
   // resolution is running (any slug), no other PR may be dispatched — the
@@ -213,15 +219,12 @@ async function evaluateEligibilityGates(
     };
   }
 
-  // Gate 6: Worktree does not exist
-  // The worktree path follows the pattern `.worktrees/<slug>`.
-  // Extract slug from the entry and construct the expected path.
-  const worktreePath = `.worktrees/${entry.slug}`;
-  const worktreeExists = await fs.worktreeExists(worktreePath);
-  if (worktreeExists) {
+  // Gate 6: no active daemon feature run owns this slug. A retained worktree
+  // is not proof of ownership and must not affect eligibility.
+  if (await isFeatureInFlight(entry.slug)) {
     return {
       eligible: false,
-      reason: `retained build worktree already exists at ${worktreePath}; concurrent prepare in progress`,
+      reason: `active feature run for ${entry.slug}; resolution deferred`,
     };
   }
 
@@ -306,8 +309,6 @@ export async function withResolveWorktree<T>(
   resolutionInFlight = true;
   const worktreePath = join(repoCwd, '.worktrees', `resolve-${slug}`);
 
-  let originalBranch: string | null = null;
-
   try {
     // Remove stale worktree directory if it exists (crashed prior run)
     await rm(worktreePath, { recursive: true, force: true });
@@ -315,31 +316,10 @@ export async function withResolveWorktree<T>(
     // Create the .worktrees directory if needed
     await mkdir(join(repoCwd, '.worktrees'), { recursive: true });
 
-    // If the branch is already checked out in the main repo, we need to checkout
-    // a different branch first so we can create the worktree.
-    // Check if HEAD points to the branch we want to create a worktree for.
-    const headResult = await execa('git', ['symbolic-ref', '--short', 'HEAD'], {
-      cwd: repoCwd,
-      reject: false,
-    });
-    if (headResult.exitCode === 0 && headResult.stdout.trim() === branch) {
-      // Branch is currently checked out. Switch to main (or another branch) temporarily.
-      originalBranch = branch;
-      const mainCheckout = await execa('git', ['checkout', '-q', 'main'], {
-        cwd: repoCwd,
-        reject: false,
-      });
-      // If checking out main fails, try origin/main or just master
-      if (mainCheckout.exitCode !== 0) {
-        await execa('git', ['checkout', '-q', 'origin/main'], {
-          cwd: repoCwd,
-          reject: false,
-        });
-      }
-    }
-
-    // Create a fresh worktree at the branch tip
-    await execa('git', ['worktree', 'add', worktreePath, branch], { cwd: repoCwd });
+    // A retained feature worktree may already have `branch` checked out. A
+    // detached transient checkout still starts at that exact branch tip while
+    // avoiding Git's one-worktree-per-branch restriction.
+    await execa('git', ['worktree', 'add', '--detach', worktreePath, branch], { cwd: repoCwd });
 
     // Prepare the worktree using the injected prepareWorktree function (or default)
     const prepare = prepareWorktree ?? defaultPrepareWorktree;
@@ -353,16 +333,6 @@ export async function withResolveWorktree<T>(
     // Task 18: clear the process-wide flag on both success and failure
     // (thrown error / escalation), so the next tick can dispatch again.
     resolutionInFlight = false;
-
-    // Restore the original branch if we switched away from it
-    if (originalBranch !== null) {
-      try {
-        await execa('git', ['checkout', '-q', originalBranch], { cwd: repoCwd, reject: false });
-      } catch (err) {
-        // Log but don't fail if we can't restore the branch
-        console.error(`failed to restore branch ${originalBranch}:`, err);
-      }
-    }
 
     try {
       await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });
@@ -654,7 +624,8 @@ export type PushRefreshedResult =
  * Story: "The refresh publishes with a lease and never overwrites unseen work"
  *
  * Execution:
- *   - Pushes the branch using `git push origin <branch> --force-with-lease`
+ *   - Pushes the current resolution `HEAD` to the branch using
+ *     `git push origin HEAD:<branch> --force-with-lease`
  *   - On success (exit 0):
  *     * Logs outcome as "refreshed"
  *     * Returns { pushed: true }
@@ -677,8 +648,9 @@ export async function pushRefreshedBranch(
 ): Promise<PushRefreshedResult> {
   const log = logger ?? console.log;
 
-  // Push the branch with --force-with-lease (lease prevents concurrent overwrites)
-  const pushResult = await git(['push', 'origin', branch, '--force-with-lease']);
+  // Resolution runs in a detached worktree, so publish its rebased HEAD rather
+  // than the stale named branch ref. The lease still prevents unseen overwrites.
+  const pushResult = await git(['push', 'origin', `HEAD:${branch}`, '--force-with-lease']);
 
   // Check if the push succeeded
   if (pushResult.exitCode === 0) {

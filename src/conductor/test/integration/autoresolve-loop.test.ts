@@ -97,6 +97,11 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     );
     await gDir(['commit', '-q', '-am', 'feature changelog']);
     await gDir(['push', 'origin', 'feat/widget']);
+    const { stdout: remoteFeatureTipBeforeResolution } = await execFile(
+      'git',
+      ['rev-parse', 'origin/feat/widget'],
+      { cwd: dir },
+    );
 
     await gDir(['checkout', '-q', 'main']);
     await writeFile(
@@ -147,6 +152,12 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     expect(changelog).toContain('- Feature widget entry');
     expect(changelog).toContain('- Sibling bar entry');
     expect(changelog).not.toContain('<<<<<<<');
+    const { stdout: remoteFeatureTipAfterResolution } = await execFile(
+      'git',
+      ['rev-parse', 'origin/feat/widget'],
+      { cwd: dir },
+    );
+    expect(remoteFeatureTipAfterResolution.trim()).not.toBe(remoteFeatureTipBeforeResolution.trim());
 
     // FR-16: the outcome is logged, identifying the PR.
     expect(logLines.some((l) => l.includes(PR_URL) && /refreshed/i.test(l))).toBe(true);

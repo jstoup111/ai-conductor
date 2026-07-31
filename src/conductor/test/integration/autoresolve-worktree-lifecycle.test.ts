@@ -19,6 +19,10 @@ import { mkdtemp, rm, mkdir, writeFile, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { promisify } from 'node:util';
+import { makeAutoresolveEligibility } from '../../src/engine/autoresolve.js';
+import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
+import type { PrMergeState } from '../../src/engine/pr-labels.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 const execFile = promisify(execFileCb);
 
@@ -52,9 +56,11 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it('creates a worktree at .worktrees/resolve-<slug> checked out at the PR branch tip, prepares the namespace before fn runs, and tears it down on success (FR-12/NFR-2 happy)', async () => {
+  it('keeps a retained feature checkout beside the transient resolution worktree, then removes only the transient checkout (FR-12/NFR-2 happy)', async () => {
+    await g(['worktree', 'add', '-q', join('.worktrees', 'widget'), 'feat/widget']);
     const autoresolve = await import('../../src/engine/autoresolve.js');
     let sawNamespaceBeforeFn = false;
+    let sawCoexistingWorktrees = false;
     const result = await autoresolve.withResolveWorktree(
       'widget',
       'feat/widget',
@@ -64,14 +70,70 @@ describe('integration/autoresolve — resolution worktree lifecycle', () => {
         expect(content).toBe('branch tip content\n');
         const env = await readFile(join(worktreePath, '.env'), 'utf-8').catch(() => '');
         sawNamespaceBeforeFn = env.includes('WORKTREE_NAMESPACE');
+        const list = await worktreeList();
+        sawCoexistingWorktrees = list.includes(join('.worktrees', 'widget')) && list.includes('resolve-widget');
         return { ok: true };
       },
     );
 
-    expect(sawNamespaceBeforeFn).toBe(true);
-    expect(result).toEqual({ ok: true });
     const list = await worktreeList();
-    expect(list).not.toContain('resolve-widget');
+    expect({
+      sawNamespaceBeforeFn,
+      sawCoexistingWorktrees,
+      result,
+      retainedFeatureWorktree: list.includes(join('.worktrees', 'widget')),
+      transientResolutionWorktree: list.includes('resolve-widget'),
+    }).toEqual({
+      sawNamespaceBeforeFn: true,
+      sawCoexistingWorktrees: true,
+      result: { ok: true },
+      retainedFeatureWorktree: true,
+      transientResolutionWorktree: false,
+    });
+  });
+
+  it('does not create a transient checkout for an active feature run and logs its skip reason', async () => {
+    await g(['worktree', 'add', '-q', join('.worktrees', 'widget'), 'feat/widget']);
+    const entry: WatchEntry = { prUrl: 'https://github.com/acme/widget/pull/1', slug: 'widget', repoCwd: dir };
+    const state: PrMergeState = {
+      state: 'CONFLICTING',
+      labels: [],
+      statusCheckRollup: [],
+      mergeable: 'CONFLICTING',
+      hasFailingOrPendingChecks: false,
+      checksOutcome: 'green',
+    };
+    const config: HarnessConfig = { mergeable_autoresolve: { enabled: true } };
+    const logs: string[] = [];
+    let resolutionAttempted = false;
+    const eligibility = await makeAutoresolveEligibility(
+      config,
+      () => true,
+      (message) => logs.push(message),
+    )(entry, state);
+
+    if (eligibility.eligible) {
+      resolutionAttempted = true;
+      const autoresolve = await import('../../src/engine/autoresolve.js');
+      await autoresolve.withResolveWorktree('widget', 'feat/widget', dir, async () => ({ ok: true }));
+    }
+
+    const list = await worktreeList();
+    expect({
+      eligibility,
+      resolutionAttempted,
+      retainedFeatureWorktree: list.includes(join('.worktrees', 'widget')),
+      transientResolutionWorktree: list.includes('resolve-widget'),
+      logs,
+    }).toEqual({
+      eligibility: { eligible: false, reason: 'active feature run for widget; resolution deferred' },
+      resolutionAttempted: false,
+      retainedFeatureWorktree: true,
+      transientResolutionWorktree: false,
+      logs: [
+        'outcome: pr=https://github.com/acme/widget/pull/1 stage=eligibility result=skipped(active feature run for widget; resolution deferred)',
+      ],
+    });
   });
 
   it('tears down the worktree even when the attempt function throws (failure teardown)', async () => {

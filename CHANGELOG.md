@@ -12,6 +12,10 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Stop the mergeable-PR autoresolve sweep from skipping every eligible PR once a daemon feature
+  retains its worktree; eligibility now checks whether a feature run is actively in flight for that
+  slug instead of treating any retained worktree as a concurrent prepare in progress
+  ([implementation PR #1213](https://github.com/jstoup111/ai-conductor/pull/1213)).
 - Make engineer landing and daemon backlog discovery share one plan-to-stories resolver, so the
   plan skill's canonical relative Markdown link lands only when it resolves to the exact Accepted
   stories artifact the daemon will dispatch; malformed, mismatched, traversing, and absolute

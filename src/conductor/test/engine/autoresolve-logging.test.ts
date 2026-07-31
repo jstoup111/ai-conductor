@@ -19,7 +19,6 @@ import {
   logOutcome,
   isEligibleForResolve,
   publishResolution,
-  type AutoresolveFs,
 } from '../../src/engine/autoresolve.js';
 import type { GitRunner } from '../../src/engine/rebase.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
@@ -104,14 +103,14 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
     const entry: WatchEntry = { ...baseEntry, resolveAttempts: 0, lastResolveAt: undefined };
     const prState: PrMergeState = { state: 'MERGED', mergeable: 'UNKNOWN', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' };
     const cfg: HarnessConfig | undefined = { mergeable_autoresolve: { enabled: true } } as any;
-    const fs: AutoresolveFs = { worktreeExists: async () => false };
+    const isFeatureInFlight = async (): Promise<boolean> => false;
 
     const result = await isEligibleForResolve(
       entry,
       prState,
       cfg,
       new Date(),
-      fs,
+      isFeatureInFlight,
       (msg) => logs.push(msg),
     );
 
@@ -125,14 +124,14 @@ describe('engine/autoresolve — outcome logging at call sites', () => {
     const entry: WatchEntry = { ...baseEntry, resolveAttempts: 0, lastResolveAt: undefined };
     const prState: PrMergeState = { state: 'CONFLICTING', mergeable: 'CONFLICTING', hasFailingOrPendingChecks: false, labels: [], checksOutcome: 'none' };
     const cfg: HarnessConfig | undefined = { mergeable_autoresolve: { enabled: true } } as any;
-    const fs: AutoresolveFs = { worktreeExists: async () => false };
+    const isFeatureInFlight = async (): Promise<boolean> => false;
 
     const result = await isEligibleForResolve(
       entry,
       prState,
       cfg,
       new Date(),
-      fs,
+      isFeatureInFlight,
       (msg) => logs.push(msg),
     );
 

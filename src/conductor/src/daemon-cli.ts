@@ -11,7 +11,11 @@ import {
   formatFeatureUsageTotal,
 } from './execution/provider-diagnostics.js';
 import { closeIssueOnImplementationMerge } from './engine/engineer/issue-ref.js';
-import { isEligibleForResolve, resolveConflictingPr } from './engine/autoresolve.js';
+import {
+  isEligibleForResolve,
+  makeAutoresolveEligibility,
+  resolveConflictingPr,
+} from './engine/autoresolve.js';
 import {
   isEligibleForCiFix,
   runCiFix,
@@ -126,7 +130,8 @@ import {
 } from './engine/daemon-rekick.js';
 import { readHaltClass } from './engine/halt-marker.js';
 import { migrateLegacyHaltClasses } from './engine/halt-class-migration.js';
-import { sweepMergeableLabels } from './engine/mergeable-sweep.js';
+import { sweepMergeableLabels, type WatchEntry } from './engine/mergeable-sweep.js';
+import type { PrMergeState } from './engine/pr-labels.js';
 import { reconcileHaltPrs, type PrSweepOutcome } from './engine/halt-pr-reconciliation.js';
 import { createPriorityResolver, ghIssueLabelReader } from './engine/backlog-priority.js';
 import { isPaused } from './engine/pause-marker.js';
@@ -1697,7 +1702,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // FR-14: wire the startup + per-idle-poll-tick mergeable label sweep.
       // NOTE: this binding must stay wired — removing it silently no-ops all
       // startup and idle-poll sweeps in production (daemon.ts guards with ?.()).
-      sweepMergeableLabels: async () => {
+      sweepMergeableLabels: async (activity) => {
         await sweepMergeableLabels({
           projectRoot,
           log,
@@ -1707,15 +1712,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           // so a disabled/absent config leaves the sweep unchanged (AC4).
           autoresolve: {
             enabled: config?.mergeable_autoresolve?.enabled ?? false,
-            isEligible: (entry, state) =>
-              isEligibleForResolve(
-                entry,
-                state,
-                config,
-                new Date(),
-                { worktreeExists: async (p) => existsSync(join(projectRoot, p)) },
-                log,
-              ),
+            isEligible: makeAutoresolveEligibility(config, activity.isFeatureInFlight, log),
             dispatch: async (entry) => {
               log(`[mergeable-sweep] autoresolve dispatch: ${entry.prUrl} (attempt ${entry.resolveAttempts})`);
 

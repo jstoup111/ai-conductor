@@ -145,7 +145,7 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     });
   });
 
-  it('logs that a CONFLICTING PR is skipped because its retained build worktree exists, without changing worktrees', async () => {
+  it('allows a retained, idle feature worktree without changing worktrees', async () => {
     const slug = 'retained-feature';
     const worktreesRoot = join(repo, '.worktrees');
     const retainedWorktree = join(worktreesRoot, slug);
@@ -153,7 +153,7 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     await writeFile(join(retainedWorktree, 'pipeline-evidence'), 'preserve me\n');
     const before = await readdir(worktreesRoot, { recursive: true });
     const logs: string[] = [];
-    const queriedPaths: string[] = [];
+    const queriedSlugs: string[] = [];
 
     const autoresolve = await import('../../src/engine/autoresolve.js');
     const result = await autoresolve.isEligibleForResolve(
@@ -173,11 +173,9 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
       },
       { mergeable_autoresolve: { enabled: true, cooldownMinutes: 60 } },
       new Date('2026-01-15T12:00:00Z'),
-      {
-        worktreeExists: async (path: string) => {
-          queriedPaths.push(path);
-          return path === `.worktrees/${slug}`;
-        },
+      (queriedSlug: string) => {
+        queriedSlugs.push(queriedSlug);
+        return false;
       },
       (message: string) => logs.push(message),
     );
@@ -185,21 +183,12 @@ describe('engine/autoresolve — acceptance guard sequence at the sweep-resoluti
     expect({
       result,
       logs,
-      queriedPaths,
+      queriedSlugs,
       worktrees: await readdir(worktreesRoot, { recursive: true }),
     }).toEqual({
-      result: {
-        eligible: false,
-        reason: expect.stringMatching(
-          /retained build worktree.*\.worktrees\/retained-feature/i,
-        ),
-      },
-      logs: [
-        expect.stringMatching(
-          /skipped\(.*retained build worktree.*\.worktrees\/retained-feature.*\)/i,
-        ),
-      ],
-      queriedPaths: ['.worktrees/retained-feature'],
+      result: { eligible: true },
+      logs: [],
+      queriedSlugs: [slug],
       worktrees: before,
     });
   });

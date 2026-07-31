@@ -70,6 +70,42 @@ describe('engine/daemon — runDaemon', () => {
     expect([...calls.values()]).toEqual([1, 1, 1, 1]);
   });
 
+  it('exposes live feature ownership to mergeable sweeps', async () => {
+    let resolveFeature: ((outcome: FeatureOutcome) => void) | undefined;
+    const featureRun = new Promise<FeatureOutcome>((resolve) => {
+      resolveFeature = resolve;
+    });
+    let dispatched: (() => void) | undefined;
+    const dispatchedFeature = new Promise<void>((resolve) => {
+      dispatched = resolve;
+    });
+    let isFeatureInFlight: ((slug: string) => boolean) | undefined;
+
+    const daemon = runDaemon(
+      {
+        discoverBacklog: staticBacklog(items(1)),
+        runFeature: async (item) => {
+          dispatched?.();
+          return featureRun;
+        },
+        sweepMergeableLabels: async ({ isFeatureInFlight: ownership }) => {
+          isFeatureInFlight = ownership;
+          expect(ownership('f0')).toBe(false);
+        },
+      },
+      { concurrency: 1, once: true },
+    );
+
+    await dispatchedFeature;
+    expect(isFeatureInFlight?.('f0')).toBe(true);
+    expect(isFeatureInFlight?.('other-feature')).toBe(false);
+
+    resolveFeature?.({ slug: 'f0', status: 'done' });
+    await daemon;
+
+    expect(isFeatureInFlight?.('f0')).toBe(false);
+  });
+
   it('stops starting after maxItems', async () => {
     const deps: DaemonDeps = {
       discoverBacklog: staticBacklog(items(10)),
