@@ -182,6 +182,35 @@ if [ "${1:-}" = '--config-contract' ]; then
   exit 0
 fi
 
+printf '\n=== Stories 1-2: hosted landing and section destinations ===\n'
+
+MISSING_LANDING="$FIXTURE_ROOT/missing-landing"
+cp -R "$VALID_ROOT" "$MISSING_LANDING"
+rm "$MISSING_LANDING/docs/index.md"
+expect_checker_failure "a missing landing page names its hosted path" "$MISSING_LANDING" \
+  "docs/index.md"
+
+MISSING_SECTION="$FIXTURE_ROOT/missing-section"
+cp -R "$VALID_ROOT" "$MISSING_SECTION"
+rm "$MISSING_SECTION/docs/runbooks/index.md"
+expect_checker_failure "a missing required section names its hosted index" "$MISSING_SECTION" \
+  "docs/runbooks/index.md"
+
+BROKEN_TARGET="$FIXTURE_ROOT/broken-target"
+cp -R "$VALID_ROOT" "$BROKEN_TARGET"
+sed -i 's#(guides/)#(https://github.com/jstoup111/ai-conductor/blob/main/docs/guides/index.md)#' \
+  "$BROKEN_TARGET/docs/index.md"
+expect_checker_failure "a non-hosted landing target names the landing page" "$BROKEN_TARGET" \
+  "docs/index.md"
+
+if [ "${1:-}" = '--landing-contract' ]; then
+  printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
+  if [ "$FAIL" -gt 0 ]; then
+    exit 1
+  fi
+  exit 0
+fi
+
 REAL_OUTPUT="$(run_checker "$REPO_ROOT")"
 REAL_STATUS=$?
 record "the maintained repository tree has no missing or ambiguous navigation membership" \
@@ -189,11 +218,6 @@ record "the maintained repository tree has no missing or ambiguous navigation me
 if [ "$REAL_STATUS" -ne 0 ]; then
   printf '%s\n' "$REAL_OUTPUT"
 fi
-
-MISSING_SECTION="$FIXTURE_ROOT/missing-section"
-cp -R "$VALID_ROOT" "$MISSING_SECTION"
-rm "$MISSING_SECTION/docs/runbooks/index.md"
-expect_checker_failure "a missing required section names its hosted index" "$MISSING_SECTION" "docs/runbooks/index.md"
 
 MISSING_METADATA="$FIXTURE_ROOT/missing-metadata"
 cp -R "$VALID_ROOT" "$MISSING_METADATA"
@@ -217,11 +241,6 @@ nav_order: 2
 # Duplicate
 MARKDOWN
 expect_checker_failure "duplicate sibling membership is rejected by path" "$AMBIGUOUS" "docs/guides/duplicate.md"
-
-BROKEN_TARGET="$FIXTURE_ROOT/broken-target"
-cp -R "$VALID_ROOT" "$BROKEN_TARGET"
-sed -i 's#(guides/)#(missing-guides/)#' "$BROKEN_TARGET/docs/index.md"
-expect_checker_failure "a broken hosted landing target names the landing page" "$BROKEN_TARGET" "docs/index.md"
 
 printf '\n=== Story 8: repository front door retains both hosted and source navigation ===\n'
 
