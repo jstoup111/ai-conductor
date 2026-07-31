@@ -615,18 +615,12 @@ describe('operator park boundary contract', () => {
         wiringStarted.resolve();
         await releaseWiring.promise;
         settled.push(step);
+      } else if (step === 'test_suite') {
+        suiteStarted.resolve();
+        await releaseSuite.promise;
+        settled.push(step);
       }
       return { success: true };
-    });
-    const ensure = vi.fn(async () => {
-      suiteStarted.resolve();
-      await releaseSuite.promise;
-      settled.push('test_suite');
-      return {
-        status: 'EXECUTED',
-        freshness: { status: 'STALE', reason: 'missing' },
-        evidence: {} as never,
-      } as const;
     });
     const conductor = new Conductor({
       projectRoot,
@@ -640,10 +634,6 @@ describe('operator park boundary contract', () => {
       verifyArtifacts: false,
       featureSlug: 'operator-park-boundary',
       operatorParkBoundary: async () => parked,
-      fullSuiteVerifier: {
-        ensure,
-        inspect: async () => ({ status: 'STALE', reason: 'missing' }),
-      },
       ...noExternalIo(),
     });
 
@@ -670,7 +660,6 @@ describe('operator park boundary contract', () => {
         ]),
       ),
       buildReviewDispatches: run.mock.calls.filter(([step]) => step === 'build_review').length,
-      suiteEnsureCalls: ensure.mock.calls.length,
     }).toEqual({
       result: {
         kind: 'operator-parked',
@@ -683,7 +672,6 @@ describe('operator park boundary contract', () => {
         build_verification__test_suite: 'done',
       },
       buildReviewDispatches: 0,
-      suiteEnsureCalls: 1,
     });
   });
 
