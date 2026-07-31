@@ -104,9 +104,7 @@ the `build_review` normalizer (`:850,859,865`).
 | `build_progress` | object | see section | [build_progress](#build_progress) |
 | `spec_owner` | string | none | [spec_owner](#spec_owner) |
 | `owner_gate_cutover` | ISO-8601 string | `null` | [owner_gate_cutover](#owner_gate_cutover) |
-| `attribution_enforcement_cutover` | ISO-8601 string | deprecated no-op | [attribution telemetry compatibility](#attribution-telemetry-compatibility) |
-| `attribution_judge_cutover` | ISO-8601 string | none | [attribution cutovers](#attribution-cutovers) |
-| `attribution_audit_sample_pct` | number | `10` | [attribution cutovers](#attribution-cutovers) |
+| `attribution_audit_sample_pct` | number | `10` | [attribution telemetry](#attribution-telemetry) |
 | `rebase_resolution_attempts` | number | `3` | [rebase_resolution_attempts](#rebase_resolution_attempts) |
 | `validation_concurrency` | number | `2` | [validation_concurrency](#validation_concurrency) |
 | `harness_self_host` | object | see section | [harness_self_host](#harness_self_host) |
@@ -944,25 +942,20 @@ Validation (`config.ts:652-662`): must be a string and `Date.parse` must succeed
 **rejected, never silently defaulted** — an un-owned spec must not be misclassified because of a
 fat-fingered date. The error names the value and shows the expected form.
 
-Absent resolves to `null` at the wiring site (`src/conductor/src/daemon-cli.ts:1229`): no grandfather
-window, so un-owned specs are indeterminate and skipped. An un-owned spec whose plan first reached the
-default branch strictly before the cutover is built; one merged on or after it is skipped.
+Absent resolves to `null` at the wiring site (`src/conductor/src/daemon-cli.ts:1229`), so un-owned
+specs default-build. With a cutover, an un-owned spec whose plan first reached the default branch
+strictly before it is labeled grandfathered; specs merged on or after it also default-build.
 
-## Attribution telemetry compatibility
+## Attribution telemetry
 
-Three related keys. Inline attribution enforcement was retired in #773; the former
-enforcement key remains accepted only so existing config files continue to load.
+`attribution_audit_sample_pct` controls the percentage of attribution telemetry audit events sampled.
+It is an optional number: validation requires a number, clamps values outside `[0,100]` with a warning,
+and defaults an absent value to `10`. Attribution telemetry consumes the resolved value at
+`src/conductor/src/engine/attribution-telemetry.ts`; a user-level value applies when the project omits
+the key. See [Load order and precedence](#load-order-and-precedence).
 
-| Key | Type | Validation | Absent |
-| --- | --- | --- | --- |
-| `attribution_enforcement_cutover` | ISO-8601 string | String and `Date.parse` must succeed | Deprecated no-op; does not gate builds, commits, or mutations |
-| `attribution_judge_cutover` | ISO-8601 string | Same (`config.ts:685-695`) | Judgment disabled (`config.ts:971-977`) |
-| `attribution_audit_sample_pct` | number | Must be a number (`config.ts:701-704`); outside `[0,100]` is clamped with a warning and the clamped value written back (`config.ts:706-712`) | Defaults to `10`, injected into the config object |
-
-A judge cutover in the past is active; a future one is inactive. `attribution_audit_sample_pct` is inert while
-`attribution_judge_cutover` is absent, and is consumed at
-`src/conductor/src/engine/attribution-telemetry.ts` (`?? 10`). Its user-level value applies when the
-project omits the key; see [Load order and precedence](#load-order-and-precedence).
+The retired `attribution_enforcement_cutover` and `attribution_judge_cutover` keys are not valid
+configuration keys. Remove either key before updating.
 
 ## rebase_resolution_attempts
 
