@@ -239,6 +239,23 @@ record "source guides have unique titles, the Guides parent, and stable order" \
     source_has_guide_destination 'running-the-daemon.md' 'Running the daemon' 5 && \
     source_has_guide_destination 'self-hosting.md' 'Self-hosting the harness' 6 && echo 0 || echo 1 )"
 
+source_has_reference_destination() {
+  local path=$1
+  local title=$2
+  local order=$3
+
+  [ -f "$REPO_ROOT/docs/reference/$path" ] && \
+    grep -Fxq "title: $title" "$REPO_ROOT/docs/reference/$path" && \
+    grep -Fxq 'parent: Reference' "$REPO_ROOT/docs/reference/$path" && \
+    grep -Fxq "nav_order: $order" "$REPO_ROOT/docs/reference/$path"
+}
+
+record "core reference topics have unique titles, the Reference parent, and stable order" \
+  "$( source_has_reference_destination 'artifacts.md' 'Artifacts and state files' 1 && \
+    source_has_reference_destination 'cli.md' '`conduct-ts` CLI reference' 2 && \
+    source_has_reference_destination 'configuration.md' 'Configuration reference' 3 && \
+    source_has_reference_destination 'environment.md' 'Environment variables' 4 && echo 0 || echo 1 )"
+
 if [ "${1:-}" = '--config-contract' ]; then
   printf '\n=== Summary: %s/%s assertions passed ===\n' "$PASS" "$TOTAL"
   if [ "$FAIL" -gt 0 ]; then

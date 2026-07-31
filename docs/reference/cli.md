@@ -1,3 +1,9 @@
+---
+title: `conduct-ts` CLI reference
+parent: Reference
+nav_order: 2
+---
+
 # `conduct-ts` CLI reference
 
 Every command, subcommand, flag, and exit code of the `conduct-ts` engine. Commands are grouped

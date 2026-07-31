@@ -1,3 +1,9 @@
+---
+title: Environment variables
+parent: Reference
+nav_order: 4
+---
+
 # Environment variables
 
 Every environment variable the harness reads or writes, grouped by role: read from your ambient
