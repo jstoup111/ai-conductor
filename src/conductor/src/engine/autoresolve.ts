@@ -296,8 +296,6 @@ export async function withResolveWorktree<T>(
   resolutionInFlight = true;
   const worktreePath = join(repoCwd, '.worktrees', `resolve-${slug}`);
 
-  let originalBranch: string | null = null;
-
   try {
     // Remove stale worktree directory if it exists (crashed prior run)
     await rm(worktreePath, { recursive: true, force: true });
@@ -305,31 +303,10 @@ export async function withResolveWorktree<T>(
     // Create the .worktrees directory if needed
     await mkdir(join(repoCwd, '.worktrees'), { recursive: true });
 
-    // If the branch is already checked out in the main repo, we need to checkout
-    // a different branch first so we can create the worktree.
-    // Check if HEAD points to the branch we want to create a worktree for.
-    const headResult = await execa('git', ['symbolic-ref', '--short', 'HEAD'], {
-      cwd: repoCwd,
-      reject: false,
-    });
-    if (headResult.exitCode === 0 && headResult.stdout.trim() === branch) {
-      // Branch is currently checked out. Switch to main (or another branch) temporarily.
-      originalBranch = branch;
-      const mainCheckout = await execa('git', ['checkout', '-q', 'main'], {
-        cwd: repoCwd,
-        reject: false,
-      });
-      // If checking out main fails, try origin/main or just master
-      if (mainCheckout.exitCode !== 0) {
-        await execa('git', ['checkout', '-q', 'origin/main'], {
-          cwd: repoCwd,
-          reject: false,
-        });
-      }
-    }
-
-    // Create a fresh worktree at the branch tip
-    await execa('git', ['worktree', 'add', worktreePath, branch], { cwd: repoCwd });
+    // A retained feature worktree may already have `branch` checked out. A
+    // detached transient checkout still starts at that exact branch tip while
+    // avoiding Git's one-worktree-per-branch restriction.
+    await execa('git', ['worktree', 'add', '--detach', worktreePath, branch], { cwd: repoCwd });
 
     // Prepare the worktree using the injected prepareWorktree function (or default)
     const prepare = prepareWorktree ?? defaultPrepareWorktree;
@@ -343,16 +320,6 @@ export async function withResolveWorktree<T>(
     // Task 18: clear the process-wide flag on both success and failure
     // (thrown error / escalation), so the next tick can dispatch again.
     resolutionInFlight = false;
-
-    // Restore the original branch if we switched away from it
-    if (originalBranch !== null) {
-      try {
-        await execa('git', ['checkout', '-q', originalBranch], { cwd: repoCwd, reject: false });
-      } catch (err) {
-        // Log but don't fail if we can't restore the branch
-        console.error(`failed to restore branch ${originalBranch}:`, err);
-      }
-    }
 
     try {
       await execa('git', ['worktree', 'remove', '--force', worktreePath], { cwd: repoCwd });

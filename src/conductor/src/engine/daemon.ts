@@ -180,6 +180,11 @@ export interface FeatureOutcome {
   costTokens?: number;
 }
 
+/** Read-only feature ownership exposed to daemon sweep adapters. */
+export interface DaemonSweepContext {
+  readonly isFeatureInFlight: (slug: string) => boolean;
+}
+
 export interface DaemonDeps {
   /**
    * Features eligible to run: stories + plan present, not yet at .pipeline/DONE.
@@ -434,13 +439,11 @@ export interface DaemonDeps {
   /**
    * FR-14: sweep mergeable labels on startup (after reconciliation) and once per
    * idle poll tick. The caller binds projectRoot + log when wiring production
-   * deps — this core accepts a pre-bound zero-arg function so it needs no
-   * knowledge of projectRoot. Best-effort: a throw is caught and logged by
-   * `runDaemon`; the daemon loop is never disrupted.
+   * deps — this core supplies read-only activity context but needs no knowledge
+   * of projectRoot. Best-effort: a throw is caught and logged by `runDaemon`;
+   * the daemon loop is never disrupted.
    */
-  sweepMergeableLabels?: (context: {
-    readonly isFeatureInFlight: (slug: string) => boolean;
-  }) => Promise<void>;
+  sweepMergeableLabels?: (context: DaemonSweepContext) => Promise<void>;
 
   // ── Task T28: daemon self-restart at idle boundary ──────────────────────
   /**

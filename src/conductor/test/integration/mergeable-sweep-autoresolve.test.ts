@@ -19,7 +19,9 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { enrollWatch, sweepMergeableLabels } from '../../src/engine/mergeable-sweep.js';
 import type { WatchEntry } from '../../src/engine/mergeable-sweep.js';
-import type { GhRunner, PrMergeState } from '../../src/engine/pr-labels.js';
+import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { makeAutoresolveEligibility } from '../../src/daemon-cli.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 
 function prViewJson(mergeable: string): { stdout: string } {
   return {
@@ -170,6 +172,59 @@ describe('mergeable-sweep autoresolve dispatch (Task 17)', () => {
     });
 
     expect(dispatched).toHaveLength(0);
+  });
+
+  it('daemon activity context reaches autoresolve eligibility: inactive dispatches and active skips', async () => {
+    const entry: WatchEntry = { prUrl: 'https://github.com/acme/widget/pull/1', slug: 'widget', repoCwd: projectRoot };
+    const config: HarnessConfig = { mergeable_autoresolve: { enabled: true } };
+    const dispatched: WatchEntry[] = [];
+    const logs: string[] = [];
+    const activePredicateCalls: string[] = [];
+    const inactivePredicateCalls: string[] = [];
+    await enrollWatch(projectRoot, entry);
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [entry.prUrl]: 'CONFLICTING' }),
+      autoresolve: {
+        enabled: true,
+        isEligible: makeAutoresolveEligibility(config, {
+          isFeatureInFlight: (slug) => {
+            activePredicateCalls.push(slug);
+            return true;
+          },
+        }, (message) => logs.push(message)),
+        dispatch: async (candidate) => {
+          dispatched.push(candidate);
+        },
+      },
+    });
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: makeGh({ [entry.prUrl]: 'CONFLICTING' }),
+      autoresolve: {
+        enabled: true,
+        isEligible: makeAutoresolveEligibility(config, {
+          isFeatureInFlight: (slug) => {
+            inactivePredicateCalls.push(slug);
+            return false;
+          },
+        }, () => {}),
+        dispatch: async (candidate) => {
+          dispatched.push(candidate);
+        },
+      },
+    });
+
+    expect({ dispatched, logs, activePredicateCalls, inactivePredicateCalls }).toEqual({
+      dispatched: [expect.objectContaining({ slug: 'widget' })],
+      logs: [
+        'outcome: pr=https://github.com/acme/widget/pull/1 stage=eligibility result=skipped(active feature run for widget; resolution deferred)',
+      ],
+      activePredicateCalls: ['widget'],
+      inactivePredicateCalls: ['widget'],
+    });
   });
 
   // ── FR-15 Regression Tests ─────────────────────────────────────────────────
