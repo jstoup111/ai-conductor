@@ -959,9 +959,9 @@ if [ -f "$plan_skill" ]; then
   test -n "$harness_plan_ownership_contract" \
     && grep -qiE 'terminal catch-all' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'writing-system-tests' <<<"$harness_plan_ownership_contract" \
-    && grep -qiE 'test-suite' <<<"$harness_plan_ownership_contract" \
+    && grep -qiE 'engine-native configured-verifier gate' <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'aggregate' <<<"$harness_plan_ownership_contract" \
-    && grep -qiE 'test-suite.*failures.*manual-test.*failures.*return directly to BUILD' \
+    && grep -qiE 'aggregate verifier failures.*manual-test.*failures.*return directly to BUILD' \
       <<<"$harness_plan_ownership_contract" \
     && grep -qiE 'prd-audit.*architecture-review.*finish.*route' \
       <<<"$harness_plan_ownership_contract" \

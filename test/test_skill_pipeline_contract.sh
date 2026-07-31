@@ -15,6 +15,7 @@ FINISH_SKILL_FILE="${HARNESS_DIR}/skills/finish/SKILL.md"
 PR_SKILL_FILE="${HARNESS_DIR}/skills/pr/SKILL.md"
 ENGINEER_SKILL_FILE="${HARNESS_DIR}/skills/engineer/SKILL.md"
 CONDUCT_SKILL_FILE="${HARNESS_DIR}/skills/conduct/SKILL.md"
+BOOTSTRAP_SKILL_FILE="${HARNESS_DIR}/skills/bootstrap/SKILL.md"
 CI_WORKFLOW_FILE="${HARNESS_DIR}/.github/workflows/ci.yml"
 AUTORESOLVE_FILE="${HARNESS_DIR}/src/conductor/src/engine/autoresolve.ts"
 CI_FIX_FILE="${HARNESS_DIR}/src/conductor/src/engine/ci-fix.ts"
@@ -83,8 +84,9 @@ else
   pass "legacy skills/test-suite directory is absent"
 fi
 
-if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' \
-  | grep -vF "${CONDUCT_SKILL_FILE}:255:" >/tmp/pipeline_contract_genericity_hits.$$ 2>/dev/null; then
+if rg -n 'src/conductor|HARNESS\.md|bin/conduct([^[:alnum:]_-]|$)|conduct-ts[[:space:]]+test-suite' "$HARNESS_DIR/skills" --glob '*.md' 2>/dev/null \
+  | grep -vF "${CONDUCT_SKILL_FILE}:" \
+  | grep -vF "${BOOTSTRAP_SKILL_FILE}:" >/tmp/pipeline_contract_genericity_hits.$$; then
   cat /tmp/pipeline_contract_genericity_hits.$$ >&2
   rm -f /tmp/pipeline_contract_genericity_hits.$$
   fail "reusable skills contain a project-specific verifier command, path, legacy runner name, or harness-file reference"
