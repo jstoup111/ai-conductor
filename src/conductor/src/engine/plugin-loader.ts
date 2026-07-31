@@ -141,11 +141,16 @@ export function registerBuiltins(
   registry: PluginRegistry,
   events: ConductorEventEmitter,
   renderEvent: UIEventHandler,
-  rendererOpts?: TerminalRendererOptions
+  rendererOpts?: TerminalRendererOptions,
+  codexDoctorTimeoutSeconds = 10,
 ): TerminalSubscriber {
   // Task 11: Register ClaudeProvider
   registry.register('llm_provider', 'claude', new ClaudeProvider());
-  registry.register('llm_provider', 'codex', new CodexProvider());
+  registry.register(
+    'llm_provider',
+    'codex',
+    new CodexProvider(undefined, undefined, undefined, undefined, codexDoctorTimeoutSeconds * 1_000),
+  );
 
   // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback)
   const subscriber = new TerminalSubscriber(events, renderEvent);

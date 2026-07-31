@@ -54,6 +54,7 @@ import { detectDaemonCommand, detectDaemonSupervisorCommand } from '../../src/en
 // so redirect the user-config adapter for this file rather than mutating HOME
 // while another daemon test is resolving its own configuration.
 const userConfigFixture = vi.hoisted(() => ({ path: '' }));
+const codexDoctorTimeouts = vi.hoisted(() => [] as Array<number | undefined>);
 
 vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
@@ -63,11 +64,23 @@ vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/plugin-loader.js')>();
+  return {
+    ...actual,
+    registerBuiltins: (...args: Parameters<typeof actual.registerBuiltins>) => {
+      codexDoctorTimeouts.push(args[4]);
+      return actual.registerBuiltins(...args);
+    },
+  };
+});
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
   userConfigFixture.path = '';
+  codexDoctorTimeouts.splice(0);
   await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
@@ -143,6 +156,18 @@ async function launchDaemon(home: string, projectRoot: string): Promise<LaunchRe
 // user scope is the only contributor. `auto_restart_on_stale_engine` is an inert
 // known key that merely makes the project config file present and valid.
 const PROJECT_WITHOUT_POLICY = 'auto_restart_on_stale_engine: false\n';
+
+describe('#1039 Story 4 — daemon Codex readiness timeout composition', () => {
+  it('passes the resolved project timeout only to built-in Codex registration', async () => {
+    const home = await makeUserHome('codex_doctor_timeout_seconds: 30\n');
+    const project = await makeProject('codex_doctor_timeout_seconds: 2.5\n');
+
+    const result = await launchDaemon(home, project);
+
+    expect(result.error).toBeUndefined();
+    expect(codexDoctorTimeouts).toEqual([2.5]);
+  });
+});
 
 describe('#967 Story 1 — daemon inherits machine-scoped runtime policy', () => {
   it('happy: a user-only llm_provider selection reaches daemon provider construction with codex first', async () => {

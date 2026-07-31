@@ -1031,7 +1031,13 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  registerBuiltins(registry, events, renderEvent);
+  registerBuiltins(
+    registry,
+    events,
+    renderEvent,
+    undefined,
+    config?.codex_doctor_timeout_seconds,
+  );
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},

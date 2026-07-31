@@ -86,7 +86,7 @@ export type CodexDoctorRunner = (
   options: CodexDoctorRunnerOptions,
 ) => Promise<DoctorCommandResult>;
 
-const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
+const DEFAULT_CODEX_DOCTOR_TIMEOUT_MS = 10_000;
 
 const defaultCodexDoctorRunner: CodexDoctorRunner = async (command, args, options) =>
   execa(command, args, options) as Promise<DoctorCommandResult>;
@@ -160,6 +160,7 @@ export class CodexProvider implements LLMProvider {
     executable = process.env.CODEX_EXECUTABLE ?? 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: CodexSubprocessFactory = execa,
+    private readonly doctorTimeoutMs = DEFAULT_CODEX_DOCTOR_TIMEOUT_MS,
   ) {
     this.authentication = this.selectAuthentication();
     this.executable = executable;
@@ -189,7 +190,7 @@ export class CodexProvider implements LLMProvider {
         ['doctor', '--json', '--summary'],
         {
           reject: false,
-          timeout: CODEX_DOCTOR_TIMEOUT_MS,
+          timeout: this.doctorTimeoutMs,
           stdout: 'pipe',
           stderr: 'pipe',
           env: authentication.apiKey
@@ -674,7 +675,7 @@ export class CodexProvider implements LLMProvider {
     if (typeof error === 'object' && error !== null && (error as { timedOut?: unknown }).timedOut === true) {
       return this.probeFailedReadiness(source, {
         kind: 'timeout',
-        facts: { timeoutMs: CODEX_DOCTOR_TIMEOUT_MS, ...facts },
+        facts: { timeoutMs: this.doctorTimeoutMs, ...facts },
       });
     }
 

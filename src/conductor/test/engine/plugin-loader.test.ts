@@ -5,6 +5,15 @@ import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
+
+const { mockExeca } = vi.hoisted(() => ({
+  mockExeca: vi.fn<
+    (file: string, args: readonly string[], options: ExecaOptions) => Promise<ExecaResult>
+  >(),
+}));
+
+vi.mock('execa', () => ({ execa: mockExeca }));
 
 describe('discoverPlugins', () => {
   let registry: PluginRegistry;
@@ -239,5 +248,37 @@ describe('registerBuiltins — memory_provider:local (adr-2026-06-29-memory-prov
 
     expect(provider.name).toBe('local');
     expect(provider.kind).toBe('memory_provider');
+  });
+});
+
+describe('registerBuiltins — Codex readiness timeout', () => {
+  beforeEach(() => {
+    mockExeca.mockReset();
+    mockExeca.mockResolvedValue({
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: true },
+        transport: { authenticated: true },
+      }),
+      exitCode: 0,
+    } as ExecaResult);
+  });
+
+  it.each([
+    ['default', undefined, 10_000],
+    ['custom', 2.5, 2_500],
+  ] as const)('passes the %s resolved timeout to the Codex doctor boundary in milliseconds', async (
+    _name,
+    timeoutSeconds,
+    expectedTimeoutMs,
+  ) => {
+    const registry = new PluginRegistry();
+    registerBuiltins(registry, new ConductorEventEmitter(), () => {}, undefined, timeoutSeconds);
+    registry.markInitialized();
+
+    const provider = registry.get<{ readiness: () => Promise<unknown> }>('llm_provider', 'codex');
+    await provider.readiness();
+
+    expect(mockExeca.mock.calls[0]?.[2]?.timeout).toBe(expectedTimeoutMs);
   });
 });

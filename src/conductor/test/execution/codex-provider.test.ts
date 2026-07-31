@@ -6,6 +6,7 @@ import {
   CodexProvider,
   parseCodexJsonl,
 } from '../../src/execution/codex-provider.js';
+import type { CodexDoctorRunner } from '../../src/execution/codex-provider.js';
 import type {
   AuthenticationReadiness,
   InvokeOptions,
@@ -1476,6 +1477,19 @@ describe('CodexProvider', () => {
       if (priorKey === undefined) delete process.env.CODEX_API_KEY;
       else process.env.CODEX_API_KEY = priorKey;
     }
+  });
+
+  it('uses an injected readiness timeout at the doctor boundary', async () => {
+    let receivedTimeout: number | undefined;
+    const runDoctor: CodexDoctorRunner = async (_command, _args, options) => {
+      receivedTimeout = options.timeout;
+      return readyDoctorResult();
+    };
+    const provider = new CodexProvider(runDoctor, 'codex', { nowMs: () => 0 }, undefined, 2_500);
+
+    await provider.readiness();
+
+    expect(receivedTimeout).toBe(2_500);
   });
 
   it.each([

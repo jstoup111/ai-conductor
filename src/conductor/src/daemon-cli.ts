@@ -849,7 +849,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // untagged.
     if ((event as Record<PropertyKey, unknown>)[FORWARDED_FROM_FEATURE]) return;
     renderDaemonEvent(event, log);
-  });
+  }, undefined, config?.codex_doctor_timeout_seconds);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},
