@@ -73,6 +73,9 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // The protected-artifact seal uses create-once publication for an
       // immutable baseline; it is unrelated to daemon process ownership.
       'engine/protected-artifact-seal.ts',
+      // The rebase-repair ledger serializes durable `.pipeline` updates. It
+      // neither references `daemon.pid` nor participates in daemon ownership.
+      'engine/test-suite-remediation.ts',
     ];
 
     for (const file of allTs) {

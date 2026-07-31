@@ -43,14 +43,14 @@ describe('renderDaemonEvent', () => {
   it('renders deterministic build verification group boundaries', () => {
     expect(lines({
       type: 'parallel_started',
-      step: 'build_verification',
+      step: 'wiring_check',
       branches: ['wiring_check', 'test_suite'],
-    })).toEqual(['· ▶ build_verification [wiring_check, test_suite]']);
+    })).toEqual(['· ▶ wiring_check [wiring_check, test_suite]']);
     expect(lines({
       type: 'parallel_completed',
-      step: 'build_verification',
+      step: 'wiring_check',
       branches: ['wiring_check', 'test_suite'],
-    })).toEqual(['·   build_verification [wiring_check, test_suite] ✓ done']);
+    })).toEqual(['·   wiring_check [wiring_check, test_suite] ✓ done']);
   });
 
   it('renders failures', () => {
@@ -120,6 +120,13 @@ describe('renderDaemonEvent', () => {
   it('renders halt and convergence', () => {
     expect(lines({ type: 'loop_halt', reason: 'cap' })).toEqual(['· ✋ loop halted: cap']);
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
+  });
+
+  it('renders a mergeable skip distinctly from an already-current branch', () => {
+    expect(lines({ type: 'rebase_noop' })).toEqual([]);
+    expect(lines({ type: 'rebase_mergeable_skip' } as unknown as ConductorEvent)).toEqual([
+      '· ✓ rebase skipped — cleanly mergeable with base',
+    ]);
   });
 
   it('renders ci_failed event with ✋ halt-monitor marker', () => {
@@ -302,6 +309,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'loop_halt', reason: 'stuck' },
       { type: 'loop_converged' },
       { type: 'rebase_noop' },
+      { type: 'rebase_mergeable_skip' } as unknown as ConductorEvent,
       { type: 'rebase_changed', changedPaths: ['a.ts'] },
       { type: 'rebase_changelog_resolved' },
       { type: 'rebase_conflict_halt', reason: 'conflict', conflicts: ['a.ts'] },
@@ -352,6 +360,7 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'build_review_base',
       'parallel_started',
       'parallel_completed',
+      'rebase_mergeable_skip',
     ]);
 
     expect(renderingTypes).toEqual(expected);

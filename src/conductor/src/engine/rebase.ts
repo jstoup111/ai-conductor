@@ -40,6 +40,29 @@ export interface GitResult {
   stderr: string;
 }
 
+/** Result of checking whether merging the base into HEAD would conflict. */
+export type ProspectiveMergeResult = 'clean' | 'conflicting' | 'indeterminate';
+
+/**
+ * Classify Git's prospective merge result without modifying the worktree.
+ *
+ * `merge-tree --write-tree` uses exit 0 for a clean merge and 1 for conflicts;
+ * every other exit is an operational failure whose mergeability is unknown.
+ */
+async function classifyProspectiveMerge(
+  git: GitRunner,
+  baseRef: string,
+): Promise<ProspectiveMergeResult> {
+  try {
+    const { exitCode } = await git(['merge-tree', '--write-tree', '--quiet', baseRef, 'HEAD']);
+    if (exitCode === 0) return 'clean';
+    if (exitCode === 1) return 'conflicting';
+    return 'indeterminate';
+  } catch {
+    return 'indeterminate';
+  }
+}
+
 /** A real git runner rooted at `cwd`, never throwing on non-zero exit. */
 export function makeGitRunner(cwd: string): GitRunner {
   return async (args: string[], opts?: { input?: string }): Promise<GitResult> => {
@@ -530,6 +553,7 @@ export async function writeSealHalt(projectRoot: string, reason: string): Promis
 
 export type RebaseOutcome =
   | { kind: 'noop' }
+  | { kind: 'mergeable_skip' }
   | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
   | { kind: 'changelog_resolved' }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
@@ -547,12 +571,19 @@ export class ProtectedArtifactSealRejection extends Error {
  * conductor's verdict/selector wiring — the caller writes verdicts + events.
  *
  *   noop               → branch already current; nothing to do (FR-4).
+ *   mergeable_skip      → behind but cleanly mergeable at normal finish.
  *   changed            → clean rebase that changed code/test paths (FR-5).
  *   changelog_resolved → CHANGELOG-only conflict auto-resolved (FR-7).
  *   conflict_halt      → any other / mixed conflict (FR-8); rebase left paused.
  */
 /** Optional capabilities injectable into `performRebase` (Task 15). */
 export interface PerformRebaseOpts {
+  /**
+   * Enables the normal-finish-only prospective-merge policy. Omitted callers
+   * retain the mandatory rebase required by recovery/re-kick paths.
+   */
+  finishMergeabilityCheck?: boolean;
+
   /**
    * Post-rebase evidence-citation translation (adr-2026-07-12-rebase-evidence-
    * stamp-translation.md), invoked on ANY clean rebase that actually ran
@@ -607,6 +638,18 @@ export async function performRebase(
   if (await isBranchCurrent(git, base.ref)) {
     return { kind: 'noop' };
   }
+
+  // Normal finish needs merge readiness, while recovery callers need the base
+  // commit in their worktree. Only the explicit finish policy may skip a real
+  // rebase, and it does so before all rebase-only mutation/preflight work.
+  const prospectiveMerge = opts?.finishMergeabilityCheck
+    ? await classifyProspectiveMerge(git, base.ref)
+    : undefined;
+  if (prospectiveMerge === 'clean') {
+    return { kind: 'mergeable_skip' };
+  }
+  // A reported conflict (and an indeterminate assessment) deliberately falls
+  // through to the established seal, rebase, and bounded resolver path below.
 
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
   // authority first so a stale or tampered seal fails before history changes.
@@ -1020,7 +1063,7 @@ export async function runGatedRebaseResolution(opts: {
  * Write the gate verdicts implied by a rebase outcome and return whether the
  * rebase gate itself is satisfied (→ proceed to finish) or the loop must HALT.
  *
- *   noop / changelog_resolved → rebase satisfied (docs-only never invalidates).
+ *   noop / mergeable_skip / changelog_resolved → rebase satisfied (no downstream invalidation).
  *   changed                   → rebase satisfied, BUT downstream gates
  *                               (build, + manual_test if it ran) are kicked
  *                               back unsatisfied so the loop re-verifies.
@@ -1047,9 +1090,11 @@ export async function applyRebaseVerdicts(
     reason:
       outcome.kind === 'noop'
         ? 'branch already current with base'
+        : outcome.kind === 'mergeable_skip'
+          ? 'branch is mergeable with base; rebase skipped'
         : outcome.kind === 'changelog_resolved'
           ? 'CHANGELOG-only conflict auto-resolved; branch current'
-          : outcome.featureSurface === undefined
+          : outcome.kind === 'changed' && outcome.featureSurface === undefined
             ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
             : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
@@ -1265,6 +1310,9 @@ export async function emitRebaseEvent(
     switch (outcome.kind) {
       case 'noop':
         await events.emit({ type: 'rebase_noop' });
+        break;
+      case 'mergeable_skip':
+        await events.emit({ type: 'rebase_mergeable_skip' });
         break;
       case 'changed':
         await events.emit({

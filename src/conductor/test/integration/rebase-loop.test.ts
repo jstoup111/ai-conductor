@@ -19,6 +19,32 @@ import {
   makeGitRunner as makeRebaseGitRunner,
 } from '../../src/engine/rebase.js';
 
+const gitCommandSpy = vi.hoisted(() => vi.fn());
+const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
+
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      gitCommandSpy(...args);
+      if (
+        prospectiveMergeFixture.forceIndeterminate &&
+        args[0] === 'git' &&
+        Array.isArray(args[1]) &&
+        args[1][0] === 'merge-tree'
+      ) {
+        return Promise.resolve({
+          exitCode: 2,
+          stdout: '',
+          stderr: 'fixture: prospective merge classification unavailable',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
+      return actual.execa(...args);
+    },
+  };
+});
+
 // END-TO-END acceptance specs for the Phase 9.0 daemon rebase-on-latest step.
 //
 // These drive the REAL Conductor over a REAL git repo in a tmpdir. Git is core
@@ -169,6 +195,8 @@ describe('integration/rebase-loop', () => {
   }
 
   beforeEach(async () => {
+    gitCommandSpy.mockClear();
+    prospectiveMergeFixture.forceIndeterminate = false;
     dir = await mkdtemp(join(tmpdir(), 'rebase-loop-'));
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -178,6 +206,12 @@ describe('integration/rebase-loop', () => {
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
+
+  function forceIndeterminateProspectiveMerge(): void {
+    // Keep the fixture's actual git rebase real while making only the
+    // read-only prospective assessment fail closed into the existing path.
+    prospectiveMergeFixture.forceIndeterminate = true;
+  }
 
   function conductorWith(runner: StepRunner): Conductor {
     const fakeGit: GitRunner = async (args) =>
@@ -284,7 +318,7 @@ describe('integration/rebase-loop', () => {
     };
   }
 
-  it('rebases the feature branch onto the advanced base before finish (FR-1/FR-2/FR-5)', async () => {
+  it('keeps a clean-mergeable feature unchanged before finish (FR-1/FR-2/FR-5)', async () => {
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
@@ -304,9 +338,9 @@ describe('integration/rebase-loop', () => {
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-    // The rebase step must have rebased feature/foo onto the advanced base, so
-    // the base's new commit is now in the feature branch's ancestry.
-    expect(await branchContains(baseSha)).toBe(true);
+    // A normal finish checks mergeability before rewriting history, so the
+    // feature deliberately remains behind its base.
+    expect(await branchContains(baseSha)).toBe(false);
   });
 
   // ── Task 14 (RED, #535): both real call sites exercise translateAfterRebase ──
@@ -322,7 +356,7 @@ describe('integration/rebase-loop', () => {
   // site does this yet, so `translateAfterRebase` below is genuinely never
   // called today (RED).
   describe('Task 14: translateAfterRebase capability at both call sites', () => {
-    it('runRebaseStep (finish-time, via Conductor.run) invokes translateAfterRebase on a changed rebase', async () => {
+    it('runRebaseStep (finish-time, via Conductor.run) does not translate a mergeable skip', async () => {
       await initRepoOnFeatureBranch({
         path: 'src/feature.ts',
         content: 'export const foo = 1;\n',
@@ -344,7 +378,7 @@ describe('integration/rebase-loop', () => {
 
       await conductorWith(runner).run();
 
-      expect(translateAfterRebase).toHaveBeenCalled();
+      expect(translateAfterRebase).not.toHaveBeenCalled();
     });
 
     it('resumeRebaseFirst (daemon re-kick, play-forward) invokes translateAfterRebase identically on a changed rebase', async () => {
@@ -490,7 +524,7 @@ describe('integration/rebase-loop', () => {
     expect(await rebaseInProgress()).toBe(true);
   });
 
-  it('falls back to the local base when there is no remote (FR-3)', async () => {
+  it('checks the local base without a remote and skips a clean mergeable branch (FR-3)', async () => {
     // No `origin` remote at all. Advance the LOCAL base non-conflicting.
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
@@ -513,9 +547,60 @@ describe('integration/rebase-loop', () => {
 
     expect(completed).toBe(true);
     await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-    // With no remote, the rebase must target the LOCAL base and still pick up
-    // its new commit.
-    expect(await branchContains(baseSha)).toBe(true);
+    // The local base is still the mergeability target, but clean mergeability
+    // no longer rewrites this branch onto it.
+    expect(await branchContains(baseSha)).toBe(false);
+  });
+
+  it('returns mergeable_skip against an advanced local base without contacting a remote', async () => {
+    await initRepoOnFeatureBranch({
+      path: 'src/feature.ts',
+      content: 'export const foo = 1;\n',
+    });
+    const baseSha = await advanceBaseNonConflicting();
+    expect(await git('remote')).toBe('');
+
+    gitCommandSpy.mockClear();
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, {
+      finishMergeabilityCheck: true,
+    });
+
+    expect(outcome).toEqual({ kind: 'mergeable_skip' });
+    expect(await branchContains(baseSha)).toBe(false);
+    const gitArgv = gitCommandSpy.mock.calls
+      .filter(([command]) => command === 'git')
+      .map(([, args]) => args as string[]);
+    expect(gitArgv.flat()).not.toContain('fetch');
+    expect(gitArgv.flat()).not.toContain('ls-remote');
+  });
+
+  it('uses the same local base for conflict recovery when prospective merge conflicts', async () => {
+    await execFileAsync('git', ['init', '-b', BASE, dir]);
+    await git('config', 'user.email', 'test@example.com');
+    await git('config', 'user.name', 'Test');
+    await git('config', 'commit.gpgsign', 'false');
+    await mkdir(join(dir, 'src'), { recursive: true });
+    await writeFile(join(dir, 'src/feature.ts'), 'export const value = 0;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'initial feature file');
+
+    await git('checkout', '-b', 'feature/foo');
+    await writeFile(join(dir, 'src/feature.ts'), 'export const value = 1;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'feature edit');
+    await git('checkout', BASE);
+    await writeFile(join(dir, 'src/feature.ts'), 'export const value = 2;\n');
+    await git('add', '.');
+    await git('commit', '-m', 'local base edit');
+    await git('checkout', 'feature/foo');
+    expect(await git('remote')).toBe('');
+
+    const outcome = await performRebase(makeRebaseGitRunner(dir), dir, BASE, {
+      finishMergeabilityCheck: true,
+    });
+
+    expect(outcome.kind).toBe('conflict_halt');
+    expect(await rebaseInProgress()).toBe(true);
   });
 
   it('resumes a resolved+continued+HALT-cleared worktree to a clean PR (FR-9)', async () => {
@@ -548,7 +633,7 @@ describe('integration/rebase-loop', () => {
     await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
   });
 
-  it('a stuck post-rebase build HALTs via the existing path, not a rebase special-case (FR-6)', async () => {
+  it('does not re-dispatch build for a clean mergeable finish (FR-6)', async () => {
     // A code-changing rebase kicks back to build; build NEVER satisfies (the
     // runner refuses to write task-status.json), so the loop must HALT through
     // the EXISTING build-failure path — the rebase itself succeeded (it is NOT
@@ -597,13 +682,12 @@ describe('integration/rebase-loop', () => {
 
     await conductorWith(runner).run();
 
-    expect(completed).toBe(false);
-    expect(halted).toBe(true);
-    // The rebase ran and kicked back to build (the rebase succeeded) — the HALT
-    // came from the stuck build, and finish never ran.
-    expect(kicks).toContainEqual({ from: 'rebase', to: 'build' });
-    expect(ran).not.toContain('finish');
-    await expect(access(join(dir, '.pipeline/HALT'))).resolves.toBeUndefined();
+    expect(completed).toBe(true);
+    expect(halted).toBe(false);
+    expect(kicks).not.toContainEqual({ from: 'rebase', to: 'build' });
+    expect(buildRuns).toBe(1);
+    expect(ran).toContain('finish');
+    await expect(access(join(dir, '.pipeline/HALT'))).rejects.toThrow();
   });
 
   it('re-parks (does NOT ship a PR) when HALT was cleared but the rebase is still in progress (FR-9 negative)', async () => {
@@ -658,6 +742,9 @@ describe('integration/rebase-loop', () => {
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
     expect(await rebaseInProgress()).toBe(true);
+    expect(gitCommandSpy.mock.calls.filter(
+      ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
+    )).toEqual([]);
   });
 
   it('re-parks when the rebase is paused but staged-without-continue (no unmerged paths) (FR-9 hardening)', async () => {
@@ -710,6 +797,9 @@ describe('integration/rebase-loop', () => {
     expect(completed).toBe(false);
     expect(halted).toBe(true);
     expect(ran).not.toContain('finish');
+    expect(gitCommandSpy.mock.calls.filter(
+      ([command, args]) => command === 'git' && Array.isArray(args) && args[0] === 'merge-tree',
+    )).toEqual([]);
   });
 
   // ── #655: delta-aware post-rebase gate invalidation ─────────────────────
@@ -955,6 +1045,7 @@ describe('integration/rebase-loop', () => {
           [{ path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" }],
           { alsoForeignRuntime: true },
         );
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1046,6 +1137,7 @@ describe('integration/rebase-loop', () => {
         await advanceBaseWithDivergentEditToSharedFile([
           { path: 'src/feature.test.ts', content: "it('foo works', () => {});\n" },
         ]);
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1073,6 +1165,7 @@ describe('integration/rebase-loop', () => {
         // D; base and feature must each make a real, non-overlapping edit.
         await initRepoOnFeatureBranchWithSharedRuntimeFile();
         await advanceBaseWithDivergentEditToSharedFile();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1130,6 +1223,7 @@ describe('integration/rebase-loop', () => {
         await advanceBaseCoincidentally([
           { path: '.docs/feature-notes.md', content: '# notes\n' },
         ]);
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1155,6 +1249,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignRuntimeOnly();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1187,6 +1282,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignRuntimeOnly();
+        forceIndeterminateProspectiveMerge();
 
         // manual_test pre-seeded 'skipped' for this feature.
         await writeState(statePath, { ...FRONT_DONE_M, manual_test: 'skipped' });
@@ -1210,6 +1306,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignTestOnly();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1253,6 +1350,7 @@ describe('integration/rebase-loop', () => {
           content: 'export const foo = 1;\n',
         });
         await advanceBaseForeignRuntimeOnly();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};
@@ -1278,6 +1376,7 @@ describe('integration/rebase-loop', () => {
         // D; base and feature must each make a real, non-overlapping edit.
         await initRepoOnFeatureBranchWithSharedRuntimeFile();
         await advanceBaseWithDivergentEditToSharedFile();
+        forceIndeterminateProspectiveMerge();
 
         await writeState(statePath, { ...FRONT_DONE_M });
         const counts: Record<string, number> = {};

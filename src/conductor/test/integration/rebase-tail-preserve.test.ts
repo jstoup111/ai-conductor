@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -12,6 +12,30 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { GitRunner } from '../../src/engine/pr-labels.js';
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
+
+const prospectiveMergeFixture = vi.hoisted(() => ({ forceIndeterminate: false }));
+
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      if (
+        prospectiveMergeFixture.forceIndeterminate &&
+        args[0] === 'git' &&
+        Array.isArray(args[1]) &&
+        args[1][0] === 'merge-tree'
+      ) {
+        return Promise.resolve({
+          exitCode: 2,
+          stdout: '',
+          stderr: 'fixture: prospective merge classification unavailable',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
+      return actual.execa(...args);
+    },
+  };
+});
 
 // Task 7 (#655, adr-2026-07-20-post-rebase-delta-aware-invalidation): the
 // `advanceTail` rebase branch (conductor.ts ~5291) re-opens invalidated tail
@@ -94,6 +118,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
   }
 
   beforeEach(async () => {
+    prospectiveMergeFixture.forceIndeterminate = false;
     dir = await mkdtemp(join(tmpdir(), 'rebase-tail-preserve-'));
     statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -103,6 +128,10 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
   afterEach(async () => {
     await rm(dir, { recursive: true, force: true });
   });
+
+  function forceIndeterminateProspectiveMerge(): void {
+    prospectiveMergeFixture.forceIndeterminate = true;
+  }
 
   function conductorWith(runner: StepRunner): Conductor {
     const fakeGit: GitRunner = async (args) =>
@@ -207,6 +236,7 @@ describe('integration/rebase-tail-preserve (Task 7, #655)', () => {
       content: 'export const foo = 1;\n',
     });
     await advanceBaseForeignRuntimeOnly();
+    forceIndeterminateProspectiveMerge();
 
     await writeState(statePath, { ...FRONT_DONE_M });
     const counts: Record<string, number> = {};

@@ -50,6 +50,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   loop_halt: { render: true, persist: false, audit: true },
   loop_converged: { render: true, persist: false, audit: false },
   rebase_noop: { render: false, persist: false, audit: false },
+  rebase_mergeable_skip: { render: true, persist: false, audit: false },
   rebase_changed: { render: false, persist: false, audit: false },
   rebase_gate_reverified: { render: false, persist: false, audit: false },
   rebase_gate_preserved: { render: false, persist: false, audit: false },

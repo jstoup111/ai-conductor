@@ -2104,6 +2104,9 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
+    case 'rebase_mergeable_skip':
+      log(`${dot} ${chalk.green('✓')} ${chalk.green('rebase skipped — cleanly mergeable with base')}`);
+      break;
     case 'ci_failed':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,

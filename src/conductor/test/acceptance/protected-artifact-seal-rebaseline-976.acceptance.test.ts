@@ -67,6 +67,33 @@ import {
 } from '../../src/engine/halt-marker.js';
 
 const execFile = promisify(execFileCb);
+const indeterminateMergeTreeRepos = vi.hoisted(() => new Set<string>());
+
+// The fixture can make only the prospective finish assessment indeterminate.
+// It deliberately delegates every other command to real Git, including the
+// rebase whose seal rebaseline behavior these acceptance cases assert.
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: any[]) => {
+      const [command, gitArgs, options] = args;
+      if (
+        command === 'git' &&
+        Array.isArray(gitArgs) &&
+        gitArgs[0] === 'merge-tree' &&
+        indeterminateMergeTreeRepos.has(String(options?.cwd ?? ''))
+      ) {
+        return Promise.resolve({
+          exitCode: 128,
+          stdout: '',
+          stderr: 'fixture: prospective merge assessment unavailable',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
+      return (actual.execa as (...argv: any[]) => ReturnType<typeof actual.execa>)(...args);
+    },
+  };
+});
 
 /** This feature's own slug — the `feature_desc` a real daemon run carries. */
 const FEATURE = '2026-07-26-rebased-features-stale-protected-artifact-seal-976';
@@ -240,7 +267,10 @@ interface RunResult {
 }
 
 /** Drives the SHIP-phase rebase step: a real `Conductor.run({ fromStep: 'rebase' })`, daemon mode. */
-async function runRebaseStep(repo: string): Promise<RunResult> {
+async function runRebaseStep(
+  repo: string,
+  { forceIndeterminateProspectiveMerge = false }: { forceIndeterminateProspectiveMerge?: boolean } = {},
+): Promise<RunResult> {
   const statePath = join(repo, 'conduct-state.json');
   await seedPreRebaseState(statePath);
   const events = new ConductorEventEmitter();
@@ -265,7 +295,12 @@ async function runRebaseStep(repo: string): Promise<RunResult> {
     // The real daemon always supplies the base branch (daemon-cli.ts:985).
     baseBranch: 'main',
   } as never);
-  await conductor.run();
+  if (forceIndeterminateProspectiveMerge) indeterminateMergeTreeRepos.add(repo);
+  try {
+    await conductor.run();
+  } finally {
+    indeterminateMergeTreeRepos.delete(repo);
+  }
   return { dispatched, events: seen, logLines };
 }
 
@@ -317,7 +352,7 @@ describe('ST-976-1: the SHIP rebase step rebaselines the seal in the same operat
       await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: preRebaseHead });
       await advanceMain(scratch, { [CANARY_PATH]: 'guardrails v2\n', 'unrelated.ts': 'main1\n' });
 
-      await runRebaseStep(repo);
+      await runRebaseStep(repo, { forceIndeterminateProspectiveMerge: true });
 
       const postRebaseHead = await head(scratch);
       expect(postRebaseHead).not.toBe(preRebaseHead); // sanity: a real rebase ran
@@ -357,7 +392,7 @@ describe('ST-976-1: the SHIP rebase step rebaselines the seal in the same operat
 
       await advanceMain(scratch, { [CANARY_PATH]: 'guardrails v2\n', 'unrelated.ts': 'main1\n' });
 
-      await runRebaseStep(repo);
+      await runRebaseStep(repo, { forceIndeterminateProspectiveMerge: true });
 
       const postRebaseHead = await head(scratch);
       const seal = await readSeal(repo);
@@ -797,7 +832,9 @@ describe('ST-976-4: rotations, refusals and halts are machine-distinguishable', 
       });
       await advanceMain(scratch, { [CANARY_PATH]: 'guardrails v2\n', 'unrelated.ts': 'a\n' });
 
-      const { logLines } = await runRebaseStep(scratch.repo);
+      const { logLines } = await runRebaseStep(scratch.repo, {
+        forceIndeterminateProspectiveMerge: true,
+      });
       const toCommit = await head(scratch);
       const rotationLine = logLines.find((line) => /protected artifact rebaseline/i.test(line));
 
@@ -856,7 +893,9 @@ describe('ST-976-4: rotations, refusals and halts are machine-distinguishable', 
         baselineCommit: await head(proactive),
       });
       await advanceMain(proactive, { [CANARY_PATH]: 'guardrails v2\n', 'unrelated.ts': 'a\n' });
-      const proactiveRun = await runRebaseStep(proactive.repo);
+      const proactiveRun = await runRebaseStep(proactive.repo, {
+        forceIndeterminateProspectiveMerge: true,
+      });
       const proactiveEvents = rebaselineEvents(proactiveRun.events);
 
       const defensive = await makeFeatureRepo();

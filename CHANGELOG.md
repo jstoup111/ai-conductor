@@ -52,6 +52,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Changed
 
+- Preserve cleanly mergeable daemon feature branches at the finish rebase gate while re-kicks still replay the advanced base before retrying the pending gate ([implementation PR #1212](https://github.com/jstoup111/ai-conductor/pull/1212)).
 - The implementation PR is now opened as a **draft** at the start of the SHIP phase — before the
   first SHIP step is dispatched — instead of at `finish`. The engine plain-pushes the feature branch
   (never a force) and opens one draft PR against the discovered base. This makes the PR number

@@ -9,14 +9,18 @@ import {
   resolveBaseCore,
   resolveFreshBase,
   isBranchCurrent,
+  rebaseStateActive,
   isCodeOrTestPath,
   filterCodeOrTestPaths,
   unreleasedAdditions,
   buildResolvedChangelog,
   writeHalt,
   applyRebaseVerdicts,
+  recordRebaseStepCompletion,
   emitRebaseEvent,
   emitGateInvalidationEvents,
+  makeGitRunner,
+  performRebase,
   type GitRunner,
   type GitResult,
   type RebaseOutcome,
@@ -47,6 +51,223 @@ function fakeGit(
   };
   return { git, calls };
 }
+
+describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
+  it('returns mergeable_skip without starting a rebase when a behind feature can merge cleanly', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-'));
+    try {
+      const { git, calls } = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
+        {
+          match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'],
+          result: { exitCode: 0 },
+        },
+      ]);
+
+      const outcome = await performRebase(git, root, 'main', {
+        finishMergeabilityCheck: true,
+      });
+
+      expect({
+        outcome,
+        startedRebase: calls.some((args) => args[0] === 'rebase'),
+      }).toEqual({
+        outcome: { kind: 'mergeable_skip' },
+        startedRebase: false,
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cleanly skips a behind feature without mutating its Git state (Task 3, real git)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-readonly-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@t.com']);
+      await g(['config', 'user.name', 'T']);
+      await g(['config', 'commit.gpgsign', 'false']);
+      await writeFile(join(repo, 'shared.txt'), 'initial\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'init']);
+
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(repo, 'feature-only.txt'), 'feature\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'feature change']);
+
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'base-only.txt'), 'base\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'base advance']);
+      await g(['checkout', '-q', 'feature']);
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: (await g(['rev-parse', 'HEAD'])).stdout.trim(),
+      });
+
+      // A clean checkout would let an accidental index/worktree rewrite hide
+      // behind empty snapshots. Make both surfaces meaningful before testing
+      // the finish-policy's explicitly read-only path.
+      await writeFile(join(repo, 'staged.txt'), 'staged\n');
+      await g(['add', 'staged.txt']);
+      await writeFile(join(repo, 'feature-only.txt'), 'dirty feature\n');
+
+      const git = (await import('../../src/engine/rebase.js')).makeGitRunner(repo);
+      const snapshot = async () => ({
+        featureRef: (await g(['rev-parse', 'refs/heads/feature'])).stdout.trim(),
+        head: (await g(['rev-parse', 'HEAD'])).stdout.trim(),
+        indexTree: (await g(['write-tree'])).stdout.trim(),
+        worktreeDiff: (await g(['diff', '--binary'])).stdout,
+        cachedDiff: (await g(['diff', '--cached', '--binary'])).stdout,
+        commitList: (await g(['rev-list', '--all', '--parents', '--topo-order'])).stdout,
+        status: (await g(['status', '--porcelain=v2', '--branch', '--untracked-files=all'])).stdout,
+        rebaseStateActive: await rebaseStateActive(git, repo),
+      });
+      const before = await snapshot();
+      const sealPath = join(repo, '.pipeline', 'protected-artifact-seal.json');
+      const sealBefore = await readFile(sealPath, 'utf8');
+      const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
+      expect(before.worktreeDiff).not.toBe('');
+      expect(before.cachedDiff).not.toBe('');
+
+      const outcome = await performRebase(git, repo, 'main', {
+        finishMergeabilityCheck: true,
+        translateAfterRebase,
+      });
+
+      expect({
+        outcome,
+        after: await snapshot(),
+        translationCalls: translateAfterRebase.mock.calls.length,
+        sealAfter: await readFile(sealPath, 'utf8'),
+      }).toEqual({
+        outcome: { kind: 'mergeable_skip' },
+        after: before,
+        translationCalls: 0,
+        sealAfter: sealBefore,
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('falls through to the established conflict outcome when the prospective merge conflicts (Task 4, real git)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-conflict-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@t.com']);
+      await g(['config', 'user.name', 'T']);
+      await g(['config', 'commit.gpgsign', 'false']);
+      await writeFile(join(repo, 'shared.txt'), 'base\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'init']);
+
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(repo, 'shared.txt'), 'feature\n');
+      await g(['commit', '-q', '-am', 'feature change']);
+
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'shared.txt'), 'base advance\n');
+      await g(['commit', '-q', '-am', 'base change']);
+      await g(['checkout', '-q', 'feature']);
+
+      const git = makeGitRunner(repo);
+      const outcome = await performRebase(git, repo, 'main', {
+        finishMergeabilityCheck: true,
+      });
+
+      expect({
+        outcome,
+        rebaseActive: await rebaseStateActive(git, repo),
+      }).toEqual({
+        outcome: {
+          kind: 'conflict_halt',
+          conflicts: ['shared.txt'],
+          reason: 'rebase conflict requires human resolution',
+        },
+        rebaseActive: true,
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: 'returns an unexpected prospective-merge exit status',
+      prospective: { exitCode: 128, stderr: 'fatal: merge-tree unavailable' },
+      rebaseStderr: 'fatal: rebase could not start',
+    },
+    {
+      name: 'loses the prospective target ref before it can be assessed',
+      prospective: { exitCode: 128, stderr: "fatal: unknown revision 'main'" },
+      rebaseStderr: "fatal: invalid upstream 'main'",
+    },
+  ])('does not return mergeable_skip when it $name (Task 5)', async ({ prospective, rebaseStderr }) => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-indeterminate-'));
+    try {
+      const { git, calls } = fakeGit([
+        { match: ['rev-parse', '--is-inside-work-tree'], result: { stdout: 'true\n' } },
+        { match: ['diff', '--name-only', '--diff-filter=U'], result: {} },
+        { match: ['remote'], result: { stdout: '' } },
+        { match: ['rev-list', '--count', 'HEAD..main'], result: { stdout: '1\n' } },
+        { match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'], result: prospective },
+        { match: ['rebase', '--autostash', 'main'], result: { exitCode: 2, stderr: rebaseStderr } },
+      ]);
+
+      // An indeterminate assessment must retain the established actual-rebase
+      // failure conversion, rather than claiming the feature is mergeable.
+      await expect(
+        performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
+      ).resolves.toEqual({
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: rebaseStderr,
+      });
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('does not return mergeable_skip when the prospective-merge runner throws (Task 5)', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-indeterminate-'));
+    const calls: string[][] = [];
+    const rebaseStderr = 'fatal: rebase could not start';
+    const git: GitRunner = async (args) => {
+      calls.push(args);
+      if (args[0] === 'merge-tree') throw new Error('simulated merge-tree runner failure');
+      if (args[0] === 'rev-parse' && args[1] === '--is-inside-work-tree') {
+        return { exitCode: 0, stdout: 'true\n', stderr: '' };
+      }
+      if (args[0] === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args[0] === 'rev-list') return { exitCode: 0, stdout: '1\n', stderr: '' };
+      if (args[0] === 'rebase') return { exitCode: 2, stdout: '', stderr: rebaseStderr };
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    try {
+      // A thrown assessment is just as indeterminate as an unexpected exit:
+      // it must reach the old rebase failure conversion instead of escaping.
+      await expect(
+        performRebase(git, root, 'main', { finishMergeabilityCheck: true }),
+      ).resolves.toEqual({
+        kind: 'conflict_halt',
+        conflicts: [],
+        reason: rebaseStderr,
+      });
+      expect(calls.some((args) => args[0] === 'rebase')).toBe(true);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
   it('discovers origin default, fetches it, returns origin/<default>', async () => {
@@ -439,6 +660,27 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, { kind: 'noop' }, true);
     expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
+  });
+
+  it('mergeable_skip → satisfied verdict and completed rebase with no downstream re-verification', async () => {
+    const outcome: RebaseOutcome = { kind: 'mergeable_skip' };
+    const verdict = await applyRebaseVerdicts(dir, outcome, true);
+    await recordRebaseStepCompletion(join(dir, '.pipeline', 'conduct-state.json'), outcome);
+
+    expect({
+      verdict,
+      rebase: await readVerdict(dir, 'rebase'),
+      state: JSON.parse(
+        await readFile(join(dir, '.pipeline', 'conduct-state.json'), 'utf8'),
+      ) as { rebase?: string; last_step?: string },
+    }).toEqual({
+      verdict: { satisfied: true, kickedBack: [], reverified: [] },
+      rebase: expect.objectContaining({
+        satisfied: true,
+        reason: 'branch is mergeable with base; rebase skipped',
+      }),
+      state: { rebase: 'done', last_step: 'rebase' },
+    });
   });
 
   it('changed (featureSurface uncomputable) → rebase satisfied + full fail-closed set kicked back (from rebase)', async () => {
@@ -1079,15 +1321,23 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
   it('emits the matching event per outcome', async () => {
     const events = new ConductorEventEmitter();
     const seen: string[] = [];
-    for (const t of ['rebase_noop', 'rebase_changed', 'rebase_changelog_resolved', 'rebase_conflict_halt'] as const) {
+    for (const t of [
+      'rebase_noop',
+      'rebase_mergeable_skip',
+      'rebase_changed',
+      'rebase_changelog_resolved',
+      'rebase_conflict_halt',
+    ] as const) {
       events.on(t, (e) => { seen.push(e.type); });
     }
     await emitRebaseEvent(events, { kind: 'noop' });
+    await emitRebaseEvent(events, { kind: 'mergeable_skip' });
     await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['src/a.ts'] });
     await emitRebaseEvent(events, { kind: 'changelog_resolved' });
     await emitRebaseEvent(events, { kind: 'conflict_halt', conflicts: ['x'], reason: 'r' });
     expect(seen).toEqual([
       'rebase_noop',
+      'rebase_mergeable_skip',
       'rebase_changed',
       'rebase_changelog_resolved',
       'rebase_conflict_halt',

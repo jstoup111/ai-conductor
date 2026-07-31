@@ -389,6 +389,10 @@ export type ConductorEvent =
       type: 'rebase_noop';
     }
   | {
+      /** The branch is behind but cleanly mergeable, so normal finish preserved its history. */
+      type: 'rebase_mergeable_skip';
+    }
+  | {
       /** A clean rebase changed code/test paths → downstream re-verification. */
       type: 'rebase_changed';
       changedPaths: string[];
