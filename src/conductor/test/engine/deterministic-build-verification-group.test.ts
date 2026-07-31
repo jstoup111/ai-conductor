@@ -30,11 +30,7 @@ describe('deterministic BUILD verification group', () => {
     await writeFile(stateFilePath, JSON.stringify({ build: 'done' }));
 
     const wiring = deferred<{ success: true }>();
-    const suite = deferred<{
-      status: 'EXECUTED';
-      freshness: { status: 'STALE'; reason: 'missing' };
-      evidence: never;
-    }>();
+    const suite = deferred<{ status: 'REUSED'; evidence: never }>();
     const starts: string[] = [];
     const review = vi.fn(async () => ({ success: false, output: 'stop after assertion boundary' }));
     const stepRunner: StepRunner = {
@@ -80,11 +76,7 @@ describe('deterministic BUILD verification group', () => {
       test_suite: 'done',
     });
 
-    suite.resolve({
-      status: 'EXECUTED',
-      freshness: { status: 'STALE', reason: 'missing' },
-      evidence: {} as never,
-    });
+    suite.resolve({ status: 'REUSED', evidence: {} as never });
     await Promise.resolve();
     expect(review).not.toHaveBeenCalled();
 
@@ -125,8 +117,8 @@ describe('deterministic BUILD verification group', () => {
     const verifier = {
       inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
       ensure: vi.fn(async () => {
-        timeline.push('suite:REUSED:start');
-        timeline.push('suite:REUSED:end');
+        timeline.push('suite:start');
+        timeline.push('suite:end');
         return { status: 'REUSED' as const, evidence: {} as never };
       }),
     };
@@ -148,8 +140,8 @@ describe('deterministic BUILD verification group', () => {
     expect(timeline).toEqual([
       'wiring:start',
       'wiring:end',
-      'suite:REUSED:start',
-      'suite:REUSED:end',
+      'suite:start',
+      'suite:end',
       'review:start',
     ]);
   });
