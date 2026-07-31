@@ -3,6 +3,7 @@
 **Status:** APPROVED
 **Date:** 2026-07-04
 **Related:** adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep
+**Amended:** 2026-07-30 by jstoup111/ai-conductor#1150
 
 ## Context
 
@@ -33,10 +34,11 @@ Option B, with these rules:
    worktree has nothing a human needs; removing it also lets the next attempt (after
    cooldown / operator clear) start clean. A stale `resolve-<slug>` leftover from a crashed
    run is force-recreated at the next attempt.
-3. **Eligibility guard:** skip resolution for a slug whose **build worktree currently exists**
-   (`.worktrees/<slug>`) — that feature is daemon-owned right now (mid-build, halted, or
-   awaiting rekick), and two actors rewriting one branch invites lease races. The sweep logs
-   the skip (FR-16).
+3. **Eligibility guard:** skip resolution for a slug whose feature run is genuinely active in the
+   daemon. A retained build worktree (`.worktrees/<slug>`) is not, by itself, evidence of ownership:
+   feature worktrees intentionally remain while implementation PRs are open. The sweep logs the
+   active-run skip reason. This preserves the branch-race guard without suppressing resolution for
+   every retained-but-idle worktree.
 4. Resolution worktrees are disjoint by construction from build worktrees (`resolve-` prefix)
    and from engineer authoring worktrees (`engineer-` prefix).
 
@@ -45,5 +47,14 @@ Option B, with these rules:
 - No lifecycle entanglement with build or rekick machinery; the lease push remains the last
   line of defense against the residual race window.
 - Disk cost is transient (one checkout during an attempt).
-- The build-worktree guard means a halted feature's PR waits for the operator/rekick path
-  instead of being auto-refreshed underneath it — intentional precedence.
+- A genuinely active feature run takes precedence over resolution. Once the run is no longer active,
+  its retained worktree may coexist with the disjoint resolution worktree and does not block a later
+  attempt.
+
+## Amendment rationale — 2026-07-30
+
+ADR `adr-2026-07-29-defer-feature-worktree-reap-to-shipped-record-on-main` deliberately retains
+feature worktrees after implementation PR creation. The former directory-existence proxy therefore
+became true for every open implementation PR and disabled automatic rebase resolution globally.
+Issue #1150 selected an actual run-liveness predicate over either deleting the guard or introducing
+a new persisted lease.
