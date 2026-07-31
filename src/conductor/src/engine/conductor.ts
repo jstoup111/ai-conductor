@@ -146,7 +146,6 @@ import {
   FullSuiteVerifier,
   type FullSuiteVerifierResult,
 } from './full-suite-verifier.js';
-import { sanitizeFullSuiteDiagnosticOutput } from './full-suite-evidence.js';
 import {
   buildReviewFailRoute,
   extractFlaggedPaths,
@@ -3327,9 +3326,6 @@ export class Conductor {
               }
               if (kickbacks.every((kickback) => !kickback.exhausted)) {
                 const evidence = deterministicFailures.map((failure) => failure.evidence).join('\n');
-                const hasNoVerdict = deterministicFailureIdxs.some(
-                  (idx) => outcomes[idx]!.kind === 'no-verdict',
-                );
                 const from = deterministicFailures.length === 1
                   ? deterministicFailures[0]!.member.name as StepName
                   : step.name;
@@ -3353,14 +3349,8 @@ export class Conductor {
                 }
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
-                if (hasNoVerdict) {
-                  for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'pending';
-                  }
-                } else {
-                  for (const failure of deterministicFailures) {
-                    (state as Record<string, unknown>)[failure.member.name] = 'stale';
-                  }
+                for (const failure of deterministicFailures) {
+                  (state as Record<string, unknown>)[failure.member.name] = 'stale';
                 }
                 await writeState(this.stateFilePath, state);
                 i = nav.index - 1;
@@ -6542,19 +6532,6 @@ export class Conductor {
       return {
         success: false,
         output: verification.message,
-        fullSuiteVerification: verification,
-      };
-    }
-    if (verification.status !== 'EXECUTED' && verification.status !== 'REUSED') {
-      const unexpected = verification as unknown as Record<string, unknown>;
-      const detail = typeof unexpected.message === 'string'
-        ? unexpected.message
-        : 'suite verifier returned no verdict';
-      return {
-        success: false,
-        output: sanitizeFullSuiteDiagnosticOutput(
-          detail,
-        ),
         fullSuiteVerification: verification,
       };
     }
