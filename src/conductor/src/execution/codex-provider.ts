@@ -5,6 +5,7 @@ import { copySelectedCodexLogin } from './codex-self-host-auth.js';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
+  CodexProbeFailure,
   InvokeOptions,
   InvokeResult,
   LLMProvider,
@@ -191,8 +192,8 @@ export class CodexProvider implements LLMProvider {
         },
       );
       return this.classifyReadiness(result, authentication);
-    } catch {
-      return this.probeFailedReadiness(authentication.source);
+    } catch (error) {
+      return this.executionProbeFailedReadiness(authentication.source, error);
     }
   }
 
@@ -559,15 +560,42 @@ export class CodexProvider implements LLMProvider {
     return { provider: 'codex', source, state, remediation: `${reason} ${action}` };
   }
 
-  private probeFailedReadiness(source: AuthenticationSource): AuthenticationReadiness {
+  private executionProbeFailedReadiness(
+    source: AuthenticationSource,
+    error: unknown,
+  ): AuthenticationReadiness {
+    if (typeof error === 'object' && error !== null && (error as { timedOut?: unknown }).timedOut === true) {
+      return this.probeFailedReadiness(source, {
+        kind: 'timeout',
+        facts: { timeoutMs: CODEX_DOCTOR_TIMEOUT_MS },
+      });
+    }
+
+    const facts: CodexProbeFailure['facts'] = {};
+    const code = typeof error === 'object' && error !== null
+      ? (error as { code?: unknown }).code
+      : undefined;
+    if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
+      facts.processErrorCode = code;
+    } else if (code !== undefined) {
+      facts.processErrorCode = 'UNKNOWN';
+    }
+
+    return this.probeFailedReadiness(source, { kind: 'exec-error', facts });
+  }
+
+  private probeFailedReadiness(
+    source: AuthenticationSource,
+    probeFailure: CodexProbeFailure = {
+      kind: 'unparseable-output',
+      facts: { parserRejection: 'unrecognized-envelope' },
+    },
+  ): AuthenticationReadiness {
     return {
       provider: 'codex',
       source,
       state: 'probe-failed',
-      probeFailure: {
-        kind: 'unparseable-output',
-        facts: { parserRejection: 'unrecognized-envelope' },
-      },
+      probeFailure,
     };
   }
 

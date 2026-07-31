@@ -1220,27 +1220,47 @@ describe('CodexProvider', () => {
     },
   );
 
-  it('returns probe-failed when the captured doctor command times out or fails externally', async () => {
-    mockExeca.mockRejectedValueOnce(Object.assign(new Error('timed out'), { timedOut: true }));
-    mockExeca.mockResolvedValueOnce({
-      stdout: '',
-      stderr: 'network unavailable with secret doctor diagnostic',
-      exitCode: 1,
-    } as any);
-
-    const defaultProvider = new CodexProvider();
-    await expect(defaultProvider.readiness()).resolves.toMatchObject({
-      provider: 'codex', source: 'cached-login', state: 'probe-failed',
-      probeFailure: { kind: 'unparseable-output' },
-    });
-    await expect(defaultProvider.readiness()).resolves.toMatchObject({
-      provider: 'codex', source: 'cached-login', state: 'probe-failed',
-      probeFailure: { kind: 'unparseable-output' },
-    });
-    expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual([
-      ['doctor', '--json', '--summary'],
-      ['doctor', '--json', '--summary'],
-    ]);
+  it.each([
+    {
+      name: 'spawn or execution rejection',
+      error: Object.assign(new Error('spawn /private/codex/auth.json sk-live-secret hash:deadbeef'), {
+        code: 'ENOENT',
+        stdout: 'sk-live-secret',
+        stderr: '/private/codex/auth.json',
+      }),
+      probeFailure: { kind: 'exec-error', facts: { processErrorCode: 'ENOENT' } },
+    },
+    {
+      name: 'doctor timeout',
+      error: Object.assign(new Error('timed out at /private/codex/auth.json sk-live-secret'), {
+        timedOut: true,
+        stdout: 'sk-live-secret',
+        stderr: '/private/codex/auth.json',
+      }),
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    },
+  ] as const)('classifies injected $name without exposing runner diagnostics', async ({ error, probeFailure }) => {
+    const runDoctor = vi.fn().mockRejectedValue(error);
+    const priorKey = process.env.CODEX_API_KEY;
+    delete process.env.CODEX_API_KEY;
+    try {
+      await expect(new CodexProvider(runDoctor).readiness()).resolves.toEqual({
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure,
+      });
+      expect(runDoctor).toHaveBeenCalledWith('codex', ['doctor', '--json', '--summary'], {
+        reject: false,
+        timeout: 10_000,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: undefined,
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
   });
 
   it.each([
