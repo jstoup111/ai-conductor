@@ -340,7 +340,6 @@ export async function reconcileParkedFeatures(
     const evidence = await gatherMergeEvidence(runGit, opts.projectRoot, slug, prefetched);
     if (evidence === null) {
       classification = 'unclassified';
-      opts.log?.(`[parked-reconciliation] ${slug} origin/main merge evidence unavailable; skipped`);
     } else if (isMerged(evidence)) {
       classification = 'merged';
     } else {
@@ -357,7 +356,6 @@ export async function reconcileParkedFeatures(
             : 'normal';
         } catch {
           classification = 'unclassified';
-          opts.log?.(`[parked-reconciliation] ${slug} issue lookup unavailable; skipped`);
         }
       }
     }
@@ -368,15 +366,14 @@ export async function reconcileParkedFeatures(
       classification,
       annotation: classification === 'orphan' ? 'orphan' : classification === 'merged' && !autoCleanup ? 'merged-ready' : undefined,
     });
-    const classificationChanged = !opts.cache || opts.cache.get(slug) !== classification;
     if (classification === 'merged' && autoCleanup) {
       // The helper reports its refusal reason for direct/operator invocation.
-      // In a daemon sweep, route that per-slug report through the outcome cache
-      // too, so an unchanged deferred record does not fill every idle-tick log.
+      // A daemon sweep deliberately suppresses that per-slug chatter; the
+      // aggregate below reports the outcome and the operator's next steps.
       const outcome = await reconcileMergedPark({
         ...opts,
         slug,
-        log: classificationChanged ? opts.log : undefined,
+        log: undefined,
         // Named explicitly (not merely carried by the spread) so the two
         // production hand-off seams stay visible at the only call site that
         // supplies them.
@@ -385,26 +382,29 @@ export async function reconcileParkedFeatures(
       });
       if (outcome.refusal === undefined) {
         counts.reconciled++;
-        opts.log?.(`[parked-reconciliation] reconciled ${slug}`);
       }
       else if (outcome.deferred) counts.deferred++;
     }
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
     else counts.parked++;
-    if (classification === 'orphan') opts.log?.(`[parked-reconciliation] ${slug} orphan`);
-    if (opts.cache && classificationChanged) {
-      opts.log?.(`[parked-reconciliation] ${slug} ${classification}`);
-    }
     opts.cache?.set(slug, classification);
   }
 
+  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.skipped}`;
+  if (!opts.cache || sweepSummarySignatures.get(opts.cache) !== signature) {
+    const remainingParked = Math.max(0, counts.parked - counts.reconciled);
+    const nextSteps = [
+      counts.deferred > 0 ? `${counts.deferred} deferred await${counts.deferred === 1 ? 's' : ''} shipped-record repair` : undefined,
+      counts.orphaned > 0 ? `${counts.orphaned} orphaned ${counts.orphaned === 1 ? 'park needs' : 'parks need'} operator review` : undefined,
+      remainingParked > 0 ? `${remainingParked} parked remain${remainingParked === 1 ? 's' : ''} parked` : undefined,
+      counts.skipped > 0 ? `${counts.skipped} skipped retry when merge/issue evidence is available` : undefined,
+    ].filter((step): step is string => step !== undefined);
+    const guidance = nextSteps.length > 0 ? `; next: ${nextSteps.join('; ')}` : '; next: no action required';
+    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} skipped=${counts.skipped}${guidance}`);
+    if (opts.cache) sweepSummarySignatures.set(opts.cache, signature);
+  }
   if (opts.cache) {
-    const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.skipped}`;
-    if (sweepSummarySignatures.get(opts.cache) !== signature) {
-      opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} skipped=${counts.skipped}`);
-      sweepSummarySignatures.set(opts.cache, signature);
-    }
     const live = new Set(parkedSlugs);
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }

@@ -395,6 +395,14 @@ See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for
 and refusal reasons. An `orphan` classification is never auto-reconciled — it needs an operator to
 decide whether to park it, delete it, or resume it manually.
 
+The sweep writes one aggregate line when its counts change instead of one line per parked slug. The
+line joins its tag directly to the daemon prefix and explains the next action for every nonzero
+outcome, for example:
+
+```text
+[daemon][parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=7 skipped=56; next: 1 deferred awaits shipped-record repair; 7 parked remain parked; 56 skipped retry when merge/issue evidence is available
+```
+
 ## Retained worktrees
 
 A feature's worktree is **not** removed when its implementation PR opens. The mergeable sweep

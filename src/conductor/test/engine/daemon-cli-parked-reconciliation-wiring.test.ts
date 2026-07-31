@@ -16,6 +16,7 @@ describe('daemon-cli parked reconciliation wiring (Task 11)', () => {
     expect(source).toMatch(/const reconcileParkedAutoCleanup = config\?\.reconcile_parked_auto_cleanup \?\? true;/);
     expect(source).toMatch(/const parkedSweepCache = new Map<string, ParkClassification>\(\);/);
     expect(source).toMatch(/reconcileParkedFeatures: async \(\{ disposeHaltWatcher \}\) => \{[\s\S]*cache: parkedSweepCache,[\s\S]*autoCleanup: reconcileParkedAutoCleanup,/);
+    expect(source).toContain('log: (message) => log(message, true),');
   });
 
   it('supplies BOTH adr-2026-07-27 hand-off callbacks from the production sweep binding (rem-adr-002, rem-adr-005)', () => {

@@ -12,6 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Reduce parked-reconciliation daemon noise to one actionable aggregate line with a compact `[daemon][parked-reconciliation]` prefix ({{IMPLEMENTATION_PR}}).
 - Preserve aggregate-gate repair context across repeated feature rebases so `build_review` can
   judge base-induced compatibility and stale-expectation repairs separately from feature scope,
   without treating rewritten commit SHAs or telemetry trailers as authority
