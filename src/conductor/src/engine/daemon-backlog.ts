@@ -562,9 +562,7 @@ export interface GatedSpecItem {
 }
 export interface GatedRepoItem {
   kind: 'repo';
-  // 'no-cutover' is observability-only (warnGateNoCutoverOnce logs it but
-  // never pushes a GatedRepoItem) — only 'identity-unresolved' is ever
-  // constructed here.
+  // Only the fail-closed 'identity-unresolved' repo warning is constructed here.
   warning: 'identity-unresolved';
   remedy: string;
 }
