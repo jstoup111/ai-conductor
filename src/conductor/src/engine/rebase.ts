@@ -1063,7 +1063,7 @@ export async function runGatedRebaseResolution(opts: {
  * Write the gate verdicts implied by a rebase outcome and return whether the
  * rebase gate itself is satisfied (→ proceed to finish) or the loop must HALT.
  *
- *   noop / changelog_resolved → rebase satisfied (docs-only never invalidates).
+ *   noop / mergeable_skip / changelog_resolved → rebase satisfied (no downstream invalidation).
  *   changed                   → rebase satisfied, BUT downstream gates
  *                               (build, + manual_test if it ran) are kicked
  *                               back unsatisfied so the loop re-verifies.
@@ -1090,6 +1090,8 @@ export async function applyRebaseVerdicts(
     reason:
       outcome.kind === 'noop'
         ? 'branch already current with base'
+        : outcome.kind === 'mergeable_skip'
+          ? 'branch is mergeable with base; rebase skipped'
         : outcome.kind === 'changelog_resolved'
           ? 'CHANGELOG-only conflict auto-resolved; branch current'
           : outcome.kind === 'changed' && outcome.featureSurface === undefined

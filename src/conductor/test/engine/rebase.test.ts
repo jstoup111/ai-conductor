@@ -17,6 +17,7 @@ import {
   buildResolvedChangelog,
   writeHalt,
   applyRebaseVerdicts,
+  recordRebaseStepCompletion,
   emitRebaseEvent,
   emitGateInvalidationEvents,
   makeGitRunner,
@@ -138,6 +139,10 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
       await g(['add', '.']);
       await g(['commit', '-q', '-m', 'base advance']);
       await g(['checkout', '-q', 'feature']);
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: (await g(['rev-parse', 'HEAD'])).stdout.trim(),
+      });
 
       // A clean checkout would let an accidental index/worktree rewrite hide
       // behind empty snapshots. Make both surfaces meaningful before testing
@@ -158,16 +163,27 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         rebaseStateActive: await rebaseStateActive(git, repo),
       });
       const before = await snapshot();
+      const sealPath = join(repo, '.pipeline', 'protected-artifact-seal.json');
+      const sealBefore = await readFile(sealPath, 'utf8');
+      const translateAfterRebase = vi.fn().mockResolvedValue(undefined);
       expect(before.worktreeDiff).not.toBe('');
       expect(before.cachedDiff).not.toBe('');
 
       const outcome = await performRebase(git, repo, 'main', {
         finishMergeabilityCheck: true,
+        translateAfterRebase,
       });
 
-      expect({ outcome, after: await snapshot() }).toEqual({
+      expect({
+        outcome,
+        after: await snapshot(),
+        translationCalls: translateAfterRebase.mock.calls.length,
+        sealAfter: await readFile(sealPath, 'utf8'),
+      }).toEqual({
         outcome: { kind: 'mergeable_skip' },
         after: before,
+        translationCalls: 0,
+        sealAfter: sealBefore,
       });
     } finally {
       await rm(repo, { recursive: true, force: true });
@@ -678,6 +694,27 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
     const r = await applyRebaseVerdicts(dir, { kind: 'noop' }, true);
     expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
     expect((await readVerdict(dir, 'rebase'))?.satisfied).toBe(true);
+  });
+
+  it('mergeable_skip → satisfied verdict and completed rebase with no downstream re-verification', async () => {
+    const outcome: RebaseOutcome = { kind: 'mergeable_skip' };
+    const verdict = await applyRebaseVerdicts(dir, outcome, true);
+    await recordRebaseStepCompletion(join(dir, '.pipeline', 'conduct-state.json'), outcome);
+
+    expect({
+      verdict,
+      rebase: await readVerdict(dir, 'rebase'),
+      state: JSON.parse(
+        await readFile(join(dir, '.pipeline', 'conduct-state.json'), 'utf8'),
+      ) as { rebase?: string; last_step?: string },
+    }).toEqual({
+      verdict: { satisfied: true, kickedBack: [], reverified: [] },
+      rebase: expect.objectContaining({
+        satisfied: true,
+        reason: 'branch is mergeable with base; rebase skipped',
+      }),
+      state: { rebase: 'done', last_step: 'rebase' },
+    });
   });
 
   it('changed (featureSurface uncomputable) → rebase satisfied + full fail-closed set kicked back (from rebase)', async () => {
