@@ -1,5 +1,10 @@
 import { readFile } from 'node:fs/promises';
+import { basename, dirname } from 'node:path';
 import { resolveFreshBase, type GitRunner } from './rebase.js';
+import {
+  readTestSuiteRemediations,
+  type TestSuiteRemediationRecord,
+} from './test-suite-remediation.js';
 
 // ── Grader input assembly (build_review) ────────────────────────────────────
 //
@@ -34,6 +39,9 @@ export interface BuildReviewInputs {
    * head, no fetch needed) — `false` on both "fetched a stale ref" and the
    * no-remote/probe-failure fallback. */
   fresh: boolean;
+  /** Engine-recorded aggregate failures exposed after base advances. The
+   * grader judges whether diff hunks implement them; they are not exemptions. */
+  repairContext?: TestSuiteRemediationRecord[];
 }
 
 /**
@@ -120,5 +128,9 @@ export async function assembleBuildReviewInputs(
     trackingRefSha: resolution.trackingRefSha,
     remoteHeadSha: resolution.remoteHeadSha,
     fresh: resolution.fresh,
+    repairContext:
+      basename(dirname(planPath)) === 'plans' && basename(dirname(dirname(planPath))) === '.docs'
+        ? await readTestSuiteRemediations(dirname(dirname(dirname(planPath))))
+        : [],
   };
 }

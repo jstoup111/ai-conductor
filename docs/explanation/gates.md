@@ -180,6 +180,14 @@ The graded diff excludes paths the **engine** authors rather than the builder â€
 `.pipeline/`. No plan task can describe harness machinery output, so grading it guarantees a scope
 finding the builder cannot legitimately act on.
 
+When `test_suite` exposes a repair needed only after a base advance, the engine accumulates the
+sanitized failure in `.pipeline/build-review-rebase-repairs.json`. The ledger is outside rewritten
+Git history, so repeated rebases retain earlier entries without treating commit trailers as
+authority. `build_review` receives the ledger as judgement context: it decides whether an
+out-of-plan hunk directly repairs a recorded failure and, only when it does, omits that hunk from
+Scope and applies the stale-base-state test check instead of the ordinary mutation check. Unmatched
+work remains fully subject to Scope and Tautology; the ledger is evidence, never an exemption.
+
 Two paths fail open to `build`, preserving the older behavior exactly: a FAIL carrying neither a
 completeness nor a scope signal, and a remediation plan with no usable dispositions. Kickback counting is untouched â€” a
 remediation-routed FAIL counts against the per-gate cap like any other.

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -11,6 +11,7 @@ import {
   MergeBaseError,
 } from '../../src/engine/build-review-inputs.js';
 import { makeGitRunner, type GitRunner, type GitResult } from '../../src/engine/rebase.js';
+import { recordTestSuiteRemediation } from '../../src/engine/test-suite-remediation.js';
 import { setupStaleTrackingRefFixture } from '../fixtures/git-repo.js';
 
 // A scripted GitRunner: matches argv prefixes to canned results (same pattern
@@ -235,6 +236,25 @@ describe('engine/build-review-inputs — assembleBuildReviewInputs', () => {
       expect(result.diff).toContain('feature change');
       expect(result.planBody).toContain('Fixture plan.');
     });
+
+    it('threads cumulative repair context into the isolated grader inputs', async () => {
+      const scopedPlanPath = join(dir, '.docs/plans/fixture.md');
+      await mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await writeFile(scopedPlanPath, '# Plan body\n\nFixture plan.\n');
+      const repair = await recordTestSuiteRemediation(dir, {
+        reason: 'command_failed',
+        message: 'base changed the aggregate command expectation',
+      }, {
+        satisfied: false,
+        checkedAt: 101,
+        kickback: { from: 'rebase', evidence: 'base advanced' },
+      });
+
+      const result = await assembleBuildReviewInputs(realGit(), scopedPlanPath);
+
+      expect(result.repairContext).toEqual([repair]);
+    });
+
   });
 
   // Regression fixture for the stale-tracking-ref incident (#870/#872): a

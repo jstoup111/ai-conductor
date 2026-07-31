@@ -579,6 +579,11 @@ When that rebase changes code or test paths, the downstream judged gates — `bu
 `wiring_check`, and (when they ran) `manual_test`, `prd_audit`,
 `architecture_review_as_built` — are re-opened, because their verdicts graded the pre-rebase diff.
 
+If aggregate verification then exposes a base-induced repair, the daemon records its sanitized
+failure identity in `.pipeline/build-review-rebase-repairs.json`. Entries accumulate across repeated
+rebases. The next `build_review` uses them as context when judging whether an otherwise out-of-plan
+test or compatibility hunk belongs to the rebase repair; unrelated work is not waived.
+
 `build` is the exception. Its predicate re-derives mechanically from the rebased history — the union
 of `Task:` commit trailers with the `.pipeline/task-status.json` rows — so the daemon re-evaluates it
 against the new tree *before* deciding. If every plan task is still evidenced, the gate keeps a fresh
