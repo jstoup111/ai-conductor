@@ -757,6 +757,101 @@ describe('conductor auth-park: daemon-token mode', () => {
     }
   });
 
+  it.each([
+    ['succeeds', { success: true }, [1, 1]],
+    ['returns a non-auth failure to ordinary retry handling', { success: false, output: 'ordinary judged failure' }, [1, 1, 2]],
+  ] as const)('judged build_review recovery trial %s', async (_case, trialResult, expectedAttempts) => {
+    await writeState(statePath, { ...READY_STATE, build: 'done', wiring_check: 'done', test_suite: 'done' });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY, builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    let buildReviewCalls = 0;
+    const runner: StepRunner = { run: vi.fn(async (step) => {
+      if (step !== 'build_review') return { success: true };
+      buildReviewCalls++;
+      if (buildReviewCalls === 1) return codexCachedLoginFailure();
+      if (buildReviewCalls === 2) return trialResult;
+      return { success: true };
+    }) };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'build_review', mode: 'auto', maxRetries: 3, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect({
+      attempts: (runner.run as ReturnType<typeof vi.fn>).mock.calls
+        .filter(([step]) => step === 'build_review').map(([, , opts]) => opts?.attempt),
+      readinessCalls: readiness.mock.calls.length,
+    }).toEqual({ attempts: expectedAttempts, readinessCalls: 1 });
+  });
+
+  it('halts an auth-failed judged recovery trial without re-probing', async () => {
+    await writeState(statePath, { ...READY_STATE, build: 'done', wiring_check: 'done', test_suite: 'done' });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY, builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const runner: StepRunner = { run: vi.fn(async () => codexCachedLoginFailure()) };
+    const halts: string[] = [];
+    events.on('loop_halt', (event) => { if (event.type === 'loop_halt') halts.push(event.reason); });
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'build_review', mode: 'auto', maxRetries: 3, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect({ calls: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length, readinessCalls: readiness.mock.calls.length, halts })
+      .toEqual({ calls: 2, readinessCalls: 1, halts: [expect.stringMatching(/recovery trial[\s\S]*probe was unavailable/i)] });
+  });
+
+  it.each([
+    ['succeeds', { success: true, output: 'verified' }, 2, 'verified'],
+    ['returns a non-auth failure', { success: false, output: 'ordinary verifier failure' }, 2, 'ordinary verifier failure'],
+    ['halts an auth-failed trial', codexCachedLoginFailure(), 2, expect.stringContaining('recovery trial for the attribution verifier failed authentication')],
+  ] as const)('spot-audit verifier recovery trial %s', async (_case, trialResult, expectedDispatches, output) => {
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY, builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const dispatchVerifier = vi.fn()
+      .mockResolvedValueOnce(codexCachedLoginFailure())
+      .mockResolvedValueOnce(trialResult);
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: { run: vi.fn(), dispatchVerifier }, events, projectRoot: dir,
+      mode: 'auto', sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    const result = await (conductor as any).dispatchSpotAuditVerifier({ residueIds: ['r1'], planPath: 'plan.md' });
+
+    expect({ dispatches: dispatchVerifier.mock.calls.length, readinessCalls: readiness.mock.calls.length, output: result.output })
+      .toEqual({ dispatches: expectedDispatches, readinessCalls: 1, output });
+  });
+
   it('judged build_review dispatch timeout halts without retry, escalation, or alternate provider use', async () => {
     await writeState(statePath, {
       ...READY_STATE,

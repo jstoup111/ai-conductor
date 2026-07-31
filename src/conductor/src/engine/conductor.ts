@@ -1560,7 +1560,22 @@ export class Conductor {
       actualProvider: result.authentication.provider,
       authentication: result.authentication,
     });
-    return park.disposition === 'recovered' ? dispatch() : result;
+    if (park.disposition === 'halt') return result;
+
+    // A failed readiness probe permits one real verifier dispatch. Its result
+    // stays on the ordinary audit adapter path unless that exact trial is also
+    // an auth failure, in which case returning the raw provider result would
+    // let a later caller recover recursively and expose provider diagnostics.
+    const trial = await dispatch();
+    if (park.disposition === 'trial-required' && trial.authFailure) {
+      return {
+        success: false,
+        output:
+          'Codex cached-login recovery trial for the attribution verifier failed authentication ' +
+          'after the readiness probe was unavailable. Refresh the Codex login, then re-queue this feature.',
+      };
+    }
+    return trial;
   }
 
   /**
