@@ -4222,6 +4222,10 @@ export class Conductor {
         // instead of the generic "retries exhausted" that hides an infra failure
         // behind a message that reads like a code-quality rejection.
         let graderDispatchFailureReason: string | undefined;
+        // A failed Codex readiness probe cannot establish whether the cached
+        // login is usable, so it authorizes one real dispatch as a bounded
+        // recovery trial. The token is consumed before that dispatch starts.
+        let authorizedRecoveryTrial = false;
 
         // Task 9 (acceptance-specs-halts-when-the-red-evidence-marke): before
         // spending ANY of this step's retry budget, check whether this is an
@@ -4278,6 +4282,8 @@ export class Conductor {
         if (!acceptanceRedPreHealed)
         while (attempt < stepMaxRetries) {
           attempt++;
+          const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;
+          authorizedRecoveryTrial = false;
 
           // Self-host live-boundary enforcement point. A violation observed
           // while an EARLIER dispatch was in flight is enforced HERE — before
@@ -4597,6 +4603,21 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
+            if (isAuthorizedRecoveryTrial) {
+              // The failed dispatch is the one bounded recovery trial for an
+              // unavailable probe. Do not recurse into another probe; keep the
+              // halt secret-safe by excluding arbitrary provider output.
+              const haltReason =
+                'Codex cached-login recovery trial failed authentication after the readiness probe was unavailable.\n' +
+                'Refresh the Codex login, then re-queue this feature.';
+              await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
             const park = await this.parkOnAuthFailure(result);
             if (park.disposition === 'halt') {
               // Task 14: Auth-park timeout → credentials-specific HALT.
@@ -4612,8 +4633,10 @@ export class Conductor {
               return;
             }
 
-            // Park resolved (refreshed or timeout-then-park-anyway); loop back to
-            // retry without decrementing attempt (budget intact).
+            // Park resolved (refreshed or probe-unavailable trial); loop back
+            // without decrementing attempt (budget intact). The trial token
+            // applies to exactly the next dispatch and is consumed at entry.
+            authorizedRecoveryTrial = park.disposition === 'trial-required';
             attempt--;
             continue;
           }
