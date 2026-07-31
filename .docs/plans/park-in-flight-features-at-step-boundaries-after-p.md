@@ -56,7 +56,7 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 5. Commit with message: `define operator park boundary result`.
 
 **Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`
-**Wired-into:** `src/conductor/src/daemon-cli.ts#OperatorParkedTermination`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
 **Dependencies:** none
 
 ### Task 2: Register the provider-neutral boundary event
@@ -72,7 +72,7 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 5. Commit with message: `register operator park boundary event`.
 
 **Files:** `src/conductor/src/types/events.ts`, `src/conductor/src/engine/event-sinks.ts`, `src/conductor/test/engine/event-sinks.test.ts`
-**Wired-into:** `src/conductor/src/engine/conductor.ts#operator_park_boundary`, `src/conductor/src/daemon-cli.ts#renderDaemonEvent`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`, `src/conductor/src/daemon-cli.ts#renderDaemonEvent`
 **Dependencies:** Task 1
 
 ### Task 3: Stop before the first or next serial unit
@@ -88,7 +88,7 @@ configured-group, SHIP-group, deterministic BUILD-group, race, resume, and inter
 5. Commit with message: `honor parks at serial step boundaries`.
 
 **Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`
-**Wired-into:** `src/conductor/src/engine/conductor.ts#stopAtOperatorParkBoundary`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor.run`
 **Dependencies:** Tasks 1, 2
 
 ### Task 4: Fail toward parked on boundary-read races and errors
