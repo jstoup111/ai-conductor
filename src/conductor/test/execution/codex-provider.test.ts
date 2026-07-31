@@ -6,7 +6,10 @@ import {
   CodexProvider,
   parseCodexJsonl,
 } from '../../src/execution/codex-provider.js';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type {
+  AuthenticationReadiness,
+  InvokeOptions,
+} from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
@@ -157,6 +160,43 @@ describe('CodexProvider', () => {
     await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
 
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
+  });
+
+  it('models every Codex readiness outcome as an exhaustive discriminated contract', () => {
+    const readinessOutcomes = [
+      { provider: 'codex', source: 'cached-login', state: 'ready' },
+      { provider: 'codex', source: 'api-key', state: 'missing', remediation: 'Replace the API key.' },
+      { provider: 'codex', source: 'cached-login', state: 'unusable', remediation: 'Sign in again.' },
+      {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: {
+          kind: 'timeout',
+          facts: { timeoutMs: 10_000 },
+        },
+      },
+    ] satisfies readonly AuthenticationReadiness[];
+
+    const classify = (readiness: AuthenticationReadiness): string => {
+      switch (readiness.state) {
+        case 'ready': return 'ready';
+        case 'missing': return 'missing';
+        case 'unusable': return 'unusable';
+        case 'probe-failed': return readiness.probeFailure.kind;
+        default: {
+          const exhaustive: never = readiness;
+          return exhaustive;
+        }
+      }
+    };
+
+    expect(readinessOutcomes.map(classify)).toEqual([
+      'ready',
+      'missing',
+      'unusable',
+      'timeout',
+    ]);
   });
 
   it.each([
@@ -926,12 +966,16 @@ describe('CodexProvider', () => {
         transport: { authenticated: false },
       },
     ],
-  ] as const)('fails closed for %s documented doctor evidence', async (_name, evidence) => {
+  ] as const)('returns probe-failed for inconclusive %s documented doctor evidence', async (_name, evidence) => {
     const readiness = await new CodexProvider(
       vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode: 0 }),
     ).readiness();
 
-    expect(readiness).toMatchObject({ source: 'cached-login', state: 'unverifiable' });
+    expect(readiness).toMatchObject({
+      source: 'cached-login',
+      state: 'probe-failed',
+      probeFailure: { kind: 'unparseable-output' },
+    });
   });
 
   it('blocks an unattended invocation when its fresh readiness check is not ready', async () => {
@@ -1074,28 +1118,28 @@ describe('CodexProvider', () => {
       'malformed evidence',
       { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true } },
       { exitCode: 0 },
-      'unverifiable',
+      'probe-failed',
     ],
     [
       'unsupported evidence schema',
       { schemaVersion: 2, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } },
       { exitCode: 0 },
-      'unverifiable',
+      'probe-failed',
     ],
     [
       'failed command despite otherwise-ready evidence',
       { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } },
       { exitCode: 1 },
-      'unverifiable',
+      'probe-failed',
     ],
     [
       'conflicting selected source evidence',
       { schemaVersion: 1, auth: { selectedMode: 'api-key', configured: true }, transport: { authenticated: true } },
       { exitCode: 0 },
-      'unverifiable',
+      'probe-failed',
     ],
   ] as const)(
-    'fails closed as %s without exposing doctor diagnostics',
+    'classifies %s without exposing doctor diagnostics',
     async (_name, evidence, result, state) => {
       mockExeca.mockResolvedValue({
         stdout: JSON.stringify(evidence),
@@ -1109,15 +1153,20 @@ describe('CodexProvider', () => {
         provider: 'codex',
         source: 'cached-login',
         state,
-        remediation: expect.any(String),
       });
+      if (state === 'probe-failed') {
+        expect(readiness).toMatchObject({ probeFailure: { kind: 'unparseable-output' } });
+        expect(readiness).not.toHaveProperty('remediation');
+      } else {
+        expect(readiness).toMatchObject({ remediation: expect.any(String) });
+      }
       expect(JSON.stringify(readiness)).not.toMatch(/secret|private|token/i);
       expect(mockExeca).toHaveBeenCalledTimes(1);
       expect(mockExeca.mock.calls[0]?.[1]).not.toContain('exec');
     },
   );
 
-  it('fails closed as unverifiable when the captured doctor command times out or fails externally', async () => {
+  it('returns probe-failed when the captured doctor command times out or fails externally', async () => {
     mockExeca.mockRejectedValueOnce(Object.assign(new Error('timed out'), { timedOut: true }));
     mockExeca.mockResolvedValueOnce({
       stdout: '',
@@ -1127,10 +1176,12 @@ describe('CodexProvider', () => {
 
     const defaultProvider = new CodexProvider();
     await expect(defaultProvider.readiness()).resolves.toMatchObject({
-      provider: 'codex', source: 'cached-login', state: 'unverifiable',
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'unparseable-output' },
     });
     await expect(defaultProvider.readiness()).resolves.toMatchObject({
-      provider: 'codex', source: 'cached-login', state: 'unverifiable',
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'unparseable-output' },
     });
     expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual([
       ['doctor', '--json', '--summary'],

@@ -53,7 +53,7 @@ interface DoctorCommandResult {
 type DoctorEvidence =
   | {
     kind: 'documented';
-    state: AuthenticationReadiness['state'];
+    state: Exclude<AuthenticationReadiness['state'], 'probe-failed'>;
     unrelatedHealth?: AuthenticationReadiness['unrelatedHealth'];
   }
   | {
@@ -192,7 +192,7 @@ export class CodexProvider implements LLMProvider {
       );
       return this.classifyReadiness(result, authentication);
     } catch {
-      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+      return this.probeFailedReadiness(authentication.source);
     }
   }
 
@@ -417,7 +417,7 @@ export class CodexProvider implements LLMProvider {
 
   private authenticationResult(
     source: AuthenticationSource,
-    state: AuthenticationReadiness['state'] | undefined,
+    state: Exclude<AuthenticationReadiness['state'], 'probe-failed'> | undefined,
   ): AuthenticationReadiness | undefined {
     if (!state) return undefined;
     return {
@@ -433,7 +433,7 @@ export class CodexProvider implements LLMProvider {
   ): AuthenticationReadiness {
     const evidence = this.parseDoctorEvidence(result.stdout);
     if (!evidence || (evidence.kind === 'legacy' && evidence.source !== authentication.source)) {
-      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+      return this.probeFailedReadiness(authentication.source);
     }
 
     const exitCode = result.exitCode ?? 1;
@@ -473,7 +473,7 @@ export class CodexProvider implements LLMProvider {
     ) {
       return this.nonReadyReadiness(authentication.source, 'unusable');
     }
-    return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    return this.probeFailedReadiness(authentication.source);
   }
 
   private parseDoctorEvidence(stdout: unknown): DoctorEvidence | undefined {
@@ -546,7 +546,7 @@ export class CodexProvider implements LLMProvider {
 
   private nonReadyReadiness(
     source: AuthenticationSource,
-    state: Exclude<AuthenticationReadiness['state'], 'ready'>,
+    state: 'missing' | 'unusable',
   ): AuthenticationReadiness {
     const action = source === 'api-key'
       ? 'Replace CODEX_API_KEY and restart the daemon.'
@@ -557,6 +557,18 @@ export class CodexProvider implements LLMProvider {
         ? 'The selected Codex authentication source was rejected.'
         : 'Codex authentication readiness could not be verified.';
     return { provider: 'codex', source, state, remediation: `${reason} ${action}` };
+  }
+
+  private probeFailedReadiness(source: AuthenticationSource): AuthenticationReadiness {
+    return {
+      provider: 'codex',
+      source,
+      state: 'probe-failed',
+      probeFailure: {
+        kind: 'unparseable-output',
+        facts: { parserRejection: 'unrecognized-envelope' },
+      },
+    };
   }
 
   private sanitizeOutput(output: string, apiKey: string | undefined): string {
