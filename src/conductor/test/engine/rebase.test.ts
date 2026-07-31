@@ -19,6 +19,7 @@ import {
   applyRebaseVerdicts,
   emitRebaseEvent,
   emitGateInvalidationEvents,
+  makeGitRunner,
   performRebase,
   type GitRunner,
   type GitResult,
@@ -167,6 +168,48 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
       expect({ outcome, after: await snapshot() }).toEqual({
         outcome: { kind: 'mergeable_skip' },
         after: before,
+      });
+    } finally {
+      await rm(repo, { recursive: true, force: true });
+    }
+  });
+
+  it('falls through to the established conflict outcome when the prospective merge conflicts (Task 4, real git)', async () => {
+    const repo = await mkdtemp(join(tmpdir(), 'rebase-finish-policy-conflict-'));
+    const g = (args: string[]) => execa('git', args, { cwd: repo });
+    try {
+      await g(['init', '-q', '-b', 'main']);
+      await g(['config', 'user.email', 't@t.com']);
+      await g(['config', 'user.name', 'T']);
+      await g(['config', 'commit.gpgsign', 'false']);
+      await writeFile(join(repo, 'shared.txt'), 'base\n');
+      await g(['add', '.']);
+      await g(['commit', '-q', '-m', 'init']);
+
+      await g(['checkout', '-q', '-b', 'feature']);
+      await writeFile(join(repo, 'shared.txt'), 'feature\n');
+      await g(['commit', '-q', '-am', 'feature change']);
+
+      await g(['checkout', '-q', 'main']);
+      await writeFile(join(repo, 'shared.txt'), 'base advance\n');
+      await g(['commit', '-q', '-am', 'base change']);
+      await g(['checkout', '-q', 'feature']);
+
+      const git = makeGitRunner(repo);
+      const outcome = await performRebase(git, repo, 'main', {
+        finishMergeabilityCheck: true,
+      });
+
+      expect({
+        outcome,
+        rebaseActive: await rebaseStateActive(git, repo),
+      }).toEqual({
+        outcome: {
+          kind: 'conflict_halt',
+          conflicts: ['shared.txt'],
+          reason: 'rebase conflict requires human resolution',
+        },
+        rebaseActive: true,
       });
     } finally {
       await rm(repo, { recursive: true, force: true });

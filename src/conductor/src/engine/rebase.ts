@@ -638,12 +638,14 @@ export async function performRebase(
   // Normal finish needs merge readiness, while recovery callers need the base
   // commit in their worktree. Only the explicit finish policy may skip a real
   // rebase, and it does so before all rebase-only mutation/preflight work.
-  if (
-    opts?.finishMergeabilityCheck &&
-    (await classifyProspectiveMerge(git, base.ref)) === 'clean'
-  ) {
+  const prospectiveMerge = opts?.finishMergeabilityCheck
+    ? await classifyProspectiveMerge(git, base.ref)
+    : undefined;
+  if (prospectiveMerge === 'clean') {
     return { kind: 'mergeable_skip' };
   }
+  // A reported conflict (and an indeterminate assessment) deliberately falls
+  // through to the established seal, rebase, and bounded resolver path below.
 
   // A real rebase is about to move HEAD. Verify the durable DECIDE-artifact
   // authority first so a stale or tampered seal fails before history changes.
