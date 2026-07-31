@@ -406,40 +406,6 @@ export interface BranchExecutorDeps {
   onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
 }
 
-/** Dependencies for an engine-native group branch (no step/provider dispatch). */
-export interface NativeBranchExecutorDeps {
-  onMemberEvent?: (event: GroupMemberStepEvent) => void | Promise<void>;
-}
-
-/**
- * Executes one injected engine-native branch and maps its result through the
- * shared branch-outcome/event contracts used by dispatched group members.
- */
-export async function runNativeGroupBranch(
-  member: GroupMember,
-  execute: () => Promise<StepRunResult>,
-  deps: NativeBranchExecutorDeps = {},
-): Promise<BranchOutcome> {
-  await deps.onMemberEvent?.({
-    type: "group_member_step",
-    member: member.name,
-    skill: member.skill,
-    phase: "dispatch",
-  });
-  const result = await execute();
-  const outcome = result.success
-    ? makeVerdictOutcome("pass", result.authentication)
-    : makeNoVerdictOutcome(result.output ?? "native branch failed", result.authentication);
-  await deps.onMemberEvent?.({
-    type: "group_member_step",
-    member: member.name,
-    skill: member.skill,
-    phase: "result",
-    outcome: classifyOutcome(outcome),
-  });
-  return outcome;
-}
-
 /**
  * Runs a single concurrent-group branch to completion: creates one detached
  * provider-session scope when the runner supports provider routing, otherwise
