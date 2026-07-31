@@ -8,24 +8,29 @@
 terms of git state, `.pipeline/` markers, gate verdicts, the event log, and HALT — there is no
 HTTP/UI surface.
 
+> **Targeted supersession (2026-07-30):** `mergeability-first-finish.md` supersedes the
+> ancestry-freshness behavior in FR-1 through FR-4. In those stories, the engine-native `rebase`
+> lifecycle step is now an automatic integration gate: a clean prospective merge satisfies it
+> without history rewriting; conflict or indeterminate state enters the actual rebase flow.
+
 ---
 
-## Story: Rebase runs after the applicable SHIP validation tail, before finish
+## Story: Automatic integration runs after the applicable SHIP validation tail, before finish
 
 **Requirement:** FR-1
 
-As the daemon, I want to rebase the feature branch onto the latest base **after** the applicable
-SHIP validation tail is green or validly skipped and **before** finish, so that the PR I open is
-built on current base.
+As the daemon, I want to evaluate integration against the latest resolved base **after** the
+applicable SHIP validation tail is green or validly skipped and **before** finish, so that the PR I
+open is either already mergeable or has entered conflict recovery.
 
 ### Acceptance Criteria
 
 #### Happy Path
 - Given a worktree whose applicable SHIP validation tail is completed or validly skipped, when the
-  loop reaches the point before `finish`, then the rebase step runs exactly once before `finish`
-  executes.
-- Given the rebase completes (clean, no-op, or auto-resolved), when no HALT is written, then
-  `finish` runs and a PR is opened.
+  loop reaches the point before `finish`, then the automatic integration gate runs exactly once
+  before `finish` executes.
+- Given integration returns already-current, mergeable-skip, clean-rebase, or auto-resolved, when
+  no HALT is written, then `finish` runs and a PR is opened.
 
 #### Negative Paths
 - Given a worktree where the applicable SHIP validation tail is not yet satisfied, when the loop
@@ -34,42 +39,40 @@ built on current base.
   run and **no PR** is opened.
 
 ### Done When
-- [ ] Rebase is invoked from the loop tail only after the applicable SHIP validation tail is
+- [ ] Automatic integration is invoked from the loop tail only after the applicable SHIP validation tail is
       completed or validly skipped.
 - [ ] When rebase HALTs, `finish` is not reached and `pr_url` is never set.
 - [ ] Integration test: green front-half → rebase → finish ordering asserted via event log.
 
 ---
 
-## Story: Rebase onto the discovered origin default branch
+## Story: Resolve the origin default branch as the integration target
 
 **Requirement:** FR-2
 
-As the daemon, I want to fetch and rebase onto **origin's default branch discovered at runtime**
-so that I pick up sibling PRs that humans merged to the remote, without hardcoding `main`.
+As the daemon, I want to fetch and evaluate integration against **origin's default branch discovered
+at runtime** so that sibling PRs humans merged are considered without hardcoding `main`.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given an `origin` remote whose default branch is `main`, when the rebase step runs, then it
-  executes `git fetch origin main` (or the discovered default) and rebases the branch onto
-  `origin/main`.
-- Given the default branch is named something other than `main` (e.g. `trunk`), when the rebase
-  runs, then it rebases onto `origin/trunk` — the name is discovered via
+- Given an `origin` remote whose default branch is `main`, when automatic integration runs, then it
+  executes `git fetch origin main` (or the discovered default) and evaluates against `origin/main`.
+- Given the default branch is named something other than `main` (e.g. `trunk`), when integration
+  runs, then it evaluates against `origin/trunk` — the name is discovered via
   `git symbolic-ref refs/remotes/origin/HEAD`, never hardcoded.
 
 #### Negative Paths
 - Given the repo's local `main` is stale but `origin/main` has advanced by 3 merged PRs, when
-  the rebase runs, then the branch is rebased onto the **fetched `origin/main`** (the advanced
-  tip), not the stale local ref.
-- Given `git symbolic-ref refs/remotes/origin/HEAD` is unset, when the rebase runs, then the
+  integration runs, then it uses the **fetched `origin/main`** tip, not the stale local ref.
+- Given `git symbolic-ref refs/remotes/origin/HEAD` is unset, when integration runs, then the
   daemon resolves the default branch deterministically (e.g. via `git remote show origin` or the
   configured base) rather than assuming `main`.
 
 ### Done When
 - [ ] Base branch name is obtained by discovery, with no literal `"main"`/`"master"` in the path.
-- [ ] A `git fetch` of the default branch precedes the rebase.
-- [ ] Test: advanced `origin/<default>` is the rebase target, asserted against the resulting log.
+- [ ] A `git fetch` of the default branch precedes prospective mergeability assessment.
+- [ ] Test: advanced `origin/<default>` is the integration target, asserted against the decision.
 
 ---
 
@@ -100,31 +103,30 @@ that remote-less repos and test fixtures still complete instead of failing.
 
 ---
 
-## Story: Skip re-verification when already up to date
+## Story: Skip re-verification when already current or mergeable
 
 **Requirement:** FR-4 *(edge)*
 
-As the daemon, I want to skip re-verification when the branch is already current with the base,
-so that an unchanged feature goes straight to its PR without wasted build/test work.
+As the daemon, I want to skip re-verification when the branch is already current or can merge
+cleanly without rewriting history, so that unchanged feature work goes straight to its PR.
 
 ### Acceptance Criteria
 
 #### Happy Path
-- Given the base branch has **no new commits** since the worktree forked, when the rebase runs,
-  then it is a no-op (worktree tree unchanged) and the loop proceeds **directly to finish** with
-  **no** re-verification of build/manual_test.
+- Given the base has no new commits, or has advanced but the prospective merge is clean, when
+  automatic integration runs, then the feature history stays unchanged and the loop proceeds
+  **directly to finish** with **no** re-verification.
 
 #### Negative Paths
-- Given the base advanced but the rebase results in a worktree tree **identical** to before
-  (no effective file change), when the rebase completes, then re-verification is still skipped —
-  the trigger is *tree changed*, not *base moved*.
-- Given the branch is already up to date, when the rebase runs twice (idempotent re-invocation),
-  then both runs are no-ops and neither invalidates any gate.
+- Given the prospective merge conflicts or is indeterminate and an actual rebase changes code/test
+  paths, when it completes, then existing re-verification rules still apply.
+- Given the branch is already current or mergeable, when integration runs twice, then both runs
+  preserve history and neither invalidates any gate.
 
 ### Done When
-- [ ] "Up to date" / unchanged-tree rebase does not invalidate `build` or `manual_test` verdicts.
-- [ ] Loop proceeds to finish without re-running build/manual_test on a no-op rebase.
-- [ ] Test: no-op rebase → zero gate invalidations → finish.
+- [ ] Already-current and mergeable-skip outcomes do not invalidate downstream verdicts.
+- [ ] Loop proceeds to finish without re-running downstream gates on either safe-skip outcome.
+- [ ] Test: mergeable skip → zero gate invalidations → finish with unchanged commit SHAs.
 
 ---
 
