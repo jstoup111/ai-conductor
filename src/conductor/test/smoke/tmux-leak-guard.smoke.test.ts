@@ -20,8 +20,6 @@ async function paneCwdSticky(runner?: TmuxRunner): Promise<boolean> {
   try {
     await newDetachedSession(name, 'bash -c "sleep 5"', os.tmpdir(), runner);
     return isTmpdirRooted(sessionPaneCwd(name, runner));
-  } catch {
-    return false;
   } finally {
     if (previous === undefined) delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     else process.env.AI_CONDUCTOR_NO_REAL_EXEC = previous;
@@ -29,30 +27,37 @@ async function paneCwdSticky(runner?: TmuxRunner): Promise<boolean> {
   }
 }
 
+async function isolatedTmuxRunner(): Promise<TmuxRunner | undefined> {
+  if (!(await tmuxInstalled())) return undefined;
+
+  const socket = `leaktest-${randomBytes(8).toString('hex')}`;
+  const runner: TmuxRunner = (args) => realTmuxRunner(['-L', socket, ...args]);
+  return runner(['start-server']).code === 0 ? runner : undefined;
+}
+
 describe('smoke/tmux-leak-guard — real tmux', () => {
   it('sweeps a tmpdir-rooted daemon session that predates the snapshot', async () => {
-    if (!(await tmuxInstalled()) || !(await paneCwdSticky())) return;
+    const runner = await isolatedTmuxRunner();
+    if (!runner || !(await paneCwdSticky(runner))) return;
 
     const name = `cc-daemon-swtest-${randomBytes(4).toString('hex')}`;
     const previous = process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
     try {
-      await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir());
-      expect(await hasSession(name)).toBe(true);
-      expect(sweepStaleDaemonSessions().killed.some((line) => line.includes(name))).toBe(true);
-      expect(await hasSession(name)).toBe(false);
+      await newDetachedSession(name, 'bash -c "sleep 60"', os.tmpdir(), runner);
+      expect(await hasSession(name, runner)).toBe(true);
+      expect(sweepStaleDaemonSessions(runner).killed.some((line) => line.includes(name))).toBe(true);
+      expect(await hasSession(name, runner)).toBe(false);
     } finally {
       if (previous === undefined) delete process.env.AI_CONDUCTOR_NO_REAL_EXEC;
       else process.env.AI_CONDUCTOR_NO_REAL_EXEC = previous;
-      await killDaemonSession(name);
+      await killDaemonSession(name, runner);
     }
   });
 
   it('reaps a newly-created session on an isolated tmux server', async () => {
-    if (!(await tmuxInstalled())) return;
-
-    const socket = `leaktest-${randomBytes(8).toString('hex')}`;
-    const runner: TmuxRunner = (args) => realTmuxRunner(['-L', socket, ...args]);
+    const runner = await isolatedTmuxRunner();
+    if (!runner) return;
     if (!(await paneCwdSticky(runner))) return;
 
     const before = snapshotDaemonSessions(runner);

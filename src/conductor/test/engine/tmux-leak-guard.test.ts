@@ -3,8 +3,8 @@
 // escapes: any `cc-daemon-*` session created during the run is killed at
 // teardown and fails the run with its pane cwd (fixture-dir attribution).
 //
-// Uses REAL tmux (skips when unavailable). The fixture session is created with
-// the kill-switch env unset — same opt-out as the intentional smokes.
+// Deterministic coverage uses injected tmux runners. Real tmux lifecycle
+// coverage is opt-in in test/smoke/tmux-leak-guard.smoke.test.ts.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { describe, it, expect, vi } from 'vitest';
