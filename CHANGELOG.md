@@ -80,7 +80,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Added
 
-- Publish the repository's documentation tree as a browsable GitHub Pages site with a landing page and persistent site-wide navigation across every quickstart, guide, reference, explanation, runbook, and contributing topic, and link it from the README ([implementation PR [implementation PR #1224](https://github.com/jstoup111/ai-conductor/pull/1224)](https://github.com/jstoup111/ai-conductor/pull/[implementation PR #1224](https://github.com/jstoup111/ai-conductor/pull/1224))).
+- Publish the repository's documentation tree as a browsable GitHub Pages site with a landing page and persistent site-wide navigation across every quickstart, guide, reference, explanation, runbook, and contributing topic, and link it from the README ([implementation PR #1224](https://github.com/jstoup111/ai-conductor/pull/1224)).
 - Add a durable `## Time` block to shipped records and a matching `time=` breakdown to `conduct-ts kpi`, partitioning each feature's measured wall-clock time into provider (LLM) time and engine/code time so later performance work can be prioritized with evidence instead of guesswork ([implementation PR #1196](https://github.com/jstoup111/ai-conductor/pull/1196)).
 - Add deterministic project-config scaffolding for new and existing Git repositories without copying user or self-host settings into project scope ([implementation PR #1169](https://github.com/jstoup111/ai-conductor/pull/1169)).
 - Catch daemon claim-to-finish seam regressions in ordinary CI with a deterministic end-to-end fixture driven by a scripted provider fake ([implementation PR #1155](https://github.com/jstoup111/ai-conductor/pull/1155)).
