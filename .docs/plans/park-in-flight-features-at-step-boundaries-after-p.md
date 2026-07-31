@@ -11,7 +11,7 @@
 
 Add one daemon-only park predicate at the conductor's shared pre-scheduling-unit boundary, return
 an explicit intentional-stop result through the daemon call chain, and teach the pool and reporting
-layers to treat that result as parked rather than failed. Sixteen small TDD tasks cover serial,
+layers to treat that result as parked rather than failed. Twenty small TDD tasks cover serial,
 configured-group, SHIP-group, deterministic BUILD-group, race, resume, and interactive behavior.
 
 ## Technical Approach
@@ -66,6 +66,33 @@ locally emulate that sibling group while the prerequisite is absent.
   - Confirmed by: operator approval, 2026-07-31 ("yes").
 
 **Verdict: CLEAR.**
+
+## Plan remediation — 2026-07-31 (build-review completeness)
+
+Build review verified that the former Task 8 bundled three independently executable proofs tightly
+enough for BUILD to omit all three while completing the surrounding behavior. This revision splits
+the mechanical dispatch inventory, zero-member group, and one-member group proofs into separate
+verify-only tasks. It does not change product scope, architecture, or production wiring.
+
+### Verify-Claims Ledger — plan remediation — 2026-07-31
+
+#### Claims
+
+- [verified] Story 8 requires a mechanical inventory that rejects future unguarded scheduling paths
+  and preserves zero/one-member group semantics.
+- [verified] Build review found no inventory, zero-member, or one-member proof in the implemented
+  diff and identified the relevant scheduler paths at `conductor.ts:2931,3013,3031-3032,3750`.
+- [verified] The remediation disposition routes all three omissions to `plan` and assigns stable
+  task ids `rem-test-001` through `rem-test-003`.
+
+#### Assumptions
+
+- None. The accepted story, approved architecture, build-review verdict, and scheduler control flow
+  settle the required proof and task boundaries.
+
+**Verdict: CLEAR.**
+
+**Operator approval:** Approved 2026-07-31 together with the unchanged architecture diagram.
 
 ## Tasks
 
@@ -186,24 +213,63 @@ locally emulate that sibling group while the prerequisite is absent.
 **Wired-into:** `same as Task 3`
 **Dependencies:** Tasks 5, 6
 
-### Task 8: Prove core serial, configured, and SHIP groups inherit the gate
+### Task rem-test-001: Inventory every supported scheduling-unit dispatch boundary
 
-**Story:** Story 8 core criteria and bypass rejection, excluding deferred deterministic BUILD integration
+**Story:** Story 8 negative path — future unguarded dispatch paths fail verification
 **Type:** negative-path
 
 **Steps:**
-1. Write failing boundary and inventory tests for every currently supported
-   serial, configured, and built-in SHIP dispatch entry.
-2. Verify an unguarded currently-supported entry makes the tests fail (RED).
-3. Route each existing entry through the same pre-unit gate and remove any
-   group-specific park branch.
-4. Verify serial, configured, SHIP, zero/one-member, and inventory cases pass
-   (GREEN), without registering or emulating the sibling BUILD group.
-5. Commit with message: `cover current park scheduling boundaries`.
+1. Write a mechanical inventory test enumerating every currently supported serial,
+   configured-parallel, and built-in SHIP scheduling-unit dispatch entry.
+2. Verify a fixture containing a newly introduced unguarded entry makes the inventory fail (RED).
+3. Assert every enumerated entry routes through `stopAtOperatorParkBoundary` before dispatch.
+4. Verify the complete current inventory passes without registering or emulating the sibling BUILD
+   group (GREEN).
+5. Commit with message: `pin operator park dispatch inventory`.
 
-**Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`
+**Files:** `src/conductor/test/engine/operator-park-boundary.test.ts`
 **Wired-into:** `same as Task 3`
+**Verify-only:** yes
 **Dependencies:** Tasks 6, 7
+
+### Task rem-test-002: Preserve zero-member group semantics while parked
+
+**Story:** Story 8 negative path — zero applicable members preserve skip semantics and block the next unit
+**Type:** negative-path
+
+**Steps:**
+1. Add an all-skipped built-in-group fixture with an active operator park and a later pending unit.
+2. Verify the fixture distinguishes the existing zero-dispatch skip result from a parked member
+   result (RED proof).
+3. Assert the group keeps its existing skipped statuses while the next pending scheduling unit is
+   stopped by the ordinary shared boundary.
+4. Verify no group member or later unit runner is called and the focused test passes (GREEN).
+5. Commit with message: `cover zero-member operator park boundary`.
+
+**Files:** `src/conductor/test/engine/operator-park-boundary.test.ts`
+**Wired-into:** `same as Task 3`
+**Verify-only:** yes
+**Dependencies:** Task 7
+
+### Task rem-test-003: Preserve one-member serial degradation while parked
+
+**Story:** Story 8 negative path — one applicable member degrades to the guarded serial path
+**Type:** negative-path
+
+**Steps:**
+1. Add a built-in-group fixture with exactly one dispatchable member, an active operator park, and
+   the lone runner instrumented for exact call counts.
+2. Verify the fixture fails if width-one membership bypasses the ordinary serial boundary (RED
+   proof).
+3. Assert width-one membership falls through to `stopAtOperatorParkBoundary` without entering the
+   parallel fan-out lane.
+4. Verify the lone runner receives zero calls and the focused test passes (GREEN).
+5. Commit with message: `cover one-member operator park boundary`.
+
+**Files:** `src/conductor/test/engine/operator-park-boundary.test.ts`
+**Wired-into:** `same as Task 3`
+**Verify-only:** yes
+**Dependencies:** Task 7
 
 ### Task 8.1: Integrate the landed deterministic BUILD group
 
@@ -223,7 +289,7 @@ locally emulate that sibling group while the prerequisite is absent.
 
 **Files:** `src/conductor/src/engine/conductor.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`, `src/conductor/test/engine/steps.test.ts`
 **Wired-into:** `same as Task 3`
-**Dependencies:** Task 8; verified sibling deterministic BUILD-verification prerequisite
+**Dependencies:** Tasks rem-test-001, rem-test-002, rem-test-003; verified sibling deterministic BUILD-verification prerequisite
 
 ### Task 9: Lock interactive behavior to its existing baseline
 
@@ -240,7 +306,7 @@ locally emulate that sibling group while the prerequisite is absent.
 
 **Files:** `src/conductor/test/engine/operator-park-boundary.test.ts`, `src/conductor/test/engine/conductor.test.ts`
 **Wired-into:** `none (no new production surface)`
-**Dependencies:** Tasks 3, 8
+**Dependencies:** Tasks 3, rem-test-001, rem-test-002, rem-test-003
 
 ### Task 10: Inject the main-root park predicate and propagate the result
 
@@ -363,7 +429,7 @@ locally emulate that sibling group while the prerequisite is absent.
 
 **Files:** `src/conductor/test/acceptance/operator-park-boundary.acceptance.test.ts`, `src/conductor/test/engine/operator-park-boundary.test.ts`, `src/conductor/test/engine/daemon-runner.test.ts`, `src/conductor/test/engine/daemon.test.ts`
 **Wired-into:** `none (no new production surface)`
-**Dependencies:** Tasks 5-15
+**Dependencies:** Tasks 5-7, rem-test-001, rem-test-002, rem-test-003, 9-15
 
 ### Task 16.1: Extend the acceptance contract for the landed BUILD group
 
@@ -386,11 +452,13 @@ locally emulate that sibling group while the prerequisite is absent.
 ## Task Dependency Graph
 
 ```text
-1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
-                    └──────────→ 10 → 11 → 12 → 13 → 14
-                         2 ─────────────────────────→ 15
-5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15 ───────────→ 16
-8 → 8.1 → 16.1
+1 → 2 → 3 → 4 → 5 → 6 → 7 → rem-test-001 ─────────→ 9
+                         ├──→ rem-test-002
+                         └──→ rem-test-003
+                    └───────────────────────────────→ 10 → 11 → 12 → 13 → 14
+                         2 ─────────────────────────────────────────────→ 15
+5, 6, 7, rem-test-001, rem-test-002, rem-test-003, 9-15 ─────────────→ 16
+rem-test-001, rem-test-002, rem-test-003 → 8.1 → 16.1
 16 ────────→ 16.1
 ```
 
@@ -399,7 +467,9 @@ must be complete on the integration base before Task 8.1 or Task 16.1 begins.
 
 ## Integration Points
 
-- After Task 8: every currently-supported serial/configured/SHIP scheduling unit shares one daemon pre-unit gate.
+- After Tasks rem-test-001 through rem-test-003: every currently-supported
+  serial/configured/SHIP scheduling unit is mechanically inventoried, and zero/one-member
+  degradation is explicitly pinned.
 - After Task 12: conductor → worktree wrapper → feature runner preserves one typed intentional stop.
 - After Task 14: daemon pool and resume behavior are complete without a HALT watcher or second marker.
 - After Task 16: the core accepted product contract is proven across the minimum real internal path.
@@ -416,7 +486,7 @@ must be complete on the integration base before Task 8.1 or Task 16.1 begins.
 | 5 | 12 |
 | 6 | 14 |
 | 7 | 4 |
-| 8 | 8 |
+| 8 | rem-test-001, rem-test-002, rem-test-003, 8.1 |
 | 9 | 9 |
 | 10 | 2 |
 
