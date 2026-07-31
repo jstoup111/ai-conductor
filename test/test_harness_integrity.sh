@@ -1068,13 +1068,13 @@ else
   assert "test/check_halt_writers.sh exists" 1
 fi
 
-# ── 17. Hosted documentation navigation ────────────────────────────────────
+# ── 17. Hosted documentation contracts ─────────────────────────────────────
 # The navigation suite first exercises complete and invalid fixture trees, then
 # checks the real repository tree. Its site-contract mode intentionally stops
 # before the README front-door assertion, which Task 14 owns separately.
 check_17_docs_site_contracts() {
   echo ""
-  echo -e "${BOLD}17. Hosted documentation navigation${NC}"
+  echo -e "${BOLD}17. Hosted documentation contracts${NC}"
 
   local docs_navigation_test="${HARNESS_DIR}/test/test_docs_navigation.sh"
   if [ -f "$docs_navigation_test" ]; then
@@ -1094,16 +1094,9 @@ check_17_docs_site_contracts() {
   else
     assert "test/test_docs_navigation.sh exists" 1
   fi
-}
-
-# ── 18. Hosted documentation fake-adapter smoke suite ──────────────────────
-# This runs only the deterministic acceptance suite, which replaces gh and curl
-# at the process boundary. The real Pages probe remains opt-in and is never
-# invoked from integrity or the aggregate test path.
-check_18_docs_pages_smoke_contracts() {
-  echo ""
-  echo -e "${BOLD}18. Hosted documentation fake-adapter smoke suite${NC}"
-
+  # This runs only the deterministic acceptance suite, which replaces gh and
+  # curl at the process boundary. The real Pages probe remains opt-in and is
+  # never invoked from integrity or the aggregate test path.
   local docs_pages_smoke_test="${HARNESS_DIR}/test/test_docs_pages_smoke.sh"
   if [ -f "$docs_pages_smoke_test" ]; then
     local docs_pages_smoke_output
@@ -1125,7 +1118,6 @@ check_18_docs_pages_smoke_contracts() {
 }
 
 check_17_docs_site_contracts
-check_18_docs_pages_smoke_contracts
 
 # ── Summary ──────────────────────────────────────────────────────────────────
 

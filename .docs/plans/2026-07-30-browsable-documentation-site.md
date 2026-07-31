@@ -376,7 +376,7 @@ Complete the existing default-branch GitHub Pages publication with a pinned Just
 - `test/test_docs_pages_smoke.sh`
 - `test/test_harness_integrity.sh`
 
-**Wired-into:** `test/test_harness_integrity.sh#check_18_docs_pages_smoke_contracts`
+**Wired-into:** `test/test_harness_integrity.sh#check_17_docs_site_contracts`
 
 **Dependencies:** Task 14
 
