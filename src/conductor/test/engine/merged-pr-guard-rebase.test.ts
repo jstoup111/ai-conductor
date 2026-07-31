@@ -252,7 +252,7 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
     expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(false);
   });
 
-  it('negative: no pr_url recorded — rebase proceeds unchanged (zero guard queries)', async () => {
+  it('negative: no pr_url recorded — clean normal finish uses mergeable skip with zero guard queries', async () => {
     ({ repo, g } = await buildCleanRepo());
     statePath = join(repo, 'conduct-state.json');
     events = new ConductorEventEmitter();
@@ -280,7 +280,9 @@ describe('engine/merged-pr-guard — rebase entry backstop (#358, TS-2)', () => 
 
     expect(calls).toHaveLength(0);
     const afterSha = (await g(['rev-parse', 'feat'])).stdout.trim();
-    expect(afterSha).not.toBe(beforeSha);
+    expect(afterSha).toBe(beforeSha);
+    expect(await fileExists(join(repo, '.pipeline/HALT'))).toBe(false);
+    expect(await fileExists(join(repo, '.pipeline/DONE'))).toBe(true);
   });
 
   // ── TS-4: cost bound — exactly one guard query at rebase entry ────────────
