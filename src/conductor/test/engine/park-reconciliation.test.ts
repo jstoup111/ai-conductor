@@ -807,9 +807,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
 
       expect({ firstPass, secondPass, cache: [...cache.entries()] }).toEqual({
         firstPass: [
-          [`[parked-reconciliation] ${slug} not reconcilable until the record lands`],
-          [`[parked-reconciliation] ${slug} merged`],
-          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0'],
+          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked'],
         ],
         secondPass: [],
         cache: [],
@@ -833,7 +831,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ entries: result.entries, issueCalls: getIssueState.mock.calls, logs: log.mock.calls }).toEqual({
         entries: [{ slug, classification: 'unclassified', annotation: undefined }],
         issueCalls: [],
-        logs: [['[parked-reconciliation] missing-origin origin/main merge evidence unavailable; skipped']],
+        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -866,7 +864,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           { slug: failingSlug, classification: 'unclassified', annotation: undefined },
           { slug: mergedSlug, classification: 'merged', annotation: 'merged-ready' },
         ],
-        logs: [['[parked-reconciliation] issue-down issue lookup unavailable; skipped']],
+        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 skipped=1; next: 1 parked remains parked; 1 skipped retry when merge/issue evidence is available']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

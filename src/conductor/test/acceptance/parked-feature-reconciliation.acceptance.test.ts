@@ -393,7 +393,9 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await branchExists(slug)).toBe(false);
     expect(await isOperatorParked(projectRoot, slug)).toBe(false);
     expect(result.counts.reconciled).toBe(1);
-    expect(log).toContain(`[parked-reconciliation] reconciled ${slug}`);
+    expect(log).toEqual([
+      '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 skipped=0; next: no action required',
+    ]);
   });
 
   it('S2 happy: an ancestry-proven park whose worktree directory is already gone still deletes the branch and removes the marker', async () => {
@@ -484,7 +486,9 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     );
     expect(result.counts.deferred).toBe(1);
     expect(result.counts.reconciled).toBe(0);
-    expect(log.some((l) => l.includes(slug) && /not reconcilable until the record lands/.test(l))).toBe(true);
+    expect(log).toEqual([
+      '[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked',
+    ]);
 
     // The sweep never writes a record itself.
     expect(await exists(join(projectRoot, '.docs', 'shipped', `${slug}.md`))).toBe(false);
@@ -573,7 +577,9 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await branchExists(slug)).toBe(true);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(result.counts.reconciled).toBe(0);
-    expect(log.some((l) => /origin\/main|no remote/i.test(l))).toBe(true);
+    expect(log).toEqual([
+      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available',
+    ]);
   });
 
   it('S3 negative (e): with reconcile_parked_auto_cleanup OFF, a merged record-backed park is annotated `merged-ready` and NOTHING is deleted', async () => {
@@ -627,7 +633,8 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await branchExists('broken-classify')).toBe(true);
     expect(await isOperatorParked(projectRoot, 'broken-classify')).toBe(true);
     expect(result.counts.skipped).toBeGreaterThanOrEqual(1);
-    expect(log.some((l) => l.includes('broken-classify'))).toBe(true);
+    expect(log).toHaveLength(1);
+    expect(log[0]).toContain('skipped retry when merge/issue evidence is available');
   });
 
   it('S7 negative: with `gh` entirely down, the merged+record-on-main park STILL reconciles (a pure-git fact) and the pass never throws', async () => {
@@ -683,7 +690,9 @@ describe('parked-feature reconciliation acceptance (S6/S7): orphan surfacing is 
     expect(await worktreeExists(slug)).toBe(true);
     expect(await branchExists(slug)).toBe(true);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
-    expect(log.some((l) => l.includes(slug) && /orphan/i.test(l))).toBe(true);
+    expect(log).toEqual([
+      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=1 parked=0 skipped=0; next: 1 orphaned park needs operator review',
+    ]);
   });
 
   it('S6 negative: a park with NO intake marker is never labelled orphan and renders as a normal parked entry', async () => {

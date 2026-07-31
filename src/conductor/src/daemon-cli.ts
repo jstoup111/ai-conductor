@@ -1686,7 +1686,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       reconcileParkedFeatures: async ({ disposeHaltWatcher }) => {
         await reconcileParkedFeatures({
           projectRoot,
-          log,
+          log: (message) => log(message, true),
           cache: parkedSweepCache,
           autoCleanup: reconcileParkedAutoCleanup,
           getIssueState: tracker.getIssueState.bind(tracker),
