@@ -971,7 +971,7 @@ Not validated in `validateConfig` — it is allow-listed only, and all coercion 
 | A finite number `>= 0` | Used as-is; **`0` disables auto-resolution and a conflict halts immediately** |
 | Negative, non-finite, or non-number | `3`, silently |
 
-Consumed at `src/conductor/src/engine/autoresolve.ts:208`,
+Consumed at `src/conductor/src/engine/autoresolve.ts:214`,
 `src/conductor/src/engine/conductor.ts:6548`, and `src/conductor/src/daemon-cli.ts:979, 1616`.
 
 ## validation_concurrency
