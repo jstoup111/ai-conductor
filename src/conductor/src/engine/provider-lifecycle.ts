@@ -1,5 +1,6 @@
 import { writeHaltMarker } from './halt-marker.js';
 import type { ProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
+import type { SpawnPermit } from '../execution/llm-provider.js';
 
 /** Identifies one provider attempt within a logical conductor step. */
 export interface ProviderAttemptIdentity {
@@ -16,11 +17,20 @@ export interface ProviderLifecycleTimer {
 
 export type ProviderLifecycleTimerHandle = number | object;
 
+/** Production timer boundary; tests inject a deterministic timer into the supervisor. */
+export const systemProviderLifecycleTimer: ProviderLifecycleTimer = {
+  now: () => Date.now(),
+  schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
+  cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
+
 /** Authority held by pre-spawn provider preparation work. */
 export interface ProviderPreparationLease {
   attempt: ProviderAttemptIdentity;
   deadlineAt: number | undefined;
   isCurrent(): boolean;
+  /** Acknowledges spawn while atomically ending preparation-timeout authority. */
+  spawnPermit: SpawnPermit;
 }
 
 /** Durable authority required to replace one timed-out preparation attempt. */
@@ -269,6 +279,23 @@ async function superviseAttempt<T>(
     attempt: { ...attempt },
     deadlineAt,
     isCurrent: () => current,
+    spawnPermit: () => {
+      if (!current) {
+        return { permitted: false, reason: 'revoked' };
+      }
+      if (state.phase === 'running') return { permitted: true };
+      if (state.phase !== 'preparing') {
+        return { permitted: false, reason: 'revoked' };
+      }
+      const running = transitionProviderLifecycle(state, { phase: 'running' });
+      if (!running.accepted) {
+        return { permitted: false, reason: 'revoked' };
+      }
+      state = running.state;
+      if (timeout !== undefined) options.timer.cancel(timeout);
+      options.onStateChange?.(state);
+      return { permitted: true };
+    },
   };
 
   let candidateResult: Promise<T>;

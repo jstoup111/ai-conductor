@@ -14,7 +14,7 @@ import { ALL_STEPS, buildStepRegistry, getStepDefinition, tryGetStepIndex } from
 import {
   resolveStepConfig,
   phaseForStep,
-  resolveStepHeartbeatStallMinutes,
+  resolveProviderPreparationTimeoutMinutes,
   type ResolvedStepConfig,
 } from './resolved-config.js';
 import {
@@ -58,10 +58,13 @@ import {
 } from './skill-invocation.js';
 import {
   createHeartbeatPulse,
-  runWithStallWatchdog,
-  type KillRef,
 } from './step-heartbeat.js';
-import { writeHaltMarker } from './halt-marker.js';
+import {
+  createProviderLifecycleSupervisor,
+  systemProviderLifecycleTimer,
+  type ProviderLifecycleHaltedResult,
+} from './provider-lifecycle.js';
+import { createProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -110,6 +113,12 @@ const INTERACTIVE_STEPS: Set<StepName> = new Set([
 
 function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isProviderLifecycleHalted(
+  result: ProviderExecutionResult | ProviderLifecycleHaltedResult,
+): result is ProviderLifecycleHaltedResult {
+  return 'kind' in result && result.kind === 'halted';
 }
 
 /**
@@ -375,6 +384,7 @@ export class DefaultStepRunner implements StepRunner {
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
   private heartbeatWatchdogOverrides?: { pollIntervalMs?: number; now?: () => number };
+  private providerLifecycleAttempt = 0;
   callCount = 0;
 
   constructor(
@@ -722,7 +732,7 @@ export class DefaultStepRunner implements StepRunner {
     });
     const safety = this.candidateSafetyFor(step);
     try {
-      const result = await this.dispatchProviderWithWatchdog(
+      const result = await this.dispatchProviderWithLifecycleSupervision(
         step,
         invocationOptions,
         (options) =>
@@ -812,7 +822,7 @@ export class DefaultStepRunner implements StepRunner {
 
     const safety = this.candidateSafetyFor(request.step);
     const invocationOptions = this.withFeatureDiagnosticLog(request.options);
-    const result = await this.dispatchProviderWithWatchdog(
+    const result = await this.dispatchProviderWithLifecycleSupervision(
       request.step,
       invocationOptions,
       (options) =>
@@ -852,66 +862,50 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   /**
-   * Wire the `.pipeline/step-heartbeat` activity pulse into `baseOptions` and
-   * race the actual dispatch (`run`) against the configured stall threshold
-   * (`resolveStepHeartbeatStallMinutes`). `run` receives the SAME augmented
-   * options object on every call, so its `onSpawn` always updates the same
-   * kill handle the watchdog reads — required for a multi-candidate dispatch,
-   * which may spawn more than one subprocess across retries/fallback.
-   *
-   * A threshold of 0 or less opts out of the watchdog entirely (heartbeat is
-   * still recorded and surfaced by `daemon status`; nothing is ever killed).
-   * On a genuine stall the underlying subprocess is killed and a
-   * `mechanical`-class HALT is raised via `writeHaltMarker` — the exact HALT
-   * machinery #1070 uses for live-boundary violations, so the daemon's
-   * existing auto-requeue path picks this up unchanged.
+   * Starts the one provider-neutral preparation supervisor before candidate
+   * resolution and carries its synchronous permit through the shared candidate
+   * executor. Heartbeat pulses remain observational telemetry only.
    */
-  private async dispatchProviderWithWatchdog(
+  private async dispatchProviderWithLifecycleSupervision(
     step: StepName,
     baseOptions: ExecuteProviderCandidatesInput['options'],
     run: (
       options: ExecuteProviderCandidatesInput['options'],
     ) => Promise<ProviderExecutionResult>,
   ): Promise<ProviderExecutionResult> {
-    const killRef: KillRef = {};
     const pulse = createHeartbeatPulse(this.projectDir, step);
-    const augmented: ExecuteProviderCandidatesInput['options'] = {
-      ...baseOptions,
-      onActivity: pulse,
-      onSpawn: (handle) => {
-        killRef.kill = handle.kill;
+    const nextAttempt = () => ({
+      logicalStep: step,
+      id: `${this.runId}:${step}:${++this.providerLifecycleAttempt}`,
+    });
+    const supervisor = createProviderLifecycleSupervisor({
+      attempt: nextAttempt(),
+      recoveryCount: 0,
+      preparationTimeoutMinutes: resolveProviderPreparationTimeoutMinutes(this.config),
+      timer: systemProviderLifecycleTimer,
+      recovery: {
+        projectRoot: this.projectDir,
+        episodeStore: createProviderLifecycleEpisodeStore(),
+        createReplacementAttempt: () => nextAttempt(),
       },
-    };
-
-    const thresholdMinutes = resolveStepHeartbeatStallMinutes(this.config);
-    if (thresholdMinutes <= 0) {
-      return run(augmented);
-    }
-
-    const outcome = await runWithStallWatchdog<ProviderExecutionResult>(
-      {
-        worktreePath: this.projectDir,
-        step,
-        thresholdMinutes,
-        killRef,
-        pollIntervalMs: this.heartbeatWatchdogOverrides?.pollIntervalMs,
-        now: this.heartbeatWatchdogOverrides?.now,
-        writeHalt: (reason) =>
-          writeHaltMarker(this.projectDir, `${reason}\n`, 'mechanical'),
-      },
-      () => run(augmented),
+    });
+    const result = await supervisor.supervise((lease) =>
+      run({
+        ...baseOptions,
+        onActivity: pulse,
+        spawnPermit: lease.spawnPermit,
+      }),
     );
-    if (outcome.stalled) {
+    if (isProviderLifecycleHalted(result)) {
       return {
         success: false,
-        output:
-          'Step killed by the heartbeat stall watchdog: no provider activity beyond the configured threshold. See .pipeline/HALT.',
+        output: 'Provider preparation timed out twice. See .pipeline/HALT.',
         exitCode: 1,
         preferredProvider: this.configuredProviders[0] ?? 'unknown',
         attempts: [],
       };
     }
-    return outcome.value as ProviderExecutionResult;
+    return result;
   }
 
   private withFeatureDiagnosticLog(
@@ -978,6 +972,7 @@ export class DefaultStepRunner implements StepRunner {
           key: runtime.key,
           policy: runtime.policy,
           builtIn: runtime.builtIn,
+          lifecycleCapability: runtime.lifecycleCapability,
           availability: runtime.availability,
           get runWideUnavailable() {
             return runtime.runWideUnavailable;
@@ -987,6 +982,7 @@ export class DefaultStepRunner implements StepRunner {
           },
           provider: {
             supportsSessionResume: runtime.provider.supportsSessionResume,
+            lifecycleCapability: runtime.provider.lifecycleCapability,
             invoke: async (options) =>
               (await runtime.provider.invokeInteractive(options)) ?? {
                 success: true,
