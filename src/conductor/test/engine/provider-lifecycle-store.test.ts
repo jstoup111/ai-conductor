@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -27,10 +27,107 @@ afterEach(async () => {
 });
 
 describe('provider lifecycle episode store', () => {
+  it('denies fresh recovery authority for malformed current lifecycle evidence', async () => {
+    const projectRoot = await createProjectRoot();
+    const pipelineDirectory = join(projectRoot, '.pipeline');
+
+    await mkdir(pipelineDirectory);
+    await writeFile(join(pipelineDirectory, 'provider-lifecycle-build.json'), '{ not json');
+
+    await expect(readProviderLifecycleEpisode(projectRoot, 'build')).resolves.toEqual({
+      recoveryAuthority: 'denied',
+      reason: 'malformed-json',
+    });
+  });
+
+  it('denies fresh recovery authority for unreadable current lifecycle evidence', async () => {
+    const projectRoot = await createProjectRoot();
+    const pipelineDirectory = join(projectRoot, '.pipeline');
+
+    await mkdir(join(pipelineDirectory, 'provider-lifecycle-build.json'), { recursive: true });
+
+    await expect(readProviderLifecycleEpisode(projectRoot, 'build')).resolves.toEqual({
+      recoveryAuthority: 'denied',
+      reason: 'unreadable',
+    });
+  });
+
+  it('denies fresh recovery authority for an unsupported lifecycle evidence version', async () => {
+    const projectRoot = await createProjectRoot();
+    const pipelineDirectory = join(projectRoot, '.pipeline');
+
+    await mkdir(pipelineDirectory);
+    await writeFile(join(pipelineDirectory, 'provider-lifecycle-build.json'), JSON.stringify({
+      version: 2,
+      lifecycle: {
+        phase: 'preparing',
+        attempt: { logicalStep: 'build', id: 'build-attempt-1' },
+        recoveryCount: 0,
+      },
+    }));
+
+    await expect(readProviderLifecycleEpisode(projectRoot, 'build')).resolves.toEqual({
+      recoveryAuthority: 'denied',
+      reason: 'unknown-version',
+    });
+  });
+
+  it('denies fresh recovery authority for lifecycle evidence with an unknown state', async () => {
+    const projectRoot = await createProjectRoot();
+    const pipelineDirectory = join(projectRoot, '.pipeline');
+
+    await mkdir(pipelineDirectory);
+    await writeFile(join(pipelineDirectory, 'provider-lifecycle-build.json'), JSON.stringify({
+      version: 1,
+      lifecycle: {
+        phase: 'launching',
+        attempt: { logicalStep: 'build', id: 'build-attempt-1' },
+        recoveryCount: 0,
+      },
+    }));
+
+    await expect(readProviderLifecycleEpisode(projectRoot, 'build')).resolves.toEqual({
+      recoveryAuthority: 'denied',
+      reason: 'unknown-state',
+    });
+  });
+
+  it('denies fresh recovery authority for impossible lifecycle recovery counts', async () => {
+    const projectRoot = await createProjectRoot();
+    const pipelineDirectory = join(projectRoot, '.pipeline');
+
+    await mkdir(pipelineDirectory);
+    await writeFile(join(pipelineDirectory, 'provider-lifecycle-build.json'), JSON.stringify({
+      version: 1,
+      lifecycle: {
+        phase: 'preparing',
+        attempt: { logicalStep: 'build', id: 'build-attempt-1' },
+        recoveryCount: 2,
+      },
+    }));
+
+    await expect(readProviderLifecycleEpisode(projectRoot, 'build')).resolves.toEqual({
+      recoveryAuthority: 'denied',
+      reason: 'impossible-recovery-count',
+    });
+  });
+
+  it('ignores interrupted temporary lifecycle files when no current evidence exists', async () => {
+    const projectRoot = await createProjectRoot();
+    const pipelineDirectory = join(projectRoot, '.pipeline');
+
+    await mkdir(pipelineDirectory);
+    await writeFile(join(pipelineDirectory, '.provider-lifecycle-build.interrupted.tmp'), '{ not json');
+
+    await expect(readProviderLifecycleEpisode(projectRoot, 'build')).resolves.toEqual({
+      recoveryAuthority: 'fresh',
+    });
+  });
+
   it('returns no episode when the logical step has no persisted lifecycle', async () => {
     const projectRoot = await createProjectRoot();
 
-    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toBeUndefined();
+    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual({ recoveryAuthority: 'fresh' });
   });
 
   it('round-trips the current lifecycle state for a logical step', async () => {
@@ -43,7 +140,10 @@ describe('provider lifecycle episode store', () => {
 
     await writeProviderLifecycleEpisode(projectRoot, lifecycle);
 
-    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual(lifecycle);
+    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual({
+      recoveryAuthority: 'persisted',
+      lifecycle,
+    });
   });
 
   it('replaces a logical step lifecycle with the newer completed attempt', async () => {
@@ -63,7 +163,10 @@ describe('provider lifecycle episode store', () => {
     await writeProviderLifecycleEpisode(projectRoot, firstAttempt);
     await writeProviderLifecycleEpisode(projectRoot, completedReplacement);
 
-    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual(completedReplacement);
+    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual({
+      recoveryAuthority: 'persisted',
+      lifecycle: completedReplacement,
+    });
   });
 
   it('writes a lifecycle record to a temporary file before atomically renaming it', async () => {
@@ -167,7 +270,7 @@ describe('provider lifecycle episode store', () => {
     await writeProviderLifecycleEpisode(projectRoot, lifecycle);
     await clearProviderLifecycleEpisode(projectRoot, 'build');
 
-    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toBeUndefined();
+    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual({ recoveryAuthority: 'fresh' });
   });
 
   it('keeps lifecycle episodes independent for each logical step', async () => {
@@ -190,6 +293,9 @@ describe('provider lifecycle episode store', () => {
     expect(await Promise.all([
       readProviderLifecycleEpisode(projectRoot, 'build'),
       readProviderLifecycleEpisode(projectRoot, 'build_review'),
-    ])).toEqual([buildLifecycle, reviewLifecycle]);
+    ])).toEqual([
+      { recoveryAuthority: 'persisted', lifecycle: buildLifecycle },
+      { recoveryAuthority: 'persisted', lifecycle: reviewLifecycle },
+    ]);
   });
 });
