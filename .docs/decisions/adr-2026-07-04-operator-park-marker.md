@@ -1,6 +1,7 @@
 # ADR: Operator park state — repo-root `.daemon/parked/<slug>` marker, checked before every autonomous decision
 
-- **Status:** APPROVED
+- **Status:** SUPERSEDED
+- **Superseded by:** adr-2026-07-29-operator-park-scheduling-unit-boundary (operator-approved 2026-07-29; carries forward this ADR's marker ownership, repo-root storage, fail-toward-parked reads, dashboard precedence, and canonical park-state module — it replaces only the attempt-level "already-running work is untouched" boundary with scheduling-unit boundaries)
 - **Approved by:** operator (James), 2026-07-04
 - **Date:** 2026-07-04
 - **Feature:** operator park (ai-conductor#236)
