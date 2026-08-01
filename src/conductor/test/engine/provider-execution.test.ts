@@ -138,13 +138,24 @@ describe('executeProviderCandidates', () => {
     });
   });
 
-  it('invokes a custom provider that declares the lifecycle spawn-permit capability', async () => {
+  it('invokes a custom provider that synchronously consumes its declared lifecycle spawn permit', async () => {
     const spawnPermit = vi.fn(() => ({ permitted: true as const }));
-    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
-      success: true,
-      output: 'custom provider completed',
-      exitCode: 0,
-    }));
+    const invoke = vi.fn((options: InvokeOptions): Promise<InvokeResult> => {
+      const permit = options.spawnPermit?.();
+      return Promise.resolve(
+        permit?.permitted
+          ? {
+              success: true,
+              output: 'custom provider completed',
+              exitCode: 0,
+            }
+          : {
+              success: false,
+              output: 'custom provider denied before spawn',
+              exitCode: 1,
+            },
+      );
+    });
     const custom = {
       lifecycleCapability: { synchronousSpawnPermit: true as const },
       invoke,
@@ -185,6 +196,7 @@ describe('executeProviderCandidates', () => {
         attempt: { provider: 'custom', invoked: true },
       },
     });
+    expect(spawnPermit).toHaveBeenCalledOnce();
   });
 
   it('applies and tears down an isolated self-host context only for the resolved Codex candidate', async () => {
