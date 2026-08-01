@@ -152,8 +152,13 @@ necessarily the repo default.
 - **`·   finish: total usage — <dispatches>, <cost>, <in>→<out> tok, <n> unmetered`** is logged once,
   when the feature's `finish` step completes. It is the sum of every dispatch that feature recorded
   in its own `.pipeline/events.jsonl` — so it spans the whole build, including steps run in earlier
-  daemon dispatches, not just the session that happened to reach `finish`. The same rollup feeds the
-  `## Cost` block of the committed `.docs/shipped/<slug>.md`, so the two never disagree.
+  daemon dispatches, not just the session that happened to reach `finish`. After finish usage is
+  persisted, the engine refreshes the committed `.docs/shipped/<slug>.md` `## Cost` block from the
+  same rollup and attempts one final push. Both operations are best-effort: a refresh failure can
+  leave the local record at its pre-finish snapshot, and a push failure can leave the PR branch at
+  that snapshot, without re-dispatching `finish`. A concurrent upstream commit is adopted only when
+  its tree exactly matches the verified refresh; unrelated branch content still fails closed under
+  the ordinary shipment-evidence gates.
 
   Cost and token figures appear only when at least one dispatch was actually metered. A build whose
   provider reported no usage prints its dispatch count and an explicit `<n> unmetered` instead of a
