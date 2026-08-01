@@ -88,6 +88,70 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('mechanically inventories every supported scheduling-unit dispatch boundary', async () => {
+    const conductorSource = await readFile(
+      new URL('../../src/engine/conductor.ts', import.meta.url),
+      'utf8',
+    );
+    const sourceThrough = (start: string, dispatch: string) => {
+      const startOffset = conductorSource.indexOf(start);
+      const dispatchOffset = conductorSource.indexOf(dispatch, startOffset);
+      return conductorSource.slice(startOffset, dispatchOffset + dispatch.length);
+    };
+    const dispatchInventory = [
+      {
+        schedulingUnit: 'configured parallel group',
+        dispatch: 'await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);',
+        source: sourceThrough(
+          'if (stepCfg?.parallel) {',
+          'await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);',
+        ),
+      },
+      {
+        schedulingUnit: 'built-in SHIP validation group',
+        dispatch: 'return runGroupBranch(',
+        source: sourceThrough(
+          'if (groupEntryName === step.name && membership.dispatchable.length > 1) {',
+          'return runGroupBranch(',
+        ),
+      },
+      {
+        schedulingUnit: 'serial step',
+        dispatch: 'await this.stepRunner.run(step.name, state, {',
+        source: sourceThrough(
+          '// Self-host release gates (TR-7/8/9/10):',
+          'await this.stepRunner.run(step.name, state, {',
+        ),
+      },
+    ];
+    const unguardedDispatches = dispatchInventory.filter(({ source, dispatch }) => {
+      const dispatchOffset = source.indexOf(dispatch);
+      return (
+        dispatchOffset === -1 ||
+        source.lastIndexOf('await stopAtOperatorParkBoundary();', dispatchOffset) === -1
+      );
+    });
+    const introducedUnguardedDispatch = {
+      schedulingUnit: 'new scheduling unit',
+      source: 'await this.runNewSchedulingUnit();',
+      dispatch: 'await this.runNewSchedulingUnit();',
+    };
+    const guardRejectsIntroducedEntry = [introducedUnguardedDispatch].filter(
+      ({ source, dispatch }) => {
+        const dispatchOffset = source.indexOf(dispatch);
+        return (
+          dispatchOffset === -1 ||
+          source.lastIndexOf('await stopAtOperatorParkBoundary();', dispatchOffset) === -1
+        );
+      },
+    );
+
+    expect({ unguardedDispatches, guardRejectsIntroducedEntry }).toEqual({
+      unguardedDispatches: [],
+      guardRejectsIntroducedEntry: [introducedUnguardedDispatch],
+    });
+  });
+
   it('parks before the first pending serial unit without dispatching it', async () => {
     await writeState(statePath, stateWithPending('memory'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
