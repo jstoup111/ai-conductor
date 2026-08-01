@@ -343,6 +343,23 @@ function fakeReader(files: Record<string, string>): (path: string) => Promise<st
 }
 
 describe('verifyDeclaredSites', () => {
+  it('passes a class-method declared site when the file defines that method', async () => {
+    const sites: WiredIntoSite[] = [{ path: 'src/codex-provider.ts', symbol: 'CodexProvider.invoke' }];
+    const newExports = [{ file: 'src/llm-provider.ts', symbol: 'AuthenticationReadiness' }];
+    const readFile = fakeReader({
+      'src/codex-provider.ts': 'export class CodexProvider {\n  async invoke(): Promise<void> {}\n}\n',
+    });
+
+    const result = await verifyDeclaredSites(sites, newExports, readFile);
+
+    expect(result.gaps).toEqual([]);
+    expect(result.evidence).toContainEqual({
+      site: 'src/codex-provider.ts#CodexProvider.invoke',
+      symbol: 'CodexProvider.invoke',
+      matchedLine: 'async invoke(): Promise<void> {}',
+    });
+  });
+
   it('passes a declared site whose file contains a non-test reference to the new symbol', async () => {
     const sites: WiredIntoSite[] = [{ path: 'src/x.ts', symbol: 'foo' }];
     const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
