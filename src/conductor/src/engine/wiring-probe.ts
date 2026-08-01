@@ -254,11 +254,43 @@ export interface VerifyDeclaredSitesResult {
   evidence: VerifiedSiteEvidence[];
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Finds the textual anchor for a declared site. Most sites name a symbol that
+ * appears literally in the target file. TypeScript method sites instead use
+ * the plan's canonical `Class.method` form, while source declares the method
+ * as `method(...)`; require both the class declaration and method declaration
+ * so that form remains a concrete production anchor rather than a loose
+ * member-name match.
+ */
+function findDeclaredSiteAnchor(content: string, symbol: string): string | undefined {
+  const symbolRe = new RegExp(`\\b${escapeRegExp(symbol)}\\b`);
+  const lines = content.split('\n');
+  const literal = lines.map((line) => line.trim()).find((line) => symbolRe.test(line));
+  if (literal !== undefined) return literal;
+
+  const methodSite = symbol.match(/^([A-Za-z_$][\w$]*)\.([A-Za-z_$][\w$]*)$/);
+  if (!methodSite) return undefined;
+
+  const [, className, methodName] = methodSite;
+  const classRe = new RegExp(`\\bclass\\s+${escapeRegExp(className)}\\b`);
+  if (!classRe.test(content)) return undefined;
+
+  const methodRe = new RegExp(
+    `^\\s*(?:(?:public|private|protected|readonly|static|abstract|async|get|set)\\s+)*${escapeRegExp(methodName)}(?:\\s*<[^>\\n]*>)?\\s*\\(`,
+  );
+  return lines.map((line) => line.trim()).find((line) => methodRe.test(line));
+}
+
 /**
  * Verifies that each declared `Wired-into:` site actually references the new
  * symbol it claims to wire in. This is Layer 1 — a simple non-test text
- * search for the symbol as a whole word in the declared file's content, not
- * full static analysis.
+ * anchor search in the declared file, not full static analysis. For canonical
+ * TypeScript `Class.method` declarations, the class and method declarations
+ * together are that anchor.
  */
 export async function verifyDeclaredSites(
   sites: WiredIntoSite[],
@@ -278,11 +310,7 @@ export async function verifyDeclaredSites(
       continue;
     }
 
-    const symbolRe = new RegExp(`\\b${site.symbol.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
-    const matchedLine = content
-      .split('\n')
-      .map((line) => line.trim())
-      .find((line) => symbolRe.test(line));
+    const matchedLine = findDeclaredSiteAnchor(content, site.symbol);
 
     if (matchedLine === undefined) {
       gaps.push(`declared call site ${label} has no non-test reference to «${site.symbol}» (searched: ${site.path})`);
