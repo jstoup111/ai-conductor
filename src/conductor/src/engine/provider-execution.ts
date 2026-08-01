@@ -552,8 +552,17 @@ export async function executeProviderCandidates({
     // delta — usually a re-rendered prompt — in `optionsForCandidate`. Merging
     // instead of replacing keeps every scoped field alive for any future
     // candidate-options provider that does not know to re-thread it.
-    const candidateOptions = optionsForCandidate
-      ? { ...options, ...optionsForCandidate(providerKey) }
+    const candidateOverrides = optionsForCandidate?.(providerKey);
+    const candidateOptions = candidateOverrides
+      ? {
+          ...options,
+          ...candidateOverrides,
+          // Candidate-local prompts/options may vary, but lifecycle authority
+          // belongs to the enclosing logical attempt and cannot be replaced.
+          ...(options.spawnPermit !== undefined
+            ? { spawnPermit: options.spawnPermit }
+            : {}),
+        }
       : options;
     let invocation: Awaited<ReturnType<typeof invokeProviderCandidate>> | undefined;
     const invoke = async (): Promise<InvokeResult> => {
