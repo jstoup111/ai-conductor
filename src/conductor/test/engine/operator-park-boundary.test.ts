@@ -5,7 +5,9 @@ import { join } from 'node:path';
 
 import { Conductor } from '../test-conductor.js';
 import { writeState, readState } from '../../src/engine/state.js';
-import { ALL_STEPS } from '../../src/engine/steps.js';
+import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
+import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { resolveGroupMembership } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type {
@@ -717,6 +719,66 @@ describe('operator park boundary contract', () => {
       boundaryChecks: 1,
       memberRunnerCalls: [],
       laterUnitRunnerCalls: [],
+    });
+  });
+
+  it('parks a one-member built-in SHIP group through the ordinary serial boundary without fan-out', async () => {
+    const state: ConductState = {
+      ...stateWithPending(
+        'manual_test',
+        'prd_audit',
+        'architecture_review_as_built',
+      ),
+      complexity_tier: 'M',
+      track: 'technical',
+      architecture_review: 'skipped',
+    };
+    await writeState(statePath, state);
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const operatorParkBoundary = vi.fn<
+      NonNullable<ConductorOptions['operatorParkBoundary']>
+    >(async () => true);
+    const parallelStarts: Array<Extract<ConductorEvent, { type: 'parallel_started' }>> = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_started', (event) => {
+      if (event.type === 'parallel_started') parallelStarts.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary,
+      ...noExternalIo(),
+    });
+
+    const result = await conductor.run();
+
+    expect({
+      membership: resolveGroupMembership(
+        VALIDATION_GROUP,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+      ).dispatchable.map((member) => member.name),
+      result,
+      boundaryChecks: operatorParkBoundary.mock.calls.length,
+      parallelStarts,
+      runnerCalls: run.mock.calls,
+    }).toEqual({
+      membership: ['manual_test'],
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      },
+      boundaryChecks: 1,
+      parallelStarts: [],
+      runnerCalls: [],
     });
   });
 
