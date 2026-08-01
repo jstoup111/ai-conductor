@@ -69,6 +69,105 @@ describe('CodexProvider', () => {
     );
   });
 
+  it('declares synchronous spawn-permit lifecycle capability', () => {
+    expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
+  });
+
+  it('checks readiness before a current permit immediately before the injected subprocess factory', async () => {
+    const callOrder: string[] = [];
+    const runDoctor = vi.fn(async () => {
+      callOrder.push('readiness');
+      return readyDoctorResult();
+    });
+    const spawnPermit = vi.fn(() => {
+      callOrder.push('spawn permit');
+      return { permitted: true as const };
+    });
+    const subprocessFactory = vi.fn(() => {
+      callOrder.push('subprocess factory');
+      return Promise.resolve({ stdout: jsonlMessage('Done.'), exitCode: 0, failed: false }) as any;
+    });
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    await provider.invoke({ ...baseOptions, spawnPermit });
+
+    expect(callOrder).toEqual(['readiness', 'spawn permit', 'subprocess factory']);
+  });
+
+  it('denies a revoked permit after readiness without creating an injected subprocess', async () => {
+    const runDoctor = vi.fn(async () => readyDoctorResult());
+    const subprocessFactory = vi.fn(() =>
+      Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    const failure = await provider.invoke({
+      ...baseOptions,
+      spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect({
+      message: failure instanceof Error ? failure.message : undefined,
+      readinessCalls: runDoctor.mock.calls.length,
+      subprocessCalls: subprocessFactory.mock.calls.length,
+    }).toEqual({
+      message: 'Codex process spawn denied: revoked',
+      readinessCalls: 1,
+      subprocessCalls: 0,
+    });
+  });
+
+  it('denies a revoked permit for automatic streaming without creating an injected subprocess', async () => {
+    const runDoctor = vi.fn(async () => readyDoctorResult());
+    const subprocessFactory = vi.fn(() =>
+      Promise.resolve({ stdout: 'unexpected child', exitCode: 0, failed: false }) as any,
+    );
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    const failure = await provider.invokeInteractive({
+      ...baseOptions,
+      interactive: false,
+      spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect({
+      message: failure instanceof Error ? failure.message : undefined,
+      readinessCalls: runDoctor.mock.calls.length,
+      subprocessCalls: subprocessFactory.mock.calls.length,
+    }).toEqual({
+      message: 'Codex process spawn denied: revoked',
+      readinessCalls: 1,
+      subprocessCalls: 0,
+    });
+  });
+
+  it('checks readiness before a current permit immediately before automatic-streaming creation', async () => {
+    const callOrder: string[] = [];
+    const runDoctor = vi.fn(async () => {
+      callOrder.push('readiness');
+      return readyDoctorResult();
+    });
+    const spawnPermit = vi.fn(() => {
+      callOrder.push('spawn permit');
+      return { permitted: true as const };
+    });
+    const subprocessFactory = vi.fn(() => {
+      callOrder.push('subprocess factory');
+      return Promise.resolve({ stdout: 'Done.', exitCode: 0, failed: false }) as any;
+    });
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
+
+    expect(callOrder).toEqual(['readiness', 'spawn permit', 'subprocess factory']);
+  });
+
   it.each([
     {
       name: 'ordinary executable',

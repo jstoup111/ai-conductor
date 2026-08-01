@@ -1,4 +1,4 @@
-import { execa } from 'execa';
+import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { copySelectedCodexLogin } from './codex-self-host-auth.js';
@@ -83,6 +83,12 @@ const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
 const defaultCodexDoctorRunner: CodexDoctorRunner = async (command, args, options) =>
   execa(command, args, options) as Promise<DoctorCommandResult>;
 
+type CodexSubprocessFactory = (
+  file: string,
+  args: readonly string[],
+  options: ExecaOptions,
+) => ResultPromise;
+
 /** Extract the final agent message and optional usage from Codex JSONL output. */
 export function parseCodexJsonl(stdout: string): { output: string; tokenUsage?: TokenUsage } {
   let output: string | undefined;
@@ -135,6 +141,7 @@ function parseWaitSeconds(output: string): number {
 
 export class CodexProvider implements LLMProvider {
   readonly supportsSessionResume = false;
+  readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
 
   private readonly authentication: SelectedAuthentication;
   private readonly executable: string;
@@ -144,6 +151,7 @@ export class CodexProvider implements LLMProvider {
     private readonly runDoctor: CodexDoctorRunner = defaultCodexDoctorRunner,
     executable = process.env.CODEX_EXECUTABLE ?? 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
+    private readonly subprocessFactory: CodexSubprocessFactory = execa,
   ) {
     this.authentication = this.selectAuthentication();
     this.executable = executable;
@@ -195,15 +203,14 @@ export class CodexProvider implements LLMProvider {
     const prompt = this.composePrompt(options);
 
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = execa(options.selfHost?.executable ?? this.executable, args, {
+      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, args, {
         reject: false,
         input: prompt,
         stdout: 'pipe',
         stderr: 'pipe',
         cwd: options.cwd,
         env: this.invocationEnv(options, authentication),
-      });
-      this.wireActivityWatchdog(subprocess, options);
+      }, options);
       return subprocess;
     });
 
@@ -232,6 +239,21 @@ export class CodexProvider implements LLMProvider {
     }
   }
 
+  private spawnCodex(
+    executable: string,
+    args: readonly string[],
+    options: ExecaOptions,
+    watchdogOptions: Pick<InvokeOptions, 'onActivity' | 'onSpawn' | 'spawnPermit'>,
+  ): ResultPromise {
+    const permit = watchdogOptions.spawnPermit?.();
+    if (permit && !permit.permitted) {
+      throw new Error(`Codex process spawn denied: ${permit.reason}`);
+    }
+    const subprocess = this.subprocessFactory(executable, args, options);
+    this.wireActivityWatchdog(subprocess, watchdogOptions);
+    return subprocess;
+  }
+
   /**
    * Codex's `exec` mode is one-shot rather than a REPL. Keep the interface
    * usable for conductor's collaborative calls by streaming that one-shot run.
@@ -247,7 +269,7 @@ export class CodexProvider implements LLMProvider {
 
     const authentication = this.authentication;
     const { value: result, interval } = await observeInterval(this.intervalClock, async () => {
-      const subprocess = execa(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
+      const subprocess = this.spawnCodex(options.selfHost?.executable ?? this.executable, [...this.buildArgs(options, false, !options.interactive), ...this.selfHostArgs(options)], {
         reject: false,
         input: this.composePrompt(options),
         stdin: 'pipe',
@@ -255,8 +277,7 @@ export class CodexProvider implements LLMProvider {
         stderr: options.diagnosticLog ? 'pipe' : options.interactive ? ['pipe', 'inherit'] : 'pipe',
         cwd: options.cwd,
         env: this.invocationEnv(options, authentication),
-      });
-      this.wireActivityWatchdog(subprocess, options);
+      }, options);
       return subprocess;
     });
 
