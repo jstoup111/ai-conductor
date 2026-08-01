@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-22
 **Design:** .docs/specs/2026-07-22-engineer-unclaim-requeue-verb-stale-claimed-ledger.md (Approved, FR-1..FR-12)
-**Stories:** .docs/stories/engineer-unclaim-requeue-verb-stale-claimed-ledger.md (Accepted)
+**Stories:** .docs/stories/engineer-unclaim-requeue-verb-stale-claimed-ledger.md
 **ADRs:** adr-2026-07-22-stale-claim-staleness-window-default,
 adr-2026-07-22-requeue-claimed-distinct-from-reopen,
 adr-2026-07-22-attempts-counter-on-crash-recovery,
