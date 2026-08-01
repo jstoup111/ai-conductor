@@ -1,4 +1,4 @@
-import { execa, type Options as ExecaOptions } from 'execa';
+import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
@@ -465,19 +465,31 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
   }
 }
 
+type ClaudeSubprocessFactory = (
+  file: string,
+  args: string[],
+  options: ExecaOptions,
+) => ResultPromise;
+
 export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
+  readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
 
   constructor(
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
+    private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
   ) {}
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, ...execaOptions } = options;
-    const subprocess = execa('claude', args, {
+    const { diagnosticLog, onActivity, onSpawn, spawnPermit, ...execaOptions } = options;
+    const permit = spawnPermit?.();
+    if (permit && !permit.permitted) {
+      throw new Error(`Claude process spawn denied: ${permit.reason}`);
+    }
+    const subprocess = this.subprocessFactory('claude', args, {
       ...execaOptions,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
@@ -542,6 +554,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          spawnPermit: options.spawnPermit,
         })
         : this.runClaude(args, {
           reject: false,
@@ -551,6 +564,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          spawnPermit: options.spawnPermit,
         }),
     );
 
@@ -594,6 +608,7 @@ export class ClaudeProvider implements LLMProvider {
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,
         onSpawn: options.onSpawn,
+        spawnPermit: options.spawnPermit,
       }),
     );
 
