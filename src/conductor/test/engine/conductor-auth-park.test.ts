@@ -586,7 +586,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       },
     ]);
     let calls = 0;
-    const runner: StepRunner = { run: vi.fn(async (currentStep) => {
+    const runner: StepRunner = { run: vi.fn(async (currentStep): Promise<StepRunResult> => {
       if (currentStep !== step) return { success: true };
       calls += 1;
       if (calls === 1) return codexCachedLoginFailure();
