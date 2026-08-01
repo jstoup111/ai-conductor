@@ -661,6 +661,65 @@ describe('operator park boundary contract', () => {
     });
   });
 
+  it('skips an all-skipped built-in SHIP group before parking at the later pending unit', async () => {
+    const members = [
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const;
+    await writeState(statePath, {
+      ...stateWithPending('rebase'),
+      complexity_tier: 'S',
+      track: 'technical',
+      manual_test: 'skipped',
+      prd_audit: 'skipped',
+      architecture_review_as_built: 'skipped',
+    });
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const operatorParkBoundary = vi.fn<
+      NonNullable<ConductorOptions['operatorParkBoundary']>
+    >(async () => true);
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events: new ConductorEventEmitter(),
+      fromStep: 'manual_test',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary,
+      ...noExternalIo(),
+    });
+
+    const result = await conductor.run();
+    const persisted = await readState(statePath);
+
+    expect({
+      result,
+      memberStatuses: persisted.ok
+        ? Object.fromEntries(members.map((member) => [member, persisted.value[member]]))
+        : persisted,
+      boundaryChecks: operatorParkBoundary.mock.calls.length,
+      memberRunnerCalls: run.mock.calls.filter(([step]) => members.includes(step as typeof members[number])),
+      laterUnitRunnerCalls: run.mock.calls.filter(([step]) => step === 'rebase'),
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'pre-first-unit' },
+      },
+      memberStatuses: {
+        manual_test: 'skipped',
+        prd_audit: 'skipped',
+        architecture_review_as_built: 'skipped',
+      },
+      boundaryChecks: 1,
+      memberRunnerCalls: [],
+      laterUnitRunnerCalls: [],
+    });
+  });
+
   it('joins the deterministic BUILD verification group before parking and blocks build review', async () => {
     await writeState(statePath, {
       ...stateWithPending('wiring_check', 'test_suite', 'build_review'),
