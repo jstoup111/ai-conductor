@@ -156,6 +156,11 @@ re-opened it, and the evidence. Four steps opt in as kickback targets — `prd`,
 `stories`, `plan` — so the furthest back the loop can throw work is the spec. Kickbacks per gate are capped;
 past the cap the run halts instead of cycling.
 
+Daemon runs do not reopen DECIDE steps. Both the verdict-driven `scanKickbackVerdicts` seam and the
+planner-driven `planRemediation` seam consult the same phase policy: a DECIDE target halts as
+`needs-human` instead of returning the daemon to human-judgment work. Interactive amendment kickbacks
+continue to reopen DECIDE targets unchanged.
+
 **Remediation** is what a blocking SHIP audit — or a `build_review` completeness or scope failure — does when the
 fix is not obvious. It classifies each gap and routes it to the earliest step that can close it — build,
 acceptance specs, architecture review, or plan — all of which sit before the gate that found it. Two gap
