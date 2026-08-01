@@ -31,6 +31,17 @@ export interface ProviderLifecycleSupervisor {
   supervise<T>(candidate: (lease: ProviderPreparationLease) => Promise<T> | T): Promise<T>;
 }
 
+/** Raised when preparation loses its authority before it can start a provider. */
+export class ProviderPreparationTimeoutError extends Error {
+  readonly attempt: ProviderAttemptIdentity;
+
+  constructor(attempt: ProviderAttemptIdentity) {
+    super(`Provider preparation timed out for ${attempt.logicalStep} (${attempt.id})`);
+    this.name = 'ProviderPreparationTimeoutError';
+    this.attempt = { ...attempt };
+  }
+}
+
 /** The only lifecycle phases with authority over provider preparation. */
 export type ProviderLifecyclePhase = 'preparing' | 'running' | 'recovering' | 'settled';
 
@@ -95,34 +106,59 @@ export function createPreparingProviderLifecycle(
 
 /**
  * Begins preparation supervision before invoking candidate resolution or any
- * other pre-spawn work. Expiration revokes the lease; recovery is introduced
- * by the subsequent lifecycle task.
+ * other pre-spawn work. Expiration revokes the lease before publishing
+ * recovery and rejects without awaiting any stale preparation result.
  */
 export function createProviderLifecycleSupervisor(
   options: ProviderLifecycleSupervisorOptions,
 ): ProviderLifecycleSupervisor {
   return {
     async supervise<T>(candidate: (lease: ProviderPreparationLease) => Promise<T> | T): Promise<T> {
-      const state = createPreparingProviderLifecycle(options.attempt, options.recoveryCount);
+      let state: ProviderLifecycleState = createPreparingProviderLifecycle(
+        options.attempt,
+        options.recoveryCount,
+      );
       const deadlineDelayMilliseconds = preparationDeadlineDelay(options.preparationTimeoutMinutes);
       const deadlineAt = deadlineDelayMilliseconds === undefined
         ? undefined
         : options.timer.now() + deadlineDelayMilliseconds;
       let current = true;
       options.onStateChange?.(state);
-      const timeout = deadlineDelayMilliseconds === undefined
+      let timeout: ProviderLifecycleTimerHandle | undefined;
+      const deadline = deadlineDelayMilliseconds === undefined
         ? undefined
-        : options.timer.schedule(() => {
+        : new Promise<never>((_, reject) => {
+          timeout = options.timer.schedule(() => {
+            if (!current) return;
             current = false;
+            const recovering = transitionProviderLifecycle(state, {
+              phase: 'recovering',
+              reason: 'preparation-timeout',
+            });
+            if (recovering.accepted) {
+              state = recovering.state;
+              options.onStateChange?.(state);
+            }
+            reject(new ProviderPreparationTimeoutError(options.attempt));
           }, deadlineDelayMilliseconds);
+        });
 
       const lease: ProviderPreparationLease = {
         deadlineAt,
         isCurrent: () => current,
       };
 
+      let candidateResult: Promise<T>;
       try {
-        return await candidate(lease);
+        candidateResult = Promise.resolve(candidate(lease));
+      } catch (error) {
+        candidateResult = Promise.reject(error);
+      }
+
+      try {
+        return await (deadline === undefined
+          ? candidateResult
+          : Promise.race([candidateResult, deadline]));
       } finally {
         current = false;
         if (timeout !== undefined) options.timer.cancel(timeout);
