@@ -73,7 +73,7 @@ describe('CodexProvider', () => {
     expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
   });
 
-  it('checks readiness before a current permit immediately before the injected subprocess factory', async () => {
+  it('checks a current permit before readiness and immediately before the injected subprocess factory', async () => {
     const callOrder: string[] = [];
     const runDoctor = vi.fn(async () => {
       callOrder.push('readiness');
@@ -91,17 +91,25 @@ describe('CodexProvider', () => {
 
     await provider.invoke({ ...baseOptions, spawnPermit });
 
-    expect(callOrder).toEqual(['readiness', 'spawn permit', 'subprocess factory']);
+    expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
 
-  it('denies a revoked permit after readiness without creating an injected subprocess', async () => {
-    const runDoctor = vi.fn(async () => readyDoctorResult());
-    const subprocessFactory = vi.fn(() =>
-      Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any,
-    );
+  it.each([
+    ['unattended invocation', (options: InvokeOptions) => provider.invoke(options)],
+    ['automatic interactive streaming', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: false })],
+  ])('does not start doctor or exec for a revoked permit during %s', async (_name, invoke) => {
+    const processStarts: string[] = [];
+    const runDoctor = vi.fn(async () => {
+      processStarts.push('doctor');
+      return readyDoctorResult();
+    });
+    const subprocessFactory = vi.fn(() => {
+      processStarts.push('exec');
+      return Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any;
+    });
     provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
 
-    const failure = await provider.invoke({
+    const failure = await invoke({
       ...baseOptions,
       spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
     }).then(
@@ -111,43 +119,14 @@ describe('CodexProvider', () => {
 
     expect({
       message: failure instanceof Error ? failure.message : undefined,
-      readinessCalls: runDoctor.mock.calls.length,
-      subprocessCalls: subprocessFactory.mock.calls.length,
+      processStarts,
     }).toEqual({
       message: 'Codex process spawn denied: revoked',
-      readinessCalls: 1,
-      subprocessCalls: 0,
+      processStarts: [],
     });
   });
 
-  it('denies a revoked permit for automatic streaming without creating an injected subprocess', async () => {
-    const runDoctor = vi.fn(async () => readyDoctorResult());
-    const subprocessFactory = vi.fn(() =>
-      Promise.resolve({ stdout: 'unexpected child', exitCode: 0, failed: false }) as any,
-    );
-    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
-
-    const failure = await provider.invokeInteractive({
-      ...baseOptions,
-      interactive: false,
-      spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
-    }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-
-    expect({
-      message: failure instanceof Error ? failure.message : undefined,
-      readinessCalls: runDoctor.mock.calls.length,
-      subprocessCalls: subprocessFactory.mock.calls.length,
-    }).toEqual({
-      message: 'Codex process spawn denied: revoked',
-      readinessCalls: 1,
-      subprocessCalls: 0,
-    });
-  });
-
-  it('checks readiness before a current permit immediately before automatic-streaming creation', async () => {
+  it('checks a current permit before readiness and immediately before automatic-streaming creation', async () => {
     const callOrder: string[] = [];
     const runDoctor = vi.fn(async () => {
       callOrder.push('readiness');
@@ -165,7 +144,7 @@ describe('CodexProvider', () => {
 
     await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
 
-    expect(callOrder).toEqual(['readiness', 'spawn permit', 'subprocess factory']);
+    expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
 
   it.each([

@@ -172,7 +172,8 @@ export class CodexProvider implements LLMProvider {
     };
   }
 
-  async readiness(): Promise<AuthenticationReadiness> {
+  async readiness(spawnPermit?: InvokeOptions['spawnPermit']): Promise<AuthenticationReadiness> {
+    this.assertSpawnPermitted(spawnPermit);
     const authentication = this.authentication;
     try {
       const result = await this.runDoctor(
@@ -195,7 +196,7 @@ export class CodexProvider implements LLMProvider {
   }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
-    const readiness = await this.readiness();
+    const readiness = await this.readiness(options.spawnPermit);
     if (readiness.state !== 'ready') return this.readinessFailure(readiness);
 
     const authentication = this.authentication;
@@ -245,13 +246,17 @@ export class CodexProvider implements LLMProvider {
     options: ExecaOptions,
     watchdogOptions: Pick<InvokeOptions, 'onActivity' | 'onSpawn' | 'spawnPermit'>,
   ): ResultPromise {
-    const permit = watchdogOptions.spawnPermit?.();
-    if (permit && !permit.permitted) {
-      throw new Error(`Codex process spawn denied: ${permit.reason}`);
-    }
+    this.assertSpawnPermitted(watchdogOptions.spawnPermit);
     const subprocess = this.subprocessFactory(executable, args, options);
     this.wireActivityWatchdog(subprocess, watchdogOptions);
     return subprocess;
+  }
+
+  private assertSpawnPermitted(spawnPermit: InvokeOptions['spawnPermit']): void {
+    const permit = spawnPermit?.();
+    if (permit && !permit.permitted) {
+      throw new Error(`Codex process spawn denied: ${permit.reason}`);
+    }
   }
 
   /**
@@ -263,7 +268,7 @@ export class CodexProvider implements LLMProvider {
     // streaming still uses this method, but is explicitly marked noninteractive
     // by the runner and must prove readiness for every dispatch.
     if (!options.interactive) {
-      const readiness = await this.readiness();
+      const readiness = await this.readiness(options.spawnPermit);
       if (readiness.state !== 'ready') return this.readinessFailure(readiness);
     }
 
