@@ -92,7 +92,7 @@ describe('daemon operator-park boundary wiring', () => {
     expect(constructor).toBeDefined();
     expect(constructor).toContain('featureSlug: item.slug');
     expect(constructor).toMatch(
-      /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(projectRoot,\s*item\.slug\)/,
+      /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/,
     );
     expect(constructor).not.toMatch(
       /operatorParkBoundary:[\s\S]*?isOperatorParked\(wt\.path/,
