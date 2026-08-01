@@ -41,10 +41,6 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
   foreign entries. The legacy `~/.codex/skills` directory is no longer Codex's active catalog
   ([implementation PR #1191](https://github.com/jstoup111/ai-conductor/pull/1191)).
 - `conduct-ts finish-record --choice pr` now recognizes the daemon's own branch shape when deriving a feature slug. Its branch-shape guard accepted only `spec/<slug>` and `feature/<slug>`, but every daemon-built feature lives on `feat/daemon-<slug>` (cut by the daemon's `createWorktree`), so recording a PR for any daemon build refused with "is not a valid … branch identity" before evidence evaluation or any terminal write. `feat/daemon-<slug>` is now a third accepted shape, reusing the existing `featureSlugFromDaemonBranch` helper so the prefix literal cannot drift from the halt-PR sweep's copy. A bare `feat/<name>` — a legitimate hand-cut human branch whose slug must not be guessed — is still refused, and the refusal message now names all three accepted shapes ({{IMPLEMENTATION_PR}}).
-- Aggregate BUILD verification is now deterministic engine machinery instead of a shipped
-  `test-suite` skill. Updating reconciles obsolete harness-owned links from both active catalogs
-  (`~/.claude/skills` and `~/.agents/skills`) while preserving foreign entries;
-  the legacy `~/.codex/skills` catalog is no longer active.
 - Parked-feature reconciliation now completes cleanup for squash-merged features instead of failing three steps later. Accepting merged-PR head identity as a deletion proof exposed three downstream refusals that nothing had ever reached before: a shipped record on `origin/main` no longer defers to the local per-worktree resume verdict, which classified as "in-progress" every worktree missing `feature_status: complete` (the normal state for older builds and for any `finish` that pushed and then died) and refused cleanup with `in-progress`; branch deletion now uses `git branch -D`, because git's own `-d` merge check is structurally false forever for a squash-merged branch that this function has already independently proven safe to delete; and a `.worktrees/<slug>` path that exists on disk but was never registered as a git worktree — `git worktree remove` rejects it with "is not a working tree", not a missing-path error — is now deleted as a plain leftover directory instead of refusing with `worktree-remove-failed`. A removal failure on a worktree git does own, or an unreadable `git worktree list`, still refuses ([implementation PR #1185](https://github.com/jstoup111/ai-conductor/pull/1185)).
 - Parked-feature reconciliation can now clean up squash-merged features. Its branch-deletion gate required every local branch for the slug to be an ancestor of `origin/main`, which a squash merge makes permanently false even when the branch carries nothing beyond what landed — so every genuinely-shipped parked feature was refused with `not-ancestor` forever and nothing auto-reconciled. A branch is now accepted as safe to delete when *either* ancestry passes *or* a `MERGED` pull request for it reports the branch's current tip as the commit it merged (`gh pr list --head <branch> --state merged --json headRefOid`). One extra commit on the branch, no merged PR, or no `gh` available all still refuse with `not-ancestor` ({{IMPLEMENTATION_PR}}).
 - Restore SHIP-start draft PR publication for daemon builds. The daemon already knew the feature worktree branch but did not persist it into conductor state, so the publisher logged `no feature branch recorded` and skipped before any push or GitHub lookup; the daemon now carries that authoritative branch into SHIP and the existing draft-PR flow runs as documented ([implementation PR #1180](https://github.com/jstoup111/ai-conductor/pull/1180)).
@@ -53,15 +49,6 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Keep self-host builds running when concurrent operator work from [issue #1115](https://github.com/jstoup111/ai-conductor/issues/1115) modifies or deletes only tracked live-checkout files, while untracked paths and provider-state drift still halt ([implementation PR #1164](https://github.com/jstoup111/ai-conductor/pull/1164)).
 - Stop self-host live-boundary halts when test tooling writes cache files beneath any `node_modules` directory ([implementation PR #1158](https://github.com/jstoup111/ai-conductor/pull/1158)).
 - The mergeable sweep no longer reaps a feature's worktree the moment its PR opens; it now retains the worktree until the PR is merged or closed *and* a `.docs/shipped/<slug>.md` record is proven present on `origin/main`, logs retention dispositions when first observed or changed while suppressing unchanged retain lines across ticks, logs reap and prune actions when performed, surfaces every retained worktree in the startup dashboard's new `RETAINED WORKTREES` section, and adds a `conduct-ts daemon reclaim-worktree <slug>` verb to remove a single retained worktree by hand ([implementation PR #1157](https://github.com/jstoup111/ai-conductor/pull/1157)).
-
-## Migration
-
-Run the supported installer reconciliation once after updating. It removes only obsolete skill
-links proven owned by the prior complete harness catalog and is safe to repeat:
-
-```bash migration
-./bin/install --update
-```
 
 ### Changed
 
