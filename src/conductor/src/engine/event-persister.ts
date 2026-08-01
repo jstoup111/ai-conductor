@@ -99,8 +99,26 @@ export class EventPersister {
             durationMs: Math.max(0, this.clock.nowMs() - startedAtMs),
           }
         : undefined;
+      const lifecycleEvent = event.type === 'provider_attempt' ? event : undefined;
+      const lifecycle = lifecycleEvent?.lifecycle;
+      const lifecycleKey = lifecycle === undefined
+        ? undefined
+        : `provider-lifecycle:${lifecycleEvent!.step}:${lifecycle.attemptId}`;
+      const lifecycleNow = lifecycle === undefined ? undefined : this.clock.nowMs();
+      const lifecycleStartedAt = lifecycleKey === undefined
+        ? undefined
+        : this.openSteps.get(lifecycleKey);
+      const lifecycleInterval = lifecycleStartedAt === undefined || lifecycleNow === undefined
+        ? undefined
+        : {
+            startedAtMs: lifecycleStartedAt,
+            durationMs: Math.max(0, lifecycleNow - lifecycleStartedAt),
+          };
       const record = JSON.stringify({
         ...event,
+        ...(lifecycleInterval
+          ? { observedIntervals: [...(lifecycleEvent?.observedIntervals ?? []), lifecycleInterval] }
+          : {}),
         ...(activeInterval ? { activeInterval } : {}),
         ts: new Date().toISOString(),
       });
@@ -111,6 +129,13 @@ export class EventPersister {
         this.openGroups.set(event.step, this.clock.nowMs());
       } else if (startedAtMs !== undefined && step !== undefined) {
         openIntervals.delete(step);
+      }
+      if (lifecycleKey !== undefined && lifecycleNow !== undefined) {
+        if (lifecycle?.phase === 'settled' || lifecycle?.phase === 'exhausted') {
+          this.openSteps.delete(lifecycleKey);
+        } else {
+          this.openSteps.set(lifecycleKey, lifecycleNow);
+        }
       }
     } catch (err) {
       throw new EventPersistError(this.filePath, err);

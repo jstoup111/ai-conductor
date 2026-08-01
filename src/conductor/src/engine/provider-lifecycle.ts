@@ -1,6 +1,8 @@
 import { writeHaltMarker } from './halt-marker.js';
 import type { ProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
 import type { SpawnPermit } from '../execution/llm-provider.js';
+import type { ProviderAttemptEvent } from '../types/events.js';
+import type { StepName } from '../types/steps.js';
 
 /** Identifies one provider attempt within a logical conductor step. */
 export interface ProviderAttemptIdentity {
@@ -47,6 +49,7 @@ export interface ProviderLifecycleSupervisorOptions {
   timer: ProviderLifecycleTimer;
   recovery?: ProviderLifecycleRecoveryOptions;
   onStateChange?(state: ProviderLifecycleState): void;
+  onLifecycleEvent?(event: ProviderAttemptEvent): void;
 }
 
 export interface ProviderLifecycleSupervisor {
@@ -211,6 +214,12 @@ async function haltAfterExhaustedRecovery(
     ].join('\n'),
     'needs-human',
   );
+  emitLifecycleEvent(options, {
+    phase: 'exhausted',
+    attempt: error.attempt,
+    recoveryCount,
+    reason: 'preparation-timeout-exhausted',
+  });
 
   return {
     kind: 'halted',
@@ -250,7 +259,7 @@ async function superviseAttempt<T>(
     ? undefined
     : preparationStartedAt + deadlineDelayMilliseconds!;
   let current = true;
-  options.onStateChange?.(state);
+  publishLifecycleState(options, state);
   let timeout: ProviderLifecycleTimerHandle | undefined;
   const deadline = deadlineDelayMilliseconds === undefined
     ? undefined
@@ -265,7 +274,7 @@ async function superviseAttempt<T>(
           });
           if (recovering.accepted) {
             state = recovering.state;
-            options.onStateChange?.(state);
+            publishLifecycleState(options, state);
           }
         }
         reject(new ProviderPreparationTimeoutError(
@@ -293,7 +302,7 @@ async function superviseAttempt<T>(
       }
       state = running.state;
       if (timeout !== undefined) options.timer.cancel(timeout);
-      options.onStateChange?.(state);
+      publishLifecycleState(options, state);
       return { permitted: true };
     },
   };
@@ -339,10 +348,45 @@ async function settleCurrentAttempt(
   if (!settled.accepted) return;
 
   if (timeout !== undefined) options.timer.cancel(timeout);
+  emitLifecycleEvent(options, settled.state);
   await options.recovery?.episodeStore.clearProviderLifecycleEpisode?.(
     options.recovery.projectRoot,
     attempt.logicalStep,
   );
+}
+
+function publishLifecycleState(
+  options: ProviderLifecycleSupervisorOptions,
+  state: ProviderLifecycleState,
+): void {
+  options.onStateChange?.(state);
+  emitLifecycleEvent(options, state);
+}
+
+function emitLifecycleEvent(
+  options: ProviderLifecycleSupervisorOptions,
+  lifecycle: {
+    phase: NonNullable<ProviderAttemptEvent['lifecycle']>['phase'];
+    attempt: ProviderAttemptIdentity;
+    recoveryCount: number;
+    reason?: 'preparation-timeout' | 'preparation-timeout-exhausted';
+    outcome?: 'completed' | 'failed';
+  },
+): void {
+  options.onLifecycleEvent?.({
+    type: 'provider_attempt',
+    step: lifecycle.attempt.logicalStep as StepName,
+    provider: 'provider-lifecycle',
+    outcome: 'success',
+    invoked: false,
+    lifecycle: {
+      phase: lifecycle.phase,
+      attemptId: lifecycle.attempt.id,
+      recoveryCount: lifecycle.recoveryCount,
+      ...(lifecycle.reason ? { reason: lifecycle.reason } : {}),
+      ...(lifecycle.outcome ? { outcome: lifecycle.outcome } : {}),
+    },
+  });
 }
 
 /**

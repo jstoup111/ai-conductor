@@ -5,7 +5,7 @@ import { tmpdir } from 'os';
 import { EventPersister, EventPersistError } from '../../src/engine/event-persister.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { ConductorEvent } from '../../src/types/index.js';
+import type { ConductorEvent, ProviderAttemptEvent } from '../../src/types/index.js';
 
 describe('EventPersister', () => {
   let tempDir: string;
@@ -463,6 +463,82 @@ describe('EventPersister', () => {
 
     const record = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
     expect(record.observedIntervals).toEqual(observedIntervals);
+  });
+
+  it('derives lifecycle observed intervals independently for each provider attempt', async () => {
+    const persister = new EventPersister(
+      eventsPath,
+      emitter,
+      scriptedClock(1_000, 1_025, 2_000, 2_075, 3_000, 3_050),
+    );
+    persister.start();
+
+    const lifecycleEvents = [
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: false,
+        lifecycle: { phase: 'preparing', attemptId: 'codex-1', recoveryCount: 0 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'failure',
+        invoked: true,
+        lifecycle: { phase: 'running', attemptId: 'codex-1', recoveryCount: 0 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'failure',
+        invoked: true,
+        lifecycle: { phase: 'running', attemptId: 'claude-1', recoveryCount: 0 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'claude',
+        outcome: 'failure',
+        invoked: true,
+        lifecycle: { phase: 'recovering', attemptId: 'claude-1', recoveryCount: 1 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: false,
+        lifecycle: { phase: 'preparing', attemptId: 'codex-2', recoveryCount: 1 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'codex',
+        outcome: 'unavailable',
+        invoked: false,
+        lifecycle: { phase: 'exhausted', attemptId: 'codex-2', recoveryCount: 1 },
+      },
+    ] satisfies ProviderAttemptEvent[];
+
+    for (const event of lifecycleEvents) await emitter.emit(event);
+    persister.stop();
+
+    const records = (await readFile(eventsPath, 'utf-8'))
+      .trim()
+      .split('\n')
+      .map((line) => JSON.parse(line));
+    expect(records.map((record) => record.observedIntervals)).toEqual([
+      undefined,
+      [{ startedAtMs: 1_000, durationMs: 25 }],
+      undefined,
+      [{ startedAtMs: 2_000, durationMs: 75 }],
+      undefined,
+      [{ startedAtMs: 3_000, durationMs: 50 }],
+    ]);
   });
 
   // ─── Task 6: creates parent directories ───────────────────────────────────

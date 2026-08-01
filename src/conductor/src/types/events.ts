@@ -47,6 +47,33 @@ export interface RecoveryContext {
   retriesExhausted: boolean;
 }
 
+/** Lifecycle diagnostics carried on the existing provider-attempt event stream. */
+export interface ProviderLifecycleEventMetadata {
+  phase: 'preparing' | 'running' | 'recovering' | 'settled' | 'exhausted';
+  attemptId: string;
+  recoveryCount: number;
+  reason?: 'preparation-timeout' | 'preparation-timeout-exhausted';
+  outcome?: 'completed' | 'failed';
+}
+
+/** One provider candidate result or lifecycle transition within a step attempt. */
+export interface ProviderAttemptEvent {
+  type: 'provider_attempt';
+  step: StepName;
+  provider: string;
+  /** Sanitized Codex authentication source; omitted for other providers. */
+  authenticationSource?: 'api-key' | 'cached-login';
+  outcome: 'success' | 'failure' | 'unavailable';
+  /** False when a cached run-wide unavailability avoided process dispatch. */
+  invoked: boolean;
+  model?: string;
+  tokenUsage?: TokenUsage;
+  observedIntervals?: readonly ObservedInterval[];
+  reason?: string;
+  fallbackReason?: string;
+  lifecycle?: ProviderLifecycleEventMetadata;
+}
+
 export type ConductorEvent =
   | { type: 'step_started'; step: StepName; index: number }
   | {
@@ -70,22 +97,7 @@ export type ConductorEvent =
       retryCount: number;
       observedIntervals?: readonly ObservedInterval[];
     }
-  | {
-      /** One provider candidate's result within a step attempt. */
-      type: 'provider_attempt';
-      step: StepName;
-      provider: string;
-      /** Sanitized Codex authentication source; omitted for other providers. */
-      authenticationSource?: 'api-key' | 'cached-login';
-      outcome: 'success' | 'failure' | 'unavailable';
-      /** False when a cached run-wide unavailability avoided process dispatch. */
-      invoked: boolean;
-      model?: string;
-      tokenUsage?: TokenUsage;
-      observedIntervals?: readonly ObservedInterval[];
-      reason?: string;
-      fallbackReason?: string;
-    }
+  | ProviderAttemptEvent
   | {
       /**
        * Whole-feature provider usage, emitted once when `finish` completes.
