@@ -255,7 +255,7 @@ complexity:
             'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
           ],
           fallback: [
-            'build_review.enabled has invalid value "banana", falling back to enabled.',
+            'build_review.enabled has invalid value "banana", omitting.',
           ],
           topLevelRejection: true,
           nestedRejection: true,
