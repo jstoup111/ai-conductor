@@ -35,13 +35,16 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { computeWiringEvidence } from '../../src/engine/wiring-probe.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
+import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName } from '../../src/types/index.js';
 
 const execFileP = promisify(execFile);
@@ -70,6 +73,117 @@ async function headSha(dir: string): Promise<string> {
 }
 
 const WIRING_CHECK = 'wiring_check' as unknown as StepName;
+
+const localGitRunner: GitRunner = async (args, opts) => ({
+  stdout: await git(opts.cwd, ...args),
+});
+
+const noGitHub = async (): Promise<{ stdout: string }> => {
+  throw new Error('GitHub must not be called by same-file composition acceptance fixtures');
+};
+
+type CompositionVariant = 'qualifying' | 'dead-helper' | 'shadowed-helper';
+
+interface CompositionFixture {
+  dir: string;
+  base: string;
+  head: string;
+  planPath: string;
+}
+
+async function initCompositionFixture(options: {
+  variant?: CompositionVariant;
+  incidentalTestImport?: boolean;
+  testOnlyRootChain?: boolean;
+} = {}): Promise<CompositionFixture> {
+  const dir = await mkdtemp(join(tmpdir(), 'same-file-wiring-'));
+  const variant = options.variant ?? 'qualifying';
+
+  await git(dir, 'init', '-q', '-b', 'main');
+  await mkdir(join(dir, 'src'), { recursive: true });
+  await mkdir(join(dir, 'test'), { recursive: true });
+  await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+  await writeFile(join(dir, 'package.json'), '{"type":"module"}\n');
+  await writeFile(join(dir, 'tsconfig.json'), '{"compilerOptions":{"module":"esnext"}}\n');
+  await writeFile(
+    join(dir, 'src', 'root.ts'),
+    options.testOnlyRootChain
+      ? "import '../test/bridge.test.js';\n"
+      : "import { productionCaller } from './composed.js';\nvoid productionCaller();\n",
+  );
+  await writeFile(
+    join(dir, 'src', 'composed.ts'),
+    'export function productionCaller(): number { return 1; }\n',
+  );
+  if (options.testOnlyRootChain) {
+    await writeFile(
+      join(dir, 'test', 'bridge.test.ts'),
+      "import { productionCaller } from '../src/composed.js';\nvoid productionCaller();\n",
+    );
+  }
+
+  const planPath = join(
+    dir,
+    '.docs',
+    'plans',
+    'wiring-gate-flags-production-reachable-seams-compo.md',
+  );
+  await writeFile(
+    planPath,
+    [
+      '### Task 1: Compose helper in its production module',
+      '**Files:** `src/composed.ts`',
+      '**Wired-into:** `src/composed.ts#productionCaller`',
+      '',
+    ].join('\n'),
+  );
+  await git(dir, 'add', '.');
+  await git(dir, 'commit', '-q', '-m', 'base fixture');
+  const base = await headSha(dir);
+
+  const callerBody =
+    variant === 'dead-helper'
+      ? 'return 1;'
+      : variant === 'shadowed-helper'
+        ? 'const composedHelper = (): number => 9; return composedHelper();'
+        : 'return composedHelper();';
+  await writeFile(
+    join(dir, 'src', 'composed.ts'),
+    [
+      'export function composedHelper(): number { return 7; }',
+      `export function productionCaller(): number { ${callerBody} }`,
+      '',
+    ].join('\n'),
+  );
+  if (options.incidentalTestImport) {
+    await writeFile(
+      join(dir, 'test', 'composed.test.ts'),
+      "import { composedHelper } from '../src/composed.js';\nvoid composedHelper();\n",
+    );
+  }
+  await git(dir, 'add', '.');
+  await git(dir, 'commit', '-q', '-m', `feature fixture: ${variant}`);
+
+  return { dir, base, head: await headSha(dir), planPath };
+}
+
+async function runCompositionBoundary(
+  fixture: CompositionFixture,
+  config: HarnessConfig,
+) {
+  return checkStepCompletion(fixture.dir, WIRING_CHECK, {
+    getHeadSha: async () => fixture.head,
+    wiringProbe: () =>
+      computeWiringEvidence({
+        runGit: localGitRunner,
+        projectRoot: fixture.dir,
+        planPath: fixture.planPath,
+        config,
+        gh: noGitHub,
+        anchor: fixture.base,
+      }),
+  });
+}
 
 describe('acceptance: WiringEvidence artifact drives checkStepCompletion(wiring_check) end-to-end', () => {
   let dirs: string[] = [];
@@ -214,5 +328,136 @@ describe('acceptance: WiringEvidence artifact drives checkStepCompletion(wiring_
     for (const msg of gapMessages) {
       expect(result.reason ?? '').toContain(msg);
     }
+  });
+});
+
+/**
+ * Acceptance coverage for
+ * `.docs/stories/wiring-gate-flags-production-reachable-seams-compo.md`.
+ *
+ * Production call sites exercised:
+ * - artifacts.ts: CUSTOM_COMPLETION_PREDICATES.wiring_check
+ * - artifacts.ts: deriveAndPersistWiringEvidence
+ * - wiring-probe.ts: computeWiringEvidence
+ *
+ * These specs drive the real compute -> persist -> validate completion seam.
+ * Local Git is real because diff/base semantics are part of the story; GitHub
+ * remains a rejecting fake and no network or provider process is reachable.
+ */
+describe('acceptance: production-reachable same-file composition satisfies wiring_check', () => {
+  let dirs: string[] = [];
+
+  afterEach(async () => {
+    await Promise.all(dirs.map((dir) => rm(dir, { recursive: true, force: true })));
+    dirs = [];
+  });
+
+  it('persists a typed proof and passes when caller identity and the production root chain agree', async () => {
+    const fixture = await initCompositionFixture();
+    dirs.push(fixture.dir);
+
+    const result = await runCompositionBoundary(fixture, {
+      wiring: { entry_points: ['src/root.ts'] },
+    });
+
+    expect(result.done, result.reason).toBe(true);
+    const evidence = JSON.parse(
+      await readFile(join(fixture.dir, '.pipeline', 'wiring-evidence.json'), 'utf8'),
+    ) as { tasks: Array<Record<string, unknown>> };
+    const task = evidence.tasks.find((candidate) => candidate.id === '1');
+    const proofs = Array.isArray(task?.proofs) ? task.proofs : [];
+    const proof = proofs.find(
+      (candidate) =>
+        typeof candidate === 'object' &&
+        candidate !== null &&
+        (candidate as Record<string, unknown>).kind === 'same-file-composition',
+    );
+    const serializedProof = JSON.stringify(proof);
+
+    expect(proof).toBeDefined();
+    expect(serializedProof).toContain('composedHelper');
+    expect(serializedProof).toContain('productionCaller');
+    expect(serializedProof).toContain('src/composed.ts');
+    expect(serializedProof).toContain('src/root.ts');
+  });
+
+  it('allows an incidental test import when the same three production proofs still hold', async () => {
+    const fixture = await initCompositionFixture({ incidentalTestImport: true });
+    dirs.push(fixture.dir);
+
+    const result = await runCompositionBoundary(fixture, {
+      wiring: { entry_points: ['src/root.ts'] },
+    });
+
+    expect(result.done, result.reason).toBe(true);
+  });
+
+  it.each([
+    ['reachable dead helper', 'dead-helper' as const],
+    ['shadowed same-name binding', 'shadowed-helper' as const],
+  ])('keeps a named orphan gap for a %s', async (_label, variant) => {
+    const fixture = await initCompositionFixture({ variant });
+    dirs.push(fixture.dir);
+
+    const result = await runCompositionBoundary(fixture, {
+      wiring: { entry_points: ['src/root.ts'] },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason ?? '').toContain('composedHelper');
+  });
+
+  it('denies the exception when the module is reachable only through a test import edge', async () => {
+    const fixture = await initCompositionFixture({ testOnlyRootChain: true });
+    dirs.push(fixture.dir);
+
+    const result = await runCompositionBoundary(fixture, {
+      wiring: { entry_points: ['src/root.ts'] },
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason ?? '').toContain('composedHelper');
+  });
+
+  it('denies the exception when a TS project has no configured production entry point', async () => {
+    const fixture = await initCompositionFixture();
+    dirs.push(fixture.dir);
+
+    const result = await runCompositionBoundary(fixture, {});
+
+    expect(result.done).toBe(false);
+    expect(result.reason ?? '').toContain('composedHelper');
+  });
+
+  it('fails closed when persisted evidence claims an unknown proof kind', async () => {
+    const fixture = await initCompositionFixture();
+    dirs.push(fixture.dir);
+    await mkdir(join(fixture.dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(fixture.dir, '.pipeline', 'wiring-evidence.json'),
+      JSON.stringify({
+        schema: 1,
+        base: fixture.base,
+        head: fixture.head,
+        tasks: [
+          {
+            id: '1',
+            contract: 'src/composed.ts#productionCaller',
+            gaps: [],
+            proofs: [{ kind: 'future-proof' }],
+          },
+        ],
+        layer2: { applicable: true },
+        waivers: [],
+      }),
+    );
+
+    const result = await checkStepCompletion(fixture.dir, WIRING_CHECK, {
+      getHeadSha: async () => fixture.head,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason ?? '').toContain('task "1"');
+    expect(result.reason ?? '').toContain('future-proof');
   });
 });
