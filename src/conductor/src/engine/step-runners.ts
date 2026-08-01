@@ -878,6 +878,9 @@ export class DefaultStepRunner implements StepRunner {
       recoveryCount: 0,
       preparationTimeoutMinutes: resolveProviderPreparationTimeoutMinutes(this.config),
       timer: systemProviderLifecycleTimer,
+      onLifecycleEvent: (event) => {
+        void this.providerAttempt?.(event.step, event);
+      },
       recovery: {
         projectRoot: this.projectDir,
         episodeStore: createProviderLifecycleEpisodeStore(),

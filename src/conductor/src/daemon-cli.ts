@@ -2057,6 +2057,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       break;
     }
     case 'provider_attempt': {
+      if (event.lifecycle) {
+        const { lifecycle } = event;
+        const phase = lifecycle.phase === 'exhausted' ? 'halted' : lifecycle.phase;
+        const reason = lifecycle.reason ? ` — ${lifecycle.reason}` : '';
+        const message = `${event.step} provider ${phase} (attempt ${lifecycle.attemptId}, recovery ${lifecycle.recoveryCount}${reason})`;
+        log(
+          lifecycle.phase === 'exhausted'
+            ? `${dot} ${chalk.red('✋')} ${chalk.red(message)}`
+            : `${dot}   ${chalk.dim(message)}`,
+        );
+        break;
+      }
       // Which provider actually executed this step. The daemon routes per-step
       // (`llm_provider` top-level + per-step overrides), so without this line an
       // operator has to read process argv to learn whether a step ran under

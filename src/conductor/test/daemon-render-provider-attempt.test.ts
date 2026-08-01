@@ -88,6 +88,34 @@ describe('renderDaemonEvent: provider_attempt', () => {
       }),
     ).toEqual([]);
   });
+
+  it.each([
+    [
+      { phase: 'preparing', attemptId: 'attempt-1', recoveryCount: 0 },
+      '·   build provider preparing (attempt attempt-1, recovery 0)',
+    ],
+    [
+      { phase: 'running', attemptId: 'attempt-2', recoveryCount: 0 },
+      '·   build provider running (attempt attempt-2, recovery 0)',
+    ],
+    [
+      { phase: 'recovering', attemptId: 'attempt-3', recoveryCount: 1, reason: 'preparation-timeout' },
+      '·   build provider recovering (attempt attempt-3, recovery 1 — preparation-timeout)',
+    ],
+    [
+      { phase: 'exhausted', attemptId: 'attempt-4', recoveryCount: 1, reason: 'preparation-timeout-exhausted' },
+      '· ✋ build provider halted (attempt attempt-4, recovery 1 — preparation-timeout-exhausted)',
+    ],
+  ] as const)('renders lifecycle diagnostics for %s', (lifecycle, expected) => {
+    expect(lines({
+      type: 'provider_attempt',
+      step: 'build',
+      provider: 'provider-lifecycle',
+      outcome: 'success',
+      invoked: false,
+      lifecycle,
+    })).toEqual([expected]);
+  });
 });
 
 describe('renderDaemonEvent: feature_usage_total', () => {

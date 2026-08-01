@@ -199,6 +199,41 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('forwards provider-aware lifecycle transitions to the provider-attempt sink before settlement', async () => {
+    const providerAttempt = vi.fn();
+    const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+      input.options.spawnPermit?.();
+      return {
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'claude' as const,
+        actualProvider: 'claude' as const,
+        attempts: [],
+      };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+      },
+      providerAttempt,
+    });
+
+    const result = await runner.run('build', emptyState);
+    const lifecyclePhases = providerAttempt.mock.calls.flatMap(([, metadata]) => {
+      const lifecycle = (metadata as { lifecycle?: { phase?: string } }).lifecycle;
+      return lifecycle?.phase ? [lifecycle.phase] : [];
+    });
+
+    expect({ lifecyclePhases, settled: result.success }).toEqual({
+      lifecyclePhases: ['preparing', 'running', 'settled'],
+      settled: true,
+    });
+  });
+
   it('forwards the daemon feature diagnostic logger to a streaming provider invocation', async () => {
     const featureLog = vi.fn();
     const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
@@ -1257,7 +1292,9 @@ describe('DefaultStepRunner', () => {
         resume: options.resume,
         interactive: options.interactive,
       })),
-      attempts: attempts.mock.calls.map(([step, attempt]) => ({ step, ...attempt })),
+      attempts: attempts.mock.calls
+        .filter(([, attempt]) => !('lifecycle' in attempt))
+        .map(([step, attempt]) => ({ step, ...attempt })),
     }).toEqual({
       capturedCalls: [],
       codexCalls: [
