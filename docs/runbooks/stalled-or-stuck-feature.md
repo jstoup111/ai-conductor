@@ -392,6 +392,46 @@ If REKICK encounters this refusal before starting git, the HALT begins
 resolver or run `git rebase --continue`; review and rotate the seal as above, then clear the HALT
 and re-queue.
 
+### A completed rebase still appears halted
+
+**Symptom:** `git rebase --continue` completed successfully, but the dashboard still lists the
+feature under HALTED and both `.pipeline/HALT` and `.pipeline/HALT.class` remain. Manual Git
+commands complete the rebase; they do not reconcile the daemon's pipeline markers.
+
+1. Park the feature before inspecting or changing its git state:
+   ```bash
+   conduct-ts daemon park <slug>
+   ```
+   Keep it parked through marker cleanup and verification. Do not unpark before clearing the stale
+   halt; that makes the feature dispatchable while its recovery state is inconsistent.
+2. From the feature worktree, prove that no rebase is active and the checkout is clean:
+   ```bash
+   cd .worktrees/<slug>
+   git status
+   test ! -d "$(git rev-parse --git-path rebase-merge)"
+   test ! -d "$(git rev-parse --git-path rebase-apply)"
+   test -z "$(git status --porcelain)"
+   ```
+   Stop if either rebase state directory exists, `git status` reports a rebase, or the porcelain
+   output is non-empty. Finish and verify the rebase before removing any marker.
+3. Return to the main checkout and remove both live halt files:
+   ```bash
+   cd ../..
+   rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
+   ```
+   Removing only `HALT` leaves a stale classification sidecar and does not complete recovery.
+4. Verify that the rebase state directories and both live halt files are absent, then unpark:
+   ```bash
+   test ! -d "$(git -C .worktrees/<slug> rev-parse --git-path rebase-merge)"
+   test ! -d "$(git -C .worktrees/<slug> rev-parse --git-path rebase-apply)"
+   test ! -e .worktrees/<slug>/.pipeline/HALT
+   test ! -e .worktrees/<slug>/.pipeline/HALT.class
+   conduct-ts daemon unpark <slug>
+   ```
+
+The next dashboard snapshot should list the feature under ELIGIBLE or IN-PROGRESS rather than
+PARKED or HALTED. The daemon log should show `↻ resume <slug>` after dispatch.
+
 ### Clear a halt and let the feature resume
 
 **Blast radius:** clearing the halt makes the feature eligible for dispatch again on the next
