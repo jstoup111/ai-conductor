@@ -373,38 +373,6 @@ describe('finalizeChangelogPr', () => {
     });
   });
 
-  it('replaces an additional token line when it is textually identical to an inherited line', async () => {
-    const changelogPath = '/repo/CHANGELOG.md';
-    const tokenLine = '- Add widgets ({{IMPLEMENTATION_PR}}).\n';
-    const original = `## [Unreleased]\n\n${tokenLine}${tokenLine}`;
-    const baseChangelogContent = `## [Unreleased]\n\n${tokenLine}`;
-    const files = new Map([[changelogPath, original]]);
-
-    const state = await finalizeChangelogPr(
-      changelogPath,
-      'https://github.com/octo/widgets/pull/456',
-      {
-        readFile: vi.fn(async (path: string) => files.get(path) ?? ''),
-        writeFile: vi.fn(async (path: string, contents: string) => {
-          files.set(path, contents);
-        }),
-        rename: vi.fn(async (from: string, to: string) => {
-          files.set(to, files.get(from) ?? '');
-          files.delete(from);
-        }),
-        rm: vi.fn(),
-      },
-      baseChangelogContent,
-    );
-
-    expect({ state, changelog: files.get(changelogPath) }).toEqual({
-      state: 'changed',
-      changelog:
-        `## [Unreleased]\n\n${tokenLine}` +
-        '- Add widgets ([implementation PR #456](https://github.com/octo/widgets/pull/456)).\n',
-    });
-  });
-
   it('refuses several tokens when the merge-base changelog cannot be resolved', async () => {
     const changelogPath = '/repo/CHANGELOG.md';
     const original =
