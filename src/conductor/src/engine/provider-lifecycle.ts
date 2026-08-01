@@ -233,9 +233,12 @@ async function superviseAttempt<T>(
 ): Promise<T> {
   let state: ProviderLifecycleState = createPreparingProviderLifecycle(attempt, recoveryCount);
   const deadlineDelayMilliseconds = preparationDeadlineDelay(options.preparationTimeoutMinutes);
-  const deadlineAt = deadlineDelayMilliseconds === undefined
+  const preparationStartedAt = deadlineDelayMilliseconds === undefined
     ? undefined
-    : options.timer.now() + deadlineDelayMilliseconds;
+    : options.timer.now();
+  const deadlineAt = preparationStartedAt === undefined
+    ? undefined
+    : preparationStartedAt + deadlineDelayMilliseconds!;
   let current = true;
   options.onStateChange?.(state);
   let timeout: ProviderLifecycleTimerHandle | undefined;
@@ -255,7 +258,10 @@ async function superviseAttempt<T>(
             options.onStateChange?.(state);
           }
         }
-        reject(new ProviderPreparationTimeoutError(attempt, deadlineDelayMilliseconds));
+        reject(new ProviderPreparationTimeoutError(
+          attempt,
+          options.timer.now() - preparationStartedAt!,
+        ));
       }, deadlineDelayMilliseconds);
     });
 

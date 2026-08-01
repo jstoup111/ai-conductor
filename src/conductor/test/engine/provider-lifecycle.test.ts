@@ -28,10 +28,11 @@ function deferred<T>(): {
 describe('provider lifecycle transitions', () => {
   it('halts needs-human after the replacement preparation also times out', async () => {
     vi.useFakeTimers();
+    const first = deferred<string>();
+    const replacement = deferred<string>();
     try {
       const attempts: string[] = [];
-      const first = deferred<string>();
-      const replacement = deferred<string>();
+      let now = 10_000;
       const episodeStore: ProviderLifecycleEpisodeStore = {
         readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
         writeProviderLifecycleEpisode: vi.fn(),
@@ -41,8 +42,11 @@ describe('provider lifecycle transitions', () => {
         recoveryCount: 0,
         preparationTimeoutMinutes: 5,
         timer: {
-          now: () => 10_000,
-          schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
+          now: () => now,
+          schedule: (callback, delayMilliseconds) => setTimeout(() => {
+            now += delayMilliseconds + 30_123;
+            callback();
+          }, delayMilliseconds),
           cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
         },
         recovery: {
@@ -70,7 +74,7 @@ describe('provider lifecycle transitions', () => {
           kind: 'halted',
           reason: 'preparation-timeout-exhausted',
           attempt: { logicalStep: 'build', id: 'attempt-2' },
-          elapsedMilliseconds: 300_000,
+          elapsedMilliseconds: 330_123,
           recoveryCount: 1,
         },
       });
@@ -82,22 +86,25 @@ describe('provider lifecycle transitions', () => {
           'step: build',
           'phase: preparing',
           'attempt: attempt-2',
-          'elapsed_ms: 300000',
+          'elapsed_ms: 330123',
           'recovery_count: 1',
           '',
         ].join('\n'),
         'needs-human',
       );
     } finally {
+      first.resolve('stale-first-result');
+      replacement.resolve('stale-replacement-result');
+      await Promise.all([first.promise, replacement.promise]);
       vi.useRealTimers();
     }
   });
 
   it('persists the first timeout recovery before dispatching its one replacement', async () => {
     vi.useFakeTimers();
+    const first = deferred<string>();
     try {
       const events: string[] = [];
-      const first = deferred<string>();
       const episodeStore: ProviderLifecycleEpisodeStore = {
         readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
         writeProviderLifecycleEpisode: vi.fn(async (_projectRoot, lifecycle) => {
@@ -136,6 +143,8 @@ describe('provider lifecycle transitions', () => {
         ],
       });
     } finally {
+      first.resolve('stale-first-result');
+      await first.promise;
       vi.useRealTimers();
     }
   });
@@ -174,8 +183,8 @@ describe('provider lifecycle transitions', () => {
 
   it('propagates the successful replacement result instead of the timed-out result', async () => {
     vi.useFakeTimers();
+    const first = deferred<{ provider: string }>();
     try {
-      const first = deferred<{ provider: string }>();
       const episodeStore: ProviderLifecycleEpisodeStore = {
         readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
         writeProviderLifecycleEpisode: vi.fn(),
@@ -204,6 +213,8 @@ describe('provider lifecycle transitions', () => {
 
       expect(await result).toEqual({ provider: 'replacement' });
     } finally {
+      first.resolve({ provider: 'stale' });
+      await first.promise;
       vi.useRealTimers();
     }
   });
