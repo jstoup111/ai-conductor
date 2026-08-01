@@ -312,6 +312,8 @@ export function validateConfig(
     'step_heartbeat_stall_minutes',
     // Stale-claim reap window override (engineer-unclaim-requeue-verb-stale-claimed-ledger).
     'stale_claim_window_hours',
+    // Provider lifecycle preparation deadline.
+    'provider_preparation_timeout_minutes',
   ]);
   for (const key of Object.keys(obj)) {
     if (!knownTopLevelKeys.has(key)) {
@@ -854,6 +856,25 @@ export function validateConfig(
         `step_heartbeat_stall_minutes has invalid value ${JSON.stringify(obj.step_heartbeat_stall_minutes)}, falling back to the default (20).`,
       );
       delete obj.step_heartbeat_stall_minutes;
+    }
+  }
+
+  // provider_preparation_timeout_minutes — lifecycle deadline, in minutes,
+  // before a provider process is spawned. 0 and negative values deliberately
+  // opt out; only non-finite or non-numeric values are invalid. Left unset
+  // when absent so the resolver applies its independent five-minute default.
+  if (
+    obj.provider_preparation_timeout_minutes !== undefined &&
+    obj.provider_preparation_timeout_minutes !== null
+  ) {
+    if (
+      typeof obj.provider_preparation_timeout_minutes !== 'number' ||
+      !Number.isFinite(obj.provider_preparation_timeout_minutes)
+    ) {
+      warnings.push(
+        `provider_preparation_timeout_minutes has invalid value ${JSON.stringify(obj.provider_preparation_timeout_minutes)}, falling back to the default (5).`,
+      );
+      delete obj.provider_preparation_timeout_minutes;
     }
   }
 

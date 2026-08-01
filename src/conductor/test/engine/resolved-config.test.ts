@@ -11,11 +11,39 @@ import {
   FALLBACK_RETRIES,
   FALLBACK_REVIEW,
   resolveBuildReviewConfig,
+  DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES,
+  resolveProviderPreparationTimeoutMinutes,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 describe('engine/resolved-config', () => {
+  describe('resolveProviderPreparationTimeoutMinutes', () => {
+    it('defaults to five minutes independently of the heartbeat threshold', () => {
+      expect(DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES).toBe(5);
+      expect(resolveProviderPreparationTimeoutMinutes()).toBe(5);
+      expect(
+        resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: 0 }),
+      ).toBe(5);
+    });
+
+    it('uses finite overrides and preserves zero or negative opt-outs', () => {
+      expect(resolveProviderPreparationTimeoutMinutes({ provider_preparation_timeout_minutes: 7 })).toBe(7);
+      expect(resolveProviderPreparationTimeoutMinutes({ provider_preparation_timeout_minutes: 0 })).toBe(0);
+      expect(resolveProviderPreparationTimeoutMinutes({ provider_preparation_timeout_minutes: -1 })).toBe(-1);
+    });
+
+    it.each([
+      { value: 'soon', message: /expected a number/i },
+      { value: Number.NaN, message: /finite number/i },
+      { value: Number.POSITIVE_INFINITY, message: /finite number/i },
+    ])('rejects invalid timeout override $value', ({ value, message }) => {
+      expect(() => resolveProviderPreparationTimeoutMinutes({
+        provider_preparation_timeout_minutes: value as number,
+      })).toThrow(message);
+    });
+  });
+
   describe('resolveBuildReviewConfig (#773 Task 4 — completeness default-on)', () => {
     it('defaults to enabled when no build_review block is present at all', () => {
       const resolved = resolveBuildReviewConfig(undefined);

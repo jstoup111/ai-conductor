@@ -218,6 +218,55 @@ describe('step_heartbeat_stall_minutes config field', () => {
   });
 });
 
+describe('provider_preparation_timeout_minutes config field', () => {
+  it('accepts positive overrides and preserves zero or negative opt-outs', () => {
+    const positive = validateConfig({ provider_preparation_timeout_minutes: 7 });
+    const zero = validateConfig({ provider_preparation_timeout_minutes: 0 });
+    const negative = validateConfig({ provider_preparation_timeout_minutes: -1 });
+
+    expect([positive, zero, negative]).toMatchObject([
+      {
+        ok: true,
+        config: { provider_preparation_timeout_minutes: 7 },
+        warnings: [],
+      },
+      {
+        ok: true,
+        config: { provider_preparation_timeout_minutes: 0 },
+        warnings: [],
+      },
+      {
+        ok: true,
+        config: { provider_preparation_timeout_minutes: -1 },
+        warnings: [],
+      },
+    ]);
+  });
+
+  it('drops invalid values with a warning so the resolver applies its default', () => {
+    const result = validateConfig({ provider_preparation_timeout_minutes: 'soon' });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.config.provider_preparation_timeout_minutes).toBeUndefined();
+    expect(result.warnings).toContainEqual(
+      expect.stringMatching(/provider_preparation_timeout_minutes.*invalid/i),
+    );
+  });
+
+  it('accepts legacy heartbeat-only configs without inferring a preparation timeout', () => {
+    const result = validateConfig({ step_heartbeat_stall_minutes: 0 });
+
+    expect(result).toMatchObject({
+      ok: true,
+      config: { step_heartbeat_stall_minutes: 0 },
+      warnings: [],
+    });
+    if (!result.ok) return;
+    expect(result.config.provider_preparation_timeout_minutes).toBeUndefined();
+  });
+});
+
 describe('reconcile_parked_auto_cleanup config field', () => {
   it('hard-errors a non-boolean value with the field name', () => {
     expect(validateConfig({ reconcile_parked_auto_cleanup: 'yes' })).toMatchObject({

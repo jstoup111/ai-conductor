@@ -549,6 +549,33 @@ export function resolveStepHeartbeatStallMinutes(config?: HarnessConfig): number
   return override;
 }
 
+/** Default lifecycle deadline, in minutes, before provider process spawn. */
+export const DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES = 5;
+
+/**
+ * Resolve the provider preparation deadline independently from heartbeat
+ * telemetry. Zero and negative values are preserved as opt-out signals.
+ *
+ * @throws Error if the configured value is non-numeric or non-finite.
+ */
+export function resolveProviderPreparationTimeoutMinutes(config?: HarnessConfig): number {
+  const override = config?.provider_preparation_timeout_minutes;
+  if (override === undefined || override === null) {
+    return DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES;
+  }
+  if (typeof override !== 'number') {
+    throw new Error(
+      `Invalid provider_preparation_timeout_minutes: expected a number, got ${typeof override} (${JSON.stringify(override)})`,
+    );
+  }
+  if (!Number.isFinite(override)) {
+    throw new Error(
+      `Invalid provider_preparation_timeout_minutes: must be a finite number, got ${override}`,
+    );
+  }
+  return override;
+}
+
 // ────────────────────────────────────────────────────────────────────────────
 // Self-host guardrails (adr-2026-06-30-self-host-detection-seam / TR-11)
 //

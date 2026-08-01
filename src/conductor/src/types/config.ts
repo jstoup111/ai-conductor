@@ -558,6 +558,12 @@ export interface HarnessConfig {
    */
   step_heartbeat_stall_minutes?: number;
   /**
+   * Maximum minutes allowed for provider candidate/session preparation before
+   * lifecycle recovery. 0 or negative disables the preparation deadline.
+   * Omitted → 5. This is independent from heartbeat telemetry settings.
+   */
+  provider_preparation_timeout_minutes?: number;
+  /**
    * When true, the daemon automatically restarts when the engine becomes stale.
    * When false or absent, manual restart is required. Invalid values resolve to
    * false with a single warning. Default: false. Never throws.
