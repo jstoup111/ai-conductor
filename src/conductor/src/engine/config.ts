@@ -35,6 +35,11 @@ export type ConfigError = {
 
 export type ConfigWarning = string;
 
+type KeySpec = {
+  key: string;
+  isValid: (value: unknown) => boolean;
+};
+
 export type ConfigResult =
   | { ok: true; config: HarnessConfig; warnings: ConfigWarning[] }
   | { ok: false; error: ConfigError };
@@ -43,6 +48,31 @@ const VALID_PHASES = new Set(['SETUP', 'UNDERSTAND', 'DECIDE', 'BUILD', 'SHIP'])
 const VALID_EFFORTS = new Set<EffortLevel>(['low', 'medium', 'high', 'xhigh', 'max']);
 const VALID_ENFORCEMENTS = new Set<EnforcementLevel>(['structural', 'advisory', 'gating']);
 const BUILT_IN_MODEL_PROVIDERS = new Set(['claude', 'codex']);
+
+function normalizeKeyedBlock(
+  blockName: string,
+  raw: unknown,
+  specs: readonly KeySpec[],
+  warnings: ConfigWarning[],
+): Record<string, unknown> {
+  if (!isPlainObject(raw)) return {};
+
+  const specByKey = new Map(specs.map((spec) => [spec.key, spec]));
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    const spec = specByKey.get(key);
+    if (!spec) {
+      warnings.push(`Unknown key in ${blockName}: "${key}"`);
+    } else if (spec.isValid(value)) {
+      normalized[key] = value;
+    } else {
+      warnings.push(
+        `${blockName}.${key} has invalid value ${JSON.stringify(value)}, omitting.`,
+      );
+    }
+  }
+  return normalized;
+}
 
 function validateTddModelConfig(
   value: unknown,
@@ -850,28 +880,22 @@ export function validateConfig(
   // Contract (total — never throws, never undefined):
   //   C1  absent / null → { enabled: true } (no warning)
   //   C2  { enabled: true|false } → as given (no warning)
-  //   C3  malformed (non-object, unknown key, or non-boolean enabled) →
-  //       { enabled: true } + one warning (fail-open to the new default,
-  //       never silently opt a project out of the replacement authority)
+  //   C3  malformed values warn and are omitted; valid sibling keys are kept.
   if (obj.build_review !== undefined && obj.build_review !== null) {
     if (isPlainObject(obj.build_review)) {
-      const br = obj.build_review as Record<string, unknown>;
-      const unknownKey = Object.keys(br).find((k) => k !== 'enabled');
-      if (unknownKey !== undefined) {
-        warnings.push(
-          `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
-        );
-        obj.build_review = { enabled: true };
-      } else if (br.enabled === undefined) {
-        obj.build_review = { enabled: true };
-      } else if (typeof br.enabled === 'boolean') {
-        obj.build_review = { enabled: br.enabled };
-      } else {
-        warnings.push(
-          `build_review.enabled has invalid value ${JSON.stringify(br.enabled)}, falling back to enabled.`,
-        );
-        obj.build_review = { enabled: true };
-      }
+      const br = normalizeKeyedBlock(
+        'build_review',
+        obj.build_review,
+        [
+          { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
+          { key: 'perTaskFloor', isValid: (value) => typeof value === 'boolean' },
+        ],
+        warnings,
+      );
+      obj.build_review = {
+        ...br,
+        enabled: typeof br.enabled === 'boolean' ? br.enabled : true,
+      };
     } else {
       warnings.push(
         `build_review has invalid value ${JSON.stringify(obj.build_review)}, falling back to enabled.`,
@@ -886,22 +910,30 @@ export function validateConfig(
   // Contract (total — never throws, never undefined):
   //   C1  absent / null → { enabled: true } (no warning)
   //   C2  { enabled: true|false } → as given (no warning)
-  //   C3  malformed (non-object, unknown key, or non-boolean enabled) →
-  //       { enabled: true } without warning (fail-safe)
+  //   C3  malformed values warn and are omitted; valid sibling keys are kept.
   if (obj.ci_watch !== undefined && obj.ci_watch !== null) {
     if (isPlainObject(obj.ci_watch)) {
-      const cw = obj.ci_watch as Record<string, unknown>;
-      const unknownKey = Object.keys(cw).find((k) => k !== 'enabled');
-      if (unknownKey !== undefined) {
-        obj.ci_watch = { enabled: true };
-      } else if (cw.enabled === undefined) {
-        obj.ci_watch = { enabled: true };
-      } else if (typeof cw.enabled === 'boolean') {
-        obj.ci_watch = { enabled: cw.enabled };
-      } else {
-        obj.ci_watch = { enabled: true };
-      }
+      const cw = normalizeKeyedBlock(
+        'ci_watch',
+        obj.ci_watch,
+        [
+          { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
+          {
+            key: 'cooldownMinutes',
+            isValid: (value) =>
+              typeof value === 'number' && Number.isFinite(value) && value >= 0,
+          },
+        ],
+        warnings,
+      );
+      obj.ci_watch = {
+        ...cw,
+        enabled: typeof cw.enabled === 'boolean' ? cw.enabled : true,
+      };
     } else {
+      warnings.push(
+        `ci_watch has invalid value ${JSON.stringify(obj.ci_watch)}, falling back to enabled.`,
+      );
       obj.ci_watch = { enabled: true };
     }
   } else if (obj.ci_watch === null || materializeDefaults) {

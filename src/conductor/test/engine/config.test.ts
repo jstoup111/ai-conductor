@@ -11,6 +11,7 @@ import {
   resolveMemoryProvider,
   resolveValidationConcurrency,
 } from '../../src/engine/config.js';
+import { resolveBuildReviewConfig } from '../../src/engine/resolved-config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 
 describe('config', () => {
@@ -254,7 +255,7 @@ complexity:
             'attribution_audit_sample_pct out of range [0, 100]; clamped to 100.',
           ],
           fallback: [
-            'build_review.enabled has invalid value "banana", falling back to enabled.',
+            'build_review.enabled has invalid value "banana", omitting.',
           ],
           topLevelRejection: true,
           nestedRejection: true,
@@ -1649,6 +1650,66 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('preserves enabled:false with perTaskFloor:false without warnings', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, perTaskFloor: false },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false, perTaskFloor: false },
+        warnings: [],
+      });
+    });
+
+    it('defaults enabled after preserving a partial perTaskFloor:false block', () => {
+      const result = validateConfig({ build_review: { perTaskFloor: false } });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: true, perTaskFloor: false },
+        warnings: [],
+      });
+    });
+
+    it('passes perTaskFloor:false through validation to the build_review resolver', () => {
+      const result = validateConfig({
+        build_review: { enabled: true, perTaskFloor: false },
+      });
+      expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual({
+        enabled: true,
+        perTaskFloor: false,
+      });
+    });
+
+    it('drops unknown build_review keys while preserving an explicit opt-out', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, perTaskFlooor: true },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/perTaskFlooor/)],
+      });
+    });
+
+    it('names every unknown key while preserving an explicit build_review opt-out', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, a: 1, b: 2 },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
+      });
+    });
+
     it('resolves enabled:true to enabled, identical to the default', () => {
       const result = validateConfig({ build_review: { enabled: true } });
       expect(result.ok).toBe(true);
@@ -1683,20 +1744,50 @@ complexity:
       expect(result.warnings[0]).toMatch(/build_review.*invalid/i);
     });
 
-    it('never throws — always returns ok: true', () => {
-      const testCases = [
-        { build_review: { enabled: true } },
-        { build_review: { enabled: false } },
-        { build_review: 'yes' },
-        { build_review: 1 },
-        { build_review: [] },
-        { build_review: {} },
-        { build_review: null },
-        {},
+    it('drops an invalid enabled value while retaining perTaskFloor', () => {
+      const result = validateConfig({
+        build_review: { enabled: 'banana', perTaskFloor: false },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: true, perTaskFloor: false },
+        warnings: [expect.stringMatching(/build_review\.enabled/)],
+      });
+    });
+
+    it('drops an invalid perTaskFloor value while retaining enabled', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, perTaskFloor: 'sometimes' },
+      });
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/build_review\.perTaskFloor/)],
+      });
+    });
+
+    it('is total across build_review shapes', () => {
+      const testCases: Array<[string, Record<string, unknown>]> = [
+        ['absent', {}],
+        ['null', { build_review: null }],
+        ['empty object', { build_review: {} }],
+        ['string', { build_review: 'yes' }],
+        ['number', { build_review: 1 }],
+        ['array', { build_review: [] }],
+        ['valid', { build_review: { enabled: false, perTaskFloor: false } }],
+        ['partially valid', { build_review: { perTaskFloor: false } }],
+        ['fully invalid', { build_review: { enabled: 'no', perTaskFloor: 'no' } }],
       ];
-      for (const testCase of testCases) {
+      for (const [, testCase] of testCases) {
+        expect(() => validateConfig(testCase)).not.toThrow();
         const result = validateConfig(testCase);
         expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.config.build_review).toBeDefined();
       }
     });
 
@@ -1858,12 +1949,98 @@ complexity:
       expect(result.warnings).toHaveLength(0);
     });
 
+    it('keeps enabled:false when an invalid cooldownMinutes is omitted with a warning', () => {
+      const result = validateConfig({
+        ci_watch: { enabled: false, cooldownMinutes: 'thirty' },
+      });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: false },
+        warnings: [expect.stringMatching(/ci_watch\.cooldownMinutes/)],
+      });
+    });
+
     it('resolves enabled:true to enabled, no warning', () => {
       const result = validateConfig({ ci_watch: { enabled: true } });
       expect(result.ok).toBe(true);
       if (!result.ok) return;
       expect(result.config.ci_watch?.enabled).toBe(true);
       expect(result.warnings).toHaveLength(0);
+    });
+
+    it('preserves enabled and cooldownMinutes with no warnings', () => {
+      const result = validateConfig({ ci_watch: { enabled: true, cooldownMinutes: 15 } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true, cooldownMinutes: 15 },
+        warnings: [],
+      });
+    });
+
+    it('defaults enabled while preserving a zero cooldownMinutes with no warnings', () => {
+      const result = validateConfig({ ci_watch: { cooldownMinutes: 0 } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true, cooldownMinutes: 0 },
+        warnings: [],
+      });
+    });
+
+    it('omits a negative cooldownMinutes and warns', () => {
+      const result = validateConfig({ ci_watch: { enabled: true, cooldownMinutes: -5 } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true },
+        warnings: [expect.stringMatching(/ci_watch\.cooldownMinutes/)],
+      });
+    });
+
+    it('defaults an invalid enabled value and warns', () => {
+      const result = validateConfig({ ci_watch: { enabled: 'banana' } });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: true },
+        warnings: [expect.stringMatching(/ci_watch\.enabled/)],
+      });
+    });
+
+    it('preserves an exact cooldownMinutes value for ci-fix', () => {
+      const result = validateConfig({ ci_watch: { cooldownMinutes: 15 } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch?.cooldownMinutes).toBe(15);
+    });
+
+    it('keeps cooldownMinutes when an unknown sibling is ignored', () => {
+      const result = validateConfig({ ci_watch: { cooldownMinutes: 15, bogus: 1 } });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.config.ci_watch).toEqual({ enabled: true, cooldownMinutes: 15 });
+      expect(result.warnings).toHaveLength(1);
+      expect(result.warnings[0]).toMatch(/bogus/);
+    });
+
+    it('names every unknown key while preserving an explicit ci_watch opt-out', () => {
+      const result = validateConfig({
+        ci_watch: { enabled: false, a: 1, b: 2 },
+      });
+      expect(result.ok && {
+        ci_watch: result.config.ci_watch,
+        warnings: result.warnings,
+      }).toEqual({
+        ci_watch: { enabled: false },
+        warnings: [expect.stringMatching(/"a"/), expect.stringMatching(/"b"/)],
+      });
     });
 
     it('resolves null to enabled silently', () => {
@@ -1888,27 +2065,24 @@ complexity:
       expect(result.config.ci_watch?.enabled).toBe(true);
     });
 
-    it('resolves a non-boolean enabled value to enabled without throwing', () => {
-      const result = validateConfig({ ci_watch: { enabled: 'banana' } });
-      expect(result.ok).toBe(true);
-      if (!result.ok) return;
-      expect(result.config.ci_watch?.enabled).toBe(true);
-    });
-
-    it('never throws — always returns ok: true', () => {
-      const testCases = [
-        { ci_watch: { enabled: true } },
-        { ci_watch: { enabled: false } },
-        { ci_watch: 'yes' },
-        { ci_watch: 1 },
-        { ci_watch: [] },
-        { ci_watch: {} },
-        { ci_watch: null },
-        {},
+    it('is total across ci_watch shapes', () => {
+      const testCases: Array<[string, Record<string, unknown>]> = [
+        ['absent', {}],
+        ['null', { ci_watch: null }],
+        ['empty object', { ci_watch: {} }],
+        ['string', { ci_watch: 'yes' }],
+        ['number', { ci_watch: 1 }],
+        ['array', { ci_watch: [] }],
+        ['valid', { ci_watch: { enabled: false, cooldownMinutes: 0 } }],
+        ['partially valid', { ci_watch: { cooldownMinutes: 15 } }],
+        ['fully invalid', { ci_watch: { enabled: 'no', cooldownMinutes: -1 } }],
       ];
-      for (const testCase of testCases) {
+      for (const [, testCase] of testCases) {
+        expect(() => validateConfig(testCase)).not.toThrow();
         const result = validateConfig(testCase);
         expect(result.ok).toBe(true);
+        if (!result.ok) return;
+        expect(result.config.ci_watch).toBeDefined();
       }
     });
   });
