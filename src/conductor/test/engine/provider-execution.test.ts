@@ -89,6 +89,104 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('rejects an unfenced custom provider before daemon lifecycle invocation', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'custom provider should not run',
+      exitCode: 0,
+    }));
+    const custom = {
+      invoke,
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      { ...runtime('claude', custom), key: 'custom', builtIn: false },
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['custom'],
+      preferredProvider: 'custom',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('custom-session')),
+      options: {
+        prompt: 'Build with lifecycle supervision.',
+        cwd: '/workspace/feature',
+        spawnPermit: () => ({ permitted: true }),
+      },
+    });
+
+    expect({
+      calls: invoke.mock.calls,
+      success: result.success,
+      output: result.output,
+      attempt: result.attempts[0],
+    }).toMatchObject({
+      calls: [],
+      success: false,
+      output: expect.stringMatching(
+        /Provider custom.*synchronous spawn-permit capability.*Recovery action/i,
+      ),
+      attempt: {
+        provider: 'custom',
+        invoked: false,
+        reason: expect.stringMatching(
+          /synchronous spawn-permit capability.*Recovery action/i,
+        ),
+      },
+    });
+  });
+
+  it('invokes a custom provider that declares the lifecycle spawn-permit capability', async () => {
+    const spawnPermit = vi.fn(() => ({ permitted: true as const }));
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'custom provider completed',
+      exitCode: 0,
+    }));
+    const custom = {
+      lifecycleCapability: { synchronousSpawnPermit: true as const },
+      invoke,
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      { ...runtime('claude', custom), key: 'custom', builtIn: false },
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['custom'],
+      preferredProvider: 'custom',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('custom-session')),
+      options: {
+        prompt: 'Build with lifecycle supervision.',
+        cwd: '/workspace/feature',
+        spawnPermit,
+      },
+    });
+
+    expect({
+      calls: invoke.mock.calls,
+      result: {
+        success: result.success,
+        output: result.output,
+        actualProvider: result.actualProvider,
+        attempt: result.attempts[0],
+      },
+    }).toMatchObject({
+      calls: [[expect.objectContaining({ spawnPermit })]],
+      result: {
+        success: true,
+        output: 'custom provider completed',
+        actualProvider: 'custom',
+        attempt: { provider: 'custom', invoked: true },
+      },
+    });
+  });
+
   it('applies and tears down an isolated self-host context only for the resolved Codex candidate', async () => {
     const codex = {
       invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => ({

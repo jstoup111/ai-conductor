@@ -242,6 +242,19 @@ function hasRecoveryPrecedence(result: InvokeResult): boolean {
   );
 }
 
+function unsupportedLifecycleProviderResult(providerKey: string): InvokeResult {
+  const reason = `Provider ${providerKey} cannot run under daemon lifecycle supervision: missing synchronous spawn-permit capability. Recovery action: update the provider to declare lifecycleCapability.synchronousSpawnPermit and synchronously validate InvokeOptions.spawnPermit before process creation.`;
+  return {
+    success: false,
+    output: reason,
+    exitCode: 1,
+    providerUnavailable: true,
+    providerUnavailableScope: 'run',
+    providerUnavailableReason: reason,
+    providerInvocationSkipped: true,
+  };
+}
+
 export function classifyProviderAttempt(
   result: InvokeResult,
 ): ProviderUnavailableClassification | undefined {
@@ -564,17 +577,22 @@ export async function executeProviderCandidates({
         await selfHost?.teardown();
       }
     };
-    const result = withCandidateSafety
-      ? await withCandidateSafety(
-          {
-            step,
-            providerKey,
-            model: resolved.model,
-            effort: resolved.effort,
-          },
-          invoke,
-        )
-      : await invoke();
+    const requiresLifecycleCapability = candidateOptions.spawnPermit !== undefined;
+    const supportsLifecycleCapability =
+      runtimes.lifecycleCapabilityFor(providerKey)?.synchronousSpawnPermit === true;
+    const result = requiresLifecycleCapability && !supportsLifecycleCapability
+      ? unsupportedLifecycleProviderResult(providerKey)
+      : withCandidateSafety
+        ? await withCandidateSafety(
+            {
+              step,
+              providerKey,
+              model: resolved.model,
+              effort: resolved.effort,
+            },
+            invoke,
+          )
+        : await invoke();
     const invokedModel = invocation?.invokedModel;
     const suppression = invocation?.sessionPolicySuppression;
     const emittedProviders = sessionPolicyDiagnostics.get(sessions) ?? new Set<string>();
