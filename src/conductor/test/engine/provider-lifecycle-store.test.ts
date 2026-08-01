@@ -89,6 +89,7 @@ describe('provider lifecycle episode store', () => {
       rename: async (from, to) => {
         calls.push({ operation: 'rename', from, to });
       },
+      rm: async () => undefined,
     };
     const store = createProviderLifecycleEpisodeStore(fileOperations);
     const pipelineDirectory = join(projectRoot, '.pipeline');
@@ -105,6 +106,53 @@ describe('provider lifecycle episode store', () => {
     ]);
     expect(calls[1]?.path).toContain('.tmp');
     expect(calls[2]?.from).toBe(calls[1]?.path);
+  });
+
+  it('awaits temporary lifecycle cleanup before rejecting a failed rename', async () => {
+    const projectRoot = await createProjectRoot();
+    const lifecycle: ProviderLifecycleState = {
+      phase: 'preparing',
+      attempt: { logicalStep: 'build', id: 'build-attempt-1' },
+      recoveryCount: 0,
+    };
+    const renameFailure = new Error('rename failed');
+    let resolveRenameAttempt: (() => void) | undefined;
+    const renameAttempted = new Promise<void>((resolve) => {
+      resolveRenameAttempt = resolve;
+    });
+    let resolveCleanup: (() => void) | undefined;
+    const cleanupReleased = new Promise<void>((resolve) => {
+      resolveCleanup = resolve;
+    });
+    let cleanupStarted = false;
+    let settled = false;
+    const store = createProviderLifecycleEpisodeStore({
+      mkdir: async () => undefined,
+      writeFile: async () => undefined,
+      rename: async () => {
+        resolveRenameAttempt?.();
+        throw renameFailure;
+      },
+      rm: async () => {
+        cleanupStarted = true;
+        await cleanupReleased;
+      },
+    });
+
+    const persistence = store.writeProviderLifecycleEpisode(projectRoot, lifecycle);
+    void persistence.catch(() => {
+      settled = true;
+    });
+
+    await renameAttempted;
+    await Promise.resolve();
+
+    expect(cleanupStarted).toBe(true);
+    expect(settled).toBe(false);
+
+    resolveCleanup?.();
+
+    await expect(persistence).rejects.toBe(renameFailure);
   });
 
   it('removes a lifecycle episode after its completed settlement', async () => {

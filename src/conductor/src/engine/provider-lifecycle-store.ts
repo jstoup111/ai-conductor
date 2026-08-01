@@ -6,6 +6,7 @@ export interface ProviderLifecycleEpisodeStoreFileOperations {
   mkdir(path: string, options: { recursive: true }): Promise<unknown>;
   writeFile(path: string, content: string): Promise<unknown>;
   rename(from: string, to: string): Promise<unknown>;
+  rm(path: string, options: { force: true }): Promise<unknown>;
 }
 
 export interface ProviderLifecycleEpisodeStore {
@@ -16,6 +17,7 @@ const defaultFileOperations: ProviderLifecycleEpisodeStoreFileOperations = {
   mkdir,
   writeFile,
   rename,
+  rm,
 };
 
 function episodePath(projectRoot: string, logicalStep: string): string {
@@ -39,7 +41,7 @@ export function createProviderLifecycleEpisodeStore(
         await fileOperations.writeFile(temporaryPath, `${JSON.stringify(lifecycle, null, 2)}\n`);
         await fileOperations.rename(temporaryPath, path);
       } catch (error) {
-        await rm(temporaryPath, { force: true }).catch(() => undefined);
+        await fileOperations.rm(temporaryPath, { force: true }).catch(() => undefined);
         throw error;
       }
     },
