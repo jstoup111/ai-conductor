@@ -1,22 +1,16 @@
-// step-heartbeat.ts — `.pipeline/step-heartbeat` liveness signal for a running
-// step's provider dispatch, plus the stall watchdog built on top of it.
+// step-heartbeat.ts — `.pipeline/step-heartbeat` activity telemetry for a
+// running step's provider dispatch.
 //
 // `daemon.log` only records step start/end, never mid-step activity, so a
 // step that is genuinely working and a step that is silently wedged look
 // identical from the outside for however long the dispatch runs. This module
-// gives both the operator (`daemon status`) and the daemon itself (the stall
-// watchdog) a real signal: a small JSON file touched on every observed
-// provider activity boundary (each streamed stdout/stderr chunk from the
-// Claude/Codex subprocess — see `onActivity` on `InvokeOptions`).
+// gives the operator (`daemon status`) a real signal: a small JSON file
+// touched on every observed provider activity boundary (each streamed
+// stdout/stderr chunk from the Claude/Codex subprocess — see `onActivity` on
+// `InvokeOptions`).
 //
-// Two halves:
-//   - the heartbeat file itself (write/read/pulse) — cheap, best-effort, and
-//     the sole authority `daemon status` reads for "Ns since last heartbeat".
-//   - `runWithStallWatchdog`, which races a dispatch against heartbeat
-//     staleness and, on a genuine stall, kills the subprocess and raises the
-//     SAME `mechanical`-class HALT machinery landed in #1070
-//     (`fix/defer-live-boundary-halt-to-next-dispatch`) so the daemon can
-//     auto-requeue the feature rather than leaving it silently hung.
+// Heartbeats are cheap, best-effort status telemetry. Their absence or age is
+// never process-liveness authority: a provider can be silent while reasoning.
 
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
@@ -93,7 +87,7 @@ export function createHeartbeatPulse(
   };
 }
 
-// ── Age classification (pure — used by both the dashboard and the watchdog) ──
+// ── Age classification (pure — used by status rendering) ────────────────────
 
 export type HeartbeatAgeStatus =
   | { kind: 'none' }
@@ -150,135 +144,4 @@ export function formatHeartbeatAge(ageMs: number): string {
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
   return minutes > 0 ? `${minutes}m${seconds}s` : `${seconds}s`;
-}
-
-// ── Stall watchdog ────────────────────────────────────────────────────────
-
-/**
- * Mutable single-slot holder for the live subprocess's kill handle. The
- * caller wires `killRef.kill = handle.kill` into the provider dispatch's
- * `onSpawn` callback before invoking `runWithStallWatchdog`, so the watchdog
- * can terminate whichever candidate subprocess is currently in flight (a
- * multi-candidate dispatch may spawn more than one over its retries/fallback).
- */
-export interface KillRef {
-  kill?: () => void;
-}
-
-export interface StallWatchdogOptions {
-  worktreePath: string;
-  step: string;
-  /** Configured stall threshold, in minutes (see `resolveStepHeartbeatStallMinutes`). */
-  thresholdMinutes: number;
-  /** Where the watchdog finds the current subprocess's kill handle, if any. */
-  killRef: KillRef;
-  /**
-   * Extra buffer added on top of the threshold before the watchdog acts, so a
-   * step that is genuinely finishing right at the threshold edge is not
-   * killed out from under a real result. Minutes; default 2.
-   */
-  graceMinutes?: number;
-  /** How often to check heartbeat staleness. Milliseconds; default 30s. */
-  pollIntervalMs?: number;
-  /**
-   * When this dispatch began, on the same clock as `now`. Any heartbeat older
-   * than this — or naming a different step — is a leftover from an earlier
-   * dispatch in the same worktree and is ignored entirely (see
-   * `heartbeatBelongsToDispatch`). Defaults to `now()` at arm time.
-   */
-  dispatchStartedAtMs?: number;
-  /** Injectable clock/heartbeat reader seam for tests. */
-  now?: () => number;
-  readHeartbeat?: (worktreePath: string) => Promise<StepHeartbeat | null>;
-  writeHalt?: (reason: string) => Promise<void>;
-}
-
-export interface StallWatchdogResult<T> {
-  /** True when the watchdog fired (the dispatch was killed as stalled). */
-  stalled: boolean;
-  /** The dispatch's own result, when it concluded before any stall fired. */
-  value?: T;
-}
-
-const DEFAULT_GRACE_MINUTES = 2;
-const DEFAULT_POLL_INTERVAL_MS = 30_000;
-
-/**
- * Race a step dispatch against heartbeat staleness. The caller wires
- * `opts.killRef.kill` (via the provider dispatch's `onSpawn` callback) before
- * calling this, so the watchdog can terminate whichever subprocess is
- * currently in flight.
- *
- * On a real stall (heartbeat silent past `thresholdMinutes + graceMinutes`):
- * the subprocess is killed, a `mechanical`-class HALT is raised via
- * `writeHalt` (reusing the exact HALT machinery #1070 uses for live-boundary
- * violations — same class, same daemon auto-requeue path), and the watchdog
- * resolves with `{ stalled: true }` without waiting for the killed dispatch's
- * own settle.
- *
- * On normal completion, the watchdog is torn down and `{ stalled: false,
- * value }` is returned.
- */
-export async function runWithStallWatchdog<T>(
-  opts: StallWatchdogOptions,
-  dispatch: () => Promise<T>,
-): Promise<StallWatchdogResult<T>> {
-  const now = opts.now ?? Date.now;
-  const readHeartbeat = opts.readHeartbeat ?? readStepHeartbeat;
-  const graceMinutes = opts.graceMinutes ?? DEFAULT_GRACE_MINUTES;
-  const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const staleAfterMs = (opts.thresholdMinutes + graceMinutes) * 60_000;
-  const dispatchStartedAtMs = opts.dispatchStartedAtMs ?? now();
-
-  let settled = false;
-
-  return new Promise<StallWatchdogResult<T>>((resolve, reject) => {
-    const timer: ReturnType<typeof setInterval> = setInterval(() => {
-      void (async () => {
-        if (settled) return;
-        const heartbeat = await readHeartbeat(opts.worktreePath);
-        // No heartbeat *from this dispatch* is never treated as a stall — a
-        // step that has not produced its first activity pulse is not evidence
-        // of a hang, and treating it as one would kill every step in its
-        // opening seconds. A heartbeat left behind by an earlier step (or an
-        // earlier run of this one) is equally uninformative and is ignored the
-        // same way, rather than read as this dispatch having been silent for
-        // however long the file has sat there.
-        if (!heartbeatBelongsToDispatch(heartbeat, opts.step, dispatchStartedAtMs)) return;
-        const status = classifyHeartbeatAge(heartbeat, now(), staleAfterMs);
-        if (status.kind !== 'stale' || settled) return;
-        settled = true;
-        clearInterval(timer);
-        try {
-          opts.killRef.kill?.();
-        } catch {
-          // Kill is best-effort; the HALT marker is the authoritative signal.
-        }
-        const reason =
-          `Step '${opts.step}' heartbeat stalled: no provider activity in ` +
-          `${formatHeartbeatAge(status.ageMs)} (threshold ${opts.thresholdMinutes}m + ${graceMinutes}m grace).`;
-        try {
-          await opts.writeHalt?.(reason);
-        } finally {
-          resolve({ stalled: true });
-        }
-      })();
-    }, pollIntervalMs);
-    if (typeof timer.unref === 'function') timer.unref(); // portability-ok: guarded typeof check; only detaches this internal poll interval from process exit, no effect on watchdog semantics
-
-    dispatch().then(
-      (value) => {
-        if (settled) return; // already resolved by the stall branch above
-        settled = true;
-        clearInterval(timer);
-        resolve({ stalled: false, value });
-      },
-      (err) => {
-        if (settled) return;
-        settled = true;
-        clearInterval(timer);
-        reject(err);
-      },
-    );
-  });
 }

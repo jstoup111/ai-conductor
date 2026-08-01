@@ -313,11 +313,8 @@ export interface StepRunnerOptions {
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
   /**
-   * Test-only overrides for the step-heartbeat stall watchdog's polling
-   * cadence and clock (`runWithStallWatchdog`). Production always uses the
-   * real 30s poll interval and `Date.now`; tests inject a tight interval and
-   * a scripted clock so a simulated stall resolves in milliseconds, not
-   * real minutes.
+   * Legacy test-fixture compatibility. Heartbeats are telemetry only, so
+   * these former watchdog controls have no effect on provider dispatch.
    */
   heartbeatWatchdog?: { pollIntervalMs?: number; now?: () => number };
 }
@@ -383,7 +380,6 @@ export class DefaultStepRunner implements StepRunner {
   private prepareCandidateSelfHost?: ExecuteProviderCandidatesInput['prepareCandidateSelfHost'];
   private log: (message: string) => void;
   private stepRegistry: ReturnType<typeof buildStepRegistry>;
-  private heartbeatWatchdogOverrides?: { pollIntervalMs?: number; now?: () => number };
   private providerLifecycleAttempt = 0;
   callCount = 0;
 
@@ -437,7 +433,6 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerWarn ??
       options?.providerExecution?.warn ??
       this.log;
-    this.heartbeatWatchdogOverrides = options?.heartbeatWatchdog;
   }
 
   resolvedConfigFor(step: StepName, tier?: ComplexityTier): ResolvedStepConfig {

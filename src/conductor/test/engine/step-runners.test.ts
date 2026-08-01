@@ -273,7 +273,7 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  describe('step-heartbeat / stall watchdog wiring', () => {
+  describe('step-heartbeat telemetry wiring', () => {
     let projectDir: string;
 
     beforeEach(async () => {
@@ -315,21 +315,19 @@ describe('DefaultStepRunner', () => {
       expect(Number.isFinite(Date.parse(heartbeat.ts))).toBe(true);
     });
 
-    it('does not kill a step whose worktree carries a stale heartbeat from an earlier step', async () => {
-      // Regression (#1082 fallout): `.pipeline/step-heartbeat` is overwritten,
-      // never cleared, so a re-kicked `architecture_review_as_built` started
-      // next to a 3.5h-old `build` heartbeat and was killed one poll tick in.
-      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(projectDir, '.pipeline', 'step-heartbeat'),
-        JSON.stringify({ step: 'build', ts: new Date(Date.now() - 214 * 60_000).toISOString() }),
-        'utf-8',
-      );
+    it('allows a quiet spawned provider to succeed beyond the former heartbeat threshold', async () => {
+      const kill = vi.fn();
+      const base = Date.now();
+      let silent = false;
       const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
         (input.options as InvokeOptions & { onSpawn?: (h: { kill: () => void }) => void }).onSpawn?.({
-          kill: () => {},
+          kill,
         });
-        // Long enough for several watchdog polls, with no activity of its own.
+        (input.options as InvokeOptions & { onActivity?: () => void }).onActivity?.();
+        // Let the initial pulse settle, then advance the old watchdog's
+        // injected clock beyond its threshold and grace period.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        silent = true;
         await new Promise((r) => setTimeout(r, 60));
         return {
           success: true,
@@ -343,7 +341,10 @@ describe('DefaultStepRunner', () => {
       const config: HarnessConfig = { step_heartbeat_stall_minutes: 1 };
       const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
         config,
-        heartbeatWatchdog: { pollIntervalMs: 5 },
+        heartbeatWatchdog: {
+          pollIntervalMs: 5,
+          now: () => (silent ? base + 60 * 60_000 : base),
+        },
         providerExecution: {
           configuredProviders: ['claude'],
           runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
@@ -352,13 +353,74 @@ describe('DefaultStepRunner', () => {
         },
       });
 
-      const result = await runner.run('architecture_review_as_built', emptyState);
+      const result = await runner.run('build', emptyState);
 
       expect(result.success).toBe(true);
+      expect(kill).not.toHaveBeenCalled();
+      expect(providerExecutor).toHaveBeenCalledTimes(1);
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
     });
 
-    it('does not wrap dispatch in the watchdog when step_heartbeat_stall_minutes <= 0 (opt-out)', async () => {
+    it.each([
+      {
+        name: 'absent',
+        setup: async () => {},
+      },
+      {
+        name: 'malformed',
+        setup: async () => {
+          await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+          await writeFile(join(projectDir, '.pipeline', 'step-heartbeat'), 'not json', 'utf-8');
+        },
+      },
+      {
+        name: 'prior-dispatch',
+        setup: async () => {
+          await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(projectDir, '.pipeline', 'step-heartbeat'),
+            JSON.stringify({ step: 'architecture_review_as_built', ts: new Date(0).toISOString() }),
+            'utf-8',
+          );
+        },
+      },
+    ])('keeps $name heartbeat data observational for a quiet spawned provider', async ({ setup }) => {
+      const kill = vi.fn();
+      await setup();
+      const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+        (input.options as InvokeOptions & { onSpawn?: (h: { kill: () => void }) => void }).onSpawn?.({
+          kill,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return {
+          success: true,
+          output: 'reviewed',
+          exitCode: 0,
+          preferredProvider: 'claude',
+          actualProvider: 'claude',
+          attempts: [],
+        };
+      });
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+        config: { step_heartbeat_stall_minutes: 1 },
+        heartbeatWatchdog: { pollIntervalMs: 5, now: () => Date.now() + 60 * 60_000 },
+        providerExecution: {
+          configuredProviders: ['claude'],
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          sessions: new ProviderSessionStore(),
+          executor: providerExecutor as unknown as typeof executeProviderCandidates,
+        },
+      });
+
+      const result = await runner.run('build', emptyState);
+
+      expect(result.success).toBe(true);
+      expect(kill).not.toHaveBeenCalled();
+      expect(providerExecutor).toHaveBeenCalledTimes(1);
+      await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
+    });
+
+    it('treats a disabled heartbeat threshold as telemetry configuration without halting', async () => {
       const providerExecutor = vi.fn(async () => ({
         success: true,
         output: 'done',
