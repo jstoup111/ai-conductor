@@ -1651,7 +1651,8 @@ export class Conductor {
           const probeFailed =
             current.provider === authentication.provider &&
             current.source === authentication.source &&
-            current.state === 'probe-failed';
+            current.state === 'probe-failed' &&
+            current.probeFailure !== undefined;
           const timedOut = elapsedMs >= timeoutMs;
           const nextDelayMs = isReady || probeFailed || timedOut
             ? 0

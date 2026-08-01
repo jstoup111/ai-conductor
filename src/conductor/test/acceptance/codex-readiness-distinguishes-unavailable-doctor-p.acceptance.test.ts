@@ -60,15 +60,18 @@ function providerWithDoctor(runDoctor: CodexDoctorRunner): CodexProvider {
   return new CodexProvider(runDoctor);
 }
 
-type FutureProbeFailure = {
+type ProbeFailedReadiness = {
   provider: 'codex';
   source: 'cached-login';
   state: 'probe-failed';
-  failure: { kind: 'exec-error' | 'timeout' | 'unparseable-output' };
+  probeFailure: {
+    kind: 'exec-error' | 'timeout' | 'unparseable-output';
+    facts: Record<string, never>;
+  };
 };
 
 function recoveryConductor(
-  readiness: () => Promise<FutureProbeFailure>,
+  readiness: () => Promise<ProbeFailedReadiness>,
   events: ConductorEventEmitter,
 ): Conductor {
   const runtimes = new ProviderRuntimeSet([{
@@ -145,7 +148,7 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
         checks: { 'auth.credentials': { status: 'warning', summary: `maybe ${secret}` } },
       }))),
     ],
-  ] as Array<[string, FutureProbeFailure['failure']['kind'], CodexDoctorRunner]>) (
+  ] as Array<[string, ProbeFailedReadiness['probeFailure']['kind'], CodexDoctorRunner]>) (
     'continues real dispatch after %s and retains only the closed %s diagnostic',
     async (_case, failureKind, runDoctor) => {
       mockExeca.mockResolvedValueOnce(successfulCodexResult() as never);
@@ -196,7 +199,12 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
     'preserves the real %s result after a degraded preflight',
     async (_case, stderr, expectedFlag) => {
       const runDoctor = vi.fn(async () => doctorResult('{not-json'));
-      mockExeca.mockResolvedValueOnce({ stdout: '', stderr, exitCode: 1 } as never);
+      mockExeca.mockResolvedValueOnce({
+        stdout: '',
+        stderr,
+        exitCode: 1,
+        ...(expectedFlag === 'providerUnavailable' ? { code: 'ENOENT' } : {}),
+      } as never);
 
       const result = await providerWithDoctor(runDoctor).invoke(base);
 
@@ -204,26 +212,28 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       if (expectedFlag) {
         expect(result[expectedFlag]).toBe(true);
       } else {
-        expect(result).toMatchObject({
-          success: false,
-          authFailure: undefined,
-          providerUnavailable: undefined,
-          rateLimited: undefined,
-          permissionDenied: undefined,
-          modelUnavailable: undefined,
-          sessionExpired: undefined,
-        });
+        expect(result.success).toBe(false);
+        for (const flag of [
+          'authFailure',
+          'providerUnavailable',
+          'rateLimited',
+          'permissionDenied',
+          'modelUnavailable',
+          'sessionExpired',
+        ] as const) {
+          expect(result[flag]).toBeUndefined();
+        }
       }
     },
   );
 
   // Covers: FR-8, FR-9, FR-10, FR-11, FR-13, FR-15
   it('authorizes one explicit recovery trial and emits secret-safe progress when the recovery probe fails', async () => {
-    const readiness = vi.fn(async (): Promise<FutureProbeFailure> => ({
+    const readiness = vi.fn(async (): Promise<ProbeFailedReadiness> => ({
       provider: 'codex',
       source: 'cached-login',
       state: 'probe-failed',
-      failure: { kind: 'timeout' },
+      probeFailure: { kind: 'timeout', facts: {} },
     }));
     const seen: ConductorEvent[] = [];
     const events = new ConductorEventEmitter();
@@ -239,17 +249,13 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
     const result = await (conductor as unknown as {
       parkOnAuthFailure(failed: unknown): Promise<{
         disposition: 'recovered' | 'trial-required' | 'halt';
-        probeFailure?: FutureProbeFailure['failure'];
       }>;
     }).parkOnAuthFailure({
       actualProvider: 'codex',
       authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
     });
 
-    expect(result).toEqual({
-      disposition: 'trial-required',
-      probeFailure: { kind: 'timeout' },
-    });
+    expect(result).toEqual({ disposition: 'trial-required' });
     expect(readiness).toHaveBeenCalledTimes(1);
     expect(seen).toContainEqual(expect.objectContaining({
       type: 'credentials_park_progress',
