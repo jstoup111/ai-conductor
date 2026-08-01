@@ -173,7 +173,7 @@ export class CodexProvider implements LLMProvider {
   }
 
   async readiness(spawnPermit?: InvokeOptions['spawnPermit']): Promise<AuthenticationReadiness> {
-    this.assertSpawnPermitted(spawnPermit);
+    this.assertSpawnPermitted(spawnPermit, 'preparation');
     const authentication = this.authentication;
     try {
       const result = await this.runDoctor(
@@ -252,8 +252,11 @@ export class CodexProvider implements LLMProvider {
     return subprocess;
   }
 
-  private assertSpawnPermitted(spawnPermit: InvokeOptions['spawnPermit']): void {
-    const permit = spawnPermit?.();
+  private assertSpawnPermitted(
+    spawnPermit: InvokeOptions['spawnPermit'],
+    purpose?: 'preparation',
+  ): void {
+    const permit = spawnPermit?.(purpose);
     if (permit && !permit.permitted) {
       throw new Error(`Codex process spawn denied: ${permit.reason}`);
     }

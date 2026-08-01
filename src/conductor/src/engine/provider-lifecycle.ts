@@ -1,6 +1,6 @@
 import { writeHaltMarker } from './halt-marker.js';
 import type { ProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
-import type { SpawnPermit } from '../execution/llm-provider.js';
+import type { SpawnPermit, SpawnPermitPurpose } from '../execution/llm-provider.js';
 import type { ProviderAttemptEvent } from '../types/events.js';
 import type { StepName } from '../types/steps.js';
 
@@ -288,10 +288,11 @@ async function superviseAttempt<T>(
     attempt: { ...attempt },
     deadlineAt,
     isCurrent: () => current,
-    spawnPermit: () => {
+    spawnPermit: (purpose: SpawnPermitPurpose = 'worker-spawn') => {
       if (!current) {
         return { permitted: false, reason: 'revoked' };
       }
+      if (purpose === 'preparation') return { permitted: true };
       if (state.phase === 'running') return { permitted: true };
       if (state.phase !== 'preparing') {
         return { permitted: false, reason: 'revoked' };

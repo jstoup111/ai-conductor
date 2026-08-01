@@ -363,8 +363,15 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
       .mockResolvedValueOnce({ success: true, output: "passed", exitCode: 0 });
     const provider: LLMProvider = {
       supportsSessionResume: true,
+      lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(),
-      invokeInteractive,
+      invokeInteractive: vi.fn(async (options: InvokeOptions) => {
+        const permit = options.spawnPermit?.();
+        if (permit && !permit.permitted) {
+          throw new Error(`provider spawn denied: ${permit.reason}`);
+        }
+        return invokeInteractive(options);
+      }),
     };
     const sessionIds = ["manual-claude-attempt-1", "manual-claude-attempt-2"];
     const sessions = new ProviderSessionStore({
@@ -488,8 +495,21 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         invoke: LLMProvider["invoke"],
         invokeInteractive: LLMProvider["invokeInteractive"],
       ): LLMProvider => ({
-        invoke,
-        invokeInteractive,
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        invoke: vi.fn(async (options: InvokeOptions) => {
+          const permit = options.spawnPermit?.();
+          if (permit && !permit.permitted) {
+            throw new Error(`provider spawn denied: ${permit.reason}`);
+          }
+          return invoke(options);
+        }),
+        invokeInteractive: vi.fn(async (options: InvokeOptions) => {
+          const permit = options.spawnPermit?.();
+          if (permit && !permit.permitted) {
+            throw new Error(`provider spawn denied: ${permit.reason}`);
+          }
+          return invokeInteractive(options);
+        }),
       });
       const legacySession = new SessionManager(pipelineDir);
       const ids = [

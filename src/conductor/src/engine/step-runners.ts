@@ -63,6 +63,7 @@ import {
   createProviderLifecycleSupervisor,
   systemProviderLifecycleTimer,
   type ProviderLifecycleHaltedResult,
+  type ProviderLifecycleTimer,
 } from './provider-lifecycle.js';
 import { createProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
 
@@ -310,6 +311,8 @@ export interface StepRunnerOptions {
   providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   /** Visible provider-transition warning sink. */
   providerWarn?: ExecuteProviderCandidatesInput['warn'];
+  /** Injectable preparation-supervision timer; production uses the system timer. */
+  providerLifecycleTimer?: ProviderLifecycleTimer;
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
   /**
@@ -373,6 +376,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerExecutor: typeof executeProviderCandidates;
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
+  private providerLifecycleTimer: ProviderLifecycleTimer;
   private taskAttribution?: ExecuteProviderCandidatesInput['taskAttribution'];
   /** Shared context remains live because Conductor installs self-host hooks at dispatch time. */
   private providerExecutionContext?: ProviderExecutionContext;
@@ -423,6 +427,8 @@ export class DefaultStepRunner implements StepRunner {
       options?.providerExecutor ??
       options?.providerExecution?.executor ??
       executeProviderCandidates;
+    this.providerLifecycleTimer =
+      options?.providerLifecycleTimer ?? systemProviderLifecycleTimer;
     this.providerAttempt =
       options?.providerAttempt ?? options?.providerExecution?.onAttempt;
     this.taskAttribution = options?.providerExecution?.taskAttribution;
@@ -877,7 +883,7 @@ export class DefaultStepRunner implements StepRunner {
       attempt: nextAttempt(),
       recoveryCount: 0,
       preparationTimeoutMinutes: resolveProviderPreparationTimeoutMinutes(this.config),
-      timer: systemProviderLifecycleTimer,
+      timer: this.providerLifecycleTimer,
       onLifecycleEvent: (event) => {
         void this.providerAttempt?.(event.step, event);
       },

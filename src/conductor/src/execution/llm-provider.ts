@@ -66,8 +66,15 @@ export type SpawnPermitDecision =
   | { permitted: true }
   | { permitted: false; reason: 'revoked' | 'superseded' };
 
+/**
+ * The provider action being authorized by a lifecycle-owned spawn permit.
+ * Omitting this argument preserves the original worker-spawn contract for
+ * legacy and custom providers.
+ */
+export type SpawnPermitPurpose = 'preparation' | 'worker-spawn';
+
 /** A lifecycle-owned, synchronous authority check for provider process creation. */
-export type SpawnPermit = () => SpawnPermitDecision;
+export type SpawnPermit = (purpose?: SpawnPermitPurpose) => SpawnPermitDecision;
 
 export interface InvokeResult {
   success: boolean;
