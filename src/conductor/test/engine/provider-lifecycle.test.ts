@@ -1,10 +1,40 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
+  createProviderLifecycleSupervisor,
   createPreparingProviderLifecycle,
   transitionProviderLifecycle,
 } from '../../src/engine/provider-lifecycle.js';
 
 describe('provider lifecycle transitions', () => {
+  it('starts preparing and records a five-minute lease before candidate work', async () => {
+    const events: string[] = [];
+    const scheduled = vi.fn<(callback: () => void, delayMilliseconds: number) => number>((_, delay) => {
+      events.push(`deadline:${delay}`);
+      return 1;
+    });
+    const supervisor = createProviderLifecycleSupervisor({
+      attempt: { logicalStep: 'build', id: 'attempt-1' },
+      recoveryCount: 0,
+      preparationTimeoutMinutes: 5,
+      timer: {
+        now: () => 10_000,
+        schedule: scheduled,
+        cancel: vi.fn(),
+      },
+      onStateChange: (state) => events.push(state.phase),
+    });
+
+    const result = await supervisor.supervise((lease) => {
+      events.push(`candidate:${lease.deadlineAt}:${lease.isCurrent()}`);
+      return 'candidate result';
+    });
+
+    expect({ result, events }).toEqual({
+      result: 'candidate result',
+      events: ['preparing', 'deadline:300000', 'candidate:310000:true'],
+    });
+  });
+
   it('moves a preparing attempt to running without changing its identity', () => {
     const attempt = { logicalStep: 'build', id: 'attempt-1' };
     const preparing = createPreparingProviderLifecycle(attempt, 0);
