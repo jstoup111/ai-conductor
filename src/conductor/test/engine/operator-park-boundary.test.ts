@@ -95,62 +95,70 @@ describe('operator park boundary contract', () => {
       new URL('../../src/engine/conductor.ts', import.meta.url),
       'utf8',
     );
-    const sourceThrough = (start: string, dispatch: string) => {
-      const startOffset = conductorSource.indexOf(start);
-      const dispatchOffset = conductorSource.indexOf(dispatch, startOffset);
-      return conductorSource.slice(startOffset, dispatchOffset + dispatch.length);
-    };
-    const dispatchInventory = [
-      {
-        schedulingUnit: 'configured parallel group',
-        dispatch: 'await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);',
-        source: sourceThrough(
-          'if (stepCfg?.parallel) {',
-          'await this.runParallelGroupViaCore(step.name, stepCfg.parallel, state);',
-        ),
-      },
-      {
-        schedulingUnit: 'built-in SHIP validation group',
-        dispatch: 'return runGroupBranch(',
-        source: sourceThrough(
-          'if (groupEntryName === step.name && membership.dispatchable.length > 1) {',
-          'return runGroupBranch(',
-        ),
-      },
-      {
-        schedulingUnit: 'serial step',
-        dispatch: 'await this.stepRunner.run(step.name, state, {',
-        source: sourceThrough(
-          '// Self-host release gates (TR-7/8/9/10):',
-          'await this.stepRunner.run(step.name, state, {',
-        ),
-      },
-    ];
-    const unguardedDispatches = dispatchInventory.filter(({ source, dispatch }) => {
-      const dispatchOffset = source.indexOf(dispatch);
-      return (
-        dispatchOffset === -1 ||
-        source.lastIndexOf('await stopAtOperatorParkBoundary();', dispatchOffset) === -1
-      );
+    const guardedSegments = [
+      /if \(stepCfg\?\.parallel\) \{[\s\S]*?await this\.runParallelGroupViaCore\(/,
+      /if \(groupEntryName === step\.name && membership\.dispatchable\.length > 1\) \{[\s\S]*?return runGroupBranch\(/,
+    ].map((pattern) => {
+      const match = conductorSource.match(pattern);
+      expect(match).not.toBeNull();
+      const source = match![0];
+      const start = conductorSource.indexOf(source);
+      return {
+        start,
+        guard: start + source.indexOf('await stopAtOperatorParkBoundary();'),
+        end: start + source.length,
+      };
     });
-    const introducedUnguardedDispatch = {
-      schedulingUnit: 'new scheduling unit',
-      source: 'await this.runNewSchedulingUnit();',
-      dispatch: 'await this.runNewSchedulingUnit();',
-    };
-    const guardRejectsIntroducedEntry = [introducedUnguardedDispatch].filter(
-      ({ source, dispatch }) => {
-        const dispatchOffset = source.indexOf(dispatch);
-        return (
-          dispatchOffset === -1 ||
-          source.lastIndexOf('await stopAtOperatorParkBoundary();', dispatchOffset) === -1
-        );
-      },
+    const serialGuard = conductorSource.lastIndexOf(
+      'const preDispatchPark = await stopAtOperatorParkBoundary();',
     );
+    const serialDispatch = conductorSource.indexOf(
+      'this.stepRunner.run(',
+      serialGuard,
+    );
+    expect(serialGuard).toBeGreaterThan(-1);
+    expect(serialDispatch).toBeGreaterThan(serialGuard);
+    guardedSegments.push({
+      start: serialGuard,
+      guard: serialGuard,
+      end: serialDispatch + 'this.stepRunner.run('.length,
+    });
+    const reviewedHelperDispatchAllowlist = [
+      "await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });",
+      'return this.stepRunner.run(name, state, { retryReason: retryHint });',
+      'return await this.stepRunner.run(name, state, { retryReason: retryHint });',
+      "return this.stepRunner.run('wiring_check', state);",
+      'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
+    ];
+    const dispatchPrimitives = [
+      'this.stepRunner.run(',
+      'runGroupBranch(',
+      'this.runParallelGroupViaCore(',
+    ];
+    const discoveredDispatches = dispatchPrimitives.flatMap((primitive) =>
+      [...conductorSource.matchAll(new RegExp(primitive.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'))].map(
+        (match) => ({ primitive, offset: match.index! }),
+      ),
+    );
+    const unreviewedDispatches = discoveredDispatches.filter(({ offset }) => {
+      const guarded = guardedSegments.some(
+        (segment) => offset > segment.guard && offset < segment.end,
+      );
+      const reviewedHelper = reviewedHelperDispatchAllowlist.some((allowed) =>
+        conductorSource
+          .slice(Math.max(0, offset - 40), offset + allowed.length + 40)
+          .includes(allowed),
+      );
+      return !guarded && !reviewedHelper;
+    });
 
-    expect({ unguardedDispatches, guardRejectsIntroducedEntry }).toEqual({
-      unguardedDispatches: [],
-      guardRejectsIntroducedEntry: [introducedUnguardedDispatch],
+    expect({ discoveredDispatches, unreviewedDispatches }).toEqual({
+      discoveredDispatches: expect.arrayContaining([
+        expect.objectContaining({ primitive: 'this.stepRunner.run(' }),
+        expect.objectContaining({ primitive: 'runGroupBranch(' }),
+        expect.objectContaining({ primitive: 'this.runParallelGroupViaCore(' }),
+      ]),
+      unreviewedDispatches: [],
     });
   });
 
@@ -522,6 +530,86 @@ describe('operator park boundary contract', () => {
       },
       laterSerialDispatches: 0,
       settledMembers: 2,
+    });
+  });
+
+  it('preserves mixed parallel statuses before parking at the next boundary', async () => {
+    await writeState(
+      statePath,
+      stateWithPending('memory', 'explore', 'architecture_diagram'),
+    );
+    let boundaryChecks = 0;
+    let boundaryObservation: Record<string, unknown> | undefined;
+    const parkObserved = deferred();
+    const events = new ConductorEventEmitter();
+    events.on('operator_park_boundary', async () => {
+      const persisted = await readState(statePath);
+      if (persisted.ok) boundaryObservation = persisted.value as Record<string, unknown>;
+      parkObserved.resolve();
+    });
+    const run = vi.fn<StepRunner['run']>(async (step) => {
+      const branch = String(step);
+      return {
+        success: branch !== 'failed-advisory',
+        output: branch === 'failed-advisory' ? 'advisory failure' : undefined,
+      };
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      config: {
+        steps: {
+          memory: {
+            parallel: [
+              { name: 'successful' },
+              { name: 'failed-advisory', advisory: true },
+            ],
+          },
+          explore: {
+            when: 'tier == L',
+            parallel: [{ name: 'skipped' }],
+          },
+        },
+      },
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary: async () => {
+        boundaryChecks += 1;
+        return boundaryChecks >= 3;
+      },
+    });
+
+    const result = await conductor.run();
+    await parkObserved.promise;
+
+    expect({
+      result,
+      statuses: boundaryObservation && {
+        memory: boundaryObservation.memory,
+        successful: boundaryObservation['memory__successful'],
+        failedAdvisory: boundaryObservation['memory__failed-advisory'],
+        explore: boundaryObservation.explore,
+        skipped: boundaryObservation['explore__skipped'],
+      },
+      laterDispatches: run.mock.calls.filter(([step]) => step === 'architecture_diagram').length,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'group', name: 'memory' },
+      },
+      statuses: {
+        memory: 'done',
+        successful: 'done',
+        failedAdvisory: 'failed',
+        explore: 'skipped',
+        skipped: 'skipped',
+      },
+      laterDispatches: 0,
     });
   });
 
