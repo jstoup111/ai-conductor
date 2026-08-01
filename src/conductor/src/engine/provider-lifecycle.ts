@@ -1,3 +1,5 @@
+import type { ProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
+
 /** Identifies one provider attempt within a logical conductor step. */
 export interface ProviderAttemptIdentity {
   logicalStep: string;
@@ -15,8 +17,16 @@ export type ProviderLifecycleTimerHandle = number | object;
 
 /** Authority held by pre-spawn provider preparation work. */
 export interface ProviderPreparationLease {
+  attempt: ProviderAttemptIdentity;
   deadlineAt: number | undefined;
   isCurrent(): boolean;
+}
+
+/** Durable authority required to replace one timed-out preparation attempt. */
+export interface ProviderLifecycleRecoveryOptions {
+  projectRoot: string;
+  episodeStore: ProviderLifecycleEpisodeStore;
+  createReplacementAttempt(expiredAttempt: ProviderAttemptIdentity): ProviderAttemptIdentity;
 }
 
 export interface ProviderLifecycleSupervisorOptions {
@@ -24,6 +34,7 @@ export interface ProviderLifecycleSupervisorOptions {
   recoveryCount: number;
   preparationTimeoutMinutes: number;
   timer: ProviderLifecycleTimer;
+  recovery?: ProviderLifecycleRecoveryOptions;
   onStateChange?(state: ProviderLifecycleState): void;
 }
 
@@ -39,6 +50,14 @@ export class ProviderPreparationTimeoutError extends Error {
     super(`Provider preparation timed out for ${attempt.logicalStep} (${attempt.id})`);
     this.name = 'ProviderPreparationTimeoutError';
     this.attempt = { ...attempt };
+  }
+}
+
+/** Raised when durable evidence cannot safely establish replacement authority. */
+export class ProviderLifecycleRecoveryEvidenceError extends Error {
+  constructor(logicalStep: string) {
+    super(`Provider lifecycle recovery evidence is unavailable for ${logicalStep}`);
+    this.name = 'ProviderLifecycleRecoveryEvidenceError';
   }
 }
 
@@ -114,57 +133,104 @@ export function createProviderLifecycleSupervisor(
 ): ProviderLifecycleSupervisor {
   return {
     async supervise<T>(candidate: (lease: ProviderPreparationLease) => Promise<T> | T): Promise<T> {
-      let state: ProviderLifecycleState = createPreparingProviderLifecycle(
-        options.attempt,
-        options.recoveryCount,
-      );
-      const deadlineDelayMilliseconds = preparationDeadlineDelay(options.preparationTimeoutMinutes);
-      const deadlineAt = deadlineDelayMilliseconds === undefined
-        ? undefined
-        : options.timer.now() + deadlineDelayMilliseconds;
-      let current = true;
-      options.onStateChange?.(state);
-      let timeout: ProviderLifecycleTimerHandle | undefined;
-      const deadline = deadlineDelayMilliseconds === undefined
-        ? undefined
-        : new Promise<never>((_, reject) => {
-          timeout = options.timer.schedule(() => {
-            if (!current) return;
-            current = false;
-            const recovering = transitionProviderLifecycle(state, {
-              phase: 'recovering',
-              reason: 'preparation-timeout',
-            });
-            if (recovering.accepted) {
-              state = recovering.state;
-              options.onStateChange?.(state);
-            }
-            reject(new ProviderPreparationTimeoutError(options.attempt));
-          }, deadlineDelayMilliseconds);
-        });
-
-      const lease: ProviderPreparationLease = {
-        deadlineAt,
-        isCurrent: () => current,
-      };
-
-      let candidateResult: Promise<T>;
+      const recoveryCount = await loadRecoveryCount(options);
       try {
-        candidateResult = Promise.resolve(candidate(lease));
+        return await superviseAttempt(options, options.attempt, recoveryCount, candidate);
       } catch (error) {
-        candidateResult = Promise.reject(error);
-      }
+        if (
+          !(error instanceof ProviderPreparationTimeoutError)
+          || options.recovery === undefined
+          || recoveryCount !== 0
+        ) {
+          throw error;
+        }
 
-      try {
-        return await (deadline === undefined
-          ? candidateResult
-          : Promise.race([candidateResult, deadline]));
-      } finally {
-        current = false;
-        if (timeout !== undefined) options.timer.cancel(timeout);
+        const recovering: RecoveringProviderLifecycle = {
+          phase: 'recovering',
+          attempt: error.attempt,
+          recoveryCount: 1,
+          reason: 'preparation-timeout',
+        };
+        await options.recovery.episodeStore.writeProviderLifecycleEpisode(
+          options.recovery.projectRoot,
+          recovering,
+        );
+        const replacementAttempt = options.recovery.createReplacementAttempt(error.attempt);
+        return superviseAttempt(options, replacementAttempt, recovering.recoveryCount, candidate);
       }
     },
   };
+}
+
+async function loadRecoveryCount(options: ProviderLifecycleSupervisorOptions): Promise<number> {
+  if (options.recovery === undefined) return options.recoveryCount;
+
+  const episode = await options.recovery.episodeStore.readProviderLifecycleEpisode(
+    options.recovery.projectRoot,
+    options.attempt.logicalStep,
+  );
+  if (episode.recoveryAuthority === 'fresh') return options.recoveryCount;
+  if (episode.recoveryAuthority === 'denied') {
+    throw new ProviderLifecycleRecoveryEvidenceError(options.attempt.logicalStep);
+  }
+  return episode.lifecycle.recoveryCount;
+}
+
+async function superviseAttempt<T>(
+  options: ProviderLifecycleSupervisorOptions,
+  attempt: ProviderAttemptIdentity,
+  recoveryCount: number,
+  candidate: (lease: ProviderPreparationLease) => Promise<T> | T,
+): Promise<T> {
+  let state: ProviderLifecycleState = createPreparingProviderLifecycle(attempt, recoveryCount);
+  const deadlineDelayMilliseconds = preparationDeadlineDelay(options.preparationTimeoutMinutes);
+  const deadlineAt = deadlineDelayMilliseconds === undefined
+    ? undefined
+    : options.timer.now() + deadlineDelayMilliseconds;
+  let current = true;
+  options.onStateChange?.(state);
+  let timeout: ProviderLifecycleTimerHandle | undefined;
+  const deadline = deadlineDelayMilliseconds === undefined
+    ? undefined
+    : new Promise<never>((_, reject) => {
+      timeout = options.timer.schedule(() => {
+        if (!current) return;
+        current = false;
+        if (recoveryCount === 0) {
+          const recovering = transitionProviderLifecycle(state, {
+            phase: 'recovering',
+            reason: 'preparation-timeout',
+          });
+          if (recovering.accepted) {
+            state = recovering.state;
+            options.onStateChange?.(state);
+          }
+        }
+        reject(new ProviderPreparationTimeoutError(attempt));
+      }, deadlineDelayMilliseconds);
+    });
+
+  const lease: ProviderPreparationLease = {
+    attempt: { ...attempt },
+    deadlineAt,
+    isCurrent: () => current,
+  };
+
+  let candidateResult: Promise<T>;
+  try {
+    candidateResult = Promise.resolve(candidate(lease));
+  } catch (error) {
+    candidateResult = Promise.reject(error);
+  }
+
+  try {
+    return await (deadline === undefined
+      ? candidateResult
+      : Promise.race([candidateResult, deadline]));
+  } finally {
+    current = false;
+    if (timeout !== undefined) options.timer.cancel(timeout);
+  }
 }
 
 /**

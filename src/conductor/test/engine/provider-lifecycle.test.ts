@@ -5,6 +5,7 @@ import {
   ProviderPreparationTimeoutError,
   transitionProviderLifecycle,
 } from '../../src/engine/provider-lifecycle.js';
+import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 
 function deferred<T>(): {
   promise: Promise<T>;
@@ -20,6 +21,121 @@ function deferred<T>(): {
 }
 
 describe('provider lifecycle transitions', () => {
+  it('persists the first timeout recovery before dispatching its one replacement', async () => {
+    vi.useFakeTimers();
+    try {
+      const events: string[] = [];
+      const first = deferred<string>();
+      const episodeStore: ProviderLifecycleEpisodeStore = {
+        readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+        writeProviderLifecycleEpisode: vi.fn(async (_projectRoot, lifecycle) => {
+          events.push(`persist:${lifecycle.phase}:${lifecycle.recoveryCount}`);
+        }),
+      };
+      const supervisor = createProviderLifecycleSupervisor({
+        attempt: { logicalStep: 'build', id: 'attempt-1' },
+        recoveryCount: 0,
+        preparationTimeoutMinutes: 5,
+        timer: {
+          now: () => 10_000,
+          schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
+          cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        },
+        recovery: {
+          projectRoot: '/project',
+          episodeStore,
+          createReplacementAttempt: () => ({ logicalStep: 'build', id: 'attempt-2' }),
+        },
+      });
+
+      const result = supervisor.supervise((lease) => {
+        events.push(`candidate:${lease.attempt.id}`);
+        return lease.attempt.id === 'attempt-1' ? first.promise : 'replacement-result';
+      });
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      expect({ result: await result, events }).toEqual({
+        result: 'replacement-result',
+        events: [
+          'candidate:attempt-1',
+          'persist:recovering:1',
+          'candidate:attempt-2',
+        ],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reloads a consumed recovery count after a daemon restart', async () => {
+    const episodeStore: ProviderLifecycleEpisodeStore = {
+      readProviderLifecycleEpisode: vi.fn().mockResolvedValue({
+        recoveryAuthority: 'persisted',
+        lifecycle: {
+          phase: 'recovering',
+          attempt: { logicalStep: 'build', id: 'attempt-1' },
+          recoveryCount: 1,
+          reason: 'preparation-timeout',
+        },
+      }),
+      writeProviderLifecycleEpisode: vi.fn(),
+    };
+    const states: string[] = [];
+    const supervisor = createProviderLifecycleSupervisor({
+      attempt: { logicalStep: 'build', id: 'attempt-2' },
+      recoveryCount: 0,
+      preparationTimeoutMinutes: 5,
+      timer: { now: () => 10_000, schedule: vi.fn(), cancel: vi.fn() },
+      recovery: {
+        projectRoot: '/project',
+        episodeStore,
+        createReplacementAttempt: () => ({ logicalStep: 'build', id: 'attempt-3' }),
+      },
+      onStateChange: (state) => states.push(`${state.phase}:${state.recoveryCount}`),
+    });
+
+    await supervisor.supervise(() => 'replacement-result');
+
+    expect(states).toEqual(['preparing:1']);
+  });
+
+  it('propagates the successful replacement result instead of the timed-out result', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = deferred<{ provider: string }>();
+      const episodeStore: ProviderLifecycleEpisodeStore = {
+        readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+        writeProviderLifecycleEpisode: vi.fn(),
+      };
+      const supervisor = createProviderLifecycleSupervisor({
+        attempt: { logicalStep: 'build', id: 'attempt-1' },
+        recoveryCount: 0,
+        preparationTimeoutMinutes: 5,
+        timer: {
+          now: () => 10_000,
+          schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
+          cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        },
+        recovery: {
+          projectRoot: '/project',
+          episodeStore,
+          createReplacementAttempt: () => ({ logicalStep: 'build', id: 'attempt-2' }),
+        },
+      });
+
+      const result = supervisor.supervise((lease) => (
+        lease.attempt.id === 'attempt-1' ? first.promise : { provider: 'replacement' }
+      ));
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      expect(await result).toEqual({ provider: 'replacement' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('starts preparing and records a five-minute lease before candidate work', async () => {
     const events: string[] = [];
     const scheduled = vi.fn<(callback: () => void, delayMilliseconds: number) => number>((_, delay) => {

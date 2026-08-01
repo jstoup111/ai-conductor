@@ -4,12 +4,17 @@ import type { ProviderAttemptIdentity, ProviderLifecycleState } from './provider
 
 export interface ProviderLifecycleEpisodeStoreFileOperations {
   mkdir(path: string, options: { recursive: true }): Promise<unknown>;
+  readFile(path: string, encoding: 'utf-8'): Promise<string>;
   writeFile(path: string, content: string): Promise<unknown>;
   rename(from: string, to: string): Promise<unknown>;
   rm(path: string, options: { force: true }): Promise<unknown>;
 }
 
 export interface ProviderLifecycleEpisodeStore {
+  readProviderLifecycleEpisode(
+    projectRoot: string,
+    logicalStep: string,
+  ): Promise<ProviderLifecycleEpisodeReadResult>;
   writeProviderLifecycleEpisode(projectRoot: string, lifecycle: ProviderLifecycleState): Promise<void>;
 }
 
@@ -35,6 +40,7 @@ export type ProviderLifecycleEpisodeReadFailureReason =
 
 const defaultFileOperations: ProviderLifecycleEpisodeStoreFileOperations = {
   mkdir,
+  readFile,
   writeFile,
   rename,
   rm,
@@ -48,6 +54,9 @@ export function createProviderLifecycleEpisodeStore(
   fileOperations: ProviderLifecycleEpisodeStoreFileOperations = defaultFileOperations,
 ): ProviderLifecycleEpisodeStore {
   return {
+    readProviderLifecycleEpisode(projectRoot, logicalStep): Promise<ProviderLifecycleEpisodeReadResult> {
+      return readProviderLifecycleEpisodeWithFileOperations(fileOperations, projectRoot, logicalStep);
+    },
     async writeProviderLifecycleEpisode(projectRoot, lifecycle): Promise<void> {
       const path = episodePath(projectRoot, lifecycle.attempt.logicalStep);
       const directory = join(projectRoot, '.pipeline');
@@ -85,9 +94,17 @@ export async function readProviderLifecycleEpisode(
   projectRoot: string,
   logicalStep: string,
 ): Promise<ProviderLifecycleEpisodeReadResult> {
+  return defaultStore.readProviderLifecycleEpisode(projectRoot, logicalStep);
+}
+
+async function readProviderLifecycleEpisodeWithFileOperations(
+  fileOperations: ProviderLifecycleEpisodeStoreFileOperations,
+  projectRoot: string,
+  logicalStep: string,
+): Promise<ProviderLifecycleEpisodeReadResult> {
   let content: string;
   try {
-    content = await readFile(episodePath(projectRoot, logicalStep), 'utf-8');
+    content = await fileOperations.readFile(episodePath(projectRoot, logicalStep), 'utf-8');
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { recoveryAuthority: 'fresh' };
     return { recoveryAuthority: 'denied', reason: 'unreadable' };

@@ -146,6 +146,23 @@ describe('provider lifecycle episode store', () => {
     });
   });
 
+  it('reloads the consumed recovery count for a replacement after a daemon restart', async () => {
+    const projectRoot = await createProjectRoot();
+    const recoveringReplacement: ProviderLifecycleState = {
+      phase: 'recovering',
+      attempt: { logicalStep: 'build', id: 'build-attempt-1' },
+      recoveryCount: 1,
+      reason: 'preparation-timeout',
+    };
+
+    await writeProviderLifecycleEpisode(projectRoot, recoveringReplacement);
+
+    expect(await readProviderLifecycleEpisode(projectRoot, 'build')).toEqual({
+      recoveryAuthority: 'persisted',
+      lifecycle: recoveringReplacement,
+    });
+  });
+
   it('replaces a logical step lifecycle with the newer completed attempt', async () => {
     const projectRoot = await createProjectRoot();
     const firstAttempt: ProviderLifecycleState = {
@@ -186,6 +203,7 @@ describe('provider lifecycle episode store', () => {
       mkdir: async (path) => {
         calls.push({ operation: 'mkdir', path });
       },
+      readFile: async () => '',
       writeFile: async (path) => {
         calls.push({ operation: 'writeFile', path });
       },
@@ -231,6 +249,7 @@ describe('provider lifecycle episode store', () => {
     let settled = false;
     const store = createProviderLifecycleEpisodeStore({
       mkdir: async () => undefined,
+      readFile: async () => '',
       writeFile: async () => undefined,
       rename: async () => {
         resolveRenameAttempt?.();
