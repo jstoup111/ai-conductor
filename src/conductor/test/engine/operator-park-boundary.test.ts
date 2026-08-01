@@ -8,6 +8,7 @@ import { writeState, readState } from '../../src/engine/state.js';
 import { ALL_STEPS, VALIDATION_GROUP } from '../../src/engine/steps.js';
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { resolveGroupMembership } from '../../src/engine/conductor.js';
+import { isOperatorParked } from '../../src/engine/park-marker.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductState, ConductorEvent, StepName } from '../../src/types/index.js';
 import type {
@@ -248,6 +249,60 @@ describe('operator park boundary contract', () => {
       boundaryObservation: { memory: 'done', explore: 'pending' },
       settledStepsStillInProgress: [],
       persisted: { memory: 'done', explore: 'pending' },
+    });
+  });
+
+  it('parks after a settled serial step before dispatching a later parallel validation group', async () => {
+    const members = [
+      'manual_test',
+      'prd_audit',
+      'architecture_review_as_built',
+    ] as const;
+    await writeState(statePath, stateWithPending('memory', ...members));
+    const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const events = new ConductorEventEmitter();
+    const parallelStarts: Array<Extract<ConductorEvent, { type: 'parallel_started' }>> = [];
+    events.on('parallel_started', (event) => {
+      if (event.type === 'parallel_started') parallelStarts.push(event);
+    });
+    let boundaryChecks = 0;
+    const operatorParkBoundary = vi.fn<
+      NonNullable<ConductorOptions['operatorParkBoundary']>
+    >(async () => {
+      boundaryChecks += 1;
+      return boundaryChecks > 1;
+    });
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath: statePath,
+      stepRunner: { run },
+      events,
+      fromStep: 'memory',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      featureSlug: 'operator-park-boundary',
+      operatorParkBoundary,
+      ...noExternalIo(),
+    });
+
+    const result = await conductor.run();
+
+    expect({
+      result,
+      runnerSteps: run.mock.calls.map(([step]) => step),
+      memberRunnerCalls: run.mock.calls.filter(([step]) =>
+        members.includes(step as typeof members[number]),
+      ),
+      parallelStarts,
+    }).toEqual({
+      result: {
+        kind: 'operator-parked',
+        boundary: { kind: 'step', name: 'memory' },
+      },
+      runnerSteps: ['memory'],
+      memberRunnerCalls: [],
+      parallelStarts: [],
     });
   });
 
@@ -1053,9 +1108,12 @@ describe('operator park boundary contract', () => {
     });
   });
 
-  it('fails closed before the first pending unit when the operator park boundary cannot be read', async () => {
+  it('logs a marker-read anomaly and fails closed before the first pending unit', async () => {
     await writeState(statePath, stateWithPending('memory'));
     const run = vi.fn<StepRunner['run']>(async () => ({ success: true }));
+    const featureSlug = 'operator-park-boundary';
+    const logLines: string[] = [];
+    await mkdir(join(projectRoot, '.daemon', 'parked', featureSlug), { recursive: true });
     const conductor = new Conductor({
       projectRoot,
       stateFilePath: statePath,
@@ -1065,20 +1123,34 @@ describe('operator park boundary contract', () => {
       mode: 'auto',
       daemon: true,
       verifyArtifacts: false,
-      featureSlug: 'operator-park-boundary',
-      operatorParkBoundary: async () => {
-        throw Object.assign(new Error('park state is unreadable'), { code: 'EACCES' });
-      },
+      featureSlug,
+      operatorParkBoundary: () =>
+        isOperatorParked(projectRoot, featureSlug, (error) => {
+          logLines.push(`operator park marker read failed: ${error.message}`);
+        }),
     });
 
     const result = await conductor.run();
+    const daemonCliSource = await readFile(
+      new URL('../../src/daemon-cli.ts', import.meta.url),
+      'utf8',
+    );
 
-    expect({ result, runnerCalls: run.mock.calls }).toEqual({
+    expect({
+      result,
+      runnerCalls: run.mock.calls,
+      logLines,
+      daemonWiresMarkerReadErrors: /operatorParkBoundary:\s*\(\)\s*=>\s*isOperatorParked\(\s*projectRoot,\s*item\.slug,\s*\(error\)\s*=>\s*featureLog\(`operator park marker read failed: \$\{error\.message\}`\),?\s*\)/.test(
+        daemonCliSource,
+      ),
+    }).toEqual({
       result: {
         kind: 'operator-parked',
         boundary: { kind: 'pre-first-unit' },
       },
       runnerCalls: [],
+      logLines: [expect.stringMatching(/operator park marker read failed:.*EISDIR/i)],
+      daemonWiresMarkerReadErrors: true,
     });
   });
 

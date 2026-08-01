@@ -1045,7 +1045,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       // the narrative to the engineer store instead of the repo's .docs/retros/.
       daemon: true,
       featureSlug: item.slug,
-      operatorParkBoundary: () => isOperatorParked(projectRoot, item.slug),
+      operatorParkBoundary: () =>
+        isOperatorParked(projectRoot, item.slug, (error) =>
+          featureLog(`operator park marker read failed: ${error.message}`),
+        ),
       rateLimitEpisode,
       // Task 22: Register in-flight wait AbortControllers with daemon-level handler
       // so process-level SIGTERM can abort all waits across N concurrent conductors.
