@@ -16,6 +16,11 @@ export interface ProviderLifecycleEpisodeStore {
     logicalStep: string,
   ): Promise<ProviderLifecycleEpisodeReadResult>;
   writeProviderLifecycleEpisode(projectRoot: string, lifecycle: ProviderLifecycleState): Promise<void>;
+  /**
+   * Clears recovery evidence after the supervisor has established that its
+   * current attempt reached a terminal result. Optional for older test fakes.
+   */
+  clearProviderLifecycleEpisode?(projectRoot: string, logicalStep: string): Promise<void>;
 }
 
 const PROVIDER_LIFECYCLE_EPISODE_VERSION = 1;
@@ -78,6 +83,9 @@ export function createProviderLifecycleEpisodeStore(
         throw error;
       }
     },
+    async clearProviderLifecycleEpisode(projectRoot, logicalStep): Promise<void> {
+      await fileOperations.rm(episodePath(projectRoot, logicalStep), { force: true });
+    },
   };
 }
 
@@ -114,7 +122,7 @@ async function readProviderLifecycleEpisodeWithFileOperations(
 }
 
 export async function clearProviderLifecycleEpisode(projectRoot: string, logicalStep: string): Promise<void> {
-  await rm(episodePath(projectRoot, logicalStep), { force: true });
+  await defaultStore.clearProviderLifecycleEpisode?.(projectRoot, logicalStep);
 }
 
 function parseProviderLifecycleEpisode(

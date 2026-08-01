@@ -306,13 +306,43 @@ async function superviseAttempt<T>(
   }
 
   try {
-    return await (deadline === undefined
+    const result = await (deadline === undefined
       ? candidateResult
       : Promise.race([candidateResult, deadline]));
+    if (current) {
+      current = false;
+      await settleCurrentAttempt(options, state, attempt, timeout, 'completed');
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof ProviderPreparationTimeoutError && !current) throw error;
+
+    if (current) {
+      current = false;
+      await settleCurrentAttempt(options, state, attempt, timeout, 'failed');
+    }
+    throw error;
   } finally {
     current = false;
     if (timeout !== undefined) options.timer.cancel(timeout);
   }
+}
+
+async function settleCurrentAttempt(
+  options: ProviderLifecycleSupervisorOptions,
+  state: ProviderLifecycleState,
+  attempt: ProviderAttemptIdentity,
+  timeout: ProviderLifecycleTimerHandle | undefined,
+  outcome: SettledProviderLifecycle['outcome'],
+): Promise<void> {
+  const settled = transitionProviderLifecycle(state, { phase: 'settled', outcome }, attempt);
+  if (!settled.accepted) return;
+
+  if (timeout !== undefined) options.timer.cancel(timeout);
+  await options.recovery?.episodeStore.clearProviderLifecycleEpisode?.(
+    options.recovery.projectRoot,
+    attempt.logicalStep,
+  );
 }
 
 /**
