@@ -45,7 +45,6 @@ import { createLedger } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
-import { parseSourceRef } from './engineer/issue-ref.js';
 import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
 import {
   claimUnblocked,
@@ -335,7 +334,7 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
  * Parse a simple duration string (e.g. "24h", "2d", "30m") into milliseconds.
  * Returns null for unparseable input — callers fall back to the resolved default.
  */
-export function parseDurationMs(input: string | undefined): number | null {
+function parseDurationMs(input: string | undefined): number | null {
   if (!input) return null;
   const m = /^(\d+)\s*(ms|s|m|h|d)$/.exec(input.trim());
   if (!m) return null;
@@ -1238,7 +1237,7 @@ export async function dispatchEngineer(
       const parsedForget = parseSourceRef(sourceRef);
       if (parsedForget) {
         try {
-          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.number, HANDLED_LABEL), { cwd: process.cwd() });
+          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.issue, HANDLED_LABEL), { cwd: process.cwd() });
         } catch (err: unknown) {
           printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
         }

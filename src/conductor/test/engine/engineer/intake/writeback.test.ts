@@ -32,6 +32,7 @@ function fakeLedger(): { ledger: Ledger; transitions: Array<{ status: LedgerStat
     forget: async () => {},
     list: async () => [],
     reopen: async () => {},
+    requeueClaimed: async () => ({ acted: false }),
   };
   return { ledger, transitions };
 }
@@ -64,6 +65,7 @@ describe('reportRouted', () => {
       forget: async () => {},
       list: async () => [],
       reopen: async () => {},
+      requeueClaimed: async () => ({ acted: false }),
     };
     await expect(
       reportRouted({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'target-repo'),
@@ -149,6 +151,7 @@ describe('reportDone', () => {
       forget: async () => {},
       list: async () => [],
       reopen: async () => {},
+      requeueClaimed: async () => ({ acted: false }),
     };
     await expect(
       reportDone({ source: 'github-issues', sourceRef: 'o/a#1', port, ledger }, 'https://x/pull/9'),

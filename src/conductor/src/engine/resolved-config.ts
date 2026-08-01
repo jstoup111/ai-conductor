@@ -441,7 +441,7 @@ export function resolveRebaseResolutionAttempts(config?: HarnessConfig): number 
  * claimed-but-abandoned ledger entries (unclaim/requeue). 24 hours.
  * Overridable via `stale_claim_window_hours` in the top-level HarnessConfig.
  */
-export const DEFAULT_STALE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_STALE_CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Resolve the stale-claim auto-heal window in milliseconds from HarnessConfig.

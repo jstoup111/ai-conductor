@@ -46,7 +46,7 @@ describe('engineer unclaim: negative paths (Task 9, 10)', () => {
         sourceRef: 'o/a#2',
       };
 
-      const code = await dispatchEngineer(dispatch, { ...opts(), engineerDir: engDir });
+      const code = await dispatchEngineer(dispatch, { ...opts({}), engineerDir: engDir });
 
       expect(code).toBe(0);
       expect(err.length).toBe(0);
@@ -77,7 +77,7 @@ describe('engineer unclaim: negative paths (Task 9, 10)', () => {
         sourceRef: 'o/a#999',
       };
 
-      const code = await dispatchEngineer(dispatch, { ...opts(), engineerDir: engDir });
+      const code = await dispatchEngineer(dispatch, { ...opts({}), engineerDir: engDir });
 
       expect(code).toBe(0);
       expect(err.length).toBe(0);

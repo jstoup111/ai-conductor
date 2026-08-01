@@ -1,16 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import {
-  DEFAULT_STALE_CLAIM_WINDOW_MS,
-  resolveStaleClaimWindowMs,
-} from '../../src/engine/resolved-config.js';
+import { resolveStaleClaimWindowMs } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 
 describe('engine/resolved-config — resolveStaleClaimWindowMs', () => {
-  it('exports DEFAULT_STALE_CLAIM_WINDOW_MS = 24h in milliseconds', () => {
-    expect(DEFAULT_STALE_CLAIM_WINDOW_MS).toBe(24 * 60 * 60 * 1000);
-  });
-
-  it('returns the 24h default when no config is provided', () => {
+  it('returns the 24h default in milliseconds', () => {
     expect(resolveStaleClaimWindowMs()).toBe(24 * 60 * 60 * 1000);
   });
 

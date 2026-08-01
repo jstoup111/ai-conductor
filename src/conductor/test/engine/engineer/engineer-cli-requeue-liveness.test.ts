@@ -59,7 +59,7 @@ describe('engineer requeue --stale: liveness (Task 12)', () => {
 
       const code = await dispatchEngineer(
         { kind: 'requeue', stale: true, olderThan: '24h' },
-        { ...opts(), engineerDir: engDir, gh },
+        { ...opts({}), engineerDir: engDir, gh },
       );
 
       expect(code).toBe(0);

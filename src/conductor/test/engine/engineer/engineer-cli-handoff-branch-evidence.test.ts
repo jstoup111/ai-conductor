@@ -466,6 +466,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
         async forget() {},
         async list() { return []; },
         async reopen() {},
+        async requeueClaimed() { return { acted: false }; },
       };
     });
 
@@ -535,6 +536,7 @@ describe('engineer handoff — evidence-write failure handling + pr-opened regre
         async forget() {},
         async list() { return []; },
         async reopen() {},
+        async requeueClaimed() { return { acted: false }; },
       };
     });
 

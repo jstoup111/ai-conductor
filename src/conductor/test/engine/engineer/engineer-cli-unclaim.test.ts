@@ -48,7 +48,7 @@ describe('engineer unclaim: happy path (Task 8)', () => {
       };
 
       const code = await dispatchEngineer(dispatch, {
-        ...opts(),
+        ...opts({}),
         engineerDir: engDir,
       });
 

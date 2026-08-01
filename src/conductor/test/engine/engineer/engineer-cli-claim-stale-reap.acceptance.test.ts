@@ -187,6 +187,7 @@ describe('engineer claim: stale-claim auto-heal reaches the real dispatchEnginee
       source: SOURCE,
       sourceRef: pendingRef,
       text: 'a healthy newer idea',
+      status: 'pending',
       receivedAt: new Date().toISOString(),
     };
     await queue.enqueue(pendingEnvelope);
