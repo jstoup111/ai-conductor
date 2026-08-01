@@ -1,3 +1,4 @@
+import { writeHaltMarker } from './halt-marker.js';
 import type { ProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
 
 /** Identifies one provider attempt within a logical conductor step. */
@@ -39,17 +40,30 @@ export interface ProviderLifecycleSupervisorOptions {
 }
 
 export interface ProviderLifecycleSupervisor {
-  supervise<T>(candidate: (lease: ProviderPreparationLease) => Promise<T> | T): Promise<T>;
+  supervise<T>(
+    candidate: (lease: ProviderPreparationLease) => Promise<T> | T,
+  ): Promise<T | ProviderLifecycleHaltedResult>;
+}
+
+/** Terminal outcome when the single automatic preparation recovery is exhausted. */
+export interface ProviderLifecycleHaltedResult {
+  kind: 'halted';
+  reason: 'preparation-timeout-exhausted';
+  attempt: ProviderAttemptIdentity;
+  elapsedMilliseconds: number;
+  recoveryCount: number;
 }
 
 /** Raised when preparation loses its authority before it can start a provider. */
 export class ProviderPreparationTimeoutError extends Error {
   readonly attempt: ProviderAttemptIdentity;
+  readonly elapsedMilliseconds: number;
 
-  constructor(attempt: ProviderAttemptIdentity) {
+  constructor(attempt: ProviderAttemptIdentity, elapsedMilliseconds: number) {
     super(`Provider preparation timed out for ${attempt.logicalStep} (${attempt.id})`);
     this.name = 'ProviderPreparationTimeoutError';
     this.attempt = { ...attempt };
+    this.elapsedMilliseconds = elapsedMilliseconds;
   }
 }
 
@@ -132,33 +146,68 @@ export function createProviderLifecycleSupervisor(
   options: ProviderLifecycleSupervisorOptions,
 ): ProviderLifecycleSupervisor {
   return {
-    async supervise<T>(candidate: (lease: ProviderPreparationLease) => Promise<T> | T): Promise<T> {
+    async supervise<T>(
+      candidate: (lease: ProviderPreparationLease) => Promise<T> | T,
+    ): Promise<T | ProviderLifecycleHaltedResult> {
       const recoveryCount = await loadRecoveryCount(options);
-      try {
-        return await superviseAttempt(options, options.attempt, recoveryCount, candidate);
-      } catch (error) {
-        if (
-          !(error instanceof ProviderPreparationTimeoutError)
-          || options.recovery === undefined
-          || recoveryCount !== 0
-        ) {
-          throw error;
-        }
+      let attempt = options.attempt;
+      let currentRecoveryCount = recoveryCount;
 
-        const recovering: RecoveringProviderLifecycle = {
-          phase: 'recovering',
-          attempt: error.attempt,
-          recoveryCount: 1,
-          reason: 'preparation-timeout',
-        };
-        await options.recovery.episodeStore.writeProviderLifecycleEpisode(
-          options.recovery.projectRoot,
-          recovering,
-        );
-        const replacementAttempt = options.recovery.createReplacementAttempt(error.attempt);
-        return superviseAttempt(options, replacementAttempt, recovering.recoveryCount, candidate);
+      while (true) {
+        try {
+          return await superviseAttempt(options, attempt, currentRecoveryCount, candidate);
+        } catch (error) {
+          if (!(error instanceof ProviderPreparationTimeoutError) || options.recovery === undefined) {
+            throw error;
+          }
+
+          if (currentRecoveryCount !== 0) {
+            return haltAfterExhaustedRecovery(options, error, currentRecoveryCount);
+          }
+
+          const recovering: RecoveringProviderLifecycle = {
+            phase: 'recovering',
+            attempt: error.attempt,
+            recoveryCount: 1,
+            reason: 'preparation-timeout',
+          };
+          await options.recovery.episodeStore.writeProviderLifecycleEpisode(
+            options.recovery.projectRoot,
+            recovering,
+          );
+          attempt = options.recovery.createReplacementAttempt(error.attempt);
+          currentRecoveryCount = recovering.recoveryCount;
+        }
       }
     },
+  };
+}
+
+async function haltAfterExhaustedRecovery(
+  options: ProviderLifecycleSupervisorOptions,
+  error: ProviderPreparationTimeoutError,
+  recoveryCount: number,
+): Promise<ProviderLifecycleHaltedResult> {
+  await writeHaltMarker(
+    options.recovery!.projectRoot,
+    [
+      'Provider preparation exhausted.',
+      `step: ${error.attempt.logicalStep}`,
+      'phase: preparing',
+      `attempt: ${error.attempt.id}`,
+      `elapsed_ms: ${error.elapsedMilliseconds}`,
+      `recovery_count: ${recoveryCount}`,
+      '',
+    ].join('\n'),
+    'needs-human',
+  );
+
+  return {
+    kind: 'halted',
+    reason: 'preparation-timeout-exhausted',
+    attempt: error.attempt,
+    elapsedMilliseconds: error.elapsedMilliseconds,
+    recoveryCount,
   };
 }
 
@@ -206,7 +255,7 @@ async function superviseAttempt<T>(
             options.onStateChange?.(state);
           }
         }
-        reject(new ProviderPreparationTimeoutError(attempt));
+        reject(new ProviderPreparationTimeoutError(attempt, deadlineDelayMilliseconds));
       }, deadlineDelayMilliseconds);
     });
 

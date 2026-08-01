@@ -1,4 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
+
+const writeHaltMarker = vi.hoisted(() => vi.fn());
+
+vi.mock('../../src/engine/halt-marker.js', () => ({ writeHaltMarker }));
+
 import {
   createProviderLifecycleSupervisor,
   createPreparingProviderLifecycle,
@@ -21,6 +26,73 @@ function deferred<T>(): {
 }
 
 describe('provider lifecycle transitions', () => {
+  it('halts needs-human after the replacement preparation also times out', async () => {
+    vi.useFakeTimers();
+    try {
+      const attempts: string[] = [];
+      const first = deferred<string>();
+      const replacement = deferred<string>();
+      const episodeStore: ProviderLifecycleEpisodeStore = {
+        readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+        writeProviderLifecycleEpisode: vi.fn(),
+      };
+      const supervisor = createProviderLifecycleSupervisor({
+        attempt: { logicalStep: 'build', id: 'attempt-1' },
+        recoveryCount: 0,
+        preparationTimeoutMinutes: 5,
+        timer: {
+          now: () => 10_000,
+          schedule: (callback, delayMilliseconds) => setTimeout(callback, delayMilliseconds),
+          cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+        },
+        recovery: {
+          projectRoot: '/project',
+          episodeStore,
+          createReplacementAttempt: () => ({ logicalStep: 'build', id: 'attempt-2' }),
+        },
+      });
+
+      const result = supervisor.supervise((lease) => {
+        attempts.push(lease.attempt.id);
+        return lease.attempt.id === 'attempt-1' ? first.promise : replacement.promise;
+      });
+      const settled = result.then(
+        (value) => ({ kind: 'fulfilled' as const, value }),
+        (error: unknown) => ({ kind: 'rejected' as const, error }),
+      );
+
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+      await vi.advanceTimersByTimeAsync(5 * 60_000);
+
+      expect(await settled).toEqual({
+        kind: 'fulfilled',
+        value: {
+          kind: 'halted',
+          reason: 'preparation-timeout-exhausted',
+          attempt: { logicalStep: 'build', id: 'attempt-2' },
+          elapsedMilliseconds: 300_000,
+          recoveryCount: 1,
+        },
+      });
+      expect(attempts).toEqual(['attempt-1', 'attempt-2']);
+      expect(writeHaltMarker).toHaveBeenCalledWith(
+        '/project',
+        [
+          'Provider preparation exhausted.',
+          'step: build',
+          'phase: preparing',
+          'attempt: attempt-2',
+          'elapsed_ms: 300000',
+          'recovery_count: 1',
+          '',
+        ].join('\n'),
+        'needs-human',
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('persists the first timeout recovery before dispatching its one replacement', async () => {
     vi.useFakeTimers();
     try {
