@@ -850,6 +850,54 @@ describe('computeWiringEvidence', () => {
     expect(task1?.gaps.some((g) => g.message.includes('unverifiable'))).toBe(true);
   });
 
+  it('retains the orphan gap and appends the failed same-file proof reason in computed evidence', async () => {
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
+    await writeFile(join(projectRoot, 'root.ts'), "import './composition.js';\n");
+    await writeFile(
+      join(projectRoot, 'composition.ts'),
+      [
+        'export const helper = (): string => \'ok\';',
+        '',
+        'const compose = (): string => \'not-helper\';',
+      ].join('\n'),
+    );
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add composition',
+        '**Files:** composition.ts',
+        '**Wired-into:** composition.ts#compose',
+      ].join('\n'),
+    );
+
+    const evidence = await computeWiringEvidence({
+      runGit: fakeGitRouter({
+        head: 'headsha3',
+        originRef: 'origin/main',
+        base: 'basesha3',
+        diff: [DIFF_HEADER('composition.ts'), '+export const helper = (): string => \'ok\';'].join('\n'),
+        grepFiles: { helper: ['composition.ts'] },
+      }),
+      projectRoot,
+      planPath,
+      config: { wiring: { entry_points: ['root.ts'] } } as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    expect(evidence.tasks.find((task) => task.id === '1')?.gaps).toEqual([
+      {
+        kind: 'orphan-export',
+        message: 'helper exported but referenced only within its own defining file (no external wiring)',
+      },
+      {
+        kind: 'orphan-export',
+        message: 'same-file composition missing proof: missing-exact-symbol-reference',
+      },
+    ]);
+  });
+
   it('accepts a declared same-file helper called by a reachable production module', async () => {
     const planPath = join(projectRoot, 'plan.md');
     await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
