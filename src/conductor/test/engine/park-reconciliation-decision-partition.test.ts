@@ -53,6 +53,8 @@ function makeGit({
         throw Object.assign(new Error('not an ancestor'), { code: 1 });
       case 'rev-parse':
         return { stdout: `${tip ?? 'tip'}\n` };
+      case 'cat-file':
+        return { stdout: '' };
       case 'worktree':
       case 'branch':
         return { stdout: '' };
