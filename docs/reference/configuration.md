@@ -88,7 +88,7 @@ the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
-37 top-level keys are allow-listed. Everything else fails the load.
+38 top-level keys are allow-listed. Everything else fails the load.
 
 | Key | Type | Default | Section |
 | --- | --- | --- | --- |
@@ -126,7 +126,8 @@ the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
 | `kickback_escalation` | object | `{ enabled: true }` | [kickback_escalation](#kickback_escalation) |
 | `daemon_verbose` | boolean | `false` | [daemon_verbose](#daemon_verbose) |
 | `reconcile_parked_auto_cleanup` | boolean | `true` | [reconcile_parked_auto_cleanup](#reconcile_parked_auto_cleanup) |
-| `step_heartbeat_stall_minutes` | number | `20` | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
+| `provider_preparation_timeout_minutes` | number | `5` | [provider_preparation_timeout_minutes](#provider_preparation_timeout_minutes) |
+| `step_heartbeat_stall_minutes` | number | deprecated no-op | [step_heartbeat_stall_minutes](#step_heartbeat_stall_minutes) |
 | `stale_claim_window_hours` | number | `24` | [stale_claim_window_hours](#stale_claim_window_hours) |
 
 ## harness_version
@@ -903,22 +904,28 @@ Set to `false` to require an explicit `conduct-ts daemon reconcile-parked <slug>
 cleanup) for every parked feature, even once it is merged and recorded — see
 [park a feature before you touch its git state](../guides/running-the-daemon.md#park-a-feature-before-you-touch-its-git-state).
 
+## provider_preparation_timeout_minutes
+
+Active pre-spawn deadline, in minutes, for provider candidate resolution, session setup, and
+self-host preparation. It is independent of heartbeat telemetry. Optional finite number; absent
+resolves to `5`. A positive value enables the deadline; `0` or a negative value disables it. A
+non-numeric or non-finite value is ignored with a validation warning, then resolves to the default.
+
+When an active deadline expires, the supervisor revokes the preparing attempt before it can spawn a
+provider and allows one replacement for that logical step. A second preparation timeout writes a
+`needs-human` HALT. See the [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#provider-preparation-exhausted)
+for recovery.
+
 ## step_heartbeat_stall_minutes
 
-Stall threshold, in minutes, for a running step's `.pipeline/step-heartbeat` liveness signal (see
-`docs/guides/running-the-daemon.md#step-heartbeat-and-the-stall-watchdog` and
-`src/conductor/src/engine/step-heartbeat.ts`). While a step's provider dispatch is in flight, the
-engine touches `.pipeline/step-heartbeat` on every observed Claude/Codex subprocess activity
-boundary. If that heartbeat goes silent for longer than this many minutes (plus a small fixed grace
-buffer), the stall watchdog kills the wedged subprocess and raises a `mechanical`-class HALT — the
-same HALT class/machinery `fix/defer-live-boundary-halt-to-next-dispatch` (#1070) uses for
-live-boundary violations — so the daemon's existing auto-requeue path picks it up unchanged.
+Deprecated accepted compatibility no-op. Finite legacy values, including `0` and negative values,
+continue to load with a warning; non-numeric or non-finite values are ignored with a warning. The
+key has no default behavior and is never read as
+`provider_preparation_timeout_minutes`.
 
-Optional number; absent → `20`. Resolved by `resolveStepHeartbeatStallMinutes`
-(`resolved-config.ts`), mirroring `auth_park_timeout_minutes`'s resolution rules: `0` or a negative
-value is a deliberate opt-out (the heartbeat file is still written and surfaced by `daemon status`,
-but the watchdog never kills anything); a non-numeric or non-finite value is a load-time validation
-warning (`config.ts`) that falls back to the default.
+`.pipeline/step-heartbeat` remains activity telemetry for `daemon status`. Neither heartbeat
+silence nor staleness terminates, retries, replaces, or completes a running provider, so this key
+grants no termination or lifecycle authority.
 
 ## spec_owner
 

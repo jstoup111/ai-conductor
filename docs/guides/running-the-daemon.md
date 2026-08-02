@@ -228,7 +228,7 @@ What the draft window does and does not mean:
 
 There is no configuration for this; the timing is fixed.
 
-## Step heartbeat and the stall watchdog
+## Provider preparation timeout and activity telemetry
 
 `daemon.log` records step boundaries, provider activity, build progress, and verdict-freshness
 decisions. The deterministic BUILD group appears as start/completion lines naming both
@@ -246,9 +246,19 @@ decisions. The deterministic BUILD group appears as start/completion lines namin
 remains valid. `invalidated` means the judged surface changed and the stale verdict was rejected;
 the gate must run again. `rewritten` means the current judging attempt produced the artifact.
 
-While a step's provider (Claude or Codex) subprocess is running, the engine touches
+Before a provider process is spawned, its candidate resolution, session setup, and self-host
+preparation are bounded by `provider_preparation_timeout_minutes` (default 5; see
+[configuration](../reference/configuration.md#provider_preparation_timeout_minutes)). The first
+expired preparation attempt is revoked and receives one replacement for that logical step. If the
+replacement also expires, the daemon writes a `needs-human` HALT headed `Provider preparation
+exhausted.`; it does not start another replacement. The daemon log and dashboard identify the
+`preparing`, `running`, `recovering`, or halted lifecycle phase with the attempt id and recovery
+count.
+
+After spawn, activity is observation-only. While a step's provider subprocess is running, the engine touches
 `.pipeline/step-heartbeat` in that feature's worktree on every observed stdout/stderr activity
-boundary (throttled to at most once every few seconds — this is a liveness signal, not a transcript).
+boundary (throttled to at most once every few seconds — activity telemetry, not a transcript or
+termination control).
 The IN-PROGRESS dashboard the daemon prints on startup (and re-prints at key transitions) annotates
 each in-progress feature with the heartbeat's age when one exists:
 
@@ -262,22 +272,16 @@ that just started) — that's distinct from a stale heartbeat, and is never rend
 were stuck.
 
 The heartbeat file is overwritten, never cleared, so a worktree keeps its last pulse after the step
-that wrote it ends. Both the dashboard and the watchdog therefore ignore any heartbeat that doesn't
-belong to the dispatch currently in flight — a different step name, or a timestamp from before this
-dispatch started. A leftover heartbeat is treated exactly like "no heartbeat yet": the suffix is
-omitted, and it is never evidence of a stall.
+that wrote it ends. The dashboard ignores a heartbeat from another step or from before the current
+dispatch; a leftover heartbeat is treated as "no heartbeat yet." Neither a missing nor a stale
+heartbeat terminates, retries, replaces, or completes a running provider.
 
-If a step's heartbeat goes silent for longer than `step_heartbeat_stall_minutes` (default 20; see
-[configuration](../reference/configuration.md#step_heartbeat_stall_minutes)) plus a small fixed
-grace buffer, the stall watchdog kills the wedged subprocess itself and raises a `mechanical`-class
-HALT — the same HALT class the live-boundary deferral (#1070) uses — so the daemon's existing
-auto-requeue sweep picks the feature back up on its own, without an operator having to notice the
-hang and intervene by hand. Set `step_heartbeat_stall_minutes` to `0` or a negative number to opt a
-project out of the kill/HALT behavior entirely; the heartbeat file itself is still written and still
-shown by the dashboard either way.
-
-See [runbook: a feature looks stalled or stuck](../runbooks/stalled-or-stuck-feature.md) for how to
-triage a feature the watchdog hasn't (yet) caught.
+`step_heartbeat_stall_minutes` is accepted only as a deprecated compatibility no-op. It grants no
+termination authority and is never used as `provider_preparation_timeout_minutes`; changing it has
+no effect on heartbeat telemetry or provider lifecycle behavior. See the
+[configuration reference](../reference/configuration.md#step_heartbeat_stall_minutes) for its
+compatibility contract and the [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#provider-preparation-exhausted)
+for preparation-exhaustion recovery.
 
 ## Pause and resume dispatch
 

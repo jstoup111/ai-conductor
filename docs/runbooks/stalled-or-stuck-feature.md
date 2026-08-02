@@ -7,8 +7,8 @@ nav_order: 4
 # Stalled or stuck feature
 
 Diagnose and clear a feature that is dispatched but not progressing: no-task-progress stalls,
-build-progress ceilings, rate-limit waits, auth parks, and kickback loops. For operators
-reading `.pipeline/` state and the daemon log.
+provider-preparation exhaustion, build-progress ceilings, rate-limit waits, auth parks, and
+kickback loops. For operators reading `.pipeline/` state and the daemon log.
 
 > **Not sure this is the right runbook?** Run `/daemon-triage` — it gathers the evidence
 > read-only, classifies the failure, and routes to the one runbook that owns it.
@@ -98,32 +98,38 @@ In daemon mode the engine synthesizes a remediation prompt into
 rounds per gate. A zero-work stall never terminal-HALTs from that path; it falls through to the
 ordinary retry and park route.
 
-#### Step-heartbeat stall (the watchdog already caught it)
+#### Provider preparation exhausted
 
-If `.pipeline/HALT` reads `Step '<step>' heartbeat stalled: no provider activity in …`, the
-step-heartbeat stall watchdog already diagnosed and handled this one for you — no manual
-CPU/mtime sampling required. It killed the wedged Claude/Codex subprocess itself and wrote this
-`mechanical`-class HALT, so the daemon's ordinary re-kick sweep clears it on the next base-branch
-advance without operator action. Check the heartbeat file's last recorded step and age before
-clearing anything by hand:
+**Symptom:** `.pipeline/HALT` begins `Provider preparation exhausted.` and its class is
+`needs-human`. The daemon log or dashboard may also show the provider lifecycle as `recovering`
+followed by `halted` with `preparation-timeout-exhausted` and recovery `1`.
+
+**Diagnosis:** read the marker body:
 
 ```bash
-cat .worktrees/<slug>/.pipeline/step-heartbeat
+cat .worktrees/<slug>/.pipeline/HALT
+cat .worktrees/<slug>/.pipeline/HALT.class
 ```
 
-The `step` recorded there is the one whose silence was measured — a heartbeat left behind by an
-earlier step is ignored by the watchdog, so a HALT naming step X was always raised against X's own
-pulses.
+It names the logical `step`, `phase: preparing`, attempt id, elapsed milliseconds, and recovery
+count. The timeout applies only before a provider process starts: candidate resolution, session
+setup, or self-host preparation did not complete within
+`provider_preparation_timeout_minutes`. The first expiration already used the one automatic
+replacement; because this is a `needs-human` HALT, the re-kick sweep will not clear it.
 
-This differs from `no_task_progress`: that breaker only fires between whole build attempts and
-requires the retry budget to be in play; the heartbeat watchdog fires mid-dispatch, on any
-provider-aware step, purely from subprocess silence, and needs no retry to have happened yet. See
-[running the daemon: step heartbeat and the stall
-watchdog](../guides/running-the-daemon.md#step-heartbeat-and-the-stall-watchdog) for the
-mechanism and `step_heartbeat_stall_minutes` in
-[configuration](../reference/configuration.md#step_heartbeat_stall_minutes) for the threshold.
-If a step is regularly this slow for legitimate reasons, raise the threshold rather than
-repeatedly clearing this halt by hand.
+Do not diagnose this from `.pipeline/step-heartbeat`. Heartbeats are activity telemetry only, and a
+quiet running provider is not automatically killed, retried, or replaced.
+
+**Recovery:** repair the preparation failure. If preparation is expected to take longer, increase
+`provider_preparation_timeout_minutes` in the active configuration; `0` or a negative value
+disables that pre-spawn deadline. Do not use `step_heartbeat_stall_minutes`: it is a deprecated
+compatibility no-op and cannot change provider lifecycle behavior. Then clear the HALT using
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** after the next dispatch, the dashboard/log shows a new `preparing` attempt and,
+once spawned, `running`; it must not return to `halted` with
+`preparation-timeout-exhausted`. Confirm the resumed feature with the general
+[verification steps](#verification).
 
 #### Live-boundary violation (self-host only)
 
