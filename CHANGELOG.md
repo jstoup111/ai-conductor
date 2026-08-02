@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Keep interrupted BUILD verification rounds from preserving a prior round's synthetic success,
+  so a failed aggregate suite reruns before build review instead of repeatedly halting on unmet
+  prerequisites ([implementation PR #1253](https://github.com/jstoup111/ai-conductor/pull/1253)).
 - Refresh self-host main before an explicit daemon restart rebuilds and respawns, so the restarted
   engine uses the latest safely fast-forwardable source instead of rebuilding a stale checkout
   ([implementation PR #1248](https://github.com/jstoup111/ai-conductor/pull/1248)).

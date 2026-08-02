@@ -220,6 +220,80 @@ describe('deterministic BUILD verification group', () => {
     },
   );
 
+  it('does not persist a native suite as done when interrupted before its failed objective verdict joins', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-repair-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({
+      plan: 'done',
+      build: 'done',
+      wiring_check: 'pending',
+      test_suite: 'pending',
+      build_review: 'stale',
+      build_verification__wiring_check: 'done',
+      build_verification__test_suite: 'done',
+    }));
+
+    let sighupHandler: (() => Promise<void>) | undefined;
+    vi.spyOn(process, 'on').mockImplementation(((event: string, handler: (...args: unknown[]) => void) => {
+      if (event === 'SIGHUP') sighupHandler = handler as () => Promise<void>;
+      return process;
+    }) as typeof process.on);
+    vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    const releaseWiring = deferred<void>();
+    const events = new ConductorEventEmitter();
+    const ensure = vi.fn(async () => ({
+      status: 'FAILED' as const,
+      reason: 'test_failure' as never,
+      message: 'objective suite failure',
+    }));
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: {
+        run: vi.fn(async (step) => {
+          if (step === 'wiring_check') {
+            await releaseWiring.promise;
+            return { success: true };
+          }
+          if (step === 'build') return { success: false, output: 'stop after failed join' };
+          throw new Error(`unexpected dispatch: ${step}`);
+        }),
+      },
+      events,
+      projectRoot,
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      daemon: true,
+      maxRetries: 1,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: {
+        inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+        ensure,
+      },
+      onRecovery: async () => 'quit',
+    });
+
+    const run = conductor.run();
+    await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(sighupHandler).toBeDefined());
+    const beforeSignal = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
+    await sighupHandler!();
+    const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
+    releaseWiring.resolve();
+    await run;
+
+    expect({
+      beforeSignalSyntheticDone: beforeSignal.build_verification__test_suite === 'done',
+      afterSignalDone: [
+        persisted.test_suite,
+        persisted.build_verification__test_suite,
+      ].includes('done'),
+    }).toEqual({
+      beforeSignalSyntheticDone: false,
+      afterSignalDone: false,
+    });
+  });
+
   it('halts a repeated wiring failure after a no-op BUILD re-entry before charging the wiring budget again', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-wiring-noop-'));
     dirs.push(projectRoot);
