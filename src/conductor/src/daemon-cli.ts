@@ -47,7 +47,7 @@ import {
 } from './engine/conductor.js';
 import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
-import { startFeatureEventPersistence, FORWARDED_FROM_FEATURE } from './engine/event-persister.js';
+import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
 import { classifySelfHost, defaultSelfHostDetector } from './engine/self-host/detector.js';
 import { loadMergedConfig, resolveMemoryProvider, BUILD_PROGRESS_HALT_DEFAULTS } from './engine/config.js';
@@ -847,7 +847,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // (beginFeatureRun below) — render them here too and every one of the 19
     // TerminalSubscriber event types would double-print, once tagged and once
     // untagged.
-    if ((event as Record<PropertyKey, unknown>)[FORWARDED_FROM_FEATURE]) return;
+    if (isForwardedFromFeature(event)) return;
     renderDaemonEvent(event, log);
   }, undefined, config?.codex_doctor_timeout_seconds);
   registry.markInitialized();

@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, readFile, chmod } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { EventPersister, EventPersistError } from '../../src/engine/event-persister.js';
+import {
+  EventPersister,
+  EventPersistError,
+  isForwardedFromFeature,
+  startFeatureEventPersistence,
+} from '../../src/engine/event-persister.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { ConductorEvent, ProviderAttemptEvent } from '../../src/types/index.js';
@@ -146,6 +151,49 @@ describe('EventPersister', () => {
       degradation: 'probe-failure',
       probeFailureKind: 'timeout',
       nextDisposition: 'trial-required',
+    });
+  });
+
+  it('forwards typed probe-failure progress to the daemon bus without widening its event shape', async () => {
+    const globalEvents = new ConductorEventEmitter();
+    const forwarded: ConductorEvent[] = [];
+    globalEvents.on('credentials_park_progress', (event) => {
+      forwarded.push(event);
+    });
+    const scope = startFeatureEventPersistence(tempDir, globalEvents);
+
+    await scope.events.emit({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      probeFailureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    });
+    scope.stop();
+
+    expect(forwarded).toHaveLength(1);
+    const [event] = forwarded;
+    expect(event).toBeDefined();
+    if (event?.type !== 'credentials_park_progress' || event.degradation !== 'probe-failure') {
+      throw new Error('expected forwarded probe-failure progress');
+    }
+    expect({
+      provider: event.provider,
+      source: event.source,
+      elapsedSeconds: event.elapsedSeconds,
+      probeFailureKind: event.probeFailureKind,
+      nextDisposition: event.nextDisposition,
+      forwarded: isForwardedFromFeature(event),
+    }).toEqual({
+      provider: 'codex',
+      source: 'cached-login',
+      elapsedSeconds: 3,
+      probeFailureKind: 'timeout',
+      nextDisposition: 'trial-required',
+      forwarded: true,
     });
   });
 
