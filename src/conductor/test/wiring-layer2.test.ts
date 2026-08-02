@@ -7,6 +7,8 @@ import {
   checkExportReachability,
   computeWiringEvidence,
   findSameFileSymbolReference,
+  orphanBackstop,
+  evaluateSameFileComposition,
 } from '../src/engine/wiring-probe.js';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -495,6 +497,101 @@ describe('findSameFileSymbolReference', () => {
           'helper',
         ),
       ).toBeNull();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('same-file composition safety boundaries', () => {
+  it('keeps a reachable module with a dead helper as a named orphan gap', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-reachable-dead-helper-'));
+    try {
+      await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(
+        join(tmpDir, 'src', 'root.ts'),
+        "import './composition.js';\nexport const root = true;\n",
+      );
+      await writeFile(
+        join(tmpDir, 'src', 'composition.ts'),
+        'export function helper(): string { return \'unused\'; }\n',
+      );
+
+      const reachability = checkExportReachability(
+        [{ file: 'src/composition.ts', symbol: 'helper' }],
+        ['src/root.ts'],
+        tmpDir,
+      );
+      const orphan = await orphanBackstop(
+        [{ file: 'src/composition.ts', symbol: 'helper' }],
+        async () => ['src/composition.ts'],
+      );
+
+      expect({ reachability, orphan }).toEqual({
+        reachability: [
+          expect.objectContaining({ reachable: true }),
+        ],
+        orphan: [
+          expect.objectContaining({
+            status: 'gap',
+            message: 'helper exported but referenced only within its own defining file (no external wiring)',
+          }),
+        ],
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a valid same-file proof when a test also imports the helper', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-incidental-test-import-'));
+    try {
+      const sourcePath = join(tmpDir, 'composition.ts');
+      const testPath = join(tmpDir, 'composition.test.ts');
+      await writeFile(
+        sourcePath,
+        [
+          'export function helper(): string {',
+          "  return 'ok';",
+          '}',
+          '',
+          'export function compose(): string {',
+          '  return helper();',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      await writeFile(testPath, "import { helper } from './composition.js';\nvoid helper;\n");
+      const program = ts.createProgram([sourcePath, testPath], { noEmit: true });
+      const symbolReference = findSameFileSymbolReference(
+        program,
+        program.getTypeChecker(),
+        sourcePath,
+        'compose',
+        'helper',
+      );
+
+      expect(symbolReference).toMatchObject({ caller: 'compose', export: 'helper' });
+
+      expect(evaluateSameFileComposition({
+        task: {
+          taskId: '7',
+          files: ['src/composition.ts'],
+          parseResult: {
+            kind: 'declared',
+            sites: [{ path: 'src/composition.ts', symbol: 'compose' }],
+          },
+        },
+        newExport: { file: 'src/composition.ts', symbol: 'helper' },
+        // The query receives an absolute temp-fixture path, while the gate
+        // composes repo-relative evidence. Normalize only that fixture seam.
+        symbolReference: symbolReference === null
+          ? null
+          : { ...symbolReference, file: 'src/composition.ts' },
+        layer2: { applicable: true, roots: ['src/root.ts'] },
+        rootChain: ['src/root.ts', 'src/composition.ts'],
+      })).toMatchObject({ kind: 'proof' });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
