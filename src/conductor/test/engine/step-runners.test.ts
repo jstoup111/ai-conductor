@@ -25,6 +25,7 @@ import type { ExecuteProviderCandidatesInput } from '../../src/engine/provider-e
 
 function createMockProvider(): LLMProvider {
   return {
+    lifecycleCapability: { synchronousSpawnPermit: true },
     invoke: vi.fn().mockResolvedValue({
       success: true,
       output: 'done',
@@ -40,10 +41,12 @@ function interactiveRuntime(
 ) {
   const policy =
     key === 'claude' ? CLAUDE_POLICY : CODEX_MODEL_POLICY;
+  const lifecycleCapability = { synchronousSpawnPermit: true } as const;
   return {
     key,
     provider: {
       supportsSessionResume: key === 'claude',
+      lifecycleCapability,
       invoke: vi.fn(async (): Promise<InvokeResult> => ({
         success: true,
         output: 'wrong captured path',
@@ -51,6 +54,7 @@ function interactiveRuntime(
       })),
       invokeInteractive,
     },
+    lifecycleCapability,
     policy,
     builtIn: true,
     availability: new ModelAvailability(policy.modelFallbackLadder),
@@ -195,6 +199,41 @@ describe('DefaultStepRunner', () => {
     });
   });
 
+  it('forwards provider-aware lifecycle transitions to the provider-attempt sink before settlement', async () => {
+    const providerAttempt = vi.fn();
+    const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+      input.options.spawnPermit?.();
+      return {
+        success: true,
+        output: 'done',
+        exitCode: 0,
+        preferredProvider: 'claude' as const,
+        actualProvider: 'claude' as const,
+        attempts: [],
+      };
+    });
+    const runner = new DefaultStepRunner(createMockProvider(), 'session', '/tmp/project', {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+        sessions: new ProviderSessionStore(),
+        executor: providerExecutor,
+      },
+      providerAttempt,
+    });
+
+    const result = await runner.run('build', emptyState);
+    const lifecyclePhases = providerAttempt.mock.calls.flatMap(([, metadata]) => {
+      const lifecycle = (metadata as { lifecycle?: { phase?: string } }).lifecycle;
+      return lifecycle?.phase ? [lifecycle.phase] : [];
+    });
+
+    expect({ lifecyclePhases, settled: result.success }).toEqual({
+      lifecyclePhases: ['preparing', 'running', 'settled'],
+      settled: true,
+    });
+  });
+
   it('forwards the daemon feature diagnostic logger to a streaming provider invocation', async () => {
     const featureLog = vi.fn();
     const providerExecutor = vi.fn(async (_input: ExecuteProviderCandidatesInput) => ({
@@ -238,7 +277,11 @@ describe('DefaultStepRunner', () => {
         runtimes: new ProviderRuntimeSet([
           {
             key: 'claude',
-            provider: { invoke, invokeInteractive: vi.fn(async () => undefined) },
+            provider: {
+              lifecycleCapability: { synchronousSpawnPermit: true },
+              invoke,
+              invokeInteractive: vi.fn(async () => undefined),
+            },
             policy,
             builtIn: true,
             availability: new ModelAvailability(policy.modelFallbackLadder),
@@ -265,7 +308,7 @@ describe('DefaultStepRunner', () => {
     });
   });
 
-  describe('step-heartbeat / stall watchdog wiring', () => {
+  describe('step-heartbeat telemetry wiring', () => {
     let projectDir: string;
 
     beforeEach(async () => {
@@ -307,63 +350,16 @@ describe('DefaultStepRunner', () => {
       expect(Number.isFinite(Date.parse(heartbeat.ts))).toBe(true);
     });
 
-    it('raises a mechanical HALT and reports failure when the stall watchdog fires', async () => {
-      // A dispatch that never settles on its own — the watchdog must be what
-      // resolves it, by killing the (fake) subprocess and writing the HALT.
-      const providerExecutor = vi.fn((input: ExecuteProviderCandidatesInput) => {
-        const options = input.options as InvokeOptions & {
-          onSpawn?: (h: { kill: () => void }) => void;
-          onActivity?: () => void;
-        };
-        options.onSpawn?.({ kill: () => {} });
-        options.onActivity?.(); // one pulse, then silence
-        silent = true;
-        return new Promise<never>(() => {});
-      });
-      const config: HarnessConfig = { step_heartbeat_stall_minutes: 1 };
-      // The dispatch pulses once (so the heartbeat genuinely belongs to THIS
-      // run), then goes silent; the clock jumps an hour so the very next poll
-      // sees real staleness without depending on wall time.
+    it('allows a quiet spawned provider to succeed beyond the former heartbeat threshold', async () => {
       const base = Date.now();
       let silent = false;
-      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
-        config,
-        heartbeatWatchdog: { pollIntervalMs: 5, now: () => (silent ? base + 60 * 60_000 : base) },
-        providerExecution: {
-          configuredProviders: ['claude'],
-          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
-          sessions: new ProviderSessionStore(),
-          executor: providerExecutor as unknown as typeof executeProviderCandidates,
-        },
-      });
-
-      const result = await runner.run('build', emptyState);
-
-      // Task 16 writer-classification inventory: the provider heartbeat
-      // watchdog is deliberately retryable and must retain its mechanical
-      // body/sidecar disposition.
-      expect(result.success).toBe(false);
-      const haltBody = await readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8');
-      expect(haltBody).toMatch(/heartbeat stalled/i);
-      const haltClass = await readFile(join(projectDir, '.pipeline', 'HALT.class'), 'utf-8');
-      expect(haltClass.trim()).toBe('mechanical');
-    });
-
-    it('does not kill a step whose worktree carries a stale heartbeat from an earlier step', async () => {
-      // Regression (#1082 fallout): `.pipeline/step-heartbeat` is overwritten,
-      // never cleared, so a re-kicked `architecture_review_as_built` started
-      // next to a 3.5h-old `build` heartbeat and was killed one poll tick in.
-      await mkdir(join(projectDir, '.pipeline'), { recursive: true });
-      await writeFile(
-        join(projectDir, '.pipeline', 'step-heartbeat'),
-        JSON.stringify({ step: 'build', ts: new Date(Date.now() - 214 * 60_000).toISOString() }),
-        'utf-8',
-      );
       const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
-        (input.options as InvokeOptions & { onSpawn?: (h: { kill: () => void }) => void }).onSpawn?.({
-          kill: () => {},
-        });
-        // Long enough for several watchdog polls, with no activity of its own.
+        input.options.onSpawn?.();
+        (input.options as InvokeOptions & { onActivity?: () => void }).onActivity?.();
+        // Let the initial pulse settle, then advance the old watchdog's
+        // injected clock beyond its threshold and grace period.
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        silent = true;
         await new Promise((r) => setTimeout(r, 60));
         return {
           success: true,
@@ -377,7 +373,10 @@ describe('DefaultStepRunner', () => {
       const config: HarnessConfig = { step_heartbeat_stall_minutes: 1 };
       const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
         config,
-        heartbeatWatchdog: { pollIntervalMs: 5 },
+        heartbeatWatchdog: {
+          pollIntervalMs: 5,
+          now: () => (silent ? base + 60 * 60_000 : base),
+        },
         providerExecution: {
           configuredProviders: ['claude'],
           runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
@@ -386,13 +385,69 @@ describe('DefaultStepRunner', () => {
         },
       });
 
-      const result = await runner.run('architecture_review_as_built', emptyState);
+      const result = await runner.run('build', emptyState);
 
       expect(result.success).toBe(true);
+      expect(providerExecutor).toHaveBeenCalledTimes(1);
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
     });
 
-    it('does not wrap dispatch in the watchdog when step_heartbeat_stall_minutes <= 0 (opt-out)', async () => {
+    it.each([
+      {
+        name: 'absent',
+        setup: async () => {},
+      },
+      {
+        name: 'malformed',
+        setup: async () => {
+          await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+          await writeFile(join(projectDir, '.pipeline', 'step-heartbeat'), 'not json', 'utf-8');
+        },
+      },
+      {
+        name: 'prior-dispatch',
+        setup: async () => {
+          await mkdir(join(projectDir, '.pipeline'), { recursive: true });
+          await writeFile(
+            join(projectDir, '.pipeline', 'step-heartbeat'),
+            JSON.stringify({ step: 'architecture_review_as_built', ts: new Date(0).toISOString() }),
+            'utf-8',
+          );
+        },
+      },
+    ])('keeps $name heartbeat data observational for a quiet spawned provider', async ({ setup }) => {
+      await setup();
+      const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+        input.options.onSpawn?.();
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        return {
+          success: true,
+          output: 'reviewed',
+          exitCode: 0,
+          preferredProvider: 'claude',
+          actualProvider: 'claude',
+          attempts: [],
+        };
+      });
+      const runner = new DefaultStepRunner(createMockProvider(), 'session', projectDir, {
+        config: { step_heartbeat_stall_minutes: 1 },
+        heartbeatWatchdog: { pollIntervalMs: 5, now: () => Date.now() + 60 * 60_000 },
+        providerExecution: {
+          configuredProviders: ['claude'],
+          runtimes: new ProviderRuntimeSet([interactiveRuntime('claude', vi.fn(async () => undefined))]),
+          sessions: new ProviderSessionStore(),
+          executor: providerExecutor as unknown as typeof executeProviderCandidates,
+        },
+      });
+
+      const result = await runner.run('build', emptyState);
+
+      expect(result.success).toBe(true);
+      expect(providerExecutor).toHaveBeenCalledTimes(1);
+      await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
+    });
+
+    it('treats a disabled heartbeat threshold as telemetry configuration without halting', async () => {
       const providerExecutor = vi.fn(async () => ({
         success: true,
         output: 'done',
@@ -417,6 +472,56 @@ describe('DefaultStepRunner', () => {
       expect(result.success).toBe(true);
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
     });
+  });
+
+  it('routes representative DECIDE, BUILD, and SHIP dispatches through lifecycle supervision', async () => {
+    const projectDir = await mkdtemp(join(tmpdir(), 'step-runner-lifecycle-'));
+    const permits: Array<ReturnType<NonNullable<InvokeOptions['spawnPermit']>> | undefined> = [];
+    const invoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => {
+      permits.push(options.spawnPermit?.());
+      return {
+        success: true,
+        output: 'MODELS: 1\nINTEGRATIONS: 0\nAUTH: 0\nSTATE_MACHINES: 0\nSTORIES: 1\nTIER: S',
+        exitCode: 0,
+      };
+    });
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke,
+      invokeInteractive: invoke,
+    };
+    const sessions = new ProviderSessionStore();
+    const runner = new DefaultStepRunner(provider, 'session', projectDir, {
+      providerExecution: {
+        configuredProviders: ['claude'],
+        runtimes: new ProviderRuntimeSet([{
+          key: 'claude',
+          provider,
+          lifecycleCapability: provider.lifecycleCapability,
+          policy: CLAUDE_POLICY,
+          builtIn: true,
+          availability: new ModelAvailability(CLAUDE_POLICY.modelFallbackLadder),
+        }]),
+        sessions,
+      },
+    });
+
+    try {
+      await runner.assessComplexity();
+      await sessions.beginStep('build');
+      await runner.run('build', emptyState);
+      await sessions.beginStep('prd_audit');
+      const ship = await runner.run('prd_audit', emptyState);
+
+      expect(ship).toMatchObject({ success: true });
+      expect(permits).toEqual([
+        { permitted: true },
+        { permitted: true },
+        { permitted: true },
+      ]);
+    } finally {
+      await rm(projectDir, { recursive: true, force: true });
+    }
   });
 
   it('reads self-host candidate hooks from the live context after construction', async () => {
@@ -503,6 +608,7 @@ describe('DefaultStepRunner', () => {
       invokeInteractive: LLMProvider['invokeInteractive'] =
         vi.fn().mockResolvedValue(undefined),
     ): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
       invoke,
       invokeInteractive,
     });
@@ -833,7 +939,11 @@ describe('DefaultStepRunner', () => {
     const provider = (
       invoke: LLMProvider['invoke'],
       invokeInteractive: LLMProvider['invokeInteractive'],
-    ): LLMProvider => ({ invoke, invokeInteractive });
+    ): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke,
+      invokeInteractive,
+    });
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'claude',
@@ -1174,7 +1284,9 @@ describe('DefaultStepRunner', () => {
         resume: options.resume,
         interactive: options.interactive,
       })),
-      attempts: attempts.mock.calls.map(([step, attempt]) => ({ step, ...attempt })),
+      attempts: attempts.mock.calls
+        .filter(([, attempt]) => !('lifecycle' in attempt))
+        .map(([step, attempt]) => ({ step, ...attempt })),
     }).toEqual({
       capturedCalls: [],
       codexCalls: [
@@ -1419,6 +1531,7 @@ describe('DefaultStepRunner', () => {
       }),
     );
     const codexProvider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: codexBoundary,
       invokeInteractive: codexBoundary,
     };

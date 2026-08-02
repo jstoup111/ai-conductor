@@ -1,8 +1,12 @@
 import type {
   AuthenticationReadiness,
   LLMProvider,
+  ProviderLifecycleCapability,
   SelfHostAuthContext,
   SelfHostAuthPreparation,
+  SpawnPermit,
+  SpawnPermitDecision,
+  SpawnPermitPurpose,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import {
@@ -15,6 +19,7 @@ import type { PluginRegistry } from './plugin-registry.js';
 export interface ProviderRuntime {
   key: string;
   provider: LLMProvider;
+  lifecycleCapability?: ProviderLifecycleCapability;
   policy: ProviderModelPolicy;
   builtIn: boolean;
   availability: ModelAvailability;
@@ -40,6 +45,12 @@ export class ProviderRuntimeSet {
       throw new Error(`Provider runtime not found: ${key}`);
     }
     return runtime;
+  }
+
+  /** Resolves the selected adapter's declared lifecycle spawn-fencing capability. */
+  lifecycleCapabilityFor(key: string): ProviderLifecycleCapability | undefined {
+    const runtime = this.runtimes.get(key);
+    return runtime?.lifecycleCapability ?? runtime?.provider.lifecycleCapability;
   }
 
   /**
@@ -72,6 +83,17 @@ export class ProviderRuntimeSet {
   }
 }
 
+/**
+ * Evaluates a lifecycle-owned permit without awaiting, so adapters can invoke
+ * it immediately before their subprocess factory and fail closed on denial.
+ */
+export function validateSpawnPermit(
+  permit: SpawnPermit | undefined,
+  purpose?: SpawnPermitPurpose,
+): SpawnPermitDecision {
+  return permit?.(purpose) ?? { permitted: true };
+}
+
 export function createProviderRuntimeSet(
   registry: PluginRegistry,
   warn?: (message: string) => void,
@@ -79,9 +101,11 @@ export function createProviderRuntimeSet(
   return new ProviderRuntimeSet(
     registry.list('llm_provider').map((key) => {
       const policy = resolveProviderModelPolicy(key, warn);
+      const provider = registry.get<LLMProvider>('llm_provider', key);
       return {
         key,
-        provider: registry.get<LLMProvider>('llm_provider', key),
+        provider,
+        lifecycleCapability: provider.lifecycleCapability,
         policy,
         builtIn: hasBuiltInProviderModelPolicy(key),
         availability: new ModelAvailability(policy.modelFallbackLadder, warn),

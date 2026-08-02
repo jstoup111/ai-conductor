@@ -8728,8 +8728,12 @@ describe('engine/conductor', () => {
     } as ConductState);
 
     const provider = (key: 'codex' | 'claude'): LLMProvider => {
-      const invoke = vi.fn(async () =>
-        key === 'codex'
+      const invoke = vi.fn(async (options: InvokeOptions) => {
+        const permit = options.spawnPermit?.();
+        if (permit && !permit.permitted) {
+          throw new Error(`provider spawn denied: ${permit.reason}`);
+        }
+        return key === 'codex'
           ? {
               success: false,
               output: 'codex executable not found',
@@ -8743,8 +8747,13 @@ describe('engine/conductor', () => {
               output: 'completed by claude',
               exitCode: 0,
               tokenUsage: { input: 120, output: 30 },
-            });
-      return { invoke, invokeInteractive: invoke };
+            };
+      });
+      return {
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        invoke,
+        invokeInteractive: invoke,
+      };
     };
     const runtimes = new ProviderRuntimeSet([
       {
@@ -8817,6 +8826,17 @@ describe('engine/conductor', () => {
           model: event.model,
           reason: event.reason,
           tokenUsage: event.tokenUsage,
+          ...(event.lifecycle === undefined
+            ? {}
+            : {
+                lifecycle: {
+                  phase: event.lifecycle.phase,
+                  recoveryCount: event.lifecycle.recoveryCount,
+                  ...(event.lifecycle.outcome === undefined
+                    ? {}
+                    : { outcome: event.lifecycle.outcome }),
+                },
+              }),
         };
       }
       if (event.type !== 'step_completed') {
@@ -8830,6 +8850,28 @@ describe('engine/conductor', () => {
         tokenUsage: event.tokenUsage,
       };
     })).toEqual([
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'provider-lifecycle',
+        outcome: 'success',
+        invoked: false,
+        model: undefined,
+        reason: undefined,
+        tokenUsage: undefined,
+        lifecycle: { phase: 'preparing', recoveryCount: 0 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'provider-lifecycle',
+        outcome: 'success',
+        invoked: false,
+        model: undefined,
+        reason: undefined,
+        tokenUsage: undefined,
+        lifecycle: { phase: 'running', recoveryCount: 0 },
+      },
       {
         type: 'provider_attempt',
         step: 'plan',
@@ -8856,6 +8898,17 @@ describe('engine/conductor', () => {
         model: 'fable',
         reason: undefined,
         tokenUsage: { input: 120, output: 30 },
+      },
+      {
+        type: 'provider_attempt',
+        step: 'plan',
+        provider: 'provider-lifecycle',
+        outcome: 'success',
+        invoked: false,
+        model: undefined,
+        reason: undefined,
+        tokenUsage: undefined,
+        lifecycle: { phase: 'settled', recoveryCount: 0, outcome: 'completed' },
       },
       {
         type: 'step_completed',
@@ -9349,11 +9402,21 @@ describe('engine/conductor', () => {
         }
         return { success: true, output: 'completed', exitCode: 0 };
       };
-      const provider = (key: 'claude' | 'codex'): LLMProvider => ({
-        supportsSessionResume: key === 'claude',
-        invoke: invoke(key),
-        invokeInteractive: invoke(key),
-      });
+      const provider = (key: 'claude' | 'codex'): LLMProvider => {
+        const invokeProvider = vi.fn(async (options: InvokeOptions) => {
+          const permit = options.spawnPermit?.();
+          if (permit && !permit.permitted) {
+            throw new Error(`provider spawn denied: ${permit.reason}`);
+          }
+          return invoke(key)(options);
+        });
+        return {
+          supportsSessionResume: key === 'claude',
+          lifecycleCapability: { synchronousSpawnPermit: true },
+          invoke: invokeProvider,
+          invokeInteractive: invokeProvider,
+        };
+      };
       const runtimes = new ProviderRuntimeSet([
         {
           key: 'claude',

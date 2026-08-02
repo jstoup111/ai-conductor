@@ -3,6 +3,8 @@ import type {
   InvokeOptions,
   InvokeResult,
   LLMProvider,
+  SpawnPermit,
+  SpawnPermitPurpose,
 } from '../../src/execution/llm-provider.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -12,6 +14,7 @@ import {
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { validateSpawnPermit } from '../../src/engine/provider-runtime.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
   timedOut?: boolean;
@@ -21,6 +24,7 @@ interface ClassifiedInvokeResult extends InvokeResult {
 interface ProviderRuntime {
   key: string;
   provider: LLMProvider;
+  lifecycleCapability?: { synchronousSpawnPermit: true };
   policy: ProviderModelPolicy;
   builtIn: boolean;
   availability: ModelAvailability;
@@ -30,6 +34,9 @@ interface ProviderRuntime {
 interface ProviderRuntimeSet {
   keys(): string[];
   get(key: string): ProviderRuntime;
+  lifecycleCapabilityFor?(
+    key: string,
+  ): { synchronousSpawnPermit: true } | undefined;
   readinessFor(
     key: string,
     authentication: AuthenticationReadiness,
@@ -79,6 +86,66 @@ function provider(): LLMProvider {
 }
 
 describe('ProviderRuntimeSet', () => {
+  it('exposes a provider-declared synchronous spawn-permit capability', async () => {
+    const capable = {
+      ...provider(),
+      lifecycleCapability: { synchronousSpawnPermit: true as const },
+    };
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'claude', capable);
+    registry.markInitialized();
+
+    const runtimes = (await loadRuntimeSetFactory())?.(registry);
+
+    expect({
+      runtime: runtimes?.get('claude').lifecycleCapability,
+      lookup: runtimes?.lifecycleCapabilityFor?.('claude'),
+    }).toEqual({
+      runtime: { synchronousSpawnPermit: true },
+      lookup: { synchronousSpawnPermit: true },
+    });
+  });
+
+  it('accepts a current spawn permit synchronously', async () => {
+    const current: SpawnPermit = () => ({ permitted: true });
+    const options: InvokeOptions = {
+      prompt: 'current permit',
+      sessionId: 'current-permit-session',
+      resume: false,
+      spawnPermit: current,
+    };
+
+    expect(validateSpawnPermit(options.spawnPermit)).toEqual({
+      permitted: true,
+    });
+  });
+
+  it('returns a typed denial for a revoked spawn permit', async () => {
+    const revoked: SpawnPermit = () => ({
+      permitted: false,
+      reason: 'revoked',
+    });
+    const options: InvokeOptions = {
+      prompt: 'revoked permit',
+      sessionId: 'revoked-permit-session',
+      resume: false,
+      spawnPermit: revoked,
+    };
+
+    expect(validateSpawnPermit(options.spawnPermit)).toEqual({
+      permitted: false,
+      reason: 'revoked',
+    });
+  });
+
+  it('forwards the preparation purpose to the shared synchronous permit', () => {
+    const purpose: SpawnPermitPurpose = 'preparation';
+    const permit = vi.fn<SpawnPermit>(() => ({ permitted: true }));
+
+    expect(validateSpawnPermit(permit, purpose)).toEqual({ permitted: true });
+    expect(permit).toHaveBeenCalledWith('preparation');
+  });
+
   it('exposes readiness only for the matching built-in provider', async () => {
     const ready: AuthenticationReadiness = {
       provider: 'codex',

@@ -66,7 +66,12 @@ describe('ST-1071 cross-component cold-start contracts', () => {
       const invocations: InvokeOptions[] = [];
       const provider: LLMProvider = {
         supportsSessionResume: false,
+        lifecycleCapability: { synchronousSpawnPermit: true },
         invoke: vi.fn(async (options: InvokeOptions) => {
+          const permit = options.spawnPermit?.();
+          if (permit && !permit.permitted) {
+            return { success: false, output: `test provider spawn denied: ${permit.reason}`, exitCode: 1 };
+          }
           invocations.push(options);
           return ok('attempt completed');
         }),

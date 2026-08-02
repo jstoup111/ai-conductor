@@ -15,6 +15,8 @@ import {
   type ProviderRuntime,
 } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionScope } from '../../src/engine/provider-session.js';
+import { createProviderLifecycleSupervisor } from '../../src/engine/provider-lifecycle.js';
+import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { createCandidateSafetyBoundary, formatProviderCapabilityGapMessages } from '../../src/engine/provider-execution.js';
 
@@ -89,6 +91,297 @@ function runtime(
 }
 
 describe('executeProviderCandidates', () => {
+  it('keeps native model fallback on the active lifecycle permit without using a replacement', async () => {
+    const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
+    const consumedPermits: InvokeOptions['spawnPermit'][] = [];
+    const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async (options) => {
+        consumedPermits.push(options.spawnPermit);
+        if (!options.spawnPermit?.().permitted) {
+          return { success: false, output: 'wrong lifecycle permit', exitCode: 1 };
+        }
+        return consumedPermits.length === 1
+          ? { success: false, output: 'primary model unavailable', exitCode: 1, modelUnavailable: true }
+          : { success: true, output: 'fallback model completed', exitCode: 0 };
+      }),
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    };
+    const writeRecovery = vi.fn();
+    const episodeStore: ProviderLifecycleEpisodeStore = {
+      readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+      writeProviderLifecycleEpisode: writeRecovery,
+    };
+    const createReplacementAttempt = vi.fn(() => ({ logicalStep: 'build', id: 'replacement' }));
+    const supervisor = createProviderLifecycleSupervisor({
+      attempt: { logicalStep: 'build', id: 'active' },
+      recoveryCount: 0,
+      preparationTimeoutMinutes: 5,
+      timer: { now: () => 0, schedule: vi.fn(), cancel: vi.fn() },
+      recovery: { projectRoot: '/workspace', episodeStore, createReplacementAttempt },
+    });
+    let activePermit: InvokeOptions['spawnPermit'];
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await supervisor.supervise((lease) => {
+      activePermit = lease.spawnPermit;
+      return executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex'],
+        runtimes: new ProviderRuntimeSet([runtime('codex', provider)]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('model-fallback-session')),
+        modelOverride: CODEX_MODEL_POLICY.modelFallbackLadder[0],
+        options: { prompt: 'Build.', cwd: '/workspace', spawnPermit: lease.spawnPermit },
+        optionsForCandidate: () => ({ prompt: 'Codex build.', cwd: '/workspace', spawnPermit: fallbackPermit }),
+      });
+    });
+
+    expect({
+      result,
+      consumedPermits,
+      activePermit,
+      replacements: createReplacementAttempt.mock.calls,
+      recoveries: writeRecovery.mock.calls,
+    }).toMatchObject({
+      result: { success: true, output: 'fallback model completed' },
+      consumedPermits: [activePermit, activePermit],
+      replacements: [],
+      recoveries: [],
+    });
+  });
+
+  it('keeps cross-provider fallback on the active lifecycle permit without using a replacement', async () => {
+    const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
+    const consumedPermits: InvokeOptions['spawnPermit'][] = [];
+    const provider = (result: InvokeResult): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn(async (options) => {
+        consumedPermits.push(options.spawnPermit);
+        return options.spawnPermit?.().permitted
+          ? result
+          : { success: false, output: 'wrong lifecycle permit', exitCode: 1 };
+      }),
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    });
+    const writeRecovery = vi.fn();
+    const episodeStore: ProviderLifecycleEpisodeStore = {
+      readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+      writeProviderLifecycleEpisode: writeRecovery,
+    };
+    const createReplacementAttempt = vi.fn(() => ({ logicalStep: 'build', id: 'replacement' }));
+    const supervisor = createProviderLifecycleSupervisor({
+      attempt: { logicalStep: 'build', id: 'active' },
+      recoveryCount: 0,
+      preparationTimeoutMinutes: 5,
+      timer: { now: () => 0, schedule: vi.fn(), cancel: vi.fn() },
+      recovery: { projectRoot: '/workspace', episodeStore, createReplacementAttempt },
+    });
+    let activePermit: InvokeOptions['spawnPermit'];
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await supervisor.supervise((lease) => {
+      activePermit = lease.spawnPermit;
+      return executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['codex', 'claude'],
+        runtimes: new ProviderRuntimeSet([
+          runtime('codex', provider({ success: false, output: 'Codex unavailable', exitCode: 127, providerUnavailable: true, providerUnavailableScope: 'run' })),
+          runtime('claude', provider({ success: true, output: 'Claude fallback completed', exitCode: 0 })),
+        ]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('provider-fallback-session')),
+        options: { prompt: 'Build.', cwd: '/workspace', spawnPermit: lease.spawnPermit },
+        optionsForCandidate: () => ({ prompt: 'Candidate build.', cwd: '/workspace', spawnPermit: fallbackPermit }),
+      });
+    });
+
+    expect({
+      result,
+      consumedPermits,
+      activePermit,
+      replacements: createReplacementAttempt.mock.calls,
+      recoveries: writeRecovery.mock.calls,
+    }).toMatchObject({
+      result: { success: true, output: 'Claude fallback completed', actualProvider: 'claude' },
+      consumedPermits: [activePermit, activePermit],
+      replacements: [],
+      recoveries: [],
+    });
+  });
+
+  it('carries the active lifecycle permit to a supported candidate after an unsupported candidate', async () => {
+    const fallbackPermit = vi.fn(() => ({ permitted: false as const, reason: 'revoked' as const }));
+    const supportedInvoke = vi.fn(async (options: InvokeOptions): Promise<InvokeResult> =>
+      options.spawnPermit?.().permitted
+        ? { success: true, output: 'supported fallback completed', exitCode: 0 }
+        : { success: false, output: 'wrong lifecycle permit', exitCode: 1 },
+    );
+    const unsupportedInvoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'must not invoke unsupported provider',
+      exitCode: 0,
+    }));
+    const writeRecovery = vi.fn();
+    const episodeStore: ProviderLifecycleEpisodeStore = {
+      readProviderLifecycleEpisode: vi.fn().mockResolvedValue({ recoveryAuthority: 'fresh' }),
+      writeProviderLifecycleEpisode: writeRecovery,
+    };
+    const createReplacementAttempt = vi.fn(() => ({ logicalStep: 'build', id: 'replacement' }));
+    const supervisor = createProviderLifecycleSupervisor({
+      attempt: { logicalStep: 'build', id: 'active' },
+      recoveryCount: 0,
+      preparationTimeoutMinutes: 5,
+      timer: { now: () => 0, schedule: vi.fn(), cancel: vi.fn() },
+      recovery: { projectRoot: '/workspace', episodeStore, createReplacementAttempt },
+    });
+    let activePermit: InvokeOptions['spawnPermit'];
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await supervisor.supervise((lease) => {
+      activePermit = lease.spawnPermit;
+      return executeProviderCandidates({
+        step: 'build',
+        configuredProviders: ['custom', 'claude'],
+        preferredProvider: 'custom',
+        runtimes: new ProviderRuntimeSet([
+          { ...runtime('claude', { invoke: unsupportedInvoke, invokeInteractive: vi.fn(async (): Promise<void> => {}) }), key: 'custom', builtIn: false },
+          runtime('claude', {
+            lifecycleCapability: { synchronousSpawnPermit: true },
+            invoke: supportedInvoke,
+            invokeInteractive: vi.fn(async (): Promise<void> => {}),
+          }),
+        ]),
+        sessions: new ProviderSessionScope(vi.fn().mockReturnValue('unsupported-fallback-session')),
+        options: { prompt: 'Build.', cwd: '/workspace', spawnPermit: lease.spawnPermit },
+        optionsForCandidate: () => ({ prompt: 'Candidate build.', cwd: '/workspace', spawnPermit: fallbackPermit }),
+      });
+    });
+
+    expect({
+      result,
+      unsupportedCalls: unsupportedInvoke.mock.calls,
+      supportedPermit: supportedInvoke.mock.calls[0]?.[0].spawnPermit,
+      activePermit,
+      replacements: createReplacementAttempt.mock.calls,
+      recoveries: writeRecovery.mock.calls,
+    }).toMatchObject({
+      result: { success: true, output: 'supported fallback completed', actualProvider: 'claude' },
+      unsupportedCalls: [],
+      supportedPermit: activePermit,
+      replacements: [],
+      recoveries: [],
+    });
+  });
+
+  it('rejects an unfenced custom provider before daemon lifecycle invocation', async () => {
+    const invoke = vi.fn(async (): Promise<InvokeResult> => ({
+      success: true,
+      output: 'custom provider should not run',
+      exitCode: 0,
+    }));
+    const custom = {
+      invoke,
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      { ...runtime('claude', custom), key: 'custom', builtIn: false },
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['custom'],
+      preferredProvider: 'custom',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('custom-session')),
+      options: {
+        prompt: 'Build with lifecycle supervision.',
+        cwd: '/workspace/feature',
+        spawnPermit: () => ({ permitted: true }),
+      },
+    });
+
+    expect({
+      calls: invoke.mock.calls,
+      success: result.success,
+      output: result.output,
+      attempt: result.attempts[0],
+    }).toMatchObject({
+      calls: [],
+      success: false,
+      output: expect.stringMatching(
+        /Provider custom.*synchronous spawn-permit capability.*Recovery action/i,
+      ),
+      attempt: {
+        provider: 'custom',
+        invoked: false,
+        reason: expect.stringMatching(
+          /synchronous spawn-permit capability.*Recovery action/i,
+        ),
+      },
+    });
+  });
+
+  it('invokes a custom provider that synchronously consumes its declared lifecycle spawn permit', async () => {
+    const spawnPermit = vi.fn(() => ({ permitted: true as const }));
+    const invoke = vi.fn((options: InvokeOptions): Promise<InvokeResult> => {
+      const permit = options.spawnPermit?.();
+      return Promise.resolve(
+        permit?.permitted
+          ? {
+              success: true,
+              output: 'custom provider completed',
+              exitCode: 0,
+            }
+          : {
+              success: false,
+              output: 'custom provider denied before spawn',
+              exitCode: 1,
+            },
+      );
+    });
+    const custom = {
+      lifecycleCapability: { synchronousSpawnPermit: true as const },
+      invoke,
+      invokeInteractive: vi.fn(async (): Promise<void> => {}),
+    };
+    const runtimes = new ProviderRuntimeSet([
+      { ...runtime('claude', custom), key: 'custom', builtIn: false },
+    ]);
+    const { executeProviderCandidates } = await import('../../src/engine/provider-execution.js');
+
+    const result = await executeProviderCandidates({
+      step: 'build',
+      configuredProviders: ['custom'],
+      preferredProvider: 'custom',
+      runtimes,
+      sessions: new ProviderSessionScope(vi.fn().mockReturnValue('custom-session')),
+      options: {
+        prompt: 'Build with lifecycle supervision.',
+        cwd: '/workspace/feature',
+        spawnPermit,
+      },
+    });
+
+    expect({
+      calls: invoke.mock.calls,
+      result: {
+        success: result.success,
+        output: result.output,
+        actualProvider: result.actualProvider,
+        attempt: result.attempts[0],
+      },
+    }).toMatchObject({
+      calls: [[expect.objectContaining({ spawnPermit })]],
+      result: {
+        success: true,
+        output: 'custom provider completed',
+        actualProvider: 'custom',
+        attempt: { provider: 'custom', invoked: true },
+      },
+    });
+    expect(spawnPermit).toHaveBeenCalledOnce();
+  });
+
   it('applies and tears down an isolated self-host context only for the resolved Codex candidate', async () => {
     const codex = {
       invoke: vi.fn(async (options: InvokeOptions): Promise<InvokeResult> => ({

@@ -56,6 +56,26 @@ export interface SelfHostAuthContext {
   homeDir: string;
 }
 
+/** Declares that a provider validates lifecycle authority at its spawn boundary. */
+export interface ProviderLifecycleCapability {
+  synchronousSpawnPermit: true;
+}
+
+/** The synchronous authority decision made immediately before process creation. */
+export type SpawnPermitDecision =
+  | { permitted: true }
+  | { permitted: false; reason: 'revoked' | 'superseded' };
+
+/**
+ * The provider action being authorized by a lifecycle-owned spawn permit.
+ * Omitting this argument preserves the original worker-spawn contract for
+ * legacy and custom providers.
+ */
+export type SpawnPermitPurpose = 'preparation' | 'worker-spawn';
+
+/** A lifecycle-owned, synchronous authority check for provider process creation. */
+export type SpawnPermit = (purpose?: SpawnPermitPurpose) => SpawnPermitDecision;
+
 export interface InvokeResult {
   success: boolean;
   output: string;
@@ -156,11 +176,17 @@ export interface InvokeOptions {
    */
   onActivity?: () => void;
   /**
-   * Fired once, synchronously, right after the provider subprocess spawns,
-   * with a handle that can terminate it. Used by the stall watchdog to kill a
-   * step whose heartbeat has gone stale past the configured threshold.
+   * Optional, best-effort notification fired synchronously once the provider
+   * subprocess has spawned. It is observation only: it grants no timeout,
+   * kill, retry, or lifecycle authority. The callback must not affect provider
+   * dispatch; lifecycle authority remains with `spawnPermit` before spawn.
    */
-  onSpawn?: (handle: { kill: () => void }) => void;
+  onSpawn?: () => void;
+  /**
+   * Lifecycle-owned authority that adapters must validate synchronously
+   * immediately before creating a provider process.
+   */
+  spawnPermit?: SpawnPermit;
 }
 
 export interface LLMProvider {
@@ -170,6 +196,11 @@ export interface LLMProvider {
    * declaration is also treated as `false` (only `=== true` authorizes resume).
    */
   supportsSessionResume?: boolean;
+  /**
+   * Declares that this adapter honors `InvokeOptions.spawnPermit` synchronously
+   * at its subprocess creation boundary.
+   */
+  lifecycleCapability?: ProviderLifecycleCapability;
   invoke(options: InvokeOptions): Promise<InvokeResult>;
   /** Optional so legacy and custom providers need not implement auth recovery. */
   readiness?(): Promise<AuthenticationReadiness>;

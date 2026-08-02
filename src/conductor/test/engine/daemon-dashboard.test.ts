@@ -45,6 +45,26 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       'utf-8',
     );
   }
+  async function makeLifecycleEvent(
+    slug: string,
+    step: string,
+    lifecycle: Record<string, unknown>,
+  ): Promise<void> {
+    const p = join(worktreeBase, slug, '.pipeline');
+    await mkdir(p, { recursive: true });
+    await writeFile(
+      join(p, 'events.jsonl'),
+      `${JSON.stringify({
+        type: 'provider_attempt',
+        step,
+        provider: 'provider-lifecycle',
+        outcome: 'success',
+        invoked: false,
+        lifecycle,
+      })}\n`,
+      'utf-8',
+    );
+  }
   // Legacy ledger format (plain `shipped`).
   async function makeProcessed(slug: string): Promise<void> {
     await mkdir(processedDir, { recursive: true });
@@ -134,6 +154,98 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 
     const entry = state.inProgress.find((p) => p.slug === 'ip1');
     expect(entry?.heartbeatAgeMs).toBeUndefined();
+  });
+
+  it('reads the current lifecycle phase and attempt evidence for an in-progress feature', async () => {
+    await makeStateful('preparing', { build: 'in_progress' });
+    await makeStateful('running', { build: 'in_progress' });
+    await makeStateful('recovering', { build: 'in_progress' });
+    await makeLifecycleEvent('preparing', 'build', {
+      phase: 'preparing', attemptId: 'attempt-1', recoveryCount: 0,
+    });
+    await makeLifecycleEvent('running', 'build', {
+      phase: 'running', attemptId: 'attempt-2', recoveryCount: 0,
+    });
+    await makeLifecycleEvent('recovering', 'build', {
+      phase: 'recovering', attemptId: 'attempt-3', recoveryCount: 1, reason: 'preparation-timeout',
+    });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.inProgress).toMatchObject([
+      { slug: 'preparing', lifecycle: { phase: 'preparing', attemptId: 'attempt-1', recoveryCount: 0 } },
+      { slug: 'recovering', lifecycle: { phase: 'recovering', attemptId: 'attempt-3', recoveryCount: 1, reason: 'preparation-timeout' } },
+      { slug: 'running', lifecycle: { phase: 'running', attemptId: 'attempt-2', recoveryCount: 0 } },
+    ]);
+  });
+
+  it('reads exhausted lifecycle evidence for a halted feature', async () => {
+    await makeHalted('halted', 'Provider preparation exhausted.');
+    await makeStateful('halted', { build: 'in_progress' });
+    await makeLifecycleEvent('halted', 'build', {
+      phase: 'exhausted',
+      attemptId: 'attempt-4',
+      recoveryCount: 1,
+      reason: 'preparation-timeout-exhausted',
+    });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.halted).toMatchObject([
+      {
+        slug: 'halted',
+        lifecycle: {
+          phase: 'halted',
+          attemptId: 'attempt-4',
+          recoveryCount: 1,
+          reason: 'preparation-timeout-exhausted',
+        },
+      },
+    ]);
+  });
+
+  it('falls back cleanly when lifecycle evidence is missing or malformed', async () => {
+    await makeStateful('missing', { build: 'in_progress' });
+    await makeStateful('malformed', { build: 'in_progress' });
+    await makeStateful('settled', { build: 'in_progress' });
+    const pipeline = join(worktreeBase, 'malformed', '.pipeline');
+    await writeFile(
+      join(pipeline, 'events.jsonl'),
+      '{ not json }\n' + JSON.stringify({
+        type: 'provider_attempt', step: 'build',
+        lifecycle: { phase: 'recovering', attemptId: 'invalid-attempt', recoveryCount: 0 },
+      }) + '\n',
+      'utf-8',
+    );
+    const settledPipeline = join(worktreeBase, 'settled', '.pipeline');
+    await writeFile(
+      join(settledPipeline, 'events.jsonl'),
+      [
+        { type: 'provider_attempt', step: 'build', lifecycle: { phase: 'running', attemptId: 'attempt-5', recoveryCount: 0 } },
+        { type: 'provider_attempt', step: 'build', lifecycle: { phase: 'settled', attemptId: 'attempt-5', recoveryCount: 0, outcome: 'completed' } },
+      ].map((event) => JSON.stringify(event)).join('\n') + '\n',
+      'utf-8',
+    );
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.inProgress).toEqual([
+      { slug: 'malformed', step: 'build' },
+      { slug: 'missing', step: 'build' },
+      { slug: 'settled', step: 'build' },
+    ]);
   });
 
   it('enriches halted/in-progress with step, tier, and PR url from conduct-state', async () => {
@@ -399,16 +511,42 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
     expect(out).toContain('p2');
   });
 
-  it('renders "Ns since last heartbeat" for an IN-PROGRESS entry with a heartbeat age', () => {
+  it('renders lifecycle diagnostics and labels heartbeat age as activity telemetry', () => {
     const state: InheritedState = {
-      halted: [],
-      inProgress: [{ slug: 'ip1', step: 'build', heartbeatAgeMs: 45_000 }],
+      halted: [{
+        slug: 'halted',
+        reason: 'Provider preparation exhausted.',
+        lifecycle: {
+          phase: 'halted', attemptId: 'attempt-4', recoveryCount: 1,
+          reason: 'preparation-timeout-exhausted',
+        },
+      }],
+      inProgress: [
+        {
+          slug: 'preparing', step: 'build', heartbeatAgeMs: 45_000,
+          lifecycle: { phase: 'preparing', attemptId: 'attempt-1', recoveryCount: 0 },
+        },
+        {
+          slug: 'running', step: 'build',
+          lifecycle: { phase: 'running', attemptId: 'attempt-2', recoveryCount: 0 },
+        },
+        {
+          slug: 'recovering', step: 'build',
+          lifecycle: {
+            phase: 'recovering', attemptId: 'attempt-3', recoveryCount: 1,
+            reason: 'preparation-timeout',
+          },
+        },
+      ],
       eligible: [],
       processed: [],
       processedCount: 0,
     };
     const out = renderDashboard(state);
-    expect(out).toContain('ip1 @build (heartbeat 45s ago)');
+    expect(out).toContain('halted — Provider preparation exhausted. (provider halted: attempt attempt-4, recovery 1 — preparation-timeout-exhausted)');
+    expect(out).toContain('preparing @build (provider preparing: attempt attempt-1, recovery 0) (activity telemetry: 45s ago)');
+    expect(out).toContain('running @build (provider running: attempt attempt-2, recovery 0)');
+    expect(out).toContain('recovering @build (provider recovering: attempt attempt-3, recovery 1 — preparation-timeout)');
   });
 
   it('renders no heartbeat annotation when heartbeatAgeMs is absent (no heartbeat yet)', () => {

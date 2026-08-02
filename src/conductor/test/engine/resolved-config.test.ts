@@ -11,11 +11,37 @@ import {
   FALLBACK_RETRIES,
   FALLBACK_REVIEW,
   resolveBuildReviewConfig,
+  resolveProviderPreparationTimeoutMinutes,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 
 describe('engine/resolved-config', () => {
+  describe('resolveProviderPreparationTimeoutMinutes', () => {
+    it.each([0, -1, 20])('defaults to five minutes without reading legacy heartbeat value %s', (heartbeatMinutes) => {
+      expect(resolveProviderPreparationTimeoutMinutes()).toBe(5);
+      expect(
+        resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: heartbeatMinutes }),
+      ).toBe(5);
+    });
+
+    it('uses finite overrides and preserves zero or negative opt-outs', () => {
+      expect(resolveProviderPreparationTimeoutMinutes({ provider_preparation_timeout_minutes: 7 })).toBe(7);
+      expect(resolveProviderPreparationTimeoutMinutes({ provider_preparation_timeout_minutes: 0 })).toBe(0);
+      expect(resolveProviderPreparationTimeoutMinutes({ provider_preparation_timeout_minutes: -1 })).toBe(-1);
+    });
+
+    it.each([
+      { value: 'soon', message: /expected a number/i },
+      { value: Number.NaN, message: /finite number/i },
+      { value: Number.POSITIVE_INFINITY, message: /finite number/i },
+    ])('rejects invalid timeout override $value', ({ value, message }) => {
+      expect(() => resolveProviderPreparationTimeoutMinutes({
+        provider_preparation_timeout_minutes: value as number,
+      })).toThrow(message);
+    });
+  });
+
   describe('resolveBuildReviewConfig (#773 Task 4 — completeness default-on)', () => {
     it('defaults to enabled when no build_review block is present at all', () => {
       const resolved = resolveBuildReviewConfig(undefined);
@@ -829,53 +855,6 @@ describe('engine/resolved-config', () => {
       expect(() => resolveAuthParkTimeoutMinutes(config)).toThrow(
         /Invalid auth_park_timeout_minutes.*finite/
       );
-    });
-  });
-
-  describe('resolveStepHeartbeatStallMinutes', () => {
-    it('defaults to 20 when step_heartbeat_stall_minutes is absent', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      expect(resolveStepHeartbeatStallMinutes(undefined)).toBe(20);
-    });
-
-    it('returns the configured value when explicitly set', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      const config: HarnessConfig = { step_heartbeat_stall_minutes: 10 };
-      expect(resolveStepHeartbeatStallMinutes(config)).toBe(10);
-    });
-
-    it('preserves 0 and negative values as opt-out signals', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      expect(resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: 0 })).toBe(0);
-      expect(resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: -1 })).toBe(-1);
-    });
-
-    it('throws on non-numeric string values', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      const config = { step_heartbeat_stall_minutes: 'soon' } as unknown as HarnessConfig;
-      expect(() => resolveStepHeartbeatStallMinutes(config)).toThrow(
-        /Invalid step_heartbeat_stall_minutes.*expected a number/
-      );
-    });
-
-    it('throws on NaN/Infinity', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      expect(() =>
-        resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: NaN }),
-      ).toThrow(/Invalid step_heartbeat_stall_minutes.*finite/);
-      expect(() =>
-        resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: Infinity }),
-      ).toThrow(/Invalid step_heartbeat_stall_minutes.*finite/);
     });
   });
 

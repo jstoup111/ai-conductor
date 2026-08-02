@@ -9,6 +9,14 @@ vi.mock('execa', () => ({
   execa: vi.fn(),
 }));
 
+const { mockValidateSpawnPermit } = vi.hoisted(() => ({
+  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
+    permit?.(purpose) ?? { permitted: true as const }),
+}));
+vi.mock('../../src/engine/provider-runtime.js', () => ({
+  validateSpawnPermit: mockValidateSpawnPermit,
+}));
+
 import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 'execa';
 
 /**
@@ -44,6 +52,53 @@ describe('ClaudeProvider', () => {
   };
 
   describe('invoke', () => {
+    it('declares synchronous spawn-permit lifecycle capability', () => {
+      expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
+    });
+
+    it('reports spawn as a zero-argument observation', async () => {
+      const onSpawn = vi.fn();
+      mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({ ...baseOptions, onSpawn });
+
+      expect(onSpawn.mock.calls).toEqual([[]]);
+    });
+
+    it('checks a current permit immediately before the injected subprocess factory', async () => {
+      const callOrder: string[] = [];
+      const subprocessFactory = vi.fn(() => {
+        callOrder.push('subprocess factory');
+        return Promise.resolve({ stdout: 'ok', exitCode: 0, failed: false }) as any;
+      });
+      const spawnPermit = vi.fn(() => {
+        callOrder.push('spawn permit');
+        return { permitted: true as const };
+      });
+      provider = new ClaudeProvider(undefined, subprocessFactory);
+
+      await provider.invoke({ ...baseOptions, spawnPermit });
+
+      expect(callOrder).toEqual(['spawn permit', 'subprocess factory']);
+      expect(mockValidateSpawnPermit).toHaveBeenCalledWith(spawnPermit);
+    });
+
+    it('fails closed without creating a child when its permit is revoked', async () => {
+      const subprocessFactory = vi.fn(() =>
+        Promise.resolve({ stdout: 'ok', exitCode: 0, failed: false }) as any,
+      );
+      provider = new ClaudeProvider(undefined, subprocessFactory);
+
+      await expect(
+        provider.invoke({
+          ...baseOptions,
+          spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
+        }),
+      ).rejects.toThrow('Claude process spawn denied: revoked');
+
+      expect(subprocessFactory).not.toHaveBeenCalled();
+    });
+
     it('returns the successful subprocess interval without changing output or provider usage', async () => {
       const readings = [1_000, 1_025];
       const clock: IntervalClock = {

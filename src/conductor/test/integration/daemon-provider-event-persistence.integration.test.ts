@@ -16,7 +16,7 @@ import { ALL_STEPS } from '../../src/engine/steps.js';
 import { writeState } from '../../src/engine/state.js';
 import * as eventPersisterModule from '../../src/engine/event-persister.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import type { LLMProvider } from '../../src/execution/llm-provider.js';
+import type { InvokeOptions, LLMProvider } from '../../src/execution/llm-provider.js';
 import type {
   ConductorEvent,
   ConductState,
@@ -99,8 +99,16 @@ describe('daemon feature provider-event persistence', () => {
         featureAEvents = featureEvents;
         await enterOverlap();
         const provider = (key: 'codex' | 'claude'): LLMProvider => {
-          const invoke = vi.fn(async () =>
-            key === 'codex'
+          const invoke = vi.fn(async (options: InvokeOptions) => {
+            const permit = options.spawnPermit?.();
+            if (permit && !permit.permitted) {
+              return {
+                success: false,
+                output: `test provider spawn denied: ${permit.reason}`,
+                exitCode: 1,
+              };
+            }
+            return key === 'codex'
               ? {
                   success: false,
                   output: 'codex executable not found',
@@ -116,8 +124,13 @@ describe('daemon feature provider-event persistence', () => {
                   exitCode: 0,
                   tokenUsage: { input: 120, output: 30 },
                   observedIntervals: claudeIntervals,
-                });
-          return { invoke, invokeInteractive: invoke };
+                };
+          });
+          return {
+            lifecycleCapability: { synchronousSpawnPermit: true },
+            invoke,
+            invokeInteractive: invoke,
+          };
         };
         const runtimes = new ProviderRuntimeSet([
           {
@@ -284,6 +297,28 @@ describe('daemon feature provider-event persistence', () => {
         {
           type: 'provider_attempt',
           step: 'plan',
+          provider: 'provider-lifecycle',
+          outcome: 'success',
+          lifecycle: {
+            phase: 'preparing',
+            attemptId: 'legacy-session:plan:1',
+            recoveryCount: 0,
+          },
+        },
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          provider: 'provider-lifecycle',
+          outcome: 'success',
+          lifecycle: {
+            phase: 'running',
+            attemptId: 'legacy-session:plan:1',
+            recoveryCount: 0,
+          },
+        },
+        {
+          type: 'provider_attempt',
+          step: 'plan',
           provider: 'codex',
           outcome: 'unavailable',
           observedIntervals: codexIntervals,
@@ -300,6 +335,18 @@ describe('daemon feature provider-event persistence', () => {
           provider: 'claude',
           outcome: 'success',
           observedIntervals: claudeIntervals,
+        },
+        {
+          type: 'provider_attempt',
+          step: 'plan',
+          provider: 'provider-lifecycle',
+          outcome: 'success',
+          lifecycle: {
+            phase: 'settled',
+            attemptId: 'legacy-session:plan:1',
+            recoveryCount: 0,
+            outcome: 'completed',
+          },
         },
         {
           type: 'step_completed',
@@ -320,6 +367,16 @@ describe('daemon feature provider-event persistence', () => {
       globalPlan: [
         {
           type: 'provider_attempt',
+          provider: 'provider-lifecycle',
+          outcome: 'success',
+        },
+        {
+          type: 'provider_attempt',
+          provider: 'provider-lifecycle',
+          outcome: 'success',
+        },
+        {
+          type: 'provider_attempt',
           provider: 'codex',
           outcome: 'unavailable',
         },
@@ -331,6 +388,11 @@ describe('daemon feature provider-event persistence', () => {
         {
           type: 'provider_attempt',
           provider: 'claude',
+          outcome: 'success',
+        },
+        {
+          type: 'provider_attempt',
+          provider: 'provider-lifecycle',
           outcome: 'success',
         },
         {

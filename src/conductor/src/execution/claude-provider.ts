@@ -1,4 +1,4 @@
-import { execa, type Options as ExecaOptions } from 'execa';
+import { execa, type Options as ExecaOptions, type ResultPromise } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult, TokenUsage } from './llm-provider.js';
 import {
   epochAnchoredMonotonicClock,
@@ -7,6 +7,7 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
@@ -465,30 +466,43 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
   }
 }
 
+type ClaudeSubprocessFactory = (
+  file: string,
+  args: string[],
+  options: ExecaOptions,
+) => ResultPromise;
+
 export class ClaudeProvider implements LLMProvider {
   readonly supportsSessionResume = false;
+  readonly lifecycleCapability = { synchronousSpawnPermit: true } as const;
 
   constructor(
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
+    private readonly subprocessFactory: ClaudeSubprocessFactory = execa,
   ) {}
 
   private async runClaude(
     args: string[],
-    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn'>,
+    options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'spawnPermit'>,
   ) {
-    const { diagnosticLog, onActivity, onSpawn, ...execaOptions } = options;
-    const subprocess = execa('claude', args, {
+    const { diagnosticLog, onActivity, onSpawn, spawnPermit, ...execaOptions } = options;
+    const permit = validateSpawnPermit(spawnPermit);
+    if (!permit.permitted) {
+      throw new Error(`Claude process spawn denied: ${permit.reason}`);
+    }
+    const subprocess = this.subprocessFactory('claude', args, {
       ...execaOptions,
       // A daemon feature must retain the diagnostic in its scoped/persisted
       // log. Other callers preserve the existing live inherited stdio path.
       stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
       stderr: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
     });
-    // Wire the heartbeat/stall-watchdog seam on the LIVE subprocess, before
-    // awaiting — attaching after resolution would miss every event and the
-    // kill handle would arrive too late for a stall to ever be caught.
+    // Wire optional spawn and activity observations on the LIVE subprocess
+    // before awaiting, so observers receive the spawn event and streamed
+    // activity. These best-effort callbacks have no timeout, kill, retry, or
+    // lifecycle authority and never affect provider dispatch.
     try {
-      onSpawn?.({ kill: () => subprocess.kill() });
+      onSpawn?.();
       subprocess.stdout?.on('data', () => onActivity?.());
       subprocess.stderr?.on('data', () => onActivity?.());
     } catch {
@@ -542,6 +556,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          spawnPermit: options.spawnPermit,
         })
         : this.runClaude(args, {
           reject: false,
@@ -551,6 +566,7 @@ export class ClaudeProvider implements LLMProvider {
           diagnosticLog: options.diagnosticLog,
           onActivity: options.onActivity,
           onSpawn: options.onSpawn,
+          spawnPermit: options.spawnPermit,
         }),
     );
 
@@ -594,6 +610,7 @@ export class ClaudeProvider implements LLMProvider {
         diagnosticLog: options.diagnosticLog,
         onActivity: options.onActivity,
         onSpawn: options.onSpawn,
+        spawnPermit: options.spawnPermit,
       }),
     );
 

@@ -27,6 +27,14 @@ const { mockExeca } = vi.hoisted(() => {
 });
 vi.mock('execa', () => ({ execa: mockExeca }));
 
+const { mockValidateSpawnPermit } = vi.hoisted(() => ({
+  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
+    permit?.(purpose) ?? { permitted: true as const }),
+}));
+vi.mock('../../src/engine/provider-runtime.js', () => ({
+  validateSpawnPermit: mockValidateSpawnPermit,
+}));
+
 const baseOptions: InvokeOptions = {
   prompt: 'Make the no-op change',
   systemPrompt: 'You are the conductor.',
@@ -62,11 +70,93 @@ describe('CodexProvider', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mockValidateSpawnPermit.mockImplementation((permit, purpose) =>
+      permit?.(purpose) ?? { permitted: true });
     provider = new CodexProvider(
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
       ),
     );
+  });
+
+  it('declares synchronous spawn-permit lifecycle capability', () => {
+    expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
+  });
+
+  it('checks a current permit before readiness and immediately before the injected subprocess factory', async () => {
+    const callOrder: string[] = [];
+    const runDoctor = vi.fn(async () => {
+      callOrder.push('readiness');
+      return readyDoctorResult();
+    });
+    const spawnPermit = vi.fn(() => {
+      callOrder.push('spawn permit');
+      return { permitted: true as const };
+    });
+    const subprocessFactory = vi.fn(() => {
+      callOrder.push('subprocess factory');
+      return Promise.resolve({ stdout: jsonlMessage('Done.'), exitCode: 0, failed: false }) as any;
+    });
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    await provider.invoke({ ...baseOptions, spawnPermit });
+
+    expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
+    expect(mockValidateSpawnPermit).toHaveBeenNthCalledWith(1, spawnPermit, 'preparation');
+    expect(mockValidateSpawnPermit).toHaveBeenNthCalledWith(2, spawnPermit);
+  });
+
+  it.each([
+    ['unattended invocation', (options: InvokeOptions) => provider.invoke(options)],
+    ['automatic interactive streaming', (options: InvokeOptions) => provider.invokeInteractive({ ...options, interactive: false })],
+  ])('does not start doctor or exec for a revoked permit during %s', async (_name, invoke) => {
+    const processStarts: string[] = [];
+    const runDoctor = vi.fn(async () => {
+      processStarts.push('doctor');
+      return readyDoctorResult();
+    });
+    const subprocessFactory = vi.fn(() => {
+      processStarts.push('exec');
+      return Promise.resolve({ stdout: jsonlMessage('unexpected child'), exitCode: 0, failed: false }) as any;
+    });
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    const failure = await invoke({
+      ...baseOptions,
+      spawnPermit: () => ({ permitted: false, reason: 'revoked' }),
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect({
+      message: failure instanceof Error ? failure.message : undefined,
+      processStarts,
+    }).toEqual({
+      message: 'Codex process spawn denied: revoked',
+      processStarts: [],
+    });
+  });
+
+  it('checks a current permit before readiness and immediately before automatic-streaming creation', async () => {
+    const callOrder: string[] = [];
+    const runDoctor = vi.fn(async () => {
+      callOrder.push('readiness');
+      return readyDoctorResult();
+    });
+    const spawnPermit = vi.fn(() => {
+      callOrder.push('spawn permit');
+      return { permitted: true as const };
+    });
+    const subprocessFactory = vi.fn(() => {
+      callOrder.push('subprocess factory');
+      return Promise.resolve({ stdout: 'Done.', exitCode: 0, failed: false }) as any;
+    });
+    provider = new CodexProvider(runDoctor, 'codex', undefined, subprocessFactory);
+
+    await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
+
+    expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
   });
 
   it.each([

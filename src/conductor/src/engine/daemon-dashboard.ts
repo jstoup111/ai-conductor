@@ -36,6 +36,16 @@ export interface HaltedEntry {
   tier?: ComplexityTier;
   /** PR opened before the halt (finish runs before some SHIP gates), if any. */
   prUrl?: string;
+  /** Provider lifecycle evidence when this halt exhausted preparation recovery. */
+  lifecycle?: ProviderLifecycleDiagnostic;
+}
+
+/** Lifecycle evidence surfaced from the feature's persisted provider events. */
+export interface ProviderLifecycleDiagnostic {
+  phase: 'preparing' | 'running' | 'recovering' | 'halted';
+  attemptId: string;
+  recoveryCount: number;
+  reason?: 'preparation-timeout' | 'preparation-timeout-exhausted';
 }
 
 export interface InProgressEntry {
@@ -53,6 +63,8 @@ export interface InProgressEntry {
    * activity pulse never renders as "stalled" (see `step-heartbeat.ts`).
    */
   heartbeatAgeMs?: number;
+  /** Current provider preparation/running/recovery phase, if persisted. */
+  lifecycle?: ProviderLifecycleDiagnostic;
 }
 
 export interface EligibleEntry {
@@ -291,6 +303,79 @@ async function loadWorktreeState(
 }
 
 /**
+ * Read the last valid lifecycle event for the current logical step. Event
+ * persistence is best-effort telemetry, so missing, malformed, or unrelated
+ * evidence deliberately leaves the dashboard row unchanged.
+ */
+async function readProviderLifecycleDiagnostic(
+  wt: string,
+  step: string | undefined,
+): Promise<ProviderLifecycleDiagnostic | undefined> {
+  let content: string;
+  try {
+    content = await readFile(join(wt, '.pipeline/events.jsonl'), 'utf-8');
+  } catch {
+    return undefined;
+  }
+
+  let latest: ProviderLifecycleDiagnostic | undefined;
+  for (const line of content.split('\n')) {
+    const diagnostic = parseProviderLifecycleDiagnostic(line, step);
+    if (diagnostic !== undefined) latest = diagnostic ?? undefined;
+  }
+  return latest;
+}
+
+function parseProviderLifecycleDiagnostic(
+  line: string,
+  step: string | undefined,
+): ProviderLifecycleDiagnostic | null | undefined {
+  if (!step || line.trim() === '') return undefined;
+  let event: unknown;
+  try {
+    event = JSON.parse(line);
+  } catch {
+    return undefined;
+  }
+  if (!isRecord(event) || event.type !== 'provider_attempt' || event.step !== step) return undefined;
+  if (!isRecord(event.lifecycle)) return undefined;
+
+  const { phase, attemptId, recoveryCount, reason, outcome } = event.lifecycle;
+  if (typeof attemptId !== 'string' || attemptId.length === 0) return undefined;
+  if (
+    typeof recoveryCount !== 'number'
+    || !Number.isInteger(recoveryCount)
+    || recoveryCount < 0
+    || recoveryCount > 1
+  ) {
+    return undefined;
+  }
+  switch (phase) {
+    case 'preparing':
+    case 'running':
+      return reason === undefined ? { phase, attemptId, recoveryCount } : undefined;
+    case 'recovering':
+      return recoveryCount === 1 && reason === 'preparation-timeout'
+        ? { phase, attemptId, recoveryCount, reason }
+        : undefined;
+    case 'exhausted':
+      return recoveryCount === 1 && reason === 'preparation-timeout-exhausted'
+        ? { phase: 'halted', attemptId, recoveryCount, reason }
+        : undefined;
+    case 'settled':
+      // A valid terminal event supersedes a prior running/preparing event for
+      // this step; do not leave stale activity diagnostics on the dashboard.
+      return reason === undefined && (outcome === 'completed' || outcome === 'failed') ? null : undefined;
+    default:
+      return undefined;
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
  * Scan inherited persisted state into the four dashboard groups. Pure of the
  * render — `renderDashboard` formats the returned struct. Injected `discover`
  * keeps eligibility in lockstep with the live `discoverBacklog`.
@@ -337,6 +422,8 @@ export async function scanInheritedState(
           if (tier) entry.tier = tier;
           if (prUrl) entry.prUrl = prUrl;
         }
+        const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
+        if (lifecycle?.phase === 'halted') entry.lifecycle = lifecycle;
         halted.push(entry);
         haltedSlugs.add(slug);
         continue;
@@ -389,6 +476,8 @@ export async function scanInheritedState(
         const ageMs = Date.now() - Date.parse(heartbeat.ts);
         if (Number.isFinite(ageMs)) entry.heartbeatAgeMs = Math.max(0, ageMs);
       }
+      const lifecycle = await readProviderLifecycleDiagnostic(wt, entry.step);
+      if (lifecycle?.phase !== 'halted') entry.lifecycle = lifecycle;
       inProgress.push(entry);
     } catch (err) {
       // A per-worktree fs error is isolated: skip it, keep scanning (FR-3).
@@ -473,13 +562,19 @@ function prSuffix(prUrl?: string): string {
 }
 
 /**
- * ` (heartbeat Ns ago)` suffix for an IN-PROGRESS row. Empty when no
+ * ` (activity telemetry: Ns ago)` suffix for an IN-PROGRESS row. Empty when no
  * heartbeat file exists yet (a step that hasn't produced its first activity
  * pulse) — that state is never rendered as if it were stale.
  */
 function heartbeatSuffix(heartbeatAgeMs?: number): string {
   if (heartbeatAgeMs === undefined) return '';
-  return ` (heartbeat ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
+  return ` (activity telemetry: ${formatHeartbeatAge(heartbeatAgeMs)} ago)`;
+}
+
+function lifecycleSuffix(lifecycle?: ProviderLifecycleDiagnostic): string {
+  if (!lifecycle) return '';
+  const reason = lifecycle.reason ? ` — ${lifecycle.reason}` : '';
+  return ` (provider ${lifecycle.phase}: attempt ${lifecycle.attemptId}, recovery ${lifecycle.recoveryCount}${reason})`;
 }
 
 /** ` [${band}]` band tag, or empty when no band is assigned. */
@@ -580,13 +675,13 @@ export function renderDashboard(
   lines.push(`HALTED (${halted.length})`);
   for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
-    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — ${h.reason}${prSuffix(h.prUrl)}`);
+    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}`);
   }
 
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
-    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
+    lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(
