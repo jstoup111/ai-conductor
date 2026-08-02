@@ -262,8 +262,9 @@ conduct-ts engineer unclaim <owner/repo#N>
 
 `unclaim` returns a `claimed` entry to pending, preserving its original capture time so the next
 `claim` can select it. An absent or non-claimed entry is reported without changing state or failing.
-Use `forget` only when the issue should be removed from the ledger and made eligible for a later
-`poll`:
+A `claimed` entry that already has a recorded PR is delivered in fact — `unclaim` refuses it and
+tells you to use `resolve` or `forget` instead. Use `forget` only when the issue should be removed
+from the ledger and made eligible for a later `poll`:
 
 ```bash
 conduct-ts engineer forget <owner/repo#N>
@@ -276,9 +277,10 @@ conduct-ts engineer requeue --stale [--older-than <dur>]
 ```
 
 Without `--older-than`, the sweep uses `stale_claim_window_hours` (24 hours by default); the optional
-duration overrides that window for this run. It requeues entries for open issues, removes entries
-only when their source issue is confirmed closed, and reports liveness-read errors without removing
-the entry.
+duration overrides that window for this run — an unparseable duration exits 1 without touching the
+ledger. It requeues stranded `claimed` entries that have no recorded PR, removes entries only when
+their source issue is confirmed closed, and reports liveness-read errors without removing the entry.
+Claimed entries that already have a PR are reserved for `resolve`/`forget` and are never touched.
 
 ## Maintenance commands
 
