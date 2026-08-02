@@ -397,7 +397,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await isOperatorParked(projectRoot, slug)).toBe(false);
     expect(result.counts.reconciled).toBe(1);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 skipped=0; next: no action required',
+      '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: no action required',
     ]);
   });
 
@@ -490,7 +490,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(result.counts.deferred).toBe(1);
     expect(result.counts.reconciled).toBe(0);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked',
+      '[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 refused=0 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked',
     ]);
 
     // The sweep never writes a record itself.
@@ -581,7 +581,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(result.counts.reconciled).toBe(0);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available',
+      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 refused=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available',
     ]);
   });
 
@@ -694,7 +694,7 @@ describe('parked-feature reconciliation acceptance (S6/S7): orphan surfacing is 
     expect(await branchExists(slug)).toBe(true);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=1 parked=0 skipped=0; next: 1 orphaned park needs operator review',
+      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=1 parked=0 refused=0 skipped=0; next: 1 orphaned park needs operator review',
     ]);
   });
 
