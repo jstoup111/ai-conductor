@@ -32,6 +32,8 @@ interface GitWorld {
   mergedPrHeads?: readonly string[];
   /** Current tip SHA per branch, for `git rev-parse <branch>`. */
   tips?: Readonly<Record<string, string>>;
+  /** Lines emitted by `git log --oneline --no-decorate <head>..<ref>`. */
+  unmergedLog?: readonly string[] | 'unavailable';
   /** Refs whose ancestry probe fails with a non-1 exit (broken repo state). */
   ancestryBroken?: readonly string[];
   /** `git for-each-ref` itself fails. */
@@ -83,6 +85,12 @@ function makeGit(world: GitWorld = {}): {
       return { stdout: 'deadbeef\n' };
     }
     if (verb === 'cat-file') return { stdout: '' };
+    if (verb === 'log') {
+      if (world.unmergedLog === 'unavailable') {
+        throw gitFailure(128, 'fatal: invalid revision range');
+      }
+      return { stdout: `${(world.unmergedLog ?? []).join('\n')}\n` };
+    }
     if (verb === 'for-each-ref') {
       if (world.refsUnavailable) throw gitFailure(128, 'fatal: not a git repository');
       return { stdout: `${branches.join('\n')}\n` };
@@ -456,10 +464,73 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
-        outcome: { slug, steps: [], refusal: 'unmerged-commits' },
+        outcome: {
+          slug,
+          steps: [],
+          refusal: 'unmerged-commits',
+          unmergedCommits: { commits: [], overflow: 0 },
+        },
         deleted: [],
         parked: true,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('attaches the capped commit summaries that a force-delete would drop', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'post-merge-commit-summaries';
+    const headRefOid = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [headRefOid],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+      unmergedLog: [
+        'aaaaaaa first commit',
+        'bbbbbbb second commit',
+        'ccccccc third commit',
+        'ddddddd fourth commit',
+        'eeeeeee fifth commit',
+        'fffffff sixth commit',
+        '1111111 seventh commit',
+        '2222222 eighth commit',
+        '3333333 ninth commit',
+        '4444444 tenth commit',
+        '5555555 eleventh commit',
+      ],
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{"headRefOid":"${headRefOid}"}]` });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect(outcome).toEqual({
+        slug,
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: {
+          commits: [
+            ['aaaaaaa', 'first commit'],
+            ['bbbbbbb', 'second commit'],
+            ['ccccccc', 'third commit'],
+            ['ddddddd', 'fourth commit'],
+            ['eeeeeee', 'fifth commit'],
+            ['fffffff', 'sixth commit'],
+            ['1111111', 'seventh commit'],
+            ['2222222', 'eighth commit'],
+            ['3333333', 'ninth commit'],
+            ['4444444', 'tenth commit'],
+          ].map(([sha, subject]) => ({ sha, subject })),
+          overflow: 1,
+        },
+      });
+      expect(run.mock.calls).toContainEqual([
+        ['log', '--oneline', '--no-decorate', `${headRefOid}..feat/${slug}`],
+        { cwd: projectRoot },
+      ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

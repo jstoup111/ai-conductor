@@ -24,7 +24,18 @@ export interface ReconcileMergedParkOutcome {
   slug: string;
   steps: string[];
   refusal?: RefusalReason;
+  unmergedCommits?: UnmergedCommitListing;
   deferred?: boolean;
+}
+
+export interface UnmergedCommitSummary {
+  sha: string;
+  subject: string;
+}
+
+export interface UnmergedCommitListing {
+  commits: UnmergedCommitSummary[];
+  overflow: number;
 }
 
 export type RefusalReason =
@@ -282,6 +293,35 @@ export async function proveByMergedPrHead(
 }
 
 /**
+ * The commits `git branch -D` would discard when a merged-PR branch advanced
+ * beyond its recorded head. This is diagnostic data only: it never grants
+ * deletion authority.
+ */
+async function listUnmergedCommits(
+  runGit: GitRunner,
+  projectRoot: string,
+  headRefOid: string,
+  ref: string,
+): Promise<UnmergedCommitListing | null> {
+  try {
+    const { stdout } = await runGit(
+      ['log', '--oneline', '--no-decorate', `${headRefOid}..${ref}`],
+      { cwd: projectRoot },
+    );
+    const commits = stdout
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => {
+        const [sha, ...subject] = line.trim().split(/\s+/);
+        return { sha, subject: subject.join(' ') };
+      });
+    return { commits: commits.slice(0, 10), overflow: Math.max(0, commits.length - 10) };
+  } catch {
+    return null;
+  }
+}
+
+/**
  * `true` when `path` appears in `git worktree list --porcelain` — i.e. git owns
  * it and `git worktree remove` failing on it is a REAL failure (locked, dirty,
  * permissions) that must refuse cleanup.
@@ -499,8 +539,17 @@ export async function reconcileMergedPark(
           continue;
         case 'no-pr':
           return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
-        case 'ahead':
-          return { slug: opts.slug, steps: [], refusal: 'unmerged-commits' };
+        case 'ahead': {
+          const unmergedCommits = await listUnmergedCommits(
+            runGit,
+            opts.projectRoot,
+            diagnosis.headRefOid,
+            ref,
+          );
+          return unmergedCommits === null
+            ? { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' }
+            : { slug: opts.slug, steps: [], refusal: 'unmerged-commits', unmergedCommits };
+        }
         case 'behind':
           return { slug: opts.slug, steps: [], refusal: 'branch-behind-merged-head' };
         case 'indeterminate':
