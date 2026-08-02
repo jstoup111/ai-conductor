@@ -51,11 +51,11 @@ import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { writeStepHeartbeat } from '../../src/engine/step-heartbeat.js';
 import type {
-  InvokeOptions,
   InvokeResult,
   LLMProvider,
 } from '../../src/execution/llm-provider.js';
 import type { HarnessConfig } from '../../src/types/config.js';
+import type { ProviderAttemptEvent } from '../../src/types/events.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 
 const FIVE_MINUTES_MS = 5 * 60_000;
@@ -111,6 +111,13 @@ interface RunnerFixture {
   runner: DefaultStepRunner;
   sessions: ProviderSessionStore;
   logs: string[];
+  lifecycleEvents: ProviderAttemptEvent[];
+}
+
+interface ProviderFixtureOptions {
+  key?: string;
+  provider?: LLMProvider;
+  builtIn?: boolean;
 }
 
 function makeRunner(
@@ -118,14 +125,18 @@ function makeRunner(
   executor: typeof executeProviderCandidates,
   rawConfig: Record<string, unknown> = {},
   heartbeatWatchdog?: { pollIntervalMs?: number; now?: () => number },
+  providerFixture: ProviderFixtureOptions = {},
 ): RunnerFixture {
   const logs: string[] = [];
-  const provider = inertProvider();
+  const lifecycleEvents: ProviderAttemptEvent[] = [];
+  const provider = providerFixture.provider ?? inertProvider();
+  const providerKey = providerFixture.key ?? 'claude';
+  const builtIn = providerFixture.builtIn ?? true;
   const sessions = new ProviderSessionStore({
     createSessionId: () => `session-${crypto.randomUUID()}`,
   });
   const config = {
-    llm_provider: ['claude'],
+    llm_provider: [providerKey],
     ...rawConfig,
   } as unknown as HarnessConfig;
   const runner = new DefaultStepRunner(provider, 'acceptance-session', root, {
@@ -134,14 +145,19 @@ function makeRunner(
     log: (message) => logs.push(message),
     heartbeatWatchdog,
     providerExecution: {
-      configuredProviders: ['claude'],
-      runtimes: new ProviderRuntimeSet([runtime('claude', provider, true)]),
+      configuredProviders: [providerKey],
+      runtimes: new ProviderRuntimeSet([runtime(providerKey, provider, builtIn)]),
       sessions,
       executor,
       diagnosticLog: (message) => logs.push(message),
     },
+    providerAttempt: (_step, event) => {
+      if ('lifecycle' in event && event.lifecycle !== undefined) {
+        lifecycleEvents.push(event as ProviderAttemptEvent);
+      }
+    },
   });
-  return { runner, sessions, logs };
+  return { runner, sessions, logs, lifecycleEvents };
 }
 
 async function runStep(
@@ -156,14 +172,32 @@ async function flushDispatch(): Promise<void> {
   for (let index = 0; index < 8; index += 1) await Promise.resolve();
 }
 
-function lifecycleLine(logs: readonly string[], step: StepName, phase: string): string | undefined {
-  return logs.find((line) =>
-    line.includes(step) && new RegExp(`\\b${phase}\\b`, 'i').test(line),
-  );
+async function waitForCondition(
+  condition: () => boolean,
+  description: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if (condition()) return;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    await flushDispatch();
+  }
+  expect(condition(), description).toBe(true);
 }
 
-function attemptIdentity(line: string): string | undefined {
-  return /attempt(?:_id)?[=:\s]+([a-z0-9_-]+)/i.exec(line)?.[1];
+function lifecycleEvent(
+  events: readonly ProviderAttemptEvent[],
+  step: StepName,
+  phase: string,
+): ProviderAttemptEvent | undefined {
+  return events.find((event) => event.step === step && event.lifecycle?.phase === phase);
+}
+
+function spawnWorker(input: ExecuteProviderCandidatesInput): void {
+  const decision = input.options.spawnPermit?.();
+  if (decision?.permitted !== true) {
+    throw new Error(`fixture worker spawn denied: ${decision?.reason ?? 'missing-permit'}`);
+  }
+  input.options.onSpawn?.();
 }
 
 let root: string;
@@ -183,19 +217,19 @@ describe('TI-1: every daemon provider step exposes one authoritative lifecycle',
     '%s crosses preparing -> running with one attempt identity',
     async (step) => {
       const executor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
-        input.options.onSpawn?.();
+        spawnWorker(input);
         return providerResult(step);
       });
       const fixture = makeRunner(root, executor);
 
       expect((await runStep(fixture, step)).success).toBe(true);
 
-      const preparing = lifecycleLine(fixture.logs, step, 'preparing');
-      const running = lifecycleLine(fixture.logs, step, 'running');
+      const preparing = lifecycleEvent(fixture.lifecycleEvents, step, 'preparing');
+      const running = lifecycleEvent(fixture.lifecycleEvents, step, 'running');
       expect(preparing).toBeDefined();
       expect(running).toBeDefined();
-      expect(attemptIdentity(preparing ?? '')).toBeDefined();
-      expect(attemptIdentity(running ?? '')).toBe(attemptIdentity(preparing ?? ''));
+      expect(preparing?.lifecycle?.attemptId).toBeDefined();
+      expect(running?.lifecycle?.attemptId).toBe(preparing?.lifecycle?.attemptId);
     },
   );
 
@@ -213,26 +247,26 @@ describe('TI-1: every daemon provider step exposes one authoritative lifecycle',
     });
 
     const run = runStep(fixture, 'build');
-    await flushDispatch();
-    const beforeSpawn = [...fixture.logs];
+    await waitForCondition(() => executor.mock.calls.length === 1, 'pre-spawn preparation begins');
+    const beforeSpawn = [...fixture.lifecycleEvents];
     pending.resolve(providerResult());
     await run;
 
-    expect(lifecycleLine(beforeSpawn, 'build', 'preparing')).toBeDefined();
-    expect(lifecycleLine(beforeSpawn, 'build', 'running')).toBeUndefined();
+    expect(lifecycleEvent(beforeSpawn, 'build', 'preparing')).toBeDefined();
+    expect(lifecycleEvent(beforeSpawn, 'build', 'running')).toBeUndefined();
   });
 });
 
 describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
   it('revokes the timed-out attempt, accepts one replacement, and ignores the stale late result', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const first = deferred<ProviderExecutionResult>();
     let calls = 0;
-    const executor = vi.fn(() => {
+    const executor = vi.fn((input: ExecuteProviderCandidatesInput) => {
       calls += 1;
-      return calls === 1
-        ? first.promise
-        : Promise.resolve(providerResult('replacement-result'));
+      if (calls === 1) return first.promise;
+      spawnWorker(input);
+      return Promise.resolve(providerResult('replacement-result'));
     });
     const fixture = makeRunner(root, executor as typeof executeProviderCandidates, {
       step_heartbeat_stall_minutes: 0,
@@ -240,22 +274,24 @@ describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
     });
 
     const run = runStep(fixture, 'build');
-    await flushDispatch();
+    await waitForCondition(() => executor.mock.calls.length === 1, 'first preparation begins');
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS + 1);
+    await waitForCondition(() => executor.mock.calls.length === 2, 'replacement begins after recovery persists');
     first.resolve(providerResult('superseded-result'));
     const result = await run;
 
     expect(executor).toHaveBeenCalledTimes(2);
     expect(result.output).toContain('replacement-result');
     expect(result.output).not.toContain('superseded-result');
-    expect(lifecycleLine(fixture.logs, 'build', 'recovering')).toMatch(/timeout/i);
+    expect(lifecycleEvent(fixture.lifecycleEvents, 'build', 'recovering')?.lifecycle?.reason)
+      .toBe('preparation-timeout');
   });
 
   it('lets spawn authorization win the deadline race without launching a replacement', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const running = deferred<ProviderExecutionResult>();
     const executor = vi.fn((input: ExecuteProviderCandidatesInput) => {
-      input.options.onSpawn?.();
+      spawnWorker(input);
       return running.promise;
     });
     const fixture = makeRunner(root, executor as typeof executeProviderCandidates, {
@@ -264,19 +300,21 @@ describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
     });
 
     const run = runStep(fixture, 'build');
-    await flushDispatch();
+    await waitForCondition(() => executor.mock.calls.length === 1, 'worker starts before deadline');
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS * 2);
     running.resolve(providerResult('quiet-success'));
     const result = await run;
 
     expect(result.success).toBe(true);
     expect(executor).toHaveBeenCalledTimes(1);
-    expect(lifecycleLine(fixture.logs, 'build', 'running')).toBeDefined();
-    expect(lifecycleLine(fixture.logs, 'build', 'recovering')).toBeUndefined();
+    expect(lifecycleEvent(fixture.lifecycleEvents, 'build', 'running')).toBeDefined();
+    expect(lifecycleEvent(fixture.lifecycleEvents, 'build', 'recovering')).toBeUndefined();
   });
 
   it('keeps provider/model fallback candidates inside one lifecycle attempt', async () => {
-    const executor = vi.fn(async () => ({
+    const executor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
+      spawnWorker(input);
+      return {
       ...providerResult('fallback-success'),
       preferredProvider: 'claude',
       actualProvider: 'codex',
@@ -284,7 +322,8 @@ describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
         { provider: 'claude', outcome: 'unavailable' as const, invoked: true },
         { provider: 'codex', outcome: 'success' as const, invoked: true },
       ],
-    }));
+      };
+    });
     const fixture = makeRunner(root, executor, {
       step_heartbeat_stall_minutes: 0,
       provider_preparation_timeout_minutes: 5,
@@ -292,13 +331,13 @@ describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
 
     expect((await runStep(fixture, 'build')).success).toBe(true);
     expect(executor).toHaveBeenCalledTimes(1);
-    expect(lifecycleLine(fixture.logs, 'build', 'recovering')).toBeUndefined();
+    expect(lifecycleEvent(fixture.lifecycleEvents, 'build', 'recovering')).toBeUndefined();
   });
 });
 
 describe('TI-3: repeated preparation failure halts durably', () => {
   it('persists one recovery and turns the second timeout into a needs-human HALT', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const attempts: Array<Deferred<ProviderExecutionResult>> = [];
     const executor = vi.fn(() => {
       const attempt = deferred<ProviderExecutionResult>();
@@ -315,8 +354,11 @@ describe('TI-3: repeated preparation failure halts durably', () => {
       return result;
     });
 
-    await flushDispatch();
-    await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS * 2 + 2);
+    await waitForCondition(() => executor.mock.calls.length === 1, 'first preparation begins');
+    await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS + 1);
+    await waitForCondition(() => executor.mock.calls.length === 2, 'replacement deadline is scheduled');
+    await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS + 1);
+    await waitForCondition(() => settled, 'second timeout writes the durable HALT');
     const settledBeforeCleanup = settled;
     for (const attempt of attempts) attempt.resolve(providerResult('late-result'));
     const result = await run;
@@ -330,7 +372,7 @@ describe('TI-3: repeated preparation failure halts durably', () => {
     expect(halt).toMatch(/preparing/i);
     expect(halt).toMatch(/attempt/i);
     expect(halt).toMatch(/elapsed/i);
-    expect(halt).toMatch(/recovery(?: count)?[=: ]+1/i);
+    expect(halt).toMatch(/recovery_count:\s*1/i);
   });
 });
 
@@ -338,14 +380,14 @@ describe('TI-4: provider activity is telemetry, never post-spawn authority', () 
   it.each([undefined, 0, -1, 1])(
     'a spawned quiet provider succeeds with step_heartbeat_stall_minutes=%s',
     async (heartbeatMinutes) => {
-      vi.useFakeTimers();
+      vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
       const completion = deferred<ProviderExecutionResult>();
       const started = deferred<void>();
       const base = Date.now();
       let now = base;
       const executor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
         await writeStepHeartbeat(root, 'build');
-        input.options.onSpawn?.();
+        spawnWorker(input);
         started.resolve();
         return completion.promise;
       });
@@ -371,7 +413,7 @@ describe('TI-4: provider activity is telemetry, never post-spawn authority', () 
 
       expect(result.success).toBe(true);
       expect(result.output).toContain('quiet-provider-finished');
-      expect(lifecycleLine(fixture.logs, 'build', 'running')).toBeDefined();
+      expect(lifecycleEvent(fixture.lifecycleEvents, 'build', 'running')).toBeDefined();
     },
   );
 });
@@ -380,22 +422,15 @@ describe('TI-5: lifecycle capability fails closed before provider invocation', (
   it('rejects an unsupported custom provider with a recovery action and creates no worker', async () => {
     const invoke = vi.fn(async () => invokeResult('must-not-run'));
     const custom = inertProvider(invoke);
-    const sessions = new ProviderSessionStore({ createSessionId: () => 'custom-session' });
-    await sessions.beginStep('build');
+    const fixture = makeRunner(
+      root,
+      executeProviderCandidates,
+      {},
+      undefined,
+      { key: 'custom-unfenced', provider: custom, builtIn: false },
+    );
 
-    const result = await executeProviderCandidates({
-      step: 'build',
-      configuredProviders: ['custom-unfenced'],
-      runtimes: new ProviderRuntimeSet([
-        runtime('custom-unfenced', custom, false),
-      ]),
-      sessions,
-      config: { llm_provider: 'custom-unfenced' },
-      options: {
-        prompt: 'bounded fixture',
-        cwd: root,
-      } as Omit<InvokeOptions, 'sessionId' | 'resume' | 'model' | 'effort'>,
-    });
+    const result = await runStep(fixture, 'build');
 
     expect(result.success).toBe(false);
     expect(invoke).not.toHaveBeenCalled();
@@ -407,20 +442,23 @@ describe('TI-5: lifecycle capability fails closed before provider invocation', (
 
 describe('TI-6: preparation timeout is independent from heartbeat policy', () => {
   it('uses the five-minute preparation default when legacy config contains only heartbeat policy', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const first = deferred<ProviderExecutionResult>();
     let calls = 0;
-    const executor = vi.fn(() => {
+    const executor = vi.fn((input: ExecuteProviderCandidatesInput) => {
       calls += 1;
-      return calls === 1 ? first.promise : Promise.resolve(providerResult('replacement'));
+      if (calls === 1) return first.promise;
+      spawnWorker(input);
+      return Promise.resolve(providerResult('replacement'));
     });
     const fixture = makeRunner(root, executor as typeof executeProviderCandidates, {
       step_heartbeat_stall_minutes: 30,
     });
 
     const run = runStep(fixture, 'build');
-    await flushDispatch();
+    await waitForCondition(() => executor.mock.calls.length === 1, 'first preparation begins');
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS + 1);
+    await waitForCondition(() => executor.mock.calls.length === 2, 'replacement begins after recovery persists');
     first.resolve(providerResult('late-legacy-attempt'));
     const result = await run;
 
@@ -430,12 +468,14 @@ describe('TI-6: preparation timeout is independent from heartbeat policy', () =>
   });
 
   it('applies an explicit preparation override only to the pre-spawn phase', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     const first = deferred<ProviderExecutionResult>();
     let calls = 0;
-    const executor = vi.fn(() => {
+    const executor = vi.fn((input: ExecuteProviderCandidatesInput) => {
       calls += 1;
-      return calls === 1 ? first.promise : Promise.resolve(providerResult('seven-minute-replacement'));
+      if (calls === 1) return first.promise;
+      spawnWorker(input);
+      return Promise.resolve(providerResult('seven-minute-replacement'));
     });
     const fixture = makeRunner(root, executor as typeof executeProviderCandidates, {
       step_heartbeat_stall_minutes: 0,
@@ -443,10 +483,11 @@ describe('TI-6: preparation timeout is independent from heartbeat policy', () =>
     });
 
     const run = runStep(fixture, 'build');
-    await flushDispatch();
+    await waitForCondition(() => executor.mock.calls.length === 1, 'first preparation begins');
     await vi.advanceTimersByTimeAsync(6 * 60_000);
     expect(executor).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(60_001);
+    await waitForCondition(() => executor.mock.calls.length === 2, 'seven-minute recovery replacement begins');
     first.resolve(providerResult('late-seven-minute-attempt'));
     const result = await run;
 
