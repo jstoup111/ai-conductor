@@ -1070,7 +1070,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
-  it('counts a non-deferred cleanup refusal while retaining its parked count', async () => {
+  it('summarizes refusal reasons and names the dominant cause in guidance', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-refused';
     const mergedPrHead = '1111111111111111111111111111111111111111';
@@ -1081,12 +1081,13 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       tips: { [`feat/${slug}`]: '2222222222222222222222222222222222222222' },
     });
     const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${mergedPrHead}'}]`.replaceAll("'", '"') });
+    const log = vi.fn<(message: string) => void>();
     try {
       await writeOperatorPark(projectRoot, slug);
 
-      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh });
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, log });
 
-      expect({ counts: result.counts, refusedByReason: result.refusedByReason }).toEqual({
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason, logs: log.mock.calls }).toEqual({
         counts: {
           reconciled: 0,
           deferred: 0,
@@ -1096,6 +1097,9 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           skipped: 0,
         },
         refusedByReason: { 'unmerged-commits': 1 },
+        logs: [[
+          '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=1 skipped=0; refusals: unmerged-commits=1; next: 1 refusal requires resolving unmerged-commits; 1 parked remains parked',
+        ]],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -1148,7 +1152,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
 
       expect({ firstPass, secondPass, cache: [...cache.entries()] }).toEqual({
         firstPass: [
-          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked'],
+          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 refused=0 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked'],
         ],
         secondPass: [],
         cache: [],
@@ -1172,7 +1176,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ entries: result.entries, issueCalls: getIssueState.mock.calls, logs: log.mock.calls }).toEqual({
         entries: [{ slug, classification: 'unclassified', annotation: undefined }],
         issueCalls: [],
-        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available']],
+        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 refused=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -1205,7 +1209,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           { slug: failingSlug, classification: 'unclassified', annotation: undefined },
           { slug: mergedSlug, classification: 'merged', annotation: 'merged-ready' },
         ],
-        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 skipped=1; next: 1 parked remains parked; 1 skipped retry when merge/issue evidence is available']],
+        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=0 skipped=1; next: 1 parked remains parked; 1 skipped retry when merge/issue evidence is available']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

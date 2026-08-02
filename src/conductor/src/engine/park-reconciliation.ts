@@ -483,15 +483,24 @@ export async function reconcileParkedFeatures(
 
   const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.skipped}`;
   if (!opts.cache || sweepSummarySignatures.get(opts.cache) !== signature) {
+    const refusalReasons = Object.entries(refusedByReason)
+      .sort(([leftReason, leftCount], [rightReason, rightCount]) =>
+        rightCount - leftCount || leftReason.localeCompare(rightReason));
+    const refusalSummary = counts.refused > 0
+      ? `; refusals: ${refusalReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`
+      : '';
     const remainingParked = Math.max(0, counts.parked - counts.reconciled);
     const nextSteps = [
       counts.deferred > 0 ? `${counts.deferred} deferred await${counts.deferred === 1 ? 's' : ''} shipped-record repair` : undefined,
       counts.orphaned > 0 ? `${counts.orphaned} orphaned ${counts.orphaned === 1 ? 'park needs' : 'parks need'} operator review` : undefined,
+      counts.refused > 0
+        ? `${counts.refused} refusal${counts.refused === 1 ? '' : 's'} requires resolving ${refusalReasons[0]?.[0]}`
+        : undefined,
       remainingParked > 0 ? `${remainingParked} parked remain${remainingParked === 1 ? 's' : ''} parked` : undefined,
       counts.skipped > 0 ? `${counts.skipped} skipped retry when merge/issue evidence is available` : undefined,
     ].filter((step): step is string => step !== undefined);
     const guidance = nextSteps.length > 0 ? `; next: ${nextSteps.join('; ')}` : '; next: no action required';
-    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} skipped=${counts.skipped}${guidance}`);
+    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} refused=${counts.refused} skipped=${counts.skipped}${refusalSummary}${guidance}`);
     if (opts.cache) sweepSummarySignatures.set(opts.cache, signature);
   }
   if (opts.cache) {
