@@ -422,4 +422,47 @@ describe('findSameFileSymbolReference', () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it.each([
+    { name: 'comment', prefix: '', callerBody: '// helper\n  return \'ok\';' },
+    { name: 'string', prefix: '', callerBody: "return 'helper';" },
+    { name: 'declaration', prefix: '', callerBody: "const helper = 'local';\n  return helper;" },
+    {
+      name: 'import',
+      prefix: "import { helper as importedHelper } from './other.js';\n\n",
+      callerBody: "return 'ok';",
+    },
+  ])('returns no proof when the helper name occurs only in a $name', async ({ prefix, callerBody }) => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-lookalike-'));
+    try {
+      const sourcePath = join(tmpDir, 'composition.ts');
+      await writeFile(
+        sourcePath,
+        [
+          prefix,
+          'export function helper(): string {',
+          "  return 'ok';",
+          '}',
+          '',
+          'export function compose(): string {',
+          `  ${callerBody}`,
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const program = ts.createProgram([sourcePath], { noEmit: true });
+
+      expect(
+        findSameFileSymbolReference(
+          program,
+          program.getTypeChecker(),
+          sourcePath,
+          'compose',
+          'helper',
+        ),
+      ).toBeNull();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
