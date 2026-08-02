@@ -888,7 +888,7 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
     expect(await branchExists(slug)).toBe(true);
     expect(await branchSha(slug)).toBe(shaAfterRace);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
-    expect(out.join('\n')).toMatch(/ancestor/i);
+    expect(out.join('\n')).toContain('ancestry-check-failed');
     expect(out.join('\n')).not.toMatch(/--force|force path/i);
   });
 
