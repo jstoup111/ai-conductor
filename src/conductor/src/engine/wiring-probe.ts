@@ -478,7 +478,7 @@ export type SameFileCompositionEvaluation =
  * It is intentionally pure and does not mutate gaps or computed evidence;
  * orchestration decides whether a returned proof can replace an orphan gap.
  */
-export function evaluateSameFileComposition(
+function evaluateSameFileComposition(
   input: SameFileCompositionEvaluationInput,
 ): SameFileCompositionEvaluation {
   const { task, newExport, symbolReference, layer2, rootChain } = input;
@@ -866,7 +866,7 @@ export interface SameFileSymbolReferenceEvidence {
  * This query is deliberately pure: callers decide whether the evidence can
  * affect a gap.
  */
-export function findSameFileSymbolReference(
+function findSameFileSymbolReference(
   program: ts.Program,
   checker: ts.TypeChecker,
   file: string,
@@ -1078,7 +1078,7 @@ function createTypescriptAnalysisContext(
   };
 }
 
-export function buildImportGraph(roots: string[], _projectRoot: string): ImportGraph {
+function buildImportGraph(roots: string[], _projectRoot: string): ImportGraph {
   return createTypescriptAnalysisContext(roots).graph;
 }
 
@@ -1426,7 +1426,11 @@ export async function computeWiringEvidence(
       const reachability = reachabilityResults.find(
         (result) => result.file === newExport.file && result.symbol === newExport.symbol,
       );
-      if (!task || !reachability?.reachable) continue;
+      if (!task || !reachability) continue;
+      if (!reachability.reachable) {
+        pushGap(gapsByTask, owner, 'orphan-export', 'same-file composition missing proof: missing-root-chain');
+        continue;
+      }
 
       let missingProof: SameFileCompositionEvaluation | null = null;
       for (const site of task.parseResult?.kind === 'declared' ? task.parseResult.sites : []) {
@@ -1461,6 +1465,16 @@ export async function computeWiringEvidence(
         proofs.push(evaluation.proof);
         proofsByTask.set(owner, proofs);
         break;
+      }
+      if (missingProof === null) {
+        const evaluation = evaluateSameFileComposition({
+          task,
+          newExport,
+          symbolReference: null,
+          layer2: layer2Applicability,
+          rootChain: reachability.reachableFromRoots ?? [],
+        });
+        if (evaluation.kind !== 'proof') missingProof = evaluation;
       }
       if (missingProof !== null && !proofsByTask.get(owner)?.some((proof) => proof.export === newExport.symbol)) {
         pushGap(gapsByTask, owner, 'orphan-export', `same-file composition missing proof: ${missingProof.reason}`);
