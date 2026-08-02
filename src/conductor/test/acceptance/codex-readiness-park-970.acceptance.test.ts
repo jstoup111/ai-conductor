@@ -150,7 +150,7 @@ describe('acceptance: Codex readiness park #970', () => {
 
     const result = await (conductor as any).parkOnAuthFailure(cachedLoginAuthFailure());
 
-    expect(result).toEqual({ disposition: 'trial-required' });
+    expect(result).toMatchObject({ disposition: 'trial-required', probeFailure: { kind: 'timeout' } });
     expect(readiness).toHaveBeenCalledOnce();
   }
 
@@ -256,7 +256,7 @@ describe('acceptance: Codex readiness park #970', () => {
   });
 
   it.each([
-    ['authorizes exactly one trial when the readiness probe fails', 'probe-failed', { disposition: 'trial-required' }],
+    ['authorizes exactly one trial when the readiness probe fails', 'probe-failed', { disposition: 'trial-required', probeFailure: { kind: 'timeout' } }],
     ['halts on conclusive non-ready evidence after the bounded park', 'unusable', { disposition: 'halt' }],
   ] as const)('bounded recovery %s', async (_case, state, expected) => {
     const readiness = vi.fn().mockResolvedValue(

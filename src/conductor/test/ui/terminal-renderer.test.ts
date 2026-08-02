@@ -140,22 +140,20 @@ describe('TerminalRenderer', () => {
     );
   });
 
-  it('renders closed probe-failure recovery progress without a lifecycle restart', async () => {
-    await renderer.handle({
-      type: 'credentials_park_progress',
-      provider: 'codex',
-      source: 'cached-login',
-      readiness: 'probe-failed',
-      elapsedSeconds: 3,
-      degradation: 'probe-failure',
-      probeFailureKind: 'timeout',
-      nextDisposition: 'trial-required',
-    });
+  it.each(['invalid-json', 'unsupported-schema'] as const)(
+    'renders the closed %s parser rejection without raw diagnostics',
+    async (parserRejection) => {
+      const rawDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
+      await renderer.handle({
+        type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+        readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure',
+        probeFailureKind: 'unparseable-output', parserRejection, nextDisposition: 'trial-required',
+      });
 
-    expect(stream.output()).toContain(
-      'Codex cached-login credentials: probe-failed (probe-failure: timeout); waiting 3s, next disposition: trial-required',
-    );
-  });
+      expect(stream.output()).toContain(`probe-failure: unparseable-output, parser-rejection: ${parserRejection}`);
+      expect(stream.output()).not.toContain(rawDiagnostic);
+    },
+  );
 
   it('renders only closed credential-park progress fields', async () => {
     const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';

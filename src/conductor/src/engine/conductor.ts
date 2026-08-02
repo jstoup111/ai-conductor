@@ -22,6 +22,7 @@ import {
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type {
   AuthenticationReadiness,
+  CodexProbeFailure,
   InvokeResult,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -496,8 +497,14 @@ export interface SpotAuditDispatchResult {
 
 type AuthRecoveryDisposition =
   | { disposition: 'recovered' }
-  | { disposition: 'trial-required' }
+  | { disposition: 'trial-required'; probeFailure: CodexProbeFailure }
   | { disposition: 'halt'; haltReason: string };
+
+/** Renders only the closed probe classification retained across recovery. */
+function formatProbeFailureClassification(probeFailure: CodexProbeFailure): string {
+  const parserRejection = probeFailure.facts.parserRejection;
+  return `${probeFailure.kind}${parserRejection === undefined ? '' : `, parser-rejection: ${parserRejection}`}`;
+}
 
 /** Preserve recovery metadata when adapting a verifier dispatch for spot audit. */
 export function toSpotAuditVerifierResult(
@@ -1572,7 +1579,8 @@ export class Conductor {
         success: false,
         output:
           'Codex cached-login recovery trial for the attribution verifier failed authentication ' +
-          'after the readiness probe was unavailable. Refresh the Codex login, then re-queue this feature.',
+          `after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}). ` +
+          'Refresh the Codex login, then re-queue this feature.',
       };
     }
     return trial;
@@ -1708,7 +1716,14 @@ export class Conductor {
             return { disposition: 'recovered' };
           }
           if (probeFailed) {
-            return { disposition: 'trial-required' };
+            const parserRejection = current.probeFailure.facts.parserRejection;
+            return {
+              disposition: 'trial-required',
+              probeFailure: {
+                kind: current.probeFailure.kind,
+                facts: parserRejection === undefined ? {} : { parserRejection },
+              },
+            };
           }
           if (timedOut) {
             return timedOutResult;
@@ -3426,7 +3441,7 @@ export class Conductor {
                   // in this secret-safe diagnostic.
                   const haltReason =
                     `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
-                    'failed authentication after the readiness probe was unavailable.\n' +
+                    `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
                     'Refresh the Codex login, then re-queue this feature.';
                   await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
                   await writeState(this.stateFilePath, state);
@@ -4294,6 +4309,7 @@ export class Conductor {
         // login is usable, so it authorizes one real dispatch as a bounded
         // recovery trial. The token is consumed before that dispatch starts.
         let authorizedRecoveryTrial = false;
+        let authorizedRecoveryProbeFailure: CodexProbeFailure | undefined;
 
         // Task 9 (acceptance-specs-halts-when-the-red-evidence-marke): before
         // spending ANY of this step's retry budget, check whether this is an
@@ -4352,6 +4368,8 @@ export class Conductor {
           attempt++;
           const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;
           authorizedRecoveryTrial = false;
+          const recoveryProbeFailure = authorizedRecoveryProbeFailure;
+          authorizedRecoveryProbeFailure = undefined;
 
           // Self-host live-boundary enforcement point. A violation observed
           // while an EARLIER dispatch was in flight is enforced HERE — before
@@ -4676,7 +4694,7 @@ export class Conductor {
               // unavailable probe. Do not recurse into another probe; keep the
               // halt secret-safe by excluding arbitrary provider output.
               const haltReason =
-                'Codex cached-login recovery trial failed authentication after the readiness probe was unavailable.\n' +
+                `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
                 'Refresh the Codex login, then re-queue this feature.';
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               await writeState(this.stateFilePath, state);
@@ -4705,6 +4723,9 @@ export class Conductor {
             // without decrementing attempt (budget intact). The trial token
             // applies to exactly the next dispatch and is consumed at entry.
             authorizedRecoveryTrial = park.disposition === 'trial-required';
+            authorizedRecoveryProbeFailure = park.disposition === 'trial-required'
+              ? park.probeFailure
+              : undefined;
             attempt--;
             continue;
           }

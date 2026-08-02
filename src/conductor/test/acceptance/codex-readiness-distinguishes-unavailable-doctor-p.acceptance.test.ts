@@ -277,7 +277,7 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
     });
 
-    expect(result).toEqual({ disposition: 'trial-required' });
+    expect(result).toMatchObject({ disposition: 'trial-required', probeFailure: { kind: 'timeout' } });
     expect(readiness).toHaveBeenCalledTimes(1);
     expect(seen.filter((event) => event.type === 'credentials_park_progress')).toEqual([{
       type: 'credentials_park_progress',

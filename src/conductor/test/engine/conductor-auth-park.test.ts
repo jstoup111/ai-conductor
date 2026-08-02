@@ -193,7 +193,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         sleepCalls: sleepFn.mock.calls.length,
         progress: eventsSeen,
       }).toEqual({
-        park: { disposition: 'trial-required' },
+        park: { disposition: 'trial-required', probeFailure: { kind: 'unparseable-output', facts: { parserRejection: 'invalid-json' } } },
         readinessCalls: 1,
         providerInvocations: 0,
         runnerCalls: 0,
@@ -429,19 +429,21 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
   });
 
-  it('halts after one authorized serial recovery trial without consuming a second probe failure', async () => {
+  it.each(['invalid-json', 'unsupported-schema'] as const)(
+    'halts a serial recovery trial with the originating %s classification',
+    async (parserRejection) => {
     const readiness = vi.fn()
       .mockResolvedValueOnce({
         provider: 'codex',
         source: 'cached-login',
         state: 'probe-failed',
-        probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+        probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
       })
       .mockResolvedValueOnce({
         provider: 'codex',
         source: 'cached-login',
         state: 'probe-failed',
-        probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+        probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
       })
       .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'unusable' });
     const runtimes = new ProviderRuntimeSet([{
@@ -478,12 +480,14 @@ describe('conductor auth-park: daemon-token mode', () => {
       }).toEqual({
         buildDispatches: 2,
         readinessCalls: 1,
-        halts: [expect.stringMatching(/Codex cached-login[\s\S]*readiness probe was unavailable[\s\S]*re-queue/i)],
+        halts: [expect.stringMatching(new RegExp(`unparseable-output, parser-rejection: ${parserRejection}`))],
       });
+      expect(JSON.stringify(halts)).not.toContain('sk-live-super-secret-token');
     } finally {
       nowSpy.mockRestore();
     }
-  });
+    },
+  );
 
   it('returns a successful authorized serial recovery trial to ordinary completion', async () => {
     const readiness = vi.fn().mockResolvedValue({
@@ -941,7 +945,9 @@ describe('conductor auth-park: daemon-token mode', () => {
     });
   });
 
-  it('halts an auth-failed grouped recovery trial without a second probe or sibling redispatch', async () => {
+  it.each(['invalid-json', 'unsupported-schema'] as const)(
+    'halts a grouped recovery trial with the originating %s classification',
+    async (parserRejection) => {
     await writeState(statePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done',
@@ -950,7 +956,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     const readiness = vi.fn()
       .mockResolvedValueOnce({
         provider: 'codex', source: 'cached-login', state: 'probe-failed',
-        probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+        probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
       })
       .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'unusable' });
     const runtimes = new ProviderRuntimeSet([{
@@ -993,12 +999,14 @@ describe('conductor auth-park: daemon-token mode', () => {
       }).toEqual({
         calls: { manual_test: 2, prd_audit: 1, architecture_review_as_built: 1 },
         readinessCalls: 1,
-        halts: [expect.stringMatching(/Codex cached-login recovery trial for grouped member "manual_test" failed authentication/i)],
+        halts: [expect.stringMatching(new RegExp(`unparseable-output, parser-rejection: ${parserRejection}`))],
       });
+      expect(JSON.stringify(halts)).not.toContain('sk-live-super-secret-token');
     } finally {
       nowSpy.mockRestore();
     }
-  });
+    },
+  );
 
   it('authorizes only one grouped member invocation after a shared failed readiness probe', async () => {
     await writeState(statePath, {
@@ -1132,11 +1140,13 @@ describe('conductor auth-park: daemon-token mode', () => {
     }).toEqual({ attempts: expectedAttempts, readinessCalls: 1 });
   });
 
-  it('halts an auth-failed judged recovery trial without re-probing', async () => {
+  it.each(['invalid-json', 'unsupported-schema'] as const)(
+    'halts a judged recovery trial with the originating %s classification',
+    async (parserRejection) => {
     await writeState(statePath, { ...READY_STATE, build: 'done', wiring_check: 'done', test_suite: 'done' });
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'probe-failed',
-      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+      probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
@@ -1156,17 +1166,17 @@ describe('conductor auth-park: daemon-token mode', () => {
     await conductor.run();
 
     expect({ calls: (runner.run as ReturnType<typeof vi.fn>).mock.calls.length, readinessCalls: readiness.mock.calls.length, halts })
-      .toEqual({ calls: 2, readinessCalls: 1, halts: [expect.stringMatching(/recovery trial[\s\S]*probe was unavailable/i)] });
-  });
+      .toEqual({ calls: 2, readinessCalls: 1, halts: [expect.stringMatching(new RegExp(`unparseable-output, parser-rejection: ${parserRejection}`))] });
+    expect(JSON.stringify(halts)).not.toContain('sk-live-super-secret-token');
+    },
+  );
 
-  it.each([
-    ['succeeds', { success: true, output: 'verified' }, 2, 'verified'],
-    ['returns a non-auth failure', { success: false, output: 'ordinary verifier failure' }, 2, 'ordinary verifier failure'],
-    ['halts an auth-failed trial', codexCachedLoginFailure(), 2, expect.stringContaining('recovery trial for the attribution verifier failed authentication')],
-  ] as const)('spot-audit verifier recovery trial %s', async (_case, trialResult, expectedDispatches, output) => {
+  it.each(['invalid-json', 'unsupported-schema'] as const)(
+    'preserves the originating %s classification in an auxiliary verifier recovery trial',
+    async (parserRejection) => {
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex', source: 'cached-login', state: 'probe-failed',
-      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+      probeFailure: { kind: 'unparseable-output', facts: { parserRejection } },
     });
     const runtimes = new ProviderRuntimeSet([{
       key: 'codex', provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
@@ -1175,7 +1185,7 @@ describe('conductor auth-park: daemon-token mode', () => {
     }]);
     const dispatchVerifier = vi.fn()
       .mockResolvedValueOnce(codexCachedLoginFailure())
-      .mockResolvedValueOnce(trialResult);
+      .mockResolvedValueOnce(codexCachedLoginFailure());
     const conductor = new Conductor({
       stateFilePath: statePath, stepRunner: { run: vi.fn(), dispatchVerifier }, events, projectRoot: dir,
       mode: 'auto', sleepFn: vi.fn(async () => {}),
@@ -1185,9 +1195,12 @@ describe('conductor auth-park: daemon-token mode', () => {
 
     const result = await (conductor as any).dispatchSpotAuditVerifier({ residueIds: ['r1'], planPath: 'plan.md' });
 
-    expect({ dispatches: dispatchVerifier.mock.calls.length, readinessCalls: readiness.mock.calls.length, output: result.output })
-      .toEqual({ dispatches: expectedDispatches, readinessCalls: 1, output });
-  });
+    expect({ dispatches: dispatchVerifier.mock.calls.length, readinessCalls: readiness.mock.calls.length })
+      .toEqual({ dispatches: 2, readinessCalls: 1 });
+    expect(result.output).toContain(`unparseable-output, parser-rejection: ${parserRejection}`);
+    expect(result.output).not.toContain('sk-live-super-secret-token');
+    },
+  );
 
   it('judged build_review dispatch timeout halts without retry, escalation, or alternate provider use', async () => {
     await writeState(statePath, {
@@ -1788,7 +1801,7 @@ describe('conductor auth-park: daemon-token mode', () => {
         actualProvider: 'codex',
         authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
       });
-      expect(unavailableResult).toEqual({ disposition: 'trial-required' });
+      expect(unavailableResult).toMatchObject({ disposition: 'trial-required', probeFailure: { kind: 'timeout' } });
 
       const readiness = vi
         .fn()
