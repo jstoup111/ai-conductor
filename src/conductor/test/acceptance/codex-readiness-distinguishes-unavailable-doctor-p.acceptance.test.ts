@@ -249,6 +249,31 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
     },
   );
 
+  // Covers: FR-5, FR-13
+  it('preserves probe-failed readiness metadata when automatic permission review is denied', async () => {
+    const runDoctor = vi.fn(async () => doctorResult('{not-json'));
+    mockExeca.mockResolvedValueOnce({
+      stdout: '',
+      stderr: 'Codex automatic permission review timed out.',
+      exitCode: 1,
+    } as never);
+
+    const result = await providerWithDoctor(runDoctor).invoke(base);
+
+    expect(result).toMatchObject({
+      success: false,
+      permissionDenied: true,
+      authFailure: undefined,
+      authentication: {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: { kind: 'unparseable-output' },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('secret');
+  });
+
   // Covers: FR-8, FR-9, FR-10, FR-11, FR-13, FR-15
   it('authorizes one explicit recovery trial and emits secret-safe progress when the recovery probe fails', async () => {
     const readiness = vi.fn(async (): Promise<ProbeFailedReadiness> => ({
