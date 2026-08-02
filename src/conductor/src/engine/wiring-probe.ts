@@ -17,7 +17,7 @@
  */
 
 import { access, readFile as readFileFs } from 'fs/promises';
-import { join } from 'path';
+import { join, relative } from 'path';
 import { createRequire } from 'node:module';
 // Type-only import: erased at build time so the `typescript` package is NEVER
 // bundled into the ESM dist. Bundling it broke the whole binary at startup —
@@ -891,6 +891,7 @@ export interface ExportReachabilityResult {
   file: string;
   symbol: string;
   reachable: boolean;
+  reachableFromRoots?: string[];
   message?: string;
 }
 
@@ -925,10 +926,15 @@ export function checkExportReachability(
 
   return newExports.map((newExport) => {
     const targetFile = join(projectRoot, newExport.file);
-    const { reachable } = reachableFromRoots(graph, absoluteRoots, targetFile);
+    const { reachable, chain } = reachableFromRoots(graph, absoluteRoots, targetFile);
 
     if (reachable) {
-      return { file: newExport.file, symbol: newExport.symbol, reachable: true };
+      return {
+        file: newExport.file,
+        symbol: newExport.symbol,
+        reachable: true,
+        reachableFromRoots: chain?.map((path) => relative(projectRoot, path).replaceAll('\\', '/')),
+      };
     }
 
     return {
