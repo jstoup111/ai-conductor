@@ -192,6 +192,7 @@ import {
   readAllVerdicts,
   readVerdict,
   recordSkipVerdict,
+  writeVerdict,
   type GateVerdict as GateObjectiveVerdict,
 } from './gate-verdicts.js';
 import {
@@ -6522,15 +6523,6 @@ export class Conductor {
                 await savePrUrl(this.stateFilePath, scraped);
               }
             }
-            if (state.feature_desc && state.pr_url) {
-              await refreshPostFinishShippedRecord({
-                runGit: this.git,
-                cwd: this.projectRoot,
-                requestedSlug: state.feature_desc,
-                pr: state.pr_url,
-                log: this.log ?? console.warn,
-              });
-            }
           }
 
           // A verified documentation delivery intentionally bypasses the
@@ -6629,6 +6621,15 @@ export class Conductor {
       }
 
       await this.completeRun(state, 'gate-driven loop converged\n');
+      if (state.feature_desc && state.pr_url) {
+        await refreshPostFinishShippedRecord({
+          runGit: this.git,
+          cwd: this.projectRoot,
+          requestedSlug: state.feature_desc,
+          pr: state.pr_url,
+          log: this.log ?? console.warn,
+        });
+      }
     } catch (err) {
       // Any unexpected throw inside the loop (e.g. a verdict-I/O failure in
       // the SHIP tail) must leave the feature recoverable, never silently
@@ -6921,11 +6922,20 @@ export class Conductor {
     } else if (topo.verdictSteps.has(step.name)) {
       // Record the objective verdict for any gate we just ran — including in the
       // front half, so a re-run plan/stories refreshes its verdict on disk.
-      const verdict = await computeAndWriteVerdict(
-        this.projectRoot,
-        step.name,
-        await this.completionCtx(state),
-      );
+      // The ordinary post-dispatch completion check already verified finish's
+      // strict shipment evidence. Persist that successful verdict directly so
+      // the tail does not repeat an external PR-head read before convergence.
+      const verdict: GateObjectiveVerdict =
+        step.name === 'finish'
+          ? { satisfied: true, checkedAt: Date.now() }
+          : await computeAndWriteVerdict(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+      if (step.name === 'finish') {
+        await writeVerdict(this.projectRoot, step.name, verdict);
+      }
       await this.events.emit({
         type: 'gate_verdict',
         step: step.name,

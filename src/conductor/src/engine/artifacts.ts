@@ -1,6 +1,5 @@
 import { access, lstat, mkdir, readdir, readFile, rm, stat, writeFile } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, relative } from 'path';
-import { setTimeout as delay } from 'timers/promises';
 import type { StepName, ComplexityTier, Track } from '../types/index.js';
 import type { HarnessConfig } from '../types/config.js';
 import type {
@@ -906,8 +905,6 @@ export interface CompletionContext {
    * verifier against the current candidate commit.
    */
   shipmentEvidence?: (input: ShipmentEvidenceInput) => Promise<ShipmentEvidenceResult>;
-  /** Injectable delay before the one bounded PR-head convergence retry. */
-  shipmentEvidenceRetryDelay?: () => Promise<void>;
   /**
    * Injectable gh runner for presentation checks (finish predicate Phase 2).
    * Used to verify the recorded PR's title is not stale (needs-remediation:).
@@ -988,24 +985,12 @@ async function verifyDurableShipmentEvidence(
       implementationPr: prUrl,
       candidateCommit,
     };
-    let verdict = ctx.shipmentEvidence
+    const verdict = ctx.shipmentEvidence
       ? await ctx.shipmentEvidence(input)
       : await evaluateShipmentEvidence(input, {
           githubRunner: (implementationPr) =>
             resolveImplementationPrBinding(ctx.gh ?? makeProductionGh(), dir, implementationPr),
         });
-    if (
-      verdict.kind === 'refusal' &&
-      verdict.code === 'shipment-candidate-not-on-implementation-head'
-    ) {
-      await (ctx.shipmentEvidenceRetryDelay?.() ?? delay(2_000));
-      verdict = ctx.shipmentEvidence
-        ? await ctx.shipmentEvidence(input)
-        : await evaluateShipmentEvidence(input, {
-            githubRunner: (implementationPr) =>
-              resolveImplementationPrBinding(ctx.gh ?? makeProductionGh(), dir, implementationPr),
-          });
-    }
     if (verdict.kind === 'valid') return null;
     const detail = verdict.kind === 'refusal' ? verdict.code : verdict.reason;
     return {

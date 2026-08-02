@@ -12,8 +12,8 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
-- Let durable finish verification tolerate one bounded GitHub PR-head propagation delay after the
-  post-finish shipped-record push, while persistent or unrelated shipment mismatches still fail closed
+- Run the final shipped-record Cost refresh only after durable finish evidence has converged and the
+  feature is recorded complete, so optional usage telemetry or its push can never reopen `finish`
   ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Let the deterministic wiring gate recognize canonical `Class.method` declarations in TypeScript
   classes, preventing valid private, async, and ordinary method anchors from falsely halting a build
