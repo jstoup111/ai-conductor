@@ -850,6 +850,118 @@ describe('engine/artifacts', () => {
   });
 
   describe('checkStepCompletion: finish predicate', () => {
+    it('rechecks durable shipment evidence when the first PR-head read trails the post-finish refresh commit', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const candidateCommit = 'post-finish-refresh-sha';
+      const immediatelyPriorCommit = 'pre-refresh-sha';
+      const trace: string[] = [];
+      const observedCandidates: string[] = [];
+      const shipmentEvidence = vi.fn(async (input) => {
+        observedCandidates.push(input.candidateCommit);
+        trace.push(`evidence:${shipmentEvidence.mock.calls.length}`);
+        if (shipmentEvidence.mock.calls.length === 1) {
+          return {
+            kind: 'refusal' as const,
+            code: 'shipment-candidate-not-on-implementation-head' as const,
+            expected: candidateCommit,
+            observed: immediatelyPriorCommit,
+          };
+        }
+        return {
+          kind: 'valid' as const,
+          slug: 'add-foo',
+          pr: 'https://github.com/foo/bar/pull/1',
+          recordPath: '.docs/shipped/add-foo.md',
+          hash: 'test-hash',
+          commit: candidateCommit,
+        };
+      });
+      const shipmentEvidenceRetryDelay = vi.fn(async () => {
+        trace.push('delay');
+      });
+      const context: CompletionContext & {
+        shipmentEvidenceRetryDelay: () => Promise<void>;
+      } = {
+        sessionStartedAt: 0,
+        featureDesc: 'add-foo',
+        getHeadSha: async () => candidateCommit,
+        shipmentEvidence,
+        shipmentEvidenceRetryDelay,
+      };
+
+      const result = await checkStepCompletion(dir, 'finish', context);
+
+      expect({
+        result,
+        evidenceCalls: shipmentEvidence.mock.calls.length,
+        observedCandidates,
+        delayCalls: shipmentEvidenceRetryDelay.mock.calls.length,
+        trace,
+      }).toEqual({
+        result: { done: true },
+        evidenceCalls: 2,
+        observedCandidates: [candidateCommit, candidateCommit],
+        delayCalls: 1,
+        trace: ['evidence:1', 'delay', 'evidence:2'],
+      });
+    });
+
+    it('fails after one bounded recheck when the PR head remains behind the post-finish refresh commit', async () => {
+      await createFile(FINISH_CHOICE_MARKER, 'pr');
+      await createFile(
+        '.pipeline/conduct-state.json',
+        JSON.stringify({ pr_url: 'https://github.com/foo/bar/pull/1' }),
+      );
+      const candidateCommit = 'post-finish-refresh-sha';
+      const immediatelyPriorCommit = 'pre-refresh-sha';
+      const trace: string[] = [];
+      const observedCandidates: string[] = [];
+      const shipmentEvidence = vi.fn(async (input) => {
+        observedCandidates.push(input.candidateCommit);
+        trace.push(`evidence:${shipmentEvidence.mock.calls.length}`);
+        return {
+          kind: 'refusal' as const,
+          code: 'shipment-candidate-not-on-implementation-head' as const,
+          expected: candidateCommit,
+          observed: immediatelyPriorCommit,
+        };
+      });
+      const shipmentEvidenceRetryDelay = vi.fn(async () => {
+        trace.push('delay');
+      });
+
+      const result = await checkStepCompletion(dir, 'finish', {
+        sessionStartedAt: 0,
+        featureDesc: 'add-foo',
+        getHeadSha: async () => candidateCommit,
+        shipmentEvidence,
+        shipmentEvidenceRetryDelay,
+      });
+
+      expect({
+        result,
+        evidenceCalls: shipmentEvidence.mock.calls.length,
+        observedCandidates,
+        delayCalls: shipmentEvidenceRetryDelay.mock.calls.length,
+        trace,
+      }).toEqual({
+        result: {
+          done: false,
+          reason:
+            'durable shipment evidence refused completion: shipment-candidate-not-on-implementation-head',
+          missing: 'other',
+        },
+        evidenceCalls: 2,
+        observedCandidates: [candidateCommit, candidateCommit],
+        delayCalls: 1,
+        trace: ['evidence:1', 'delay', 'evidence:2'],
+      });
+    });
+
     it('rejects a fresh PR marker when strict shipment evidence refuses it', async () => {
       await createFile(FINISH_CHOICE_MARKER, 'pr');
       await createFile(
