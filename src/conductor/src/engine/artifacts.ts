@@ -1270,12 +1270,23 @@ export interface WiringGap {
   message: string;
 }
 
+export type SameFileCompositionProof = {
+  kind: 'same-file-composition';
+  export: string;
+  caller: string;
+  file: string;
+  rootChain: string[];
+};
+
+export type WiringProof = SameFileCompositionProof;
+
 export interface WiringTaskResult {
   id: string;
   /** Freeform description of the task's declared contract (e.g. a
    * `file#symbol` reference, or 'none (no new production surface)'). */
   contract: string;
   gaps: WiringGap[];
+  proofs?: WiringProof[];
 }
 
 export interface WiringLayer2 {
