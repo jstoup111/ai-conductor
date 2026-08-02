@@ -1062,7 +1062,8 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
       authentication: {
         provider: 'codex',
         source: 'api-key',
-        state: 'ready',
+        state: 'unusable',
+        remediation: 'sensitive provider detail',
       },
     }]);
     const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
@@ -1078,7 +1079,7 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
         authentication: {
           provider: 'codex',
           source: 'api-key',
-          state: 'ready',
+          state: 'unusable',
         },
       },
     });
