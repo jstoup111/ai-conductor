@@ -1162,6 +1162,36 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('re-logs a changed refusal mix but suppresses an identical following sweep', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'cached-refusal';
+    const mergedPrHead = '1111111111111111111111111111111111111111';
+    const cache = new Map<string, 'merged' | 'orphan' | 'normal' | 'unclassified'>();
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      tips: { [`feat/${slug}`]: '2222222222222222222222222222222222222222' },
+    });
+    const runGh = vi.fn<GhRunner>()
+      .mockResolvedValueOnce({ stdout: '[]' })
+      .mockResolvedValue({ stdout: `[{"headRefOid":"${mergedPrHead}"}]` });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, cache, log });
+      await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, cache, log });
+      await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, cache, log });
+
+      expect(log.mock.calls).toEqual([
+        ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=1 skipped=0; refusals: no-merge-proof=1; next: 1 refusal requires resolving no-merge-proof; 1 parked remains parked'],
+        ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=1 skipped=0; refusals: branch-behind-merged-head=1; next: 1 refusal requires resolving branch-behind-merged-head; 1 parked remains parked'],
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('skips an unreadable origin/main with one log line and does not query issue state', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'missing-origin';

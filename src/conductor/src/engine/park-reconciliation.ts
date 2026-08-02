@@ -481,7 +481,11 @@ export async function reconcileParkedFeatures(
     opts.cache?.set(slug, classification);
   }
 
-  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.skipped}`;
+  const refusalSignature = Object.entries(refusedByReason)
+    .sort(([leftReason], [rightReason]) => leftReason.localeCompare(rightReason))
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(',');
+  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.refused}:${counts.skipped}:${refusalSignature}`;
   if (!opts.cache || sweepSummarySignatures.get(opts.cache) !== signature) {
     const refusalReasons = Object.entries(refusedByReason)
       .sort(([leftReason, leftCount], [rightReason, rightCount]) =>
