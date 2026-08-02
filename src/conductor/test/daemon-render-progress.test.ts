@@ -171,6 +171,33 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     );
   });
 
+  it.each([
+    ['invalid-json', 'invalid-json'],
+    ['unsupported-schema', 'unsupported-schema'],
+    [undefined, undefined],
+  ] as const)(
+    'renders the closed parser-rejection reason %s for probe-failure recovery',
+    (parserRejection, expectedReason) => {
+    const rawDoctorDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
+    const [line] = lines({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      probeFailureKind: 'unparseable-output',
+      ...(parserRejection === undefined ? {} : { parserRejection }),
+      nextDisposition: 'trial-required',
+    });
+
+    expect(line).toBe(
+      `Codex cached-login credentials: probe-failed (probe-failure: unparseable-output${expectedReason === undefined ? '' : `, parser-rejection: ${expectedReason}`}); waiting 3s, next disposition: trial-required`,
+    );
+    expect(line).not.toContain(rawDoctorDiagnostic);
+    },
+  );
+
   it('produces no line for an unhandled kind (unchanged behavior)', () => {
     expect(lines({ type: 'dashboard_refresh' })).toEqual([]);
   });

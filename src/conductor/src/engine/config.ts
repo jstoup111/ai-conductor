@@ -290,6 +290,8 @@ export function validateConfig(
     'auto_restart_on_stale_engine',
     // Minimum interval between engine-refresh (origin fetch) attempts.
     'engine_refresh_min_interval_seconds',
+    // Maximum time to wait for the Codex readiness doctor command.
+    'codex_doctor_timeout_seconds',
     // Auto-resolve merge conflicts on open PRs.
     'mergeable_autoresolve',
     // Opt-in judgement gate at the build → manual_test seam.
@@ -836,6 +838,21 @@ export function validateConfig(
   } else if (obj.engine_refresh_min_interval_seconds === null || materializeDefaults) {
     // C1: absent or null → 300 without warning
     obj.engine_refresh_min_interval_seconds = 300;
+  }
+
+  // codex_doctor_timeout_seconds — bounded readiness check timeout. Absent
+  // values default to 10 seconds; supplied values must be finite and positive.
+  if (obj.codex_doctor_timeout_seconds !== undefined) {
+    if (
+      typeof obj.codex_doctor_timeout_seconds !== 'number' ||
+      !Number.isFinite(obj.codex_doctor_timeout_seconds) ||
+      obj.codex_doctor_timeout_seconds <= 0 ||
+      !Number.isFinite(obj.codex_doctor_timeout_seconds * 1_000)
+    ) {
+      return errVal('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
+    }
+  } else if (materializeDefaults) {
+    obj.codex_doctor_timeout_seconds = 10;
   }
 
   // step_heartbeat_stall_minutes is a deprecated compatibility no-op. Retain

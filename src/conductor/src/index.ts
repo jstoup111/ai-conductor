@@ -50,7 +50,8 @@ import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
-import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
+import { discoverPlugins } from './engine/plugin-loader.js';
+import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
@@ -77,6 +78,7 @@ import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
 } from './engine/shipment-evidence-cli.js';
+
 import {
   detectFinishRecordCommand,
   dispatchFinishRecord,
@@ -1031,7 +1033,7 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  registerBuiltins(registry, events, renderEvent);
+  registerCliBuiltins(registry, events, renderEvent, config);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},

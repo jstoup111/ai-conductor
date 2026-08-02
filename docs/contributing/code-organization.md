@@ -168,7 +168,7 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 | ui → types | 11 | |
 | engine → ui | 14 | 11 are `import type`. |
 | ui → engine | 10 | 5 are `import type`. |
-| types → execution | 1 | `types/events.ts:7`. |
+| types → execution | 1 | `types/events.ts:3-9`. |
 | execution → anything internal | 0 | A clean leaf — `execution/` imports nothing from `engine/`, `types/`, or `ui/`. |
 | anything → entry points | 0 | No layer file imports `index.js`, `cli.js`, or `daemon-cli.js`. |
 | tools → engine, types | — | Generators read engine metadata; the reverse never happens. |
@@ -182,9 +182,10 @@ Intended layering is `types ← execution ← engine ← ui ← entry points`. M
 > initialization cycle that the type checker will not flag. Tracked in
 > [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
 
-> **Known limitation.** `types/events.ts:7` imports `AuthenticationReadinessState`,
-> `AuthenticationSource`, and `TokenUsage` from `../execution/llm-provider.js` — the only outbound edge
-> from `types/`, and it inverts `types ← execution`. It is a type-only import, so it has no runtime
+> **Known limitation.** `types/events.ts:3-9` imports `AuthenticationReadinessState`,
+> `AuthenticationSource`, `CodexProbeFailureKind`, `CodexProbeParserRejection`, and `TokenUsage` from
+> `../execution/llm-provider.js` — the only outbound edge from `types/`, and it inverts
+> `types ← execution`. It is a type-only import, so it has no runtime
 > effect, but `types/` is not the dependency-free leaf the layering implies. Tracked in
 > [#1017](https://github.com/jstoup111/ai-conductor/issues/1017).
 

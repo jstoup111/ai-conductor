@@ -1063,6 +1063,7 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
         provider: 'codex',
         source: 'api-key',
         state: 'ready',
+        // @ts-expect-error Ready authentication metadata must never carry remediation.
         remediation: 'sensitive provider detail',
       },
     }]);

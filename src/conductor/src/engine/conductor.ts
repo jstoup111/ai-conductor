@@ -22,6 +22,7 @@ import {
 import { findDocumentationDelivery } from './documentation-delivery.js';
 import type {
   AuthenticationReadiness,
+  CodexProbeFailure,
   InvokeResult,
   TokenUsage,
 } from '../execution/llm-provider.js';
@@ -492,6 +493,17 @@ export interface SpotAuditDispatchResult {
   observedIntervals?: readonly ObservedInterval[];
   authFailure?: boolean;
   authentication?: AuthenticationReadiness;
+}
+
+type AuthRecoveryDisposition =
+  | { disposition: 'recovered' }
+  | { disposition: 'trial-required'; probeFailure: CodexProbeFailure }
+  | { disposition: 'halt'; haltReason: string };
+
+/** Renders only the closed probe classification retained across recovery. */
+function formatProbeFailureClassification(probeFailure: CodexProbeFailure): string {
+  const parserRejection = probeFailure.facts.parserRejection;
+  return `${probeFailure.kind}${parserRejection === undefined ? '' : `, parser-rejection: ${parserRejection}`}`;
 }
 
 /** Preserve recovery metadata when adapting a verifier dispatch for spot audit. */
@@ -1555,7 +1567,23 @@ export class Conductor {
       actualProvider: result.authentication.provider,
       authentication: result.authentication,
     });
-    return park.timedOut ? result : dispatch();
+    if (park.disposition === 'halt') return result;
+
+    // A failed readiness probe permits one real verifier dispatch. Its result
+    // stays on the ordinary audit adapter path unless that exact trial is also
+    // an auth failure, in which case returning the raw provider result would
+    // let a later caller recover recursively and expose provider diagnostics.
+    const trial = await dispatch();
+    if (park.disposition === 'trial-required' && trial.authFailure) {
+      return {
+        success: false,
+        output:
+          'Codex cached-login recovery trial for the attribution verifier failed authentication ' +
+          `after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}). ` +
+          'Refresh the Codex login, then re-queue this feature.',
+      };
+    }
+    return trial;
   }
 
   /**
@@ -1571,7 +1599,7 @@ export class Conductor {
    */
   private async parkOnAuthFailure(
     failed?: Pick<StepRunResult, 'actualProvider' | 'authentication'>,
-  ): Promise<{ timedOut: boolean; haltReason: string }> {
+  ): Promise<AuthRecoveryDisposition> {
     const shPark = resolveSelfHostConfig(this.config);
 
     const authentication = failed?.authentication;
@@ -1587,7 +1615,7 @@ export class Conductor {
           await this.sleep(1_000);
         }
         return {
-          timedOut: true,
+          disposition: 'halt',
           haltReason:
             'Codex API-key authentication is inherited at daemon startup and cannot be refreshed in-process.\n' +
             'Replace CODEX_API_KEY, restart the daemon, then re-queue this feature.',
@@ -1602,7 +1630,7 @@ export class Conductor {
         const timeoutMs = shPark.authParkTimeoutMinutes * 60 * 1000;
         const startedAt = Date.now();
         const timedOutResult = {
-          timedOut: true,
+          disposition: 'halt' as const,
           haltReason:
             'Codex cached-login authentication did not become ready before the auth park timed out.\n' +
             'Refresh the Codex login, then re-queue this feature.',
@@ -1618,7 +1646,7 @@ export class Conductor {
 
         let retryDelayMs = 1_000;
         let lastProgress:
-          | { readiness: typeof authentication.state; degradation: 'credential-failure' | 'unrelated-diagnostic-degradation'; emittedAt: number }
+          | { readiness: typeof authentication.state; degradation: 'credential-failure' | 'unrelated-diagnostic-degradation' | 'probe-failure'; emittedAt: number }
           | undefined;
         for (;;) {
           const current = await readiness();
@@ -1628,11 +1656,18 @@ export class Conductor {
             current.provider === authentication.provider &&
             current.source === authentication.source &&
             current.state === 'ready';
+          const probeFailed =
+            current.provider === authentication.provider &&
+            current.source === authentication.source &&
+            current.state === 'probe-failed' &&
+            current.probeFailure !== undefined;
           const timedOut = elapsedMs >= timeoutMs;
-          const nextDelayMs = isReady || timedOut
+          const nextDelayMs = isReady || probeFailed || timedOut
             ? 0
             : Math.min(retryDelayMs, timeoutMs - elapsedMs);
-          const degradation = current.unrelatedHealth === 'degraded'
+          const degradation = probeFailed
+            ? 'probe-failure' as const
+            : current.unrelatedHealth === 'degraded'
             ? 'unrelated-diagnostic-degradation' as const
             : 'credential-failure' as const;
           const previousProgress = lastProgress;
@@ -1642,25 +1677,53 @@ export class Conductor {
             previousProgress.degradation !== degradation;
 
           if (stateChanged || now - previousProgress.emittedAt >= 60_000) {
-            await this.events.emit({
-              type: 'credentials_park_progress',
-              provider: 'codex',
-              source: authentication.source,
-              readiness: current.state,
-              elapsedSeconds: Math.min(
-                Math.ceil(timeoutMs / 1_000),
-                Math.max(0, Math.floor(elapsedMs / 1_000)),
-              ),
-              nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
-              degradation,
-            });
-            lastProgress = { readiness: current.state, degradation, emittedAt: now };
+            const elapsedSeconds = Math.min(
+              Math.ceil(timeoutMs / 1_000),
+              Math.max(0, Math.floor(elapsedMs / 1_000)),
+            );
+            if (probeFailed) {
+              await this.events.emit({
+                type: 'credentials_park_progress',
+                provider: 'codex',
+                source: authentication.source,
+                readiness: current.state,
+                elapsedSeconds,
+                degradation: 'probe-failure',
+                probeFailureKind: current.probeFailure.kind,
+                ...(current.probeFailure.facts.parserRejection === undefined
+                  ? {}
+                  : { parserRejection: current.probeFailure.facts.parserRejection }),
+                nextDisposition: 'trial-required',
+              });
+              lastProgress = { readiness: current.state, degradation, emittedAt: now };
+            } else if (current.state !== 'probe-failed') {
+              await this.events.emit({
+                type: 'credentials_park_progress',
+                provider: 'codex',
+                source: authentication.source,
+                readiness: current.state,
+                elapsedSeconds,
+                nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
+                degradation: current.unrelatedHealth === 'degraded'
+                  ? 'unrelated-diagnostic-degradation'
+                  : 'credential-failure',
+              });
+              lastProgress = { readiness: current.state, degradation, emittedAt: now };
+            }
           }
 
-          if (
-            isReady
-          ) {
-            return { timedOut: false, haltReason: '' };
+          if (isReady) {
+            return { disposition: 'recovered' };
+          }
+          if (probeFailed) {
+            const parserRejection = current.probeFailure.facts.parserRejection;
+            return {
+              disposition: 'trial-required',
+              probeFailure: {
+                kind: current.probeFailure.kind,
+                facts: parserRejection === undefined ? {} : { parserRejection },
+              },
+            };
           }
           if (timedOut) {
             return timedOutResult;
@@ -1673,7 +1736,7 @@ export class Conductor {
 
     if (this.selfHost && shPark.buildAuthMode === 'api-key') {
       return {
-        timedOut: true,
+        disposition: 'halt',
         haltReason:
           `Auth failure in api-key mode — the ANTHROPIC_API_KEY environment variable\n` +
           `is missing, invalid, or has insufficient permissions.\n` +
@@ -1702,7 +1765,7 @@ export class Conductor {
 
       if (parkResult.type === 'timeout') {
         return {
-          timedOut: true,
+          disposition: 'halt',
           haltReason:
             `Daemon build token expired and refresh timed out.\n` +
             `Token file: ${tokenPath}\n` +
@@ -1710,7 +1773,7 @@ export class Conductor {
             `Then re-queue this feature.`,
         };
       }
-      return { timedOut: false, haltReason: '' };
+      return { disposition: 'recovered' };
     }
 
     // Operator credentials mode (backward compatibility)
@@ -1735,7 +1798,7 @@ export class Conductor {
     if (parkResult.type === 'timeout') {
       const expiresAtStr = parkResult.expiresAt ?? 'unparseable';
       return {
-        timedOut: true,
+        disposition: 'halt',
         haltReason:
           `Operator credentials expired and refresh timed out.\n` +
           `Credentials file: ${parkResult.credentialsPath}\n` +
@@ -1743,7 +1806,7 @@ export class Conductor {
           `Please refresh your OAuth token and re-queue this feature.`,
       };
     }
-    return { timedOut: false, haltReason: '' };
+    return { disposition: 'recovered' };
   }
 
   /**
@@ -3300,6 +3363,7 @@ export class Conductor {
             // auth-failed member(s) — siblings that already produced a
             // verdict are never re-run, so this never burns retry/escalation
             // budget and never spins the retry ladder.
+            const consumedRecoveryTrials = new Set<string>();
             for (;;) {
               const authFailureIdxs = outcomes
                 .map((o, i) => (o.kind === 'no-verdict' && o.reason === 'authFailure' ? i : -1))
@@ -3327,12 +3391,16 @@ export class Conductor {
                     );
                   })
                 : authFailureIdxs;
+              const recoverySource = authentication
+                ? `${authentication.provider}:${authentication.source}`
+                : undefined;
+              if (recoverySource && consumedRecoveryTrials.has(recoverySource)) break;
               const park = await this.parkOnAuthFailure(
                 authentication
                   ? { actualProvider: authentication.provider, authentication }
                   : undefined,
               );
-              if (park.timedOut) {
+              if (park.disposition === 'halt') {
                 await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
                 await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
@@ -3344,14 +3412,49 @@ export class Conductor {
                 return;
               }
 
-              const retryMembers = retryIdxs.map((i) => membership.dispatchable[i]!);
+              // A failed readiness probe authorizes one real invocation, not
+              // one invocation per group member. A ready recheck, however,
+              // restores the ordinary group contract: every failed member
+              // using that source resumes together.
+              const retryIdx = retryIdxs[0]!;
+              const retryMembers = park.disposition === 'trial-required'
+                ? [membership.dispatchable[retryIdx]!]
+                : retryIdxs.map((idx) => membership.dispatchable[idx]!);
+              if (park.disposition === 'trial-required' && recoverySource) {
+                // Consume the one-shot authorization before dispatch so a
+                // successful or non-auth trial cannot authorize another
+                // same-source member in this recovery episode.
+                consumedRecoveryTrials.add(recoverySource);
+              }
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
               if (signalExitRequested) return;
-              retryIdxs.forEach((idx, k) => {
-                outcomes[idx] = retryOutcomes[k]!;
-              });
+
+              if (park.disposition === 'trial-required') {
+                const failedTrial = retryOutcomes[0];
+                if (failedTrial?.kind === 'no-verdict' && failedTrial.reason === 'authFailure') {
+                  const failedMember = membership.dispatchable[retryIdx]!;
+                  // The recovery trial is the bounded fallback for an
+                  // unavailable probe. Never route an auth-failed trial back
+                  // through parkOnAuthFailure; do not include provider output
+                  // in this secret-safe diagnostic.
+                  const haltReason =
+                    `Codex cached-login recovery trial for grouped member "${failedMember.name}" ` +
+                    `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
+                    'Refresh the Codex login, then re-queue this feature.';
+                  await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
+                  await writeState(this.stateFilePath, state);
+                  const prUrl = await this.surfaceRemediationPr(haltReason);
+                  await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+                  process.off('SIGINT', sigintHandler);
+                  if (!this.daemon) process.off('SIGTERM', sigterm);
+                  return;
+                }
+              }
+              for (const [index, outcome] of retryOutcomes.entries()) {
+                outcomes[retryIdxs[index]!] = outcome;
+              }
             }
 
             const permissionDeniedIdx = outcomes.findIndex(
@@ -4202,6 +4305,11 @@ export class Conductor {
         // instead of the generic "retries exhausted" that hides an infra failure
         // behind a message that reads like a code-quality rejection.
         let graderDispatchFailureReason: string | undefined;
+        // A failed Codex readiness probe cannot establish whether the cached
+        // login is usable, so it authorizes one real dispatch as a bounded
+        // recovery trial. The token is consumed before that dispatch starts.
+        let authorizedRecoveryTrial = false;
+        let authorizedRecoveryProbeFailure: CodexProbeFailure | undefined;
 
         // Task 9 (acceptance-specs-halts-when-the-red-evidence-marke): before
         // spending ANY of this step's retry budget, check whether this is an
@@ -4258,6 +4366,10 @@ export class Conductor {
         if (!acceptanceRedPreHealed)
         while (attempt < stepMaxRetries) {
           attempt++;
+          const isAuthorizedRecoveryTrial = authorizedRecoveryTrial;
+          authorizedRecoveryTrial = false;
+          const recoveryProbeFailure = authorizedRecoveryProbeFailure;
+          authorizedRecoveryProbeFailure = undefined;
 
           // Self-host live-boundary enforcement point. A violation observed
           // while an EARLIER dispatch was in flight is enforced HERE — before
@@ -4577,8 +4689,23 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
+            if (isAuthorizedRecoveryTrial) {
+              // The failed dispatch is the one bounded recovery trial for an
+              // unavailable probe. Do not recurse into another probe; keep the
+              // halt secret-safe by excluding arbitrary provider output.
+              const haltReason =
+                `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
+                'Refresh the Codex login, then re-queue this feature.';
+              await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(haltReason);
+              await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
             const park = await this.parkOnAuthFailure(result);
-            if (park.timedOut) {
+            if (park.disposition === 'halt') {
               // Task 14: Auth-park timeout → credentials-specific HALT.
               await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
               // Durable signals (HALT marker + state) are written BEFORE escalation
@@ -4592,8 +4719,13 @@ export class Conductor {
               return;
             }
 
-            // Park resolved (refreshed or timeout-then-park-anyway); loop back to
-            // retry without decrementing attempt (budget intact).
+            // Park resolved (refreshed or probe-unavailable trial); loop back
+            // without decrementing attempt (budget intact). The trial token
+            // applies to exactly the next dispatch and is consumed at entry.
+            authorizedRecoveryTrial = park.disposition === 'trial-required';
+            authorizedRecoveryProbeFailure = park.disposition === 'trial-required'
+              ? park.probeFailure
+              : undefined;
             attempt--;
             continue;
           }

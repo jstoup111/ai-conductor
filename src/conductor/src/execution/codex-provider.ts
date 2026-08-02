@@ -5,6 +5,7 @@ import { copySelectedCodexLogin } from './codex-self-host-auth.js';
 import type {
   AuthenticationReadiness,
   AuthenticationSource,
+  CodexProbeFailure,
   InvokeOptions,
   InvokeResult,
   LLMProvider,
@@ -48,13 +49,18 @@ interface DoctorCommandResult {
   stdout?: unknown;
   stderr?: unknown;
   exitCode?: number | null;
+  failed?: boolean;
+  timedOut?: boolean;
+  code?: unknown;
+  signal?: unknown;
 }
 
 type DoctorEvidence =
   | {
     kind: 'documented';
-    state: AuthenticationReadiness['state'];
+    state: Exclude<AuthenticationReadiness['state'], 'probe-failed'>;
     unrelatedHealth?: AuthenticationReadiness['unrelatedHealth'];
+    facts: CodexProbeFailure['facts'];
   }
   | {
     kind: 'legacy';
@@ -62,7 +68,12 @@ type DoctorEvidence =
     configured: boolean;
     authenticated: boolean;
     rejected?: boolean;
+    facts: CodexProbeFailure['facts'];
   };
+
+type ParsedDoctorEvidence =
+  | { kind: 'evidence'; evidence: DoctorEvidence }
+  | { kind: 'rejected'; probeFailure: CodexProbeFailure };
 
 export interface CodexDoctorRunnerOptions {
   reject: false;
@@ -79,7 +90,7 @@ export type CodexDoctorRunner = (
   options: CodexDoctorRunnerOptions,
 ) => Promise<DoctorCommandResult>;
 
-const CODEX_DOCTOR_TIMEOUT_MS = 10_000;
+const DEFAULT_CODEX_DOCTOR_TIMEOUT_MS = 10_000;
 
 const defaultCodexDoctorRunner: CodexDoctorRunner = async (command, args, options) =>
   execa(command, args, options) as Promise<DoctorCommandResult>;
@@ -153,6 +164,7 @@ export class CodexProvider implements LLMProvider {
     executable = process.env.CODEX_EXECUTABLE ?? 'codex',
     private readonly intervalClock: IntervalClock = epochAnchoredMonotonicClock,
     private readonly subprocessFactory: CodexSubprocessFactory = execa,
+    private readonly doctorTimeoutMs = DEFAULT_CODEX_DOCTOR_TIMEOUT_MS,
   ) {
     this.authentication = this.selectAuthentication();
     this.executable = executable;
@@ -182,7 +194,7 @@ export class CodexProvider implements LLMProvider {
         ['doctor', '--json', '--summary'],
         {
           reject: false,
-          timeout: CODEX_DOCTOR_TIMEOUT_MS,
+          timeout: this.doctorTimeoutMs,
           stdout: 'pipe',
           stderr: 'pipe',
           env: authentication.apiKey
@@ -190,15 +202,21 @@ export class CodexProvider implements LLMProvider {
             : undefined,
         },
       );
+      if (this.isProvenDoctorExecutionFailure(result)) {
+        return this.executionProbeFailedReadiness(authentication.source, result);
+      }
       return this.classifyReadiness(result, authentication);
-    } catch {
-      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    } catch (error) {
+      return this.executionProbeFailedReadiness(authentication.source, error);
     }
   }
 
   async invoke(options: InvokeOptions): Promise<InvokeResult> {
     const readiness = await this.readiness(options.spawnPermit);
-    if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+    this.logReadinessDiagnostic(readiness, options.diagnosticLog);
+    if (readiness.state === 'missing' || readiness.state === 'unusable') {
+      return this.readinessFailure(readiness);
+    }
 
     const authentication = this.authentication;
     const args = [...this.buildArgs(options, true, true), ...this.selfHostArgs(options)];
@@ -218,7 +236,7 @@ export class CodexProvider implements LLMProvider {
 
     this.logDiagnostics(result, options.diagnosticLog);
 
-    const completion = this.classifyCompletion(result, true, authentication, true);
+    const completion = this.classifyCompletion(result, true, authentication, true, readiness);
     return { ...completion, observedIntervals: [interval] };
   }
 
@@ -273,9 +291,12 @@ export class CodexProvider implements LLMProvider {
     // A real interactive session leaves authorization to the operator. Auto
     // streaming still uses this method, but is explicitly marked noninteractive
     // by the runner and must prove readiness for every dispatch.
-    if (!options.interactive) {
-      const readiness = await this.readiness(options.spawnPermit);
-      if (readiness.state !== 'ready') return this.readinessFailure(readiness);
+    const readiness = options.interactive
+      ? undefined
+      : await this.readiness(options.spawnPermit);
+    if (readiness) this.logReadinessDiagnostic(readiness, options.diagnosticLog);
+    if (readiness?.state === 'missing' || readiness?.state === 'unusable') {
+      return this.readinessFailure(readiness);
     }
 
     const authentication = this.authentication;
@@ -295,7 +316,7 @@ export class CodexProvider implements LLMProvider {
     this.logDiagnostics(result, options.diagnosticLog);
 
     return {
-      ...this.classifyCompletion(result, false, authentication, !options.interactive),
+      ...this.classifyCompletion(result, false, authentication, !options.interactive, readiness),
       observedIntervals: [interval],
     };
   }
@@ -314,6 +335,30 @@ export class CodexProvider implements LLMProvider {
     }
   }
 
+  private logReadinessDiagnostic(
+    readiness: AuthenticationReadiness,
+    diagnosticLog: InvokeOptions['diagnosticLog'],
+  ): void {
+    if (!diagnosticLog || readiness.state !== 'probe-failed') return;
+
+    const { facts, kind } = readiness.probeFailure;
+    const renderedFacts = [
+      facts.processErrorCode && `processErrorCode=${facts.processErrorCode}`,
+      facts.exitCode !== undefined && `exitCode=${facts.exitCode}`,
+      facts.signal && `signal=${facts.signal}`,
+      facts.timeoutMs !== undefined && `timeoutMs=${facts.timeoutMs}`,
+      facts.stdoutBytes !== undefined && `stdoutBytes=${facts.stdoutBytes}`,
+      facts.stderrBytes !== undefined && `stderrBytes=${facts.stderrBytes}`,
+      facts.schemaVersion !== undefined && `schemaVersion=${facts.schemaVersion}`,
+      facts.envelopeStatus && `envelopeStatus=${facts.envelopeStatus}`,
+      facts.credentialCheck && `credentialCheck=${facts.credentialCheck}`,
+      facts.parserRejection && `parserRejection=${facts.parserRejection}`,
+    ].filter((fact): fact is string => typeof fact === 'string');
+    diagnosticLog(
+      `Codex readiness probe failed: ${kind}${renderedFacts.length > 0 ? ` (${renderedFacts.join(', ')})` : ''}.`,
+    );
+  }
+
   private classifyCompletion(
     result: {
       stdout?: unknown;
@@ -324,6 +369,7 @@ export class CodexProvider implements LLMProvider {
     jsonOutput: boolean,
     authenticationSelection: SelectedAuthentication,
     automaticReview = true,
+    readyReadiness?: Extract<AuthenticationReadiness, { state: 'ready' | 'probe-failed' }>,
   ): InvokeResult {
     const { source } = authenticationSelection;
     const stdout = (result.stdout ?? '') as string;
@@ -351,7 +397,9 @@ export class CodexProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
-        authentication: this.authenticationResult(source, 'ready'),
+        // A missing executable takes precedence as the completion result, but
+        // must not overwrite an earlier inconclusive readiness probe.
+        authentication: readyReadiness ?? this.authenticationResult(source, 'ready'),
       };
     }
 
@@ -374,10 +422,9 @@ export class CodexProvider implements LLMProvider {
       !authFailure &&
       !sessionExpired &&
       CODEX_PERMISSION_DECISION_RE.test(rawOutput);
-    const authentication = this.authenticationResult(
-      source,
-      authFailure ? 'unusable' : 'ready',
-    );
+    const authentication = authFailure
+      ? this.authenticationResult(source, 'unusable')
+      : readyReadiness ?? this.authenticationResult(source, 'ready');
 
     return {
       success: exitCode === 0,
@@ -417,7 +464,7 @@ export class CodexProvider implements LLMProvider {
 
   private authenticationResult(
     source: AuthenticationSource,
-    state: AuthenticationReadiness['state'] | undefined,
+    state: Exclude<AuthenticationReadiness['state'], 'probe-failed'> | undefined,
   ): AuthenticationReadiness | undefined {
     if (!state) return undefined;
     return {
@@ -431,9 +478,16 @@ export class CodexProvider implements LLMProvider {
     result: DoctorCommandResult,
     authentication: SelectedAuthentication,
   ): AuthenticationReadiness {
-    const evidence = this.parseDoctorEvidence(result.stdout);
-    if (!evidence || (evidence.kind === 'legacy' && evidence.source !== authentication.source)) {
-      return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    const parsed = this.parseDoctorEvidence(result.stdout);
+    if (parsed.kind === 'rejected') {
+      return this.probeFailedReadiness(authentication.source, parsed.probeFailure);
+    }
+    const { evidence } = parsed;
+    if (evidence.kind === 'legacy' && evidence.source !== authentication.source) {
+      return this.probeFailedReadiness(authentication.source, {
+        kind: 'unparseable-output',
+        facts: { ...evidence.facts, parserRejection: 'conflicting-source-evidence' },
+      });
     }
 
     const exitCode = result.exitCode ?? 1;
@@ -443,7 +497,9 @@ export class CodexProvider implements LLMProvider {
           provider: 'codex',
           source: authentication.source,
           state: 'ready',
-          unrelatedHealth: evidence.unrelatedHealth,
+          ...(evidence.unrelatedHealth
+            ? { unrelatedHealth: evidence.unrelatedHealth }
+            : {}),
         };
       }
       return this.nonReadyReadiness(authentication.source, evidence.state);
@@ -460,33 +516,44 @@ export class CodexProvider implements LLMProvider {
     if (
       evidence.configured === false &&
       evidence.authenticated === false &&
-      evidence.rejected !== true &&
-      exitCode === 0
+      evidence.rejected !== true
     ) {
       return this.nonReadyReadiness(authentication.source, 'missing');
     }
     if (
       evidence.configured === true &&
       evidence.authenticated === false &&
-      evidence.rejected === true &&
-      exitCode !== 0
+      evidence.rejected === true
     ) {
       return this.nonReadyReadiness(authentication.source, 'unusable');
     }
-    return this.nonReadyReadiness(authentication.source, 'unverifiable');
+    return this.probeFailedReadiness(authentication.source, {
+      kind: 'unparseable-output',
+      facts: { ...evidence.facts, parserRejection: 'ambiguous-credential-evidence' },
+    });
   }
 
-  private parseDoctorEvidence(stdout: unknown): DoctorEvidence | undefined {
-    if (typeof stdout !== 'string') return undefined;
+  private parseDoctorEvidence(stdout: unknown): ParsedDoctorEvidence {
+    if (typeof stdout !== 'string') return this.parserRejected('unrecognized-envelope');
+    const stdoutBytes = Buffer.byteLength(stdout);
     try {
       const parsed: unknown = JSON.parse(stdout);
-      if (!parsed || typeof parsed !== 'object') return undefined;
+      if (!parsed || typeof parsed !== 'object') {
+        return this.parserRejected('unrecognized-envelope', { stdoutBytes });
+      }
       const record = parsed as Record<string, unknown>;
-      if (record.schemaVersion !== 1) return undefined;
+      if (record.schemaVersion !== 1) {
+        return this.parserRejected('unsupported-schema', {
+          stdoutBytes,
+          ...(typeof record.schemaVersion === 'number' ? { schemaVersion: record.schemaVersion } : {}),
+        });
+      }
 
       const hasDocumentedShape = 'overallStatus' in record || 'checks' in record;
       const hasLegacyShape = 'auth' in record || 'transport' in record;
-      if (hasDocumentedShape && hasLegacyShape) return undefined;
+      if (hasDocumentedShape && hasLegacyShape) {
+        return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+      }
 
       if (hasDocumentedShape) {
         // `codex doctor` reports three envelope statuses: ok / warning / fail.
@@ -503,31 +570,49 @@ export class CodexProvider implements LLMProvider {
           typeof checks !== 'object' ||
           Array.isArray(checks)
         ) {
-          return undefined;
+          return this.parserRejected('unrecognized-envelope', this.documentedShapeFacts(record, stdoutBytes));
         }
         const credentials = (checks as Record<string, unknown>)['auth.credentials'];
-        if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) return undefined;
+        if (!credentials || typeof credentials !== 'object' || Array.isArray(credentials)) {
+          return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+        }
         const { status, summary } = credentials as Record<string, unknown>;
-        if (typeof summary !== 'string') return undefined;
+        if (typeof summary !== 'string') {
+          return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+        }
         if (status === 'ok') {
-          return {
+          return { kind: 'evidence', evidence: {
             kind: 'documented',
             state: 'ready',
             unrelatedHealth: overallStatus === 'ok' ? undefined : 'degraded',
-          };
+            facts: this.documentedShapeFacts(record, stdoutBytes),
+          } };
         }
-        if (status !== 'fail') return undefined;
+        if (status !== 'fail') {
+          return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
+        }
         if (/(?:no codex credentials were found|codex credentials are missing)/i.test(summary)) {
-          return { kind: 'documented', state: 'missing' };
+          return { kind: 'evidence', evidence: {
+            kind: 'documented', state: 'missing', facts: this.documentedShapeFacts(record, stdoutBytes),
+          } };
         }
         if (/invalid|rejected|unauthorized|expired/i.test(summary)) {
-          return { kind: 'documented', state: 'unusable' };
+          return { kind: 'evidence', evidence: {
+            kind: 'documented', state: 'unusable', facts: this.documentedShapeFacts(record, stdoutBytes),
+          } };
         }
-        return undefined;
+        return this.parserRejected('ambiguous-credential-evidence', this.documentedShapeFacts(record, stdoutBytes));
       }
 
       const { auth, transport } = record;
-      if (!auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') return undefined;
+      if (!auth || typeof auth !== 'object' || !transport || typeof transport !== 'object') {
+        return this.parserRejected('unrecognized-envelope', {
+          stdoutBytes,
+          schemaVersion: 1,
+          envelopeStatus: 'unknown',
+          credentialCheck: 'unknown',
+        });
+      }
       const { selectedMode, configured, rejected } = auth as Record<string, unknown>;
       const { authenticated } = transport as Record<string, unknown>;
       if (
@@ -536,17 +621,53 @@ export class CodexProvider implements LLMProvider {
         typeof authenticated !== 'boolean' ||
         (rejected !== undefined && typeof rejected !== 'boolean')
       ) {
-        return undefined;
+        return this.parserRejected('ambiguous-credential-evidence', { stdoutBytes, schemaVersion: 1 });
       }
-      return { kind: 'legacy', source: selectedMode, configured, authenticated, rejected };
+      return { kind: 'evidence', evidence: {
+        kind: 'legacy', source: selectedMode, configured, authenticated, rejected,
+        facts: { stdoutBytes, schemaVersion: 1 },
+      } };
     } catch {
-      return undefined;
+      return this.parserRejected('invalid-json', { stdoutBytes });
     }
+  }
+
+  private parserRejected(
+    parserRejection: Extract<CodexProbeFailure['facts']['parserRejection'], string>,
+    facts: CodexProbeFailure['facts'] = {},
+  ): ParsedDoctorEvidence {
+    return {
+      kind: 'rejected',
+      probeFailure: { kind: 'unparseable-output', facts: { ...facts, parserRejection } },
+    };
+  }
+
+  private documentedShapeFacts(record: Record<string, unknown>, stdoutBytes: number): CodexProbeFailure['facts'] {
+    const overallStatus = record.overallStatus;
+    const checks = record.checks;
+    const credentials = checks && typeof checks === 'object' && !Array.isArray(checks)
+      ? (checks as Record<string, unknown>)['auth.credentials']
+      : undefined;
+    const status = credentials && typeof credentials === 'object' && !Array.isArray(credentials)
+      ? (credentials as Record<string, unknown>).status
+      : undefined;
+    return {
+      stdoutBytes,
+      schemaVersion: 1,
+      envelopeStatus: overallStatus === 'ok' || overallStatus === 'warning' || overallStatus === 'fail'
+        ? overallStatus
+        : 'unknown',
+      credentialCheck: credentials === undefined
+        ? 'absent'
+        : status === 'ok' || status === 'fail'
+          ? status
+          : 'unknown',
+    };
   }
 
   private nonReadyReadiness(
     source: AuthenticationSource,
-    state: Exclude<AuthenticationReadiness['state'], 'ready'>,
+    state: 'missing' | 'unusable',
   ): AuthenticationReadiness {
     const action = source === 'api-key'
       ? 'Replace CODEX_API_KEY and restart the daemon.'
@@ -557,6 +678,77 @@ export class CodexProvider implements LLMProvider {
         ? 'The selected Codex authentication source was rejected.'
         : 'Codex authentication readiness could not be verified.';
     return { provider: 'codex', source, state, remediation: `${reason} ${action}` };
+  }
+
+  private executionProbeFailedReadiness(
+    source: AuthenticationSource,
+    error: unknown,
+  ): AuthenticationReadiness {
+    const facts = this.executionProbeFacts(error);
+    if (typeof error === 'object' && error !== null && (error as { timedOut?: unknown }).timedOut === true) {
+      return this.probeFailedReadiness(source, {
+        kind: 'timeout',
+        facts: { timeoutMs: this.doctorTimeoutMs, ...facts },
+      });
+    }
+
+    return this.probeFailedReadiness(source, { kind: 'exec-error', facts });
+  }
+
+  private isProvenDoctorExecutionFailure(result: DoctorCommandResult): boolean {
+    if (result.timedOut === true) return true;
+    const facts = this.executionProbeFacts(result);
+    return facts.processErrorCode !== undefined || facts.signal !== undefined;
+  }
+
+  private executionProbeFacts(error: unknown): CodexProbeFailure['facts'] {
+    const facts: CodexProbeFailure['facts'] = {};
+    if (typeof error !== 'object' || error === null) return facts;
+    const record = error as Record<string, unknown>;
+    const code = record.code;
+    if (code === 'EACCES' || code === 'EAGAIN' || code === 'ENOENT' || code === 'EPERM') {
+      facts.processErrorCode = code;
+    } else if (code !== undefined) {
+      facts.processErrorCode = 'UNKNOWN';
+    }
+    const exitCode = record.exitCode;
+    if (typeof exitCode === 'number' && Number.isInteger(exitCode) && exitCode >= 0) {
+      facts.exitCode = exitCode;
+    }
+    const signal = record.signal;
+    if (
+      signal === 'SIGABRT' || signal === 'SIGALRM' || signal === 'SIGHUP' || signal === 'SIGINT' ||
+      signal === 'SIGKILL' || signal === 'SIGPIPE' || signal === 'SIGQUIT' || signal === 'SIGTERM'
+    ) {
+      facts.signal = signal;
+    } else if (signal !== undefined) {
+      facts.signal = 'UNKNOWN';
+    }
+    const stdoutBytes = this.outputByteLength(record.stdout);
+    if (stdoutBytes !== undefined) facts.stdoutBytes = stdoutBytes;
+    const stderrBytes = this.outputByteLength(record.stderr);
+    if (stderrBytes !== undefined) facts.stderrBytes = stderrBytes;
+    return facts;
+  }
+
+  private outputByteLength(output: unknown): number | undefined {
+    if (typeof output === 'string' || Buffer.isBuffer(output)) return Buffer.byteLength(output);
+    return undefined;
+  }
+
+  private probeFailedReadiness(
+    source: AuthenticationSource,
+    probeFailure: CodexProbeFailure = {
+      kind: 'unparseable-output',
+      facts: { parserRejection: 'unrecognized-envelope' },
+    },
+  ): AuthenticationReadiness {
+    return {
+      provider: 'codex',
+      source,
+      state: 'probe-failed',
+      probeFailure,
+    };
   }
 
   private sanitizeOutput(output: string, apiKey: string | undefined): string {

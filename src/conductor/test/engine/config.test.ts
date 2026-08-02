@@ -160,6 +160,48 @@ complexity:
   });
 
   describe('validateConfig', () => {
+    describe('codex_doctor_timeout_seconds', () => {
+      it('resolves an omitted timeout to 10 seconds', () => {
+        const result = validateConfig({});
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: { codex_doctor_timeout_seconds: 10 },
+          warnings: [],
+        });
+      });
+
+      it('preserves a finite positive fractional custom timeout', () => {
+        const result = validateConfig({ codex_doctor_timeout_seconds: 0.5 });
+
+        expect(result).toMatchObject({
+          ok: true,
+          config: { codex_doctor_timeout_seconds: 0.5 },
+          warnings: [],
+        });
+      });
+
+      it.each([
+        ['zero', 0],
+        ['a negative number', -1],
+        ['a string', '30'],
+        ['NaN', NaN],
+        ['infinity', Infinity],
+        ['a value that overflows milliseconds', Number.MAX_VALUE],
+      ])('rejects %s with a field-specific diagnostic', (_name, value) => {
+        const result = validateConfig({ codex_doctor_timeout_seconds: value });
+
+        expect(result).toEqual({
+          ok: false,
+          error: {
+            type: 'validation_error',
+            message: 'codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds',
+          },
+        });
+        if (!result.ok) expect(result.error.message).not.toMatch(/unknown top-level key/i);
+      });
+    });
+
     it('returns top-level and nested defaults without mutating the caller input', () => {
       const input = {
         harness_version: '>=1.0.0',

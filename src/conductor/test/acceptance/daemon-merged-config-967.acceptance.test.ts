@@ -49,11 +49,25 @@ import { runDaemonMode } from '../../src/daemon-cli.js';
 import { daemonLogPath } from '../../src/engine/daemon-log.js';
 import { DAEMON_FOREGROUND_COMMAND } from '../../src/engine/daemon-tmux.js';
 import { detectDaemonCommand, detectDaemonSupervisorCommand } from '../../src/engine/daemon-command.js';
+import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { CodexProvider } from '../../src/execution/codex-provider.js';
+import type { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import type { HarnessConfig } from '../../src/types/index.js';
+import type { Options } from 'execa';
+
+vi.mock('execa', () => ({ execa: vi.fn() }));
+import { execa } from 'execa';
+
+type ExecaLongCall = (file: string, args: readonly string[], options?: Options) => ReturnType<typeof execa>;
+const mockExeca = vi.mocked(execa as unknown as ExecaLongCall);
 
 // `HOME` is process-global. The aggregate suite runs test files concurrently,
 // so redirect the user-config adapter for this file rather than mutating HOME
 // while another daemon test is resolving its own configuration.
 const userConfigFixture = vi.hoisted(() => ({ path: '' }));
+const codexDoctorTimeouts = vi.hoisted(() => [] as Array<number | undefined>);
+const registeredProviderRoots = vi.hoisted(() => [] as PluginRegistry[]);
+const daemonResolvedConfigs = vi.hoisted(() => [] as HarnessConfig[]);
 
 vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../src/engine/user-config.js')>();
@@ -63,11 +77,38 @@ vi.mock('../../src/engine/user-config.js', async (importOriginal) => {
   };
 });
 
+vi.mock('../../src/engine/plugin-loader.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/plugin-loader.js')>();
+  return {
+    ...actual,
+    registerBuiltins: (...args: Parameters<typeof actual.registerBuiltins>) => {
+      codexDoctorTimeouts.push(args[4]);
+      registeredProviderRoots.push(args[0]);
+      return actual.registerBuiltins(...args);
+    },
+  };
+});
+
+vi.mock('../../src/engine/self-host/detector.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/self-host/detector.js')>();
+  return {
+    ...actual,
+    classifySelfHost: async (...args: Parameters<typeof actual.classifySelfHost>) => {
+      if (args[1]) daemonResolvedConfigs.push(args[1]);
+      return actual.classifySelfHost(...args);
+    },
+  };
+});
+
 const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.restoreAllMocks();
   userConfigFixture.path = '';
+  codexDoctorTimeouts.splice(0);
+  registeredProviderRoots.splice(0);
+  daemonResolvedConfigs.splice(0);
+  mockExeca.mockReset();
   await Promise.all(tempDirs.splice(0).map((d) => rm(d, { recursive: true, force: true })));
 });
 
@@ -143,6 +184,68 @@ async function launchDaemon(home: string, projectRoot: string): Promise<LaunchRe
 // user scope is the only contributor. `auto_restart_on_stale_engine` is an inert
 // known key that merely makes the project config file present and valid.
 const PROJECT_WITHOUT_POLICY = 'auto_restart_on_stale_engine: false\n';
+
+describe('#1039 Story 4 — daemon Codex readiness timeout composition', () => {
+  it('passes the resolved doctor timeout without changing provider, invocation, or auth-park timeouts', async () => {
+    const home = await makeUserHome('codex_doctor_timeout_seconds: 30\n');
+    const project = await makeProject([
+      'codex_doctor_timeout_seconds: 2.5',
+      'harness_self_host:',
+      '  auth_park_timeout_minutes: 7',
+      'test_suite:',
+      '  command: npm test',
+      '  timeout_seconds: 41',
+      '',
+    ].join('\n'));
+
+    const result = await launchDaemon(home, project);
+
+    expect(result.error).toBeUndefined();
+    expect(codexDoctorTimeouts).toEqual([2.5]);
+    mockExeca.mockReset();
+    const registry = registeredProviderRoots[0];
+    expect(registry).toBeDefined();
+    const codex = registry!.get<CodexProvider>('llm_provider', 'codex');
+    const claude = registry!.get<{ invoke(options: InvokeOptions): Promise<unknown> }>('llm_provider', 'claude');
+    mockExeca
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          auth: { selectedMode: 'cached-login', configured: true },
+          transport: { authenticated: true },
+        }),
+        stderr: '',
+        exitCode: 0,
+      } as never)
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }),
+        stderr: '',
+        exitCode: 0,
+      } as never)
+      .mockResolvedValueOnce({ stdout: JSON.stringify({ result: 'done' }), stderr: '', exitCode: 0 } as never);
+
+    const invokeOptions: InvokeOptions = {
+      prompt: 'composition probe', sessionId: 'daemon-composition', resume: false, cwd: project,
+    };
+    await codex.invoke(invokeOptions);
+    await claude.invoke(invokeOptions);
+
+    expect(mockExeca.mock.calls.map(([command, args, options]) => ({
+      command,
+      doctor: args.includes('doctor'),
+      timeout: options?.timeout,
+    }))).toEqual([
+      { command: 'codex', doctor: true, timeout: 2_500 },
+      { command: 'codex', doctor: false, timeout: undefined },
+      { command: 'claude', doctor: false, timeout: undefined },
+    ]);
+    expect(daemonResolvedConfigs[0]).toMatchObject({
+      codex_doctor_timeout_seconds: 2.5,
+      harness_self_host: { auth_park_timeout_minutes: 7 },
+      test_suite: { timeout_seconds: 41 },
+    });
+  });
+});
 
 describe('#967 Story 1 — daemon inherits machine-scoped runtime policy', () => {
   it('happy: a user-only llm_provider selection reaches daemon provider construction with codex first', async () => {

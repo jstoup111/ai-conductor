@@ -182,11 +182,24 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
-  // Covers: FR-6 through FR-11. Every non-ready evidence state is terminal for
-  // this dispatch; even a previous ready check cannot authorize a resume.
-  it.each(['missing', 'unusable', 'unverifiable'] as const)(
-    'fails closed for %s doctor evidence without model work, fallback, or a budget classification',
+  // Covers: FR-6 through FR-11. Inconclusive evidence authorizes one real
+  // invocation, while affirmative credential evidence remains terminal.
+  it.each(['missing', 'unusable'] as const)(
+    'distinguishes unavailable doctor evidence from affirmative %s evidence',
     async (state) => {
+      mockExeca
+        .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as any)
+        .mockResolvedValueOnce({ stdout: 'trial completed', stderr: '', exitCode: 0 } as any);
+
+      const degraded = await new CodexProvider().invoke({ ...base, resume: true });
+
+      expect(degraded).toMatchObject({
+        success: true,
+        authentication: { state: 'probe-failed', probeFailure: { kind: 'unparseable-output' } },
+      });
+      expect(mockExeca.mock.calls.map(([, args]) => args.includes('exec'))).toEqual([false, true]);
+      mockExeca.mockReset();
+
       mockExeca.mockResolvedValueOnce({
         stdout: doctorNonReady('cached-login', state), stderr: `diagnostic ${secret}`, exitCode: state === 'missing' ? 0 : 1,
       } as any);
@@ -201,6 +214,60 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
       expect(JSON.stringify(result)).not.toContain(secret);
     },
   );
+
+  // An inconclusive doctor probe is not credential evidence. Every closed
+  // probe-failure class still starts exactly one real Codex invocation; its
+  // actual result remains authoritative.
+  it.each([
+    {
+      name: 'execution error',
+      doctor: Object.assign(new Error(`spawn ${secret}`), { code: 'ENOENT' }),
+      kind: 'exec-error',
+    },
+    {
+      name: 'timeout',
+      doctor: Object.assign(new Error(`timed out ${secret}`), { timedOut: true }),
+      kind: 'timeout',
+    },
+    {
+      name: 'invalid JSON',
+      doctor: { stdout: '{not-json', stderr: `diagnostic ${secret}`, exitCode: 0 },
+      kind: 'unparseable-output',
+    },
+    {
+      name: 'unsupported schema',
+      doctor: { stdout: JSON.stringify({ schemaVersion: 2, raw: secret }), stderr: '', exitCode: 0 },
+      kind: 'unparseable-output',
+    },
+    {
+      name: 'unrecognized envelope',
+      doctor: { stdout: JSON.stringify({ schemaVersion: 1, response: secret }), stderr: '', exitCode: 0 },
+      kind: 'unparseable-output',
+    },
+    {
+      name: 'conflicting selected source',
+      doctor: { stdout: doctorReady('api-key'), stderr: '', exitCode: 0 },
+      kind: 'unparseable-output',
+    },
+  ] as const)('dispatches after an inconclusive $name probe', async ({ doctor, kind }) => {
+    if (doctor instanceof Error) mockExeca.mockRejectedValueOnce(doctor);
+    else mockExeca.mockResolvedValueOnce(doctor as any);
+    mockExeca.mockResolvedValueOnce({ stdout: 'real invocation completed', stderr: '', exitCode: 0 } as any);
+
+    const result = await new CodexProvider().invoke({ ...base, resume: true });
+
+    expect(result).toMatchObject({
+      success: true,
+      authentication: {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: { kind },
+      },
+    });
+    expect(mockExeca.mock.calls.map(([, args]) => args.includes('exec'))).toEqual([false, true]);
+    expect(JSON.stringify(result)).not.toContain(secret);
+  });
 
   // #970: supported credentials evidence may authorize dispatch despite an
   // unrelated doctor-health failure. The completion result still owns its

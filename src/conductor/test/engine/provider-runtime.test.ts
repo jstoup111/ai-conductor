@@ -146,6 +146,60 @@ describe('ProviderRuntimeSet', () => {
     expect(permit).toHaveBeenCalledWith('preparation');
   });
 
+  it.each([
+    {
+      name: 'success',
+      result: { success: true, output: 'completed', exitCode: 0 },
+    },
+    {
+      name: 'authentication failure',
+      result: { success: false, output: 'login expired', exitCode: 1, authFailure: true },
+    },
+    {
+      name: 'ordinary failure',
+      result: { success: false, output: 'command failed', exitCode: 1 },
+    },
+  ] satisfies Array<{ name: string; result: InvokeResult }>)('preserves a probe-failed Codex invocation $name without marking the runtime unavailable', async ({ result }) => {
+    const probeFailed: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    };
+    const invoke = vi.fn(async () => ({ ...result, authentication: probeFailed }));
+    const readiness = vi.fn(async () => probeFailed);
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'codex', {
+      invoke,
+      invokeInteractive: vi.fn(async () => {}),
+      readiness,
+    });
+    registry.markInitialized();
+
+    const runtimes = (await loadRuntimeSetFactory())?.(registry);
+    const runtime = runtimes?.get('codex');
+    const resultFromRuntime = runtime && await (await loadRuntimeInvoker())?.(runtime, {
+      prompt: 'continue after inconclusive readiness',
+      sessionId: 'probe-failed-runtime-test',
+      resume: false,
+      model: CODEX_MODEL_POLICY.stepModels.build,
+    });
+
+    expect({
+      readiness: await runtimes?.readinessFor('codex', probeFailed)?.(),
+      result: resultFromRuntime,
+      invocations: invoke.mock.calls.length,
+      deadModels: runtime ? [...runtime.availability.dead] : undefined,
+      runWideUnavailable: runtime?.runWideUnavailable,
+    }).toEqual({
+      readiness: probeFailed,
+      result: { ...result, authentication: probeFailed },
+      invocations: 1,
+      deadModels: [],
+      runWideUnavailable: undefined,
+    });
+  });
+
   it('exposes readiness only for the matching built-in provider', async () => {
     const ready: AuthenticationReadiness = {
       provider: 'codex',

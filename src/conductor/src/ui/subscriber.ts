@@ -33,6 +33,7 @@ export class TerminalSubscriber implements UISubscriber {
       'gate_blocked',
       'rate_limit',
       'session_reset',
+      'credentials_park_progress',
       'feature_complete',
       'auto_heal',
       'mode_skip',

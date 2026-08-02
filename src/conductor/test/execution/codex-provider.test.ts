@@ -6,7 +6,11 @@ import {
   CodexProvider,
   parseCodexJsonl,
 } from '../../src/execution/codex-provider.js';
-import type { InvokeOptions } from '../../src/execution/llm-provider.js';
+import type { CodexDoctorRunner } from '../../src/execution/codex-provider.js';
+import type {
+  AuthenticationReadiness,
+  InvokeOptions,
+} from '../../src/execution/llm-provider.js';
 import type { IntervalClock } from '../../src/execution/observed-interval.js';
 import type { Options as ExecaOptions, Result as ExecaResult } from 'execa';
 
@@ -157,6 +161,43 @@ describe('CodexProvider', () => {
     await provider.invokeInteractive({ ...baseOptions, interactive: false, spawnPermit });
 
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
+  });
+
+  it('models every Codex readiness outcome as an exhaustive discriminated contract', () => {
+    const readinessOutcomes = [
+      { provider: 'codex', source: 'cached-login', state: 'ready' },
+      { provider: 'codex', source: 'api-key', state: 'missing', remediation: 'Replace the API key.' },
+      { provider: 'codex', source: 'cached-login', state: 'unusable', remediation: 'Sign in again.' },
+      {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: {
+          kind: 'timeout',
+          facts: { timeoutMs: 10_000 },
+        },
+      },
+    ] satisfies readonly AuthenticationReadiness[];
+
+    const classify = (readiness: AuthenticationReadiness): string => {
+      switch (readiness.state) {
+        case 'ready': return 'ready';
+        case 'missing': return 'missing';
+        case 'unusable': return 'unusable';
+        case 'probe-failed': return readiness.probeFailure.kind;
+        default: {
+          const exhaustive: never = readiness;
+          return exhaustive;
+        }
+      }
+    };
+
+    expect(readinessOutcomes.map(classify)).toEqual([
+      'ready',
+      'missing',
+      'unusable',
+      'timeout',
+    ]);
   });
 
   it.each([
@@ -794,11 +835,6 @@ describe('CodexProvider', () => {
 
   it.each([
     [
-      'all-green doctor health',
-      'ok',
-      { provider: 'codex', source: 'cached-login', state: 'ready' },
-    ],
-    [
       'unrelated degraded doctor health',
       'fail',
       {
@@ -819,25 +855,35 @@ describe('CodexProvider', () => {
       },
     ],
   ] as const)(
-    'classifies supported ready auth evidence with %s without leaking doctor diagnostics',
+    'keeps supported ready auth evidence authorized with %s without leaking doctor diagnostics',
     async (_name, overallStatus, expected) => {
-      const readiness = await new CodexProvider(
-        vi.fn().mockResolvedValue({
-          stdout: JSON.stringify({
-            schemaVersion: 1,
-            overallStatus,
-            checks: {
-              'auth.credentials': {
-                status: 'ok',
-                summary: 'credentials available; reachability probe failed at https://internal.example',
-              },
+      mockExeca.mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          overallStatus,
+          checks: {
+            'auth.credentials': {
+              status: 'ok',
+              summary: 'credentials available; reachability probe failed at https://internal.example',
             },
-          }),
-          exitCode: overallStatus === 'ok' ? 0 : 1,
+          },
         }),
-      ).readiness();
+        exitCode: 1,
+        failed: true,
+      } as any);
+      mockExeca.mockResolvedValue({ stdout: jsonlMessage('Authorized.'), exitCode: 0 } as any);
 
-      expect(readiness).toEqual(expected);
+      const result = await new CodexProvider().invoke(baseOptions);
+
+      expect({
+        readiness: result.authentication,
+        substantiveExecCalls: mockExeca.mock.calls.length - 1,
+      }).toEqual({
+        readiness: expected,
+        substantiveExecCalls: 1,
+      });
+      expect(result).toMatchObject({ success: true, output: 'Authorized.' });
+      expect(mockExeca.mock.calls[0]?.slice(0, 2)).toEqual(['codex', ['doctor', '--json', '--summary']]);
     },
   );
 
@@ -926,13 +972,94 @@ describe('CodexProvider', () => {
         transport: { authenticated: false },
       },
     ],
-  ] as const)('fails closed for %s documented doctor evidence', async (_name, evidence) => {
+  ] as const)('returns probe-failed for inconclusive %s documented doctor evidence', async (_name, evidence) => {
     const readiness = await new CodexProvider(
       vi.fn().mockResolvedValue({ stdout: JSON.stringify(evidence), exitCode: 0 }),
     ).readiness();
 
-    expect(readiness).toMatchObject({ source: 'cached-login', state: 'unverifiable' });
+    expect(readiness).toMatchObject({
+      source: 'cached-login',
+      state: 'probe-failed',
+      probeFailure: { kind: 'unparseable-output' },
+    });
   });
+
+  it.each([
+    {
+      name: 'invalid JSON',
+      stdout: '{"schemaVersion":',
+      facts: {
+        stdoutBytes: 17,
+        parserRejection: 'invalid-json',
+      },
+    },
+    {
+      name: 'unsupported schema',
+      stdout: JSON.stringify({ schemaVersion: 2 }),
+      facts: {
+        stdoutBytes: 19,
+        schemaVersion: 2,
+        parserRejection: 'unsupported-schema',
+      },
+    },
+    {
+      name: 'unrecognized envelope',
+      stdout: JSON.stringify({ schemaVersion: 1, response: 'unknown' }),
+      facts: {
+        stdoutBytes: 40,
+        schemaVersion: 1,
+        envelopeStatus: 'unknown',
+        credentialCheck: 'unknown',
+        parserRejection: 'unrecognized-envelope',
+      },
+    },
+    {
+      name: 'conflicting selected-source evidence',
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        auth: { selectedMode: 'api-key', configured: true },
+        transport: { authenticated: true },
+      }),
+      facts: {
+        stdoutBytes: 106,
+        schemaVersion: 1,
+        parserRejection: 'conflicting-source-evidence',
+      },
+    },
+    {
+      name: 'ambiguous evidence',
+      stdout: JSON.stringify({
+        schemaVersion: 1,
+        overallStatus: 'ok',
+        checks: { 'auth.credentials': { status: 'ok', summary: 'credentials available' } },
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      }),
+      facts: {
+        stdoutBytes: 214,
+        schemaVersion: 1,
+        envelopeStatus: 'ok',
+        credentialCheck: 'ok',
+        parserRejection: 'ambiguous-credential-evidence',
+      },
+    },
+  ] as const)(
+    'classifies $name as a closed parser rejection without a credential verdict',
+    async ({ stdout, facts }) => {
+      const readiness = await new CodexProvider(
+        vi.fn().mockResolvedValue({ stdout, exitCode: 0 }),
+      ).readiness();
+
+      expect(readiness).toEqual({
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: { kind: 'unparseable-output', facts },
+      });
+      expect(readiness.state).not.toBe('missing');
+      expect(readiness.state).not.toBe('unusable');
+    },
+  );
 
   it('blocks an unattended invocation when its fresh readiness check is not ready', async () => {
     const runDoctor = vi.fn().mockResolvedValue({
@@ -954,6 +1081,173 @@ describe('CodexProvider', () => {
     expect(result).not.toHaveProperty('observedIntervals');
   });
 
+  it('runs exactly one ordinary invocation after a failed readiness probe without synthesizing recovery metadata', async () => {
+    const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
+    const degradedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Real invocation completed.'), exitCode: 0 } as any);
+
+    const result = await degradedProvider.invoke(baseOptions);
+
+    expect({
+      substantiveExecCalls: mockExeca.mock.calls.length,
+      result: {
+        success: result.success,
+        output: result.output,
+        authFailure: result.authFailure,
+        rateLimited: result.rateLimited,
+        modelUnavailable: result.modelUnavailable,
+        providerUnavailable: result.providerUnavailable,
+        providerUnavailableScope: result.providerUnavailableScope,
+        sessionExpired: result.sessionExpired,
+        authentication: result.authentication,
+      },
+    }).toEqual({
+      substantiveExecCalls: 1,
+      result: {
+        success: true,
+        output: 'Real invocation completed.',
+        authFailure: undefined,
+        rateLimited: undefined,
+        modelUnavailable: undefined,
+        providerUnavailable: undefined,
+        providerUnavailableScope: undefined,
+        sessionExpired: undefined,
+        authentication: {
+          provider: 'codex',
+          source: 'cached-login',
+          state: 'probe-failed',
+          probeFailure: {
+            kind: 'unparseable-output',
+            facts: { stdoutBytes: 17, parserRejection: 'invalid-json' },
+          },
+        },
+      },
+    });
+  });
+
+  it.each([
+    {
+      name: 'initial automatic stream succeeds',
+      resume: false,
+      response: { stdout: 'Real invocation completed.', stderr: '', exitCode: 0 },
+      expected: { success: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports authentication failure',
+      resume: true,
+      response: {
+        stdout: '',
+        stderr: 'Authentication required. Please run codex login.',
+        exitCode: 1,
+      },
+      expected: { success: false, authFailure: true },
+      authenticationState: 'unusable',
+    },
+    {
+      name: 'resumed automatic stream reports unavailable provider',
+      resume: true,
+      response: { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
+      expected: {
+        success: false,
+        providerUnavailable: true,
+        authentication: {
+          state: 'probe-failed',
+          probeFailure: {
+            kind: 'unparseable-output',
+            facts: { stdoutBytes: 17, parserRejection: 'invalid-json' },
+          },
+        },
+      },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports a rate limit',
+      resume: true,
+      response: { stdout: '', stderr: 'Error 429: rate limit exceeded', exitCode: 1 },
+      expected: { success: false, rateLimited: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports a permission denial',
+      resume: true,
+      response: {
+        stdout: '',
+        stderr: 'Codex automatic review denied the permission request.',
+        exitCode: 1,
+      },
+      expected: { success: false, permissionDenied: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports an unavailable model',
+      resume: true,
+      response: { stdout: '', stderr: 'Requested model gpt-nope is not available', exitCode: 1 },
+      expected: { success: false, modelUnavailable: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports an expired session',
+      resume: true,
+      response: { stdout: '', stderr: 'Thread not found; cannot resume this session', exitCode: 1 },
+      expected: { success: false, sessionExpired: true },
+      authenticationState: 'probe-failed',
+    },
+    {
+      name: 'resumed automatic stream reports an ordinary failure',
+      resume: true,
+      response: { stdout: '', stderr: 'ordinary failure', exitCode: 1 },
+      expected: { success: false },
+      authenticationState: 'probe-failed',
+    },
+  ] as const)(
+    'preserves the real result after a failed doctor probe when $name',
+    async ({ resume, response, expected, authenticationState }) => {
+      const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
+      const degradedProvider = new CodexProvider(runDoctor);
+      mockExeca.mockResolvedValue(response as any);
+
+      const result = await degradedProvider.invokeInteractive({
+        ...baseOptions,
+        interactive: false,
+        resume,
+      });
+
+      expect(mockExeca).toHaveBeenCalledOnce();
+      expect(result).toMatchObject(expected);
+      expect(result.authentication).toMatchObject({
+        provider: 'codex',
+        source: 'cached-login',
+        state: authenticationState,
+      });
+    },
+  );
+
+  it.each([
+    ['ordinary', (provider: CodexProvider) => provider.invoke(baseOptions)],
+    ['unattended', (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true })],
+  ] as const)('preserves failed probe evidence when the %s completion reports an unavailable provider', async (_context, invoke) => {
+    const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
+    const degradedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' } as any);
+
+    const result = await invoke(degradedProvider);
+
+    expect(result).toMatchObject({
+      success: false,
+      providerUnavailable: true,
+      authentication: {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: {
+          kind: 'unparseable-output',
+          facts: { stdoutBytes: 17, parserRejection: 'invalid-json' },
+        },
+      },
+    });
+  });
+
   it.each([
     ['missing', 'no Codex credentials were found', 'missing'],
     ['unusable', 'cached credentials expired', 'unusable'],
@@ -969,7 +1263,6 @@ describe('CodexProvider', () => {
         exitCode: 0,
       });
       const gatedProvider = new CodexProvider(runDoctor);
-
       const initial = await gatedProvider.invoke(baseOptions);
       const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
 
@@ -986,6 +1279,51 @@ describe('CodexProvider', () => {
         substantiveCalls: 0,
         output: expect.not.stringContaining(summary),
       });
+    },
+  );
+
+  it.each([
+    {
+      name: 'missing selected-source evidence despite a failed mixed doctor result',
+      invoke: (subject: CodexProvider) => subject.invoke(baseOptions),
+      evidence: {
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: false },
+        transport: { authenticated: false },
+      },
+      exitCode: 1,
+      state: 'missing',
+    },
+    {
+      name: 'rejected selected-source evidence despite a successful mixed doctor result',
+      invoke: (subject: CodexProvider) =>
+        subject.invokeInteractive({ ...baseOptions, interactive: false }),
+      evidence: {
+        schemaVersion: 1,
+        auth: { selectedMode: 'cached-login', configured: true, rejected: true },
+        transport: { authenticated: false },
+      },
+      exitCode: 0,
+      state: 'unusable',
+    },
+  ] as const)(
+    'preserves $state as a blocking verdict for $name',
+    async ({ invoke, evidence, exitCode, state }) => {
+      const runDoctor = vi.fn().mockResolvedValue({
+        stdout: JSON.stringify(evidence),
+        exitCode,
+      });
+
+      const result = await invoke(new CodexProvider(runDoctor));
+
+      expect({
+        readiness: result.authentication,
+        substantiveExecCalls: mockExeca.mock.calls.length,
+      }).toEqual({
+        readiness: expect.objectContaining({ state }),
+        substantiveExecCalls: 0,
+      });
+      expect(result.authentication?.state).not.toBe('probe-failed');
     },
   );
 
@@ -1059,43 +1397,31 @@ describe('CodexProvider', () => {
 
   it.each([
     [
-      'missing selected source',
-      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: false }, transport: { authenticated: false } },
-      { exitCode: 0 },
-      'missing',
-    ],
-    [
-      'rejected selected source',
-      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true, rejected: true }, transport: { authenticated: false } },
-      { exitCode: 1 },
-      'unusable',
-    ],
-    [
       'malformed evidence',
       { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true } },
       { exitCode: 0 },
-      'unverifiable',
+      'probe-failed',
     ],
     [
       'unsupported evidence schema',
       { schemaVersion: 2, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } },
       { exitCode: 0 },
-      'unverifiable',
+      'probe-failed',
     ],
     [
       'failed command despite otherwise-ready evidence',
       { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true }, transport: { authenticated: true } },
       { exitCode: 1 },
-      'unverifiable',
+      'probe-failed',
     ],
     [
       'conflicting selected source evidence',
       { schemaVersion: 1, auth: { selectedMode: 'api-key', configured: true }, transport: { authenticated: true } },
       { exitCode: 0 },
-      'unverifiable',
+      'probe-failed',
     ],
   ] as const)(
-    'fails closed as %s without exposing doctor diagnostics',
+    'classifies %s without exposing doctor diagnostics',
     async (_name, evidence, result, state) => {
       mockExeca.mockResolvedValue({
         stdout: JSON.stringify(evidence),
@@ -1109,33 +1435,180 @@ describe('CodexProvider', () => {
         provider: 'codex',
         source: 'cached-login',
         state,
-        remediation: expect.any(String),
       });
+      if (state === 'probe-failed') {
+        expect(readiness).toMatchObject({ probeFailure: { kind: 'unparseable-output' } });
+        expect(readiness).not.toHaveProperty('remediation');
+      } else {
+        expect(readiness).toMatchObject({ remediation: expect.any(String) });
+      }
       expect(JSON.stringify(readiness)).not.toMatch(/secret|private|token/i);
       expect(mockExeca).toHaveBeenCalledTimes(1);
       expect(mockExeca.mock.calls[0]?.[1]).not.toContain('exec');
     },
   );
 
-  it('fails closed as unverifiable when the captured doctor command times out or fails externally', async () => {
-    mockExeca.mockRejectedValueOnce(Object.assign(new Error('timed out'), { timedOut: true }));
-    mockExeca.mockResolvedValueOnce({
-      stdout: '',
-      stderr: 'network unavailable with secret doctor diagnostic',
-      exitCode: 1,
-    } as any);
+  it.each([
+    {
+      name: 'resolved execution error',
+      result: {
+        failed: true,
+        timedOut: false,
+        code: 'ENOENT',
+        exitCode: 126,
+        signal: 'SIGTERM',
+        stdout: 'sk-live-secret',
+        stderr: '/private/codex/auth.json',
+      },
+      probeFailure: {
+        kind: 'exec-error',
+        facts: { processErrorCode: 'ENOENT', exitCode: 126, signal: 'SIGTERM', stdoutBytes: 14, stderrBytes: 24 },
+      },
+    },
+    {
+      name: 'resolved doctor timeout',
+      result: {
+        failed: true,
+        timedOut: true,
+        stdout: 'sk-live-secret',
+        stderr: '/private/codex/auth.json',
+      },
+      probeFailure: {
+        kind: 'timeout',
+        facts: { timeoutMs: 10_000, stdoutBytes: 14, stderrBytes: 24 },
+      },
+    },
+  ] as const)('classifies injected $name without exposing runner diagnostics', async ({ result, probeFailure }) => {
+    const runDoctor = vi.fn().mockResolvedValue(result);
+    const priorKey = process.env.CODEX_API_KEY;
+    delete process.env.CODEX_API_KEY;
+    try {
+      await expect(new CodexProvider(runDoctor).readiness()).resolves.toEqual({
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure,
+      });
+      expect(runDoctor).toHaveBeenCalledWith('codex', ['doctor', '--json', '--summary'], {
+        reject: false,
+        timeout: 10_000,
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: undefined,
+      });
+    } finally {
+      if (priorKey === undefined) delete process.env.CODEX_API_KEY;
+      else process.env.CODEX_API_KEY = priorKey;
+    }
+  });
 
-    const defaultProvider = new CodexProvider();
-    await expect(defaultProvider.readiness()).resolves.toMatchObject({
-      provider: 'codex', source: 'cached-login', state: 'unverifiable',
+  it('uses an injected readiness timeout at the doctor boundary', async () => {
+    let receivedTimeout: number | undefined;
+    const runDoctor: CodexDoctorRunner = async (_command, _args, options) => {
+      receivedTimeout = options.timeout;
+      return readyDoctorResult();
+    };
+    const provider = new CodexProvider(runDoctor, 'codex', { nowMs: () => 0 }, undefined, 2_500);
+
+    await provider.readiness();
+
+    expect(receivedTimeout).toBe(2_500);
+  });
+
+  it.each([
+    {
+      name: 'exec error',
+      kind: 'exec-error',
+      error: Object.assign(new Error('spawn /private/codex/auth.json sk-live-secret hash:deadbeef'), {
+        code: 'ENOENT',
+        exitCode: 126,
+        signal: 'SIGTERM',
+        stdout: 'stdout sk-live-secret /private/codex/auth.json',
+        stderr: 'stderr sk-live-secret CODEX_API_KEY=sk-live-secret',
+        path: '/private/codex/auth.json',
+      }),
+      expectedDiagnostic: 'Codex readiness probe failed: exec-error (processErrorCode=ENOENT, exitCode=126, signal=SIGTERM, stdoutBytes=46, stderrBytes=50).',
+    },
+    {
+      name: 'timeout',
+      kind: 'timeout',
+      error: Object.assign(new Error('timed out at /private/codex/auth.json sk-live-secret hash:deadbeef'), {
+        timedOut: true,
+        stdout: 'stdout sk-live-secret /private/codex/auth.json',
+        stderr: 'stderr sk-live-secret CODEX_API_KEY=sk-live-secret',
+        path: '/private/codex/auth.json',
+      }),
+      expectedDiagnostic: 'Codex readiness probe failed: timeout (timeoutMs=10000, stdoutBytes=46, stderrBytes=50).',
+    },
+  ] as const)('emits only secret-safe $name readiness diagnostics for every unattended invocation', async ({ error, kind, expectedDiagnostic }) => {
+    const runDoctor = vi.fn().mockRejectedValue(error);
+    const featureLog = vi.fn();
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Authorized.'), exitCode: 0 } as any);
+    const diagnosticText = () => featureLog.mock.calls.map(([message]) => message).join('\n');
+
+    for (const invoke of [
+      (provider: CodexProvider) => provider.invoke({ ...baseOptions, diagnosticLog: featureLog }),
+      (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, diagnosticLog: featureLog }),
+    ]) {
+      featureLog.mockClear();
+      const result = await invoke(new CodexProvider(runDoctor));
+
+      expect(result.authentication).toMatchObject({
+        state: 'probe-failed',
+        probeFailure: expect.objectContaining({ kind }),
+      });
+      expect(diagnosticText()).toContain(expectedDiagnostic);
+      for (const forbidden of [
+        'sk-live-secret',
+        '/private/codex/auth.json',
+        'CODEX_API_KEY=',
+        'hash:deadbeef',
+        'spawn ',
+        'timed out at',
+      ]) {
+        expect(JSON.stringify({ readiness: result.authentication, diagnostic: diagnosticText() })).not.toContain(forbidden);
+      }
+    }
+  });
+
+  it('logs only bounded parser shape facts and still invokes when no diagnostic sink is supplied', async () => {
+    const sensitivePayload = 'sk-live-parser-secret /private/codex/auth.json hash:deadbeef';
+    const doctorOutput = JSON.stringify({
+      schemaVersion: 1,
+      overallStatus: 'unexpected',
+      checks: {
+        'auth.credentials': { status: 'ok', summary: sensitivePayload },
+        'unknown.check': { rawPayload: sensitivePayload },
+      },
+      unknownField: sensitivePayload,
     });
-    await expect(defaultProvider.readiness()).resolves.toMatchObject({
-      provider: 'codex', source: 'cached-login', state: 'unverifiable',
+    const runDoctor = vi.fn().mockResolvedValue({ stdout: doctorOutput, exitCode: 0 });
+    const featureLog = vi.fn();
+    mockExeca.mockResolvedValue({ stdout: jsonlMessage('Completed after failed probe.'), exitCode: 0 } as any);
+
+    const logged = await new CodexProvider(runDoctor).invoke({ ...baseOptions, diagnosticLog: featureLog });
+    const sinkless = await new CodexProvider(runDoctor).invoke(baseOptions);
+    const diagnostic = featureLog.mock.calls.map(([message]) => String(message)).join('\n');
+
+    expect(logged.authentication).toMatchObject({
+      state: 'probe-failed',
+      probeFailure: {
+        kind: 'unparseable-output',
+        facts: {
+          stdoutBytes: Buffer.byteLength(doctorOutput),
+          schemaVersion: 1,
+          envelopeStatus: 'unknown',
+          credentialCheck: 'ok',
+          parserRejection: 'unrecognized-envelope',
+        },
+      },
     });
-    expect(mockExeca.mock.calls.map(([, args]) => args)).toEqual([
-      ['doctor', '--json', '--summary'],
-      ['doctor', '--json', '--summary'],
-    ]);
+    expect(diagnostic).toContain(
+      `stdoutBytes=${Buffer.byteLength(doctorOutput)}, schemaVersion=1, envelopeStatus=unknown, credentialCheck=ok, parserRejection=unrecognized-envelope`,
+    );
+    expect(`${JSON.stringify(logged.authentication)}\n${diagnostic}`).not.toContain(sensitivePayload);
+    expect(sinkless).toMatchObject({ success: true, output: 'Completed after failed probe.' });
+    expect(mockExeca).toHaveBeenCalledTimes(2);
   });
 
   it.each([

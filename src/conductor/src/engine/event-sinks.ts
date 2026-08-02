@@ -26,7 +26,7 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   session_reset: { render: true, persist: true, audit: false },
   credentials_park: { render: false, persist: true, audit: false },
   operator_park_boundary: { render: true, persist: true, audit: false },
-  credentials_park_progress: { render: false, persist: true, audit: false },
+  credentials_park_progress: { render: true, persist: true, audit: false },
   feature_complete: { render: false, persist: true, audit: false },
   dashboard_refresh: { render: false, persist: true, audit: false },
   protected_artifact_rebaseline: { render: true, persist: true, audit: false },

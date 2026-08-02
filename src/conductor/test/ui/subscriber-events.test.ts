@@ -56,4 +56,21 @@ describe('TerminalSubscriber event forwarding', () => {
     await emitter.emit(event);
     expect(renderCallback).toHaveBeenCalledWith(event);
   });
+
+  it('forwards closed probe-failure recovery progress', async () => {
+    const event = {
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      probeFailureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    } satisfies ConductorEvent;
+
+    await emitter.emit(event);
+
+    expect(renderCallback).toHaveBeenCalledWith(event);
+  });
 });

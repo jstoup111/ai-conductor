@@ -118,6 +118,21 @@ describe('createRenderer', () => {
     );
   });
 
+  it.each(['invalid-json', 'unsupported-schema'] as const)(
+    'renders the closed %s parser rejection in CLI mode without raw diagnostics',
+    async (parserRejection) => {
+      const rawDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
+      await renderer({
+        type: 'credentials_park_progress', provider: 'codex', source: 'cached-login',
+        readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure',
+        probeFailureKind: 'unparseable-output', parserRejection, nextDisposition: 'trial-required',
+      });
+
+      expect(stream.output()).toContain(`probe-failure: unparseable-output, parser-rejection: ${parserRejection}`);
+      expect(stream.output()).not.toContain(rawDiagnostic);
+    },
+  );
+
   it('reads state from file on each dashboard render', async () => {
     await renderer({ type: 'step_completed', step: 'worktree', status: 'done' });
     expect(readStateMock).toHaveBeenCalledWith('/tmp/test-state.json');

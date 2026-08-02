@@ -16,12 +16,47 @@ export type ProviderUnavailableScope = 'run';
 /** The credential mechanism selected by the Codex provider for a run. */
 export type AuthenticationSource = 'api-key' | 'cached-login';
 
-/** A conclusive provider-owned authentication readiness outcome. */
+/** A closed classification for a Codex doctor probe that yielded no credential verdict. */
+export type CodexProbeFailureKind = 'exec-error' | 'timeout' | 'unparseable-output';
+
+/** A closed parser/evidence reason retained without raw doctor output. */
+export type CodexProbeParserRejection =
+  | 'invalid-json'
+  | 'unsupported-schema'
+  | 'unrecognized-envelope'
+  | 'conflicting-source-evidence'
+  | 'ambiguous-credential-evidence';
+
+/**
+ * Bounded, allowlisted facts about a failed Codex doctor probe. These fields
+ * deliberately exclude raw output, paths, credential material, hashes, and
+ * arbitrary error messages.
+ */
+export interface CodexProbeFailureFacts {
+  processErrorCode?: 'EACCES' | 'EAGAIN' | 'ENOENT' | 'EPERM' | 'UNKNOWN';
+  exitCode?: number;
+  signal?: 'SIGABRT' | 'SIGALRM' | 'SIGHUP' | 'SIGINT' | 'SIGKILL' | 'SIGPIPE' | 'SIGQUIT' | 'SIGTERM' | 'UNKNOWN';
+  timeoutMs?: number;
+  stdoutBytes?: number;
+  stderrBytes?: number;
+  schemaVersion?: number;
+  envelopeStatus?: 'ok' | 'warning' | 'fail' | 'unknown';
+  credentialCheck?: 'absent' | 'ok' | 'fail' | 'unknown';
+  parserRejection?: CodexProbeParserRejection;
+}
+
+/** Closed metadata retained when the Codex doctor probe cannot determine readiness. */
+export interface CodexProbeFailure {
+  kind: CodexProbeFailureKind;
+  facts: CodexProbeFailureFacts;
+}
+
+/** Every state the provider may report for the selected authentication source. */
 export type AuthenticationReadinessState =
   | 'ready'
   | 'missing'
   | 'unusable'
-  | 'unverifiable';
+  | 'probe-failed';
 
 /** A closed indication that non-authentication doctor checks are degraded. */
 export type UnrelatedHealth = 'degraded';
@@ -30,13 +65,49 @@ export type UnrelatedHealth = 'degraded';
  * Safe metadata a provider may return for authentication recovery. Diagnostic
  * output and credential material deliberately have no representation here.
  */
-export interface AuthenticationReadiness {
+interface AuthenticationReadinessBase {
   provider: 'codex';
   source: AuthenticationSource;
-  state: AuthenticationReadinessState;
-  unrelatedHealth?: UnrelatedHealth;
-  remediation?: string;
 }
+
+/** Supported doctor evidence affirmatively accepts the selected source. */
+export interface ReadyAuthenticationReadiness extends AuthenticationReadinessBase {
+  state: 'ready';
+  unrelatedHealth?: UnrelatedHealth;
+  remediation?: never;
+  probeFailure?: never;
+}
+
+/** Supported doctor evidence affirmatively reports the selected source missing. */
+export interface MissingAuthenticationReadiness extends AuthenticationReadinessBase {
+  state: 'missing';
+  unrelatedHealth?: never;
+  remediation?: string;
+  probeFailure?: never;
+}
+
+/** Supported doctor evidence affirmatively rejects the selected source. */
+export interface UnusableAuthenticationReadiness extends AuthenticationReadinessBase {
+  state: 'unusable';
+  unrelatedHealth?: never;
+  remediation?: string;
+  probeFailure?: never;
+}
+
+/** The doctor probe could not produce a trustworthy credential verdict. */
+export interface ProbeFailedAuthenticationReadiness extends AuthenticationReadinessBase {
+  state: 'probe-failed';
+  unrelatedHealth?: never;
+  remediation?: never;
+  probeFailure: CodexProbeFailure;
+}
+
+/** A discriminated readiness result for the selected Codex authentication source. */
+export type AuthenticationReadiness =
+  | ReadyAuthenticationReadiness
+  | MissingAuthenticationReadiness
+  | UnusableAuthenticationReadiness
+  | ProbeFailedAuthenticationReadiness;
 
 /** Opaque, child-only invocation settings prepared by a selected provider. */
 export interface SelfHostInvocation {
