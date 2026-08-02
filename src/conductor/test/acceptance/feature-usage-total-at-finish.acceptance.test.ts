@@ -367,6 +367,69 @@ describe('acceptance: finish logs the whole-feature usage total', () => {
     expect(committedRecord).toMatch(/## Cost\ninput: 50\n/);
   });
 
+  it('verifies the implementation head before committing and pushing the optional Cost refresh', async () => {
+    await seedCommittedShippedRecord();
+    const implementationHead = await seedPushedTrackingBranch();
+    const trace: string[] = [];
+    const observedCandidates: string[] = [];
+    const events = new ConductorEventEmitter();
+    const persister = new EventPersister(join(dir, '.pipeline/events.jsonl'), events);
+    persister.start();
+    const tracingGit: GitRunner = async (args, options) => {
+      if (args[0] === 'push') {
+        trace.push(`push:${await git(['rev-parse', 'HEAD'])}`);
+      }
+      return realGit(args, options);
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: meteredShippingRunner(),
+      events,
+      projectRoot: dir,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      fromStep: 'finish',
+      maxRetries: 1,
+      escalateBuildFailure: async () => ({}),
+      git: tracingGit,
+      gh: async () => ({ stdout: '{}' }),
+      shipmentEvidence: async (input) => {
+        observedCandidates.push(input.candidateCommit);
+        trace.push(`verify:${input.candidateCommit}`);
+        return {
+          kind: 'valid',
+          slug: input.slug,
+          pr: input.implementationPr,
+          recordPath: `.docs/shipped/${input.slug}.md`,
+          hash: 'fixture-hash',
+          commit: input.candidateCommit,
+        };
+      },
+    });
+    try {
+      await conductor.run();
+    } finally {
+      persister.stop();
+    }
+    const refreshedHead = await git(['rev-parse', 'HEAD']);
+    const refreshedParent = await git(['rev-parse', 'HEAD^']);
+
+    expect({
+      implementationHead,
+      refreshedParent,
+      refreshCreatedCommit: refreshedHead !== implementationHead,
+      observedCandidates,
+      trace,
+    }).toEqual({
+      implementationHead,
+      refreshedParent: implementationHead,
+      refreshCreatedCommit: true,
+      observedCandidates: [implementationHead],
+      trace: [`verify:${implementationHead}`, `push:${refreshedHead}`],
+    });
+  });
+
   it('attempts one push and still completes finish when that push throws', async () => {
     await seedCommittedShippedRecord();
     const pushedHead = await seedPushedTrackingBranch();
