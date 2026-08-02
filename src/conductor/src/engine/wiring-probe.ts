@@ -455,6 +455,7 @@ export interface SameFileCompositionEvaluationInput {
   task: TaskWiringContract;
   newExport: NewExport;
   symbolReference: SameFileSymbolReferenceEvidence | null;
+  layer2: Layer2ApplicabilityResult;
   rootChain: string[];
 }
 
@@ -466,6 +467,9 @@ export type SameFileCompositionEvaluation =
         | 'task-does-not-own-export'
         | 'missing-same-file-caller-contract'
         | 'missing-exact-symbol-reference'
+        | 'layer2-not-applicable'
+        | 'layer2-skipped'
+        | 'layer2-bad-root'
         | 'missing-root-chain';
     };
 
@@ -477,7 +481,7 @@ export type SameFileCompositionEvaluation =
 export function evaluateSameFileComposition(
   input: SameFileCompositionEvaluationInput,
 ): SameFileCompositionEvaluation {
-  const { task, newExport, symbolReference, rootChain } = input;
+  const { task, newExport, symbolReference, layer2, rootChain } = input;
   if (!task.files.includes(newExport.file)) {
     return { kind: 'missing-proof', reason: 'task-does-not-own-export' };
   }
@@ -496,6 +500,12 @@ export function evaluateSameFileComposition(
   );
   if (!matchingCaller) {
     return { kind: 'missing-proof', reason: 'missing-same-file-caller-contract' };
+  }
+  if (!layer2.applicable) {
+    return {
+      kind: 'missing-proof',
+      reason: `layer2-${layer2.reason}`,
+    };
   }
   if (rootChain.length === 0) {
     return { kind: 'missing-proof', reason: 'missing-root-chain' };
