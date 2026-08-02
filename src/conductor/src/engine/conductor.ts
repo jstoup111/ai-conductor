@@ -3348,6 +3348,7 @@ export class Conductor {
             // auth-failed member(s) — siblings that already produced a
             // verdict are never re-run, so this never burns retry/escalation
             // budget and never spins the retry ladder.
+            const consumedRecoveryTrials = new Set<string>();
             for (;;) {
               const authFailureIdxs = outcomes
                 .map((o, i) => (o.kind === 'no-verdict' && o.reason === 'authFailure' ? i : -1))
@@ -3375,6 +3376,10 @@ export class Conductor {
                     );
                   })
                 : authFailureIdxs;
+              const recoverySource = authentication
+                ? `${authentication.provider}:${authentication.source}`
+                : undefined;
+              if (recoverySource && consumedRecoveryTrials.has(recoverySource)) break;
               const park = await this.parkOnAuthFailure(
                 authentication
                   ? { actualProvider: authentication.provider, authentication }
@@ -3397,6 +3402,12 @@ export class Conductor {
               // pending for a later recovery episode.
               const retryIdx = retryIdxs[0]!;
               const retryMembers = [membership.dispatchable[retryIdx]!];
+              if (park.disposition === 'trial-required' && recoverySource) {
+                // Consume the one-shot authorization before dispatch so a
+                // successful or non-auth trial cannot authorize another
+                // same-source member in this recovery episode.
+                consumedRecoveryTrials.add(recoverySource);
+              }
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;

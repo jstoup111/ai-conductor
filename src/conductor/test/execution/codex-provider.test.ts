@@ -1450,31 +1450,36 @@ describe('CodexProvider', () => {
 
   it.each([
     {
-      name: 'spawn or execution rejection',
-      error: Object.assign(new Error('spawn /private/codex/auth.json sk-live-secret hash:deadbeef'), {
+      name: 'resolved execution error',
+      result: {
+        failed: true,
+        timedOut: false,
         code: 'ENOENT',
+        exitCode: 126,
+        signal: 'SIGTERM',
         stdout: 'sk-live-secret',
         stderr: '/private/codex/auth.json',
-      }),
+      },
       probeFailure: {
         kind: 'exec-error',
-        facts: { processErrorCode: 'ENOENT', stdoutBytes: 14, stderrBytes: 24 },
+        facts: { processErrorCode: 'ENOENT', exitCode: 126, signal: 'SIGTERM', stdoutBytes: 14, stderrBytes: 24 },
       },
     },
     {
-      name: 'doctor timeout',
-      error: Object.assign(new Error('timed out at /private/codex/auth.json sk-live-secret'), {
+      name: 'resolved doctor timeout',
+      result: {
+        failed: true,
         timedOut: true,
         stdout: 'sk-live-secret',
         stderr: '/private/codex/auth.json',
-      }),
+      },
       probeFailure: {
         kind: 'timeout',
         facts: { timeoutMs: 10_000, stdoutBytes: 14, stderrBytes: 24 },
       },
     },
-  ] as const)('classifies injected $name without exposing runner diagnostics', async ({ error, probeFailure }) => {
-    const runDoctor = vi.fn().mockRejectedValue(error);
+  ] as const)('classifies injected $name without exposing runner diagnostics', async ({ result, probeFailure }) => {
+    const runDoctor = vi.fn().mockResolvedValue(result);
     const priorKey = process.env.CODEX_API_KEY;
     delete process.env.CODEX_API_KEY;
     try {

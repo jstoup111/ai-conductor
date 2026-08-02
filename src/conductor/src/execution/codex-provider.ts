@@ -49,6 +49,10 @@ interface DoctorCommandResult {
   stdout?: unknown;
   stderr?: unknown;
   exitCode?: number | null;
+  failed?: boolean;
+  timedOut?: boolean;
+  code?: unknown;
+  signal?: unknown;
 }
 
 type DoctorEvidence =
@@ -198,6 +202,9 @@ export class CodexProvider implements LLMProvider {
             : undefined,
         },
       );
+      if (result.failed === true) {
+        return this.executionProbeFailedReadiness(authentication.source, result);
+      }
       return this.classifyReadiness(result, authentication);
     } catch (error) {
       return this.executionProbeFailedReadiness(authentication.source, error);

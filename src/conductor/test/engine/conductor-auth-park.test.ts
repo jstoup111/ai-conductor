@@ -1029,6 +1029,57 @@ describe('conductor auth-park: daemon-token mode', () => {
   });
 
   it.each([
+    ['succeeds', { success: true, output: 'verified' }],
+    ['returns a non-auth failure', { success: false, output: 'ordinary failure' }],
+  ] as const)('consumes one grouped recovery trial when the first trial %s', async (_case, trialResult) => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done', build_review: 'done', wiring_check: 'done',
+      retro: 'done', rebase: 'done', finish: 'done',
+    });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    let manualTestCalls = 0;
+    let prdAuditCalls = 0;
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        if (step === 'manual_test') {
+          manualTestCalls++;
+          return manualTestCalls === 1 ? codexCachedLoginFailure() : trialResult;
+        }
+        if (step === 'prd_audit') {
+          prdAuditCalls++;
+          return codexCachedLoginFailure();
+        }
+        return { success: true };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'manual_test', mode: 'auto', maxRetries: 1, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect({
+      manualTestCalls,
+      prdAuditCalls,
+      readinessCalls: readiness.mock.calls.length,
+    }).toEqual({ manualTestCalls: 2, prdAuditCalls: 1, readinessCalls: 1 });
+  });
+
+  it.each([
     ['succeeds', { success: true }, [1, 1]],
     ['returns a non-auth failure to ordinary retry handling', { success: false, output: 'ordinary judged failure' }, [1, 1, 2]],
   ] as const)('judged build_review recovery trial %s', async (_case, trialResult, expectedAttempts) => {
