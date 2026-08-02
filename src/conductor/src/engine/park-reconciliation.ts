@@ -66,8 +66,10 @@ export interface ParkedSweepResult {
     deferred: number;
     orphaned: number;
     parked: number;
+    refused: number;
     skipped: number;
   };
+  refusedByReason: Partial<Record<RefusalReason, number>>;
 }
 
 export interface ReconcileParkedFeaturesOptions {
@@ -400,7 +402,15 @@ export async function reconcileParkedFeatures(
   opts: ReconcileParkedFeaturesOptions,
 ): Promise<ParkedSweepResult> {
   const entries: ParkedSweepEntry[] = [];
-  const counts = { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, skipped: 0 };
+  const counts = {
+    reconciled: 0,
+    deferred: 0,
+    orphaned: 0,
+    parked: 0,
+    refused: 0,
+    skipped: 0,
+  };
+  const refusedByReason: Partial<Record<RefusalReason, number>> = {};
   const runGit = opts.runGit ?? makeProductionGit();
   const parkedSlugs = await listOperatorParkedSlugs(opts.projectRoot);
 
@@ -459,7 +469,11 @@ export async function reconcileParkedFeatures(
       if (outcome.refusal === undefined) {
         counts.reconciled++;
       }
-      else if (outcome.deferred) counts.deferred++;
+      else if (outcome.refusal === 'record-missing') counts.deferred++;
+      else {
+        counts.refused++;
+        refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
+      }
     }
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
@@ -485,7 +499,7 @@ export async function reconcileParkedFeatures(
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 
-  return { entries, counts };
+  return { entries, counts, refusedByReason };
 }
 
 /**

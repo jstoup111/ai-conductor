@@ -154,7 +154,7 @@ describe('engine/park-reconciliation — merge evidence against real git', () =>
 
     expect({ entries: result.entries, counts: result.counts, outcome, logs }).toEqual({
       entries: [{ slug, classification: 'unclassified', annotation: undefined }],
-      counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, skipped: 1 },
+      counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, refused: 0, skipped: 1 },
       // Fail-closed: no ancestry answer means no cleanup, not "not merged".
       outcome: { slug, steps: [], refusal: 'ancestry-check-failed' },
       logs: ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available'],

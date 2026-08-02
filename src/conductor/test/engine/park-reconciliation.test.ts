@@ -1070,6 +1070,64 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('counts a non-deferred cleanup refusal while retaining its parked count', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-refused';
+    const mergedPrHead = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [mergedPrHead],
+      tips: { [`feat/${slug}`]: '2222222222222222222222222222222222222222' },
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${mergedPrHead}'}]`.replaceAll("'", '"') });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 1,
+          refused: 1,
+          skipped: 0,
+        },
+        refusedByReason: { 'unmerged-commits': 1 },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a record-missing outcome deferred rather than refused', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-record-missing';
+    const { run } = makeGit({ branches: [`feat/${slug}`], merged: [`feat/${slug}`] });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 1,
+          orphaned: 0,
+          parked: 1,
+          refused: 0,
+          skipped: 0,
+        },
+        refusedByReason: {},
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('suppresses repeated outcomes and summaries, then prunes a no-longer-parked slug', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'cached-merged';
