@@ -4124,6 +4124,10 @@ export class Conductor {
         // rerunning the identical verifier input only repeats the same command
         // before BUILD has had a chance to remediate it.
         const stepMaxRetries = isEngineComputedStep(step.name) ? 1 : resolved.max_retries;
+        // A finish completion miss that is solely a missing outcome recording
+        // gets one non-budget-consuming retry to run the narrow finish-record
+        // command from its retry hint. A second miss follows normal routing.
+        let finishRecordingRetryUsed = false;
         // Snapshot of resolved-task count before the most recent build retry,
         // so the circuit breaker can detect "Claude ran but completed zero
         // additional tasks" = no point retrying further, hand off to REPL.
@@ -5315,7 +5319,13 @@ export class Conductor {
                 headShaAttemptStart = headShaAfterBuild;
               }
 
-              if (progressBypassed || attempt < stepMaxRetries) {
+              const finishRecordingRetry: boolean =
+                this.daemon &&
+                this.mode === 'auto' &&
+                step.name === 'finish' &&
+                completion.missing === 'recording' &&
+                !finishRecordingRetryUsed;
+              if (progressBypassed || finishRecordingRetry || attempt < stepMaxRetries) {
                 // #188: same escalation annotation as the dispatch-failure emit
                 // above — the (model, effort) the upcoming attempt will use.
                 const escNext = escalateAttempt(
@@ -5342,7 +5352,8 @@ export class Conductor {
                 // progress-attempt ceiling — undo the `attempt++` at the top
                 // of the loop so it doesn't consume the fixed
                 // `stepMaxRetries` budget.
-                if (progressBypassed) {
+                if (progressBypassed || finishRecordingRetry) {
+                  finishRecordingRetryUsed ||= finishRecordingRetry;
                   attempt--;
                 }
                 continue;
