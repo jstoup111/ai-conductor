@@ -148,12 +148,12 @@ describe('engine/daemon-park-cli', () => {
       });
     });
 
-    it('refuses a non-ancestor without offering a force path', async () => {
+    it('refuses an ancestry-check failure without offering a force path', async () => {
       const out: string[] = [];
       const reconcileMergedPark = vi.fn().mockResolvedValue({
         slug: 'unmerged',
         steps: [],
-        refusal: 'not-ancestor',
+        refusal: 'ancestry-check-failed',
       });
 
       const code = await dispatchDaemonPark(
@@ -162,7 +162,7 @@ describe('engine/daemon-park-cli', () => {
       );
 
       expect(code).toBe(1);
-      expect(out.join('\n')).toContain("Could not reconcile 'unmerged': not-ancestor");
+      expect(out.join('\n')).toContain("Could not reconcile 'unmerged': ancestry-check-failed");
       expect(out.join('\n')).not.toMatch(/force/i);
     });
 

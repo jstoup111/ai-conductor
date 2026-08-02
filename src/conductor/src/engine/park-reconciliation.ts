@@ -42,7 +42,6 @@ export type RefusalReason =
   | 'invalid-slug'
   | 'ancestry-check-failed'
   | 'branch-missing'
-  | 'not-ancestor'
   | 'no-merge-proof'
   | 'unmerged-commits'
   | 'branch-behind-merged-head'
