@@ -165,9 +165,8 @@ export function createDeliveryGuardedQueue(
   // Task 5 (stale-claimed reap): scan the ledger for entries stuck in
   // 'claimed' status past the stale-claim window (an engineer process died
   // or was killed before recording a prUrl or completing the claim) and
-  // requeue them to 'pending' so they become claimable again. Runs once per
-  // top-level claim() invocation, AFTER the delivered-heal pass has already
-  // resolved (so healing always takes precedence over reaping).
+  // requeue them to 'pending' so they become claimable again. Entries with a
+  // prUrl are excluded by isStaleClaim and belong exclusively to PR healing.
   async function reapStaleClaimed(): Promise<void> {
     if (typeof ledger.list !== 'function' || typeof ledger.requeueClaimed !== 'function') {
       return;
@@ -458,13 +457,9 @@ export function createDeliveryGuardedQueue(
       // inspects any candidate's status — otherwise a stale claimed entry
       // whose envelope is still in the underlying queue gets misread as an
       // in-flight duplicate and dropped instead of being served this same
-      // pull (FIFO by capturedAt, Story 2). Delivered-heal (inside
-      // innerClaim) still takes precedence over reaping for any single
-      // entry, because reapStaleClaimed only acts on entries whose status
-      // is already 'claimed' with no live prUrl-driven heal in progress —
-      // running the ledger-wide reap first does not change that per-entry
-      // precedence, it only ensures reaped entries are visible in time to
-      // be claimed on this pull.
+      // pull (FIFO by capturedAt, Story 2). Entries carrying a prUrl are
+      // excluded from reaping, so their candidate reaches the PR-healing path
+      // inside innerClaim unchanged.
       await reapStaleClaimed();
       return innerClaim();
     },

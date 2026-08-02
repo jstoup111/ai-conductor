@@ -1472,6 +1472,72 @@ describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dr
 // ─── Task 5: delivery-guard reaps stale claimed → pending at claim time ─────
 
 describe('Task 5: createDeliveryGuardedQueue — reaps stale claimed entries to pending', () => {
+  it('stale claimed entry with an open PR is healed, never requeued before healing', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('stale-with-open-pr');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const staleEntry = {
+      source: candidate.source,
+      sourceRef: candidate.sourceRef,
+      status: 'claimed',
+      prUrl: 'https://github.com/owner/repo/pull/123',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+    (ledger as any).get = async () => staleEntry;
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    expect(await guarded.claim()).toBeNull();
+    expect(requeueCalls).toEqual([]);
+    expect(transitionCalls).toContainEqual([
+      candidate.source,
+      candidate.sourceRef,
+      'done',
+      { prUrl: staleEntry.prUrl, branch: undefined },
+    ]);
+  });
+
+  it('stale claimed entry with a merged PR is healed, never requeued before healing', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('stale-with-merged-pr');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const staleEntry = {
+      source: candidate.source,
+      sourceRef: candidate.sourceRef,
+      status: 'claimed',
+      prUrl: 'https://github.com/owner/repo/pull/124',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+    (ledger as any).get = async () => staleEntry;
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'MERGED' }));
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    expect(await guarded.claim()).toBeNull();
+    expect(requeueCalls).toEqual([]);
+    expect(transitionCalls).toContainEqual([
+      candidate.source,
+      candidate.sourceRef,
+      'done',
+      { prUrl: staleEntry.prUrl, branch: undefined },
+    ]);
+  });
+
   it('stale claimed entry (no prUrl) → requeueClaimed called, logger.info announces reap, delivered-heal runs first (precedence)', async () => {
     const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
     const candidate = makeEnvelope('idea-1');

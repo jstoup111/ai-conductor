@@ -8,6 +8,7 @@ import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
 import { mkdir, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
+import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 
 describe('engineer unclaim: happy path (Task 8)', () => {
   const GITHUB_ISSUES_SOURCE = 'github-issues';
@@ -61,6 +62,17 @@ describe('engineer unclaim: happy path (Task 8)', () => {
       const afterRaw = JSON.parse(await readFile(ledgerPath, 'utf8'));
       expect(afterRaw[beforeKey].status).toBe('pending');
       expect(afterRaw[beforeKey].capturedAt).toBe(capturedAt);
+
+      // The original envelope was acked when it was claimed. Recovery must
+      // reconstruct it, otherwise ledger-aware polling will never see it again.
+      expect(await createFileQueue(join(engDir, 'inbox')).list()).toEqual([
+        expect.objectContaining({
+          source: GITHUB_ISSUES_SOURCE,
+          sourceRef: 'o/a#1',
+          status: 'pending',
+          receivedAt: capturedAt,
+        }),
+      ]);
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }

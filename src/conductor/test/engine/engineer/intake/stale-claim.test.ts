@@ -42,6 +42,15 @@ describe('isStaleClaim', () => {
     expect(isStaleClaim(entry, now, windowMs)).toBe(false);
   });
 
+  it('returns false for a stale claimed entry that already has a PR to heal', () => {
+    const now = 10_000;
+    const entry = baseEntry({
+      prUrl: 'https://github.com/owner/repo/pull/1',
+      lastSeenAt: new Date(now - windowMs - 1).toISOString(),
+    });
+    expect(isStaleClaim(entry, now, windowMs)).toBe(false);
+  });
+
   it('returns false when lastSeenAt is missing', () => {
     const now = 10_000;
     const entry = baseEntry({ lastSeenAt: undefined });

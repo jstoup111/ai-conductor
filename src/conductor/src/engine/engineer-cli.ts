@@ -41,7 +41,7 @@ import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
-import { createLedger } from './engineer/intake/ledger.js';
+import { createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
@@ -332,7 +332,8 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
 
 /**
  * Parse a simple duration string (e.g. "24h", "2d", "30m") into milliseconds.
- * Returns null for unparseable input — callers fall back to the resolved default.
+ * Returns null for omitted or unparseable input so callers can distinguish an
+ * absent optional flag from a malformed supplied value.
  */
 function parseDurationMs(input: string | undefined): number | null {
   if (!input) return null;
@@ -349,6 +350,32 @@ function parseDurationMs(input: string | undefined): number | null {
     d: 24 * 60 * 60 * 1000,
   };
   return n * perUnitMs[unit];
+}
+
+/**
+ * Reconstruct the minimal queue envelope for a ledger entry recovered outside
+ * the normal claim-time reap. The original was acked at claim time and polling
+ * intentionally suppresses ledger-known refs, so moving the ledger back to
+ * pending alone would strand the idea. `capturedAt` retains its FIFO position.
+ */
+async function enqueueRecoveredEnvelope(
+  queue: ReturnType<typeof createFileQueue>,
+  entry: LedgerEntry,
+  nowMs: number = Date.now(),
+): Promise<void> {
+  const alreadyQueued = (await queue.list()).some(
+    (envelope) => envelope.source === entry.source && envelope.sourceRef === entry.sourceRef,
+  );
+  if (alreadyQueued) return;
+
+  await queue.enqueue({
+    id: `recovered:${entry.source}:${entry.sourceRef}`,
+    source: entry.source,
+    sourceRef: entry.sourceRef,
+    text: `[recovered stale claim] ${entry.sourceRef}`,
+    status: 'pending',
+    receivedAt: entry.capturedAt ?? new Date(nowMs).toISOString(),
+  });
 }
 
 /** Parse the value of a named flag (e.g. --project foo) from an argv array. */
@@ -1279,6 +1306,9 @@ export async function dispatchEngineer(
       }
 
       const { acted } = await ledger.requeueClaimed(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (acted) {
+        await enqueueRecoveredEnvelope(createFileQueue(join(engDir, 'inbox')), entry);
+      }
 
       print(JSON.stringify({ kind: 'unclaim', sourceRef, found: true, acted }));
       return 0;
@@ -1295,6 +1325,7 @@ export async function dispatchEngineer(
     case 'requeue': {
       const engDir = engineerDir ?? resolveEngineerDir({});
       const ledger = createLedger(join(engDir, 'ledger.json'));
+      const queue = createFileQueue(join(engDir, 'inbox'));
 
       // Same project-level config load as the `claim` case, so an operator's
       // `stale_claim_window_hours` override also governs the bulk requeue default
@@ -1303,6 +1334,12 @@ export async function dispatchEngineer(
       const requeueConfig = requeueConfigResult.ok ? requeueConfigResult.config : undefined;
 
       const parsedOlderThan = parseDurationMs(dispatch.olderThan);
+      if (dispatch.olderThan !== undefined && parsedOlderThan === null) {
+        printErr(
+          `engineer requeue: invalid --older-than "${dispatch.olderThan}" (expected a non-negative duration such as 30m, 24h, or 2d)`,
+        );
+        return 1;
+      }
       const windowMs = parsedOlderThan ?? resolveStaleClaimWindowMs(requeueConfig);
       const now = Date.now();
 
@@ -1351,7 +1388,10 @@ export async function dispatchEngineer(
         }
 
         const { acted } = await ledger.requeueClaimed(entry.source, entry.sourceRef);
-        if (acted) requeued.push(entry.sourceRef);
+        if (acted) {
+          await enqueueRecoveredEnvelope(queue, entry, now);
+          requeued.push(entry.sourceRef);
+        }
       }
 
       print(

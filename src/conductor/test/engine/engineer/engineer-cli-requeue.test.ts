@@ -8,6 +8,7 @@ import { dispatchEngineer, detectEngineerCommand } from '../../../src/engine/eng
 import { mkdir, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
+import { createFileQueue } from '../../../src/engine/engineer/intake/queue.js';
 
 const GITHUB_ISSUES_SOURCE = 'github-issues';
 
@@ -87,6 +88,41 @@ describe('engineer requeue --stale: happy path (Task 11)', () => {
       const after = JSON.parse(await readFile(ledgerPath, 'utf8'));
       expect(after[oldKey].status).toBe('pending');
       expect(after[newKey].status).toBe('claimed');
+      expect(await createFileQueue(join(engDir, 'inbox')).list()).toEqual([
+        expect.objectContaining({
+          source: GITHUB_ISSUES_SOURCE,
+          sourceRef: 'o/a#1',
+          status: 'pending',
+          receivedAt: after[oldKey].capturedAt,
+        }),
+      ]);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a malformed --older-than duration instead of applying the default window', async () => {
+    const testDir = `/tmp/requeue-invalid-duration-${Date.now()}-${Math.random()}`;
+    try {
+      const { engDir, ledgerPath, ledger } = await makeLedger(testDir);
+      await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef: 'o/a#3' });
+      await ledger.transition(GITHUB_ISSUES_SOURCE, 'o/a#3', 'claimed');
+
+      const raw = JSON.parse(await readFile(ledgerPath, 'utf8'));
+      const key = Object.keys(raw).find((candidate) => candidate.includes('o/a#3'))!;
+      raw[key].lastSeenAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+      await import('node:fs/promises').then((fs) => fs.writeFile(ledgerPath, JSON.stringify(raw, null, 2)));
+
+      const { out, err, opts } = captureOut();
+      const code = await dispatchEngineer(
+        { kind: 'requeue', stale: true, olderThan: '24hours' },
+        { ...opts({}), engineerDir: engDir, gh: async () => ({ stdout: JSON.stringify({ state: 'OPEN' }) }) },
+      );
+
+      expect(code).toBe(1);
+      expect(out).toEqual([]);
+      expect(err.join('\n')).toContain('invalid --older-than "24hours"');
+      expect((await createLedger(ledgerPath).get(GITHUB_ISSUES_SOURCE, 'o/a#3'))?.status).toBe('claimed');
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }
