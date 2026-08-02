@@ -1255,6 +1255,7 @@ export async function computeWiringEvidence(
   }));
 
   const gapsByTask = new Map<string, WiringGap[]>();
+  const proofsByTask = new Map<string, SameFileCompositionProof[]>();
 
   // ── FileReader / ReferenceSearchRunner / FileExistsChecker / GhRunner adapters ──
   const readFile: FileReader = (path: string) => readFileFs(join(projectRoot, path), 'utf-8');
@@ -1362,6 +1363,51 @@ export async function computeWiringEvidence(
         result.message ?? `${result.symbol} unreachable from any entry point`,
       );
     }
+
+    for (const newExport of newExports) {
+      const orphan = orphanResults.find(
+        (result) => result.file === newExport.file && result.symbol === newExport.symbol,
+      );
+      if (orphan?.status !== 'gap' || orphan.referenceClassification !== 'same-file-only') continue;
+
+      const owner = ownerTaskId(newExport.file, tasks);
+      const task = tasks.find((candidate) => candidate.taskId === owner);
+      const reachability = reachabilityResults.find(
+        (result) => result.file === newExport.file && result.symbol === newExport.symbol,
+      );
+      if (!task || !reachability?.reachable) continue;
+
+      for (const site of task.parseResult?.kind === 'declared' ? task.parseResult.sites : []) {
+        if (site.path !== newExport.file) continue;
+        const reference = findSameFileSymbolReference(
+          analysisContext.program,
+          analysisContext.checker,
+          join(projectRoot, newExport.file),
+          site.symbol,
+          newExport.symbol,
+        );
+        const evaluation = evaluateSameFileComposition({
+          task,
+          newExport,
+          symbolReference: reference === null ? null : { ...reference, file: newExport.file },
+          layer2: layer2Applicability,
+          rootChain: reachability.reachableFromRoots ?? [],
+        });
+        if (evaluation.kind !== 'proof') continue;
+
+        const gaps = gapsByTask.get(owner);
+        const gapIndex = gaps?.findIndex(
+          (gap) => gap.kind === 'orphan-export' && gap.message === orphan.message,
+        ) ?? -1;
+        if (gapIndex === -1) continue;
+
+        gaps?.splice(gapIndex, 1);
+        const proofs = proofsByTask.get(owner) ?? [];
+        proofs.push(evaluation.proof);
+        proofsByTask.set(owner, proofs);
+        break;
+      }
+    }
   } else if (layer2Applicability.reason === 'bad-root') {
     layer2 = { applicable: false, reason: layer2Applicability.message };
     pushGap(gapsByTask, UNSCOPED_TASK_ID, 'scope-undeterminable', layer2Applicability.message);
@@ -1382,6 +1428,7 @@ export async function computeWiringEvidence(
     id: task.taskId,
     contract: describeContract(task.parseResult),
     gaps: isLegacyAdvisory ? [] : gapsByTask.get(task.taskId) ?? [],
+    ...(proofsByTask.has(task.taskId) ? { proofs: proofsByTask.get(task.taskId) } : {}),
   }));
 
   // Any gaps attributed to files/tasks outside the known task set (unscoped)

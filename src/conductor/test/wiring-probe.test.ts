@@ -39,6 +39,7 @@ import type {
   GhRunner,
 } from '../src/engine/wiring-probe.js';
 import type { HarnessConfig } from '../src/types/config.js';
+import { validateWiringEvidence } from '../src/engine/artifacts.js';
 
 // ── Fake GitRunner factory ────────────────────────────────────────────────────
 
@@ -724,6 +725,7 @@ interface FakeGitRouterOpts {
   originRef?: 'origin/main' | null;
   base?: string | null;
   diff?: string;
+  grepFiles?: Record<string, string[]>;
   failRevParseHead?: boolean;
 }
 
@@ -750,7 +752,8 @@ function fakeGitRouter(opts: FakeGitRouterOpts): GitRunner {
       return { stdout: opts.diff ?? '' };
     }
     if (args[0] === 'grep') {
-      return { stdout: '' };
+      const symbol = args[args.length - 1];
+      return { stdout: (opts.grepFiles?.[symbol] ?? []).join('\n') };
     }
     return { stdout: '' };
   };
@@ -845,5 +848,62 @@ describe('computeWiringEvidence', () => {
     expect(task1).toBeDefined();
     expect(task1?.gaps.some((g) => g.kind === 'waiver-unresolved')).toBe(true);
     expect(task1?.gaps.some((g) => g.message.includes('unverifiable'))).toBe(true);
+  });
+
+  it('accepts a declared same-file helper called by a reachable production module', async () => {
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
+    await writeFile(join(projectRoot, 'root.ts'), "import './composition.js';\n");
+    await writeFile(
+      join(projectRoot, 'composition.ts'),
+      [
+        'export function helper(): string {',
+        "  return 'ok';",
+        '}',
+        '',
+        'function compose(): string {',
+        '  return helper();',
+        '}',
+      ].join('\n'),
+    );
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add composition',
+        '**Files:** composition.ts',
+        '**Wired-into:** composition.ts#compose',
+      ].join('\n'),
+    );
+
+    const evidence = await computeWiringEvidence({
+      runGit: fakeGitRouter({
+        head: 'headsha3',
+        originRef: 'origin/main',
+        base: 'basesha3',
+        diff: [DIFF_HEADER('composition.ts'), '+export function helper(): string {'].join('\n'),
+        grepFiles: { helper: ['composition.ts'] },
+      }),
+      projectRoot,
+      planPath,
+      config: { wiring: { entry_points: ['root.ts'] } } as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    expect({ task: evidence.tasks.find((task) => task.id === '1'), validation: validateWiringEvidence(evidence) }).toEqual({
+      task: {
+        id: '1',
+        contract: 'composition.ts#compose',
+        gaps: [],
+        proofs: [{
+          kind: 'same-file-composition',
+          export: 'helper',
+          caller: 'compose',
+          file: 'composition.ts',
+          rootChain: ['root.ts', 'composition.ts'],
+        }],
+      },
+      validation: { ok: true },
+    });
   });
 });
