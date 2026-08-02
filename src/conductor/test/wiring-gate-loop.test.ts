@@ -28,14 +28,14 @@ import { tmpdir } from 'os';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 
-import type { ConductState, StepName } from '../src/types/index.js';
+import type { ConductState, StepDefinition, StepName } from '../src/types/index.js';
 import { ALL_STEPS } from '../src/engine/steps.js';
 import {
   selectNextGate,
   earliestUnsatisfiedGateIndex,
   type SelectorInput,
 } from '../src/engine/selector.js';
-import type { GateVerdict } from '../src/engine/gate-verdicts.js';
+import { writeVerdict, type GateVerdict } from '../src/engine/gate-verdicts.js';
 import { ConductorEventEmitter } from '../src/ui/events.js';
 import { readState, writeState } from '../src/engine/state.js';
 import { Conductor } from '../src/engine/conductor.js';
@@ -292,6 +292,64 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     expect(reviewIdx).toBeGreaterThan(wiringIdx);
     expect(reviewIdx).toBeGreaterThan(testSuiteIdx);
     expect(manualIdx).toBeGreaterThan(reviewIdx);
+  });
+
+  it('clears prior unsatisfied selection debt after wiring_check satisfies before later invalidation', async () => {
+    await writeState(statePath, {
+      ...frontDone(),
+      complexity_tier: 'M',
+      track: 'technical',
+      coherence_check: 'done',
+      build: 'done',
+      test_suite: 'done',
+    });
+    await satisfy('build');
+    await writeVerdict(dir, 'build', { satisfied: true, checkedAt: Date.now() });
+    await writeVerdict(dir, 'test_suite', { satisfied: true, checkedAt: Date.now() });
+    const state = (await readState(statePath)) as { ok: true; value: ConductState };
+    const stuckGate = new Map<StepName, number>();
+    const indexOf = (name: StepName) => ALL_STEPS.findIndex((step) => step.name === name);
+    const conductor = makeConductor({ run: async () => ({ success: true }) });
+    const advanceTail = (conductor as unknown as {
+      advanceTail: (
+        step: StepDefinition,
+        state: ConductState,
+        stuckGate: Map<StepName, number>,
+        steps: StepDefinition[],
+        indexOf: (name: StepName) => number,
+      ) => Promise<number | null | 'halt'>;
+    }).advanceTail.bind(conductor);
+    const wiringStep = ALL_STEPS[indexOf('wiring_check')];
+    const reviewStep = ALL_STEPS[indexOf('build_review')];
+
+    for (let selection = 1; selection <= 6; selection++) {
+      await writeVerdict(dir, 'wiring_check', {
+        satisfied: false,
+        checkedAt: Date.now(),
+        reason: `wiring remains unsatisfied on selection ${selection}`,
+      });
+      await advanceTail(reviewStep, state.value, stuckGate, ALL_STEPS, indexOf);
+    }
+    await satisfy('wiring_check');
+    await writeVerdict(dir, 'wiring_check', {
+      satisfied: true,
+      checkedAt: Date.now(),
+    });
+    await advanceTail(wiringStep, state.value, stuckGate, ALL_STEPS, indexOf);
+    await writeVerdict(dir, 'wiring_check', {
+      satisfied: false,
+      checkedAt: Date.now(),
+      kickback: {
+        from: 'build_review',
+        evidence: 'source advanced after the prior wiring proof',
+      },
+    });
+    const next = await advanceTail(reviewStep, state.value, stuckGate, ALL_STEPS, indexOf);
+
+    expect({ next, debt: [...stuckGate.entries()] }).toEqual({
+      next: indexOf('wiring_check'),
+      debt: [['build_review', 1], ['wiring_check', 1]],
+    });
   });
 
   it.each([
