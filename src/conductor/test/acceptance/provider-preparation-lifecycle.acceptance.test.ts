@@ -48,6 +48,7 @@ import type {
 import { CLAUDE_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
+import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { writeStepHeartbeat } from '../../src/engine/step-heartbeat.js';
 import type {
@@ -112,6 +113,7 @@ interface RunnerFixture {
   sessions: ProviderSessionStore;
   logs: string[];
   lifecycleEvents: ProviderAttemptEvent[];
+  lifecycleWrites: string[];
 }
 
 interface ProviderFixtureOptions {
@@ -129,6 +131,14 @@ function makeRunner(
 ): RunnerFixture {
   const logs: string[] = [];
   const lifecycleEvents: ProviderAttemptEvent[] = [];
+  const lifecycleWrites: string[] = [];
+  const episodeStore: ProviderLifecycleEpisodeStore = {
+    readProviderLifecycleEpisode: async () => ({ recoveryAuthority: 'fresh' }),
+    writeProviderLifecycleEpisode: async (_root, lifecycle) => {
+      lifecycleWrites.push(`${lifecycle.phase}:${lifecycle.recoveryCount}`);
+    },
+    clearProviderLifecycleEpisode: async () => undefined,
+  };
   const provider = providerFixture.provider ?? inertProvider();
   const providerKey = providerFixture.key ?? 'claude';
   const builtIn = providerFixture.builtIn ?? true;
@@ -144,6 +154,7 @@ function makeRunner(
     config,
     log: (message) => logs.push(message),
     heartbeatWatchdog,
+    providerLifecycleEpisodeStore: episodeStore,
     providerExecution: {
       configuredProviders: [providerKey],
       runtimes: new ProviderRuntimeSet([runtime(providerKey, provider, builtIn)]),
@@ -157,7 +168,7 @@ function makeRunner(
       }
     },
   });
-  return { runner, sessions, logs, lifecycleEvents };
+  return { runner, sessions, logs, lifecycleEvents, lifecycleWrites };
 }
 
 async function runStep(
@@ -285,6 +296,7 @@ describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
     expect(result.output).not.toContain('superseded-result');
     expect(lifecycleEvent(fixture.lifecycleEvents, 'build', 'recovering')?.lifecycle?.reason)
       .toBe('preparation-timeout');
+    expect(fixture.lifecycleWrites).toEqual(['recovering:1']);
   });
 
   it('lets spawn authorization win the deadline race without launching a replacement', async () => {
@@ -465,6 +477,7 @@ describe('TI-6: preparation timeout is independent from heartbeat policy', () =>
     expect(executor).toHaveBeenCalledTimes(2);
     expect(result.output).toContain('replacement');
     expect(result.output).not.toContain('late-legacy-attempt');
+    expect(fixture.lifecycleWrites).toEqual(['recovering:1']);
   });
 
   it('applies an explicit preparation override only to the pre-spawn phase', async () => {

@@ -65,7 +65,10 @@ import {
   type ProviderLifecycleHaltedResult,
   type ProviderLifecycleTimer,
 } from './provider-lifecycle.js';
-import { createProviderLifecycleEpisodeStore } from './provider-lifecycle-store.js';
+import {
+  createProviderLifecycleEpisodeStore,
+  type ProviderLifecycleEpisodeStore,
+} from './provider-lifecycle-store.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -313,6 +316,8 @@ export interface StepRunnerOptions {
   providerWarn?: ExecuteProviderCandidatesInput['warn'];
   /** Injectable preparation-supervision timer; production uses the system timer. */
   providerLifecycleTimer?: ProviderLifecycleTimer;
+  /** Injectable lifecycle episode store; production uses durable filesystem storage. */
+  providerLifecycleEpisodeStore?: ProviderLifecycleEpisodeStore;
   /** Shared provider routing state owned by this conductor run. */
   providerExecution?: ProviderExecutionContext;
   /**
@@ -377,6 +382,7 @@ export class DefaultStepRunner implements StepRunner {
   private providerAttempt?: ExecuteProviderCandidatesInput['onAttempt'];
   private providerWarn: NonNullable<ExecuteProviderCandidatesInput['warn']>;
   private providerLifecycleTimer: ProviderLifecycleTimer;
+  private providerLifecycleEpisodeStore: ProviderLifecycleEpisodeStore;
   private taskAttribution?: ExecuteProviderCandidatesInput['taskAttribution'];
   /** Shared context remains live because Conductor installs self-host hooks at dispatch time. */
   private providerExecutionContext?: ProviderExecutionContext;
@@ -429,6 +435,8 @@ export class DefaultStepRunner implements StepRunner {
       executeProviderCandidates;
     this.providerLifecycleTimer =
       options?.providerLifecycleTimer ?? systemProviderLifecycleTimer;
+    this.providerLifecycleEpisodeStore =
+      options?.providerLifecycleEpisodeStore ?? createProviderLifecycleEpisodeStore();
     this.providerAttempt =
       options?.providerAttempt ?? options?.providerExecution?.onAttempt;
     this.taskAttribution = options?.providerExecution?.taskAttribution;
@@ -889,7 +897,7 @@ export class DefaultStepRunner implements StepRunner {
       },
       recovery: {
         projectRoot: this.projectDir,
-        episodeStore: createProviderLifecycleEpisodeStore(),
+        episodeStore: this.providerLifecycleEpisodeStore,
         createReplacementAttempt: () => nextAttempt(),
       },
     });
