@@ -861,9 +861,10 @@ export interface SameFileSymbolReferenceEvidence {
 }
 
 /**
- * Returns evidence only when a top-level caller implementation references the
- * exact exported function declaration in the same source file. This query is
- * deliberately pure: callers decide whether the evidence can affect a gap.
+ * Returns evidence only when a compatible top-level caller implementation
+ * references the exact exported binding or class in the same source file.
+ * This query is deliberately pure: callers decide whether the evidence can
+ * affect a gap.
  */
 export function findSameFileSymbolReference(
   program: ts.Program,
@@ -876,19 +877,65 @@ export function findSameFileSymbolReference(
   const sourceFile = program.getSourceFile(file);
   if (!sourceFile) return null;
 
-  const functions = sourceFile.statements.filter(
-    (statement): statement is ts.FunctionDeclaration =>
-      tsc.isFunctionDeclaration(statement) && statement.name !== undefined,
-  );
-  const callerDeclaration = functions.find((declaration) => declaration.name?.text === caller);
-  const exportDeclaration = functions.find(
-    (declaration) =>
-      declaration.name?.text === exported &&
-      (tsc.getCombinedModifierFlags(declaration) & tsc.ModifierFlags.Export) !== 0,
-  );
-  if (!callerDeclaration?.body || !exportDeclaration?.name) return null;
+  type TopLevelBinding = { name: string; symbolNode: ts.Identifier; implementation: ts.Node[]; exported: boolean };
+  const bindings: TopLevelBinding[] = [];
 
-  const exportSymbol = checker.getSymbolAtLocation(exportDeclaration.name);
+  for (const statement of sourceFile.statements) {
+    if (tsc.isFunctionDeclaration(statement) && statement.name !== undefined && statement.body !== undefined) {
+      bindings.push({
+        name: statement.name.text,
+        symbolNode: statement.name,
+        implementation: [statement.body],
+        exported: (tsc.getCombinedModifierFlags(statement) & tsc.ModifierFlags.Export) !== 0,
+      });
+      continue;
+    }
+
+    if (tsc.isClassDeclaration(statement) && statement.name !== undefined) {
+      const implementation: ts.Node[] = [];
+      for (const member of statement.members) {
+        if (tsc.isPropertyDeclaration(member) && member.initializer !== undefined) {
+          implementation.push(member.initializer);
+        } else if (
+          (tsc.isMethodDeclaration(member) ||
+            tsc.isGetAccessorDeclaration(member) ||
+            tsc.isSetAccessorDeclaration(member) ||
+            tsc.isConstructorDeclaration(member)) &&
+          member.body !== undefined
+        ) {
+          implementation.push(member.body);
+        }
+      }
+      bindings.push({
+        name: statement.name.text,
+        symbolNode: statement.name,
+        implementation,
+        exported: (tsc.getCombinedModifierFlags(statement) & tsc.ModifierFlags.Export) !== 0,
+      });
+      continue;
+    }
+
+    if (!tsc.isVariableStatement(statement)) continue;
+    const isExported = statement.modifiers?.some((modifier) => modifier.kind === tsc.SyntaxKind.ExportKeyword) ?? false;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!tsc.isIdentifier(declaration.name)) continue;
+      const initializer = declaration.initializer;
+      bindings.push({
+        name: declaration.name.text,
+        symbolNode: declaration.name,
+        implementation: initializer !== undefined && (tsc.isArrowFunction(initializer) || tsc.isFunctionExpression(initializer))
+          ? [initializer.body]
+          : [],
+        exported: isExported,
+      });
+    }
+  }
+
+  const callerBinding = bindings.find((binding) => binding.name === caller);
+  const exportBinding = bindings.find((binding) => binding.name === exported && binding.exported);
+  if (!callerBinding || callerBinding.implementation.length === 0 || !exportBinding) return null;
+
+  const exportSymbol = checker.getSymbolAtLocation(exportBinding.symbolNode);
   if (!exportSymbol) return null;
 
   let foundExactReference = false;
@@ -903,7 +950,7 @@ export function findSameFileSymbolReference(
     }
     tsc.forEachChild(node, visit);
   };
-  visit(callerDeclaration.body);
+  for (const implementation of callerBinding.implementation) visit(implementation);
 
   return foundExactReference ? { file, caller, export: exported } : null;
 }
@@ -1381,6 +1428,7 @@ export async function computeWiringEvidence(
       );
       if (!task || !reachability?.reachable) continue;
 
+      let missingProof: SameFileCompositionEvaluation | null = null;
       for (const site of task.parseResult?.kind === 'declared' ? task.parseResult.sites : []) {
         if (site.path !== newExport.file) continue;
         const reference = findSameFileSymbolReference(
@@ -1397,7 +1445,10 @@ export async function computeWiringEvidence(
           layer2: layer2Applicability,
           rootChain: reachability.reachableFromRoots ?? [],
         });
-        if (evaluation.kind !== 'proof') continue;
+        if (evaluation.kind !== 'proof') {
+          missingProof ??= evaluation;
+          continue;
+        }
 
         const gaps = gapsByTask.get(owner);
         const gapIndex = gaps?.findIndex(
@@ -1410,6 +1461,9 @@ export async function computeWiringEvidence(
         proofs.push(evaluation.proof);
         proofsByTask.set(owner, proofs);
         break;
+      }
+      if (missingProof !== null && !proofsByTask.get(owner)?.some((proof) => proof.export === newExport.symbol)) {
+        pushGap(gapsByTask, owner, 'orphan-export', `same-file composition missing proof: ${missingProof.reason}`);
       }
     }
   } else if (layer2Applicability.reason === 'bad-root') {

@@ -426,6 +426,56 @@ describe('findSameFileSymbolReference', () => {
   });
 
   it.each([
+    {
+      name: 'an exported const through a top-level arrow-function caller',
+      exported: 'export const helper = (): string => \'ok\';',
+      caller: 'export const compose = (): string => helper();',
+      callerName: 'compose',
+      exportedName: 'helper',
+    },
+    {
+      name: 'an exported let binding through a top-level function caller',
+      exported: 'export let helper = 1;',
+      caller: 'function compose(): number { return helper; }',
+      callerName: 'compose',
+      exportedName: 'helper',
+    },
+    {
+      name: 'an exported var binding through a top-level function caller',
+      exported: 'export var helper = 1;',
+      caller: 'function compose(): number { return helper; }',
+      callerName: 'compose',
+      exportedName: 'helper',
+    },
+    {
+      name: 'an exported class through a top-level class caller',
+      exported: 'export class Helper {}',
+      caller: 'export class Compose { build(): Helper { return new Helper(); } }',
+      callerName: 'Compose',
+      exportedName: 'Helper',
+    },
+  ])('returns identity evidence for $name', async ({ exported, caller, callerName, exportedName }) => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-binding-reference-'));
+    try {
+      const sourcePath = join(tmpDir, 'composition.ts');
+      await writeFile(sourcePath, [exported, '', caller, ''].join('\n'));
+      const program = ts.createProgram([sourcePath], { noEmit: true });
+
+      expect(
+        findSameFileSymbolReference(
+          program,
+          program.getTypeChecker(),
+          sourcePath,
+          callerName,
+          exportedName,
+        ),
+      ).toEqual({ file: sourcePath, caller: callerName, export: exportedName });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
     { name: 'comment', prefix: '', callerBody: '// helper\n  return \'ok\';' },
     { name: 'string', prefix: '', callerBody: "return 'helper';" },
     { name: 'declaration', prefix: '', callerBody: "const helper = 'local';\n  return helper;" },
