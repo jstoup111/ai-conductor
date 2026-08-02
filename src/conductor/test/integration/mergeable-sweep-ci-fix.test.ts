@@ -1,7 +1,7 @@
 /**
  * Acceptance spec (RED, pre-implementation) — ship→CI feedback loop.
  *
- * Story: "ci-failed label lifecycle + halt-monitor-visible event" (TR-2) and
+ * Story: native-check CI failure observation + halt-monitor-visible event (TR-2) and
  * "Bounded CI-fix dispatch seam" (TR-3), .docs/stories/ship-ci-feedback-loop.md.
  *
  * Drives the REAL entry point (`sweepMergeableLabels`) end-to-end against a
@@ -9,7 +9,7 @@
  * `mergeable-sweep-autoresolve.test.ts` does for the conflict-resolve path —
  * this is the CI-fix analog. Scoped to the seam shapes already pinned by the
  * plan (`SweepOpts.ciFix: CiFixDispatchOpts`, `WatchEntry.ciFixAttempts` /
- * `lastCiFixAt`, the `ci-failed` label). The exhaustion/escalation call site
+ * `lastCiFixAt`, and retirement of the redundant `ci-failed` label). The exhaustion/escalation call site
  * (TR-5) is intentionally NOT asserted here — the plan (Task 21) leaves its
  * module home undecided ("mergeable-sweep.ts or ci-fix.ts"), so pinning its
  * shape now would freeze an unconfirmed assumption; it is covered by TDD's
@@ -90,7 +90,7 @@ async function readEntries(projectRoot: string): Promise<WatchEntry[]> {
     .map((line) => JSON.parse(line));
 }
 
-describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', () => {
+describe('mergeable-sweep native CI state + bounded CI-fix dispatch', () => {
   let projectRoot: string;
 
   beforeEach(async () => {
@@ -101,7 +101,7 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     await rm(projectRoot, { recursive: true, force: true });
   });
 
-  it('TR-2 happy: ensures+adds ci-failed once for a failed rollup, not re-added when present', async () => {
+  it('TR-2 happy: relies on failed native checks and removes a legacy ci-failed label', async () => {
     const prUrl = 'https://github.com/acme/widget/pull/1';
     await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
 
@@ -116,17 +116,17 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     const labelAddCalls = calls.filter(
       (c) => c.args.join(' ').includes('ci-failed') && c.args[0] === 'api',
     );
-    expect(labelCreateCalls).toHaveLength(1);
-    expect(labelAddCalls.length).toBeGreaterThanOrEqual(1);
+    expect(labelCreateCalls).toHaveLength(0);
+    expect(labelAddCalls).toHaveLength(0);
 
-    // Second sweep with the label already present: no further add call.
+    // A legacy label is removed when the next reconciliation observes it.
     calls.length = 0;
     const gh2 = makeGh({ [prUrl]: { checks: FAILED_CHECKS, labels: ['ci-failed'] } }, calls);
     await sweepMergeableLabels({ projectRoot, runGh: gh2 });
-    const repeatAddCalls = calls.filter(
-      (c) => c.args.join(' ').includes('ci-failed') && c.args[0] === 'api',
+    const removalCalls = calls.filter(
+      (c) => c.args[0] === 'api' && c.args[2] === 'DELETE' && c.args.join(' ').includes('ci-failed'),
     );
-    expect(repeatAddCalls).toHaveLength(0);
+    expect(removalCalls).toHaveLength(1);
   });
 
   it('TR-2 happy: removes ci-failed and resets ciFixAttempts to 0 on green', async () => {
@@ -177,7 +177,7 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     expect(dispatched).toHaveLength(0);
   });
 
-  it('a failed rollup with a still-running check is deferred: no dispatch, no attempt burn, ci-failed label still applied', async () => {
+  it('a failed rollup with a still-running check is deferred: no dispatch, no attempt burn', async () => {
     const prUrl = 'https://github.com/acme/widget/pull/1';
     await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
 
@@ -205,11 +205,9 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
     expect(persisted.lastCiFixAt).toBeUndefined();
 
-    // Labeling is informational and unaffected by the dispatch deferral.
-    const labelCreateCalls = calls.filter(
-      (c) => c.args[0] === 'label' && c.args[1] === 'create' && c.args[2] === 'ci-failed',
-    );
-    expect(labelCreateCalls).toHaveLength(1);
+    // Deferring never paints a harness status on top of GitHub's own checks.
+    const ciFailedLabelCalls = calls.filter((c) => c.args.join(' ').includes('ci-failed'));
+    expect(ciFailedLabelCalls).toHaveLength(0);
   });
 
   it('TR-3 happy: bumps ciFixAttempts + stamps lastCiFixAt BEFORE dispatch, persisted in the registry', async () => {
@@ -285,11 +283,11 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
     expect(persisted.lastCiFixAt).toBeUndefined();
 
-    // The ci-failed label lifecycle itself still applies even with dispatch disabled.
+    // Disabling dispatch does not reintroduce the retired label.
     const labelCreateCalls = calls.filter(
       (c) => c.args[0] === 'label' && c.args[1] === 'create' && c.args[2] === 'ci-failed',
     );
-    expect(labelCreateCalls).toHaveLength(1);
+    expect(labelCreateCalls).toHaveLength(0);
   });
 
   it('TR-3 negative: a CONFLICTING + failed entry skips CI-fix (conflict precedence) — no ciFixAttempts burn', async () => {
@@ -321,7 +319,7 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     expect(persisted.ciFixAttempts ?? 0).toBe(0);
   });
 
-  it('TR-2 negative: needs-remediation present + failed checks — no dispatch, ci-failed label handling still applies', async () => {
+  it('TR-2 negative: needs-remediation present + failed checks — no dispatch or ci-failed label', async () => {
     const prUrl = 'https://github.com/acme/widget/pull/1';
     await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
 
@@ -351,7 +349,7 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     const labelCreateCalls = calls.filter(
       (c) => c.args[0] === 'label' && c.args[1] === 'create' && c.args[2] === 'ci-failed',
     );
-    expect(labelCreateCalls).toHaveLength(1);
+    expect(labelCreateCalls).toHaveLength(0);
   });
 
   it('TR-2 negative: label add/remove gh error is logged, the entry survives, and the sweep continues to the next entry', async () => {
@@ -362,18 +360,35 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
 
     const calls: GhCall[] = [];
     const gh = makeGh(
-      { [prUrlA]: { checks: FAILED_CHECKS }, [prUrlB]: { checks: FAILED_CHECKS } },
+      {
+        [prUrlA]: { checks: FAILED_CHECKS, labels: ['ci-failed'] },
+        [prUrlB]: { checks: FAILED_CHECKS, labels: ['ci-failed'] },
+      },
       calls,
-      (args) => args[0] === 'label' && args[1] === 'create' && args[2] === 'ci-failed',
+      (args) => args[0] === 'api' && args[2] === 'DELETE' && args.join(' ').includes('/issues/1/'),
     );
     const logs: string[] = [];
+    const dispatched: string[] = [];
 
     await expect(
-      sweepMergeableLabels({ projectRoot, runGh: gh, log: (msg) => logs.push(msg) }),
+      sweepMergeableLabels({
+        projectRoot,
+        runGh: gh,
+        log: (msg) => logs.push(msg),
+        ciFix: {
+          enabled: true,
+          isEligible: async () => ({ eligible: true }),
+          dispatch: async (entry) => {
+            dispatched.push(entry.prUrl);
+          },
+        },
+      }),
     ).resolves.toBeUndefined();
 
     const entries = await readEntries(projectRoot);
     expect(entries.map((e) => e.prUrl).sort()).toEqual([prUrlA, prUrlB].sort());
+    expect(dispatched).toEqual([prUrlA]);
+    expect(logs.some((line) => line.includes(prUrlB) && line.includes('deferring'))).toBe(true);
     expect(logs.length).toBeGreaterThan(0);
   });
 

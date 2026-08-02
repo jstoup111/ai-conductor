@@ -877,10 +877,11 @@ conclusion (`SUCCESS`, `FAILURE`, `CANCELLED`, `TIMED_OUT`, `SKIPPED`, …); `QU
 attempt — the next sweep tick re-reads the PR and dispatches once every check has finished. When the
 PR state carries no check-rollup detail at all, the gate does not block.
 
-Draft PRs are never dispatched to the CI fix loop. The sweep still labels them (`ci-failed`,
-`mergeable`) but logs `skipping ci-fix for <url> (draft PR)` instead of collecting them as
-candidates — a draft PR belongs to an in-flight build, and fixing its CI would fight the running
-build. Attempt counters are not burned for skipped drafts.
+Draft PRs are never dispatched to the CI fix loop. The sweep may still reconcile their `mergeable`
+label, but logs `skipping ci-fix for <url> (draft PR)` instead of collecting them as candidates — a
+draft PR belongs to an in-flight build, and fixing its CI would fight the running build. GitHub's
+native checks remain the CI-status authority; the sweep never applies the redundant `ci-failed`
+label and removes it when observed. Attempt counters are not burned for skipped drafts.
 
 `cooldownMinutes` reaches the CI-fix cooldown calculation (`src/conductor/src/engine/ci-fix.ts:250`);
 `0` is valid and disables the delay.
