@@ -12,7 +12,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
-- Keep daemon provider preparation bounded before spawn with an independently configurable deadline, one automatic replacement, and diagnosable `needs-human` exhaustion halts while treating quiet running-provider output as status-only telemetry ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
+- Keep daemon provider preparation bounded before spawn with an independently configurable deadline, one automatic replacement, and diagnosable `needs-human` exhaustion halts while treating quiet running-provider output as status-only telemetry ([implementation PR #1231](https://github.com/jstoup111/ai-conductor/pull/1231)).
 - Refresh self-host main before an explicit daemon restart rebuilds and respawns, so the restarted
   engine uses the latest safely fast-forwardable source instead of rebuilding a stale checkout
   ([implementation PR #1248](https://github.com/jstoup111/ai-conductor/pull/1248)).
