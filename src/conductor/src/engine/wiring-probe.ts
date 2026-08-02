@@ -35,7 +35,13 @@ import {
 } from './wired-into.js';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import type { HarnessConfig } from '../types/config.js';
-import type { WiringEvidence, WiringGap, WiringGapKind, WiringTaskResult } from './artifacts.js';
+import type {
+  SameFileCompositionProof,
+  WiringEvidence,
+  WiringGap,
+  WiringGapKind,
+  WiringTaskResult,
+} from './artifacts.js';
 
 export interface NewExport {
   file: string;
@@ -443,6 +449,68 @@ export interface TaskWiringContract {
   taskId: string;
   files: string[];
   parseResult: WiredIntoParseResult | null;
+}
+
+export interface SameFileCompositionEvaluationInput {
+  task: TaskWiringContract;
+  newExport: NewExport;
+  symbolReference: SameFileSymbolReferenceEvidence | null;
+  rootChain: string[];
+}
+
+export type SameFileCompositionEvaluation =
+  | { kind: 'proof'; proof: SameFileCompositionProof }
+  | {
+      kind: 'missing-proof';
+      reason:
+        | 'task-does-not-own-export'
+        | 'missing-same-file-caller-contract'
+        | 'missing-exact-symbol-reference'
+        | 'missing-root-chain';
+    };
+
+/**
+ * Joins the independent facts needed for the narrow same-file exception.
+ * It is intentionally pure and does not mutate gaps or computed evidence;
+ * orchestration decides whether a returned proof can replace an orphan gap.
+ */
+export function evaluateSameFileComposition(
+  input: SameFileCompositionEvaluationInput,
+): SameFileCompositionEvaluation {
+  const { task, newExport, symbolReference, rootChain } = input;
+  if (!task.files.includes(newExport.file)) {
+    return { kind: 'missing-proof', reason: 'task-does-not-own-export' };
+  }
+  if (task.parseResult?.kind !== 'declared') {
+    return { kind: 'missing-proof', reason: 'missing-same-file-caller-contract' };
+  }
+  if (
+    symbolReference === null ||
+    symbolReference.file !== newExport.file ||
+    symbolReference.export !== newExport.symbol
+  ) {
+    return { kind: 'missing-proof', reason: 'missing-exact-symbol-reference' };
+  }
+  const matchingCaller = task.parseResult.sites.some(
+    (site) => site.path === newExport.file && site.symbol === symbolReference.caller,
+  );
+  if (!matchingCaller) {
+    return { kind: 'missing-proof', reason: 'missing-same-file-caller-contract' };
+  }
+  if (rootChain.length === 0) {
+    return { kind: 'missing-proof', reason: 'missing-root-chain' };
+  }
+
+  return {
+    kind: 'proof',
+    proof: {
+      kind: 'same-file-composition',
+      export: newExport.symbol,
+      caller: symbolReference.caller,
+      file: newExport.file,
+      rootChain,
+    },
+  };
 }
 
 /**

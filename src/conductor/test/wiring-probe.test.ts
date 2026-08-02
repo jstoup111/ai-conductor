@@ -25,6 +25,7 @@ import {
   checkContractConsistency,
   runWiringProbe,
   evaluatePlanWiringDisposition,
+  evaluateSameFileComposition,
   computeWiringEvidence,
   LEGACY_ADVISORY_REASON,
   WIRING_SCOPE_UNDETERMINABLE,
@@ -494,6 +495,39 @@ describe('orphanBackstop', () => {
         referenceClassification: 'test-only',
       }),
     ]);
+  });
+});
+
+describe('evaluateSameFileComposition', () => {
+  it('returns a typed proof when task ownership, caller contract, exact reference, and root chain agree', () => {
+    const result = evaluateSameFileComposition({
+      task: {
+        taskId: '7',
+        files: ['src/composition.ts'],
+        parseResult: {
+          kind: 'declared',
+          sites: [{ path: 'src/composition.ts', symbol: 'compose' }],
+        },
+      },
+      newExport: { file: 'src/composition.ts', symbol: 'helper' },
+      symbolReference: {
+        file: 'src/composition.ts',
+        caller: 'compose',
+        export: 'helper',
+      },
+      rootChain: ['src/index.ts', 'src/composition.ts'],
+    });
+
+    expect(result).toEqual({
+      kind: 'proof',
+      proof: {
+        kind: 'same-file-composition',
+        export: 'helper',
+        caller: 'compose',
+        file: 'src/composition.ts',
+        rootChain: ['src/index.ts', 'src/composition.ts'],
+      },
+    });
   });
 });
 
