@@ -6,6 +6,7 @@ import {
   reachableFromRoots,
   checkExportReachability,
   computeWiringEvidence,
+  findSameFileSymbolReference,
 } from '../src/engine/wiring-probe.js';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -378,6 +379,45 @@ describe('computeWiringEvidence — TypeScript analysis context', () => {
       });
 
       expect(constructions).toBe(1);
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('findSameFileSymbolReference', () => {
+  it('returns identity evidence when a top-level caller references the exact exported helper', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-reference-'));
+    try {
+      const sourcePath = join(tmpDir, 'composition.ts');
+      await writeFile(
+        sourcePath,
+        [
+          'export function helper(): string {',
+          "  return 'ok';",
+          '}',
+          '',
+          'export function compose(): string {',
+          '  return helper();',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const program = ts.createProgram([sourcePath], { noEmit: true });
+
+      const evidence = findSameFileSymbolReference(
+        program,
+        program.getTypeChecker(),
+        sourcePath,
+        'compose',
+        'helper',
+      );
+
+      expect(evidence).toEqual({
+        file: sourcePath,
+        caller: 'compose',
+        export: 'helper',
+      });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

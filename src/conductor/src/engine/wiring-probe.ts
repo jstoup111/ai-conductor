@@ -776,6 +776,60 @@ interface TypescriptAnalysisContext {
   graph: ImportGraph;
 }
 
+export interface SameFileSymbolReferenceEvidence {
+  file: string;
+  caller: string;
+  export: string;
+}
+
+/**
+ * Returns evidence only when a top-level caller implementation references the
+ * exact exported function declaration in the same source file. This query is
+ * deliberately pure: callers decide whether the evidence can affect a gap.
+ */
+export function findSameFileSymbolReference(
+  program: ts.Program,
+  checker: ts.TypeChecker,
+  file: string,
+  caller: string,
+  exported: string,
+): SameFileSymbolReferenceEvidence | null {
+  const tsc = createRequire(import.meta.url)('typescript') as typeof import('typescript');
+  const sourceFile = program.getSourceFile(file);
+  if (!sourceFile) return null;
+
+  const functions = sourceFile.statements.filter(
+    (statement): statement is ts.FunctionDeclaration =>
+      tsc.isFunctionDeclaration(statement) && statement.name !== undefined,
+  );
+  const callerDeclaration = functions.find((declaration) => declaration.name?.text === caller);
+  const exportDeclaration = functions.find(
+    (declaration) =>
+      declaration.name?.text === exported &&
+      (tsc.getCombinedModifierFlags(declaration) & tsc.ModifierFlags.Export) !== 0,
+  );
+  if (!callerDeclaration?.body || !exportDeclaration?.name) return null;
+
+  const exportSymbol = checker.getSymbolAtLocation(exportDeclaration.name);
+  if (!exportSymbol) return null;
+
+  let foundExactReference = false;
+  const visit = (node: ts.Node): void => {
+    if (
+      tsc.isIdentifier(node) &&
+      node.text === exported &&
+      checker.getSymbolAtLocation(node) === exportSymbol
+    ) {
+      foundExactReference = true;
+      return;
+    }
+    tsc.forEachChild(node, visit);
+  };
+  visit(callerDeclaration.body);
+
+  return foundExactReference ? { file, caller, export: exported } : null;
+}
+
 /**
  * Builds a directed module-import graph by walking transitively from the
  * given root files, using the TypeScript compiler API (`ts.createProgram`)
