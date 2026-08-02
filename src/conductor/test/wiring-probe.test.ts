@@ -25,7 +25,6 @@ import {
   checkContractConsistency,
   runWiringProbe,
   evaluatePlanWiringDisposition,
-  evaluateSameFileComposition,
   computeWiringEvidence,
   LEGACY_ADVISORY_REASON,
   WIRING_SCOPE_UNDETERMINABLE,
@@ -34,7 +33,6 @@ import type { GitRunner } from '../src/engine/pr-labels.js';
 import type { WiredIntoSite } from '../src/engine/wired-into.js';
 import type {
   ReferenceSearchRunner,
-  SameFileCompositionEvaluationInput,
   TaskWiringContract,
   GhRunner,
 } from '../src/engine/wiring-probe.js';
@@ -500,120 +498,6 @@ describe('orphanBackstop', () => {
   });
 });
 
-describe('evaluateSameFileComposition', () => {
-  const qualifyingInput = (): SameFileCompositionEvaluationInput => ({
-    task: {
-      taskId: '7',
-      files: ['src/composition.ts'],
-      parseResult: {
-        kind: 'declared',
-        sites: [{ path: 'src/composition.ts', symbol: 'compose' }],
-      },
-    },
-    newExport: { file: 'src/composition.ts', symbol: 'helper' },
-    symbolReference: {
-      file: 'src/composition.ts',
-      caller: 'compose',
-      export: 'helper',
-    },
-    layer2: { applicable: true, roots: ['src/index.ts'] },
-    rootChain: ['src/index.ts', 'src/composition.ts'],
-  });
-
-  it('returns a typed proof when task ownership, caller contract, exact reference, and root chain agree', () => {
-    const result = evaluateSameFileComposition(qualifyingInput());
-
-    expect(result).toEqual({
-      kind: 'proof',
-      proof: {
-        kind: 'same-file-composition',
-        export: 'helper',
-        caller: 'compose',
-        file: 'src/composition.ts',
-        rootChain: ['src/index.ts', 'src/composition.ts'],
-      },
-    });
-  });
-
-  it.each([
-    {
-      name: 'no caller contract',
-      mutate: (input: SameFileCompositionEvaluationInput) => {
-        input.task.parseResult = null;
-      },
-      reason: 'missing-same-file-caller-contract',
-    },
-    {
-      name: 'a caller contract in another file',
-      mutate: (input: SameFileCompositionEvaluationInput) => {
-        input.task.parseResult = {
-          kind: 'declared',
-          sites: [{ path: 'src/other.ts', symbol: 'compose' }],
-        };
-      },
-      reason: 'missing-same-file-caller-contract',
-    },
-    {
-      name: 'an unresolved caller',
-      mutate: (input: SameFileCompositionEvaluationInput) => {
-        input.symbolReference = null;
-      },
-      reason: 'missing-exact-symbol-reference',
-    },
-    {
-      name: 'a task that does not own the export',
-      mutate: (input: SameFileCompositionEvaluationInput) => {
-        input.task.files = ['src/other.ts'];
-      },
-      reason: 'task-does-not-own-export',
-    },
-    {
-      name: 'a caller reference to a different export',
-      mutate: (input: SameFileCompositionEvaluationInput) => {
-        if (input.symbolReference) input.symbolReference.export = 'otherHelper';
-      },
-      reason: 'missing-exact-symbol-reference',
-    },
-  ])('does not manufacture a proof for $name', ({ mutate, reason }) => {
-    const input = qualifyingInput();
-    mutate(input);
-
-    expect(evaluateSameFileComposition(input)).toEqual({ kind: 'missing-proof', reason });
-  });
-
-  it.each([
-    {
-      name: 'not-applicable',
-      layer2: { applicable: false, reason: 'not-applicable' } as const,
-      reason: 'layer2-not-applicable',
-    },
-    {
-      name: 'skipped',
-      layer2: {
-        applicable: false,
-        reason: 'skipped',
-        message: 'Layer 2 skipped: wiring.entry_points not configured',
-      } as const,
-      reason: 'layer2-skipped',
-    },
-    {
-      name: 'bad-root',
-      layer2: {
-        applicable: false,
-        reason: 'bad-root',
-        satisfied: false,
-        message: 'wiring.entry_points root "src/missing.ts" does not exist',
-      } as const,
-      reason: 'layer2-bad-root',
-    },
-  ])('does not authorize a proof when Layer 2 is $name', ({ layer2, reason }) => {
-    const input = qualifyingInput();
-    input.layer2 = layer2;
-
-    expect(evaluateSameFileComposition(input)).toEqual({ kind: 'missing-proof', reason });
-  });
-});
-
 // ── checkContractConsistency ────────────────────────────────────────────────
 
 describe('checkContractConsistency', () => {
@@ -896,6 +780,145 @@ describe('computeWiringEvidence', () => {
         message: 'same-file composition missing proof: missing-exact-symbol-reference',
       },
     ]);
+  });
+
+  it('rejects a declared caller whose local binding shadows the exported helper', async () => {
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
+    await writeFile(join(projectRoot, 'root.ts'), "import './composition.js';\n");
+    await writeFile(
+      join(projectRoot, 'composition.ts'),
+      [
+        'export function helper(): string {',
+        "  return 'exported';",
+        '}',
+        '',
+        'function compose(): string {',
+        "  const helper = (): string => 'local';",
+        '  return helper();',
+        '}',
+      ].join('\n'),
+    );
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add composition',
+        '**Files:** composition.ts',
+        '**Wired-into:** composition.ts#compose',
+      ].join('\n'),
+    );
+
+    const evidence = await computeWiringEvidence({
+      runGit: fakeGitRouter({
+        head: 'headsha-shadowed-helper',
+        originRef: 'origin/main',
+        base: 'basesha-shadowed-helper',
+        diff: [DIFF_HEADER('composition.ts'), '+export function helper(): string {'].join('\n'),
+        grepFiles: { helper: ['composition.ts'] },
+      }),
+      projectRoot,
+      planPath,
+      config: { wiring: { entry_points: ['root.ts'] } } as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    expect(evidence.tasks.find((task) => task.id === '1')?.gaps).toEqual([
+      {
+        kind: 'orphan-export',
+        message: 'helper exported but referenced only within its own defining file (no external wiring)',
+      },
+      {
+        kind: 'orphan-export',
+        message: 'same-file composition missing proof: missing-exact-symbol-reference',
+      },
+    ]);
+  });
+
+  it('names the missing same-file caller contract while retaining the orphan gap', async () => {
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
+    await writeFile(join(projectRoot, 'root.ts'), "import './composition.js';\n");
+    await writeFile(join(projectRoot, 'composition.ts'), "export const helper = (): string => 'ok';\n");
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add composition',
+        '**Files:** composition.ts',
+        '',
+        '### Task 2: Existing contract-bearing task',
+        '**Files:** other.ts',
+        '**Wired-into:** no new production surface',
+      ].join('\n'),
+    );
+
+    const evidence = await computeWiringEvidence({
+      runGit: fakeGitRouter({
+        head: 'headsha-no-contract',
+        originRef: 'origin/main',
+        base: 'basesha-no-contract',
+        diff: [DIFF_HEADER('composition.ts'), "+export const helper = (): string => 'ok';"].join('\n'),
+        grepFiles: { helper: ['composition.ts'] },
+      }),
+      projectRoot,
+      planPath,
+      config: { wiring: { entry_points: ['root.ts'] } } as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    const gaps = evidence.tasks.find((task) => task.id === '1')?.gaps ?? [];
+    expect(gaps.map((gap) => gap.message)).toEqual(expect.arrayContaining([
+      'helper exported but referenced only within its own defining file (no external wiring)',
+      'same-file composition missing proof: missing-same-file-caller-contract',
+    ]));
+  });
+
+  it('names the missing root-chain proof while retaining the orphan gap', async () => {
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
+    await writeFile(join(projectRoot, 'root.ts'), 'export const root = true;\n');
+    await writeFile(
+      join(projectRoot, 'composition.ts'),
+      [
+        'export function helper(): string {',
+        "  return 'ok';",
+        '}',
+        '',
+        'function compose(): string {',
+        '  return helper();',
+        '}',
+      ].join('\n'),
+    );
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add composition',
+        '**Files:** composition.ts',
+        '**Wired-into:** composition.ts#compose',
+      ].join('\n'),
+    );
+
+    const evidence = await computeWiringEvidence({
+      runGit: fakeGitRouter({
+        head: 'headsha-no-root-chain',
+        originRef: 'origin/main',
+        base: 'basesha-no-root-chain',
+        diff: [DIFF_HEADER('composition.ts'), '+export function helper(): string {'].join('\n'),
+        grepFiles: { helper: ['composition.ts'] },
+      }),
+      projectRoot,
+      planPath,
+      config: { wiring: { entry_points: ['root.ts'] } } as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    const gaps = evidence.tasks.find((task) => task.id === '1')?.gaps ?? [];
+    expect(gaps.map((gap) => gap.message)).toEqual(expect.arrayContaining([
+      'helper exported but referenced only within its own defining file (no external wiring)',
+      'same-file composition missing proof: missing-root-chain',
+    ]));
   });
 
   it('accepts a declared same-file helper called by a reachable production module', async () => {

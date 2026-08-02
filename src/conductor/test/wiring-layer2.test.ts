@@ -2,13 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { loadConfig } from '../src/engine/config.js';
 import {
   resolveLayer2Applicability,
-  buildImportGraph,
-  reachableFromRoots,
   checkExportReachability,
   computeWiringEvidence,
-  findSameFileSymbolReference,
   orphanBackstop,
-  evaluateSameFileComposition,
 } from '../src/engine/wiring-probe.js';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
@@ -122,7 +118,7 @@ describe('resolveLayer2Applicability', () => {
   });
 });
 
-describe('buildImportGraph / reachableFromRoots', () => {
+describe('checkExportReachability — import traversal', () => {
   async function makeFixtureProject(): Promise<string> {
     const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-import-graph-'));
     await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
@@ -139,37 +135,19 @@ describe('buildImportGraph / reachableFromRoots', () => {
     return tmpDir;
   }
 
-  it('builds a module import graph transitively from configured roots', async () => {
+  it('reports a transitively imported module as reachable from configured roots', async () => {
     const tmpDir = await makeFixtureProject();
     try {
-      const rootFile = join(tmpDir, 'src', 'root.ts');
-      const graph = buildImportGraph([rootFile], tmpDir);
-
-      const aFile = join(tmpDir, 'src', 'a.ts');
-      const bFile = join(tmpDir, 'src', 'b.ts');
-
-      expect(graph.has(rootFile)).toBe(true);
-      expect(graph.get(rootFile)).toContain(aFile);
-      expect(graph.has(aFile)).toBe(true);
-      expect(graph.get(aFile)).toContain(bFile);
-      expect(graph.has(bFile)).toBe(true);
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('reports a transitively-imported module as reachable from roots with the chain as evidence', async () => {
-    const tmpDir = await makeFixtureProject();
-    try {
-      const rootFile = join(tmpDir, 'src', 'root.ts');
-      const aFile = join(tmpDir, 'src', 'a.ts');
-      const bFile = join(tmpDir, 'src', 'b.ts');
-
-      const graph = buildImportGraph([rootFile], tmpDir);
-      const result = reachableFromRoots(graph, [rootFile], bFile);
-
-      expect(result.reachable).toBe(true);
-      expect(result.chain).toEqual([rootFile, aFile, bFile]);
+      expect(checkExportReachability(
+        [{ file: 'src/b.ts', symbol: 'b' }],
+        ['src/root.ts'],
+        tmpDir,
+      )).toEqual([
+        expect.objectContaining({
+          reachable: true,
+          reachableFromRoots: ['src/root.ts', 'src/a.ts', 'src/b.ts'],
+        }),
+      ]);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -201,13 +179,16 @@ describe('buildImportGraph / reachableFromRoots', () => {
       );
       await writeFile(join(tmpDir, 'src', 'lazy.ts'), 'export const lazyValue = 1;\n');
 
-      const rootFile = join(tmpDir, 'src', 'root.ts');
-      const lazyFile = join(tmpDir, 'src', 'lazy.ts');
-      const graph = buildImportGraph([rootFile], tmpDir);
-
-      expect(graph.get(rootFile)).toContain(lazyFile);
-      const result = reachableFromRoots(graph, [rootFile], lazyFile);
-      expect(result.reachable).toBe(true);
+      expect(checkExportReachability(
+        [{ file: 'src/lazy.ts', symbol: 'lazyValue' }],
+        ['src/root.ts'],
+        tmpDir,
+      )).toEqual([
+        expect.objectContaining({
+          reachable: true,
+          reachableFromRoots: ['src/root.ts', 'src/lazy.ts'],
+        }),
+      ]);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
@@ -387,172 +368,6 @@ describe('computeWiringEvidence — TypeScript analysis context', () => {
   });
 });
 
-describe('findSameFileSymbolReference', () => {
-  it('returns identity evidence when a top-level caller references the exact exported helper', async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-reference-'));
-    try {
-      const sourcePath = join(tmpDir, 'composition.ts');
-      await writeFile(
-        sourcePath,
-        [
-          'export function helper(): string {',
-          "  return 'ok';",
-          '}',
-          '',
-          'export function compose(): string {',
-          '  return helper();',
-          '}',
-          '',
-        ].join('\n'),
-      );
-      const program = ts.createProgram([sourcePath], { noEmit: true });
-
-      const evidence = findSameFileSymbolReference(
-        program,
-        program.getTypeChecker(),
-        sourcePath,
-        'compose',
-        'helper',
-      );
-
-      expect(evidence).toEqual({
-        file: sourcePath,
-        caller: 'compose',
-        export: 'helper',
-      });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    {
-      name: 'an exported const through a top-level arrow-function caller',
-      exported: 'export const helper = (): string => \'ok\';',
-      caller: 'export const compose = (): string => helper();',
-      callerName: 'compose',
-      exportedName: 'helper',
-    },
-    {
-      name: 'an exported let binding through a top-level function caller',
-      exported: 'export let helper = 1;',
-      caller: 'function compose(): number { return helper; }',
-      callerName: 'compose',
-      exportedName: 'helper',
-    },
-    {
-      name: 'an exported var binding through a top-level function caller',
-      exported: 'export var helper = 1;',
-      caller: 'function compose(): number { return helper; }',
-      callerName: 'compose',
-      exportedName: 'helper',
-    },
-    {
-      name: 'an exported class through a top-level class caller',
-      exported: 'export class Helper {}',
-      caller: 'export class Compose { build(): Helper { return new Helper(); } }',
-      callerName: 'Compose',
-      exportedName: 'Helper',
-    },
-  ])('returns identity evidence for $name', async ({ exported, caller, callerName, exportedName }) => {
-    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-binding-reference-'));
-    try {
-      const sourcePath = join(tmpDir, 'composition.ts');
-      await writeFile(sourcePath, [exported, '', caller, ''].join('\n'));
-      const program = ts.createProgram([sourcePath], { noEmit: true });
-
-      expect(
-        findSameFileSymbolReference(
-          program,
-          program.getTypeChecker(),
-          sourcePath,
-          callerName,
-          exportedName,
-        ),
-      ).toEqual({ file: sourcePath, caller: callerName, export: exportedName });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it.each([
-    { name: 'comment', prefix: '', callerBody: '// helper\n  return \'ok\';' },
-    { name: 'string', prefix: '', callerBody: "return 'helper';" },
-    { name: 'declaration', prefix: '', callerBody: "const helper = 'local';\n  return helper;" },
-    {
-      name: 'import',
-      prefix: "import { helper as importedHelper } from './other.js';\n\n",
-      callerBody: "return 'ok';",
-    },
-  ])('returns no proof when the helper name occurs only in a $name', async ({ prefix, callerBody }) => {
-    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-lookalike-'));
-    try {
-      const sourcePath = join(tmpDir, 'composition.ts');
-      await writeFile(
-        sourcePath,
-        [
-          prefix,
-          'export function helper(): string {',
-          "  return 'ok';",
-          '}',
-          '',
-          'export function compose(): string {',
-          `  ${callerBody}`,
-          '}',
-          '',
-        ].join('\n'),
-      );
-      const program = ts.createProgram([sourcePath], { noEmit: true });
-
-      expect(
-        findSameFileSymbolReference(
-          program,
-          program.getTypeChecker(),
-          sourcePath,
-          'compose',
-          'helper',
-        ),
-      ).toBeNull();
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('returns no proof when the caller references a local binding that shadows the exported helper', async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-shadow-'));
-    try {
-      const sourcePath = join(tmpDir, 'composition.ts');
-      await writeFile(
-        sourcePath,
-        [
-          'export function helper(): string {',
-          "  return 'exported';",
-          '}',
-          '',
-          'export function compose(): string {',
-          "  const helper = (): string => 'local';",
-          '  return helper();',
-          '}',
-          '',
-        ].join('\n'),
-      );
-      const program = ts.createProgram([sourcePath], { noEmit: true });
-
-      expect(
-        findSameFileSymbolReference(
-          program,
-          program.getTypeChecker(),
-          sourcePath,
-          'compose',
-          'helper',
-        ),
-      ).toBeNull();
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-});
-
 describe('same-file composition safety boundaries', () => {
   it('keeps a reachable module with a dead helper as a named orphan gap', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-reachable-dead-helper-'));
@@ -589,59 +404,6 @@ describe('same-file composition safety boundaries', () => {
           }),
         ],
       });
-    } finally {
-      await rm(tmpDir, { recursive: true, force: true });
-    }
-  });
-
-  it('keeps a valid same-file proof when a test also imports the helper', async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-incidental-test-import-'));
-    try {
-      const sourcePath = join(tmpDir, 'composition.ts');
-      const testPath = join(tmpDir, 'composition.test.ts');
-      await writeFile(
-        sourcePath,
-        [
-          'export function helper(): string {',
-          "  return 'ok';",
-          '}',
-          '',
-          'export function compose(): string {',
-          '  return helper();',
-          '}',
-          '',
-        ].join('\n'),
-      );
-      await writeFile(testPath, "import { helper } from './composition.js';\nvoid helper;\n");
-      const program = ts.createProgram([sourcePath, testPath], { noEmit: true });
-      const symbolReference = findSameFileSymbolReference(
-        program,
-        program.getTypeChecker(),
-        sourcePath,
-        'compose',
-        'helper',
-      );
-
-      expect(symbolReference).toMatchObject({ caller: 'compose', export: 'helper' });
-
-      expect(evaluateSameFileComposition({
-        task: {
-          taskId: '7',
-          files: ['src/composition.ts'],
-          parseResult: {
-            kind: 'declared',
-            sites: [{ path: 'src/composition.ts', symbol: 'compose' }],
-          },
-        },
-        newExport: { file: 'src/composition.ts', symbol: 'helper' },
-        // The query receives an absolute temp-fixture path, while the gate
-        // composes repo-relative evidence. Normalize only that fixture seam.
-        symbolReference: symbolReference === null
-          ? null
-          : { ...symbolReference, file: 'src/composition.ts' },
-        layer2: { applicable: true, roots: ['src/root.ts'] },
-        rootChain: ['src/root.ts', 'src/composition.ts'],
-      })).toMatchObject({ kind: 'proof' });
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }
