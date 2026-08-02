@@ -45,12 +45,14 @@ function makeGit({
         // Tasks 3–4 will ask Git to establish this relation before assigning
         // observability detail. Preserve a real graph distinction now so this
         // partition remains a useful safety net for that implementation.
-        if (args[3] === 'feat/partition') {
+        if (args[2] === 'merged-tip' && args[3] === 'feat/partition') {
           if (headRelation === 'ahead') return { stdout: '' };
           throw Object.assign(new Error('not an ancestor'), { code: 1 });
         }
         if (merged.includes(args[2])) return { stdout: '' };
         throw Object.assign(new Error('not an ancestor'), { code: 1 });
+      case 'log':
+        return { stdout: headRelation === 'ahead' ? 'commit-ahead additional commit\n' : '' };
       case 'rev-parse':
         return { stdout: `${tip ?? 'tip'}\n` };
       case 'cat-file':
