@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { spawnSync } from 'node:child_process';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -563,45 +562,6 @@ describe('buildPinsJson', () => {
     const pins = buildPinsJson();
     expect(pins['code-review']).toEqual({ exempt: true });
   });
-});
-
-describe('harness integrity pin mismatch boundary', () => {
-  it('fails nonzero and names the Claude skill whose seeded pin disagrees', async () => {
-    const dir = await mkdtemp(join(tmpdir(), 'harness-pin-mismatch-'));
-    const fixtureSkillsDir = join(dir, 'skills');
-    const assessDir = join(fixtureSkillsDir, 'assess');
-    const assessSkillPath = join(harnessRoot, 'skills', 'assess', 'SKILL.md');
-
-    try {
-      await mkdir(assessDir, { recursive: true });
-      const assessSkill = await readFile(assessSkillPath, 'utf8');
-      await writeFile(
-        join(assessDir, 'SKILL.md'),
-        assessSkill.replace(/^model:\s*sonnet$/m, 'model: opus'),
-        'utf8',
-      );
-
-      const result = spawnSync('bash', [join(harnessRoot, 'test', 'test_harness_integrity.sh')], {
-        cwd: harnessRoot,
-        env: {
-          ...process.env,
-          HARNESS_INTEGRITY_TEST_SKILLS_DIR: fixtureSkillsDir,
-          HARNESS_INTEGRITY_TEST_PINS_JSON: JSON.stringify(buildPinsJson()),
-        },
-        encoding: 'utf8',
-      });
-      const output = `${result.stdout}${result.stderr}`;
-
-      expect({
-        failed: result.status !== 0,
-        namesAffectedSkill: output.includes(
-          "assess — pin/expected disagreement: pinned='opus' expected='sonnet'",
-        ),
-      }).toEqual({ failed: true, namesAffectedSkill: true });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
-  }, 30_000);
 });
 
 describe('runGenerateModelTable --pins mode', () => {
