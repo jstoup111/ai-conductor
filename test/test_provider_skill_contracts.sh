@@ -244,6 +244,18 @@ require_pattern 'code review scopes evaluator model selection to Claude' \
   "$HARNESS_DIR/skills/code-review/SKILL.md"
 require_pattern 'architecture review preserves its two-agent medium-tier limit' \
   'Max 2 agents|maximum of 2 agents' "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+require_pattern 'as-built architecture review independently verifies the root-to-caller-to-export chain' \
+  'independently verif.{0,160}root-to-caller-to-export|root-to-caller-to-export.{0,160}independently verif' \
+  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+require_pattern 'as-built architecture review permits same-file composition only with exact caller and root evidence' \
+  'same-file.{0,220}(exact caller-to-export|caller-to-export.{0,120}exact).{0,220}(production-entry-point|production root|root chain)' \
+  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+require_pattern 'as-built architecture review rejects own-module-only claims' \
+  'own-module.{0,120}(alone|only).{0,120}(does not count|insufficient|reject)' \
+  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
+require_pattern 'as-built architecture review rejects stale BUILD proof as authority' \
+  'stale.{0,100}(BUILD )?proof.{0,160}(does not|never).{0,120}(count|authorit|pass)|persisted BUILD proof.{0,160}(corroborat|not authorit)' \
+  "$HARNESS_DIR/skills/architecture-review/SKILL.md"
 require_pattern 'assess retains specialist-report output contract' \
   'Write your findings to \.pipeline/assessment/' "$HARNESS_DIR/skills/assess/SKILL.md"
 require_pattern 'code review retains fresh-context evaluator review' \

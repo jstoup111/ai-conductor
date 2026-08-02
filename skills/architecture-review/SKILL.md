@@ -372,7 +372,18 @@ logic of §10 (Recurring Review) and the ADR lifecycle of §7b.
   config keys, emitted events, ADR-promised log lines — trace ONE invocation path from a real
   production entry point (`conduct-ts` command dispatch, the daemon loop, hook/settings provisioning,
   a wired step runner) and cite the caller as `file:line`. Test files, fixtures, and the
-  primitive's own module do not count as callers.
+  primitive's own module do not count as callers, except for the narrow same-file composition
+  case below.
+  - **Narrow same-file composition exception.** Independently verify the complete **root-to-caller-to-export** chain in the current shipped source: a configured production
+    entry point reaches the defining module through non-test edges; the task's declared caller in
+    that module is the exact caller implementation; and that implementation references the exact
+    changed export. Cite the root/module chain and caller-to-export reference as `file:line`.
+    A same-file exception passes only with an exact caller-to-export reference and a production-entry-point root chain.
+    An own-module caller alone, module reachability alone, or a name/text match alone does not count.
+    This exception never permits a dead helper, a test-only path, a shadowed binding, or an
+    unavailable/ambiguous reachability analysis to pass.
+  - **Current-source authority.** A persisted BUILD `same-file-composition` proof is corroborating context only, never authority for this SHIP review. Re-resolve the root-to-caller-to-export
+    chain against current shipped source at the reviewed HEAD. A stale BUILD proof does not count or pass the exception; neither does a missing current-source hop or changed caller/export.
   - **No production caller exists** → this is a **BLOCKED** violation ("unreachable rung"), same
     severity as an ADR violation: shipped-tested-green code nothing invokes is not shipped
     behavior. Name the primitive and what was searched.
@@ -422,7 +433,8 @@ review remain in `.docs/decisions/`):
 **Verdict:** APPROVED | APPROVED WITH DRIFT NOTES | BLOCKED
 
 ## Production Reachability (every new/changed primitive → its production caller, file:line;
-## UNEXERCISED entries carry their observation signature)
+same-file exceptions independently cite root → caller → export at the reviewed HEAD;
+UNEXERCISED entries carry their observation signature)
 ## Drift Notes (if any)
 ## Blocking Violations (if BLOCKED — which APPROVED ADR or unreachable rung, file:line)
 ## Resolution (if BLOCKED — code fix OR superseding ADR; human-approved)
@@ -467,6 +479,9 @@ echo "verdict: BLOCKED, violated adr-2026-06-29-rate-limit-strategy" > .pipeline
 - [ ] **As-built mode:** at SHIP, shipped code checked against APPROVED ADRs only (no new design)
 - [ ] **As-built mode:** every diff-introduced primitive cites a production caller (`file:line`)
       from a real entry point; no caller ⇒ BLOCKED as an unreachable rung
+- [ ] **As-built mode:** a same-file caller counts only after independently verifying the exact
+      current-source root-to-caller-to-export chain; own-module-only and stale BUILD-proof claims
+      remain rejected
 - [ ] **As-built mode:** statically-reachable-but-unobserved behavior recorded as `UNEXERCISED`
       with its greppable observation signature
 - [ ] **As-built mode:** verdict written to `.pipeline/architecture-review-as-built.md`
