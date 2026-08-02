@@ -37,7 +37,8 @@ indefinitely, through every automatic recovery path it has.
   exception — the guarded reconcile helper may remove the marker of an ancestry-proven-merged park
   whose shipped record is on main, when `reconcile_parked_auto_cleanup` is enabled (its default) or
   via the operator verb `conduct daemon reconcile-parked <slug>`. All other autonomous unpark
-  remains forbidden.*
+  remains forbidden. See `adr-2026-08-01-multi-proof-park-deletion-authority` for the complete
+  two-proof deletion-authority definition.*
 
 ## Users / Personas
 

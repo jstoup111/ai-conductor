@@ -84,11 +84,13 @@ interface ParkedSweepCounts {
   orphaned: number;
   parked: number;
   skipped: number;
+  refused: number;
 }
 
 interface ParkedSweepResult {
   entries: ParkedSweepEntry[];
   counts: ParkedSweepCounts;
+  refusedByReason: Record<string, number>;
 }
 
 interface RecordRepairRequest {
@@ -104,6 +106,7 @@ interface ReconcileSweepOpts {
   getIssueState?: (ref: string, cwd: string) => Promise<string>;
   requestRecordRepair?: (req: RecordRepairRequest) => Promise<void>;
   log?: (msg: string) => void;
+  cache?: Map<string, string>;
 }
 
 interface ReconcileParkOutcome {
@@ -394,7 +397,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await isOperatorParked(projectRoot, slug)).toBe(false);
     expect(result.counts.reconciled).toBe(1);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 skipped=0; next: no action required',
+      '[parked-reconciliation] reconciled=1 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: no action required',
     ]);
   });
 
@@ -487,7 +490,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(result.counts.deferred).toBe(1);
     expect(result.counts.reconciled).toBe(0);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked',
+      '[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 refused=0 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked',
     ]);
 
     // The sweep never writes a record itself.
@@ -578,7 +581,7 @@ describe('parked-feature reconciliation acceptance (S2/S3): the sweep reconciles
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(result.counts.reconciled).toBe(0);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available',
+      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 refused=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available',
     ]);
   });
 
@@ -691,7 +694,7 @@ describe('parked-feature reconciliation acceptance (S6/S7): orphan surfacing is 
     expect(await branchExists(slug)).toBe(true);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(log).toEqual([
-      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=1 parked=0 skipped=0; next: 1 orphaned park needs operator review',
+      '[parked-reconciliation] reconciled=0 deferred=0 orphaned=1 parked=0 refused=0 skipped=0; next: 1 orphaned park needs operator review',
     ]);
   });
 
@@ -885,7 +888,7 @@ describe('parked-feature reconciliation acceptance (S5/S4): the operator verb is
     expect(await branchExists(slug)).toBe(true);
     expect(await branchSha(slug)).toBe(shaAfterRace);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
-    expect(out.join('\n')).toMatch(/ancestor/i);
+    expect(out.join('\n')).toContain('ancestry-check-failed');
     expect(out.join('\n')).not.toMatch(/--force|force path/i);
   });
 
@@ -1106,5 +1109,136 @@ describe('parked-feature reconciliation acceptance (rem-adr-006): the production
     expect(await worktreeExists(slug)).toBe(true);
     expect(await isOperatorParked(projectRoot, slug)).toBe(true);
     expect(out.some((line) => line.includes('no repair requested'))).toBe(true);
+  });
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// RED acceptance specs for refusal observability (#1114).
+//
+// Production call sites for the correctness-critical refusal diagnosis:
+//   1. src/conductor/src/engine/daemon-park-cli.ts: dispatchDaemonPark
+//   2. src/conductor/src/engine/park-reconciliation.ts: reconcileParkedFeatures
+// Both specs feed real divergent Git history through those call sites. Only
+// GitHub's `gh` boundary is replaced with a deterministic fake.
+// ─────────────────────────────────────────────────────────────────────────────
+
+describe('park-reconciliation refusal observability acceptance (#1114)', () => {
+  it('S2: the operator verb names every commit that an unmerged-commits refusal protects', async () => {
+    const slug = 'wip-backup-refusal';
+    await seedParkedFeature(slug, { merged: false, record: true });
+    const mergedHead = await branchSha(slug);
+    if (!mergedHead) throw new Error('expected seeded feature branch');
+
+    const worktree = join(projectRoot, '.worktrees', slug);
+    await writeFile(join(worktree, 'backup.txt'), 'unmerged backup\n');
+    await git(['add', '-A'], worktree);
+    await git(['commit', '-q', '-m', 'WIP backup'], worktree);
+    const firstShortSha = await git(['rev-parse', '--short', 'HEAD'], worktree);
+
+    await writeFile(join(worktree, 'follow-up.txt'), 'follow-up work\n');
+    await git(['add', '-A'], worktree);
+    await git(['commit', '-q', '-m', 'feat: follow-up work'], worktree);
+    const secondShortSha = await git(['rev-parse', '--short', 'HEAD'], worktree);
+
+    const gh = fakeGh((args) => {
+      if (args[0] === 'pr' && args[1] === 'list' && args.includes('headRefOid')) {
+        return JSON.stringify([{ headRefOid: mergedHead }]);
+      }
+      throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
+    });
+    const { detect, dispatch } = await loadReconcileVerb();
+    const out: string[] = [];
+    const code = await dispatch(
+      detect(['node', 'conduct', 'daemon', 'reconcile-parked', slug]) as {
+        kind: string;
+        slug: string;
+      },
+      { cwd: projectRoot, out: (line) => out.push(line), runGit: realGit, runGh: gh },
+    );
+
+    const printed = out.join('\n');
+    expect(code).not.toBe(0);
+    expect(printed).toContain(`Could not reconcile '${slug}': unmerged-commits`);
+    expect(printed).toContain(`${secondShortSha} feat: follow-up work`);
+    expect(printed).toContain(`${firstShortSha} WIP backup`);
+    expect(printed.indexOf(secondShortSha)).toBeLessThan(printed.indexOf(firstShortSha));
+    expect(await branchSha(slug)).toBe(await git(['rev-parse', 'HEAD'], worktree));
+    expect(await isOperatorParked(projectRoot, slug)).toBe(true);
+    expect(printed).not.toMatch(/--force|force path/i);
+  });
+
+  it('S3/S4: the sweep counts refusal causes and re-logs only when the refusal mix changes', async () => {
+    const noProofSlug = 'refused-no-proof';
+    const aheadSlug = 'refused-ahead';
+    const behindSlug = 'refused-behind';
+
+    await seedParkedFeature(noProofSlug, { merged: false, record: true });
+    await seedParkedFeature(aheadSlug, { merged: false, record: true });
+    const aheadMergedHead = await branchSha(aheadSlug);
+    if (!aheadMergedHead) throw new Error('expected ahead branch');
+    await advanceFeatureBranch(aheadSlug);
+
+    await seedParkedFeature(behindSlug, { merged: false, record: true });
+    const behindTip = await branchSha(behindSlug);
+    if (!behindTip) throw new Error('expected behind branch');
+    const behindMergedHead = await git([
+      'commit-tree',
+      `${behindTip}^{tree}`,
+      '-p',
+      behindTip,
+      '-m',
+      'merged PR head',
+    ]);
+
+    let reportBehindPr = false;
+    const gh = fakeGh((args) => {
+      if (args[0] !== 'pr' || args[1] !== 'list' || !args.includes('headRefOid')) {
+        throw new Error(`unexpected gh invocation: ${args.join(' ')}`);
+      }
+      const head = args[args.indexOf('--head') + 1];
+      if (head === `feature/${aheadSlug}`) return JSON.stringify([{ headRefOid: aheadMergedHead }]);
+      if (head === `feature/${behindSlug}` && reportBehindPr) {
+        return JSON.stringify([{ headRefOid: behindMergedHead }]);
+      }
+      return '[]';
+    });
+    const cache = new Map<string, string>();
+    const logs: string[] = [];
+    const runSweep = () => sweep({
+      projectRoot,
+      runGit: realGit,
+      runGh: gh,
+      cache,
+      log: (line) => logs.push(line),
+    });
+
+    const first = await runSweep();
+    expect(first.counts.refused).toBe(3);
+    expect(first.refusedByReason).toMatchObject({
+      'no-merge-proof': 2,
+      'unmerged-commits': 1,
+    });
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toContain('refused=3');
+    expect(logs[0]).toMatch(/no-merge-proof\D+2/);
+    expect(logs[0]).toMatch(/unmerged-commits\D+1/);
+
+    reportBehindPr = true;
+    const second = await runSweep();
+    expect(second.counts.refused).toBe(3);
+    expect(second.refusedByReason).toMatchObject({
+      'no-merge-proof': 1,
+      'unmerged-commits': 1,
+      'branch-behind-merged-head': 1,
+    });
+    expect(logs).toHaveLength(2);
+    expect(logs[1]).toMatch(/branch-behind-merged-head\D+1/);
+
+    await runSweep();
+    expect(logs).toHaveLength(2);
+
+    await rm(join(projectRoot, '.daemon', 'parked', behindSlug));
+    await runSweep();
+    expect(cache.has(behindSlug)).toBe(false);
   });
 });

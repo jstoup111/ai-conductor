@@ -257,11 +257,16 @@ For a valid slug, the command checks whether the slug's work reached `origin/mai
 `.docs/shipped/<stem>.md` record committed there (matched allowing for the `YYYY-MM-DD-` plan-date
 prefix), or a local branch ending in `/<slug>` under any prefix that `git merge-base --is-ancestor`
 proves is contained in `origin/main`. If neither holds, or the check fails, it prints `Could not
-reconcile '<slug>': <reason>` and exits 1, where `<reason>` is one of `not-ancestor`,
-`branch-missing`, or `ancestry-check-failed`. `not-ancestor` also covers the case where the record
-proves the ship but a branch for the slug is proven neither by ancestry nor by
-[merged-PR head identity](../guides/running-the-daemon.md#parked-feature-reconciliation) to carry
-only what landed, so nothing is deleted there. If the slug is
+reconcile '<slug>': <reason>` and exits 1. The refusal reason identifies the proof that is missing:
+
+- `branch-missing` — no local branch for the slug is available to prove.
+- `no-merge-proof` — the branch is not an ancestor and no merged PR proves its current tip.
+- `unmerged-commits` — the branch has commits beyond the merged PR head. The command prints up to
+  ten `SHA subject` lines after the refusal, followed by `… and M more` when the list is longer.
+- `branch-behind-merged-head` — the local branch tip no longer matches the merged PR head proof.
+- `ancestry-check-failed` — Git or merged-PR evidence could not be checked safely.
+
+These refusals leave every branch and worktree in place. If the slug is
 merged but `.docs/shipped/<slug>.md` does not exist on `origin/main`, it requests an ST-916
 record-repair PR when a merged PR can be found, prints `Could not reconcile '<slug>':
 record-missing`, and exits 1 — the same deferral the daemon sweep applies until the shipped record

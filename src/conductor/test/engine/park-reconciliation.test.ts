@@ -3,7 +3,11 @@ import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { reconcileMergedPark, reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
+import {
+  proveByMergedPrHead,
+  reconcileMergedPark,
+  reconcileParkedFeatures,
+} from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { isOperatorParked, removeOperatorPark, writeOperatorPark } from '../../src/engine/park-marker.js';
 
@@ -24,8 +28,12 @@ interface GitWorld {
   branches?: readonly string[];
   /** Subset of `branches` contained in origin/main. */
   merged?: readonly string[];
+  /** Merged PR heads that are ancestors of a branch despite the branch being outside origin/main. */
+  mergedPrHeads?: readonly string[];
   /** Current tip SHA per branch, for `git rev-parse <branch>`. */
   tips?: Readonly<Record<string, string>>;
+  /** Lines emitted by `git log --oneline --no-decorate <head>..<ref>`. */
+  unmergedLog?: readonly string[] | 'unavailable';
   /** Refs whose ancestry probe fails with a non-1 exit (broken repo state). */
   ancestryBroken?: readonly string[];
   /** `git for-each-ref` itself fails. */
@@ -76,6 +84,13 @@ function makeGit(world: GitWorld = {}): {
       }
       return { stdout: 'deadbeef\n' };
     }
+    if (verb === 'cat-file') return { stdout: '' };
+    if (verb === 'log') {
+      if (world.unmergedLog === 'unavailable') {
+        throw gitFailure(128, 'fatal: invalid revision range');
+      }
+      return { stdout: `${(world.unmergedLog ?? []).join('\n')}\n` };
+    }
     if (verb === 'for-each-ref') {
       if (world.refsUnavailable) throw gitFailure(128, 'fatal: not a git repository');
       return { stdout: `${branches.join('\n')}\n` };
@@ -85,6 +100,7 @@ function makeGit(world: GitWorld = {}): {
       if (world.ancestryBroken?.includes(ref)) {
         throw gitFailure(128, `fatal: Not a valid object name ${ref}`);
       }
+      if (args[3] !== undefined && world.mergedPrHeads?.includes(ref)) return { stdout: '' };
       if (merged.includes(ref)) return { stdout: '' };
       throw gitFailure(1, 'not an ancestor');
     }
@@ -119,6 +135,89 @@ function makeGit(world: GitWorld = {}): {
   return { run, deleted, deleteArgv, events };
 }
 
+describe('engine/park-reconciliation — proveByMergedPrHead', () => {
+  const projectRoot = '/project';
+  const ref = 'feat/parked';
+  const mergedHead = '1111111111111111111111111111111111111111';
+  const branchTip = '2222222222222222222222222222222222222222';
+
+  function probeGit(mergeBaseExit?: 1, catFileFails = false): ReturnType<typeof vi.fn<GitRunner>> {
+    return vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'rev-parse') return { stdout: `${branchTip}\n` };
+      if (args[0] === 'cat-file') {
+        if (catFileFails) throw gitFailure(128, 'fatal: Not a valid object name');
+        return { stdout: '' };
+      }
+      if (args[0] === 'merge-base') {
+        if (mergeBaseExit === 1) throw gitFailure(1, 'not an ancestor');
+        return { stdout: '' };
+      }
+      throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+    });
+  }
+
+  it.each([
+    { name: 'reports no-pr when no merged PR is found', pr: '[]', git: probeGit(), expected: { kind: 'no-pr' } },
+    {
+      name: 'proves a branch whose tip exactly matches the merged PR head',
+      pr: `[{"headRefOid":"${branchTip}"}]`,
+      git: probeGit(),
+      expected: { kind: 'proven' },
+    },
+    {
+      name: 'reports ahead after the merged PR head is guarded and is an ancestor of the branch',
+      pr: `[{"headRefOid":"${mergedHead}"}]`,
+      git: probeGit(),
+      expected: { kind: 'ahead', headRefOid: mergedHead },
+    },
+    {
+      name: 'reports behind after the merged PR head is guarded but is not an ancestor of the branch',
+      pr: `[{"headRefOid":"${mergedHead}"}]`,
+      git: probeGit(1),
+      expected: { kind: 'behind', headRefOid: mergedHead },
+    },
+    {
+      name: 'reports indeterminate when the mismatched merged PR head cannot be resolved locally',
+      pr: `[{"headRefOid":"${mergedHead}"}]`,
+      git: probeGit(undefined, true),
+      expected: { kind: 'indeterminate' },
+    },
+  ])('$name', async ({ pr, git, expected }) => {
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: pr });
+
+    const diagnosis = await proveByMergedPrHead(git, runGh, projectRoot, ref);
+
+    expect({
+      diagnosis,
+      gitCalls: git.mock.calls.map(([args]) => args),
+      ghCalls: runGh.mock.calls,
+    }).toEqual({
+      diagnosis: expected,
+      gitCalls:
+        expected.kind === 'no-pr'
+          ? []
+          : expected.kind === 'proven'
+            ? [['rev-parse', ref]]
+          : expected.kind === 'indeterminate'
+            ? [
+                ['rev-parse', ref],
+                ['cat-file', '-e', `${mergedHead}^{commit}`],
+              ]
+            : [
+                ['rev-parse', ref],
+                ['cat-file', '-e', `${mergedHead}^{commit}`],
+                ['merge-base', '--is-ancestor', mergedHead, ref],
+              ],
+      ghCalls: [
+        [
+          ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
+          { cwd: projectRoot },
+        ],
+      ],
+    });
+  });
+});
+
 describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it.each(['*', 'a/b', 'a,b', ''])(
     'refuses invalid single-slug input %j before invoking git',
@@ -143,7 +242,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       name: 'the branch exists but is not contained in origin/main and no record landed',
       world: { branches: ['feat/unmerged'], merged: [] },
       slug: 'unmerged',
-      refusal: 'not-ancestor',
+      refusal: 'no-merge-proof',
     },
     {
       name: 'no branch carries the slug and no record landed',
@@ -231,7 +330,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       merged: [],
     });
     // No merged PR reports this head, so nothing can prove the branch carries
-    // only what landed — the ancestry refusal must stand.
+    // only what landed — the lack of a merge proof must stand.
     const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
     try {
       await writeOperatorPark(projectRoot, slug);
@@ -239,10 +338,72 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
-        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        outcome: { slug, steps: [], refusal: 'no-merge-proof' },
         deleted: [],
         parked: true,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: 'no merged PR proves the branch',
+      gh: '[]',
+      expectedOutcome: { steps: [], refusal: 'no-merge-proof' },
+    },
+    {
+      name: 'the branch contains commits beyond the merged PR head',
+      gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+      mergedPrHeads: ['1111111111111111111111111111111111111111'],
+      tips: { 'feat/deletion-gate-map': '2222222222222222222222222222222222222222' },
+      expectedOutcome: {
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: { commits: [], overflow: 0 },
+      },
+    },
+    {
+      name: 'the branch is behind the merged PR head',
+      gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+      tips: { 'feat/deletion-gate-map': '2222222222222222222222222222222222222222' },
+      expectedOutcome: { steps: [], refusal: 'branch-behind-merged-head' },
+    },
+    {
+      name: 'the branch tip cannot be resolved locally',
+      gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+      expectedOutcome: { steps: [], refusal: 'ancestry-check-failed' },
+    },
+    {
+      name: 'the current tip equals the merged PR head',
+      gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
+      tips: { 'feat/deletion-gate-map': '1111111111111111111111111111111111111111' },
+      expectedOutcome: { steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
+    },
+  ] as const)('maps deletion-gate diagnosis when $name', async ({ gh, mergedPrHeads, tips, expectedOutcome }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'deletion-gate-map';
+    const { run, deleted } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads,
+      tips,
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: gh });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, ...expectedOutcome },
+        deleted: expectedOutcome.refusal === undefined ? [`feat/${slug}`] : [],
+        parked: expectedOutcome.refusal !== undefined,
+      });
+      if (expectedOutcome.refusal !== 'unmerged-commits') {
+        expect(outcome).not.toHaveProperty('unmergedCommits');
+      }
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -298,6 +459,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       shipped: [slug],
       branches: [`feat/${slug}`],
       merged: [],
+      mergedPrHeads: ['1111111111111111111111111111111111111111'],
       tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
     });
     const runGh = vi.fn<GhRunner>().mockResolvedValue({
@@ -309,7 +471,12 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
-        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        outcome: {
+          slug,
+          steps: [],
+          refusal: 'unmerged-commits',
+          unmergedCommits: { commits: [], overflow: 0 },
+        },
         deleted: [],
         parked: true,
       });
@@ -318,10 +485,126 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     }
   });
 
+  it('lists the post-merge commits in git range order', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'ordered-post-merge-commits';
+    const headRefOid = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [headRefOid],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+      unmergedLog: ['bbbbbbb newer commit', 'aaaaaaa older commit'],
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${headRefOid}'}]`.replaceAll("'", '"') });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect(outcome).toEqual({
+        slug,
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: {
+          commits: [
+            { sha: 'bbbbbbb', subject: 'newer commit' },
+            { sha: 'aaaaaaa', subject: 'older commit' },
+          ],
+          overflow: 0,
+        },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed without a commit list when the unmerged range cannot be read', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'unreadable-post-merge-range';
+    const headRefOid = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [headRefOid],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+      unmergedLog: 'unavailable',
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${headRefOid}'}]`.replaceAll("'", '"') });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect(outcome).toEqual({ slug, steps: [], refusal: 'ancestry-check-failed' });
+      expect(outcome).not.toHaveProperty('unmergedCommits');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('attaches the capped commit summaries that a force-delete would drop', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'post-merge-commit-summaries';
+    const headRefOid = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [headRefOid],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+      unmergedLog: [
+        'aaaaaaa first commit',
+        'bbbbbbb second commit',
+        'ccccccc third commit',
+        'ddddddd fourth commit',
+        'eeeeeee fifth commit',
+        'fffffff sixth commit',
+        '1111111 seventh commit',
+        '2222222 eighth commit',
+        '3333333 ninth commit',
+        '4444444 tenth commit',
+        '5555555 eleventh commit',
+      ],
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{"headRefOid":"${headRefOid}"}]` });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect(outcome).toEqual({
+        slug,
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: {
+          commits: [
+            ['aaaaaaa', 'first commit'],
+            ['bbbbbbb', 'second commit'],
+            ['ccccccc', 'third commit'],
+            ['ddddddd', 'fourth commit'],
+            ['eeeeeee', 'fifth commit'],
+            ['fffffff', 'sixth commit'],
+            ['1111111', 'seventh commit'],
+            ['2222222', 'eighth commit'],
+            ['3333333', 'ninth commit'],
+            ['4444444', 'tenth commit'],
+          ].map(([sha, subject]) => ({ sha, subject })),
+          overflow: 1,
+        },
+      });
+      expect(run.mock.calls).toContainEqual([
+        ['log', '--oneline', '--no-decorate', `${headRefOid}..feat/${slug}`],
+        { cwd: projectRoot },
+      ]);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { name: 'the PR lookup itself is unavailable', gh: () => Promise.reject(new Error('gh unavailable')) },
     { name: 'the PR lookup returns unparsable output', gh: async () => ({ stdout: 'not json' }) },
-  ])('keeps the ancestry refusal when $name', async ({ gh }) => {
+  ])('reports an ancestry-check failure when $name', async ({ gh }) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'offline-refusal';
     const { run, deleted } = makeGit({
@@ -337,7 +620,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
-        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        outcome: { slug, steps: [], refusal: 'ancestry-check-failed' },
         deleted: [],
         parked: true,
       });
@@ -363,7 +646,7 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
       expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
-        outcome: { slug, steps: [], refusal: 'not-ancestor' },
+        outcome: { slug, steps: [], refusal: 'ancestry-check-failed' },
         deleted: [],
         parked: true,
       });
@@ -787,6 +1070,153 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('summarizes refusal reasons and names the dominant cause in guidance', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-refused';
+    const mergedPrHead = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [mergedPrHead],
+      tips: { [`feat/${slug}`]: '2222222222222222222222222222222222222222' },
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${mergedPrHead}'}]`.replaceAll("'", '"') });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, log });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason, logs: log.mock.calls }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 1,
+          refused: 1,
+          skipped: 0,
+        },
+        refusedByReason: { 'unmerged-commits': 1 },
+        logs: [[
+          '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=1 skipped=0; refusals: unmerged-commits=1; next: 1 refusal requires resolving unmerged-commits; 1 parked remains parked',
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('counts three merged cleanup refusals by reason while keeping all three slugs parked', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slugs = ['behind', 'no-proof', 'unmerged'] as const;
+    const unmergedHead = '1111111111111111111111111111111111111111';
+    const behindHead = '2222222222222222222222222222222222222222';
+    const { run } = makeGit({
+      shipped: slugs,
+      branches: slugs.map((slug) => `feat/${slug}`),
+      mergedPrHeads: [unmergedHead],
+      tips: Object.fromEntries(slugs.map((slug) => [
+        `feat/${slug}`,
+        'ffffffffffffffffffffffffffffffffffffffff',
+      ])),
+      unmergedLog: ['aaaaaaa local commit after merged head'],
+    });
+    const runGh = vi.fn<GhRunner>(async (args) => {
+      const ref = args[args.indexOf('--head') + 1];
+      if (ref === 'feat/no-proof') return { stdout: '[]' };
+      const headRefOid = ref === 'feat/behind' ? behindHead : unmergedHead;
+      return { stdout: JSON.stringify([{ headRefOid }]) };
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      for (const slug of slugs) await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, log });
+
+      expect({
+        counts: result.counts,
+        refusedByReason: result.refusedByReason,
+        parked: await Promise.all(slugs.map((slug) => isOperatorParked(projectRoot, slug))),
+        logs: log.mock.calls,
+      }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 3,
+          refused: 3,
+          skipped: 0,
+        },
+        refusedByReason: {
+          'branch-behind-merged-head': 1,
+          'no-merge-proof': 1,
+          'unmerged-commits': 1,
+        },
+        parked: [true, true, true],
+        logs: [[
+          '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=3 refused=3 skipped=0; refusals: branch-behind-merged-head=1, no-merge-proof=1, unmerged-commits=1; next: 3 refusals requires resolving branch-behind-merged-head; 3 parked remain parked',
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('omits refusal-breakdown noise when a sweep has no refusals', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'merged-ready';
+    const { run } = makeGit({ shipped: [slug] });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, autoCleanup: false, log });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason, logs: log.mock.calls }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 1,
+          refused: 0,
+          skipped: 0,
+        },
+        refusedByReason: {},
+        logs: [[
+          '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: 1 parked remains parked',
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps a record-missing outcome deferred rather than refused', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'sweep-record-missing';
+    const { run } = makeGit({ branches: [`feat/${slug}`], merged: [`feat/${slug}`] });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: '[]' });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 1,
+          orphaned: 0,
+          parked: 1,
+          refused: 0,
+          skipped: 0,
+        },
+        refusedByReason: {},
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('suppresses repeated outcomes and summaries, then prunes a no-longer-parked slug', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'cached-merged';
@@ -807,11 +1237,41 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
 
       expect({ firstPass, secondPass, cache: [...cache.entries()] }).toEqual({
         firstPass: [
-          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked'],
+          ['[parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=1 refused=0 skipped=0; next: 1 deferred awaits shipped-record repair; 1 parked remains parked'],
         ],
         secondPass: [],
         cache: [],
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('re-logs a changed refusal mix but suppresses an identical following sweep', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'cached-refusal';
+    const mergedPrHead = '1111111111111111111111111111111111111111';
+    const cache = new Map<string, 'merged' | 'orphan' | 'normal' | 'unclassified'>();
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      tips: { [`feat/${slug}`]: '2222222222222222222222222222222222222222' },
+    });
+    const runGh = vi.fn<GhRunner>()
+      .mockResolvedValueOnce({ stdout: '[]' })
+      .mockResolvedValue({ stdout: `[{"headRefOid":"${mergedPrHead}"}]` });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, cache, log });
+      await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, cache, log });
+      await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, cache, log });
+
+      expect(log.mock.calls).toEqual([
+        ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=1 skipped=0; refusals: no-merge-proof=1; next: 1 refusal requires resolving no-merge-proof; 1 parked remains parked'],
+        ['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=1 skipped=0; refusals: branch-behind-merged-head=1; next: 1 refusal requires resolving branch-behind-merged-head; 1 parked remains parked'],
+      ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -831,7 +1291,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
       expect({ entries: result.entries, issueCalls: getIssueState.mock.calls, logs: log.mock.calls }).toEqual({
         entries: [{ slug, classification: 'unclassified', annotation: undefined }],
         issueCalls: [],
-        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available']],
+        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=0 refused=0 skipped=1; next: 1 skipped retry when merge/issue evidence is available']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
@@ -864,7 +1324,7 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
           { slug: failingSlug, classification: 'unclassified', annotation: undefined },
           { slug: mergedSlug, classification: 'merged', annotation: 'merged-ready' },
         ],
-        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 skipped=1; next: 1 parked remains parked; 1 skipped retry when merge/issue evidence is available']],
+        logs: [['[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=0 skipped=1; next: 1 parked remains parked; 1 skipped retry when merge/issue evidence is available']],
       });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });

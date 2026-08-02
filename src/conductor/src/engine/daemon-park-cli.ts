@@ -187,6 +187,14 @@ export async function dispatchDaemonPark(
       const outcome = await reconcile({ projectRoot: resolvedRoot, slug, log: out, runGit: deps.runGit, runGh: deps.runGh, requestRecordRepair });
       if (outcome.refusal) {
         out(`Could not reconcile '${slug}': ${outcome.refusal}`);
+        if (outcome.refusal === 'unmerged-commits' && outcome.unmergedCommits) {
+          for (const commit of outcome.unmergedCommits.commits) {
+            out(`${commit.sha} ${commit.subject}`);
+          }
+          if (outcome.unmergedCommits.overflow > 0) {
+            out(`… and ${outcome.unmergedCommits.overflow} more`);
+          }
+        }
         return 1;
       }
       out(`Reconciled '${slug}': ${outcome.steps.join(', ')}`);

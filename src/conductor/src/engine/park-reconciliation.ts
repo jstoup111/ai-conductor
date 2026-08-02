@@ -23,9 +23,32 @@ export interface ReconcileMergedParkOptions {
 export interface ReconcileMergedParkOutcome {
   slug: string;
   steps: string[];
-  refusal?: string;
+  refusal?: RefusalReason;
+  unmergedCommits?: UnmergedCommitListing;
   deferred?: boolean;
 }
+
+export interface UnmergedCommitSummary {
+  sha: string;
+  subject: string;
+}
+
+export interface UnmergedCommitListing {
+  commits: UnmergedCommitSummary[];
+  overflow: number;
+}
+
+export type RefusalReason =
+  | 'invalid-slug'
+  | 'ancestry-check-failed'
+  | 'branch-missing'
+  | 'no-merge-proof'
+  | 'unmerged-commits'
+  | 'branch-behind-merged-head'
+  | 'record-missing'
+  | 'worktree-remove-failed'
+  | 'branch-delete-failed'
+  | 'unpark-failed';
 
 export type ParkClassification = 'merged' | 'orphan' | 'normal' | 'unclassified';
 
@@ -42,8 +65,10 @@ export interface ParkedSweepResult {
     deferred: number;
     orphaned: number;
     parked: number;
+    refused: number;
     skipped: number;
   };
+  refusedByReason: Partial<Record<RefusalReason, number>>;
 }
 
 export interface ReconcileParkedFeaturesOptions {
@@ -97,7 +122,7 @@ function undatedStem(stem: string): string {
  * - `mergedBranches` — local branches for the slug that `merge-base
  *   --is-ancestor` proves are contained in `origin/main`. Ancestry is one of
  *   the two deletion proofs `reconcileMergedPark` accepts; the other is
- *   head-oid identity against a merged PR (`isSquashMergedAtTip`), needed
+ *   head-oid identity against a merged PR (`proveByMergedPrHead`), needed
  *   because a squash merge makes ancestry permanently false for the source
  *   branch. A shipped record is never a deletion proof on its own — it says
  *   nothing about commits added to the branch after the merge.
@@ -204,9 +229,19 @@ async function isContainedInMain(
 }
 
 /**
- * `true` when a MERGED pull request for `ref` reports exactly this branch's
- * current tip as its head commit — the squash/rebase-merge equivalent of
- * ancestry.
+ * The diagnosis from a merged pull request's recorded head commit. `proven` is
+ * the squash/rebase-merge equivalent of ancestry; the other cases preserve why
+ * that proof was unavailable without changing deletion authority.
+ */
+export type MergedPrHeadDiagnosis =
+  | { kind: 'proven' }
+  | { kind: 'no-pr' }
+  | { kind: 'ahead'; headRefOid: string }
+  | { kind: 'behind'; headRefOid: string }
+  | { kind: 'indeterminate' };
+
+/**
+ * Proves or diagnoses head identity for a merged pull request on `ref`.
  *
  * A squash merge rewrites the branch's commits into one new commit on the base
  * branch, so `merge-base --is-ancestor` is permanently `false` for the source
@@ -218,18 +253,18 @@ async function isContainedInMain(
  * deleting this ref drop a commit?" — without weakening it: GitHub recorded
  * which commit it merged, and if the local tip still equals that commit then
  * every commit on the branch is contained in the squash. One extra local commit
- * moves the tip, the SHAs diverge, and this returns `false`.
+ * moves the tip, the SHAs diverge, and the result distinguishes whether the
+ * branch is ahead of or behind the merged head.
  *
- * Fails closed: an unavailable `gh`, a non-JSON payload, no merged PR, or an
- * unresolvable tip all return `false`, leaving ancestry as the only authority
- * exactly as before.
+ * Fails closed: an unavailable `gh`, a non-JSON payload, or an unresolvable
+ * object returns `indeterminate`, leaving ancestry as the only authority.
  */
-async function isSquashMergedAtTip(
+export async function proveByMergedPrHead(
   runGit: GitRunner,
   runGh: GhRunner,
   projectRoot: string,
   ref: string,
-): Promise<boolean> {
+): Promise<MergedPrHeadDiagnosis> {
   try {
     const { stdout } = await runGh(
       ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
@@ -237,11 +272,53 @@ async function isSquashMergedAtTip(
     );
     const prs = JSON.parse(stdout) as Array<{ headRefOid?: unknown }>;
     const headRefOid = prs[0]?.headRefOid;
-    if (typeof headRefOid !== 'string' || headRefOid.trim() === '') return false;
+    if (prs.length === 0) return { kind: 'no-pr' };
+    if (typeof headRefOid !== 'string' || headRefOid.trim() === '') return { kind: 'indeterminate' };
     const { stdout: tip } = await runGit(['rev-parse', ref], { cwd: projectRoot });
-    return tip.trim() === headRefOid.trim();
+    const normalizedHeadRefOid = headRefOid.trim();
+    if (tip.trim() === normalizedHeadRefOid) return { kind: 'proven' };
+
+    await runGit(['cat-file', '-e', `${normalizedHeadRefOid}^{commit}`], { cwd: projectRoot });
+    try {
+      await runGit(['merge-base', '--is-ancestor', normalizedHeadRefOid, ref], { cwd: projectRoot });
+      return { kind: 'ahead', headRefOid: normalizedHeadRefOid };
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 1) {
+        return { kind: 'behind', headRefOid: normalizedHeadRefOid };
+      }
+      return { kind: 'indeterminate' };
+    }
   } catch {
-    return false;
+    return { kind: 'indeterminate' };
+  }
+}
+
+/**
+ * The commits `git branch -D` would discard when a merged-PR branch advanced
+ * beyond its recorded head. This is diagnostic data only: it never grants
+ * deletion authority.
+ */
+async function listUnmergedCommits(
+  runGit: GitRunner,
+  projectRoot: string,
+  headRefOid: string,
+  ref: string,
+): Promise<UnmergedCommitListing | null> {
+  try {
+    const { stdout } = await runGit(
+      ['log', '--oneline', '--no-decorate', `${headRefOid}..${ref}`],
+      { cwd: projectRoot },
+    );
+    const commits = stdout
+      .split('\n')
+      .filter((line) => line.trim() !== '')
+      .map((line) => {
+        const [sha, ...subject] = line.trim().split(/\s+/);
+        return { sha, subject: subject.join(' ') };
+      });
+    return { commits: commits.slice(0, 10), overflow: Math.max(0, commits.length - 10) };
+  } catch {
+    return null;
   }
 }
 
@@ -324,7 +401,15 @@ export async function reconcileParkedFeatures(
   opts: ReconcileParkedFeaturesOptions,
 ): Promise<ParkedSweepResult> {
   const entries: ParkedSweepEntry[] = [];
-  const counts = { reconciled: 0, deferred: 0, orphaned: 0, parked: 0, skipped: 0 };
+  const counts = {
+    reconciled: 0,
+    deferred: 0,
+    orphaned: 0,
+    parked: 0,
+    refused: 0,
+    skipped: 0,
+  };
+  const refusedByReason: Partial<Record<RefusalReason, number>> = {};
   const runGit = opts.runGit ?? makeProductionGit();
   const parkedSlugs = await listOperatorParkedSlugs(opts.projectRoot);
 
@@ -383,7 +468,11 @@ export async function reconcileParkedFeatures(
       if (outcome.refusal === undefined) {
         counts.reconciled++;
       }
-      else if (outcome.deferred) counts.deferred++;
+      else if (outcome.refusal === 'record-missing') counts.deferred++;
+      else {
+        counts.refused++;
+        refusedByReason[outcome.refusal] = (refusedByReason[outcome.refusal] ?? 0) + 1;
+      }
     }
     if (classification === 'orphan') counts.orphaned++;
     else if (classification === 'unclassified') counts.skipped++;
@@ -391,17 +480,30 @@ export async function reconcileParkedFeatures(
     opts.cache?.set(slug, classification);
   }
 
-  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.skipped}`;
+  const refusalSignature = Object.entries(refusedByReason)
+    .sort(([leftReason], [rightReason]) => leftReason.localeCompare(rightReason))
+    .map(([reason, count]) => `${reason}=${count}`)
+    .join(',');
+  const signature = `${counts.reconciled}:${counts.deferred}:${counts.orphaned}:${counts.parked}:${counts.refused}:${counts.skipped}:${refusalSignature}`;
   if (!opts.cache || sweepSummarySignatures.get(opts.cache) !== signature) {
+    const refusalReasons = Object.entries(refusedByReason)
+      .sort(([leftReason, leftCount], [rightReason, rightCount]) =>
+        rightCount - leftCount || leftReason.localeCompare(rightReason));
+    const refusalSummary = counts.refused > 0
+      ? `; refusals: ${refusalReasons.map(([reason, count]) => `${reason}=${count}`).join(', ')}`
+      : '';
     const remainingParked = Math.max(0, counts.parked - counts.reconciled);
     const nextSteps = [
       counts.deferred > 0 ? `${counts.deferred} deferred await${counts.deferred === 1 ? 's' : ''} shipped-record repair` : undefined,
       counts.orphaned > 0 ? `${counts.orphaned} orphaned ${counts.orphaned === 1 ? 'park needs' : 'parks need'} operator review` : undefined,
+      counts.refused > 0
+        ? `${counts.refused} refusal${counts.refused === 1 ? '' : 's'} requires resolving ${refusalReasons[0]?.[0]}`
+        : undefined,
       remainingParked > 0 ? `${remainingParked} parked remain${remainingParked === 1 ? 's' : ''} parked` : undefined,
       counts.skipped > 0 ? `${counts.skipped} skipped retry when merge/issue evidence is available` : undefined,
     ].filter((step): step is string => step !== undefined);
     const guidance = nextSteps.length > 0 ? `; next: ${nextSteps.join('; ')}` : '; next: no action required';
-    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} skipped=${counts.skipped}${guidance}`);
+    opts.log?.(`[parked-reconciliation] reconciled=${counts.reconciled} deferred=${counts.deferred} orphaned=${counts.orphaned} parked=${counts.parked} refused=${counts.refused} skipped=${counts.skipped}${refusalSummary}${guidance}`);
     if (opts.cache) sweepSummarySignatures.set(opts.cache, signature);
   }
   if (opts.cache) {
@@ -409,7 +511,7 @@ export async function reconcileParkedFeatures(
     for (const slug of opts.cache.keys()) if (!live.has(slug)) opts.cache.delete(slug);
   }
 
-  return { entries, counts };
+  return { entries, counts, refusedByReason };
 }
 
 /**
@@ -436,7 +538,7 @@ export async function reconcileMergedPark(
     return {
       slug: opts.slug,
       steps: [],
-      refusal: evidence.branches.length === 0 ? 'branch-missing' : 'not-ancestor',
+      refusal: evidence.branches.length === 0 ? 'branch-missing' : 'no-merge-proof',
     };
   }
 
@@ -457,8 +559,27 @@ export async function reconcileMergedPark(
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
     for (const ref of unproven) {
-      if (!(await isSquashMergedAtTip(runGit, runGh, opts.projectRoot, ref))) {
-        return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
+      const diagnosis = await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref);
+      switch (diagnosis.kind) {
+        case 'proven':
+          continue;
+        case 'no-pr':
+          return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
+        case 'ahead': {
+          const unmergedCommits = await listUnmergedCommits(
+            runGit,
+            opts.projectRoot,
+            diagnosis.headRefOid,
+            ref,
+          );
+          return unmergedCommits === null
+            ? { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' }
+            : { slug: opts.slug, steps: [], refusal: 'unmerged-commits', unmergedCommits };
+        }
+        case 'behind':
+          return { slug: opts.slug, steps: [], refusal: 'branch-behind-merged-head' };
+        case 'indeterminate':
+          return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
       }
     }
   }

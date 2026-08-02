@@ -385,11 +385,15 @@ drop, by **either** of two proofs:
   structurally false forever even for a branch carrying nothing beyond what landed. One extra local
   commit moves the tip, the SHAs diverge, and this proof fails.
 
-If neither proof holds for some branch — a stale local branch, work that landed on it after the
-merge, or simply no `gh` available to ask — cleanup is refused with `not-ancestor` and nothing is
-deleted, even though the slug still classifies `merged`. Once a proof holds, the branch is deleted
-with `git branch -D`: the reconciler, not git, is the authority that no commit is dropped, and git's
-own `-d` merge check is structurally false forever for a squash-merged branch.
+If neither proof holds for some branch, cleanup is refused and nothing is deleted, even though the
+slug still classifies `merged`. The reason distinguishes no merged-PR proof (`no-merge-proof`),
+commits added after the merged PR head (`unmerged-commits`), a branch that is behind that head
+(`branch-behind-merged-head`), and evidence that Git or `gh` could not check
+(`ancestry-check-failed`). For `unmerged-commits`, `daemon reconcile-parked` prints up to ten
+`SHA subject` lines and an overflow count, so the operator can inspect what cleanup would drop.
+Once a proof holds, the branch is deleted with `git branch -D`: the reconciler, not git, is the
+authority that no commit is dropped, and git's own `-d` merge check is structurally false forever
+for a squash-merged branch.
 
 Worktree removal tolerates one more real-world shape. Some `.worktrees/<slug>` paths exist on disk
 without ever having been registered as git worktrees, and `git worktree remove` rejects those with
@@ -412,12 +416,14 @@ See [`daemon reconcile-parked`](../reference/cli.md#daemon-reconcile-parked) for
 and refusal reasons. An `orphan` classification is never auto-reconciled — it needs an operator to
 decide whether to park it, delete it, or resume it manually.
 
-The sweep writes one aggregate line when its counts change instead of one line per parked slug. The
-line joins its tag directly to the daemon prefix and explains the next action for every nonzero
-outcome, for example:
+The cleanup sweep writes one aggregate line when its counts change instead of one line per parked
+slug. It includes `refused=N` and, when nonzero, a per-reason breakdown plus guidance for the
+dominant refusal. The startup dashboard runs an observational classification pass with cleanup
+disabled, so its aggregate always reports `refused=0`. A cleanup-sweep line joins its tag directly
+to the daemon prefix and explains the next action for every nonzero outcome, for example:
 
 ```text
-[daemon][parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=7 skipped=56; next: 1 deferred awaits shipped-record repair; 7 parked remain parked; 56 skipped retry when merge/issue evidence is available
+[daemon][parked-reconciliation] reconciled=0 deferred=1 orphaned=0 parked=7 refused=2 skipped=56; refusals: unmerged-commits=2; next: 1 deferred awaits shipped-record repair; 2 refusals requires resolving unmerged-commits; 7 parked remain parked; 56 skipped retry when merge/issue evidence is available
 ```
 
 ## Retained worktrees

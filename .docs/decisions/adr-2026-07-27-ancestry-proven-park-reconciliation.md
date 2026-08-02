@@ -23,9 +23,18 @@ Conflict-check surfaced three accepted contracts this design must reconcile with
    - **orphan** — issue from `.docs/intake/<slug>.md` `Source-Ref:` is closed AND the branch is not an ancestor (or absent). Uses the shared sourceRef parser (`parseIntakeSourceRef` / the intake brain-sweep's shared parse) — never a new parser, never slug-string inference. Orphans are surfaced on the dashboard as `orphan — needs manual review`; they are NEVER deleted.
    - no marker / unparseable ref / git or `gh` failure → no classification, no action (fail-closed toward inaction).
 
+   *Amended 2026-08-01 by `adr-2026-08-01-multi-proof-park-deletion-authority`: `merged` also
+   includes a branch whose current tip is the `headRefOid` of its MERGED pull request; the two
+   deletion proofs are equal-strength. See that ADR for the complete authority set.*
+
 2. **Auto-reconcile (default ON) via `reconcile_parked_auto_cleanup` (boolean, default `true`).** With the toggle on, the sweep passes each merged-classified slug to the guarded cleanup helper. With the toggle off, the sweep only annotates merged parks as `merged — ready to reconcile` and takes no destructive action. The toggle changes who initiates, never what is checked.
 
 3. **Git ancestry is the ONLY deletion authority.** All deletion flows through one guarded helper that accepts exactly ONE explicit slug, rejects globs/lists/paths, and re-verifies ancestry itself immediately before any destructive step (never trusts the caller's or the sweep's cached classification). Issue state, artifact content hashes, and slug text never authorize deletion. No force flag exists anywhere.
+
+   *Amended 2026-08-01 by `adr-2026-08-01-multi-proof-park-deletion-authority`: deletion authority
+   is the equal-strength set of ancestry and merged-PR head identity, rather than ancestry alone.
+   The single-slug scope, point-of-deletion re-verification, record-as-precondition, and no-force
+   requirements remain unchanged.*
 
 4. **Records are never invented; record-on-main is a deletion precondition.** The helper deletes worktree/branch/marker only when `.docs/shipped/<slug>.md` already exists on the base branch. When missing, it resolves the actual merged implementation PR (e.g. `gh pr list --state merged --head feature/<slug>`); if resolvable it hands record creation to the ST-916 record-only repair-PR seam (real `pr` URL, canonical hash derivation) and defers cleanup to a later pass ("not reconcilable until the record lands"); if no merged PR is resolvable it reports and makes zero record writes (ST-916-5 NP2). Nothing here commits to main or merges anything.
 
