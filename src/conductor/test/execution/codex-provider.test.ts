@@ -1254,25 +1254,23 @@ describe('CodexProvider', () => {
   ] as const)(
     'blocks initial and adjacent unattended dispatches for explicit %s documented evidence',
     async (_name, summary, state) => {
-      mockExeca.mockResolvedValue({
+      const runDoctor = vi.fn().mockResolvedValue({
         stdout: JSON.stringify({
           schemaVersion: 1,
           overallStatus: 'ok',
           checks: { 'auth.credentials': { status: 'fail', summary } },
         }),
-        exitCode: 1,
-        failed: true,
-      } as any);
-      const gatedProvider = new CodexProvider();
-
+        exitCode: 0,
+      });
+      const gatedProvider = new CodexProvider(runDoctor);
       const initial = await gatedProvider.invoke(baseOptions);
       const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
 
       expect({
         initial: initial.authentication?.state,
         adjacent: adjacent.authentication?.state,
-        doctorCalls: mockExeca.mock.calls.length,
-        substantiveCalls: 0,
+        doctorCalls: runDoctor.mock.calls.length,
+        substantiveCalls: mockExeca.mock.calls.length,
         output: `${initial.output}\n${adjacent.output}`,
       }).toEqual({
         initial: state,

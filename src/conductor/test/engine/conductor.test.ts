@@ -5313,7 +5313,7 @@ describe('engine/conductor', () => {
       const readiness = vi
         .fn()
         .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
-        .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'ready' });
+        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
       const runtimes = new ProviderRuntimeSet([
         {
           key: 'codex',
