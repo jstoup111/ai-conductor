@@ -1106,6 +1106,91 @@ describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
     }
   });
 
+  it('counts three merged cleanup refusals by reason while keeping all three slugs parked', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slugs = ['behind', 'no-proof', 'unmerged'] as const;
+    const unmergedHead = '1111111111111111111111111111111111111111';
+    const behindHead = '2222222222222222222222222222222222222222';
+    const { run } = makeGit({
+      shipped: slugs,
+      branches: slugs.map((slug) => `feat/${slug}`),
+      mergedPrHeads: [unmergedHead],
+      tips: Object.fromEntries(slugs.map((slug) => [
+        `feat/${slug}`,
+        'ffffffffffffffffffffffffffffffffffffffff',
+      ])),
+      unmergedLog: ['aaaaaaa local commit after merged head'],
+    });
+    const runGh = vi.fn<GhRunner>(async (args) => {
+      const ref = args[args.indexOf('--head') + 1];
+      if (ref === 'feat/no-proof') return { stdout: '[]' };
+      const headRefOid = ref === 'feat/behind' ? behindHead : unmergedHead;
+      return { stdout: JSON.stringify([{ headRefOid }]) };
+    });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      for (const slug of slugs) await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, runGh, log });
+
+      expect({
+        counts: result.counts,
+        refusedByReason: result.refusedByReason,
+        parked: await Promise.all(slugs.map((slug) => isOperatorParked(projectRoot, slug))),
+        logs: log.mock.calls,
+      }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 3,
+          refused: 3,
+          skipped: 0,
+        },
+        refusedByReason: {
+          'branch-behind-merged-head': 1,
+          'no-merge-proof': 1,
+          'unmerged-commits': 1,
+        },
+        parked: [true, true, true],
+        logs: [[
+          '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=3 refused=3 skipped=0; refusals: branch-behind-merged-head=1, no-merge-proof=1, unmerged-commits=1; next: 3 refusals requires resolving branch-behind-merged-head; 3 parked remain parked',
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('omits refusal-breakdown noise when a sweep has no refusals', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'merged-ready';
+    const { run } = makeGit({ shipped: [slug] });
+    const log = vi.fn<(message: string) => void>();
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const result = await reconcileParkedFeatures({ projectRoot, runGit: run, autoCleanup: false, log });
+
+      expect({ counts: result.counts, refusedByReason: result.refusedByReason, logs: log.mock.calls }).toEqual({
+        counts: {
+          reconciled: 0,
+          deferred: 0,
+          orphaned: 0,
+          parked: 1,
+          refused: 0,
+          skipped: 0,
+        },
+        refusedByReason: {},
+        logs: [[
+          '[parked-reconciliation] reconciled=0 deferred=0 orphaned=0 parked=1 refused=0 skipped=0; next: 1 parked remains parked',
+        ]],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('keeps a record-missing outcome deferred rather than refused', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'sweep-record-missing';
