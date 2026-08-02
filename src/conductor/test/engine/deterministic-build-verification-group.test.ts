@@ -276,17 +276,22 @@ describe('deterministic BUILD verification group', () => {
     const run = conductor.run();
     await vi.waitFor(() => expect(ensure).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(sighupHandler).toBeDefined());
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    const beforeSignal = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
     await sighupHandler!();
     const persisted = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
     releaseWiring.resolve();
     await run;
 
-    expect([
-      persisted.test_suite,
-      persisted.build_verification__test_suite,
-    ].includes('done')).toBe(false);
+    expect({
+      beforeSignalSyntheticDone: beforeSignal.build_verification__test_suite === 'done',
+      afterSignalDone: [
+        persisted.test_suite,
+        persisted.build_verification__test_suite,
+      ].includes('done'),
+    }).toEqual({
+      beforeSignalSyntheticDone: false,
+      afterSignalDone: false,
+    });
   });
 
   it('halts a repeated wiring failure after a no-op BUILD re-entry before charging the wiring budget again', async () => {
