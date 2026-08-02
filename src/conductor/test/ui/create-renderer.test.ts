@@ -118,6 +118,23 @@ describe('createRenderer', () => {
     );
   });
 
+  it('renders closed probe-failure recovery progress in CLI mode', async () => {
+    await renderer({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      failureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    });
+
+    expect(stream.output()).toContain(
+      'Codex cached-login credentials: probe-failed (probe-failure: timeout); waiting 3s, next disposition: trial-required',
+    );
+  });
+
   it('reads state from file on each dashboard render', async () => {
     await renderer({ type: 'step_completed', step: 'worktree', status: 'done' });
     expect(readStateMock).toHaveBeenCalledWith('/tmp/test-state.json');

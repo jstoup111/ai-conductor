@@ -1669,27 +1669,36 @@ export class Conductor {
             previousProgress.degradation !== degradation;
 
           if (stateChanged || now - previousProgress.emittedAt >= 60_000) {
-            const progress = {
-              type: 'credentials_park_progress',
-              provider: 'codex',
-              source: authentication.source,
-              readiness: current.state,
-              elapsedSeconds: Math.min(
-                Math.ceil(timeoutMs / 1_000),
-                Math.max(0, Math.floor(elapsedMs / 1_000)),
-              ),
-              nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
-              degradation,
-              ...(probeFailed
-                ? {
-                    failureKind: current.probeFailure.kind,
-                    nextDisposition: 'trial-required' as const,
-                  }
-                : {}),
-            } as const;
-            // Task 17 widens the persisted event contract for these closed facts.
-            await this.events.emit(progress as Parameters<typeof this.events.emit>[0]);
-            lastProgress = { readiness: current.state, degradation, emittedAt: now };
+            const elapsedSeconds = Math.min(
+              Math.ceil(timeoutMs / 1_000),
+              Math.max(0, Math.floor(elapsedMs / 1_000)),
+            );
+            if (probeFailed) {
+              await this.events.emit({
+                type: 'credentials_park_progress',
+                provider: 'codex',
+                source: authentication.source,
+                readiness: current.state,
+                elapsedSeconds,
+                degradation: 'probe-failure',
+                failureKind: current.probeFailure.kind,
+                nextDisposition: 'trial-required',
+              });
+              lastProgress = { readiness: current.state, degradation, emittedAt: now };
+            } else if (current.state !== 'probe-failed') {
+              await this.events.emit({
+                type: 'credentials_park_progress',
+                provider: 'codex',
+                source: authentication.source,
+                readiness: current.state,
+                elapsedSeconds,
+                nextProbeDelaySeconds: Math.min(30, Math.max(0, Math.ceil(nextDelayMs / 1_000))),
+                degradation: current.unrelatedHealth === 'degraded'
+                  ? 'unrelated-diagnostic-degradation'
+                  : 'credential-failure',
+              });
+              lastProgress = { readiness: current.state, degradation, emittedAt: now };
+            }
           }
 
           if (isReady) {

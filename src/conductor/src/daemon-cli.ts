@@ -2145,6 +2145,15 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'session_reset':
       log(`${dot} ${chalk.dim(`session reset: ${event.reason}`)}`);
       break;
+    case 'credentials_park_progress':
+      log(
+        chalk.yellow(
+          event.degradation === 'probe-failure'
+            ? `Codex ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.failureKind}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
+            : `Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
+        ),
+      );
+      break;
     case 'operator_park_boundary': {
       const boundary =
         event.boundary.kind === 'pre-first-unit'

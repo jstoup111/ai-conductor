@@ -171,6 +171,23 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
     );
   });
 
+  it('renders closed probe-failure recovery progress in daemon mode', () => {
+    const [line] = lines({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      failureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    });
+
+    expect(line).toBe(
+      'Codex cached-login credentials: probe-failed (probe-failure: timeout); waiting 3s, next disposition: trial-required',
+    );
+  });
+
   it('produces no line for an unhandled kind (unchanged behavior)', () => {
     expect(lines({ type: 'dashboard_refresh' })).toEqual([]);
   });

@@ -3,6 +3,7 @@ import type { BootstrapMode } from './state.js';
 import type {
   AuthenticationReadinessState,
   AuthenticationSource,
+  CodexProbeFailureKind,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -14,6 +15,31 @@ export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 export type CredentialParkProgressDegradation =
   | 'credential-failure'
   | 'unrelated-diagnostic-degradation';
+
+type CredentialParkProgressEventBase = {
+  type: 'credentials_park_progress';
+  provider: 'codex';
+  source: AuthenticationSource;
+  elapsedSeconds: number;
+};
+
+type CredentialParkProgressEvent = CredentialParkProgressEventBase &
+  (
+    | {
+        readiness: Exclude<AuthenticationReadinessState, 'probe-failed'>;
+        degradation: CredentialParkProgressDegradation;
+        nextProbeDelaySeconds: number;
+        failureKind?: never;
+        nextDisposition?: never;
+      }
+    | {
+        readiness: 'probe-failed';
+        degradation: 'probe-failure';
+        failureKind: CodexProbeFailureKind;
+        nextDisposition: 'trial-required';
+        nextProbeDelaySeconds?: never;
+      }
+  );
 
 export type VerdictFreshnessOutcome =
   | 'rewritten'
@@ -175,16 +201,8 @@ export type ConductorEvent =
       featureSlug: string;
       boundary: SchedulingUnitRef;
     }
-  | {
-      /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
-      type: 'credentials_park_progress';
-      provider: 'codex';
-      source: AuthenticationSource;
-      readiness: AuthenticationReadinessState;
-      elapsedSeconds: number;
-      nextProbeDelaySeconds: number;
-      degradation: CredentialParkProgressDegradation;
-    }
+  /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
+  | CredentialParkProgressEvent
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | {

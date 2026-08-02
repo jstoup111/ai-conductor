@@ -119,6 +119,36 @@ describe('EventPersister', () => {
     });
   });
 
+  it('persists the closed probe-failure recovery disposition as JSONL', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      failureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    });
+
+    persister.stop();
+
+    const { ts: _ts, ...record } = JSON.parse((await readFile(eventsPath, 'utf-8')).trim());
+    expect(record).toEqual({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      failureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    });
+  });
+
   it('persists only the closed progress contract, not doctor diagnostics', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();

@@ -140,6 +140,23 @@ describe('TerminalRenderer', () => {
     );
   });
 
+  it('renders closed probe-failure recovery progress without a lifecycle restart', async () => {
+    await renderer.handle({
+      type: 'credentials_park_progress',
+      provider: 'codex',
+      source: 'cached-login',
+      readiness: 'probe-failed',
+      elapsedSeconds: 3,
+      degradation: 'probe-failure',
+      failureKind: 'timeout',
+      nextDisposition: 'trial-required',
+    });
+
+    expect(stream.output()).toContain(
+      'Codex cached-login credentials: probe-failed (probe-failure: timeout); waiting 3s, next disposition: trial-required',
+    );
+  });
+
   it('renders only closed credential-park progress fields', async () => {
     const rawFragment = 'sk-live-super-secret-token /private/codex/credentials.json';
     await renderer.handle({

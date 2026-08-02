@@ -557,6 +557,162 @@ describe('conductor auth-park: daemon-token mode', () => {
     }).toEqual({ buildAttempts: [1, 1, 2], readinessCalls: 1 });
   });
 
+  it('keeps degraded-preflight recovery on the selected Codex model ladder without mutating provider state', async () => {
+    const probeFailed = {
+      provider: 'codex' as const,
+      source: 'cached-login' as const,
+      state: 'probe-failed' as const,
+      probeFailure: {
+        kind: 'timeout' as const,
+        facts: { timeoutMs: 10_000 },
+      },
+    };
+    const selectedReadiness = vi.fn().mockResolvedValue(probeFailed);
+    const alternateReadiness = vi.fn();
+    const selectedInvoke = vi.fn();
+    const alternateInvoke = vi.fn();
+    const selectedAvailability = new ModelAvailability(
+      CODEX_MODEL_POLICY.modelFallbackLadder,
+    );
+    const alternateAvailability = new ModelAvailability(
+      CLAUDE_MODEL_POLICY.modelFallbackLadder,
+    );
+    const runtimes = new ProviderRuntimeSet([
+      {
+        key: 'codex',
+        provider: {
+          invoke: selectedInvoke,
+          invokeInteractive: vi.fn(async () => {}),
+          readiness: selectedReadiness,
+        },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: selectedAvailability,
+      },
+      {
+        key: 'claude',
+        provider: {
+          invoke: alternateInvoke,
+          invokeInteractive: vi.fn(async () => {}),
+          readiness: alternateReadiness,
+        },
+        policy: CLAUDE_MODEL_POLICY,
+        builtIn: true,
+        availability: alternateAvailability,
+      },
+    ]);
+    const buildResults: StepRunResult[] = [
+      codexCachedLoginFailure(),
+      {
+        success: false,
+        output: 'actual ordinary failure after degraded preflight',
+        actualProvider: 'codex',
+        authentication: probeFailed,
+      },
+      {
+        success: false,
+        output: 'actual ordinary failure on the next intended ladder attempt',
+        actualProvider: 'codex',
+        authentication: probeFailed,
+      },
+      {
+        success: true,
+        output: 'actual success on the escalated model',
+        actualProvider: 'codex',
+        authentication: probeFailed,
+      },
+    ];
+    const observedBuildResults: StepRunResult[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step): Promise<StepRunResult> => {
+        if (step !== 'build') return { success: true };
+        const result = buildResults[observedBuildResults.length] ?? { success: true };
+        observedBuildResults.push(result);
+        return result;
+      }),
+    };
+    const halts: string[] = [];
+    events.on('loop_halt', (event) => {
+      if (event.type === 'loop_halt') halts.push(event.reason);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      maxRetries: 4,
+      sleepFn: vi.fn(async () => {}),
+      config: {
+        harness_self_host: { auth_park_timeout_minutes: 1 },
+        steps: { build: { llm_provider: 'codex' } },
+      } as never,
+      providerExecution: {
+        runtimes,
+        sessions: {} as never,
+        configuredProviders: ['codex', 'claude'],
+      },
+      fullSuiteVerifier: fullSuiteVerifierStub(),
+    });
+
+    await conductor.run();
+
+    const dispatches = (runner.run as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([step]) => step === 'build')
+      .map(([, , options]) => ({
+        attempt: options?.attempt,
+        model: options?.modelOverride,
+      }));
+    expect({
+      dispatches,
+      actualClassifications: observedBuildResults.map((result) => ({
+        success: result.success,
+        authFailure: result.authFailure,
+        authentication: result.authentication,
+      })),
+      selectedReadinessCalls: selectedReadiness.mock.calls.length,
+      alternateReadinessCalls: alternateReadiness.mock.calls.length,
+      selectedProviderInvocations: selectedInvoke.mock.calls.length,
+      alternateProviderInvocations: alternateInvoke.mock.calls.length,
+      selectedDeadModels: [...selectedAvailability.dead],
+      alternateDeadModels: [...alternateAvailability.dead],
+      selectedRunWideUnavailable: runtimes.get('codex').runWideUnavailable,
+      alternateRunWideUnavailable: runtimes.get('claude').runWideUnavailable,
+      halts,
+    }).toEqual({
+      dispatches: [
+        { attempt: 1, model: 'gpt-5.6-terra' },
+        { attempt: 1, model: 'gpt-5.6-terra' },
+        { attempt: 2, model: 'gpt-5.6-terra' },
+        { attempt: 3, model: 'gpt-5.6-sol' },
+      ],
+      actualClassifications: [
+        {
+          success: false,
+          authFailure: true,
+          authentication: {
+            provider: 'codex',
+            source: 'cached-login',
+            state: 'unusable',
+          },
+        },
+        { success: false, authFailure: undefined, authentication: probeFailed },
+        { success: false, authFailure: undefined, authentication: probeFailed },
+        { success: true, authFailure: undefined, authentication: probeFailed },
+      ],
+      selectedReadinessCalls: 1,
+      alternateReadinessCalls: 0,
+      selectedProviderInvocations: 0,
+      alternateProviderInvocations: 0,
+      selectedDeadModels: [],
+      alternateDeadModels: [],
+      selectedRunWideUnavailable: undefined,
+      alternateRunWideUnavailable: undefined,
+      halts: [],
+    });
+  });
+
   it.each([
     { label: 'initial serial adapter', step: 'build' as const, completed: {} },
     {
