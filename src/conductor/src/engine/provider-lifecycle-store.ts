@@ -89,22 +89,6 @@ export function createProviderLifecycleEpisodeStore(
   };
 }
 
-const defaultStore = createProviderLifecycleEpisodeStore();
-
-export async function writeProviderLifecycleEpisode(
-  projectRoot: string,
-  lifecycle: ProviderLifecycleState,
-): Promise<void> {
-  await defaultStore.writeProviderLifecycleEpisode(projectRoot, lifecycle);
-}
-
-export async function readProviderLifecycleEpisode(
-  projectRoot: string,
-  logicalStep: string,
-): Promise<ProviderLifecycleEpisodeReadResult> {
-  return defaultStore.readProviderLifecycleEpisode(projectRoot, logicalStep);
-}
-
 async function readProviderLifecycleEpisodeWithFileOperations(
   fileOperations: ProviderLifecycleEpisodeStoreFileOperations,
   projectRoot: string,
@@ -119,10 +103,6 @@ async function readProviderLifecycleEpisodeWithFileOperations(
   }
 
   return parseProviderLifecycleEpisode(content, logicalStep);
-}
-
-export async function clearProviderLifecycleEpisode(projectRoot: string, logicalStep: string): Promise<void> {
-  await defaultStore.clearProviderLifecycleEpisode?.(projectRoot, logicalStep);
 }
 
 function parseProviderLifecycleEpisode(
