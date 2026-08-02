@@ -3398,10 +3398,13 @@ export class Conductor {
               }
 
               // A failed readiness probe authorizes one real invocation, not
-              // one invocation per group member. Any remaining failures stay
-              // pending for a later recovery episode.
+              // one invocation per group member. A ready recheck, however,
+              // restores the ordinary group contract: every failed member
+              // using that source resumes together.
               const retryIdx = retryIdxs[0]!;
-              const retryMembers = [membership.dispatchable[retryIdx]!];
+              const retryMembers = park.disposition === 'trial-required'
+                ? [membership.dispatchable[retryIdx]!]
+                : retryIdxs.map((idx) => membership.dispatchable[idx]!);
               if (park.disposition === 'trial-required' && recoverySource) {
                 // Consume the one-shot authorization before dispatch so a
                 // successful or non-auth trial cannot authorize another
@@ -3434,7 +3437,9 @@ export class Conductor {
                   return;
                 }
               }
-              outcomes[retryIdx] = retryOutcomes[0]!;
+              for (const [index, outcome] of retryOutcomes.entries()) {
+                outcomes[retryIdxs[index]!] = outcome;
+              }
             }
 
             const permissionDeniedIdx = outcomes.findIndex(

@@ -19,6 +19,8 @@ import { detectsAuthFailure } from '../../src/execution/claude-provider.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { invokeRuntime } from '../../src/engine/provider-execution.js';
+import type { InvokeResult } from '../../src/execution/llm-provider.js';
 
 type AuthResult = StepRunResult & { authFailure?: boolean };
 
@@ -576,7 +578,33 @@ describe('conductor auth-park: daemon-token mode', () => {
     };
     const selectedReadiness = vi.fn().mockResolvedValue(probeFailed);
     const alternateReadiness = vi.fn();
-    const selectedInvoke = vi.fn();
+    const initialAuthFailure = codexCachedLoginFailure();
+    const selectedResponses: InvokeResult[] = [
+      {
+        ...initialAuthFailure,
+        output: initialAuthFailure.output ?? 'Codex cached login failed authentication',
+        exitCode: 1,
+      },
+      {
+        success: false,
+        output: 'actual ordinary failure after degraded preflight',
+        exitCode: 1,
+        authentication: probeFailed,
+      },
+      {
+        success: false,
+        output: 'actual ordinary failure on the next intended ladder attempt',
+        exitCode: 1,
+        authentication: probeFailed,
+      },
+      {
+        success: true,
+        output: 'actual success on the escalated model',
+        exitCode: 0,
+        authentication: probeFailed,
+      },
+    ];
+    const selectedInvoke = vi.fn(async () => selectedResponses.shift()!);
     const alternateInvoke = vi.fn();
     const selectedAvailability = new ModelAvailability(
       CODEX_MODEL_POLICY.modelFallbackLadder,
@@ -608,32 +636,19 @@ describe('conductor auth-park: daemon-token mode', () => {
         availability: alternateAvailability,
       },
     ]);
-    const buildResults: StepRunResult[] = [
-      codexCachedLoginFailure(),
-      {
-        success: false,
-        output: 'actual ordinary failure after degraded preflight',
-        actualProvider: 'codex',
-        authentication: probeFailed,
-      },
-      {
-        success: false,
-        output: 'actual ordinary failure on the next intended ladder attempt',
-        actualProvider: 'codex',
-        authentication: probeFailed,
-      },
-      {
-        success: true,
-        output: 'actual success on the escalated model',
-        actualProvider: 'codex',
-        authentication: probeFailed,
-      },
-    ];
     const observedBuildResults: StepRunResult[] = [];
     const runner: StepRunner = {
-      run: vi.fn(async (step): Promise<StepRunResult> => {
+      run: vi.fn(async (step, _state, options): Promise<StepRunResult> => {
         if (step !== 'build') return { success: true };
-        const result = buildResults[observedBuildResults.length] ?? { success: true };
+        const result = {
+          ...(await invokeRuntime(runtimes.get('codex'), {
+            prompt: 'bounded degraded-readiness dispatch',
+            sessionId: 'auth-park-runtime-test',
+            resume: false,
+            model: options?.modelOverride ?? CODEX_MODEL_POLICY.stepModels.build,
+          })),
+          actualProvider: 'codex',
+        };
         observedBuildResults.push(result);
         return result;
       }),
@@ -710,7 +725,7 @@ describe('conductor auth-park: daemon-token mode', () => {
       ],
       selectedReadinessCalls: 1,
       alternateReadinessCalls: 0,
-      selectedProviderInvocations: 0,
+      selectedProviderInvocations: 4,
       alternateProviderInvocations: 0,
       selectedDeadModels: [],
       alternateDeadModels: [],
