@@ -13,6 +13,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 ### Fixed
 
 - Keep daemon provider preparation bounded before spawn with an independently configurable deadline, one automatic replacement, and diagnosable `needs-human` exhaustion halts while treating quiet running-provider output as status-only telemetry ([implementation PR #1231](https://github.com/jstoup111/ai-conductor/pull/1231)).
+- Reset a loop gate's stuck-selection debt after an objective satisfied verdict, so later
+  source-driven invalidation re-verifies the gate instead of falsely halting on cumulative reruns
+  ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Keep interrupted BUILD verification rounds from preserving a prior round's synthetic success,
   so a failed aggregate suite reruns before build review instead of repeatedly halting on unmet
   prerequisites ([implementation PR #1253](https://github.com/jstoup111/ai-conductor/pull/1253)).

@@ -6948,6 +6948,7 @@ export class Conductor {
         satisfied: verdict.satisfied,
         reason: verdict.reason,
       });
+      if (verdict.satisfied) stuckGate.delete(step.name);
 
       // Task 15: Post-green spot-audit dispatch for semantic attribution verification.
       // Only dispatch after build gate is satisfied and sampling is enabled.
