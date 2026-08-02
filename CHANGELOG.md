@@ -500,7 +500,7 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 - Preserve user-level values for all defaulted configuration keys when a project omits them, while keeping explicit project policy, validation diagnostics, merge semantics, and effective defaults authoritative ([implementation PR #1199](https://github.com/jstoup111/ai-conductor/pull/1199)).
 - Remove retired attribution cutover settings so configurations reject obsolete keys while attribution telemetry sampling retains its 10% default ([implementation PR #1211](https://github.com/jstoup111/ai-conductor/pull/1211)).
 - Show parked-cleanup refusal causes, unmerged commit details, and refusal totals in daemon
-  reconciliation output ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
+  reconciliation output ([implementation PR #1247](https://github.com/jstoup111/ai-conductor/pull/1247)).
 
 ## Migration
 
