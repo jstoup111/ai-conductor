@@ -5,6 +5,13 @@ daemon, and the engineer idea→spec loop.
 
 Documentation for this package lives in the repository's `docs/` tree, not here.
 
+Engineer intake recovery is durable: `engineer claim` automatically returns stale claimed entries to
+the inbox and can serve them in the same claim. The default stale window is 24 hours and is set with
+`stale_claim_window_hours`; operators can recover one entry with `engineer unclaim <sourceRef>` or
+the stale set with `engineer requeue --stale [--older-than <dur>]`. See the
+[engineer-loop guide](../../docs/guides/engineer-loop.md), [CLI reference](../../docs/reference/cli.md),
+and [configuration reference](../../docs/reference/configuration.md) for the contract.
+
 | Topic | Page |
 | --- | --- |
 | Module map, layering, entry points | [`docs/contributing/code-organization.md`](../../docs/contributing/code-organization.md) |

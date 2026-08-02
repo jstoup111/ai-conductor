@@ -1095,6 +1095,17 @@ test_suite:
   0). Wired into `/architecture-review`'s Wiring Surface check (Medium/Large tier) and
   `/plan`'s Step 8a over the authoritative Files set, both before their respective
   artifacts lock (#523).
+- Stale-claim auto-heal for the engineer intake ledger, plus two manual recovery verbs:
+  `conduct-ts engineer unclaim <sourceRef>` (single-idea recovery — flips one `claimed`
+  entry back to `pending`, preserving `capturedAt`) and `conduct-ts engineer requeue
+  --stale [--older-than <dur>]` (bulk recovery — requeues every stranded `claimed` entry
+  past the staleness window, or forgets it if its backing GitHub issue is confirmed
+  closed; fail-safe to requeue on an unconfirmed/errored liveness read). The claim-time
+  delivery guard now also auto-heals stranded `claimed` entries past the same window in
+  the same pass, so a crashed engineer process no longer strands an idea forever. The
+  window defaults to 24h and is configurable via `stale_claim_window_hours` in
+  `.ai-conductor/config.yml` (`resolveStaleClaimWindowMs`,
+  `engine/resolved-config.ts`).
 
 ### Changed
 

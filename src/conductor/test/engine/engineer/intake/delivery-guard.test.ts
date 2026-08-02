@@ -159,6 +159,50 @@ function makeFakeQueueWithEnvelopes(envelopes: any[]): {
   return { queue, releasedEnvelopes };
 }
 
+/**
+ * Fake queue that ALSO supports `list()`/`enqueue()` — the two members
+ * `reapStaleClaimed` (delivery-guard.ts) type-guards for before synthesizing a
+ * minimal envelope for a stale-claimed ledger entry whose original envelope is
+ * no longer present in the queue (already ack'd, long before the process that
+ * held the claim died). `makeFakeQueueWithEnvelopes` above deliberately omits
+ * these two methods so unrelated tests exercise the (typeof-guarded) "queue
+ * doesn't support list/enqueue" short-circuit; this variant is for tests that
+ * must drive the synthesis branch itself.
+ */
+function makeFakeQueueWithEnvelopesAndCatalog(envelopes: any[]): {
+  queue: FakeQueue & { list(): Promise<any[]>; enqueue(e: any): Promise<void> };
+  releasedEnvelopes: any[];
+  enqueued: any[];
+} {
+  const pending = [...envelopes];
+  const catalog = [...envelopes];
+  const releasedEnvelopes: any[] = [];
+  const enqueued: any[] = [];
+
+  const queue = {
+    async claim() {
+      const e = pending.shift();
+      return e || null;
+    },
+    async ack(e: any) {
+      releasedEnvelopes.push(e);
+    },
+    async release(e: any) {
+      releasedEnvelopes.push(e);
+    },
+    async list() {
+      return [...catalog];
+    },
+    async enqueue(e: any) {
+      enqueued.push(e);
+      catalog.push(e);
+      pending.push(e);
+    },
+  };
+
+  return { queue, releasedEnvelopes, enqueued };
+}
+
 function makeEnvelope(sourceRef: string, source = 'test-source') {
   return {
     id: `id-${sourceRef}`,
@@ -1422,6 +1466,409 @@ describe('Task 7: createDeliveryGuardedQueue — in-flight duplicate envelope dr
     // Third claim should return null (queue exhausted)
     const third = await guarded2.claim();
     expect(third).toBeNull();
+  });
+});
+
+// ─── Task 5: delivery-guard reaps stale claimed → pending at claim time ─────
+
+describe('Task 5: createDeliveryGuardedQueue — reaps stale claimed entries to pending', () => {
+  it('stale claimed entry with an open PR is healed, never requeued before healing', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('stale-with-open-pr');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const staleEntry = {
+      source: candidate.source,
+      sourceRef: candidate.sourceRef,
+      status: 'claimed',
+      prUrl: 'https://github.com/owner/repo/pull/123',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+    (ledger as any).get = async () => staleEntry;
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    expect(await guarded.claim()).toBeNull();
+    expect(requeueCalls).toEqual([]);
+    expect(transitionCalls).toContainEqual([
+      candidate.source,
+      candidate.sourceRef,
+      'done',
+      { prUrl: staleEntry.prUrl, branch: undefined },
+    ]);
+  });
+
+  it('stale claimed entry with a merged PR is healed, never requeued before healing', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('stale-with-merged-pr');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+    const staleEntry = {
+      source: candidate.source,
+      sourceRef: candidate.sourceRef,
+      status: 'claimed',
+      prUrl: 'https://github.com/owner/repo/pull/124',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+    (ledger as any).get = async () => staleEntry;
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'MERGED' }));
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+
+    expect(await guarded.claim()).toBeNull();
+    expect(requeueCalls).toEqual([]);
+    expect(transitionCalls).toContainEqual([
+      candidate.source,
+      candidate.sourceRef,
+      'done',
+      { prUrl: staleEntry.prUrl, branch: undefined },
+    ]);
+  });
+
+  it('stale claimed entry (no prUrl) → requeueClaimed called, logger.info announces reap, delivered-heal runs first (precedence)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — always stale
+    };
+
+    (ledger as any).list = async () => [staleEntry];
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    // The claimed candidate itself has no ledger entry keyed to it (passthrough).
+    (ledger as any).get = async () => undefined;
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+    expect(logMessages.some((m) => m.includes('stale-idea'))).toBe(true);
+    // Precedence: no delivered-heal transitions were triggered by this reap.
+    expect(transitionCalls).toHaveLength(0);
+  });
+
+  it('delivered-heal (→ done) runs before the stale-claimed reap pass (precedence)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate1 = makeEnvelope('idea-1');
+    const candidate2 = makeEnvelope('idea-2');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate1, candidate2]);
+    const { ledger, transitionCalls } = makeFakeLedger();
+
+    // candidate1's ledger entry is claimed + has an open prUrl → delivered-heal path.
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (source === candidate1.source && sourceRef === candidate1.sourceRef) {
+        return {
+          source: candidate1.source,
+          sourceRef: candidate1.sourceRef,
+          status: 'claimed',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+          branch: 'feat/test-branch',
+        };
+      }
+      return undefined;
+    };
+
+    // A separate, unrelated stale claimed entry exists in the ledger (no prUrl).
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+
+    const { runner: gh } = makeFakeGh(JSON.stringify({ state: 'OPEN' }));
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const first = await guarded.claim();
+
+    // Delivered-heal serves candidate2 after healing candidate1 to done.
+    expect(first).toEqual(candidate2);
+    expect(transitionCalls.length).toBeGreaterThan(0);
+    expect(transitionCalls[0][2]).toBe('done');
+
+    // Stale-claimed reap also ran and requeued the unrelated stale entry.
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+    expect(logMessages.some((m) => m.includes('stale-idea'))).toBe(true);
+  });
+});
+
+// ─── Plan-Task 6: reap respects the window, never touches non-claimed entries ──
+// (.docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md, Task 6 —
+// distinct from the pre-existing "Task 6" describe blocks above, which belong to
+// an unrelated, earlier plan's task numbering.)
+
+describe('Plan-Task 6: createDeliveryGuardedQueue — reap never touches fresh or terminal entries', () => {
+  it('fresh claimed entry (age <= window) is NOT reaped and NOT announced', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+
+    const freshEntry = {
+      source: 'test-source',
+      sourceRef: 'fresh-idea',
+      status: 'claimed',
+      lastSeenAt: new Date().toISOString(), // just now — well within the window
+    };
+
+    (ledger as any).list = async () => [freshEntry];
+    (ledger as any).get = async () => undefined;
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(requeueCalls).toHaveLength(0);
+    expect(logMessages.some((m) => m.includes('fresh-idea'))).toBe(false);
+  });
+
+  it('old done entry is never reaped by the stale-claim rule (non-claimed status is untouched)', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const candidate = makeEnvelope('idea-1');
+    const { queue } = makeFakeQueueWithEnvelopes([candidate]);
+    const { ledger } = makeFakeLedger();
+
+    const doneEntry = {
+      source: 'test-source',
+      sourceRef: 'done-idea',
+      status: 'done',
+      prUrl: 'https://github.com/owner/repo/pull/900',
+      lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — would be stale if claimed
+    };
+
+    (ledger as any).list = async () => [doneEntry];
+    (ledger as any).get = async () => undefined;
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    expect(claimed).toEqual(candidate);
+    expect(requeueCalls).toHaveLength(0);
+    expect(logMessages.some((m) => m.includes('done-idea'))).toBe(false);
+  });
+});
+
+// ─── Synthetic-envelope reap: stale claimed entry with no queue envelope ──────
+// (commit e22ba810 added `queue.list()`/`queue.enqueue()` synthesis inside
+// `reapStaleClaimed` for exactly this case — the original envelope was ack'd
+// away when it was first claimed, so nothing in the queue matches the stale
+// ledger entry any more. Every other reap test above seeds `pending` with an
+// envelope whose sourceRef matches the stale entry, so the synth branch never
+// actually ran; this test's queue starts with ONLY an unrelated pending
+// envelope — proving the reap manufactures one and serves it.)
+
+describe('Synthetic-envelope reap: stale claimed entry with no matching queue envelope', () => {
+  it('synthesizes a minimal envelope for a stale claimed entry absent from queue.list() and serves it same-pull', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+
+    // The queue has NO envelope for 'stale-idea' — it was ack'd away when
+    // originally claimed. Only an unrelated, genuinely pending envelope exists.
+    const pendingCandidate = makeEnvelope('pending-idea');
+    const { queue, enqueued } = makeFakeQueueWithEnvelopesAndCatalog([pendingCandidate]);
+    const { ledger } = makeFakeLedger();
+
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      capturedAt: '2020-01-01T00:00:00.000Z',
+      lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — always stale
+    };
+    (ledger as any).list = async () => [staleEntry];
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      return { acted: true };
+    };
+    // The pending candidate has no ledger entry (healthy passthrough).
+    (ledger as any).get = async () => undefined;
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const first = await guarded.claim();
+
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
+    // A synthetic envelope was manufactured for the reaped entry, backdated to
+    // its original capturedAt so a real (time-ordered) queue would serve it
+    // ahead of the newer pending candidate.
+    expect(enqueued).toHaveLength(1);
+    expect(enqueued[0]).toMatchObject({
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      receivedAt: '2020-01-01T00:00:00.000Z',
+    });
+    expect(logMessages.some((m) => m.includes('stale-idea'))).toBe(true);
+
+    // The synthesized envelope is now genuinely claimable — served on a
+    // subsequent pull from the SAME guarded queue (this fake's `claim()`
+    // preserves push order rather than re-sorting by receivedAt, so the two
+    // claim()s here stand in for a real queue's single FIFO-ordered pull).
+    expect(first).toMatchObject({ source: 'test-source', sourceRef: 'pending-idea' });
+    const second = await guarded.claim();
+    expect(second).toMatchObject({ source: 'test-source', sourceRef: 'stale-idea' });
+  });
+
+  it('does not duplicate-enqueue when a matching envelope already exists in queue.list()', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+    const staleCandidate = makeEnvelope('stale-idea');
+    const { queue, enqueued } = makeFakeQueueWithEnvelopesAndCatalog([staleCandidate]);
+    const { ledger } = makeFakeLedger();
+
+    const staleEntry = {
+      source: 'test-source',
+      sourceRef: 'stale-idea',
+      status: 'claimed',
+      capturedAt: '2020-01-01T00:00:00.000Z',
+      lastSeenAt: '2020-01-01T00:00:00.000Z',
+    };
+    (ledger as any).list = async () => [staleEntry];
+    (ledger as any).requeueClaimed = async () => ({ acted: true });
+    (ledger as any).get = async () => undefined;
+
+    const { runner: gh } = makeFakeGh('');
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh });
+    const claimed = await guarded.claim();
+
+    expect(enqueued).toHaveLength(0);
+    expect(claimed).toEqual(staleCandidate);
+  });
+});
+
+// ─── Plan-Task 7: reaped entry is claimable on the same pull, oldest-first ─────
+// (.docs/plans/engineer-unclaim-requeue-verb-stale-claimed-ledger.md, Task 7 —
+// distinct from the pre-existing "Task 7" describe blocks above, which belong to
+// an unrelated, earlier plan's task numbering.)
+
+describe('Plan-Task 7: createDeliveryGuardedQueue — reaped entry served same-pull, oldest-first (FIFO)', () => {
+  it('stale claimed entry (older capturedAt) is reaped and returned before a newer pending entry', async () => {
+    const { createDeliveryGuardedQueue } = await loadDeliveryGuard();
+
+    // The queue's FIFO order mirrors capturedAt: the stale entry's envelope was
+    // captured first, so the underlying queue would naturally serve it first —
+    // but its ledger status is still 'claimed' (stranded), so without the reap
+    // it would otherwise be dropped as an in-flight duplicate (see Task 7 guard
+    // logic) and the newer pending entry would be served instead.
+    const staleCandidate = makeEnvelope('stale-idea');
+    const pendingCandidate = makeEnvelope('pending-idea');
+    const { queue } = makeFakeQueueWithEnvelopes([staleCandidate, pendingCandidate]);
+    const { ledger } = makeFakeLedger();
+
+    (ledger as any).list = async () => [
+      {
+        source: 'test-source',
+        sourceRef: 'stale-idea',
+        status: 'claimed',
+        capturedAt: '2020-01-01T00:00:00.000Z',
+        lastSeenAt: '2020-01-01T00:00:00.000Z', // far in the past — always stale
+      },
+    ];
+
+    (ledger as any).get = async (source: string, sourceRef: string) => {
+      if (sourceRef === 'stale-idea') {
+        return {
+          source,
+          sourceRef,
+          status: 'claimed',
+          capturedAt: '2020-01-01T00:00:00.000Z',
+          lastSeenAt: '2020-01-01T00:00:00.000Z',
+        };
+      }
+      return undefined; // pending-idea is a healthy passthrough candidate
+    };
+
+    const requeueCalls: Array<[string, string]> = [];
+    (ledger as any).requeueClaimed = async (source: string, sourceRef: string) => {
+      requeueCalls.push([source, sourceRef]);
+      (ledger as any).get = async (s: string, r: string) => {
+        if (r === 'stale-idea') {
+          return {
+            source: s,
+            sourceRef: r,
+            status: 'pending',
+            capturedAt: '2020-01-01T00:00:00.000Z',
+          };
+        }
+        return undefined;
+      };
+      return { acted: true };
+    };
+
+    const logMessages: string[] = [];
+    const mockLogger = { info: (msg: string) => logMessages.push(msg) };
+    const { runner: gh } = makeFakeGh('');
+
+    const guarded = createDeliveryGuardedQueue(queue, ledger, { gh, logger: mockLogger });
+    const claimed = await guarded.claim();
+
+    // The reaped, older entry wins over the newer healthy pending one — proving
+    // the reap persisted to the ledger BEFORE the candidate's status was
+    // inspected, on this same claim() call.
+    expect(claimed).toEqual(staleCandidate);
+    expect(requeueCalls).toEqual([['test-source', 'stale-idea']]);
   });
 });
 

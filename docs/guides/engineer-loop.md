@@ -91,9 +91,13 @@ Outcomes:
 | `{"empty":true}` | Nothing pending | Use the launch argument or the operator's chat idea |
 | `{"allBlocked":true,"entries":[…]}` | Everything queued is blocked by an open dependency | Resolve or reprioritise the blockers |
 
-`claim` exits 0 in all three cases. It acks the queue, advances the intake ledger to `claimed`, and
-persists a claim record so a later `worktree --source-ref` can recover the issue's Desired-outcome
-bullets without you re-typing them.
+`claim` exits 0 in all three cases. It first reaps `claimed` entries stranded longer than the
+`stale_claim_window_hours` window, returns them to pending, and can re-serve a reaped entry in the
+same call. The default window is 24 hours; set `stale_claim_window_hours` in
+[project configuration](../reference/configuration.md#stale_claim_window_hours) to change it. It then
+acks the selected queue entry, advances the intake ledger to `claimed`, and persists a claim record
+so a later `worktree --source-ref` can recover the issue's Desired-outcome bullets without you
+re-typing them.
 
 Ideas that came from a launch argument or from chat have **no** `sourceRef` — omit `--source-ref`
 for those.
@@ -253,17 +257,38 @@ and exits 0. `--branch` is optional; omitting it preserves any branch already re
 To put an issue back in the pool instead:
 
 ```bash
+conduct-ts engineer unclaim <owner/repo#N>
+```
+
+`unclaim` returns a `claimed` entry to pending, preserving its original capture time so the next
+`claim` can select it. An absent or non-claimed entry is reported without changing state or failing.
+A `claimed` entry that already has a recorded PR is delivered in fact — `unclaim` refuses it and
+tells you to use `resolve` or `forget` instead. Use `forget` only when the issue should be removed
+from the ledger and made eligible for a later `poll`:
+
+```bash
 conduct-ts engineer forget <owner/repo#N>
 ```
 
-This drops the ledger entry and strips the `engineer:handled` label so the next `poll` sees the issue
-again. An absent ref reports `{"found":false}` and is not an error. The label removal is best-effort.
+To recover every stale claim at once, run:
+
+```bash
+conduct-ts engineer requeue --stale [--older-than <dur>]
+```
+
+Without `--older-than`, the sweep uses `stale_claim_window_hours` (24 hours by default); the optional
+duration overrides that window for this run — an unparseable duration exits 1 without touching the
+ledger. It requeues stranded `claimed` entries that have no recorded PR, removes entries only when
+their source issue is confirmed closed, and reports liveness-read errors without removing the entry.
+Claimed entries that already have a PR are reserved for `resolve`/`forget` and are never touched.
 
 ## Maintenance commands
 
 | Command | Effect |
 | --- | --- |
 | `conduct-ts engineer poll` | One synchronous sweep of the GitHub issues adapter into the durable inbox. No routing, no background process. The ledger dedups, so a double-poll enqueues nothing new. |
+| `conduct-ts engineer unclaim <sourceRef>` | Returns one claimed entry to pending so it can be claimed again. Use it for a known stranded claim. |
+| `conduct-ts engineer requeue --stale [--older-than <dur>]` | Bulk-recovers stale claimed entries. The default age is `stale_claim_window_hours` (24 hours); `--older-than` overrides it once. |
 | `conduct-ts engineer migrate-issue-deps` | One-time prose-to-structured-link dependency migration. Dry-run by default; prints the proposal and `Dry run — no links written. Re-run with --confirm to apply.` |
 | `conduct-ts engineer migrate-issue-deps --confirm` | Applies the migration and prints `N link(s) created, M already present.` |
 

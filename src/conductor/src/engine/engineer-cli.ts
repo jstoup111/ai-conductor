@@ -41,11 +41,10 @@ import { ensureRunning } from './daemon-lock.js';
 // The CLI is the composition root for the github-issues intake adapter — the
 // engineer loop must NOT import a concrete adapter (FR-13), but the CLI must.
 import { brainLoopAlive } from './engineer/brain-liveness.js';
-import { createLedger } from './engineer/intake/ledger.js';
+import { createLedger, type LedgerEntry } from './engineer/intake/ledger.js';
 import { createFileQueue } from './engineer/intake/queue.js';
 import { createGithubIssuesAdapter, GITHUB_ISSUES_SOURCE, HANDLED_LABEL } from './engineer/intake/github-issues.js';
 import { reportRouted, reportDone } from './engineer/intake/writeback.js';
-import { parseSourceRef } from './engineer/issue-ref.js';
 import { makeProductionGit, restRemoveLabelArgs, type GitRunner } from './pr-labels.js';
 import {
   claimUnblocked,
@@ -55,7 +54,10 @@ import {
 import type { Envelope } from './engineer/intake/port.js';
 import { createBlockerResolver } from './blocker-resolver.js';
 import { ghIssueLabelReader } from './backlog-priority.js';
-import { createDeliveryGuardedQueue } from './engineer/intake/delivery-guard.js';
+import { createDeliveryGuardedQueue, getIssueState } from './engineer/intake/delivery-guard.js';
+import { isStaleClaim } from './engineer/intake/stale-claim.js';
+import { resolveStaleClaimWindowMs } from './resolved-config.js';
+import { parseSourceRef } from './engineer/intake/source-ref.js';
 import { parseDependencyProse, createDependencyLinks, runMigration } from './engineer/issue-dep-migration.js';
 import { makeProductionGh } from './tracker-client.js';
 
@@ -109,6 +111,8 @@ export type EngineerDispatch =
   | { kind: 'poll' }
   | { kind: 'claim' }
   | { kind: 'forget'; sourceRef: string }
+  | { kind: 'unclaim'; sourceRef: string }
+  | { kind: 'requeue'; stale: true; olderThan?: string }
   | { kind: 'resolve'; sourceRef: string; prUrl: string; branch?: string }
   | { kind: 'migrate-issue-deps'; confirm: boolean }
   | { kind: 'reject'; sub: string; flag: string }
@@ -116,8 +120,8 @@ export type EngineerDispatch =
 
 /** Single source of truth for the known deterministic subcommands (#524). */
 export const ENGINEER_SUBCOMMANDS = [
-  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'resolve',
-  'migrate-issue-deps',
+  'projects', 'worktree', 'land', 'handoff', 'poll', 'claim', 'forget', 'unclaim', 'requeue',
+  'resolve', 'migrate-issue-deps',
 ] as const;
 
 // ── Subcommand detection ──────────────────────────────────────────────────────
@@ -243,6 +247,31 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
     return { kind: 'forget', sourceRef };
   }
 
+  if (subCmd === 'unclaim') {
+    // `conduct-ts engineer unclaim <sourceRef>` — requeue a claimed ledger entry
+    // back to pending (single-idea recovery, FR-5).
+    const sourceRef = argv[4];
+    if (!sourceRef || sourceRef.startsWith('--')) {
+      return { kind: 'guide' };
+    }
+    const unk = findUnknownFlag(argv, []);
+    if (unk) return { kind: 'reject', sub: 'unclaim', flag: unk };
+    return { kind: 'unclaim', sourceRef };
+  }
+
+  if (subCmd === 'requeue') {
+    // `conduct-ts engineer requeue --stale [--older-than <dur>]` — bulk recovery
+    // of stranded `claimed` ledger entries (FR-8). `--stale` is required to
+    // invoke this mode; `--older-than` overrides the resolved stale-claim window.
+    if (!argv.includes('--stale')) {
+      return { kind: 'guide' };
+    }
+    const unk = findUnknownFlag(argv, ['--stale', '--older-than']);
+    if (unk) return { kind: 'reject', sub: 'requeue', flag: unk };
+    const olderThan = parseFlag(argv, '--older-than') ?? undefined;
+    return { kind: 'requeue', stale: true, olderThan };
+  }
+
   if (subCmd === 'resolve') {
     // `conduct-ts engineer resolve <sourceRef> --pr-url <url> [--branch <b>]` — mark
     // a claimed entry as delivered when write-back fails. Recovers from the stranded
@@ -299,6 +328,54 @@ export function detectEngineerCommand(argv: string[]): EngineerDispatch | null {
 
   // Unknown flag-form / empty — treat as guide.
   return { kind: 'guide' };
+}
+
+/**
+ * Parse a simple duration string (e.g. "24h", "2d", "30m") into milliseconds.
+ * Returns null for omitted or unparseable input so callers can distinguish an
+ * absent optional flag from a malformed supplied value.
+ */
+function parseDurationMs(input: string | undefined): number | null {
+  if (!input) return null;
+  const m = /^(\d+)\s*(ms|s|m|h|d)$/.exec(input.trim());
+  if (!m) return null;
+  const n = Number(m[1]);
+  if (!Number.isFinite(n) || n < 0) return null;
+  const unit = m[2];
+  const perUnitMs: Record<string, number> = {
+    ms: 1,
+    s: 1000,
+    m: 60 * 1000,
+    h: 60 * 60 * 1000,
+    d: 24 * 60 * 60 * 1000,
+  };
+  return n * perUnitMs[unit];
+}
+
+/**
+ * Reconstruct the minimal queue envelope for a ledger entry recovered outside
+ * the normal claim-time reap. The original was acked at claim time and polling
+ * intentionally suppresses ledger-known refs, so moving the ledger back to
+ * pending alone would strand the idea. `capturedAt` retains its FIFO position.
+ */
+async function enqueueRecoveredEnvelope(
+  queue: ReturnType<typeof createFileQueue>,
+  entry: LedgerEntry,
+  nowMs: number = Date.now(),
+): Promise<void> {
+  const alreadyQueued = (await queue.list()).some(
+    (envelope) => envelope.source === entry.source && envelope.sourceRef === entry.sourceRef,
+  );
+  if (alreadyQueued) return;
+
+  await queue.enqueue({
+    id: `recovered:${entry.source}:${entry.sourceRef}`,
+    source: entry.source,
+    sourceRef: entry.sourceRef,
+    text: `[recovered stale claim] ${entry.sourceRef}`,
+    status: 'pending',
+    receivedAt: entry.capturedAt ?? new Date(nowMs).toISOString(),
+  });
 }
 
 /** Parse the value of a named flag (e.g. --project foo) from an argv array. */
@@ -535,6 +612,16 @@ export const SUBCOMMAND_HELP = {
     'Flags: <sourceRef> positional (required), --pr-url <url> (required, must be http:// or https://), --branch <branch> (optional).\n' +
     'Mutates: stamps the ledger entry with prUrl (and branch, if given), recovering from a stranded claimed-but-undelivered state.\n' +
     'Loop fit: terminal step — claim → worktree → land → handoff → resolve/forget (recovery path, alternative to forget).',
+  unclaim:
+    'engineer unclaim <sourceRef> — requeue a claimed ledger entry back to pending (single-idea recovery).\n' +
+    'Flags: <sourceRef> positional (required, must not start with --).\n' +
+    'Mutates: flips the ledger entry from claimed to pending, preserving capturedAt; refuses (acted:false) as a non-error on absent or non-claimed entries.\n' +
+    'Loop fit: out-of-band maintenance op — recovers a stale/stranded claim so it can be re-claimed; not a step in claim → worktree → land → handoff → resolve/forget.',
+  requeue:
+    'engineer requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h", "2d").\n' +
+    'Flags: --stale (required — invokes bulk recovery mode), --older-than <dur> (optional, overrides the resolved default stale-claim window).\n' +
+    'Mutates: flips each eligible claimed entry to pending (preserving capturedAt), or forgets it (removes from ledger) when its originating GitHub issue is confirmed closed; never forgets on an unconfirmed/errored liveness read.\n' +
+    'Loop fit: out-of-band maintenance op — bulk recovery of the whole stranded class; not a step in claim → worktree → land → handoff → resolve/forget.',
   'migrate-issue-deps':
     'engineer migrate-issue-deps [--confirm] — one-time migration of prose-based issue dependency references to structured links.\n' +
     'Flags: --confirm (optional — without it, dry-run only: proposes changes with zero writes; with it, applies via the GET-before-POST writer).\n' +
@@ -558,6 +645,8 @@ function printGuide(print: (s: string) => void): void {
       '  conduct-ts engineer land --project <n> --idea "<i>" --worktree <p> [--source-ref <ref>]    — commit spec artifacts in the worktree\n' +
       '  conduct-ts engineer handoff --project <n> --branch <b> --worktree <p> [--source-ref <ref>] — open spec PR + remove worktree + nudge daemon\n' +
       '  conduct-ts engineer resolve <ref> --pr-url <url> [--branch <b>]              — mark a claimed entry as delivered (recovery from write-back failure)\n' +
+      '  conduct-ts engineer unclaim <owner/repo#N>              — requeue a claimed ledger entry back to pending (single-idea recovery)\n' +
+      '  conduct-ts engineer requeue --stale [--older-than <dur>] — bulk-recover stranded claimed ledger entries (e.g. "24h")\n' +
       '  conduct-ts engineer poll                                — poll github issues → enqueue new ideas\n' +
       '  conduct-ts engineer forget <owner/repo#N>               — drop an intake ledger entry + label\n' +
       '  conduct-ts engineer migrate-issue-deps [--confirm]      — one-time prose→link dependency migration ' +
@@ -1072,12 +1161,20 @@ export async function dispatchEngineer(
       const engDir = engineerDir ?? resolveEngineerDir({});
       const { ledger, queue } = buildIntake({ engineerDir: engDir, registryPath, gh, printErr });
 
+      // Resolve the project-level config (`.ai-conductor/config.yml` at cwd) so an
+      // operator's `stale_claim_window_hours` override reaches the reap pass below —
+      // same load path as index.ts's top-level `loadConfig(projectRoot)`. Best-effort:
+      // an absent/invalid config falls back to resolveStaleClaimWindowMs's default.
+      const claimConfigResult = await loadConfig(process.cwd());
+      const claimConfig = claimConfigResult.ok ? claimConfigResult.config : undefined;
+
       // Wrap the queue with the delivery guard decorator (Task 8: integration point).
       // The guard is transparent to claimUnblocked; it only filters/heals problematic
       // candidates via ledger + gh state checks.
       const guardedQueue = createDeliveryGuardedQueue(queue, ledger, {
         gh,
         logger: { info: (msg) => printErr(msg) },
+        config: claimConfig,
       });
 
       // Fresh resolver per claim call — createBlockerResolver()'s memo is scoped
@@ -1167,13 +1264,148 @@ export async function dispatchEngineer(
       const parsedForget = parseSourceRef(sourceRef);
       if (parsedForget) {
         try {
-          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.number, HANDLED_LABEL), { cwd: process.cwd() });
+          await gh(restRemoveLabelArgs(parsedForget.repo, parsedForget.issue, HANDLED_LABEL), { cwd: process.cwd() });
         } catch (err: unknown) {
           printErr(`engineer forget: label strip failed for ${sourceRef}: ${err instanceof Error ? err.message : String(err)}`);
         }
       }
 
       print(JSON.stringify({ kind: 'forget', sourceRef, found: true, removed: true }));
+      return 0;
+    }
+
+    // ── unclaim ─────────────────────────────────────────────────────────────
+    // `conduct-ts engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
+    // requeue a claimed ledger entry back to pending, preserving capturedAt.
+    // An absent ref is reported (found:false) and is NOT an error (Story 5, FR-7).
+    // A non-claimed (terminal) or already PR-delivered entry refuses and directs
+    // the operator to resolve/forget instead (Story 4, FR-6) — also NOT an error.
+    case 'unclaim': {
+      const { sourceRef } = dispatch;
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+
+      const entry = await ledger.get(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (!entry) {
+        print(JSON.stringify({ kind: 'unclaim', sourceRef, found: false }));
+        return 0;
+      }
+
+      if (entry.status !== 'claimed' || entry.prUrl) {
+        const reason = entry.prUrl
+          ? 'entry already has an associated PR — use `engineer resolve` or `engineer forget` instead'
+          : `entry is "${entry.status}", not "claimed" — use \`engineer resolve\` or \`engineer forget\` instead`;
+        print(
+          JSON.stringify({
+            kind: 'unclaim',
+            sourceRef,
+            found: true,
+            acted: false,
+            status: entry.status,
+            reason,
+          }),
+        );
+        return 0;
+      }
+
+      const { acted } = await ledger.requeueClaimed(GITHUB_ISSUES_SOURCE, sourceRef);
+      if (acted) {
+        await enqueueRecoveredEnvelope(createFileQueue(join(engDir, 'inbox')), entry);
+      }
+
+      print(JSON.stringify({ kind: 'unclaim', sourceRef, found: true, acted }));
+      return 0;
+    }
+
+    // ── requeue ───────────────────────────────────────────────────────────────
+    // `conduct-ts engineer requeue --stale [--older-than <dur>]` — bulk recovery
+    // of the whole stranded claimed class (Story 6, FR-8). Before requeueing each
+    // eligible entry, probe its GitHub issue liveness (Story 7, FR-9): closed →
+    // forget (drop); open → requeueClaimed. A liveness read that errors, returns
+    // unknown, or can't be attempted (unparseable sourceRef) NEVER forgets
+    // (fail-safe, Story 7 negative) — the error is surfaced per-entry and the
+    // batch continues for the rest of the run.
+    case 'requeue': {
+      const engDir = engineerDir ?? resolveEngineerDir({});
+      const ledger = createLedger(join(engDir, 'ledger.json'));
+      const queue = createFileQueue(join(engDir, 'inbox'));
+
+      // Same project-level config load as the `claim` case, so an operator's
+      // `stale_claim_window_hours` override also governs the bulk requeue default
+      // (an explicit `--older-than` still takes precedence per-invocation).
+      const requeueConfigResult = await loadConfig(process.cwd());
+      const requeueConfig = requeueConfigResult.ok ? requeueConfigResult.config : undefined;
+
+      const parsedOlderThan = parseDurationMs(dispatch.olderThan);
+      if (dispatch.olderThan !== undefined && parsedOlderThan === null) {
+        printErr(
+          `engineer requeue: invalid --older-than "${dispatch.olderThan}" (expected a non-negative duration such as 30m, 24h, or 2d)`,
+        );
+        return 1;
+      }
+      const windowMs = parsedOlderThan ?? resolveStaleClaimWindowMs(requeueConfig);
+      const now = Date.now();
+
+      const entries = await ledger.list();
+      const requeued: string[] = [];
+      const dropped: string[] = [];
+      const errors: Array<{ sourceRef: string; error: string }> = [];
+
+      for (const entry of entries) {
+        if (!isStaleClaim(entry, now, windowMs)) continue;
+
+        const parsed = parseSourceRef(entry.sourceRef);
+        if (!parsed) {
+          errors.push({
+            sourceRef: entry.sourceRef,
+            error: `unparseable sourceRef "${entry.sourceRef}" — cannot confirm issue liveness`,
+          });
+          continue;
+        }
+
+        let issueState: 'open' | 'closed' | 'unknown';
+        try {
+          issueState = await getIssueState(gh, parsed.repo, parsed.issue);
+        } catch (err: unknown) {
+          errors.push({
+            sourceRef: entry.sourceRef,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          continue;
+        }
+
+        if (issueState === 'unknown') {
+          // Fail-safe (Story 7 negative): never forget on an unconfirmed-closed
+          // signal — surface the error and continue with the rest of the batch.
+          errors.push({
+            sourceRef: entry.sourceRef,
+            error: 'issue liveness state unknown — not forgotten (fail-safe)',
+          });
+          continue;
+        }
+
+        if (issueState === 'closed') {
+          await ledger.forget(entry.source, entry.sourceRef);
+          dropped.push(entry.sourceRef);
+          continue;
+        }
+
+        const { acted } = await ledger.requeueClaimed(entry.source, entry.sourceRef);
+        if (acted) {
+          await enqueueRecoveredEnvelope(queue, entry, now);
+          requeued.push(entry.sourceRef);
+        }
+      }
+
+      print(
+        JSON.stringify({
+          kind: 'requeue',
+          requeued,
+          dropped,
+          errors,
+          count: requeued.length,
+        }),
+      );
       return 0;
     }
 
