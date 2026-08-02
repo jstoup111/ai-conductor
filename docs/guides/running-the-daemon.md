@@ -510,12 +510,14 @@ Behavior depends on what the daemon is doing:
 
 | Daemon state | Outcome |
 | --- | --- |
-| Idle | Clears any stale lock, reconciles an orphaned process, relinks skills, respawns; the outcome message is always printed |
-| Paused | Counts as idle — respawns immediately; the pause marker is never touched |
-| Busy | Writes `.daemon/RESTART-PENDING` and returns at once with `restart queued: daemon is busy on <slug>; it will restart automatically once idle.` |
+| Idle | For the self-host harness, fast-forwards the installed main checkout and rebuilds/relinks it; then clears any stale lock, reconciles an orphaned process, and respawns. The outcome message is always printed |
+| Paused | Counts as idle and follows the same refresh/rebuild/respawn path; the pause marker is never touched |
+| Busy | Writes `.daemon/RESTART-PENDING` and returns at once. At the next idle boundary, a forced source refresh runs before rebuild/relink and respawn |
 
-`restart` never blocks or polls. A degraded restart (fallback kill-and-recreate, which loses
-scrollback) is reported explicitly.
+Single-repository `restart` never blocks or polls. Its self-host refresh fails closed: when the
+checkout is dirty, diverged, offline, or not on its default branch, restart reports the reason and
+does not rebuild or respawn from stale source. A degraded restart (fallback kill-and-recreate,
+which loses scrollback) is reported explicitly.
 
 ## Fleet operations
 

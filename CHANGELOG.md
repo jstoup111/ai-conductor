@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Refresh self-host main before an explicit daemon restart rebuilds and respawns, so the restarted
+  engine uses the latest safely fast-forwardable source instead of rebuilding a stale checkout
+  ([implementation PR #1248](https://github.com/jstoup111/ai-conductor/pull/1248)).
 - Run the final shipped-record Cost refresh only after durable finish evidence has converged and the
   feature is recorded complete, so optional usage telemetry or its push can never reopen `finish`
   ([implementation PR #1243](https://github.com/jstoup111/ai-conductor/pull/1243)).
