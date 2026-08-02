@@ -173,7 +173,7 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     readiness: 'probe-failed',
     elapsedSeconds: 3,
     degradation: 'probe-failure',
-    failureKind: 'timeout',
+    probeFailureKind: 'timeout',
     nextDisposition: 'trial-required',
   },
   feature_complete: { type: 'feature_complete' },

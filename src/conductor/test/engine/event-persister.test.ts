@@ -130,7 +130,7 @@ describe('EventPersister', () => {
       readiness: 'probe-failed',
       elapsedSeconds: 3,
       degradation: 'probe-failure',
-      failureKind: 'timeout',
+      probeFailureKind: 'timeout',
       nextDisposition: 'trial-required',
     });
 
@@ -144,7 +144,7 @@ describe('EventPersister', () => {
       readiness: 'probe-failed',
       elapsedSeconds: 3,
       degradation: 'probe-failure',
-      failureKind: 'timeout',
+      probeFailureKind: 'timeout',
       nextDisposition: 'trial-required',
     });
   });

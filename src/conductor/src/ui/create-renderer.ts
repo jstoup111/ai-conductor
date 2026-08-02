@@ -163,7 +163,7 @@ export function createRenderer(
         region.log(
           chalk.yellow(
             event.degradation === 'probe-failure'
-              ? `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.failureKind}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
+              ? `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}: ${event.probeFailureKind}); waiting ${event.elapsedSeconds}s, next disposition: ${event.nextDisposition}`
               : `  Codex ${event.source} credentials: ${event.readiness} (${event.degradation}); waiting ${event.elapsedSeconds}s, next check in ${event.nextProbeDelaySeconds}s`,
           ),
         );

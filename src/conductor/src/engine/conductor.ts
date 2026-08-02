@@ -1681,7 +1681,7 @@ export class Conductor {
                 readiness: current.state,
                 elapsedSeconds,
                 degradation: 'probe-failure',
-                failureKind: current.probeFailure.kind,
+                probeFailureKind: current.probeFailure.kind,
                 nextDisposition: 'trial-required',
               });
               lastProgress = { readiness: current.state, degradation, emittedAt: now };

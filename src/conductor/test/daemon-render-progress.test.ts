@@ -179,7 +179,7 @@ describe('renderDaemonEvent: build_progress / build_no_progress / build_stall', 
       readiness: 'probe-failed',
       elapsedSeconds: 3,
       degradation: 'probe-failure',
-      failureKind: 'timeout',
+      probeFailureKind: 'timeout',
       nextDisposition: 'trial-required',
     });
 

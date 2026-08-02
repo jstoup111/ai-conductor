@@ -29,13 +29,13 @@ type CredentialParkProgressEvent = CredentialParkProgressEventBase &
         readiness: Exclude<AuthenticationReadinessState, 'probe-failed'>;
         degradation: CredentialParkProgressDegradation;
         nextProbeDelaySeconds: number;
-        failureKind?: never;
+        probeFailureKind?: never;
         nextDisposition?: never;
       }
     | {
         readiness: 'probe-failed';
         degradation: 'probe-failure';
-        failureKind: CodexProbeFailureKind;
+        probeFailureKind: CodexProbeFailureKind;
         nextDisposition: 'trial-required';
         nextProbeDelaySeconds?: never;
       }

@@ -65,7 +65,7 @@ describe('TerminalSubscriber event forwarding', () => {
       readiness: 'probe-failed',
       elapsedSeconds: 3,
       degradation: 'probe-failure',
-      failureKind: 'timeout',
+      probeFailureKind: 'timeout',
       nextDisposition: 'trial-required',
     } satisfies ConductorEvent;
 

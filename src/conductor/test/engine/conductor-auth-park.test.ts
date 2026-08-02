@@ -196,7 +196,7 @@ describe('conductor auth-park: daemon-token mode', () => {
           source: 'cached-login',
           readiness: 'probe-failed',
           degradation: 'probe-failure',
-          failureKind: 'timeout',
+          probeFailureKind: 'timeout',
           elapsedSeconds: 0,
           nextDisposition: 'trial-required',
         })],

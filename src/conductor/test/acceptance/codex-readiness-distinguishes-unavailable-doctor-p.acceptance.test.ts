@@ -263,7 +263,7 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       source: 'cached-login',
       readiness: 'probe-failed',
       degradation: 'probe-failure',
-      failureKind: 'timeout',
+      probeFailureKind: 'timeout',
       elapsedSeconds: 60,
       nextDisposition: 'trial-required',
     }]);
