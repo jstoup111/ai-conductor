@@ -328,6 +328,47 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
     expect(probeCalls).toBe(0);
   });
 
+  it.each([
+    {
+      name: 'an unknown proof kind',
+      mutate: (proof: Record<string, unknown>) => {
+        proof.kind = 'future-proof';
+      },
+      field: 'kind',
+    },
+    {
+      name: 'an empty root chain',
+      mutate: (proof: Record<string, unknown>) => {
+        proof.rootChain = [];
+      },
+      field: 'rootChain',
+    },
+  ])('a claimed same-file proof with $name is unsatisfied with its named validation reason', async ({ mutate, field }) => {
+    const proof: Record<string, unknown> = {
+      kind: 'same-file-composition',
+      export: 'doThing',
+      caller: 'compose',
+      file: 'src/x.ts',
+      rootChain: ['src/main.ts', 'src/x.ts'],
+    };
+    mutate(proof);
+    await writeEvidence({
+      schema: 1,
+      base: 'base123',
+      head: 'head456',
+      layer2: { applicable: true },
+      waivers: [],
+      tasks: [{ id: '17', contract: 'src/x.ts#compose', gaps: [], proofs: [proof] }],
+    });
+
+    const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
+    const result = await predicate(dir, { getHeadSha: async () => 'head456' });
+
+    expect(result.done).toBe(false);
+    expect(result.reason).toContain('task "17"');
+    expect(result.reason).toContain(`"${field}"`);
+  });
+
   it('wiringProbe throwing is unsatisfied with a reason naming the probe failure', async () => {
     const predicate = CUSTOM_COMPLETION_PREDICATES.wiring_check!;
 
