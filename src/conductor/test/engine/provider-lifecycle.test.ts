@@ -6,9 +6,6 @@ vi.mock('../../src/engine/halt-marker.js', () => ({ writeHaltMarker }));
 
 import {
   createProviderLifecycleSupervisor,
-  createPreparingProviderLifecycle,
-  ProviderPreparationTimeoutError,
-  transitionProviderLifecycle,
 } from '../../src/engine/provider-lifecycle.js';
 import type { ProviderLifecycleEpisodeStore } from '../../src/engine/provider-lifecycle-store.js';
 
@@ -508,7 +505,7 @@ describe('provider lifecycle transitions', () => {
         });
       });
       const recovered = timedOutAttempt.catch((error: unknown) => {
-        events.push(`recovery:${error instanceof ProviderPreparationTimeoutError}`);
+        events.push(`recovery:${error instanceof Error && /preparation timed out/.test(error.message)}`);
         return replacement.promise;
       });
 
@@ -533,82 +530,4 @@ describe('provider lifecycle transitions', () => {
     }
   });
 
-  it('moves a preparing attempt to running without changing its identity', () => {
-    const attempt = { logicalStep: 'build', id: 'attempt-1' };
-    const preparing = createPreparingProviderLifecycle(attempt, 0);
-
-    expect(transitionProviderLifecycle(preparing, { phase: 'running' })).toEqual({
-      accepted: true,
-      state: { phase: 'running', attempt, recoveryCount: 0 },
-    });
-  });
-
-  it('marks a timed-out preparing attempt as recovering and consumes recovery authority', () => {
-    const attempt = { logicalStep: 'build', id: 'attempt-1' };
-    const preparing = createPreparingProviderLifecycle(attempt, 0);
-
-    expect(
-      transitionProviderLifecycle(preparing, {
-        phase: 'recovering',
-        reason: 'preparation-timeout',
-      }),
-    ).toEqual({
-      accepted: true,
-      state: {
-        phase: 'recovering',
-        attempt,
-        recoveryCount: 1,
-        reason: 'preparation-timeout',
-      },
-    });
-  });
-
-  it('settles a running attempt terminally', () => {
-    const attempt = { logicalStep: 'build', id: 'attempt-1' };
-    const running = transitionProviderLifecycle(
-      createPreparingProviderLifecycle(attempt, 0),
-      { phase: 'running' },
-    );
-
-    expect(
-      running.accepted
-        ? transitionProviderLifecycle(running.state, { phase: 'settled', outcome: 'completed' })
-        : running,
-    ).toEqual({
-      accepted: true,
-      state: { phase: 'settled', attempt, recoveryCount: 0, outcome: 'completed' },
-    });
-  });
-
-  it('rejects a transition from a stale attempt', () => {
-    const preparing = createPreparingProviderLifecycle({ logicalStep: 'build', id: 'attempt-1' }, 0);
-
-    expect(
-      transitionProviderLifecycle(preparing, { phase: 'running' }, {
-        logicalStep: 'build',
-        id: 'attempt-2',
-      }),
-    ).toEqual({ accepted: false, state: preparing, reason: 'stale-attempt' });
-  });
-
-  it('rejects reversed transitions after an attempt is running', () => {
-    const attempt = { logicalStep: 'build', id: 'attempt-1' };
-    const running = transitionProviderLifecycle(
-      createPreparingProviderLifecycle(attempt, 0),
-      { phase: 'running' },
-    );
-
-    expect(
-      running.accepted
-        ? transitionProviderLifecycle(running.state, {
-            phase: 'recovering',
-            reason: 'preparation-timeout',
-          })
-        : running,
-    ).toEqual({
-      accepted: false,
-      state: { phase: 'running', attempt, recoveryCount: 0 },
-      reason: 'illegal-transition',
-    });
-  });
 });

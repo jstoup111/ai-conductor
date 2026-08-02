@@ -192,6 +192,10 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     const invoke = (
       provider: 'claude' | 'codex',
     ) => async (options: InvokeOptions): Promise<InvokeResult> => {
+      const permit = options.spawnPermit?.();
+      if (permit && !permit.permitted) {
+        return { success: false, output: `test provider spawn denied: ${permit.reason}`, exitCode: 1 };
+      }
       const step =
         options.prompt === (provider === 'codex' ? '$memory' : '/memory')
           ? 'memory'
@@ -241,6 +245,7 @@ describe('#188 retry-as-escalation — Conductor wiring', () => {
     };
     const provider = (key: 'claude' | 'codex'): LLMProvider => ({
       supportsSessionResume: key === 'claude',
+      lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: invoke(key),
       invokeInteractive: invoke(key),
     });

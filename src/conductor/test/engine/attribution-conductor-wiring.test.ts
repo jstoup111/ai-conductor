@@ -214,7 +214,21 @@ describe('attribution-conductor-wiring — real dispatcher invocation from produ
     const provider = (
       invoke: LLMProvider['invoke'],
       invokeInteractive: LLMProvider['invokeInteractive'],
-    ): LLMProvider => ({ invoke, invokeInteractive });
+    ): LLMProvider => ({
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: async (options) => {
+        const permit = options.spawnPermit?.();
+        if (permit && !permit.permitted) {
+          return {
+            success: false,
+            output: `test provider spawn denied: ${permit.reason}`,
+            exitCode: 1,
+          };
+        }
+        return invoke(options);
+      },
+      invokeInteractive,
+    });
     const runtimes = new ProviderRuntimeSet([
       {
         key: 'claude',

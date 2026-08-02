@@ -68,7 +68,7 @@ export interface ProviderLifecycleHaltedResult {
 }
 
 /** Raised when preparation loses its authority before it can start a provider. */
-export class ProviderPreparationTimeoutError extends Error {
+class ProviderPreparationTimeoutError extends Error {
   readonly attempt: ProviderAttemptIdentity;
   readonly elapsedMilliseconds: number;
 
@@ -81,7 +81,7 @@ export class ProviderPreparationTimeoutError extends Error {
 }
 
 /** Raised when durable evidence cannot safely establish replacement authority. */
-export class ProviderLifecycleRecoveryEvidenceError extends Error {
+class ProviderLifecycleRecoveryEvidenceError extends Error {
   constructor(logicalStep: string) {
     super(`Provider lifecycle recovery evidence is unavailable for ${logicalStep}`);
     this.name = 'ProviderLifecycleRecoveryEvidenceError';
@@ -139,7 +139,7 @@ export type ProviderLifecycleTransitionResult =
     };
 
 /** Starts a provider attempt before candidate resolution or other preparation work. */
-export function createPreparingProviderLifecycle(
+function createPreparingProviderLifecycle(
   attempt: ProviderAttemptIdentity,
   recoveryCount: number,
 ): PreparingProviderLifecycle {
@@ -395,7 +395,7 @@ function emitLifecycleEvent(
  * transition itself cannot supply an identity, preventing it from replacing
  * the active attempt while moving between phases.
  */
-export function transitionProviderLifecycle(
+function transitionProviderLifecycle(
   current: ProviderLifecycleState,
   transition: ProviderLifecycleTransition,
   authoritativeAttempt: ProviderAttemptIdentity = current.attempt,

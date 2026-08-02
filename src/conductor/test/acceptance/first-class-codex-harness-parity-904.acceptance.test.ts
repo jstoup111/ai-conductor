@@ -71,10 +71,15 @@ function provider(
 ) {
   const calls: InvokeOptions[] = [];
   const invoke = vi.fn(async (options: InvokeOptions) => {
+    const permit = options.spawnPermit?.();
+    if (permit && !permit.permitted) {
+      return { success: false, output: `test provider spawn denied: ${permit.reason}`, exitCode: 1 };
+    }
     calls.push(options);
     return responder(options, calls.length);
   });
   const llmProvider: LLMProvider = {
+    lifecycleCapability: { synchronousSpawnPermit: true },
     invoke,
     invokeInteractive: vi.fn(async () => undefined),
   };

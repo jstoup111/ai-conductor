@@ -231,8 +231,13 @@ describe('ST-1071-4 — runInteractive renders the context and cold-starts', () 
   function makeProvider() {
     const calls: InvokeOptions[] = [];
     const provider: LLMProvider = {
+      lifecycleCapability: { synchronousSpawnPermit: true },
       invoke: vi.fn(async () => ({ success: true, output: 'ok', exitCode: 0 })),
       invokeInteractive: vi.fn(async (options: InvokeOptions) => {
+        const permit = options.spawnPermit?.();
+        if (permit && !permit.permitted) {
+          return { success: false, output: `test provider spawn denied: ${permit.reason}`, exitCode: 1 };
+        }
         calls.push(options);
         return { success: true, output: 'operator finished', exitCode: 0 };
       }),

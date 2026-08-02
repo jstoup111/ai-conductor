@@ -512,7 +512,7 @@ export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
 }
 
 /** Default lifecycle deadline, in minutes, before provider process spawn. */
-export const DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES = 5;
+const DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES = 5;
 
 /**
  * Resolve the provider preparation deadline without reading the deprecated

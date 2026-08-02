@@ -56,7 +56,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/src/engine/provider-lifecycle.ts`
 - `src/conductor/test/engine/provider-lifecycle.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#dispatchProviderWithWatchdog`
+**Wired-into:** `src/conductor/src/engine/provider-lifecycle.ts#createProviderLifecycleSupervisor`
 
 **Dependencies:** none
 
@@ -81,7 +81,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/test/config-validation.test.ts`
 - `src/conductor/test/engine/resolved-config.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/provider-lifecycle.ts#createProviderLifecycleSupervisor`
+**Wired-into:** `src/conductor/src/engine/resolved-config.ts#resolveProviderPreparationTimeoutMinutes`
 
 **Dependencies:** none
 
@@ -146,7 +146,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/src/engine/provider-lifecycle.ts`
 - `src/conductor/test/engine/provider-lifecycle.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#dispatchProviderWithWatchdog`
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#dispatchProviderWithLifecycleSupervision`
 
 **Dependencies:** Task 1, Task 2, Task 3
 
@@ -213,7 +213,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/src/engine/halt-marker.ts`
 - `src/conductor/test/engine/provider-lifecycle.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/daemon-runner.ts#runConductorInWorktree`
+**Wired-into:** `src/conductor/src/daemon-cli.ts#runConductorInWorktree`
 
 **Dependencies:** Task 7
 
@@ -300,7 +300,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/src/execution/codex-provider.ts`
 - `src/conductor/test/execution/codex-provider.test.ts`
 
-**Wired-into:** `src/conductor/src/execution/codex-provider.ts#invokeUnattended`
+**Wired-into:** `src/conductor/src/execution/codex-provider.ts#CodexProvider.invoke`
 
 **Dependencies:** Task 10
 
@@ -414,7 +414,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/test/engine/step-heartbeat.test.ts`
 - `src/conductor/test/engine/step-runners.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/daemon-dashboard.ts#scanInProgress`
+**Wired-into:** `src/conductor/src/engine/daemon-dashboard.ts#scanInheritedState`
 
 **Dependencies:** Task 14
 
@@ -438,7 +438,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/src/engine/provider-lifecycle.ts`
 - `src/conductor/test/engine/event-persister.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/daemon-runner.ts#runConductorInWorktree`
+**Wired-into:** `src/conductor/src/daemon-cli.ts#runConductorInWorktree`
 
 **Dependencies:** Task 5, Task 16
 
@@ -463,7 +463,7 @@ provider interval/event infrastructure and preserve all provider/model fallback 
 - `src/conductor/test/engine/daemon-dashboard.test.ts`
 - `src/conductor/test/daemon-render-provider-attempt.test.ts`
 
-**Wired-into:** `src/conductor/src/daemon-cli.ts#renderDaemonStatus`
+**Wired-into:** `src/conductor/src/daemon-cli.ts#renderDaemonEvent`
 
 **Dependencies:** Task 4, Task 18
 
@@ -536,3 +536,23 @@ Task 2 + Task 9 + Task 15 + Task 17 + Task 18 + Task 19 ─> Task 20
 - [x] No task invokes real providers or third parties in ordinary tests.
 - [x] No terminal catch-all validation or speculative repair task exists.
 - [x] Plan contains 20 tasks, within the normal 1–20 range.
+
+### Task rem-adr-001: Use the shared spawn-permit validator at both built-in provider spawn boundaries
+
+Invoke `validateSpawnPermit` from the Claude and Codex adapters immediately before process creation, remove their duplicate inline validation, and make the provider-runtime test require the shared validator.
+
+### Task rem-adr-002: Remove unused lifecycle-store wrapper exports and test the production factory API
+
+Delete `defaultStore` and the unreachable module-level wrapper exports from `provider-lifecycle-store.ts`; update its tests to exercise `createProviderLifecycleEpisodeStore()` and its object methods.
+
+### Task rem-adr-003: Retain the heartbeat timeout key only as a deprecated compatibility no-op
+
+Remove the dead `resolveStepHeartbeatStallMinutes` resolver and resolver-only tests while continuing to accept `step_heartbeat_stall_minutes` without giving it termination authority or reusing it as the preparation timeout.
+
+### Task rem-adr-004: Define `onSpawn` as observation-only
+
+Correct the `InvokeOptions.onSpawn` contract and adapter wiring comments so the callback has no timeout, kill, retry, or lifecycle authority.
+
+### Task rem-adr-005: Document preparation timeout and telemetry-only heartbeat behavior
+
+Update the daemon guide, configuration reference, and stalled-feature runbook to document `provider_preparation_timeout_minutes`, remove claims that heartbeat silence terminates providers, and describe the legacy heartbeat setting as a deprecated compatibility no-op.

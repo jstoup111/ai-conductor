@@ -11,7 +11,6 @@ import {
   FALLBACK_RETRIES,
   FALLBACK_REVIEW,
   resolveBuildReviewConfig,
-  DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES,
   resolveProviderPreparationTimeoutMinutes,
 } from '../../src/engine/resolved-config.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -20,7 +19,6 @@ import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provid
 describe('engine/resolved-config', () => {
   describe('resolveProviderPreparationTimeoutMinutes', () => {
     it.each([0, -1, 20])('defaults to five minutes without reading legacy heartbeat value %s', (heartbeatMinutes) => {
-      expect(DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES).toBe(5);
       expect(resolveProviderPreparationTimeoutMinutes()).toBe(5);
       expect(
         resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: heartbeatMinutes }),
