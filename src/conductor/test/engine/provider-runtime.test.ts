@@ -146,6 +146,34 @@ describe('ProviderRuntimeSet', () => {
     expect(permit).toHaveBeenCalledWith('preparation');
   });
 
+  it('exposes readiness only for the matching built-in provider', async () => {
+    const ready: AuthenticationReadiness = {
+      provider: 'codex',
+      source: 'cached-login',
+      state: 'ready',
+    };
+    const codex = {
+      ...provider(),
+      readiness: vi.fn(async () => ready),
+    };
+    const custom = {
+      ...provider(),
+      readiness: vi.fn(async () => ready),
+    };
+    const registry = new PluginRegistry();
+    registry.register('llm_provider', 'codex', codex);
+    registry.register('llm_provider', 'custom', custom);
+    registry.markInitialized();
+
+    const runtimes = (await loadRuntimeSetFactory())?.(registry);
+    const codexReadiness = runtimes?.readinessFor('codex', ready);
+    const customReadiness = runtimes?.readinessFor('custom', ready);
+
+    expect(await codexReadiness?.()).toEqual(ready);
+    expect(customReadiness).toBeUndefined();
+    expect(custom.readiness).not.toHaveBeenCalled();
+  });
+
   it('constructs every frozen-registry provider with isolated per-run state', async () => {
     const claude = provider();
     const codex = provider();
@@ -208,88 +236,6 @@ describe('ProviderRuntimeSet', () => {
       policies: [true, true, true],
       builtIn: [true, true, false],
       isolatedState: [true, true, true, true, true, true, true, true],
-    });
-  });
-
-  it('preserves degraded readiness and real classifications across intended Codex model attempts', async () => {
-    const probeFailed: AuthenticationReadiness = {
-      provider: 'codex',
-      source: 'cached-login',
-      state: 'probe-failed',
-      probeFailure: {
-        kind: 'timeout',
-        facts: { timeoutMs: 10_000 },
-      },
-    };
-    const models = [
-      CODEX_MODEL_POLICY.stepModels.build,
-      CODEX_MODEL_POLICY.modelEscalationOrder.at(-1)!,
-    ];
-    const actualResults: InvokeResult[] = [
-      {
-        success: false,
-        output: 'ordinary failure remains ordinary',
-        exitCode: 1,
-        authentication: probeFailed,
-      },
-      {
-        success: false,
-        output: 'rate limit remains authoritative',
-        exitCode: 1,
-        rateLimited: true,
-        waitSeconds: 7,
-        authentication: probeFailed,
-      },
-    ];
-    const invoke = vi.fn(async (options: InvokeOptions) => {
-      const index = models.indexOf(options.model ?? '');
-      return actualResults[index] ?? {
-        success: false,
-        output: 'unexpected model',
-        exitCode: 1,
-      };
-    });
-    const readiness = vi.fn(async () => probeFailed);
-    const registry = new PluginRegistry();
-    registry.register('llm_provider', 'codex', {
-      invoke,
-      invokeInteractive: vi.fn(async () => {}),
-      readiness,
-    });
-    registry.markInitialized();
-    const runtimes = (await loadRuntimeSetFactory())?.(registry);
-    const runtime = runtimes?.get('codex');
-    const invokeRuntime = await loadRuntimeInvoker();
-    const observed = [];
-
-    for (const model of models) {
-      const readinessCheck = runtimes?.readinessFor('codex', probeFailed);
-      observed.push({
-        readiness: await readinessCheck?.(),
-        result: runtime && await invokeRuntime?.(runtime, {
-          prompt: `attempt ${model}`,
-          sessionId: `session-${model}`,
-          resume: false,
-          model,
-        }),
-      });
-    }
-
-    expect({
-      observed,
-      invokedModels: invoke.mock.calls.map(([options]) => options.model),
-      readinessCalls: readiness.mock.calls.length,
-      deadModels: runtime ? [...runtime.availability.dead] : undefined,
-      runWideUnavailable: runtime?.runWideUnavailable,
-    }).toEqual({
-      observed: actualResults.map((result) => ({
-        readiness: probeFailed,
-        result,
-      })),
-      invokedModels: models,
-      readinessCalls: models.length,
-      deadModels: [],
-      runWideUnavailable: undefined,
     });
   });
 

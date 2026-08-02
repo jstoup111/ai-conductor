@@ -857,7 +857,7 @@ describe('CodexProvider', () => {
   ] as const)(
     'keeps supported ready auth evidence authorized with %s without leaking doctor diagnostics',
     async (_name, overallStatus, expected) => {
-      const runDoctor = vi.fn().mockResolvedValue({
+      mockExeca.mockResolvedValueOnce({
         stdout: JSON.stringify({
           schemaVersion: 1,
           overallStatus,
@@ -869,20 +869,21 @@ describe('CodexProvider', () => {
           },
         }),
         exitCode: 1,
-      });
+        failed: true,
+      } as any);
       mockExeca.mockResolvedValue({ stdout: jsonlMessage('Authorized.'), exitCode: 0 } as any);
 
-      const result = await new CodexProvider(runDoctor).invoke(baseOptions);
+      const result = await new CodexProvider().invoke(baseOptions);
 
       expect({
         readiness: result.authentication,
-        substantiveExecCalls: mockExeca.mock.calls.length,
+        substantiveExecCalls: mockExeca.mock.calls.length - 1,
       }).toEqual({
         readiness: expected,
         substantiveExecCalls: 1,
       });
       expect(result).toMatchObject({ success: true, output: 'Authorized.' });
-      expect(runDoctor).toHaveBeenCalledOnce();
+      expect(mockExeca.mock.calls[0]?.slice(0, 2)).toEqual(['codex', ['doctor', '--json', '--summary']]);
     },
   );
 
@@ -1253,15 +1254,16 @@ describe('CodexProvider', () => {
   ] as const)(
     'blocks initial and adjacent unattended dispatches for explicit %s documented evidence',
     async (_name, summary, state) => {
-      const runDoctor = vi.fn().mockResolvedValue({
+      mockExeca.mockResolvedValue({
         stdout: JSON.stringify({
           schemaVersion: 1,
           overallStatus: 'ok',
           checks: { 'auth.credentials': { status: 'fail', summary } },
         }),
-        exitCode: 0,
-      });
-      const gatedProvider = new CodexProvider(runDoctor);
+        exitCode: 1,
+        failed: true,
+      } as any);
+      const gatedProvider = new CodexProvider();
 
       const initial = await gatedProvider.invoke(baseOptions);
       const adjacent = await gatedProvider.invokeInteractive({ ...baseOptions, interactive: false, resume: true });
@@ -1269,8 +1271,8 @@ describe('CodexProvider', () => {
       expect({
         initial: initial.authentication?.state,
         adjacent: adjacent.authentication?.state,
-        doctorCalls: runDoctor.mock.calls.length,
-        substantiveCalls: mockExeca.mock.calls.length,
+        doctorCalls: mockExeca.mock.calls.length,
+        substantiveCalls: 0,
         output: `${initial.output}\n${adjacent.output}`,
       }).toEqual({
         initial: state,

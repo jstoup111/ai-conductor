@@ -202,7 +202,7 @@ export class CodexProvider implements LLMProvider {
             : undefined,
         },
       );
-      if (result.failed === true) {
+      if (this.isProvenDoctorExecutionFailure(result)) {
         return this.executionProbeFailedReadiness(authentication.source, result);
       }
       return this.classifyReadiness(result, authentication);
@@ -693,6 +693,12 @@ export class CodexProvider implements LLMProvider {
     }
 
     return this.probeFailedReadiness(source, { kind: 'exec-error', facts });
+  }
+
+  private isProvenDoctorExecutionFailure(result: DoctorCommandResult): boolean {
+    if (result.timedOut === true) return true;
+    const facts = this.executionProbeFacts(result);
+    return facts.processErrorCode !== undefined || facts.signal !== undefined;
   }
 
   private executionProbeFacts(error: unknown): CodexProbeFailure['facts'] {
