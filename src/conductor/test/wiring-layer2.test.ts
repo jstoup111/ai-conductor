@@ -465,4 +465,38 @@ describe('findSameFileSymbolReference', () => {
       await rm(tmpDir, { recursive: true, force: true });
     }
   });
+
+  it('returns no proof when the caller references a local binding that shadows the exported helper', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-symbol-shadow-'));
+    try {
+      const sourcePath = join(tmpDir, 'composition.ts');
+      await writeFile(
+        sourcePath,
+        [
+          'export function helper(): string {',
+          "  return 'exported';",
+          '}',
+          '',
+          'export function compose(): string {',
+          "  const helper = (): string => 'local';",
+          '  return helper();',
+          '}',
+          '',
+        ].join('\n'),
+      );
+      const program = ts.createProgram([sourcePath], { noEmit: true });
+
+      expect(
+        findSameFileSymbolReference(
+          program,
+          program.getTypeChecker(),
+          sourcePath,
+          'compose',
+          'helper',
+        ),
+      ).toBeNull();
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
