@@ -460,4 +460,44 @@ describe('acceptance: production-reachable same-file composition satisfies wirin
     expect(result.reason ?? '').toContain('task "1"');
     expect(result.reason ?? '').toContain('future-proof');
   });
+
+  it('fails closed when a claimed same-file proof was persisted for a stale HEAD', async () => {
+    const fixture = await initCompositionFixture();
+    dirs.push(fixture.dir);
+    await mkdir(join(fixture.dir, '.pipeline'), { recursive: true });
+    await writeFile(
+      join(fixture.dir, '.pipeline', 'wiring-evidence.json'),
+      JSON.stringify({
+        schema: 1,
+        base: fixture.base,
+        head: 'stale-proof-head',
+        tasks: [
+          {
+            id: '1',
+            contract: 'src/composed.ts#productionCaller',
+            gaps: [],
+            proofs: [
+              {
+                kind: 'same-file-composition',
+                export: 'composedHelper',
+                caller: 'productionCaller',
+                file: 'src/composed.ts',
+                rootChain: ['src/root.ts', 'src/composed.ts'],
+              },
+            ],
+          },
+        ],
+        layer2: { applicable: true },
+        waivers: [],
+      }),
+    );
+
+    const result = await checkStepCompletion(fixture.dir, WIRING_CHECK, {
+      getHeadSha: async () => fixture.head,
+    });
+
+    expect(result.done).toBe(false);
+    expect(result.reason ?? '').toContain('evidence recorded for stale-proof-head');
+    expect(result.reason ?? '').toContain(`HEAD is ${fixture.head}`);
+  });
 });
