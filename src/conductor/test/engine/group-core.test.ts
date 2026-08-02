@@ -1053,6 +1053,38 @@ describe("group-core: runGroupBranch authFailure / sessionExpired parity", () =>
 
   const fakeState = {} as ConductState;
 
+  it("a permission denial stops the branch without consuming retry budget", async () => {
+    const runner = spyRunner([{
+      success: false,
+      output: "Codex automatic permission review denied the required action.",
+      permissionDenied: true,
+      actualProvider: "codex",
+      authentication: {
+        provider: 'codex',
+        source: 'api-key',
+        state: 'ready',
+        remediation: 'sensitive provider detail',
+      } as never,
+    }]);
+    const member: GroupMember = { name: "manual_test", skill: "manual-test", outcome: makeSkippedOutcome() };
+
+    const outcome = await runGroupBranch(member, fakeState, { stepRunner: runner }, 3);
+
+    expect({ calls: runner.calls.length, outcome }).toEqual({
+      calls: 1,
+      outcome: {
+        kind: "permission-denied",
+        provider: "codex",
+        reason: "Codex automatic permission review denied the required action.",
+        authentication: {
+          provider: 'codex',
+          source: 'api-key',
+          state: 'ready',
+        },
+      },
+    });
+  });
+
   it("an authFailure result does NOT burn retry budget and classifies as no-verdict with reason 'authFailure'", async () => {
     // Regression pin for the group JOIN behavior (conductor.ts's
     // `noVerdictIdx !== -1` branch, adr-2026-07-04-auth-failure-park-and-poll.md):
