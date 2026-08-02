@@ -12,6 +12,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Let the deterministic wiring gate recognize canonical `Class.method` declarations in TypeScript
+  classes, preventing valid private, async, and ordinary method anchors from falsely halting a build
+  ([implementation PR {{IMPLEMENTATION_PR}}](https://github.com/jstoup111/ai-conductor/pull/{{IMPLEMENTATION_PR}})).
 - Stop the mergeable-PR autoresolve sweep from skipping every eligible PR once a daemon feature
   retains its worktree; eligibility now checks whether a feature run is actively in flight for that
   slug instead of treating any retained worktree as a concurrent prepare in progress
