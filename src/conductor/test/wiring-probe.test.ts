@@ -34,6 +34,7 @@ import type { GitRunner } from '../src/engine/pr-labels.js';
 import type { WiredIntoSite } from '../src/engine/wired-into.js';
 import type {
   ReferenceSearchRunner,
+  SameFileCompositionEvaluationInput,
   TaskWiringContract,
   GhRunner,
 } from '../src/engine/wiring-probe.js';
@@ -499,24 +500,26 @@ describe('orphanBackstop', () => {
 });
 
 describe('evaluateSameFileComposition', () => {
+  const qualifyingInput = (): SameFileCompositionEvaluationInput => ({
+    task: {
+      taskId: '7',
+      files: ['src/composition.ts'],
+      parseResult: {
+        kind: 'declared',
+        sites: [{ path: 'src/composition.ts', symbol: 'compose' }],
+      },
+    },
+    newExport: { file: 'src/composition.ts', symbol: 'helper' },
+    symbolReference: {
+      file: 'src/composition.ts',
+      caller: 'compose',
+      export: 'helper',
+    },
+    rootChain: ['src/index.ts', 'src/composition.ts'],
+  });
+
   it('returns a typed proof when task ownership, caller contract, exact reference, and root chain agree', () => {
-    const result = evaluateSameFileComposition({
-      task: {
-        taskId: '7',
-        files: ['src/composition.ts'],
-        parseResult: {
-          kind: 'declared',
-          sites: [{ path: 'src/composition.ts', symbol: 'compose' }],
-        },
-      },
-      newExport: { file: 'src/composition.ts', symbol: 'helper' },
-      symbolReference: {
-        file: 'src/composition.ts',
-        caller: 'compose',
-        export: 'helper',
-      },
-      rootChain: ['src/index.ts', 'src/composition.ts'],
-    });
+    const result = evaluateSameFileComposition(qualifyingInput());
 
     expect(result).toEqual({
       kind: 'proof',
@@ -528,6 +531,52 @@ describe('evaluateSameFileComposition', () => {
         rootChain: ['src/index.ts', 'src/composition.ts'],
       },
     });
+  });
+
+  it.each([
+    {
+      name: 'no caller contract',
+      mutate: (input: SameFileCompositionEvaluationInput) => {
+        input.task.parseResult = null;
+      },
+      reason: 'missing-same-file-caller-contract',
+    },
+    {
+      name: 'a caller contract in another file',
+      mutate: (input: SameFileCompositionEvaluationInput) => {
+        input.task.parseResult = {
+          kind: 'declared',
+          sites: [{ path: 'src/other.ts', symbol: 'compose' }],
+        };
+      },
+      reason: 'missing-same-file-caller-contract',
+    },
+    {
+      name: 'an unresolved caller',
+      mutate: (input: SameFileCompositionEvaluationInput) => {
+        input.symbolReference = null;
+      },
+      reason: 'missing-exact-symbol-reference',
+    },
+    {
+      name: 'a task that does not own the export',
+      mutate: (input: SameFileCompositionEvaluationInput) => {
+        input.task.files = ['src/other.ts'];
+      },
+      reason: 'task-does-not-own-export',
+    },
+    {
+      name: 'a caller reference to a different export',
+      mutate: (input: SameFileCompositionEvaluationInput) => {
+        if (input.symbolReference) input.symbolReference.export = 'otherHelper';
+      },
+      reason: 'missing-exact-symbol-reference',
+    },
+  ])('does not manufacture a proof for $name', ({ mutate, reason }) => {
+    const input = qualifyingInput();
+    mutate(input);
+
+    expect(evaluateSameFileComposition(input)).toEqual({ kind: 'missing-proof', reason });
   });
 });
 
