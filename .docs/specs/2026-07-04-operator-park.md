@@ -34,11 +34,11 @@ indefinitely, through every automatic recovery path it has.
 - Changing how machine-placed halts are created, cleared, or retried.
 - Any form of scheduled or conditional auto-unpark; a park ends only by operator action.
   *Amended 2026-07-27 by `adr-2026-07-27-ancestry-proven-park-reconciliation` (#1060): one scoped
-  exception — the guarded reconcile helper may remove the marker of a park authorized under the
-  two-proof deletion-authority set in `adr-2026-08-01-multi-proof-park-deletion-authority`
+  exception — the guarded reconcile helper may remove the marker of an ancestry-proven-merged park
   whose shipped record is on main, when `reconcile_parked_auto_cleanup` is enabled (its default) or
   via the operator verb `conduct daemon reconcile-parked <slug>`. All other autonomous unpark
-  remains forbidden.*
+  remains forbidden. See `adr-2026-08-01-multi-proof-park-deletion-authority` for the complete
+  two-proof deletion-authority definition.*
 
 ## Users / Personas
 
