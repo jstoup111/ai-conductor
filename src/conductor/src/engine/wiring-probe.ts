@@ -335,10 +335,17 @@ export async function verifyDeclaredSites(
  */
 export type ReferenceSearchRunner = (symbol: string) => Promise<string[]>;
 
+export type ReferenceClassification =
+  | 'absent'
+  | 'same-file-only'
+  | 'test-only'
+  | 'production-outside-file';
+
 export interface OrphanBackstopResult {
   file: string;
   symbol: string;
   status: 'ok' | 'gap';
+  referenceClassification: ReferenceClassification;
   message?: string;
   evidence?: string[];
 }
@@ -374,11 +381,23 @@ export async function orphanBackstop(
     const referencingFiles = await searchReferences(newExport.symbol);
     const outsideDefiningFile = referencingFiles.filter((file) => file !== newExport.file);
 
+    if (referencingFiles.length === 0) {
+      results.push({
+        file: newExport.file,
+        symbol: newExport.symbol,
+        status: 'gap',
+        referenceClassification: 'absent',
+        message: `${newExport.symbol} exported but referenced only within its own defining file (no external wiring)`,
+      });
+      continue;
+    }
+
     if (outsideDefiningFile.length === 0) {
       results.push({
         file: newExport.file,
         symbol: newExport.symbol,
         status: 'gap',
+        referenceClassification: 'same-file-only',
         message: `${newExport.symbol} exported but referenced only within its own defining file (no external wiring)`,
       });
       continue;
@@ -391,6 +410,7 @@ export async function orphanBackstop(
         file: newExport.file,
         symbol: newExport.symbol,
         status: 'gap',
+        referenceClassification: 'test-only',
         message: `${newExport.symbol} exported but referenced by no production code (${outsideDefiningFile.length} test-only references excluded)`,
       });
       continue;
@@ -400,6 +420,7 @@ export async function orphanBackstop(
       file: newExport.file,
       symbol: newExport.symbol,
       status: 'ok',
+      referenceClassification: 'production-outside-file',
       evidence: [...new Set(nonTestFiles)],
     });
   }
