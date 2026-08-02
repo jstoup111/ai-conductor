@@ -2,7 +2,8 @@ export * from './types/index.js';
 export { parseArgs, createProgram, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
-import type { RunMode } from './types/index.js';
+import type { HarnessConfig, RunMode } from './types/index.js';
+import type { UIEventHandler } from './ui/subscriber.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -77,6 +78,7 @@ import {
   detectShipmentEvidenceCommand,
   dispatchShipmentEvidence,
 } from './engine/shipment-evidence-cli.js';
+
 import {
   detectFinishRecordCommand,
   dispatchFinishRecord,
@@ -124,6 +126,22 @@ import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmu
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
+
+/** CLI composition seam: keep the resolved doctor timeout isolated to Codex registration. */
+export function registerCliBuiltins(
+  registry: PluginRegistry,
+  events: ConductorEventEmitter,
+  renderEvent: UIEventHandler,
+  config: HarnessConfig | undefined,
+) {
+  return registerBuiltins(
+    registry,
+    events,
+    renderEvent,
+    undefined,
+    config?.codex_doctor_timeout_seconds,
+  );
+}
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
@@ -1031,13 +1049,7 @@ async function main(): Promise<void> {
 
   // Discover and register external plugins, then built-ins
   await discoverPlugins(globalPluginsDir, projectPluginsDir, registry);
-  registerBuiltins(
-    registry,
-    events,
-    renderEvent,
-    undefined,
-    config?.codex_doctor_timeout_seconds,
-  );
+  registerCliBuiltins(registry, events, renderEvent, config);
   registry.markInitialized();
   validateRegisteredProviderSelections({
     config: config ?? {},

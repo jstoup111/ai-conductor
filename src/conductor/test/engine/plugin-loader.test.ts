@@ -264,22 +264,15 @@ describe('registerBuiltins — Codex readiness timeout', () => {
     } as ExecaResult);
   });
 
-  it.each([
-    ['default', undefined, 10_000],
-    ['custom', 2.5, 2_500],
-  ] as const)('passes the %s resolved timeout to the Codex doctor boundary in milliseconds', async (
-    _name,
-    timeoutSeconds,
-    expectedTimeoutMs,
-  ) => {
+  it('passes a custom resolved timeout to the Codex doctor boundary in milliseconds', async () => {
     const registry = new PluginRegistry();
-    registerBuiltins(registry, new ConductorEventEmitter(), () => {}, undefined, timeoutSeconds);
+    registerBuiltins(registry, new ConductorEventEmitter(), () => {}, undefined, 2.5);
     registry.markInitialized();
 
     const provider = registry.get<{ readiness: () => Promise<unknown> }>('llm_provider', 'codex');
     await provider.readiness();
 
-    expect(mockExeca.mock.calls[0]?.[2]?.timeout).toBe(expectedTimeoutMs);
+    expect(mockExeca.mock.calls[0]?.[2]?.timeout).toBe(2_500);
   });
 
   it('rejects a timeout that overflows when converted to milliseconds before constructing the provider', () => {

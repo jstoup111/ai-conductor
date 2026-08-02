@@ -144,6 +144,16 @@ describe('acceptance: Codex readiness park #970', () => {
     return { nowSpy, sleepFn };
   }
 
+  async function expectUnavailableProbeTrial(): Promise<void> {
+    const readiness = vi.fn().mockResolvedValue(probeFailedReadiness());
+    const conductor = cachedLoginConductor(readiness as never, new ConductorEventEmitter(), async () => {});
+
+    const result = await (conductor as any).parkOnAuthFailure(cachedLoginAuthFailure());
+
+    expect(result).toEqual({ disposition: 'trial-required' });
+    expect(readiness).toHaveBeenCalledOnce();
+  }
+
   async function writeSuccessfulGroupEvidence(step: StepName) {
     if (step === 'manual_test') {
       await writeFile(join(flowDir, '.pipeline/manual-test-results.md'), '# Results\n\n| Story | Result |\n|--|--|\n| s1 | PASS |\n');
@@ -169,7 +179,17 @@ describe('acceptance: Codex readiness park #970', () => {
     ['missing', documentedDoctor('fail', 'fail', 'no Codex credentials were found'), 'missing'],
     ['rejected', documentedDoctor('fail', 'fail', 'credentials unauthorized'), 'unusable'],
     ['ambiguous green envelope', documentedDoctor('ok', 'ok', 42 as never), 'unverifiable'],
-  ] as const)('classifies %s auth evidence without leaking doctor diagnostics', async (_case, stdout, state) => {
+  ] as const)('contrasts unavailable doctor evidence with %s auth evidence', async (_case, stdout, state) => {
+    mockExeca
+      .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as never)
+      .mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
+    const degraded = await new CodexProvider().invoke(base);
+    expect(degraded).toMatchObject({
+      success: true,
+      authentication: { state: 'probe-failed', probeFailure: { kind: 'unparseable-output' } },
+    });
+    mockExeca.mockReset();
+
     mockExeca.mockResolvedValueOnce({ stdout, stderr: 'raw doctor diagnostic', exitCode: 1 } as never);
     if (state === 'unverifiable') {
       mockExeca.mockResolvedValueOnce({ stdout: 'completed', stderr: '', exitCode: 0 } as never);
@@ -323,6 +343,7 @@ describe('acceptance: Codex readiness park #970', () => {
   it.each(['missing', 'unusable'] as const)(
     'serial recovery times out on conclusive %s evidence without another dispatch',
     async (nonReadyState) => {
+    await expectUnavailableProbeTrial();
     await writeState(flowStatePath, {
       ...READY_STATE,
       build_review: 'done', wiring_check: 'done', manual_test: 'done', prd_audit: 'done',
@@ -422,6 +443,7 @@ describe('acceptance: Codex readiness park #970', () => {
   it.each(['missing', 'unusable'] as const)(
     'grouped recovery times out on conclusive %s evidence without redispatching completed siblings',
     async (nonReadyState) => {
+    await expectUnavailableProbeTrial();
     await writeState(flowStatePath, {
       ...READY_STATE,
       build: 'done', build_review: 'done', wiring_check: 'done', retro: 'done', rebase: 'done', finish: 'done',
@@ -500,6 +522,7 @@ describe('acceptance: Codex readiness park #970', () => {
   it.each(['missing', 'unusable'] as const)(
     'auxiliary recovery times out on conclusive %s evidence without redispatch',
     async (nonReadyState) => {
+    await expectUnavailableProbeTrial();
     const readiness = vi.fn().mockResolvedValue({ provider: 'codex', source: 'cached-login', state: nonReadyState });
     const { runtimes, fallbackReadiness } = recoveryRuntimes(readiness);
     const dispatchVerifier = vi.fn().mockResolvedValue(cachedLoginAuthFailure());

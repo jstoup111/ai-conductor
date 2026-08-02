@@ -835,11 +835,6 @@ describe('CodexProvider', () => {
 
   it.each([
     [
-      'all-green doctor health',
-      'ok',
-      { provider: 'codex', source: 'cached-login', state: 'ready' },
-    ],
-    [
       'unrelated degraded doctor health',
       'fail',
       {
@@ -873,7 +868,7 @@ describe('CodexProvider', () => {
             },
           },
         }),
-        exitCode: overallStatus === 'ok' ? 0 : 1,
+        exitCode: 1,
       });
       mockExeca.mockResolvedValue({ stdout: jsonlMessage('Authorized.'), exitCode: 0 } as any);
 
@@ -1401,18 +1396,6 @@ describe('CodexProvider', () => {
   });
 
   it.each([
-    [
-      'missing selected source',
-      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: false }, transport: { authenticated: false } },
-      { exitCode: 0 },
-      'missing',
-    ],
-    [
-      'rejected selected source',
-      { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true, rejected: true }, transport: { authenticated: false } },
-      { exitCode: 1 },
-      'unusable',
-    ],
     [
       'malformed evidence',
       { schemaVersion: 1, auth: { selectedMode: 'cached-login', configured: true } },

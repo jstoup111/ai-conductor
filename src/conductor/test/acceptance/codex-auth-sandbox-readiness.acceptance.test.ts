@@ -182,12 +182,24 @@ describe('acceptance: Codex auth and bounded unattended execution (#905)', () =>
     expect(JSON.stringify(result)).not.toContain(secret);
   });
 
-  // Covers: FR-6 through FR-11. Every affirmative credential verdict is
-  // terminal for this dispatch; even a previous ready check cannot authorize
-  // a resume.
+  // Covers: FR-6 through FR-11. Inconclusive evidence authorizes one real
+  // invocation, while affirmative credential evidence remains terminal.
   it.each(['missing', 'unusable'] as const)(
-    'fails closed for %s doctor evidence without model work, fallback, or a budget classification',
+    'distinguishes unavailable doctor evidence from affirmative %s evidence',
     async (state) => {
+      mockExeca
+        .mockResolvedValueOnce({ stdout: '{not-json', stderr: '', exitCode: 0 } as any)
+        .mockResolvedValueOnce({ stdout: 'trial completed', stderr: '', exitCode: 0 } as any);
+
+      const degraded = await new CodexProvider().invoke({ ...base, resume: true });
+
+      expect(degraded).toMatchObject({
+        success: true,
+        authentication: { state: 'probe-failed', probeFailure: { kind: 'unparseable-output' } },
+      });
+      expect(mockExeca.mock.calls.map(([, args]) => args.includes('exec'))).toEqual([false, true]);
+      mockExeca.mockReset();
+
       mockExeca.mockResolvedValueOnce({
         stdout: doctorNonReady('cached-login', state), stderr: `diagnostic ${secret}`, exitCode: state === 'missing' ? 0 : 1,
       } as any);

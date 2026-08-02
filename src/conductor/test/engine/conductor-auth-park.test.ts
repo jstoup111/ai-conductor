@@ -1692,8 +1692,38 @@ describe('conductor auth-park: daemon-token mode', () => {
   });
 
   it.each(['missing', 'unusable'] as const)(
-    'serial Codex %s preflight parks and resumes only the failed attempt',
+    'serial Codex preflight distinguishes unavailable recovery from %s evidence',
     async (state) => {
+      const unavailableReadiness = vi.fn().mockResolvedValue({
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+      });
+      const unavailableRuntimes = new ProviderRuntimeSet([{
+        key: 'codex',
+        provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness: unavailableReadiness },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      }]);
+      const unavailableConductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: vi.fn() },
+        events,
+        projectRoot: dir,
+        fromStep: 'build',
+        mode: 'auto',
+        sleepFn: vi.fn(async () => {}),
+        config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+        providerExecution: { runtimes: unavailableRuntimes, sessions: {} as never, configuredProviders: ['codex'] },
+      });
+      const unavailableResult = await (unavailableConductor as any).parkOnAuthFailure({
+        actualProvider: 'codex',
+        authentication: { provider: 'codex', source: 'cached-login', state: 'unusable' },
+      });
+      expect(unavailableResult).toEqual({ disposition: 'trial-required' });
+
       const readiness = vi
         .fn()
         .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state })

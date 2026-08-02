@@ -13,6 +13,9 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { Options } from 'execa';
 import { CodexProvider, type CodexDoctorRunner } from '../../src/execution/codex-provider.js';
 import type { InvokeOptions } from '../../src/execution/llm-provider.js';
@@ -22,6 +25,9 @@ import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
 import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { loadConfig } from '../../src/engine/config.js';
+import { PluginRegistry } from '../../src/engine/plugin-registry.js';
+import { registerCliBuiltins } from '../../src/index.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 import { execa } from 'execa';
@@ -173,7 +179,19 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
   it.each([
     ['missing', 'no Codex credentials were found'],
     ['unusable', 'credentials unauthorized'],
-  ] as const)('keeps affirmative %s evidence blocking and never starts model work', async (_state, summary) => {
+  ] as const)('distinguishes unavailable doctor evidence from affirmative %s evidence', async (state, summary) => {
+    const unavailableDoctor = vi.fn(async () => doctorResult('{not-json'));
+    mockExeca.mockResolvedValueOnce(successfulCodexResult('trial completed') as never);
+
+    const degraded = await providerWithDoctor(unavailableDoctor).invoke(base);
+
+    expect(degraded).toMatchObject({
+      success: true,
+      authentication: { state: 'probe-failed', probeFailure: { kind: 'unparseable-output' } },
+    });
+    expect(mockExeca).toHaveBeenCalledTimes(1);
+    mockExeca.mockReset();
+
     const runDoctor = vi.fn(async () => doctorResult(JSON.stringify({
       schemaVersion: 1,
       overallStatus: 'fail',
@@ -182,7 +200,11 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
 
     const result = await providerWithDoctor(runDoctor).invoke(base);
 
-    expect(result).toMatchObject({ success: false, authFailure: true });
+    expect(result).toMatchObject({
+      success: false,
+      authFailure: true,
+      authentication: { state },
+    });
     expect(mockExeca).not.toHaveBeenCalled();
   });
 
@@ -268,5 +290,61 @@ describe('acceptance: Codex readiness probe failure separation (#1039)', () => {
       nextDisposition: 'trial-required',
     }]);
     expect(JSON.stringify(seen)).not.toContain(secret);
+  });
+
+  // Covers: FR-12. This drives the production index.ts composition seam with
+  // a real project config and observes the registered provider boundaries.
+  it('loads the CLI doctor timeout without changing provider, invocation, or auth-park timeouts', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'codex-1039-cli-composition-'));
+    try {
+      await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+      await writeFile(join(projectRoot, '.ai-conductor/config.yml'), [
+        'codex_doctor_timeout_seconds: 2.5',
+        'harness_self_host:',
+        '  auth_park_timeout_minutes: 7',
+        'test_suite:',
+        '  command: npm test',
+        '  timeout_seconds: 41',
+        '',
+      ].join('\n'));
+      const loaded = await loadConfig(projectRoot);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) return;
+
+      const registry = new PluginRegistry();
+      registerCliBuiltins(registry, new ConductorEventEmitter(), () => {}, loaded.config);
+      registry.markInitialized();
+      const codex = registry.get<CodexProvider>('llm_provider', 'codex');
+      const claude = registry.get<{ invoke(options: InvokeOptions): Promise<unknown> }>('llm_provider', 'claude');
+
+      mockExeca
+        .mockResolvedValueOnce(doctorResult(JSON.stringify({
+          schemaVersion: 1,
+          auth: { selectedMode: 'cached-login', configured: true },
+          transport: { authenticated: true },
+        })) as never)
+        .mockResolvedValueOnce(successfulCodexResult('configured CLI invocation') as never)
+        .mockResolvedValueOnce({ stdout: JSON.stringify({ result: 'configured Claude invocation' }), stderr: '', exitCode: 0 } as never);
+
+      await codex.invoke(base);
+      await claude.invoke(base);
+
+      expect(mockExeca.mock.calls.map(([command, args, options]) => ({
+        command,
+        doctor: args.includes('doctor'),
+        timeout: options?.timeout,
+      }))).toEqual([
+        { command: 'codex', doctor: true, timeout: 2_500 },
+        { command: 'codex', doctor: false, timeout: undefined },
+        { command: 'claude', doctor: false, timeout: undefined },
+      ]);
+      expect(loaded.config).toMatchObject({
+        codex_doctor_timeout_seconds: 2.5,
+        harness_self_host: { auth_park_timeout_minutes: 7 },
+        test_suite: { timeout_seconds: 41 },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });

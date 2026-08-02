@@ -191,10 +191,14 @@ complexity:
       ])('rejects %s with a field-specific diagnostic', (_name, value) => {
         const result = validateConfig({ codex_doctor_timeout_seconds: value });
 
-        expect(result).toMatchObject({
+        expect(result).toEqual({
           ok: false,
-          error: { message: expect.stringMatching(/codex_doctor_timeout_seconds/i) },
+          error: {
+            type: 'validation_error',
+            message: 'codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds',
+          },
         });
+        if (!result.ok) expect(result.error.message).not.toMatch(/unknown top-level key/i);
       });
     });
 
