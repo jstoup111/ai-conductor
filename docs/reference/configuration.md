@@ -82,9 +82,11 @@ Validation is fail-closed at the top level: an unrecognized key is a hard load e
 | `harness_version` mismatch | `{ type: 'version_mismatch' }` (only when `loadConfig` is passed a `harnessVersion`) |
 | Malformed project config at run start | `process.exit(1)` |
 
-Only five sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
-(`:708`), `auto_restart_on_stale_engine` (`:778`), `engine_refresh_min_interval_seconds` (`:807`), and
-the `build_review` and `ci_watch` normalizers (`:52,898-927,929-961`).
+Only seven sites ever emit a warning instead of an error: the `attribution_audit_sample_pct` clamp
+(`:708`), `auto_restart_on_stale_engine` (`:778`), `engine_refresh_min_interval_seconds` (`:807`),
+the deprecated `step_heartbeat_stall_minutes` compatibility normalizer (`:852-859`),
+`provider_preparation_timeout_minutes` (`:875-878`), and the `build_review` and `ci_watch`
+normalizers (`:52,898-927,929-961`).
 
 ## Key index
 
