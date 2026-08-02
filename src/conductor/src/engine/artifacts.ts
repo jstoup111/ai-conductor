@@ -1390,6 +1390,49 @@ export function validateWiringEvidence(
         reason: `${WIRING_EVIDENCE} task "${t.id}" must include "gaps" as an array`,
       };
     }
+    if (t.proofs !== undefined) {
+      if (!Array.isArray(t.proofs)) {
+        return {
+          ok: false,
+          reason: `${WIRING_EVIDENCE} task "${t.id}" must include "proofs" as an array`,
+        };
+      }
+      for (const proof of t.proofs) {
+        if (typeof proof !== 'object' || proof === null || Array.isArray(proof)) {
+          return {
+            ok: false,
+            reason: `${WIRING_EVIDENCE} task "${t.id}" has a "proofs" entry that is not an object`,
+          };
+        }
+        const p = proof as Record<string, unknown>;
+        if (p.kind !== 'same-file-composition') {
+          return {
+            ok: false,
+            reason: `${WIRING_EVIDENCE} task "${t.id}" has a proof with an unknown "kind" "${String(p.kind)}"`,
+          };
+        }
+        for (const field of ['export', 'caller', 'file'] as const) {
+          if (typeof p[field] !== 'string' || p[field].trim() === '') {
+            return {
+              ok: false,
+              reason: `${WIRING_EVIDENCE} task "${t.id}" has a proof missing a non-empty string "${field}"`,
+            };
+          }
+        }
+        if (!Array.isArray(p.rootChain) || p.rootChain.length === 0) {
+          return {
+            ok: false,
+            reason: `${WIRING_EVIDENCE} task "${t.id}" must include a non-empty "rootChain" array`,
+          };
+        }
+        if (p.rootChain.some((entry) => typeof entry !== 'string' || entry.trim() === '')) {
+          return {
+            ok: false,
+            reason: `${WIRING_EVIDENCE} task "${t.id}" has a "rootChain" entry that is not a non-empty string`,
+          };
+        }
+      }
+    }
     for (const gap of t.gaps as unknown[]) {
       if (typeof gap !== 'object' || gap === null) {
         return {

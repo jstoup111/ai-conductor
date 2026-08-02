@@ -59,6 +59,70 @@ describe('validateWiringEvidence — validator for wiring-reachability evidence 
     expect(validateWiringEvidence(ev)).toEqual({ ok: true });
   });
 
+  it.each([
+    {
+      name: 'an unknown proof kind',
+      mutate: (proof: Record<string, unknown>) => {
+        proof.kind = 'unknown-proof-kind';
+      },
+      field: 'kind',
+    },
+    {
+      name: 'a missing export',
+      mutate: (proof: Record<string, unknown>) => {
+        delete proof.export;
+      },
+      field: 'export',
+    },
+    {
+      name: 'a missing caller',
+      mutate: (proof: Record<string, unknown>) => {
+        delete proof.caller;
+      },
+      field: 'caller',
+    },
+    {
+      name: 'a missing file',
+      mutate: (proof: Record<string, unknown>) => {
+        delete proof.file;
+      },
+      field: 'file',
+    },
+    {
+      name: 'an empty root chain',
+      mutate: (proof: Record<string, unknown>) => {
+        proof.rootChain = [];
+      },
+      field: 'rootChain',
+    },
+    {
+      name: 'a non-string root-chain entry',
+      mutate: (proof: Record<string, unknown>) => {
+        proof.rootChain = ['src/main.ts', 42];
+      },
+      field: 'rootChain',
+    },
+  ])('rejects a same-file composition proof with $name', ({ mutate, field }) => {
+    const ev = validEvidence() as unknown as {
+      tasks: Array<{ proofs: Array<Record<string, unknown>> }>;
+    };
+    ev.tasks[0].proofs = [
+      {
+        kind: 'same-file-composition',
+        export: 'doThing',
+        caller: 'compose',
+        file: 'src/x.ts',
+        rootChain: ['src/main.ts', 'src/x.ts'],
+      },
+    ];
+    mutate(ev.tasks[0].proofs[0]);
+
+    expect(validateWiringEvidence(ev)).toEqual({
+      ok: false,
+      reason: expect.stringMatching(new RegExp(`task "7".*"${field}"`)),
+    });
+  });
+
   it('non-object input fails with "not a JSON object" reason naming the path', () => {
     const result = validateWiringEvidence('not an object');
 
