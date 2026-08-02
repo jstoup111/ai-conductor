@@ -360,24 +360,17 @@ describe('TI-3: repeated preparation failure halts durably', () => {
       step_heartbeat_stall_minutes: 0,
       provider_preparation_timeout_minutes: 5,
     });
-    let settled = false;
-    const run = runStep(fixture, 'build').then((result) => {
-      settled = true;
-      return result;
-    });
+    const run = runStep(fixture, 'build');
 
     await waitForCondition(() => executor.mock.calls.length === 1, 'first preparation begins');
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS + 1);
     await waitForCondition(() => executor.mock.calls.length === 2, 'replacement deadline is scheduled');
     await vi.advanceTimersByTimeAsync(FIVE_MINUTES_MS + 1);
-    await waitForCondition(() => settled, 'second timeout writes the durable HALT');
-    const settledBeforeCleanup = settled;
-    for (const attempt of attempts) attempt.resolve(providerResult('late-result'));
     const result = await run;
+    for (const attempt of attempts) attempt.resolve(providerResult('late-result'));
     const halt = await readFile(join(root, '.pipeline', 'HALT'), 'utf8').catch(() => '');
     const haltClass = await readFile(join(root, '.pipeline', 'HALT.class'), 'utf8').catch(() => '');
 
-    expect(settledBeforeCleanup).toBe(true);
     expect(result.success).toBe(false);
     expect(haltClass.trim()).toBe('needs-human');
     expect(halt).toMatch(/build/i);
