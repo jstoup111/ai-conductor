@@ -401,6 +401,9 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         deleted: expectedOutcome.refusal === undefined ? [`feat/${slug}`] : [],
         parked: expectedOutcome.refusal !== undefined,
       });
+      if (expectedOutcome.refusal !== 'unmerged-commits') {
+        expect(outcome).not.toHaveProperty('unmergedCommits');
+      }
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
@@ -477,6 +480,64 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
         deleted: [],
         parked: true,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('lists the post-merge commits in git range order', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'ordered-post-merge-commits';
+    const headRefOid = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [headRefOid],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+      unmergedLog: ['bbbbbbb newer commit', 'aaaaaaa older commit'],
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${headRefOid}'}]`.replaceAll("'", '"') });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect(outcome).toEqual({
+        slug,
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: {
+          commits: [
+            { sha: 'bbbbbbb', subject: 'newer commit' },
+            { sha: 'aaaaaaa', subject: 'older commit' },
+          ],
+          overflow: 0,
+        },
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed without a commit list when the unmerged range cannot be read', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const slug = 'unreadable-post-merge-range';
+    const headRefOid = '1111111111111111111111111111111111111111';
+    const { run } = makeGit({
+      shipped: [slug],
+      branches: [`feat/${slug}`],
+      mergedPrHeads: [headRefOid],
+      tips: { [`feat/${slug}`]: 'ffffffffffffffffffffffffffffffffffffffff' },
+      unmergedLog: 'unavailable',
+    });
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: `[{'headRefOid':'${headRefOid}'}]`.replaceAll("'", '"') });
+    try {
+      await writeOperatorPark(projectRoot, slug);
+
+      const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
+
+      expect(outcome).toEqual({ slug, steps: [], refusal: 'ancestry-check-failed' });
+      expect(outcome).not.toHaveProperty('unmergedCommits');
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
