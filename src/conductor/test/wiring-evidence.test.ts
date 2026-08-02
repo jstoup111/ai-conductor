@@ -35,6 +35,30 @@ describe('validateWiringEvidence — validator for wiring-reachability evidence 
     expect(result).toEqual({ ok: true });
   });
 
+  it('validates a task carrying a complete same-file composition proof', () => {
+    const ev: WiringEvidence = {
+      ...validEvidence(),
+      tasks: [
+        {
+          id: '7',
+          contract: 'src/x.ts#compose',
+          gaps: [],
+          proofs: [
+            {
+              kind: 'same-file-composition',
+              export: 'doThing',
+              caller: 'compose',
+              file: 'src/x.ts',
+              rootChain: ['src/main.ts', 'src/x.ts'],
+            },
+          ],
+        },
+      ],
+    };
+
+    expect(validateWiringEvidence(ev)).toEqual({ ok: true });
+  });
+
   it('non-object input fails with "not a JSON object" reason naming the path', () => {
     const result = validateWiringEvidence('not an object');
 
