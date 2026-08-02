@@ -308,7 +308,7 @@ export function validateConfig(
     'daemon_verbose',
     // Removes parked feature worktrees after reconciliation by default.
     'reconcile_parked_auto_cleanup',
-    // Step-heartbeat stall watchdog threshold (step-heartbeat.ts).
+    // Deprecated heartbeat compatibility no-op; retained so legacy configs load.
     'step_heartbeat_stall_minutes',
     // Stale-claim reap window override (engineer-unclaim-requeue-verb-stale-claimed-ledger).
     'stale_claim_window_hours',
@@ -838,12 +838,9 @@ export function validateConfig(
     obj.engine_refresh_min_interval_seconds = 300;
   }
 
-  // step_heartbeat_stall_minutes — stall threshold, in minutes, for the
-  // step-heartbeat watchdog (step-heartbeat.ts). Unlike
-  // engine_refresh_min_interval_seconds, 0 and negative values are a
-  // deliberate opt-out signal (never a fallback trigger) — only a non-finite
-  // or non-numeric value is invalid. Left unset here when absent; the
-  // resolver (resolveStepHeartbeatStallMinutes) applies the default (20).
+  // step_heartbeat_stall_minutes is a deprecated compatibility no-op. Retain
+  // finite legacy values so older configs continue to load, but never resolve
+  // this key into termination authority or provider preparation timeout.
   if (
     obj.step_heartbeat_stall_minutes !== undefined &&
     obj.step_heartbeat_stall_minutes !== null
@@ -853,9 +850,13 @@ export function validateConfig(
       !Number.isFinite(obj.step_heartbeat_stall_minutes)
     ) {
       warnings.push(
-        `step_heartbeat_stall_minutes has invalid value ${JSON.stringify(obj.step_heartbeat_stall_minutes)}, falling back to the default (20).`,
+        `step_heartbeat_stall_minutes is a deprecated compatibility no-op; invalid value ${JSON.stringify(obj.step_heartbeat_stall_minutes)} is ignored. It grants no termination authority and is never used as provider_preparation_timeout_minutes.`,
       );
       delete obj.step_heartbeat_stall_minutes;
+    } else {
+      warnings.push(
+        'step_heartbeat_stall_minutes is a deprecated compatibility no-op. It grants no termination authority and is never used as provider_preparation_timeout_minutes.',
+      );
     }
   }
 

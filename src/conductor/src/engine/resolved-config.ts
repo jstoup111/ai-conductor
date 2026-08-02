@@ -511,50 +511,13 @@ export function resolveAuthParkTimeoutMinutes(config?: HarnessConfig): number {
   return override;
 }
 
-/**
- * Default stall threshold, in minutes, for the step-heartbeat watchdog
- * (`step-heartbeat.ts`). Chosen from typical step durations observed in
- * `.daemon/daemon.log` history — most steps settle well under this, so a
- * step silent this long is meaningfully anomalous rather than merely slow.
- */
-export const DEFAULT_STEP_HEARTBEAT_STALL_MINUTES = 20;
-
-/**
- * Resolve the step-heartbeat stall threshold from HarnessConfig.
- *
- * Reads `config.step_heartbeat_stall_minutes` (top-level HarnessConfig key),
- * mirroring `resolveAuthParkTimeoutMinutes`'s resolution rules:
- *   - undefined / absent     → DEFAULT_STEP_HEARTBEAT_STALL_MINUTES (20)
- *   - finite number (any)    → use the value (0 and negatives opt out of the watchdog)
- *   - non-numeric (string)   → throw with clear error message
- *   - NaN or Infinity        → throw with clear error message
- *
- * @throws Error if the value is non-numeric or non-finite (NaN, Infinity)
- */
-export function resolveStepHeartbeatStallMinutes(config?: HarnessConfig): number {
-  const override = config?.step_heartbeat_stall_minutes;
-  if (override === undefined || override === null) {
-    return DEFAULT_STEP_HEARTBEAT_STALL_MINUTES;
-  }
-  if (typeof override !== 'number') {
-    throw new Error(
-      `Invalid step_heartbeat_stall_minutes: expected a number, got ${typeof override} (${JSON.stringify(override)})`
-    );
-  }
-  if (!Number.isFinite(override)) {
-    throw new Error(
-      `Invalid step_heartbeat_stall_minutes: must be a finite number, got ${override}`
-    );
-  }
-  return override;
-}
-
 /** Default lifecycle deadline, in minutes, before provider process spawn. */
 export const DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES = 5;
 
 /**
- * Resolve the provider preparation deadline independently from heartbeat
- * telemetry. Zero and negative values are preserved as opt-out signals.
+ * Resolve the provider preparation deadline without reading the deprecated
+ * heartbeat compatibility key. Zero and negative values are preserved as
+ * opt-out signals.
  *
  * @throws Error if the configured value is non-numeric or non-finite.
  */

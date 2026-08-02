@@ -171,42 +171,44 @@ describe('engine_refresh_min_interval_seconds config field', () => {
 });
 
 describe('step_heartbeat_stall_minutes config field', () => {
-  it('is a known top-level key (not rejected)', () => {
+  it('accepts the deprecated compatibility no-op without granting termination authority', () => {
     const result = validateConfig({ step_heartbeat_stall_minutes: 15 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.config.step_heartbeat_stall_minutes).toBe(15);
-    expect(result.warnings).toHaveLength(0);
+    expect(result.warnings).toContainEqual(
+      expect.stringMatching(/step_heartbeat_stall_minutes.*deprecated.*compatibility no-op.*termination authority/i),
+    );
   });
 
-  it('is left unset when absent (resolver applies the default)', () => {
+  it('is left unset when absent', () => {
     const result = validateConfig({});
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.config.step_heartbeat_stall_minutes).toBeUndefined();
   });
 
-  it('preserves 0 and negative values as an opt-out signal, no warning', () => {
+  it('preserves 0 and negative values as compatibility input and warns they are no-ops', () => {
     const zero = validateConfig({ step_heartbeat_stall_minutes: 0 });
     expect(zero.ok).toBe(true);
     if (!zero.ok) return;
     expect(zero.config.step_heartbeat_stall_minutes).toBe(0);
-    expect(zero.warnings).toHaveLength(0);
+    expect(zero.warnings).toContainEqual(expect.stringMatching(/deprecated.*compatibility no-op/i));
 
     const negative = validateConfig({ step_heartbeat_stall_minutes: -5 });
     expect(negative.ok).toBe(true);
     if (!negative.ok) return;
     expect(negative.config.step_heartbeat_stall_minutes).toBe(-5);
-    expect(negative.warnings).toHaveLength(0);
+    expect(negative.warnings).toContainEqual(expect.stringMatching(/deprecated.*compatibility no-op/i));
   });
 
-  it('drops a non-numeric value with a warning, leaving the resolver default to apply', () => {
+  it('drops a non-numeric value with a compatibility no-op warning', () => {
     const result = validateConfig({ step_heartbeat_stall_minutes: 'soon' });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.config.step_heartbeat_stall_minutes).toBeUndefined();
     expect(result.warnings.length).toBeGreaterThan(0);
-    expect(result.warnings[0]).toMatch(/step_heartbeat_stall_minutes.*invalid/i);
+    expect(result.warnings[0]).toMatch(/step_heartbeat_stall_minutes.*deprecated.*no-op.*invalid/i);
   });
 
   it('drops a non-finite value (NaN/Infinity) with a warning', () => {
@@ -214,7 +216,7 @@ describe('step_heartbeat_stall_minutes config field', () => {
     expect(nanResult.ok).toBe(true);
     if (!nanResult.ok) return;
     expect(nanResult.config.step_heartbeat_stall_minutes).toBeUndefined();
-    expect(nanResult.warnings.length).toBeGreaterThan(0);
+    expect(nanResult.warnings).toContainEqual(expect.stringMatching(/deprecated.*no-op.*invalid/i));
   });
 });
 
@@ -260,7 +262,7 @@ describe('provider_preparation_timeout_minutes config field', () => {
     expect(result).toMatchObject({
       ok: true,
       config: { step_heartbeat_stall_minutes: 0 },
-      warnings: [],
+      warnings: [expect.stringMatching(/deprecated.*compatibility no-op/i)],
     });
     if (!result.ok) return;
     expect(result.config.provider_preparation_timeout_minutes).toBeUndefined();

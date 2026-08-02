@@ -19,11 +19,11 @@ import { CLAUDE_MODEL_POLICY, CODEX_MODEL_POLICY } from '../../src/engine/provid
 
 describe('engine/resolved-config', () => {
   describe('resolveProviderPreparationTimeoutMinutes', () => {
-    it('defaults to five minutes independently of the heartbeat threshold', () => {
+    it.each([0, -1, 20])('defaults to five minutes without reading legacy heartbeat value %s', (heartbeatMinutes) => {
       expect(DEFAULT_PROVIDER_PREPARATION_TIMEOUT_MINUTES).toBe(5);
       expect(resolveProviderPreparationTimeoutMinutes()).toBe(5);
       expect(
-        resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: 0 }),
+        resolveProviderPreparationTimeoutMinutes({ step_heartbeat_stall_minutes: heartbeatMinutes }),
       ).toBe(5);
     });
 
@@ -857,53 +857,6 @@ describe('engine/resolved-config', () => {
       expect(() => resolveAuthParkTimeoutMinutes(config)).toThrow(
         /Invalid auth_park_timeout_minutes.*finite/
       );
-    });
-  });
-
-  describe('resolveStepHeartbeatStallMinutes', () => {
-    it('defaults to 20 when step_heartbeat_stall_minutes is absent', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      expect(resolveStepHeartbeatStallMinutes(undefined)).toBe(20);
-    });
-
-    it('returns the configured value when explicitly set', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      const config: HarnessConfig = { step_heartbeat_stall_minutes: 10 };
-      expect(resolveStepHeartbeatStallMinutes(config)).toBe(10);
-    });
-
-    it('preserves 0 and negative values as opt-out signals', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      expect(resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: 0 })).toBe(0);
-      expect(resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: -1 })).toBe(-1);
-    });
-
-    it('throws on non-numeric string values', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      const config = { step_heartbeat_stall_minutes: 'soon' } as unknown as HarnessConfig;
-      expect(() => resolveStepHeartbeatStallMinutes(config)).toThrow(
-        /Invalid step_heartbeat_stall_minutes.*expected a number/
-      );
-    });
-
-    it('throws on NaN/Infinity', async () => {
-      const { resolveStepHeartbeatStallMinutes } = await import(
-        '../../src/engine/resolved-config.js'
-      );
-      expect(() =>
-        resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: NaN }),
-      ).toThrow(/Invalid step_heartbeat_stall_minutes.*finite/);
-      expect(() =>
-        resolveStepHeartbeatStallMinutes({ step_heartbeat_stall_minutes: Infinity }),
-      ).toThrow(/Invalid step_heartbeat_stall_minutes.*finite/);
     });
   });
 

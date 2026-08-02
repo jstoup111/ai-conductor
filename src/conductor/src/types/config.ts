@@ -546,15 +546,9 @@ export interface HarnessConfig {
    */
   auth_park_timeout_minutes?: number;
   /**
-   * Stall threshold, in minutes, for a step's `.pipeline/step-heartbeat`
-   * liveness signal. When a running step's provider dispatch produces no
-   * observed activity (no streamed stdout/stderr chunk) for longer than this
-   * many minutes (plus a small fixed grace buffer), the stall watchdog kills
-   * the subprocess and raises a `mechanical`-class HALT the daemon can
-   * auto-requeue — the same HALT class/machinery #1070 uses for live-boundary
-   * violations. 0 or negative disables the watchdog (heartbeat is still
-   * recorded and surfaced by `daemon status`, but nothing is ever killed).
-   * Omitted → 20.
+   * Deprecated legacy compatibility key. It is accepted so older configs
+   * continue to load, but it has no termination or lifecycle authority and is
+   * never used as `provider_preparation_timeout_minutes`.
    */
   step_heartbeat_stall_minutes?: number;
   /**
