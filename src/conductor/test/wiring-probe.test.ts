@@ -418,7 +418,13 @@ describe('orphanBackstop', () => {
     const results = await orphanBackstop(newExports, search);
 
     expect(results).toEqual([
-      { file: 'src/foo.ts', symbol: 'foo', status: 'ok', evidence: ['src/caller.ts'] },
+      {
+        file: 'src/foo.ts',
+        symbol: 'foo',
+        status: 'ok',
+        referenceClassification: 'production-outside-file',
+        evidence: ['src/caller.ts'],
+      },
     ]);
   });
 
@@ -435,6 +441,7 @@ describe('orphanBackstop', () => {
         file: 'src/foo.ts',
         symbol: 'foo',
         status: 'gap',
+        referenceClassification: 'test-only',
         message: 'foo exported but referenced by no production code (2 test-only references excluded)',
       },
     ]);
@@ -451,8 +458,41 @@ describe('orphanBackstop', () => {
         file: 'src/foo.ts',
         symbol: 'foo',
         status: 'gap',
+        referenceClassification: 'same-file-only',
         message: 'foo exported but referenced only within its own defining file (no external wiring)',
       },
+    ]);
+  });
+
+  it('classifies same-file-only, absent, and test-only references as distinct gaps', async () => {
+    const newExports = [
+      { file: 'src/same-file.ts', symbol: 'sameFile' },
+      { file: 'src/absent.ts', symbol: 'absent' },
+      { file: 'src/test-only.ts', symbol: 'testOnly' },
+    ];
+    const search = fakeSearch({
+      sameFile: ['src/same-file.ts'],
+      testOnly: ['src/test-only.ts', 'src/test-only.test.ts'],
+    });
+
+    const results = await orphanBackstop(newExports, search);
+
+    expect(results).toEqual([
+      expect.objectContaining({
+        symbol: 'sameFile',
+        status: 'gap',
+        referenceClassification: 'same-file-only',
+      }),
+      expect.objectContaining({
+        symbol: 'absent',
+        status: 'gap',
+        referenceClassification: 'absent',
+      }),
+      expect.objectContaining({
+        symbol: 'testOnly',
+        status: 'gap',
+        referenceClassification: 'test-only',
+      }),
     ]);
   });
 });
