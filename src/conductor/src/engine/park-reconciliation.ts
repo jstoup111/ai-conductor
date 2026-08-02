@@ -472,7 +472,7 @@ export async function reconcileMergedPark(
     return {
       slug: opts.slug,
       steps: [],
-      refusal: evidence.branches.length === 0 ? 'branch-missing' : 'not-ancestor',
+      refusal: evidence.branches.length === 0 ? 'branch-missing' : 'no-merge-proof',
     };
   }
 
@@ -493,8 +493,18 @@ export async function reconcileMergedPark(
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
     for (const ref of unproven) {
-      if ((await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref)).kind !== 'proven') {
-        return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
+      const diagnosis = await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref);
+      switch (diagnosis.kind) {
+        case 'proven':
+          continue;
+        case 'no-pr':
+          return { slug: opts.slug, steps: [], refusal: 'no-merge-proof' };
+        case 'ahead':
+          return { slug: opts.slug, steps: [], refusal: 'unmerged-commits' };
+        case 'behind':
+          return { slug: opts.slug, steps: [], refusal: 'branch-behind-merged-head' };
+        case 'indeterminate':
+          return { slug: opts.slug, steps: [], refusal: 'ancestry-check-failed' };
       }
     }
   }
