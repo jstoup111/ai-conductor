@@ -136,12 +136,17 @@ describe('conductor auth-park: daemon-token mode', () => {
     expect(park).toEqual({ disposition: 'recovered' });
   });
 
-  it('authorizes one trial when a cached-login recovery probe becomes unavailable', async () => {
+  it('retains the closed parser rejection in unavailable cached-login recovery progress', async () => {
+    const rawDoctorDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
     const readiness = vi.fn().mockResolvedValue({
       provider: 'codex',
       source: 'cached-login',
       state: 'probe-failed',
-      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+      probeFailure: {
+        kind: 'unparseable-output',
+        facts: { parserRejection: 'invalid-json' },
+        rawDoctorDiagnostic,
+      },
     });
     const invoke = vi.fn();
     const runner: StepRunner = { run: vi.fn(async () => ({ success: true })) };
@@ -196,11 +201,13 @@ describe('conductor auth-park: daemon-token mode', () => {
           source: 'cached-login',
           readiness: 'probe-failed',
           degradation: 'probe-failure',
-          probeFailureKind: 'timeout',
+          probeFailureKind: 'unparseable-output',
+          parserRejection: 'invalid-json',
           elapsedSeconds: 0,
           nextDisposition: 'trial-required',
         })],
       });
+      expect(JSON.stringify(eventsSeen)).not.toContain(rawDoctorDiagnostic);
     } finally {
       nowSpy.mockRestore();
     }

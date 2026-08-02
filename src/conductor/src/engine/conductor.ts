@@ -1682,6 +1682,9 @@ export class Conductor {
                 elapsedSeconds,
                 degradation: 'probe-failure',
                 probeFailureKind: current.probeFailure.kind,
+                ...(current.probeFailure.facts.parserRejection === undefined
+                  ? {}
+                  : { parserRejection: current.probeFailure.facts.parserRejection }),
                 nextDisposition: 'trial-required',
               });
               lastProgress = { readiness: current.state, degradation, emittedAt: now };

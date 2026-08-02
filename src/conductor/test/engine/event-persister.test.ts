@@ -124,9 +124,12 @@ describe('EventPersister', () => {
     });
   });
 
-  it('persists the closed probe-failure recovery disposition as JSONL', async () => {
+  it.each(['invalid-json', 'unsupported-schema', undefined] as const)(
+    'persists the closed parser-rejection reason %s for probe-failure recovery',
+    async (parserRejection) => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();
+    const rawDoctorDiagnostic = 'sk-live-super-secret-token /private/codex/credentials.json';
 
     await emitter.emit({
       type: 'credentials_park_progress',
@@ -135,7 +138,8 @@ describe('EventPersister', () => {
       readiness: 'probe-failed',
       elapsedSeconds: 3,
       degradation: 'probe-failure',
-      probeFailureKind: 'timeout',
+      probeFailureKind: 'unparseable-output',
+      ...(parserRejection === undefined ? {} : { parserRejection }),
       nextDisposition: 'trial-required',
     });
 
@@ -149,10 +153,13 @@ describe('EventPersister', () => {
       readiness: 'probe-failed',
       elapsedSeconds: 3,
       degradation: 'probe-failure',
-      probeFailureKind: 'timeout',
+      probeFailureKind: 'unparseable-output',
+      ...(parserRejection === undefined ? {} : { parserRejection }),
       nextDisposition: 'trial-required',
     });
-  });
+    expect(JSON.stringify(record)).not.toContain(rawDoctorDiagnostic);
+    },
+  );
 
   it('forwards typed probe-failure progress to the daemon bus without widening its event shape', async () => {
     const globalEvents = new ConductorEventEmitter();

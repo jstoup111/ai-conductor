@@ -4,6 +4,7 @@ import type {
   AuthenticationReadinessState,
   AuthenticationSource,
   CodexProbeFailureKind,
+  CodexProbeParserRejection,
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
@@ -36,6 +37,8 @@ type CredentialParkProgressEvent = CredentialParkProgressEventBase &
         readiness: 'probe-failed';
         degradation: 'probe-failure';
         probeFailureKind: CodexProbeFailureKind;
+        /** Closed, secret-safe parser reason from the current failed probe. */
+        parserRejection?: CodexProbeParserRejection;
         nextDisposition: 'trial-required';
         nextProbeDelaySeconds?: never;
       }

@@ -103,6 +103,8 @@ void deliberatelyNotPersisted;
 const probeFailureMissingClosedMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure' } satisfies ConductorEvent;
 // @ts-expect-error -- a terminal probe-failure disposition has no next polling delay.
 const probeFailureWithPollingDelay = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required', nextProbeDelaySeconds: 4 } satisfies ConductorEvent;
+// @ts-expect-error -- recovery progress retains only the closed parser-rejection union, never raw doctor diagnostics.
+const probeFailureWithRawParserRejection = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'probe-failed', elapsedSeconds: 3, degradation: 'probe-failure', probeFailureKind: 'unparseable-output', parserRejection: 'sk-live-super-secret-token /private/codex/credentials.json', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // @ts-expect-error -- conclusive credential progress cannot carry probe-only metadata.
 const credentialFailureWithProbeMetadata = { type: 'credentials_park_progress', provider: 'codex', source: 'cached-login', readiness: 'unusable', elapsedSeconds: 3, nextProbeDelaySeconds: 4, degradation: 'credential-failure', probeFailureKind: 'timeout', nextDisposition: 'trial-required' } satisfies ConductorEvent;
 // @ts-expect-error -- probe-failure degradation is valid only with probe-failed readiness.
@@ -118,6 +120,7 @@ const unrelatedDegradationWithProbeFailedReadiness = { type: 'credentials_park_p
 void [
   probeFailureMissingClosedMetadata,
   probeFailureWithPollingDelay,
+  probeFailureWithRawParserRejection,
   credentialFailureWithProbeMetadata,
   probeFailureWithConclusiveReadiness,
   probeFailureWithMissingReadiness,
