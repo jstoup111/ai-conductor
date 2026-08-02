@@ -351,33 +351,37 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
     {
       name: 'no merged PR proves the branch',
       gh: '[]',
-      expectedRefusal: 'no-merge-proof',
+      expectedOutcome: { steps: [], refusal: 'no-merge-proof' },
     },
     {
       name: 'the branch contains commits beyond the merged PR head',
       gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
       mergedPrHeads: ['1111111111111111111111111111111111111111'],
       tips: { 'feat/deletion-gate-map': '2222222222222222222222222222222222222222' },
-      expectedRefusal: 'unmerged-commits',
+      expectedOutcome: {
+        steps: [],
+        refusal: 'unmerged-commits',
+        unmergedCommits: { commits: [], overflow: 0 },
+      },
     },
     {
       name: 'the branch is behind the merged PR head',
       gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
       tips: { 'feat/deletion-gate-map': '2222222222222222222222222222222222222222' },
-      expectedRefusal: 'branch-behind-merged-head',
+      expectedOutcome: { steps: [], refusal: 'branch-behind-merged-head' },
     },
     {
       name: 'the branch tip cannot be resolved locally',
       gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
-      expectedRefusal: 'ancestry-check-failed',
+      expectedOutcome: { steps: [], refusal: 'ancestry-check-failed' },
     },
     {
       name: 'the current tip equals the merged PR head',
       gh: '[{"headRefOid":"1111111111111111111111111111111111111111"}]',
       tips: { 'feat/deletion-gate-map': '1111111111111111111111111111111111111111' },
-      expectedRefusal: undefined,
+      expectedOutcome: { steps: ['worktree-removed', 'branch-deleted', 'unparked'] },
     },
-  ] as const)('maps deletion-gate diagnosis when $name', async ({ gh, mergedPrHeads, tips, expectedRefusal }) => {
+  ] as const)('maps deletion-gate diagnosis when $name', async ({ gh, mergedPrHeads, tips, expectedOutcome }) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
     const slug = 'deletion-gate-map';
     const { run, deleted } = makeGit({
@@ -392,11 +396,11 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 
       const outcome = await reconcileMergedPark({ projectRoot, slug, runGit: run, runGh });
 
-      expect({ refusal: outcome.refusal, deleted }).toEqual(
-        expectedRefusal === undefined
-          ? { refusal: undefined, deleted: [`feat/${slug}`] }
-          : { refusal: expectedRefusal, deleted: [] },
-      );
+      expect({ outcome, deleted, parked: await isOperatorParked(projectRoot, slug) }).toEqual({
+        outcome: { slug, ...expectedOutcome },
+        deleted: expectedOutcome.refusal === undefined ? [`feat/${slug}`] : [],
+        parked: expectedOutcome.refusal !== undefined,
+      });
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
