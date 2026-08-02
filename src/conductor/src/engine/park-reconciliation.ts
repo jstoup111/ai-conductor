@@ -110,7 +110,7 @@ function undatedStem(stem: string): string {
  * - `mergedBranches` — local branches for the slug that `merge-base
  *   --is-ancestor` proves are contained in `origin/main`. Ancestry is one of
  *   the two deletion proofs `reconcileMergedPark` accepts; the other is
- *   head-oid identity against a merged PR (`isSquashMergedAtTip`), needed
+ *   head-oid identity against a merged PR (`proveByMergedPrHead`), needed
  *   because a squash merge makes ancestry permanently false for the source
  *   branch. A shipped record is never a deletion proof on its own — it says
  *   nothing about commits added to the branch after the merge.
@@ -217,9 +217,19 @@ async function isContainedInMain(
 }
 
 /**
- * `true` when a MERGED pull request for `ref` reports exactly this branch's
- * current tip as its head commit — the squash/rebase-merge equivalent of
- * ancestry.
+ * The diagnosis from a merged pull request's recorded head commit. `proven` is
+ * the squash/rebase-merge equivalent of ancestry; the other cases preserve why
+ * that proof was unavailable without changing deletion authority.
+ */
+export type MergedPrHeadDiagnosis =
+  | { kind: 'proven' }
+  | { kind: 'no-pr' }
+  | { kind: 'ahead'; headRefOid: string }
+  | { kind: 'behind'; headRefOid: string }
+  | { kind: 'indeterminate' };
+
+/**
+ * Proves or diagnoses head identity for a merged pull request on `ref`.
  *
  * A squash merge rewrites the branch's commits into one new commit on the base
  * branch, so `merge-base --is-ancestor` is permanently `false` for the source
@@ -231,18 +241,18 @@ async function isContainedInMain(
  * deleting this ref drop a commit?" — without weakening it: GitHub recorded
  * which commit it merged, and if the local tip still equals that commit then
  * every commit on the branch is contained in the squash. One extra local commit
- * moves the tip, the SHAs diverge, and this returns `false`.
+ * moves the tip, the SHAs diverge, and the result distinguishes whether the
+ * branch is ahead of or behind the merged head.
  *
- * Fails closed: an unavailable `gh`, a non-JSON payload, no merged PR, or an
- * unresolvable tip all return `false`, leaving ancestry as the only authority
- * exactly as before.
+ * Fails closed: an unavailable `gh`, a non-JSON payload, or an unresolvable
+ * object returns `indeterminate`, leaving ancestry as the only authority.
  */
-async function isSquashMergedAtTip(
+export async function proveByMergedPrHead(
   runGit: GitRunner,
   runGh: GhRunner,
   projectRoot: string,
   ref: string,
-): Promise<boolean> {
+): Promise<MergedPrHeadDiagnosis> {
   try {
     const { stdout } = await runGh(
       ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
@@ -250,11 +260,24 @@ async function isSquashMergedAtTip(
     );
     const prs = JSON.parse(stdout) as Array<{ headRefOid?: unknown }>;
     const headRefOid = prs[0]?.headRefOid;
-    if (typeof headRefOid !== 'string' || headRefOid.trim() === '') return false;
+    if (prs.length === 0) return { kind: 'no-pr' };
+    if (typeof headRefOid !== 'string' || headRefOid.trim() === '') return { kind: 'indeterminate' };
     const { stdout: tip } = await runGit(['rev-parse', ref], { cwd: projectRoot });
-    return tip.trim() === headRefOid.trim();
+    const normalizedHeadRefOid = headRefOid.trim();
+    if (tip.trim() === normalizedHeadRefOid) return { kind: 'proven' };
+
+    await runGit(['cat-file', '-e', `${normalizedHeadRefOid}^{commit}`], { cwd: projectRoot });
+    try {
+      await runGit(['merge-base', '--is-ancestor', normalizedHeadRefOid, ref], { cwd: projectRoot });
+      return { kind: 'ahead', headRefOid: normalizedHeadRefOid };
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 1) {
+        return { kind: 'behind', headRefOid: normalizedHeadRefOid };
+      }
+      return { kind: 'indeterminate' };
+    }
   } catch {
-    return false;
+    return { kind: 'indeterminate' };
   }
 }
 
@@ -470,7 +493,7 @@ export async function reconcileMergedPark(
   if (unproven.length > 0) {
     const runGh = opts.runGh ?? makeProductionGh();
     for (const ref of unproven) {
-      if (!(await isSquashMergedAtTip(runGit, runGh, opts.projectRoot, ref))) {
+      if ((await proveByMergedPrHead(runGit, runGh, opts.projectRoot, ref)).kind !== 'proven') {
         return { slug: opts.slug, steps: [], refusal: 'not-ancestor' };
       }
     }

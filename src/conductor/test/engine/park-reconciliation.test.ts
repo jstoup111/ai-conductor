@@ -3,7 +3,11 @@ import { access, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { reconcileMergedPark, reconcileParkedFeatures } from '../../src/engine/park-reconciliation.js';
+import {
+  proveByMergedPrHead,
+  reconcileMergedPark,
+  reconcileParkedFeatures,
+} from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { isOperatorParked, removeOperatorPark, writeOperatorPark } from '../../src/engine/park-marker.js';
 
@@ -118,6 +122,89 @@ function makeGit(world: GitWorld = {}): {
 
   return { run, deleted, deleteArgv, events };
 }
+
+describe('engine/park-reconciliation — proveByMergedPrHead', () => {
+  const projectRoot = '/project';
+  const ref = 'feat/parked';
+  const mergedHead = '1111111111111111111111111111111111111111';
+  const branchTip = '2222222222222222222222222222222222222222';
+
+  function probeGit(mergeBaseExit?: 1, catFileFails = false): ReturnType<typeof vi.fn<GitRunner>> {
+    return vi.fn<GitRunner>(async (args) => {
+      if (args[0] === 'rev-parse') return { stdout: `${branchTip}\n` };
+      if (args[0] === 'cat-file') {
+        if (catFileFails) throw gitFailure(128, 'fatal: Not a valid object name');
+        return { stdout: '' };
+      }
+      if (args[0] === 'merge-base') {
+        if (mergeBaseExit === 1) throw gitFailure(1, 'not an ancestor');
+        return { stdout: '' };
+      }
+      throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+    });
+  }
+
+  it.each([
+    { name: 'reports no-pr when no merged PR is found', pr: '[]', git: probeGit(), expected: { kind: 'no-pr' } },
+    {
+      name: 'proves a branch whose tip exactly matches the merged PR head',
+      pr: `[{"headRefOid":"${branchTip}"}]`,
+      git: probeGit(),
+      expected: { kind: 'proven' },
+    },
+    {
+      name: 'reports ahead after the merged PR head is guarded and is an ancestor of the branch',
+      pr: `[{"headRefOid":"${mergedHead}"}]`,
+      git: probeGit(),
+      expected: { kind: 'ahead', headRefOid: mergedHead },
+    },
+    {
+      name: 'reports behind after the merged PR head is guarded but is not an ancestor of the branch',
+      pr: `[{"headRefOid":"${mergedHead}"}]`,
+      git: probeGit(1),
+      expected: { kind: 'behind', headRefOid: mergedHead },
+    },
+    {
+      name: 'reports indeterminate when the mismatched merged PR head cannot be resolved locally',
+      pr: `[{"headRefOid":"${mergedHead}"}]`,
+      git: probeGit(undefined, true),
+      expected: { kind: 'indeterminate' },
+    },
+  ])('$name', async ({ pr, git, expected }) => {
+    const runGh = vi.fn<GhRunner>().mockResolvedValue({ stdout: pr });
+
+    const diagnosis = await proveByMergedPrHead(git, runGh, projectRoot, ref);
+
+    expect({
+      diagnosis,
+      gitCalls: git.mock.calls.map(([args]) => args),
+      ghCalls: runGh.mock.calls,
+    }).toEqual({
+      diagnosis: expected,
+      gitCalls:
+        expected.kind === 'no-pr'
+          ? []
+          : expected.kind === 'proven'
+            ? [['rev-parse', ref]]
+          : expected.kind === 'indeterminate'
+            ? [
+                ['rev-parse', ref],
+                ['cat-file', '-e', `${mergedHead}^{commit}`],
+              ]
+            : [
+                ['rev-parse', ref],
+                ['cat-file', '-e', `${mergedHead}^{commit}`],
+                ['merge-base', '--is-ancestor', mergedHead, ref],
+              ],
+      ghCalls: [
+        [
+          ['pr', 'list', '--head', ref, '--state', 'merged', '--json', 'headRefOid', '--limit', '1'],
+          { cwd: projectRoot },
+        ],
+      ],
+    });
+  });
+});
 
 describe('engine/park-reconciliation — reconcileMergedPark', () => {
   it.each(['*', 'a/b', 'a,b', ''])(
