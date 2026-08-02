@@ -23,9 +23,22 @@ export interface ReconcileMergedParkOptions {
 export interface ReconcileMergedParkOutcome {
   slug: string;
   steps: string[];
-  refusal?: string;
+  refusal?: RefusalReason;
   deferred?: boolean;
 }
+
+export type RefusalReason =
+  | 'invalid-slug'
+  | 'ancestry-check-failed'
+  | 'branch-missing'
+  | 'not-ancestor'
+  | 'no-merge-proof'
+  | 'unmerged-commits'
+  | 'branch-behind-merged-head'
+  | 'record-missing'
+  | 'worktree-remove-failed'
+  | 'branch-delete-failed'
+  | 'unpark-failed';
 
 export type ParkClassification = 'merged' | 'orphan' | 'normal' | 'unclassified';
 
