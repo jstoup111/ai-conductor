@@ -18,6 +18,7 @@ import {
   type IntervalClock,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // These are deliberately Codex-specific rather than reusing Claude's error
 // vocabulary. The CLIs report different messages for the same failure class.
@@ -256,8 +257,10 @@ export class CodexProvider implements LLMProvider {
     spawnPermit: InvokeOptions['spawnPermit'],
     purpose?: 'preparation',
   ): void {
-    const permit = spawnPermit?.(purpose);
-    if (permit && !permit.permitted) {
+    const permit = purpose === undefined
+      ? validateSpawnPermit(spawnPermit)
+      : validateSpawnPermit(spawnPermit, purpose);
+    if (!permit.permitted) {
       throw new Error(`Codex process spawn denied: ${permit.reason}`);
     }
   }

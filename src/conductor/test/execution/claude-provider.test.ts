@@ -9,6 +9,14 @@ vi.mock('execa', () => ({
   execa: vi.fn(),
 }));
 
+const { mockValidateSpawnPermit } = vi.hoisted(() => ({
+  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
+    permit?.(purpose) ?? { permitted: true as const }),
+}));
+vi.mock('../../src/engine/provider-runtime.js', () => ({
+  validateSpawnPermit: mockValidateSpawnPermit,
+}));
+
 import { execa, type Options as ExecaOptions, type Result as ExecaResult } from 'execa';
 
 /**
@@ -63,6 +71,7 @@ describe('ClaudeProvider', () => {
       await provider.invoke({ ...baseOptions, spawnPermit });
 
       expect(callOrder).toEqual(['spawn permit', 'subprocess factory']);
+      expect(mockValidateSpawnPermit).toHaveBeenCalledWith(spawnPermit);
     });
 
     it('fails closed without creating a child when its permit is revoked', async () => {

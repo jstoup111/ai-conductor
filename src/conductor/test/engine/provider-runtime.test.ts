@@ -4,7 +4,7 @@ import type {
   InvokeResult,
   LLMProvider,
   SpawnPermit,
-  SpawnPermitDecision,
+  SpawnPermitPurpose,
 } from '../../src/execution/llm-provider.js';
 import {
   CLAUDE_MODEL_POLICY,
@@ -14,6 +14,7 @@ import {
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
 import type { AuthenticationReadiness } from '../../src/execution/llm-provider.js';
 import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { validateSpawnPermit } from '../../src/engine/provider-runtime.js';
 
 interface ClassifiedInvokeResult extends InvokeResult {
   timedOut?: boolean;
@@ -73,23 +74,6 @@ async function loadRuntimeInvoker(): Promise<InvokeRuntime | undefined> {
   )?.invokeRuntime;
 }
 
-async function loadSpawnPermitValidator(): Promise<
-  ((permit: SpawnPermit | undefined) => SpawnPermitDecision) | undefined
-> {
-  const module = await import('../../src/engine/provider-runtime.js').catch(
-    () => null,
-  );
-  return (
-    module as
-      | {
-          validateSpawnPermit?: (
-            permit: SpawnPermit | undefined,
-          ) => SpawnPermitDecision;
-        }
-      | null
-  )?.validateSpawnPermit;
-}
-
 function provider(): LLMProvider {
   return {
     invoke: vi.fn(async () => ({
@@ -131,7 +115,7 @@ describe('ProviderRuntimeSet', () => {
       spawnPermit: current,
     };
 
-    expect((await loadSpawnPermitValidator())?.(options.spawnPermit)).toEqual({
+    expect(validateSpawnPermit(options.spawnPermit)).toEqual({
       permitted: true,
     });
   });
@@ -148,10 +132,18 @@ describe('ProviderRuntimeSet', () => {
       spawnPermit: revoked,
     };
 
-    expect((await loadSpawnPermitValidator())?.(options.spawnPermit)).toEqual({
+    expect(validateSpawnPermit(options.spawnPermit)).toEqual({
       permitted: false,
       reason: 'revoked',
     });
+  });
+
+  it('forwards the preparation purpose to the shared synchronous permit', () => {
+    const purpose: SpawnPermitPurpose = 'preparation';
+    const permit = vi.fn<SpawnPermit>(() => ({ permitted: true }));
+
+    expect(validateSpawnPermit(permit, purpose)).toEqual({ permitted: true });
+    expect(permit).toHaveBeenCalledWith('preparation');
   });
 
   it('exposes readiness only for the matching built-in provider', async () => {

@@ -6,6 +6,7 @@ import type {
   SelfHostAuthPreparation,
   SpawnPermit,
   SpawnPermitDecision,
+  SpawnPermitPurpose,
 } from '../execution/llm-provider.js';
 import { ModelAvailability } from './model-availability.js';
 import {
@@ -88,8 +89,9 @@ export class ProviderRuntimeSet {
  */
 export function validateSpawnPermit(
   permit: SpawnPermit | undefined,
+  purpose?: SpawnPermitPurpose,
 ): SpawnPermitDecision {
-  return permit?.() ?? { permitted: true };
+  return permit?.(purpose) ?? { permitted: true };
 }
 
 export function createProviderRuntimeSet(

@@ -7,6 +7,7 @@ import {
   type ObservedInterval,
 } from './observed-interval.js';
 import { summarizeProviderDiagnostic } from './provider-diagnostics.js';
+import { validateSpawnPermit } from '../engine/provider-runtime.js';
 
 // Task 17: Extended to include session-limit family (observed 2026-07-03 incident)
 // Patterns: "rate limit", "429", "overloaded"
@@ -485,8 +486,8 @@ export class ClaudeProvider implements LLMProvider {
     options: ExecaOptions & Pick<InvokeOptions, 'diagnosticLog' | 'onActivity' | 'onSpawn' | 'spawnPermit'>,
   ) {
     const { diagnosticLog, onActivity, onSpawn, spawnPermit, ...execaOptions } = options;
-    const permit = spawnPermit?.();
-    if (permit && !permit.permitted) {
+    const permit = validateSpawnPermit(spawnPermit);
+    if (!permit.permitted) {
       throw new Error(`Claude process spawn denied: ${permit.reason}`);
     }
     const subprocess = this.subprocessFactory('claude', args, {

@@ -27,6 +27,14 @@ const { mockExeca } = vi.hoisted(() => {
 });
 vi.mock('execa', () => ({ execa: mockExeca }));
 
+const { mockValidateSpawnPermit } = vi.hoisted(() => ({
+  mockValidateSpawnPermit: vi.fn((permit, purpose) =>
+    permit?.(purpose) ?? { permitted: true as const }),
+}));
+vi.mock('../../src/engine/provider-runtime.js', () => ({
+  validateSpawnPermit: mockValidateSpawnPermit,
+}));
+
 const baseOptions: InvokeOptions = {
   prompt: 'Make the no-op change',
   systemPrompt: 'You are the conductor.',
@@ -62,6 +70,8 @@ describe('CodexProvider', () => {
 
   beforeEach(() => {
     vi.resetAllMocks();
+    mockValidateSpawnPermit.mockImplementation((permit, purpose) =>
+      permit?.(purpose) ?? { permitted: true });
     provider = new CodexProvider(
       vi.fn(async (_command, _args, options) =>
         readyDoctorResult(options.env?.CODEX_API_KEY ? 'api-key' : 'cached-login'),
@@ -92,6 +102,8 @@ describe('CodexProvider', () => {
     await provider.invoke({ ...baseOptions, spawnPermit });
 
     expect(callOrder).toEqual(['spawn permit', 'readiness', 'spawn permit', 'subprocess factory']);
+    expect(mockValidateSpawnPermit).toHaveBeenNthCalledWith(1, spawnPermit, 'preparation');
+    expect(mockValidateSpawnPermit).toHaveBeenNthCalledWith(2, spawnPermit);
   });
 
   it.each([
