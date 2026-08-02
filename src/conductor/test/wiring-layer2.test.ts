@@ -210,6 +210,50 @@ describe('buildImportGraph / reachableFromRoots', () => {
 });
 
 describe('checkExportReachability — orphan islands and test-only edges', () => {
+  it('exposes the shortest repo-relative root chain for a reachable export', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-reachable-export-chain-'));
+    try {
+      await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(
+        join(tmpDir, 'src', 'root.ts'),
+        [
+          "import { detour } from './detour.js';",
+          "import { a } from './a.js';",
+          'export const rootValue = detour + a;',
+          '',
+        ].join('\n'),
+      );
+      await writeFile(
+        join(tmpDir, 'src', 'detour.ts'),
+        "import { bridge } from './bridge.js';\nexport const detour = bridge;\n",
+      );
+      await writeFile(
+        join(tmpDir, 'src', 'bridge.ts'),
+        "import { b } from './b.js';\nexport const bridge = b;\n",
+      );
+      await writeFile(
+        join(tmpDir, 'src', 'a.ts'),
+        "import { b } from './b.js';\nexport const a = b;\n",
+      );
+      await writeFile(join(tmpDir, 'src', 'b.ts'), 'export const b = 1;\n');
+
+      const results = checkExportReachability(
+        [{ file: 'src/b.ts', symbol: 'b' }],
+        ['src/root.ts'],
+        tmpDir,
+      );
+
+      expect(results).toHaveLength(1);
+      expect(results[0]).toMatchObject({
+        reachable: true,
+        reachableFromRoots: ['src/root.ts', 'src/a.ts', 'src/b.ts'],
+      });
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports an orphan island (modules that import each other but are unreachable from any root) as unreachable', async () => {
     const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-orphan-island-'));
     try {
