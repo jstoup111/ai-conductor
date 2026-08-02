@@ -3216,8 +3216,13 @@ export class Conductor {
               1,
               Math.min(this.validationConcurrency, membership.dispatchable.length),
             );
-            const dispatchGroupRound = (members: typeof membership.dispatchable) =>
-              runWithConcurrency(
+            const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+              for (const member of members) {
+                const syntheticKey = `${builtinGroup.name}__${member.name}`;
+                (state as Record<string, unknown>)[syntheticKey] = 'stale';
+              }
+              await writeState(this.stateFilePath, state);
+              return runWithConcurrency(
                 members.map((member) => () => {
                   if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
                     return runNativeGroupBranch(
@@ -3273,6 +3278,7 @@ export class Conductor {
                 }),
                 cap,
               );
+            };
 
             // Task 27: reset the pending-completions side-channel for THIS
             // round only — never touched by any path outside this fan-out
