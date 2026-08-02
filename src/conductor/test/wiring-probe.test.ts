@@ -515,6 +515,7 @@ describe('evaluateSameFileComposition', () => {
       caller: 'compose',
       export: 'helper',
     },
+    layer2: { applicable: true, roots: ['src/index.ts'] },
     rootChain: ['src/index.ts', 'src/composition.ts'],
   });
 
@@ -575,6 +576,38 @@ describe('evaluateSameFileComposition', () => {
   ])('does not manufacture a proof for $name', ({ mutate, reason }) => {
     const input = qualifyingInput();
     mutate(input);
+
+    expect(evaluateSameFileComposition(input)).toEqual({ kind: 'missing-proof', reason });
+  });
+
+  it.each([
+    {
+      name: 'not-applicable',
+      layer2: { applicable: false, reason: 'not-applicable' } as const,
+      reason: 'layer2-not-applicable',
+    },
+    {
+      name: 'skipped',
+      layer2: {
+        applicable: false,
+        reason: 'skipped',
+        message: 'Layer 2 skipped: wiring.entry_points not configured',
+      } as const,
+      reason: 'layer2-skipped',
+    },
+    {
+      name: 'bad-root',
+      layer2: {
+        applicable: false,
+        reason: 'bad-root',
+        satisfied: false,
+        message: 'wiring.entry_points root "src/missing.ts" does not exist',
+      } as const,
+      reason: 'layer2-bad-root',
+    },
+  ])('does not authorize a proof when Layer 2 is $name', ({ layer2, reason }) => {
+    const input = qualifyingInput();
+    input.layer2 = layer2;
 
     expect(evaluateSameFileComposition(input)).toEqual({ kind: 'missing-proof', reason });
   });
