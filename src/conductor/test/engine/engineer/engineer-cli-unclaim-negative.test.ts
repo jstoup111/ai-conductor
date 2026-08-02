@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { dispatchEngineer } from '../../../src/engine/engineer-cli.js';
-import { mkdir, rm, readFile } from 'node:fs/promises';
+import { access, mkdir, rm, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { createLedger } from '../../../src/engine/engineer/intake/ledger.js';
 
@@ -60,6 +60,37 @@ describe('engineer unclaim: negative paths (Task 9, 10)', () => {
 
       const afterRaw = JSON.parse(await readFile(ledgerPath, 'utf8'));
       expect(afterRaw).toEqual(beforeRaw);
+    } finally {
+      await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a claimed entry that already has a PR, preserving the ledger and inbox', async () => {
+    const testDir = `/tmp/unclaim-neg-test-${Date.now()}-${Math.random()}`;
+    try {
+      const engDir = join(testDir, 'engineer');
+      await mkdir(engDir, { recursive: true });
+      const ledgerPath = join(engDir, 'ledger.json');
+      const ledger = createLedger(ledgerPath);
+      const sourceRef = 'o/a#3';
+      const prUrl = 'https://github.com/o/a/pull/3';
+      await ledger.record({ source: GITHUB_ISSUES_SOURCE, sourceRef });
+      await ledger.transition(GITHUB_ISSUES_SOURCE, sourceRef, 'claimed', { prUrl });
+      const beforeRaw = JSON.parse(await readFile(ledgerPath, 'utf8'));
+
+      const { out, err, opts } = captureOut();
+      const code = await dispatchEngineer(
+        { kind: 'unclaim', sourceRef },
+        { ...opts({}), engineerDir: engDir },
+      );
+
+      expect(code).toBe(0);
+      expect(err).toEqual([]);
+      expect(out).toHaveLength(1);
+      expect(JSON.parse(out[0])).toMatchObject({ kind: 'unclaim', sourceRef, found: true, acted: false });
+      expect(out[0]).toMatch(/resolve|forget/i);
+      expect(JSON.parse(await readFile(ledgerPath, 'utf8'))).toEqual(beforeRaw);
+      await expect(access(join(engDir, 'inbox'))).rejects.toThrow();
     } finally {
       await rm(testDir, { recursive: true, force: true });
     }

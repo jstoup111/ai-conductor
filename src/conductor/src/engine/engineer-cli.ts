@@ -1278,8 +1278,8 @@ export async function dispatchEngineer(
     // `conduct-ts engineer unclaim <sourceRef>` — single-idea recovery (FR-5):
     // requeue a claimed ledger entry back to pending, preserving capturedAt.
     // An absent ref is reported (found:false) and is NOT an error (Story 5, FR-7).
-    // A non-claimed (terminal) entry refuses and directs the operator to
-    // resolve/forget instead (Story 4, FR-6) — also NOT an error.
+    // A non-claimed (terminal) or already PR-delivered entry refuses and directs
+    // the operator to resolve/forget instead (Story 4, FR-6) — also NOT an error.
     case 'unclaim': {
       const { sourceRef } = dispatch;
       const engDir = engineerDir ?? resolveEngineerDir({});
@@ -1291,7 +1291,10 @@ export async function dispatchEngineer(
         return 0;
       }
 
-      if (entry.status !== 'claimed') {
+      if (entry.status !== 'claimed' || entry.prUrl) {
+        const reason = entry.prUrl
+          ? 'entry already has an associated PR — use `engineer resolve` or `engineer forget` instead'
+          : `entry is "${entry.status}", not "claimed" — use \`engineer resolve\` or \`engineer forget\` instead`;
         print(
           JSON.stringify({
             kind: 'unclaim',
@@ -1299,7 +1302,7 @@ export async function dispatchEngineer(
             found: true,
             acted: false,
             status: entry.status,
-            reason: `entry is "${entry.status}", not "claimed" — use \`engineer resolve\` or \`engineer forget\` instead`,
+            reason,
           }),
         );
         return 0;
