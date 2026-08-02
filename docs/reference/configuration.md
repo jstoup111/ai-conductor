@@ -119,6 +119,7 @@ normalizers (`:52,898-927,929-961`).
 | `model_fallback_ladder` | string[] | provider policy | [model_fallback_ladder](#model_fallback_ladder) |
 | `auto_restart_on_stale_engine` | boolean | `false` | [auto_restart_on_stale_engine](#auto_restart_on_stale_engine) |
 | `engine_refresh_min_interval_seconds` | number | `300` | [engine_refresh_min_interval_seconds](#engine_refresh_min_interval_seconds) |
+| `codex_doctor_timeout_seconds` | number | `10` | [codex_doctor_timeout_seconds](#codex_doctor_timeout_seconds) |
 | `mergeable_autoresolve` | object | disabled | [mergeable_autoresolve](#mergeable_autoresolve) |
 | `build_review` | object | `{ enabled: true }` | [build_review](#build_review) |
 | `ci_watch` | object | `{ enabled: true }` | [ci_watch](#ci_watch) |
@@ -781,6 +782,13 @@ back (`config.ts:812-815`).
 
 Consumed at `src/conductor/src/daemon-cli.ts:1397, 1427` as `(… ?? 300) * 1000`. User-level values
 apply when the project omits this key.
+
+## codex_doctor_timeout_seconds
+
+Maximum time, in seconds, to wait for the Codex readiness doctor command. Optional number, default `10`.
+The value must be positive and finite after conversion to milliseconds; invalid values, including values
+that overflow when multiplied by 1,000, fail configuration validation. The resolved value is passed to the
+Codex provider as milliseconds.
 
 ## mergeable_autoresolve
 

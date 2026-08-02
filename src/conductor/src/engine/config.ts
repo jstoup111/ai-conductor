@@ -846,9 +846,10 @@ export function validateConfig(
     if (
       typeof obj.codex_doctor_timeout_seconds !== 'number' ||
       !Number.isFinite(obj.codex_doctor_timeout_seconds) ||
-      obj.codex_doctor_timeout_seconds <= 0
+      obj.codex_doctor_timeout_seconds <= 0 ||
+      !Number.isFinite(obj.codex_doctor_timeout_seconds * 1_000)
     ) {
-      return errVal('codex_doctor_timeout_seconds must be a finite positive number');
+      return errVal('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
     }
   } else if (materializeDefaults) {
     obj.codex_doctor_timeout_seconds = 10;

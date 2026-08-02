@@ -187,6 +187,7 @@ complexity:
         ['a string', '30'],
         ['NaN', NaN],
         ['infinity', Infinity],
+        ['a value that overflows milliseconds', Number.MAX_VALUE],
       ])('rejects %s with a field-specific diagnostic', (_name, value) => {
         const result = validateConfig({ codex_doctor_timeout_seconds: value });
 

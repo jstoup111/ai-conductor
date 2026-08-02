@@ -281,4 +281,17 @@ describe('registerBuiltins — Codex readiness timeout', () => {
 
     expect(mockExeca.mock.calls[0]?.[2]?.timeout).toBe(expectedTimeoutMs);
   });
+
+  it('rejects a timeout that overflows when converted to milliseconds before constructing the provider', () => {
+    const registry = new PluginRegistry();
+
+    expect(() => registerBuiltins(
+      registry,
+      new ConductorEventEmitter(),
+      () => {},
+      undefined,
+      Number.MAX_VALUE,
+    )).toThrow(/codex_doctor_timeout_seconds.*milliseconds/i);
+    expect(mockExeca).not.toHaveBeenCalled();
+  });
 });

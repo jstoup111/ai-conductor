@@ -978,6 +978,49 @@ describe('conductor auth-park: daemon-token mode', () => {
     }
   });
 
+  it('authorizes only one grouped member invocation after a shared failed readiness probe', async () => {
+    await writeState(statePath, {
+      ...READY_STATE,
+      build: 'done', build_review: 'done', wiring_check: 'done',
+      retro: 'done', rebase: 'done', finish: 'done',
+    });
+    const readiness = vi.fn().mockResolvedValue({
+      provider: 'codex', source: 'cached-login', state: 'probe-failed',
+      probeFailure: { kind: 'timeout', facts: { timeoutMs: 10_000 } },
+    });
+    const runtimes = new ProviderRuntimeSet([{
+      key: 'codex',
+      provider: { invoke: vi.fn(), invokeInteractive: vi.fn(async () => {}), readiness },
+      policy: CODEX_MODEL_POLICY,
+      builtIn: true,
+      availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+    }]);
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step: StepName) => {
+        calls.push(step);
+        return codexCachedLoginFailure();
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath, stepRunner: runner, events, projectRoot: dir,
+      fromStep: 'manual_test', mode: 'auto', maxRetries: 1, sleepFn: vi.fn(async () => {}),
+      config: { harness_self_host: { auth_park_timeout_minutes: 1 } } as never,
+      providerExecution: { runtimes, sessions: {} as never, configuredProviders: ['codex'] },
+    });
+
+    await conductor.run();
+
+    expect({
+      calls: Object.fromEntries(['manual_test', 'prd_audit', 'architecture_review_as_built']
+        .map((step) => [step, calls.filter((call) => call === step).length])),
+      readinessCalls: readiness.mock.calls.length,
+    }).toEqual({
+      calls: { manual_test: 2, prd_audit: 1, architecture_review_as_built: 1 },
+      readinessCalls: 1,
+    });
+  });
+
   it.each([
     ['succeeds', { success: true }, [1, 1]],
     ['returns a non-auth failure to ordinary retry handling', { success: false, output: 'ordinary judged failure' }, [1, 1, 2]],

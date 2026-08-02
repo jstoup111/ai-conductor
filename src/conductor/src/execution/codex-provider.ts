@@ -390,7 +390,9 @@ export class CodexProvider implements LLMProvider {
         providerUnavailable: true,
         providerUnavailableScope: 'run',
         providerUnavailableReason: reason,
-        authentication: this.authenticationResult(source, 'ready'),
+        // A missing executable takes precedence as the completion result, but
+        // must not overwrite an earlier inconclusive readiness probe.
+        authentication: readyReadiness ?? this.authenticationResult(source, 'ready'),
       };
     }
 

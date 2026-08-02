@@ -3389,19 +3389,20 @@ export class Conductor {
                 return;
               }
 
-              const retryMembers = retryIdxs.map((i) => membership.dispatchable[i]!);
+              // A failed readiness probe authorizes one real invocation, not
+              // one invocation per group member. Any remaining failures stay
+              // pending for a later recovery episode.
+              const retryIdx = retryIdxs[0]!;
+              const retryMembers = [membership.dispatchable[retryIdx]!];
               inFlightGroupCompletions = {};
               const retryOutcomes = await dispatchGroupRound(retryMembers);
               inFlightGroupCompletions = undefined;
               if (signalExitRequested) return;
 
               if (park.disposition === 'trial-required') {
-                const failedTrialIdx = retryIdxs.find((_, retryIdx) => {
-                  const outcome = retryOutcomes[retryIdx]!;
-                  return outcome.kind === 'no-verdict' && outcome.reason === 'authFailure';
-                });
-                if (failedTrialIdx !== undefined) {
-                  const failedMember = membership.dispatchable[failedTrialIdx]!;
+                const failedTrial = retryOutcomes[0];
+                if (failedTrial?.kind === 'no-verdict' && failedTrial.reason === 'authFailure') {
+                  const failedMember = membership.dispatchable[retryIdx]!;
                   // The recovery trial is the bounded fallback for an
                   // unavailable probe. Never route an auth-failed trial back
                   // through parkOnAuthFailure; do not include provider output
@@ -3419,9 +3420,7 @@ export class Conductor {
                   return;
                 }
               }
-              retryIdxs.forEach((idx, k) => {
-                outcomes[idx] = retryOutcomes[k]!;
-              });
+              outcomes[retryIdx] = retryOutcomes[0]!;
             }
 
             const permissionDeniedIdx = outcomes.findIndex(

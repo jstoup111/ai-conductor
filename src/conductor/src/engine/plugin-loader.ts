@@ -144,12 +144,17 @@ export function registerBuiltins(
   rendererOpts?: TerminalRendererOptions,
   codexDoctorTimeoutSeconds = 10,
 ): TerminalSubscriber {
+  const codexDoctorTimeoutMs = codexDoctorTimeoutSeconds * 1_000;
+  if (!Number.isFinite(codexDoctorTimeoutMs) || codexDoctorTimeoutMs <= 0) {
+    throw new Error('codex_doctor_timeout_seconds must be a finite positive number representable in milliseconds');
+  }
+
   // Task 11: Register ClaudeProvider
   registry.register('llm_provider', 'claude', new ClaudeProvider());
   registry.register(
     'llm_provider',
     'codex',
-    new CodexProvider(undefined, undefined, undefined, undefined, codexDoctorTimeoutSeconds * 1_000),
+    new CodexProvider(undefined, undefined, undefined, undefined, codexDoctorTimeoutMs),
   );
 
   // Task 12: Register TerminalSubscriber (lifecycle wrapper — wires event emitter to render callback)

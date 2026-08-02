@@ -1152,8 +1152,18 @@ describe('CodexProvider', () => {
       name: 'resumed automatic stream reports unavailable provider',
       resume: true,
       response: { stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' },
-      expected: { success: false, providerUnavailable: true },
-      authenticationState: 'ready',
+      expected: {
+        success: false,
+        providerUnavailable: true,
+        authentication: {
+          state: 'probe-failed',
+          probeFailure: {
+            kind: 'unparseable-output',
+            facts: { stdoutBytes: 17, parserRejection: 'invalid-json' },
+          },
+        },
+      },
+      authenticationState: 'probe-failed',
     },
     {
       name: 'resumed automatic stream reports a rate limit',
@@ -1216,6 +1226,31 @@ describe('CodexProvider', () => {
       });
     },
   );
+
+  it.each([
+    ['ordinary', (provider: CodexProvider) => provider.invoke(baseOptions)],
+    ['unattended', (provider: CodexProvider) => provider.invokeInteractive({ ...baseOptions, interactive: false, resume: true })],
+  ] as const)('preserves failed probe evidence when the %s completion reports an unavailable provider', async (_context, invoke) => {
+    const runDoctor = vi.fn().mockResolvedValue({ stdout: '{"schemaVersion":', exitCode: 0 });
+    const degradedProvider = new CodexProvider(runDoctor);
+    mockExeca.mockResolvedValue({ stdout: '', stderr: '', exitCode: undefined, code: 'ENOENT' } as any);
+
+    const result = await invoke(degradedProvider);
+
+    expect(result).toMatchObject({
+      success: false,
+      providerUnavailable: true,
+      authentication: {
+        provider: 'codex',
+        source: 'cached-login',
+        state: 'probe-failed',
+        probeFailure: {
+          kind: 'unparseable-output',
+          facts: { stdoutBytes: 17, parserRejection: 'invalid-json' },
+        },
+      },
+    });
+  });
 
   it.each([
     ['missing', 'no Codex credentials were found', 'missing'],
