@@ -5,10 +5,12 @@ import {
   buildImportGraph,
   reachableFromRoots,
   checkExportReachability,
+  computeWiringEvidence,
 } from '../src/engine/wiring-probe.js';
 import { mkdtemp, writeFile, rm, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import * as ts from 'typescript';
 
 describe('wiring.entry_points config parsing', () => {
   it('parses a wiring.entry_points list of repo-relative paths', async () => {
@@ -313,6 +315,69 @@ describe('checkExportReachability — orphan islands and test-only edges', () =>
       expect(results[0].message).toBe(
         `«barValue» exported but unreachable from any entry point (roots: ${roots.join(', ')})`,
       );
+    } finally {
+      await rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('computeWiringEvidence — TypeScript analysis context', () => {
+  it('constructs one compiler program for multiple Layer 2 exports in one probe run', async () => {
+    const tmpDir = await mkdtemp(join(tmpdir(), 'wiring-analysis-context-'));
+    try {
+      await writeFile(join(tmpDir, 'tsconfig.json'), '{}');
+      await mkdir(join(tmpDir, 'src'), { recursive: true });
+      await writeFile(
+        join(tmpDir, 'src', 'root.ts'),
+        "import { a } from './a.js';\nimport { b } from './b.js';\nexport const root = a + b;\n",
+      );
+      await writeFile(join(tmpDir, 'src', 'a.ts'), 'export const a = 1;\n');
+      await writeFile(join(tmpDir, 'src', 'b.ts'), 'export const b = 2;\n');
+      const planPath = join(tmpDir, 'plan.md');
+      await writeFile(
+        planPath,
+        [
+          '### Task 1: Add exports',
+          '**Files:** src/a.ts, src/b.ts',
+          '**Wired-into:** src/root.ts#root',
+          '',
+        ].join('\n'),
+      );
+
+      let constructions = 0;
+      await computeWiringEvidence({
+        runGit: async (args: string[]) => {
+          if (args[0] === 'rev-parse' && args[1] === 'HEAD') return { stdout: 'head' };
+          if (args[0] === 'rev-parse' && args[1] === '--verify') return { stdout: '' };
+          if (args[0] === 'diff') {
+            return {
+              stdout: [
+                'diff --git a/src/a.ts b/src/a.ts',
+                '+++ b/src/a.ts',
+                '+export const a = 1;',
+                'diff --git a/src/b.ts b/src/b.ts',
+                '+++ b/src/b.ts',
+                '+export const b = 2;',
+              ].join('\n'),
+            };
+          }
+          if (args[0] === 'grep') return { stdout: 'src/root.ts\n' };
+          return { stdout: '' };
+        },
+        projectRoot: tmpDir,
+        planPath,
+        config: { wiring: { entry_points: ['src/root.ts'] } },
+        gh: async () => {
+          throw new Error('gh should not be called');
+        },
+        anchor: 'base',
+        compilerProgramFactory: (roots, compilerOptions, host) => {
+          constructions++;
+          return ts.createProgram(roots, compilerOptions, host);
+        },
+      });
+
+      expect(constructions).toBe(1);
     } finally {
       await rm(tmpDir, { recursive: true, force: true });
     }

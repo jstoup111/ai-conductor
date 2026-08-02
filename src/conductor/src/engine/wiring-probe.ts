@@ -762,6 +762,20 @@ export async function resolveLayer2Applicability(
  */
 export type ImportGraph = Map<string, Set<string>>;
 
+export type CompilerProgramFactory = (
+  roots: string[],
+  compilerOptions: ts.CompilerOptions,
+  host: ts.CompilerHost,
+  tsc: typeof import('typescript'),
+) => ts.Program;
+
+interface TypescriptAnalysisContext {
+  roots: string[];
+  program: ts.Program;
+  checker: ts.TypeChecker;
+  graph: ImportGraph;
+}
+
 /**
  * Builds a directed module-import graph by walking transitively from the
  * given root files, using the TypeScript compiler API (`ts.createProgram`)
@@ -771,27 +785,15 @@ export type ImportGraph = Map<string, Set<string>>;
  *
  * `roots` and the graph's keys/values are absolute file paths.
  */
-export function buildImportGraph(roots: string[], projectRoot: string): ImportGraph {
+function buildImportGraphFromProgram(
+  roots: string[],
+  compilerOptions: ts.CompilerOptions,
+  host: ts.CompilerHost,
+  tsc: typeof import('typescript'),
+  program: ts.Program,
+): ImportGraph {
   const graph: ImportGraph = new Map();
   if (roots.length === 0) return graph;
-
-  // Load the TypeScript compiler lazily at call time (see the type-only import
-  // note at the top of the file). `createRequire` resolves the real package
-  // from node_modules instead of a bundled copy, and throws a clear
-  // module-not-found error when `typescript` is absent — which the Layer 2
-  // predicate catches and reports as a degraded skip rather than crashing.
-  const tsc = createRequire(import.meta.url)('typescript') as typeof import('typescript');
-
-  const compilerOptions: ts.CompilerOptions = {
-    allowJs: true,
-    module: tsc.ModuleKind.ESNext,
-    moduleResolution: tsc.ModuleResolutionKind.Bundler,
-    target: tsc.ScriptTarget.ES2020,
-    noEmit: true,
-  };
-
-  const host = tsc.createCompilerHost(compilerOptions);
-  const program = tsc.createProgram(roots, compilerOptions, host);
 
   const queue = [...roots];
   const visited = new Set<string>();
@@ -868,6 +870,39 @@ export function buildImportGraph(roots: string[], projectRoot: string): ImportGr
   return graph;
 }
 
+function createTypescriptAnalysisContext(
+  roots: string[],
+  programFactory?: CompilerProgramFactory,
+): TypescriptAnalysisContext {
+  // Load the TypeScript compiler lazily at call time (see the type-only import
+  // note at the top of the file). `createRequire` resolves the real package
+  // from node_modules instead of a bundled copy, and throws a clear
+  // module-not-found error when `typescript` is absent — which the Layer 2
+  // predicate catches and reports as a degraded skip rather than crashing.
+  const tsc = createRequire(import.meta.url)('typescript') as typeof import('typescript');
+  const compilerOptions: ts.CompilerOptions = {
+    allowJs: true,
+    module: tsc.ModuleKind.ESNext,
+    moduleResolution: tsc.ModuleResolutionKind.Bundler,
+    target: tsc.ScriptTarget.ES2020,
+    noEmit: true,
+  };
+  const host = tsc.createCompilerHost(compilerOptions);
+  const program = (programFactory ?? ((factoryRoots, options, factoryHost, factoryTsc) =>
+    factoryTsc.createProgram(factoryRoots, options, factoryHost)))(roots, compilerOptions, host, tsc);
+
+  return {
+    roots,
+    program,
+    checker: program.getTypeChecker(),
+    graph: buildImportGraphFromProgram(roots, compilerOptions, host, tsc, program),
+  };
+}
+
+export function buildImportGraph(roots: string[], _projectRoot: string): ImportGraph {
+  return createTypescriptAnalysisContext(roots).graph;
+}
+
 export interface ReachabilityResult {
   reachable: boolean;
   chain?: string[];
@@ -941,9 +976,10 @@ export function checkExportReachability(
   newExports: NewExport[],
   roots: string[],
   projectRoot: string,
+  analysisContext?: Pick<TypescriptAnalysisContext, 'roots' | 'graph'>,
 ): ExportReachabilityResult[] {
-  const absoluteRoots = roots.map((root) => join(projectRoot, root));
-  const graph = buildImportGraph(absoluteRoots, projectRoot);
+  const absoluteRoots = analysisContext?.roots ?? roots.map((root) => join(projectRoot, root));
+  const graph = analysisContext?.graph ?? buildImportGraph(absoluteRoots, projectRoot);
 
   return newExports.map((newExport) => {
     const targetFile = join(projectRoot, newExport.file);
@@ -1017,6 +1053,7 @@ export interface ComputeWiringEvidenceParams {
   config: HarnessConfig;
   gh: GhRunner;
   anchor: string;
+  compilerProgramFactory?: CompilerProgramFactory;
 }
 
 /**
@@ -1035,7 +1072,7 @@ export interface ComputeWiringEvidenceParams {
 export async function computeWiringEvidence(
   params: ComputeWiringEvidenceParams,
 ): Promise<WiringEvidence> {
-  const { runGit, projectRoot, planPath, config, gh, anchor } = params;
+  const { runGit, projectRoot, planPath, config, gh, anchor, compilerProgramFactory } = params;
 
   const headResult = await runGit(['rev-parse', 'HEAD'], { cwd: projectRoot });
   const head = headResult.stdout.trim();
@@ -1173,10 +1210,15 @@ export async function computeWiringEvidence(
   let layer2: WiringEvidence['layer2'];
   if (layer2Applicability.applicable) {
     layer2 = { applicable: true };
+    const analysisContext = createTypescriptAnalysisContext(
+      layer2Applicability.roots.map((root) => join(projectRoot, root)),
+      compilerProgramFactory,
+    );
     const reachabilityResults = checkExportReachability(
       newExports,
       layer2Applicability.roots,
       projectRoot,
+      analysisContext,
     );
     for (const result of reachabilityResults) {
       if (result.reachable) continue;
