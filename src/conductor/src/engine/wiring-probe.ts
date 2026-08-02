@@ -1368,7 +1368,11 @@ export async function computeWiringEvidence(
       const orphan = orphanResults.find(
         (result) => result.file === newExport.file && result.symbol === newExport.symbol,
       );
-      if (orphan?.status !== 'gap' || orphan.referenceClassification !== 'same-file-only') continue;
+      if (
+        orphan?.status !== 'gap' ||
+        (orphan.referenceClassification !== 'same-file-only' &&
+          orphan.referenceClassification !== 'test-only')
+      ) continue;
 
       const owner = ownerTaskId(newExport.file, tasks);
       const task = tasks.find((candidate) => candidate.taskId === owner);
