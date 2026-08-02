@@ -131,7 +131,7 @@ describe('engine/park-reconciliation — merge evidence against real git', () =>
       parked: await isOperatorParked(repo, slug),
     }).toEqual({
       entries: [{ slug, classification: 'normal', annotation: undefined }],
-      outcome: { slug, steps: [], refusal: 'not-ancestor' },
+      outcome: { slug, steps: [], refusal: 'no-merge-proof' },
       branchStillThere: tip,
       parked: true,
     });
