@@ -351,13 +351,10 @@ describe('DefaultStepRunner', () => {
     });
 
     it('allows a quiet spawned provider to succeed beyond the former heartbeat threshold', async () => {
-      const kill = vi.fn();
       const base = Date.now();
       let silent = false;
       const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
-        (input.options as InvokeOptions & { onSpawn?: (h: { kill: () => void }) => void }).onSpawn?.({
-          kill,
-        });
+        input.options.onSpawn?.();
         (input.options as InvokeOptions & { onActivity?: () => void }).onActivity?.();
         // Let the initial pulse settle, then advance the old watchdog's
         // injected clock beyond its threshold and grace period.
@@ -391,7 +388,6 @@ describe('DefaultStepRunner', () => {
       const result = await runner.run('build', emptyState);
 
       expect(result.success).toBe(true);
-      expect(kill).not.toHaveBeenCalled();
       expect(providerExecutor).toHaveBeenCalledTimes(1);
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
     });
@@ -420,12 +416,9 @@ describe('DefaultStepRunner', () => {
         },
       },
     ])('keeps $name heartbeat data observational for a quiet spawned provider', async ({ setup }) => {
-      const kill = vi.fn();
       await setup();
       const providerExecutor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
-        (input.options as InvokeOptions & { onSpawn?: (h: { kill: () => void }) => void }).onSpawn?.({
-          kill,
-        });
+        input.options.onSpawn?.();
         await new Promise((resolve) => setTimeout(resolve, 20));
         return {
           success: true,
@@ -450,7 +443,6 @@ describe('DefaultStepRunner', () => {
       const result = await runner.run('build', emptyState);
 
       expect(result.success).toBe(true);
-      expect(kill).not.toHaveBeenCalled();
       expect(providerExecutor).toHaveBeenCalledTimes(1);
       await expect(readFile(join(projectDir, '.pipeline', 'HALT'), 'utf-8')).rejects.toThrow();
     });

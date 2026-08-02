@@ -56,6 +56,15 @@ describe('ClaudeProvider', () => {
       expect(provider.lifecycleCapability).toEqual({ synchronousSpawnPermit: true });
     });
 
+    it('reports spawn as a zero-argument observation', async () => {
+      const onSpawn = vi.fn();
+      mockExeca.mockResolvedValue({ stdout: 'Done.', stderr: '', exitCode: 0, failed: false } as any);
+
+      await provider.invoke({ ...baseOptions, onSpawn });
+
+      expect(onSpawn.mock.calls).toEqual([[]]);
+    });
+
     it('checks a current permit immediately before the injected subprocess factory', async () => {
       const callOrder: string[] = [];
       const subprocessFactory = vi.fn(() => {

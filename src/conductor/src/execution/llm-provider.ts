@@ -181,7 +181,7 @@ export interface InvokeOptions {
    * kill, retry, or lifecycle authority. The callback must not affect provider
    * dispatch; lifecycle authority remains with `spawnPermit` before spawn.
    */
-  onSpawn?: (handle: { kill: () => void }) => void;
+  onSpawn?: () => void;
   /**
    * Lifecycle-owned authority that adapters must validate synchronously
    * immediately before creating a provider process.

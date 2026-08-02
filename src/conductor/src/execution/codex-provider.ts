@@ -233,7 +233,7 @@ export class CodexProvider implements LLMProvider {
     options: Pick<InvokeOptions, 'onActivity' | 'onSpawn'>,
   ): void {
     try {
-      options.onSpawn?.({ kill: () => subprocess.kill() });
+      options.onSpawn?.();
       subprocess.stdout?.on('data', () => options.onActivity?.());
       subprocess.stderr?.on('data', () => options.onActivity?.());
     } catch {

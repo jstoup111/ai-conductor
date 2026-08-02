@@ -183,7 +183,7 @@ describe('TI-1: every daemon provider step exposes one authoritative lifecycle',
     '%s crosses preparing -> running with one attempt identity',
     async (step) => {
       const executor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
-        input.options.onSpawn?.({ kill: () => undefined });
+        input.options.onSpawn?.();
         return providerResult(step);
       });
       const fixture = makeRunner(root, executor);
@@ -255,7 +255,7 @@ describe('TI-2: a pre-spawn wedge has one bounded replacement', () => {
     vi.useFakeTimers();
     const running = deferred<ProviderExecutionResult>();
     const executor = vi.fn((input: ExecuteProviderCandidatesInput) => {
-      input.options.onSpawn?.({ kill: () => undefined });
+      input.options.onSpawn?.();
       return running.promise;
     });
     const fixture = makeRunner(root, executor as typeof executeProviderCandidates, {
@@ -341,12 +341,11 @@ describe('TI-4: provider activity is telemetry, never post-spawn authority', () 
       vi.useFakeTimers();
       const completion = deferred<ProviderExecutionResult>();
       const started = deferred<void>();
-      let killCalls = 0;
       const base = Date.now();
       let now = base;
       const executor = vi.fn(async (input: ExecuteProviderCandidatesInput) => {
         await writeStepHeartbeat(root, 'build');
-        input.options.onSpawn?.({ kill: () => { killCalls += 1; } });
+        input.options.onSpawn?.();
         started.resolve();
         return completion.promise;
       });
@@ -372,7 +371,6 @@ describe('TI-4: provider activity is telemetry, never post-spawn authority', () 
 
       expect(result.success).toBe(true);
       expect(result.output).toContain('quiet-provider-finished');
-      expect(killCalls).toBe(0);
       expect(lifecycleLine(fixture.logs, 'build', 'running')).toBeDefined();
     },
   );

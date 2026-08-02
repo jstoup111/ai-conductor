@@ -502,7 +502,7 @@ export class ClaudeProvider implements LLMProvider {
     // activity. These best-effort callbacks have no timeout, kill, retry, or
     // lifecycle authority and never affect provider dispatch.
     try {
-      onSpawn?.({ kill: () => subprocess.kill() });
+      onSpawn?.();
       subprocess.stdout?.on('data', () => onActivity?.());
       subprocess.stderr?.on('data', () => onActivity?.());
     } catch {
