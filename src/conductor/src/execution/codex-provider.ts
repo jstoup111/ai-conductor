@@ -223,10 +223,10 @@ export class CodexProvider implements LLMProvider {
   }
 
   /**
-   * Wire the heartbeat/stall-watchdog seam on the LIVE subprocess, before it
-   * is awaited — attaching after resolution would miss every streamed event
-   * and hand the kill handle to the watchdog too late for a stall to ever be
-   * caught. Best-effort: never affects provider dispatch.
+   * Wire optional spawn and activity observations on the LIVE subprocess
+   * before awaiting, so observers receive the spawn event and streamed
+   * activity. These best-effort callbacks have no timeout, kill, retry, or
+   * lifecycle authority and never affect provider dispatch.
    */
   private wireActivityWatchdog(
     subprocess: { kill: () => void; stdout?: NodeJS.ReadableStream | null; stderr?: NodeJS.ReadableStream | null },

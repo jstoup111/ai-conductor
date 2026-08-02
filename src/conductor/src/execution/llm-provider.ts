@@ -176,9 +176,10 @@ export interface InvokeOptions {
    */
   onActivity?: () => void;
   /**
-   * Fired once, synchronously, right after the provider subprocess spawns,
-   * with a handle that can terminate it. Used by the stall watchdog to kill a
-   * step whose heartbeat has gone stale past the configured threshold.
+   * Optional, best-effort notification fired synchronously once the provider
+   * subprocess has spawned. It is observation only: it grants no timeout,
+   * kill, retry, or lifecycle authority. The callback must not affect provider
+   * dispatch; lifecycle authority remains with `spawnPermit` before spawn.
    */
   onSpawn?: (handle: { kill: () => void }) => void;
   /**

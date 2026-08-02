@@ -497,9 +497,10 @@ export class ClaudeProvider implements LLMProvider {
       stdout: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
       stderr: diagnosticLog ? 'pipe' : ['pipe', 'inherit'],
     });
-    // Wire the heartbeat/stall-watchdog seam on the LIVE subprocess, before
-    // awaiting — attaching after resolution would miss every event and the
-    // kill handle would arrive too late for a stall to ever be caught.
+    // Wire optional spawn and activity observations on the LIVE subprocess
+    // before awaiting, so observers receive the spawn event and streamed
+    // activity. These best-effort callbacks have no timeout, kill, retry, or
+    // lifecycle authority and never affect provider dispatch.
     try {
       onSpawn?.({ kill: () => subprocess.kill() });
       subprocess.stdout?.on('data', () => onActivity?.());
