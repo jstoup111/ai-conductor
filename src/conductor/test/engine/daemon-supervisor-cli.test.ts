@@ -650,6 +650,62 @@ describe('dispatchDaemonSupervisor: restart — immediate (idle/paused) vs queue
     expect(callOrder).toEqual(['relink', 'restart']);
   });
 
+  it('explicit restart refreshes self-host source before install-rebuild-relink and respawn', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { supervisor } = makeFakeSupervisor();
+    const callOrder: string[] = [];
+
+    supervisor.restart = async () => {
+      callOrder.push('restart');
+      return { degraded: false, message: 'daemon restarted in place.' };
+    };
+
+    await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: () => {},
+        refreshSource: async () => {
+          callOrder.push('refresh');
+        },
+        relinkSkills: async () => {
+          callOrder.push('install-rebuild-relink');
+        },
+      },
+    );
+
+    expect(callOrder).toEqual(['refresh', 'install-rebuild-relink', 'restart']);
+  });
+
+  it('explicit restart fails closed when source refresh is skipped', async () => {
+    const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
+    const repo = await tempRepo();
+    const { supervisor } = makeFakeSupervisor();
+    const calls: string[] = [];
+
+    supervisor.restart = async () => {
+      calls.push('restart');
+      return { degraded: false, message: 'daemon restarted in place.' };
+    };
+
+    const code: number = await dispatch(
+      { verb: 'restart' },
+      {
+        supervisor,
+        cwd: repo,
+        out: () => {},
+        refreshSource: async () => ({ status: 'skipped', cause: 'fetch-failed' }),
+        relinkSkills: async () => {
+          calls.push('install-rebuild-relink');
+        },
+      },
+    );
+
+    expect({ code, calls }).toEqual({ code: 1, calls: [] });
+  });
+
   it('relink failure aborts restart; supervisor.restart is NOT called (TR-4 negative)', async () => {
     const dispatch = requireFn(await load(), 'dispatchDaemonSupervisor');
     const repo = await tempRepo();

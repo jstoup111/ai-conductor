@@ -387,6 +387,64 @@ describe('Task 13: queued-restart relink at idle boundary', () => {
     expect(result.stoppedReason).toBe('idle_timeout');
   });
 
+  it('queued restart at idle boundary refreshes source before relink and trigger', async () => {
+    const callOrder: string[] = [];
+    let dispatched = false;
+
+    await runDaemon(
+      {
+        discoverBacklog: async () => (dispatched ? [] : items(1)),
+        runFeature: async (item) => {
+          dispatched = true;
+          return { slug: item.slug, status: 'done' };
+        },
+        log: () => {},
+        sleep: async () => {},
+        hasRestartPending: async () => true,
+        refreshEngineSource: async (opts?: { force?: boolean }) => {
+          callOrder.push(`refresh-force:${String(opts?.force)}`);
+        },
+        relink: async () => {
+          callOrder.push('relink');
+        },
+        triggerSelfRestart: async () => {
+          callOrder.push('trigger');
+        },
+      },
+      { concurrency: 1, once: false, idlePollMs: 0, maxIdlePolls: 1 },
+    );
+
+    expect(callOrder).toEqual(['refresh-force:true', 'relink', 'trigger']);
+  });
+
+  it('queued restart keeps the pending marker eligible when source refresh is skipped', async () => {
+    const calls: string[] = [];
+    let dispatched = false;
+
+    await runDaemon(
+      {
+        discoverBacklog: async () => (dispatched ? [] : items(1)),
+        runFeature: async (item) => {
+          dispatched = true;
+          return { slug: item.slug, status: 'done' };
+        },
+        log: () => {},
+        sleep: async () => {},
+        hasRestartPending: async () => true,
+        refreshEngineSource: async () => ({ status: 'skipped', cause: 'fetch-failed' }),
+        relink: async () => {
+          calls.push('relink');
+        },
+        triggerSelfRestart: async () => {
+          calls.push('trigger');
+        },
+      },
+      { concurrency: 1, once: false, idlePollMs: 0, maxIdlePolls: 1 },
+    );
+
+    expect(calls).toEqual([]);
+  });
+
   it('queued restart relink failure → log, do NOT fire trigger (TR-3)', async () => {
     const logs: string[] = [];
     let relinkCalls = 0;

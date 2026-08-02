@@ -1530,8 +1530,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
               (config?.engine_refresh_min_interval_seconds ?? 300) * 1000;
             const throttle = createRefreshThrottle(minIntervalMs, Date.now);
             const warner = createStalenessWarner(log);
-            return async () => {
-              if (!throttle.shouldRun()) return;
+            return async (refreshOpts?: { force?: boolean }) => {
+              if (!refreshOpts?.force && !throttle.shouldRun()) return;
               throttle.markRan();
               const outcome = await fastForwardRoot(projectRoot, log);
               if (
@@ -1543,6 +1543,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
               ) {
                 warner.warn(outcome.cause, outcome.originHead, baseBranch);
               }
+              return outcome;
             };
           })()
         : undefined,
@@ -1947,6 +1948,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       },
       // Task T28: trigger self-restart when marker is pending (injected from supervisor/bare-run).
       triggerSelfRestart: opts.triggerSelfRestart,
+      // Queued supervisor restarts rebuild/relink only for the harness self-host.
+      ...(isSelfHost ? { relink: () => relinkSkillsForSelfBuild({ log }) } : {}),
       // Task T30: consume restart marker in bare-run mode (when triggerSelfRestart absent).
       consumeRestartPending: async () => {
         return await consumeOnBoot(projectRoot);

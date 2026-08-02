@@ -18,6 +18,8 @@ import type { ComplexityTier, Track } from '../types/index.js';
 import { Waker } from './waker.js';
 import type { RateLimitEpisode } from './rate-limit-episode.js';
 
+type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
+
 /**
  * Default sleep implementation whose timer HOLDS the event loop.
  *
@@ -381,7 +383,7 @@ export interface DaemonDeps {
    * continues into `rebuildEngine`/`check()` unaffected (non-fatal, same
    * posture as a failed rebuild). Call site wired in Task 7.
    */
-  refreshEngineSource?: () => Promise<void>;
+  refreshEngineSource?: (opts?: { force?: boolean }) => Promise<FastForwardOutcome | void>;
 
   /**
    * Advisory-only staleness probe (Task 9, TI-4 HP3) invoked at the SAME
@@ -1201,10 +1203,29 @@ export async function runDaemon(
                 // T28 path: supervisor mode — fire respawn trigger
                 if (deps.triggerSelfRestart) {
                   log('[daemon] self-restart marker found at idle boundary; firing trigger');
+                  let refreshFailed = false;
+                  if (deps.refreshEngineSource) {
+                    try {
+                      const outcome = await deps.refreshEngineSource({ force: true });
+                      if (outcome?.status === 'skipped') {
+                        log(
+                          `[daemon] source refresh skipped (${outcome.cause ?? 'unknown cause'}); ` +
+                            'restart marker retained for retry at next idle boundary',
+                        );
+                        refreshFailed = true;
+                      }
+                    } catch (err) {
+                      log(
+                        `[daemon] source refresh failed: ${err instanceof Error ? err.message : String(err)}; ` +
+                          'restart marker retained for retry at next idle boundary',
+                      );
+                      refreshFailed = true;
+                    }
+                  }
                   // Task 13 (#393): relink BEFORE firing the trigger (queued-restart
                   // relink wiring); a relink failure keeps the marker for retry.
-                  let relinkFailed = false;
-                  if (deps.relink) {
+                  let relinkFailed = refreshFailed;
+                  if (!refreshFailed && deps.relink) {
                     try {
                       await deps.relink();
                     } catch (err) {

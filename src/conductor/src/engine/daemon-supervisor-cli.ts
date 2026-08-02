@@ -8,12 +8,19 @@
 
 import { makeTmuxSupervisor, TmuxNotInstalledError, type Supervisor } from './daemon-tmux.js';
 import type { DaemonSupervisorCommand } from './daemon-command.js';
-import { ensureInstallFresh, relinkSkillsForSelfBuild } from './install-freshness.js';
+import {
+  ensureInstallFresh,
+  relinkSkillsForSelfBuild,
+  resolveInstalledHarnessRoot,
+} from './install-freshness.js';
+import { defaultSelfHostDetector } from './self-host/detector.js';
 import { clearStaleLockForRestart, readPidRecord, reclaim, isLive, type KillProbe } from './daemon-lock.js';
 import { isPaused, writePauseMarker, removePauseMarker } from './pause-marker.js';
 import { writeRestartPending } from './restart-marker.js';
 import { runFleetAction, type FleetSelection } from './daemon-fleet.js';
 import type { ProjectRecord } from './registry.js';
+
+type FastForwardOutcome = import('./daemon-backlog.js').FastForwardOutcome;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Orphaned-process reconciliation (FR-21 negative path, Task 34).
@@ -156,6 +163,8 @@ export interface DaemonSupervisorDeps {
    * the caller (Task 12).
    */
   relinkSkills?: () => Promise<void>;
+  /** Refresh the installed self-host source before rebuilding on restart. */
+  refreshSource?: () => Promise<FastForwardOutcome | void>;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -209,6 +218,21 @@ export async function dispatchDaemonSupervisor(
   const isBusy = deps.isBusy ?? (async () => ({ busy: false }));
   const kill = deps.kill ?? defaultKillForOrphan;
   const relinkSkills = deps.relinkSkills ?? (() => relinkSkillsForSelfBuild({ log: out }));
+  const refreshSource =
+    deps.refreshSource ??
+    (async () => {
+      if (!(await defaultSelfHostDetector().isSelfHost(cwd))) return;
+      const installed = await resolveInstalledHarnessRoot({ log: out });
+      if (installed.status !== 'ok') {
+        throw new Error(
+          `Cannot refresh the installed harness before restart: ${
+            installed.status === 'rejected' ? installed.detail : 'installed root unresolved'
+          }`,
+        );
+      }
+      const { fastForwardRoot } = await import('./daemon-backlog.js');
+      return fastForwardRoot(installed.root, out);
+    });
 
   // Fleet dispatch (FR-3/FR-17/FR-18): pause/resume/restart accept a named subset or
   // `--all` and iterate the registry instead of acting on `cwd` alone. This
@@ -344,6 +368,14 @@ export async function dispatchDaemonSupervisor(
               'it will restart automatically once idle.',
           );
           break;
+        }
+
+        const refreshOutcome = await refreshSource();
+        if (refreshOutcome?.status === 'skipped') {
+          throw new Error(
+            `Cannot restart the self-host daemon from stale source: source refresh was skipped ` +
+              `(${refreshOutcome.cause ?? 'unknown cause'}). Resolve the checkout or remote issue and retry.`,
+          );
         }
 
         // Handoff (FR-8): proactively clear any stale (dead-pid) or absent
