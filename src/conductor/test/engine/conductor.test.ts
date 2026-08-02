@@ -5313,7 +5313,7 @@ describe('engine/conductor', () => {
       const readiness = vi
         .fn()
         .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'missing' })
-        .mockResolvedValueOnce({ provider: 'codex', source: 'cached-login', state: 'ready' });
+        .mockResolvedValue({ provider: 'codex', source: 'cached-login', state: 'ready' });
       const runtimes = new ProviderRuntimeSet([
         {
           key: 'codex',
@@ -5379,7 +5379,7 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      expect(readiness).toHaveBeenCalledTimes(2);
+      expect(readiness).toHaveBeenCalledTimes(3);
       expect(calls.filter((call) => call.step === 'manual_test')).toHaveLength(1);
       expect(calls.filter((call) => call.step === 'prd_audit').map((call) => call.attempt)).toEqual([1, 1]);
       expect(calls.filter((call) => call.step === 'architecture_review_as_built').map((call) => call.attempt)).toEqual([1, 1]);
