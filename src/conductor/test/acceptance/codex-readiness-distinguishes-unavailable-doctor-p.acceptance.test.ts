@@ -27,7 +27,7 @@ import type { ConductorEvent } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { loadConfig } from '../../src/engine/config.js';
 import { PluginRegistry } from '../../src/engine/plugin-registry.js';
-import { registerCliBuiltins } from '../../src/index.js';
+import { registerCliBuiltins } from '../../src/engine/cli-builtins.js';
 
 vi.mock('execa', () => ({ execa: vi.fn() }));
 import { execa } from 'execa';

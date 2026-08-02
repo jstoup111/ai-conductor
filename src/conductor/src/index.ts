@@ -2,8 +2,7 @@ export * from './types/index.js';
 export { parseArgs, createProgram, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
 
-import type { HarnessConfig, RunMode } from './types/index.js';
-import type { UIEventHandler } from './ui/subscriber.js';
+import type { RunMode } from './types/index.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -51,7 +50,8 @@ import { spawnAutoUpdateCheck } from './engine/auto-update-check.js';
 import { createLiveRegion } from './ui/live-region.js';
 import { TerminalPromptHost } from './ui/terminal/prompt-host.js';
 import { runProjectPrelude } from './engine/project-prelude.js';
-import { discoverPlugins, registerBuiltins } from './engine/plugin-loader.js';
+import { discoverPlugins } from './engine/plugin-loader.js';
+import { registerCliBuiltins } from './engine/cli-builtins.js';
 import { PluginRegistry } from './engine/plugin-registry.js';
 import { EventPersister } from './engine/event-persister.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
@@ -126,22 +126,6 @@ import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmu
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
 import { OtelVisualizer, type OtelVisualizerContext } from './engine/otel/otel-visualizer.js';
 import type { ResolvedOtelConfig } from './engine/otel/otel-config.js';
-
-/** CLI composition seam: keep the resolved doctor timeout isolated to Codex registration. */
-export function registerCliBuiltins(
-  registry: PluginRegistry,
-  events: ConductorEventEmitter,
-  renderEvent: UIEventHandler,
-  config: HarnessConfig | undefined,
-) {
-  return registerBuiltins(
-    registry,
-    events,
-    renderEvent,
-    undefined,
-    config?.codex_doctor_timeout_seconds,
-  );
-}
 
 // ── Visualizer lifecycle helpers (exported so tests can verify the wiring) ────
 
