@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release Disposition"
+  short_description: "Write self-host release metadata"
+  default_prompt: "Use $release-disposition to judge the feature diff and write its release disposition to the retained SHIP draft PR."

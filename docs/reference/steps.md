@@ -72,6 +72,14 @@ one-way) region and the gate loop. Everything from `build` to `finish` is a loop
 re-entered when a downstream gate kicks back. The kickback targets — the steps a blocking gate can send
 work back to — are `prd`, `architecture_review`, `stories`, and `plan`.
 
+## Repository-local self-host tail
+
+This repository adds two configured SHIP gates without changing the static `ALL_STEPS` index:
+`rebase → maintain-documentation → release-disposition → finish`. `release-disposition` is gating,
+writes the authoritative structured metadata to the retained SHIP draft PR, and records only its
+completion evidence in `.pipeline/release-disposition-pass`. The later `finish` step preserves that
+metadata while supplying the reader-facing PR body.
+
 ## Out-of-band steps
 
 These have full step definitions and are dispatchable, but hold no slot in the sequential loop.

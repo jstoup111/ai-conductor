@@ -727,6 +727,7 @@ describe('shouldSkipForBootstrapMode', () => {
 
 describe('custom step definition resolution', () => {
   const MAINTAIN_DOCS = 'maintain-documentation' as StepName;
+  const RELEASE_DISPOSITION = 'release-disposition' as StepName;
 
   // Mirrors .ai-conductor/config.yml's live declaration.
   const config: HarnessConfig = {
@@ -734,6 +735,11 @@ describe('custom step definition resolution', () => {
       'maintain-documentation': {
         after: 'rebase',
         skill: '.agents/skills/maintain-documentation/SKILL.md',
+        enforcement: 'gating',
+      },
+      'release-disposition': {
+        after: 'maintain-documentation',
+        skill: '.agents/skills/release-disposition/SKILL.md',
         enforcement: 'gating',
       },
     },
@@ -774,6 +780,17 @@ describe('custom step definition resolution', () => {
     expect(phaseForStep(MAINTAIN_DOCS)).toBe('SHIP');
     // gates.ts enforcement lookup.
     expect(isGatingStep(MAINTAIN_DOCS)).toBe(true);
+    expect(phaseForStep(RELEASE_DISPOSITION)).toBe('SHIP');
+    expect(isGatingStep(RELEASE_DISPOSITION)).toBe(true);
+  });
+
+  it('orders release-disposition after documentation and before finish', () => {
+    const names = buildStepRegistry(config).map((step) => step.name);
+    expect(names.slice(names.indexOf('maintain-documentation'), names.indexOf('finish') + 1)).toEqual([
+      'maintain-documentation',
+      'release-disposition',
+      'finish',
+    ]);
   });
 
   it('still throws for a step name that no config declared (typo guard)', () => {
@@ -796,8 +813,9 @@ describe('custom step definition resolution', () => {
 
     expect(names.indexOf(MAINTAIN_DOCS)).toBe(names.indexOf('rebase') + 1);
     // Ordering is registry-relative; the custom step is inserted, not appended.
-    expect(names.indexOf('finish')).toBe(names.indexOf(MAINTAIN_DOCS) + 1);
-    expect(registry).toHaveLength(ALL_STEPS.length + 1);
+    expect(names.indexOf(RELEASE_DISPOSITION)).toBe(names.indexOf(MAINTAIN_DOCS) + 1);
+    expect(names.indexOf('finish')).toBe(names.indexOf(RELEASE_DISPOSITION) + 1);
+    expect(registry).toHaveLength(ALL_STEPS.length + 2);
   });
 
   it('claims no slot in the static linear index space', () => {

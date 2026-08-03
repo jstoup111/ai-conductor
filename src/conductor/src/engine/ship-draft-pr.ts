@@ -41,9 +41,6 @@ export const SHIP_DRAFT_PR_NOTE =
   'for the remaining ship steps. The `/finish` step authors the real title and body and ' +
   'marks this PR ready for review.';
 
-/** A valid disposition belongs on the retained draft before self-host gates inspect it. */
-export const SHIP_DRAFT_RELEASE_DISPOSITION = 'Release-Disposition: no-note';
-
 export interface OpenShipDraftPrDeps {
   gh?: GhRunner;
   git?: GitRunner;
@@ -69,26 +66,6 @@ export type OpenShipDraftPrResult =
   | { outcome: 'published'; prUrl: string }
   /** gh could not publish — advisory failure, the build continues. */
   | { outcome: 'failed'; reason: string };
-
-async function finalizeDraftReleaseDisposition(
-  gh: GhRunner,
-  cwd: string,
-  prUrl: string,
-  fallbackBody: string,
-  log: (msg: string) => void,
-): Promise<void> {
-  try {
-    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'body'], { cwd });
-    const current = JSON.parse(stdout) as { body?: unknown };
-    if (typeof current.body === 'string' && /^Release-Disposition:/m.test(current.body)) return;
-    const body = typeof current.body === 'string' && current.body.trim() !== ''
-      ? `${current.body.trim()}\n\n${SHIP_DRAFT_RELEASE_DISPOSITION}\n`
-      : fallbackBody;
-    await gh(['pr', 'edit', prUrl, '--body', body], { cwd });
-  } catch (err) {
-    log(`[ship-draft-pr] could not finalize release disposition for ${prUrl}: ${err}`);
-  }
-}
 
 /**
  * Count commits on HEAD that are not on `base`. Tries the local base ref first
@@ -175,8 +152,6 @@ export async function openShipDraftPr(
       '',
       SHIP_DRAFT_PR_NOTE,
       '',
-      SHIP_DRAFT_RELEASE_DISPOSITION,
-      '',
     ].join('\n');
 
     const { prUrl } = await findOrCreatePr(
@@ -190,11 +165,6 @@ export async function openShipDraftPr(
       log(`[ship-draft-pr] ${reason} (advisory, build continues)`);
       return { outcome: 'failed', reason };
     }
-
-    // A reused draft predates this run's placeholder. Finalize an explicit
-    // disposition through the injected GitHub seam while deliberately leaving
-    // title, draft state, and finish's reader-facing rewrite untouched.
-    await finalizeDraftReleaseDisposition(gh, cwd, prUrl, body, log);
 
     log(`[ship-draft-pr] ship-phase draft PR for ${branch}: ${prUrl}`);
     return { outcome: 'published', prUrl };
