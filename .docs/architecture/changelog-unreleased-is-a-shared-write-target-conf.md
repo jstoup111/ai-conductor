@@ -1,7 +1,7 @@
 # Release-PR Architecture: ai-conductor
 
 **Last updated:** 2026-08-01  
-**Scope:** Proposed repository-local flow for maintaining and publishing release notes without feature-branch writes to `CHANGELOG.md`.
+**Scope:** As-built repository-local flow for maintaining and publishing release notes without feature-branch writes to `CHANGELOG.md`.
 
 ## System Context
 
