@@ -19,9 +19,6 @@ jobs:
     concurrency:
       group: release-pr-maintenance
       cancel-in-progress: false
-    permissions:
-      contents: write
-      pull-requests: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -44,6 +41,7 @@ jobs:
           private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+          permission-checks: write
       - uses: actions/github-script@v9
         env:
           RELEASE_PR_APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
@@ -54,7 +52,6 @@ jobs:
             const {
               collectReleaseCandidates,
               renderReleaseCandidate,
-              renderReleaseCandidateAudit,
               runReleasePrAction,
             } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
             const { readFile, writeFile } = await import('node:fs/promises');
@@ -83,9 +80,10 @@ jobs:
               readBranchFiles: async () => {
                 const remote = await gitOutput(['ls-remote', '--heads', 'origin', branch]);
                 if (remote === '') return undefined;
+                await exec.exec('git', ['fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`], { silent: true });
                 const files = {};
                 for (const path of generatedPaths) {
-                  const value = await gitOutput(['show', `${branch}:${path}`], true);
+                  const value = await gitOutput(['show', `refs/remotes/origin/${branch}:${path}`], true);
                   if (value !== '') files[path] = `${value}\n`;
                 }
                 return files;
@@ -157,17 +155,25 @@ jobs:
               updatePullRequest: async ({ number, title, body }) => {
                 await github.rest.pulls.update({ owner, repo, pull_number: number, title, body });
               },
+              publishReleaseReadiness: async ({ pullRequestNumber, head, conclusion, summary }) => {
+                await github.rest.checks.create({
+                  owner,
+                  repo,
+                  name: 'release-candidate-audit',
+                  head_sha: head,
+                  status: 'completed',
+                  conclusion,
+                  output: { title: 'Release candidate audit', summary: `${summary}\n\nRelease PR #${pullRequestNumber}` },
+                });
+              },
             };
-            const body = [
-              'Automated release proposal. Review and merge to publish.',
-              renderReleaseCandidateAudit(candidates.candidates.map(({ number, mergeSha, disposition }) => ({ number, mergeSha, disposition }))),
-            ].join('\n\n');
             await runReleasePrAction({
               git,
               github: releaseGithub,
               config: { branch, base, appLogin: process.env.RELEASE_PR_APP_LOGIN },
               generatedFiles: { 'CHANGELOG.md': rendered.changelog, VERSION: `${rendered.version}\n` },
               title: `Release ${rendered.version}`,
-              body,
+              body: 'Automated release proposal. Review and merge to publish.',
               expectedMainHead: await gitOutput(['rev-parse', 'HEAD']),
+              audit: candidates.candidates.map(({ number, mergeSha, disposition }) => ({ number, mergeSha, disposition })),
             });
