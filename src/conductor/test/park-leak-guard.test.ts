@@ -6,6 +6,7 @@ import {
   diffParkedMarkers,
   snapshotParkedMarkers,
 } from './park-leak-guard.js';
+import { applyParkTeardownDecision } from './global-setup.js';
 
 describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   const temporaryDirectories: string[] = [];
@@ -88,5 +89,17 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
       { added: [], removed: [], modified: [] },
       { added: [], removed: [], modified: [] },
     ]);
+  });
+
+  it.each([
+    ['added', { added: ['added-slug'], removed: [], modified: [] }, 'added-slug'],
+    ['removed', { added: [], removed: ['removed-slug'], modified: [] }, 'removed-slug'],
+    ['modified', { added: [], removed: [], modified: ['modified-slug'] }, 'modified-slug'],
+  ])('throws for %s parked marker leaks', (_kind, diff, slug) => {
+    expect(() => applyParkTeardownDecision(diff)).toThrow(new RegExp(`${slug}.*#1251`));
+  });
+
+  it('returns silently when the parked marker diff is empty', () => {
+    expect(() => applyParkTeardownDecision({ added: [], removed: [], modified: [] })).not.toThrow();
   });
 });

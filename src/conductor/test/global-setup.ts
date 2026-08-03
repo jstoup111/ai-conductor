@@ -2,6 +2,7 @@ import { rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
+import type { ParkedMarkersDiff } from './park-leak-guard.js';
 import {
   createRunTmpRoot,
   diffTmpdirEntries,
@@ -85,6 +86,22 @@ export function applyTeardownDecision(
     throw new Error(
       `tmux-leak-guard: KILLED leaked session(s) during test run (killed at teardown, ` +
         `but the spawning path must be fixed — see #377): ${killed.join('; ')}`
+    );
+  }
+}
+
+/**
+ * Decide whether real parked-marker ledger changes make the test run fail.
+ *
+ * This stays separate from global teardown wiring so its fail-fast policy is
+ * directly unit-testable before the parked-ledger lifecycle is introduced.
+ */
+export function applyParkTeardownDecision(diff: ParkedMarkersDiff): void {
+  const leakedSlugs = [...diff.added, ...diff.removed, ...diff.modified];
+  if (leakedSlugs.length > 0) {
+    throw new Error(
+      `park-leak-guard: parked marker ledger changed during test run: ` +
+        `${leakedSlugs.join(', ')} (#1251)`
     );
   }
 }
