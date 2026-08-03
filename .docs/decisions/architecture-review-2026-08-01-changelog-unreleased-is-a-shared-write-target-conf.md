@@ -29,7 +29,7 @@
 |---|---|
 | Structured release metadata parser/validator | Required pull-request check for implementation PR open/update events |
 | Release candidate collector and renderer | Release-PR maintainer action invoked after an implementation PR merges |
-| GitHub App authentication seam | Release-PR maintainer workflow before branch/PR mutations |
+| GitHub App authentication, declared in workflow YAML (no engine module; contract enforced by `test/test_release_pr_workflow.sh`) | Release-PR maintainer workflow before branch/PR mutations |
 | Serialized release-PR upsert | Maintainer workflow, guarded by a repository-wide concurrency group and latest-main recheck |
 | Release-set completeness/provenance verifier | Release PR checks and the post-merge publisher before tagging |
 | Deterministic publisher | Push-to-main workflow only when the merged PR is the designated release PR |
