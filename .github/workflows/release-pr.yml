@@ -1,0 +1,51 @@
+name: release-pr-maintenance
+
+on:
+  pull_request:
+    types: [closed]
+
+# The installation token below, rather than the workflow token, grants the two
+# writes needed to update the dedicated release branch and its one pull request.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-pr-maintenance:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref != 'automation/release-pr'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-pr-maintenance
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { runReleasePrAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            await runReleasePrAction({ github, context, core });
