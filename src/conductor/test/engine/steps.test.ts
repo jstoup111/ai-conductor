@@ -786,7 +786,7 @@ describe('custom step definition resolution', () => {
 
   it('orders release-disposition after documentation and before finish', () => {
     const names = buildStepRegistry(config).map((step) => step.name);
-    expect(names.slice(names.indexOf('maintain-documentation'), names.indexOf('finish') + 1)).toEqual([
+    expect(names.slice(names.indexOf(MAINTAIN_DOCS), names.indexOf('finish') + 1)).toEqual([
       'maintain-documentation',
       'release-disposition',
       'finish',

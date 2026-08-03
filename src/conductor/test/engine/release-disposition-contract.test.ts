@@ -5,10 +5,14 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { loadConfig } from '../../src/engine/config.js';
 import { buildStepRegistry } from '../../src/engine/steps.js';
+import type { StepName } from '../../src/types/index.js';
 
 const testDir = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(testDir, '../../../..');
 const skillName = 'release-disposition';
+// The registry accepts YAML-defined names at runtime; its static API remains
+// intentionally limited to built-in StepName values.
+const MAINTAIN_DOCUMENTATION = 'maintain-documentation' as StepName;
 const canonicalDir = join(repoRoot, '.agents/skills', skillName);
 
 describe('repository-local release-disposition contract', () => {
@@ -28,7 +32,7 @@ describe('repository-local release-disposition contract', () => {
       claudeTarget: await realpath(claudeLink),
       byteIdentical: canonicalSkill.equals(claudeSkill),
       config: config.config.steps?.[skillName],
-      tail: names.slice(names.indexOf('maintain-documentation'), names.indexOf('finish') + 1),
+      tail: names.slice(names.indexOf(MAINTAIN_DOCUMENTATION), names.indexOf('finish') + 1),
     }).toEqual({
       canonicalSkill: true,
       claudeLink: true,
