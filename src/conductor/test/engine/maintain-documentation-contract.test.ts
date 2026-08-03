@@ -613,20 +613,31 @@ describe('repository-local maintain-documentation contract', () => {
       readFile(join(repoRoot, 'CLAUDE.md'), 'utf-8'),
       readFile(join(repoRoot, '.github/pull_request_template.md'), 'utf-8'),
     ]);
-    const noReleaseContract = (policy: string) => {
-      const noReleaseLine =
-        policy.split(/\r?\n/).find((line) => /successful no-release path/i.test(line)) ?? '';
-      return {
-        successfulNoRelease: /empty `?\[Unreleased\]`?.*successful no-release path/i.test(
-          noReleaseLine,
+    const releasePolicyContract = (policy: string) => ({
+      implementationBranchesDoNotWriteArtifacts:
+        /implementation branches never write `CHANGELOG\.md` or `VERSION`/i.test(policy),
+      everyPrDeclaresDisposition: /every PR declares a release disposition/i.test(policy),
+      noNoteDefault:
+        /Release-Disposition: no-note[\s\S]*covers non-notable, specification-only,[\s\S]*documentation-only, and no-implementation changes/i.test(
+          policy,
         ),
-        noChangelogRewrite: /no changelog rewrite(?:,|;|\.|$)/i.test(noReleaseLine),
-        noVersionBump: /no VERSION bump(?:,|;|\.|$)/i.test(noReleaseLine),
-        noTag: /no tag(?:,|;|\.|$)/i.test(noReleaseLine),
-        noReleaseCommit: /no release commit(?:,|;|\.|$)/i.test(noReleaseLine),
-        noGitHubRelease: /no GitHub Release(?:,|;|\.|$)/i.test(noReleaseLine),
-      };
-    };
+      noteVariant:
+        /Release-Disposition: note[\s\S]*Release-Category:[\s\S]*Release-Semver:[\s\S]*Release-Note:/i.test(
+          policy,
+        ),
+      dispositionValidation:
+        /required check validates the disposition[\s\S]*missing, malformed, or contradictory metadata/i.test(
+          policy,
+        ),
+      botOwnedPublication:
+          /bot-owned release\s+PR is maintained on every merge to main[\s\S]*publishes only when the commit on `main` is (?:\*\*)?that exact\s+PR's merge/i.test(
+          policy,
+        ),
+      migrationBlocks:
+        /migration blocks for breaking changes travel in the PR body, not `CHANGELOG\.md`[\s\S]*runnable ```` ```bash migration ```` fence inside a[\s\S]*`## Migration` section/i.test(
+          policy,
+        ),
+    });
     const contradictionContract = (policy: string) => {
       const paragraphs = policy
         .split(/\r?\n\s*\r?\n/)
@@ -645,15 +656,7 @@ describe('repository-local maintain-documentation contract', () => {
       };
     };
     const policyContract = (policy: string) => ({
-      notableOnly:
-        /changelog entry.*required only when.*notable reader-visible implementation change/is.test(
-          policy,
-        ),
-      nonNotableAllowed:
-        /non-notable implementation.*(?:may|can).*without.*changelog entry/is.test(policy),
-      emptyUnreleased: noReleaseContract(policy),
-      breakingMigration:
-        /breaking changes.*still require.*runnable.*bash migration/is.test(policy),
+      release: releasePolicyContract(policy),
       readme: {
         localRefinement: /README.*repository-local landing-page refinement/i.test(policy),
         canonicalAffectedDocs:
@@ -677,21 +680,25 @@ describe('repository-local maintain-documentation contract', () => {
         retainsMigration: /```bash migration/.test(pullRequestTemplate),
       },
       mutationProbes: {
-        rewritesChangelog: !noReleaseContract(
-          'An empty [Unreleased] is a successful no-release path that rewrites the changelog.',
-        ).noChangelogRewrite,
-        bumpsVersion: !noReleaseContract(
-          'An empty [Unreleased] is a successful no-release path that bumps VERSION.',
-        ).noVersionBump,
-        createsTag: !noReleaseContract(
-          'An empty [Unreleased] is a successful no-release path that creates a tag.',
-        ).noTag,
-        createsReleaseCommit: !noReleaseContract(
-          'An empty [Unreleased] is a successful no-release path that creates a release commit.',
-        ).noReleaseCommit,
-        createsGitHubRelease: !noReleaseContract(
-          'An empty [Unreleased] is a successful no-release path that creates a GitHub Release.',
-        ).noGitHubRelease,
+        permitsBranchReleaseArtifacts: !releasePolicyContract(
+          'Implementation branches never write CHANGELOG.md or VERSION.',
+        ).implementationBranchesDoNotWriteArtifacts,
+        omitsRequiredDisposition: !releasePolicyContract(
+          'A release disposition is optional for implementation PRs.',
+        ).everyPrDeclaresDisposition,
+        omitsNoNoteDefault: !releasePolicyContract(
+          'Release-Disposition: no-note is available.',
+        ).noNoteDefault,
+        omitsNoteFields: !releasePolicyContract('Release-Disposition: note').noteVariant,
+        acceptsMalformedDisposition: !releasePolicyContract(
+          'A required check validates the disposition.',
+        ).dispositionValidation,
+        allowsOrdinaryPushPublication: !releasePolicyContract(
+          'A release workflow publishes after every ordinary push to main.',
+        ).botOwnedPublication,
+        putsMigrationInChangelog: !releasePolicyContract(
+          'Migration blocks for breaking changes travel in CHANGELOG.md.',
+        ).migrationBlocks,
         universalRequirement: !contradictionContract(
           'All pull requests must add a changelog entry.',
         ).noUniversalEntryRequirement,
@@ -701,17 +708,15 @@ describe('repository-local maintain-documentation contract', () => {
       },
     }).toEqual({
       claudePolicy: {
-        notableOnly: true,
-        nonNotableAllowed: true,
-        emptyUnreleased: {
-          successfulNoRelease: true,
-          noChangelogRewrite: true,
-          noVersionBump: true,
-          noTag: true,
-          noReleaseCommit: true,
-          noGitHubRelease: true,
+        release: {
+          implementationBranchesDoNotWriteArtifacts: true,
+          everyPrDeclaresDisposition: true,
+          noNoteDefault: true,
+          noteVariant: true,
+          dispositionValidation: true,
+          botOwnedPublication: true,
+          migrationBlocks: true,
         },
-        breakingMigration: true,
         readme: {
           localRefinement: true,
           canonicalAffectedDocs: true,
@@ -729,11 +734,13 @@ describe('repository-local maintain-documentation contract', () => {
         retainsMigration: true,
       },
       mutationProbes: {
-        rewritesChangelog: true,
-        bumpsVersion: true,
-        createsTag: true,
-        createsReleaseCommit: true,
-        createsGitHubRelease: true,
+        permitsBranchReleaseArtifacts: true,
+        omitsRequiredDisposition: true,
+        omitsNoNoteDefault: true,
+        omitsNoteFields: true,
+        acceptsMalformedDisposition: true,
+        allowsOrdinaryPushPublication: true,
+        putsMigrationInChangelog: true,
         universalRequirement: true,
         emptyIsError: true,
       },
