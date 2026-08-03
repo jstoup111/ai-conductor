@@ -407,20 +407,39 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 **Wired-into:** none (removes obsolete special handling; generic `src/conductor/src/engine/conductor.ts#runRebase` remains)  
 **Dependencies:** Tasks 3, 18
 
-### Task 20: Produce the one-time audited release backlog transition
+### Task 20: Deliver the release backlog transition mechanism and its unresolved audit
 
 **Story:** TI-7 — include/consolidate/exclude proposal, operator approval input, uncertainty, and rerun refusal  
 **Type:** infrastructure
 
+**Scope amendment (operator-approved, supersedes the original Task 20).** The original
+task directed the build session to exercise semantic judgment once and emit a *cleaned
+pending set* into `CHANGELOG.md`. That curation is explicitly **out of scope for this
+feature** and is deferred to issue #217 ("Condense and correct CHANGELOG [Unreleased]
+before re-enabling releases"), for two reasons:
+
+1. **No authoritative mapping.** The checkout has no offline mapping from legacy changelog
+   prose or commit-message `#NNN` references to merged GitHub PR metadata. Any disposition
+   the build session invented would convert uncertainty into a silent exclusion — the exact
+   failure the transition guard exists to prevent.
+2. **Ordering.** #217 requires the curation to land alone, immediately before the
+   release-workflow fix (#218), with nothing else in flight. Performing it inside a feature
+   build violates that constraint.
+
+This feature therefore delivers the transition **mechanism** plus an exhaustive,
+deliberately-unresolved audit; #217 resolves the dispositions and rewrites `[Unreleased]`.
+The guard fails closed in the interim: the first bot-owned release PR refuses to seed while
+the audit status is not `approved` or any item remains unresolved.
+
 **Steps:**
 1. Create a failing transition check that requires every legacy `[Unreleased]` entry and relevant post-tag PR to have an included, consolidated, excluded, or unresolved audit disposition.
 2. Verify RED against the current uncurated backlog.
-3. Use the build session's semantic judgment once to generate the audit and cleaned proposed backlog; encode unresolved items explicitly and add a consumed-once transition guard for the release-PR maintainer.
-4. Verify GREEN for exhaustive accounting, migration ordering, and refusal to rerun after transition completion; leave the exact proposal visible for operator PR approval.
+3. Generate the exhaustive audit inventory with content hashes, recording every item as `unresolved` and naming #217 as the resolver; add a consumed-once transition guard for the release-PR maintainer.
+4. Verify GREEN for exhaustive accounting, migration ordering, refusal to seed while unapproved or unresolved, and refusal to rerun after transition completion.
 5. Commit `chore(release): propose audited backlog transition`.
 
 **Files:**
-- `CHANGELOG.md` — one-time cleaned pending set (transition exception to steady-state ownership)
+- `CHANGELOG.md` — legacy `[Unreleased]` left intact behind a pointer comment to the audit; curation deferred to #217 (no cleaned pending set in this feature)
 - `.github/release-transition-audit.md` — one-time exhaustive include/consolidate/exclude/unresolved evidence consumed by the first release PR
 - `src/conductor/src/engine/release-pr-action.ts` — transition guard/seed handling
 - `src/conductor/test/engine/release-pr-action.test.ts` — seed and rerun-refusal cases
