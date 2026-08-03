@@ -1,3 +1,5 @@
+import { renderReleaseCandidateAudit, type ReleaseAuditCandidate } from './release-renderer.js';
+
 /**
  * The release-maintenance boundary deliberately accepts only injected Git and
  * GitHub adapters.  Workflow authentication is configured outside this module;
@@ -21,6 +23,8 @@ export interface ReleasePrGit {
   }): Promise<void>;
   /** Read the current base head immediately before a guarded generated-branch push. */
   readMainHead?(branch: string): Promise<string>;
+  /** Read the generated branch head used to bind required release readiness. */
+  readBranchHead?(branch: string): Promise<string>;
 }
 
 export interface ReleasePrGithub {
@@ -32,6 +36,13 @@ export interface ReleasePrGithub {
     body: string;
   }): Promise<{ number: number }>;
   updatePullRequest(input: { number: number; title: string; body: string }): Promise<void>;
+  /** Publish candidate completeness against the exact release PR head. */
+  publishReleaseReadiness?(input: {
+    pullRequestNumber: number;
+    head: string;
+    conclusion: 'success';
+    summary: string;
+  }): Promise<void>;
 }
 
 /** The complete remote identity required before this action may mutate its branch. */
@@ -58,6 +69,8 @@ export interface ReleasePrActionInput {
    * action keeps no local recovery ledger and never chooses stale content itself.
    */
   rerenderForCurrentMain?: (mainHead: string) => Promise<ReleasePrRender>;
+  /** When present, render exhaustive evidence and publish a head-bound readiness result. */
+  audit?: readonly ReleaseAuditCandidate[];
 }
 
 export interface ReleasePrRender {
@@ -76,6 +89,7 @@ export type ReleasePrActionResult = {
 /** Create the designated release PR or update its generated release surfaces. */
 export async function runReleasePrAction(input: ReleasePrActionInput): Promise<ReleasePrActionResult> {
   assertAppIdentity(input.config.appLogin);
+  assertAuditDependencies(input);
   const existingPullRequest = await input.github.findOpenReleasePullRequest();
   if (existingPullRequest !== undefined) {
     assertOwnedPullRequest(existingPullRequest, input.config);
@@ -85,7 +99,7 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
     expectedMainHead: input.expectedMainHead ?? '',
     generatedFiles: input.generatedFiles,
     title: input.title,
-    body: input.body,
+    body: renderBodyWithAudit(input.body, input.audit),
   };
   let staleRetries = 0;
   let branchUpdated: boolean;
@@ -104,7 +118,7 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
           throw new Error(`Stale release render: main advanced from ${expectedMainHead} to ${mainHead}`);
         }
         staleRetries += 1;
-        render = await input.rerenderForCurrentMain(mainHead);
+        render = withAudit(input.audit, await input.rerenderForCurrentMain(mainHead));
         continue;
       }
     }
@@ -119,6 +133,7 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
     break;
   }
 
+  let result: ReleasePrActionResult;
   if (existingPullRequest === undefined) {
     const created = await input.github.createPullRequest({
       head: input.config.branch,
@@ -126,15 +141,44 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
       title: render.title,
       body: render.body,
     });
-    return { action: 'created', pullRequestNumber: created.number, branchUpdated };
+    result = { action: 'created', pullRequestNumber: created.number, branchUpdated };
+  } else {
+    await input.github.updatePullRequest({
+      number: existingPullRequest.number,
+      title: render.title,
+      body: render.body,
+    });
+    result = { action: 'updated', pullRequestNumber: existingPullRequest.number, branchUpdated };
   }
 
-  await input.github.updatePullRequest({
-    number: existingPullRequest.number,
-    title: render.title,
-    body: render.body,
-  });
-  return { action: 'updated', pullRequestNumber: existingPullRequest.number, branchUpdated };
+  if (input.audit !== undefined) {
+    const head = await input.git.readBranchHead!(input.config.branch);
+    await input.github.publishReleaseReadiness!({
+      pullRequestNumber: result.pullRequestNumber,
+      head,
+      conclusion: 'success',
+      summary: `All ${input.audit.length} release candidates are accounted for.`,
+    });
+  }
+  return result;
+}
+
+function renderBodyWithAudit(body: string, audit: readonly ReleaseAuditCandidate[] | undefined): string {
+  return audit === undefined ? body : `${body.trimEnd()}\n\n${renderReleaseCandidateAudit(audit)}`;
+}
+
+function withAudit(audit: readonly ReleaseAuditCandidate[] | undefined, render: ReleasePrRender): ReleasePrRender {
+  return { ...render, body: renderBodyWithAudit(render.body, audit) };
+}
+
+function assertAuditDependencies(input: ReleasePrActionInput): void {
+  if (input.audit === undefined) return;
+  if (input.git.readBranchHead === undefined) {
+    throw new Error('Release maintenance requires a release-head reader to publish readiness');
+  }
+  if (input.github.publishReleaseReadiness === undefined) {
+    throw new Error('Release maintenance requires a readiness publisher when an audit is rendered');
+  }
 }
 
 async function readRequiredMainHead(git: ReleasePrGit, base: string): Promise<string> {

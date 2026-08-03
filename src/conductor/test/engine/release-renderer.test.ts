@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   aggregateReleaseSemver,
+  renderReleaseCandidateAudit,
   renderReleaseCandidate,
 } from '../../src/engine/release-renderer.js';
 
@@ -79,6 +80,37 @@ describe('engine/release-renderer — deterministic release candidates (Task 6)'
     const second = renderReleaseCandidate(input);
 
     expect(second).toEqual(first);
+  });
+
+  it('renders one auditable disposition row per candidate while keeping no-note and excluded candidates out of the changelog', () => {
+    const audit = renderReleaseCandidateAudit([
+      { number: 42, mergeSha: 'merge-note', disposition: candidate(42, 'Fixed', 'patch', 'Correct a race.').disposition },
+      { number: 43, mergeSha: 'merge-no-note', disposition: { disposition: 'no-note' } },
+      { number: 44, mergeSha: 'merge-excluded', disposition: { disposition: 'excluded', reason: 'Consolidated into implementation PR #42.' } },
+    ]);
+
+    expect(audit).toBe([
+      '## Release candidate audit',
+      '',
+      '| Implementation PR | Merge commit | Disposition | Reason |',
+      '| --- | --- | --- | --- |',
+      '| #42 | `merge-note` | included | Correct a race. |',
+      '| #43 | `merge-no-note` | no-note | Explicit no-note disposition. |',
+      '| #44 | `merge-excluded` | excluded | Consolidated into implementation PR #42. |',
+    ].join('\n'));
+
+    const rendered = renderReleaseCandidate({
+      currentVersion: '1.2.3',
+      date: '2026-08-02',
+      changelog: changelogWithEmptyUnreleased(),
+      candidates: [
+        candidate(42, 'Fixed', 'patch', 'Correct a race.'),
+        { number: 43, disposition: { disposition: 'no-note' } },
+      ],
+    });
+    expect(rendered.changelog).toContain('Correct a race.');
+    expect(rendered.changelog).not.toContain('Explicit no-note disposition.');
+    expect(rendered.changelog).not.toContain('Consolidated into implementation PR #42.');
   });
 });
 

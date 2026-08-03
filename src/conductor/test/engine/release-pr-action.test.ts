@@ -249,3 +249,73 @@ describe('engine/release-pr-action — stale render protection (Task 11)', () =>
     expect(github.createPullRequest).toHaveBeenCalledOnce();
   });
 });
+
+describe('engine/release-pr-action — candidate audit readiness (Task 13)', () => {
+  const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+  const generatedFiles = { 'CHANGELOG.md': '# Changelog\n', VERSION: '1.2.4\n' };
+
+  it('appends the exhaustive audit to the owned PR and publishes required readiness on the exact generated-branch head', async () => {
+    const git = {
+      readBranchFiles: vi.fn(async () => undefined),
+      readBranchHead: vi.fn(async () => 'release-head-42'),
+      pushGeneratedBranch: vi.fn(async () => undefined),
+    };
+    const github = {
+      findOpenReleasePullRequest: vi.fn(async () => undefined),
+      createPullRequest: vi.fn(async () => ({ number: 42 })),
+      updatePullRequest: vi.fn(async () => undefined),
+      publishReleaseReadiness: vi.fn(async () => undefined),
+    };
+
+    await runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Generated release.',
+      audit: [
+        { number: 10, mergeSha: 'candidate-note', disposition: { disposition: 'note', category: 'Added', semver: 'minor', note: 'Add audit evidence.' } },
+        { number: 11, mergeSha: 'candidate-no-note', disposition: { disposition: 'no-note' } },
+      ],
+    });
+
+    expect(github.createPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.stringContaining('| #10 | `candidate-note` | included | Add audit evidence. |'),
+    }));
+    expect(github.createPullRequest).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.stringContaining('| #11 | `candidate-no-note` | no-note | Explicit no-note disposition. |'),
+    }));
+    expect(github.publishReleaseReadiness).toHaveBeenCalledWith({
+      pullRequestNumber: 42,
+      head: 'release-head-42',
+      conclusion: 'success',
+      summary: 'All 2 release candidates are accounted for.',
+    });
+  });
+
+  it('fails closed instead of publishing an unbound readiness status when audit dependencies cannot read the release head', async () => {
+    const git = {
+      readBranchFiles: vi.fn(async () => undefined),
+      pushGeneratedBranch: vi.fn(async () => undefined),
+    };
+    const github = {
+      findOpenReleasePullRequest: vi.fn(async () => undefined),
+      createPullRequest: vi.fn(async () => ({ number: 42 })),
+      updatePullRequest: vi.fn(async () => undefined),
+      publishReleaseReadiness: vi.fn(async () => undefined),
+    };
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Generated release.',
+      audit: [{ number: 10, mergeSha: 'candidate-note', disposition: { disposition: 'no-note' } }],
+    })).rejects.toThrow(/release-head reader/i);
+
+    expect(github.publishReleaseReadiness).not.toHaveBeenCalled();
+  });
+});

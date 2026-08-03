@@ -33,6 +33,17 @@ export interface RenderedReleaseCandidate {
   changelog: string;
 }
 
+/** A candidate's review disposition as rendered on the bot-owned release PR. */
+export type ReleaseAuditDisposition =
+  | ReleaseDisposition
+  | { disposition: 'excluded'; reason: string };
+
+export interface ReleaseAuditCandidate {
+  number: number;
+  mergeSha: string;
+  disposition: ReleaseAuditDisposition;
+}
+
 /** Return the most significant declared impact, rejecting values outside the metadata contract. */
 export function aggregateReleaseSemver(impacts: readonly string[]): ReleaseSemver {
   let highest: ReleaseSemver | undefined;
@@ -67,6 +78,32 @@ export function renderReleaseCandidate(input: ReleaseRenderInput): RenderedRelea
     version,
     changelog: insertReleaseSection(input.changelog, releaseSection),
   };
+}
+
+/** Render every candidate for PR review while the changelog stays reader-facing. */
+export function renderReleaseCandidateAudit(candidates: readonly ReleaseAuditCandidate[]): string {
+  const lines = [
+    '## Release candidate audit',
+    '',
+    '| Implementation PR | Merge commit | Disposition | Reason |',
+    '| --- | --- | --- | --- |',
+  ];
+
+  for (const candidate of candidates) {
+    const disposition = candidate.disposition;
+    const [outcome, reason] = disposition.disposition === 'note'
+      ? ['included', disposition.note]
+      : disposition.disposition === 'no-note'
+        ? ['no-note', 'Explicit no-note disposition.']
+        : ['excluded', disposition.reason];
+    lines.push(`| #${candidate.number} | \`${escapeTableCell(candidate.mergeSha)}\` | ${outcome} | ${escapeTableCell(reason)} |`);
+  }
+
+  return lines.join('\n');
+}
+
+function escapeTableCell(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('|', '\\|').replaceAll(/\r?\n/g, '<br>');
 }
 
 function bumpVersion(currentVersion: string, impact: ReleaseSemver): string {
