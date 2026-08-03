@@ -112,6 +112,32 @@ ahead of the gate; the gate reads and parses that body through the conductor's i
 GitHub boundary. `/finish` continues to author the reader-facing title/body and mark the PR
 ready — finalizing metadata must not pre-empt that.
 
+**Disposition authority (operator decision, resolves `stall:disposition-authority`).** The
+authoritative pre-gate writer is a new **repository-local custom step, `release-disposition`**,
+declared in this repo's `.ai-conductor/config.yml` and anchored `after: maintain-documentation`
+— immediately before `finish`. It judges the feature's own diff and authors the structured
+disposition (`Release-Disposition` / `Release-Category` / `Release-Semver` / `Release-Note`, plus
+any runnable migration block) **directly onto the retained SHIP draft PR body**, then the gate
+reads that body. `/finish` continues to author the reader-facing title/body afterward and must
+not clobber the metadata block.
+
+Why a custom step rather than engine code:
+
+- **Self-host-only by construction.** The step exists only in this repository's config, which
+  consumers do not have — no `isSelfBuild()` branch is added to the engine. This is the same
+  mechanism and precedent as the existing `maintain-documentation` custom step.
+- **Ordering is expressible and verified.** `after` accepts a built-in or an earlier custom step
+  (`src/conductor/src/engine/steps.ts:532-533`), and the step registry that the pre-finish gate
+  iterates is built by `buildStepRegistry` (`src/conductor/src/engine/conductor.ts:2557`), so a
+  step anchored before `finish` runs before the gate at `conductor.ts:4143` — daemon path included.
+- **No new authority ledger.** The step writes to the PR body, so merged PR metadata remains the
+  single authority per the ADR; `completion_artifact` is evidence only, never the source of truth.
+- **Gate-loop membership is inherited.** A custom step inserted among the loop steps joins the
+  gate loop automatically, so a downstream kickback can re-open it.
+
+The step's skill lives in the repository-local catalog (`.agents/skills/release-disposition/SKILL.md`)
+per `scope-check`, not the shipped `skills/` catalog.
+
 **Fail-closed requirement.** The gate now depends on a GitHub read, which can fail offline
 (observed: the daemon logging `fetch origin main failed (offline?)`). Unreachable GitHub,
 an unresolvable PR identity, an absent disposition, and a malformed disposition MUST each
@@ -121,9 +147,10 @@ produce a HALT verdict — never a pass, and never a silent skip of the migratio
 1. Write failing release-gate tests that supply structured metadata rather than feature-owned changelog content.
 2. Verify RED.
 3. Refactor the gate input to validate the parsed runnable migration block for classified breaking surfaces.
-4. Finalize the structured disposition onto the retained draft implementation PR before the pre-finish gate, then resolve, parse, and pass it into `guardrails.releaseGate` from `runSelfHostFinishGates` through the injected GitHub boundary.
-5. Verify GREEN, including exact `bin/migrate`-compatible fence preservation, and prove through the production caller that a classified breaking surface with runnable PR-metadata migration passes while unreachable, missing, and malformed metadata each HALT.
-6. Commit `feat(release): validate migrations from PR metadata`.
+4. Add the `release-disposition` repository-local custom step: its SKILL.md, its `.ai-conductor/config.yml` declaration (`after: maintain-documentation`, `enforcement: gating`, `completion_artifact`, `llm_provider: claude`), and a registry test proving it is inserted before `finish`.
+5. Finalize the structured disposition onto the retained draft implementation PR before the pre-finish gate, then resolve, parse, and pass it into `guardrails.releaseGate` from `runSelfHostFinishGates` through the injected GitHub boundary.
+6. Verify GREEN, including exact `bin/migrate`-compatible fence preservation, and prove through the production caller that a classified breaking surface with runnable PR-metadata migration passes while unreachable, missing, and malformed metadata each HALT.
+7. Commit `feat(release): validate migrations from PR metadata`.
 
 **Files:**
 - `src/conductor/src/engine/self-host/release-gate.ts` — structured migration input
@@ -132,6 +159,10 @@ produce a HALT verdict — never a pass, and never a silent skip of the migratio
 - `src/conductor/src/engine/conductor.ts` — resolve/parse the implementation PR disposition and supply `releaseMetadata` to `guardrails.releaseGate`; fail closed when it cannot be resolved
 - `src/conductor/src/engine/ship-draft-pr.ts` — retain draft PR identity and finalize release metadata onto its body before the pre-finish gate
 - `src/conductor/test/engine/self-host/wiring.test.ts` — production-path coverage: metadata reaches `releaseGate`; unreachable/missing/malformed each HALT
+- `.agents/skills/release-disposition/SKILL.md` — repository-local skill: judge the diff, author the structured disposition onto the draft PR body
+- `.ai-conductor/config.yml` — `release-disposition` custom-step declaration (`after: maintain-documentation`, gating, completion artifact)
+- `src/conductor/test/engine/steps.test.ts` — registry coverage proving `release-disposition` inserts before `finish` and joins the gate loop
+- `docs/reference/steps.md` — document the new step (required by the repo's documentation-upkeep rule)
 
 **Wired-into:** `src/conductor/src/engine/conductor.ts#runSelfHostFinishGates`
 **Dependencies:** Task 2
