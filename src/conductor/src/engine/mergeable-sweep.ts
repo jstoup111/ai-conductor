@@ -72,6 +72,7 @@ export interface WatchEntry {
   lastResolveAt?: string;
   ciFixAttempts?: number;
   lastCiFixAt?: string;
+  ciFailureDetected?: boolean;
 }
 
 const WATCH_FILE = '.daemon/mergeable-watch.jsonl';
@@ -168,6 +169,9 @@ export async function readWatch(projectRoot: string): Promise<WatchEntry[]> {
               ciFixAttempts: typeof raw.ciFixAttempts === 'number' ? raw.ciFixAttempts : 0,
               // lastCiFixAt is optional; only include if present
               ...(typeof raw.lastCiFixAt === 'string' && { lastCiFixAt: raw.lastCiFixAt }),
+              ...(typeof raw.ciFailureDetected === 'boolean' && {
+                ciFailureDetected: raw.ciFailureDetected,
+              }),
             };
             return [entry];
           }
@@ -322,6 +326,12 @@ export async function sweepMergeableLabels({
       try {
         const state = await prMergeState(gh, entry.repoCwd, entry.prUrl, log);
 
+        // GitHub checks are authoritative for CI state. Retire the redundant
+        // custom label whenever a reconciliation read finds it on a PR.
+        if (state.labels.includes('ci-failed')) {
+          await removeLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
+        }
+
         // MERGED and CLOSED may both represent a completed merge: only a
         // shipped record proven present authorizes feature-worktree teardown.
         if (state.state === 'MERGED' || state.state === 'CLOSED') {
@@ -407,9 +417,8 @@ export async function sweepMergeableLabels({
         //
         // Draft PRs are never resolution candidates (see `isDraft` note on
         // PrMergeState): a draft is an in-flight build's own PR, so dispatching
-        // autoresolve/CI-fix against it fights the running build. Labeling
-        // below is unaffected — a draft still gets its `mergeable`/`ci-failed`
-        // labels, which are informational only.
+        // autoresolve/CI-fix against it fights the running build. The ordinary
+        // `mergeable` label reconciliation below is unaffected.
         if (state.mergeable === 'CONFLICTING') {
           if (state.isDraft) {
             log?.(`[mergeable-sweep] skipping resolve for ${entry.prUrl} (draft PR)`);
@@ -424,8 +433,7 @@ export async function sweepMergeableLabels({
         // Task 21: exhaustion — escalate exactly once. Gated on the
         // label-absent→present transition so a sweep that finds
         // needs-remediation already present (sticky) performs zero new gh
-        // mutations or events, matching the Task 8 ci_failed transition
-        // pattern above.
+        // mutations or events.
         if (
           !hasRemediation &&
           state.checksOutcome === 'failed' &&
@@ -506,14 +514,9 @@ export async function sweepMergeableLabels({
           }
         }
 
-        // Task 6: ci-failed label on failed checks (idempotent)
-        // Add `ci-failed` label when checks outcome is 'failed' and not already present.
-        // This happens regardless of needs-remediation status.
+        // Keep edge-triggered failure events independent of GitHub label state.
         if (state.checksOutcome === 'failed') {
-          if (!state.labels.includes('ci-failed')) {
-            await ensureLabel(gh, entry.repoCwd, 'ci-failed', 'E8451F', log);
-            await addLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
-            // Task 8: emit ci_failed event on label-absent→present transition (detected phase)
+          if (!entry.ciFailureDetected) {
             onEvent?.({
               type: 'ci_failed',
               prUrl: entry.prUrl,
@@ -522,19 +525,22 @@ export async function sweepMergeableLabels({
               attempts: (entry.ciFixAttempts ?? 0) + 1,
               phase: 'detected',
             });
+            const failedIdx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+            if (failedIdx >= 0) {
+              survivors[failedIdx] = { ...survivors[failedIdx], ciFailureDetected: true };
+            }
           }
         }
 
-        // Task 7: green path removes ci-failed and resets attempts (idempotent)
-        // When checks outcome is 'green', remove `ci-failed` if present and reset ciFixAttempts.
+        // A green outcome resets the bounded CI-fix attempt counter.
         if (state.checksOutcome === 'green') {
-          if (state.labels.includes('ci-failed')) {
-            await removeLabel(gh, entry.repoCwd, entry.prUrl, 'ci-failed', log);
-          }
-          // Reset ciFixAttempts to 0 on green
           const greenIdx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
           if (greenIdx >= 0) {
-            survivors[greenIdx] = { ...survivors[greenIdx], ciFixAttempts: 0 };
+            survivors[greenIdx] = {
+              ...survivors[greenIdx],
+              ciFixAttempts: 0,
+              ciFailureDetected: false,
+            };
           }
         }
 
@@ -584,12 +590,13 @@ export async function sweepMergeableLabels({
 
         dispatched = true;
         const now = autoresolve.now ? autoresolve.now() : new Date();
+        const idx = survivors.findIndex((survivor) => survivor.prUrl === entry.prUrl);
+        const current = idx >= 0 ? survivors[idx] : entry;
         const updated: WatchEntry = {
-          ...entry,
+          ...current,
           resolveAttempts: (entry.resolveAttempts ?? 0) + 1,
           lastResolveAt: now.toISOString(),
         };
-        const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
         if (idx >= 0) survivors[idx] = updated;
 
         const dispatchResult = await autoresolve.dispatch(updated);
@@ -622,6 +629,7 @@ export async function sweepMergeableLabels({
           ...entry,
           ciFixAttempts: (entry.ciFixAttempts ?? 0) + 1,
           lastCiFixAt: now.toISOString(),
+          ciFailureDetected: true,
         };
         const idx = survivors.findIndex((s) => s.prUrl === entry.prUrl);
         if (idx >= 0) survivors[idx] = updated;

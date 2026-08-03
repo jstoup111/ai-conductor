@@ -12,6 +12,13 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ### Fixed
 
+- Keep GitHub's native checks authoritative for CI status by never applying the redundant
+  `ci-failed` label and removing existing instances during PR reconciliation
+  ([implementation PR 1271](https://github.com/jstoup111/ai-conductor/pull/1271)).
+- Hold CI-fix remediation until every check on the PR has reached a terminal state, so a rollup that
+  is already `failed` while sibling checks are still queued or running is deferred (reason
+  `checks-not-terminal`, no attempt burned) instead of remediating against incomplete CI results
+  ([implementation PR 1271](https://github.com/jstoup111/ai-conductor/pull/1271)).
 - Keep daemon provider preparation bounded before spawn with an independently configurable deadline, one automatic replacement, and diagnosable `needs-human` exhaustion halts while treating quiet running-provider output as status-only telemetry ([implementation PR #1231](https://github.com/jstoup111/ai-conductor/pull/1231)).
 - Reset a loop gate's stuck-selection debt after an objective satisfied verdict, so later
   source-driven invalidation re-verifies the gate instead of falsely halting on cumulative reruns

@@ -298,7 +298,7 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
     },
   };
 
-  it('gate 4 (serial guard): when no resolution in flight → passes eligibility', async () => {
+  it('gate 5 (serial guard): when no resolution in flight → passes eligibility', async () => {
     // The serial guard checks isResolutionInFlight() which is a module-level flag
     // set by withResolveWorktree in autoresolve.ts. In test environment (no actual
     // resolution running), the flag is always false, so this gate always passes.
@@ -309,7 +309,7 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
     expect(result.eligible).toBe(true);
   });
 
-  it('gate 5 (cooldown): lastCiFixAt within cooldown → ineligible(cooldown)', async () => {
+  it('gate 6 (cooldown): lastCiFixAt within cooldown → ineligible(cooldown)', async () => {
     // lastCiFixAt is 10 minutes ago, cooldown is 60 minutes by default
     const tenMinutesAgo = new Date(NOW.getTime() - 10 * 60 * 1000);
     const entry = { ...defaultEntry, lastCiFixAt: tenMinutesAgo.toISOString() };
@@ -324,7 +324,7 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
     expect(logs.some((l) => l.includes('skipped') && l.includes('cooldown'))).toBe(true);
   });
 
-  it('gate 5 (cooldown): lastCiFixAt past cooldown → eligible', async () => {
+  it('gate 6 (cooldown): lastCiFixAt past cooldown → eligible', async () => {
     // lastCiFixAt is 61 minutes ago, cooldown is 60 minutes by default → eligible
     const sixtyOneMinutesAgo = new Date(NOW.getTime() - 61 * 60 * 1000);
     const entry = { ...defaultEntry, lastCiFixAt: sixtyOneMinutesAgo.toISOString() };
@@ -334,7 +334,7 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
     expect(result.eligible).toBe(true);
   });
 
-  it('gate 5 (cooldown): no lastCiFixAt → eligible (first attempt)', async () => {
+  it('gate 6 (cooldown): no lastCiFixAt → eligible (first attempt)', async () => {
     const entry = { ...defaultEntry };
     // No lastCiFixAt field
 
@@ -352,6 +352,115 @@ describe('ci-fix: isEligibleForCiFix eligibility gates (Task 14)', () => {
     expect(result.eligible).toBe(false);
     // Entry's ciFixAttempts should not be mutated
     expect(entry.ciFixAttempts).toBe(1);
+  });
+});
+
+// ── Tests for the terminal-CI-state gate ────────────────────────────────────
+
+describe('ci-fix: isEligibleForCiFix terminal-CI-state gate', () => {
+  const NOW = new Date('2026-07-08T12:00:00Z');
+
+  const entry: WatchEntry = {
+    prUrl: 'https://github.com/foo/bar/pull/42',
+    slug: 'foo/bar#42',
+    repoCwd: '/fake/repo',
+    ciFixAttempts: 0,
+  };
+
+  const config: HarnessConfig = { ci_watch: { enabled: true } };
+
+  /** A `failed` rollup — the state the sweep hands to the CI-fix dispatch. */
+  function stateWithChecks(
+    statusCheckRollup: Array<{ status?: string | null; conclusion?: string | null; name?: string }>,
+  ): PrMergeState {
+    return {
+      state: 'OPEN',
+      mergeable: 'MERGEABLE',
+      hasFailingOrPendingChecks: true,
+      labels: [],
+      checksOutcome: 'failed',
+      statusCheckRollup,
+    };
+  }
+
+  it('one check still IN_PROGRESS alongside a failure → ineligible(checks-not-terminal)', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { status: 'IN_PROGRESS', conclusion: null, name: 'integration' },
+    ]);
+    const logs: string[] = [];
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW, (m) => logs.push(m));
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain('checks-not-terminal');
+    expect(result.reason).toContain('integration');
+    expect(logs.filter((l) => l.includes('skipped'))).toHaveLength(1);
+  });
+
+  it('a QUEUED check alongside a failure → ineligible(checks-not-terminal)', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { status: 'QUEUED', conclusion: '', name: 'e2e' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain('checks-not-terminal');
+  });
+
+  it('a PENDING commit status alongside a failure → ineligible(checks-not-terminal)', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { status: 'PENDING', conclusion: 'PENDING', name: 'deploy-preview' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.eligible).toBe(false);
+    expect(result.reason).toContain('checks-not-terminal');
+  });
+
+  it('all checks terminal (success/failure/cancelled/timed_out/skipped) → eligible', async () => {
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'SUCCESS', name: 'lint' },
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { status: 'COMPLETED', conclusion: 'CANCELLED', name: 'e2e' },
+      { status: 'COMPLETED', conclusion: 'TIMED_OUT', name: 'perf' },
+      { status: 'COMPLETED', conclusion: 'SKIPPED', name: 'release' },
+    ]);
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.eligible).toBe(true);
+  });
+
+  it('no rollup detail available → gate does not block (unchanged contract)', async () => {
+    const state: PrMergeState = {
+      state: 'OPEN',
+      mergeable: 'MERGEABLE',
+      hasFailingOrPendingChecks: true,
+      labels: [],
+      checksOutcome: 'failed',
+    };
+
+    const result = await isEligibleForCiFix(entry, state, config, NOW);
+
+    expect(result.eligible).toBe(true);
+  });
+
+  it('no counter burn when the gate defers a non-terminal rollup', async () => {
+    const mutableEntry = { ...entry, ciFixAttempts: 1 };
+    const state = stateWithChecks([
+      { status: 'COMPLETED', conclusion: 'FAILURE', name: 'unit' },
+      { status: 'IN_PROGRESS', conclusion: null, name: 'integration' },
+    ]);
+
+    const result = await isEligibleForCiFix(mutableEntry, state, config, NOW);
+
+    expect(result.eligible).toBe(false);
+    expect(mutableEntry.ciFixAttempts).toBe(1);
   });
 });
 
