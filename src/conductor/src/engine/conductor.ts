@@ -184,7 +184,8 @@ import { waitForCredentialsChange, readOperatorCredentialsState } from './self-h
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
-import type { GateVerdict } from './self-host/gate-halt.js';
+import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
+import { parseReleaseDisposition } from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
@@ -1123,6 +1124,8 @@ export class Conductor {
    * a single push + `gh pr view` rather than repeating them at every SHIP step.
    */
   private shipDraftPrAttempted = false;
+  /** Stable identity of the draft opened at SHIP entry, retained until finish. */
+  private shipDraftPrUrl: string | undefined;
   /** Strict merged-history verifier; injection is limited to hermetic tests. */
   private verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
   /** Strict finish verifier; production defaults to evaluateShipmentEvidence. */
@@ -2456,16 +2459,54 @@ export class Conductor {
     }
 
     if (sh.releaseArtifactGate) {
+      const releaseMetadata = await this.readShipDraftReleaseMetadata();
+      if (!releaseMetadata.ok) return releaseMetadata;
       const verdict = await this.guardrails.releaseGate({
         projectRoot: this.projectRoot,
         harnessRoot: this.projectRoot,
         readText: (p) => this.readTextOrNull(p),
         changedFiles: () => this.selfBuildChangedFiles(),
+        releaseMetadata: releaseMetadata.value,
       });
       if (!verdict.ok) return verdict;
     }
 
     return { ok: true };
+  }
+
+  /** Read and parse the exact retained draft body through the injected GitHub seam. */
+  private async readShipDraftReleaseMetadata(): Promise<
+    | { ok: false; reason: string }
+    | { ok: true; value: ReturnType<typeof parseReleaseDisposition> }
+  > {
+    if (!this.shipDraftPrUrl) {
+      const reason = 'Self-host release gate HALT: retained draft PR identity is unavailable.';
+      await writeSelfHostHalt(this.projectRoot, reason);
+      return { ok: false, reason };
+    }
+
+    let body: string;
+    try {
+      const { stdout } = await this.runGh(
+        ['pr', 'view', this.shipDraftPrUrl, '--json', 'body'],
+        { cwd: this.projectRoot },
+      );
+      const value = JSON.parse(stdout) as { body?: unknown };
+      if (typeof value.body !== 'string') throw new Error('PR body is absent');
+      body = value.body;
+    } catch (err) {
+      const reason = `Self-host release gate HALT: GitHub is unreachable or the retained draft PR cannot be resolved (${String(err)}).`;
+      await writeSelfHostHalt(this.projectRoot, reason);
+      return { ok: false, reason };
+    }
+
+    try {
+      return { ok: true, value: parseReleaseDisposition(body) };
+    } catch (err) {
+      const reason = `Self-host release gate HALT: retained draft PR has absent or malformed release disposition (${String(err)}).`;
+      await writeSelfHostHalt(this.projectRoot, reason);
+      return { ok: false, reason };
+    }
   }
 
   /**
@@ -3126,7 +3167,7 @@ export class Conductor {
         // Advisory: openShipDraftPr never throws and a failure only logs.
         if (step.phase === 'SHIP' && !this.shipDraftPrAttempted) {
           this.shipDraftPrAttempted = true;
-          await openShipDraftPr({
+          const draftPr = await openShipDraftPr({
             gh: this.gh,
             git: this.git,
             cwd: this.projectRoot,
@@ -3135,6 +3176,7 @@ export class Conductor {
             featureDesc: state.feature_desc,
             log: this.log ?? console.warn,
           });
+          if (draftPr.outcome === 'published') this.shipDraftPrUrl = draftPr.prUrl;
         }
 
         // Execute parallel group (T15 — Promise.all fan-out)

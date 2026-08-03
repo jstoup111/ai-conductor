@@ -43,7 +43,7 @@ grep -q 'RELEASE_PR_APP_TOKEN: \${{ steps.app-token.outputs.token }}' "$WORKFLOW
 grep -q 'runReleasePrAction' "$WORKFLOW"
 # The github-script bridge must compose the complete exported action contract;
 # passing only Actions globals crashes before release-PR maintenance can begin.
-rg -U -q '(?s)runReleasePrAction\(\{.*git,.*github:.*config:.*generatedFiles:.*title:.*body,' "$WORKFLOW"
+rg -U -q '(?s)runReleasePrAction\(\{.*git,.*github:.*config:.*generatedFiles:.*title:.*body[,:]' "$WORKFLOW"
 if rg -U -q 'runReleasePrAction\(\{\s*github\s*,\s*context\s*,\s*core\s*\}\)' "$WORKFLOW"; then
   exit 1
 fi

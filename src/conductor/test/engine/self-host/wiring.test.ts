@@ -40,6 +40,7 @@ import {
   runReleaseArtifactGate,
   type ReleaseGateOptions,
 } from '../../../src/engine/self-host/release-gate.js';
+import type { GhRunner, GitRunner } from '../../../src/engine/pr-labels.js';
 import { Conductor } from '../../test-conductor.js';
 
 const NOOP_ESCALATION = async () => ({});
@@ -78,6 +79,7 @@ function preBuildDoneState(): ConductState {
     complexity_tier: 'S',
     track: 'technical', // no PRD/prd_audit — keeps the SHIP tail minimal
     feature_desc: 'self-build-feat',
+    worktree_branch: 'feat/self-build-feat',
   } as ConductState;
 }
 
@@ -188,10 +190,30 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   function selfBuildConductor(
     guardrails: SelfHostGuardrails,
     runner: StepRunner,
-    opts: { selfHost?: boolean; daemon?: boolean; config?: Record<string, unknown> } = {},
+    opts: {
+      selfHost?: boolean;
+      daemon?: boolean;
+      config?: Record<string, unknown>;
+      gh?: GhRunner;
+      runGh?: GhRunner;
+      git?: GitRunner;
+    } = {},
   ): Conductor {
     const configuredSteps = (opts.config?.steps ?? {}) as Record<string, unknown>;
     const configuredSelfHost = (opts.config?.harness_self_host ?? {}) as Record<string, unknown>;
+    const draftUrl = 'https://github.com/acme/harness/pull/7';
+    const gh = opts.gh ?? (async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ url: draftUrl, state: 'OPEN' }) };
+      }
+      return { stdout: '' };
+    });
+    const runGh = opts.runGh ?? (async () => ({
+      stdout: JSON.stringify({ body: 'Release-Disposition: no-note' }),
+    }));
+    const git = opts.git ?? (async (args: string[]) => ({
+      stdout: args[0] === 'rev-list' ? '1\n' : '',
+    }));
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
@@ -203,6 +225,9 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       baseBranch: 'main',
       fromStep: 'build',
       selfHostGuardrails: guardrails,
+      gh,
+      git,
+      runGh,
       escalateBuildFailure: NOOP_ESCALATION,
       config: {
         ...opts.config,
@@ -284,6 +309,70 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
     expect(releaseGate).toHaveBeenCalledTimes(1);
     expect(seen.find((s) => s.step === 'finish')).toBeDefined();
     expect(await exists(join(dir, '.pipeline', 'HALT'))).toBe(false);
+  });
+
+  it('passes runnable migration metadata from the retained draft PR to releaseGate', async () => {
+    await writeState(statePath, preBuildDoneState());
+    const { guardrails } = makeGuardrails();
+    const { runner } = recordingRunner();
+    const prUrl = 'https://github.com/acme/harness/pull/42';
+    const metadataBody = [
+      'Release-Disposition: note',
+      'Release-Category: Changed',
+      'Release-Semver: major',
+      'Release-Note: Preserve the migration contract.',
+      '',
+      '## Migration',
+      '',
+      '```bash migration',
+      './bin/install --update',
+      '```',
+    ].join('\n');
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ url: prUrl, state: 'OPEN' }) };
+      }
+      return { stdout: '' };
+    };
+    const runGh: GhRunner = async (args) => {
+      expect(args).toEqual(['pr', 'view', prUrl, '--json', 'body']);
+      return { stdout: JSON.stringify({ body: metadataBody }) };
+    };
+
+    await selfBuildConductor(guardrails, runner, { gh, runGh }).run();
+
+    expect(guardrails.releaseGate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        releaseMetadata: expect.objectContaining({
+          disposition: 'note',
+          migration: '```bash migration\n./bin/install --update\n```',
+        }),
+      }),
+    );
+  });
+
+  it.each([
+    ['unreachable GitHub', async () => { throw new Error('offline'); }, /unreachable/i],
+    ['unresolved draft identity', undefined, /draft PR identity/i],
+    ['absent disposition', async () => ({ stdout: JSON.stringify({ body: 'ordinary draft text' }) }), /Disposition/],
+    ['malformed disposition', async () => ({ stdout: JSON.stringify({ body: 'Release-Disposition: note' }) }), /Category/],
+  ] as const)('HALTs before finish when release metadata has %s', async (_caseName, runGh, reason) => {
+    await writeState(statePath, preBuildDoneState());
+    const { guardrails } = makeGuardrails();
+    const { runner, seen } = recordingRunner();
+    const gh: GhRunner = async (args) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        if (_caseName === 'unresolved draft identity') throw new Error('no PR');
+        return { stdout: JSON.stringify({ url: 'https://github.com/acme/harness/pull/42', state: 'OPEN' }) };
+      }
+      return { stdout: '' };
+    };
+
+    await selfBuildConductor(guardrails, runner, { gh, runGh }).run();
+
+    expect(guardrails.releaseGate).not.toHaveBeenCalled();
+    expect(seen.find((entry) => entry.step === 'finish')).toBeUndefined();
+    expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf8')).toMatch(reason);
   });
 
   it('selecting Codex skips Claude-only self-build preparation while preserving shared release gates', async () => {
