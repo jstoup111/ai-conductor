@@ -52,47 +52,59 @@ Specifically:
 3. **Reject; never delete.** The hook refuses the commit and leaves the working tree
    byte-for-byte untouched. It never stages a deletion and never names deletion as the
    remedy. The message offers exactly two forward paths: narrow the commit to the task's
-   declared paths, or record a scope disposition.
+   declared paths, or justify the widening in the commit message itself. It prints the exact
+   trailer line to add, per offending path, so the remedy is a copy-paste and a re-run of
+   `git commit`.
 
-4. **Explicit scope disposition as the widening path.** A committed, reviewable record widens
-   the allowed set for a named task. It lives at
-   `.docs/scope-dispositions/<plan-stem>.md`, modeled directly on the existing release-waiver
-   mechanism:
+4. **`Scope:` commit trailer as the widening path.** The justification rides on the commit it
+   authorizes:
 
    ```
-   Task: <task id>
-
-   Paths:
-   - <repo-relative path>
-
-   Rationale: <non-empty prose — why the planned behavior requires this file>
+   Scope: <repo-relative path> — <non-empty rationale>
    ```
 
-   `.docs/scope-dispositions/` is added to `DOCS_WRITE_ALWAYS_ALLOWED`
-   (`phase-marker.ts:72`), which today holds exactly `.docs/release-waivers/` — the same
-   shape of artifact: a committed, in-diff, reviewable record that widens a gate. This
-   placement is deliberate on two counts:
+   The trailer is repeatable: one line per path being widened. The hook already reads trailers
+   via `git interpret-trailers` (`git-hook-assets.ts:100`), so this adds no new file I/O, no
+   parser, and no read-ordering question.
 
-   - It is **inside the reviewed diff.** `build_review` excludes only
-     `MACHINERY_AUTHORED_PATHS` (`['.docs/shipped/', '.pipeline/']`), so a disposition under
-     `.docs/` is visible to both the grader and the human reviewer. Putting it in
-     `.pipeline/` would make it machinery-authored and invisible — an unreviewable rubber
-     stamp, defeating desired outcome 3.
-   - It is **writable during BUILD.** The docs-guard freezes `.docs/` while a build phase is
-     active; the always-allowed prefix is what permits the disposition to be authored at the
-     moment the refusal occurs.
+   A malformed trailer is treated as absent, never as blanket permission — fail-closed,
+   consistent with the release-waiver gate. Malformed means: a path that is not in the staged
+   set, an empty or missing rationale, or a bare `Scope:` with no path.
 
-   Amending the plan's own `Files:` block was rejected as the widening mechanism: `.docs/plans/`
-   is frozen during BUILD and is explicitly a Scope failure for `build_review` when modified
+   **Why the commit message and not a committed file.** An earlier revision of this ADR put the
+   record at `.docs/scope-dispositions/<plan-stem>.md`, added to `DOCS_WRITE_ALWAYS_ALLOWED`
+   (`phase-marker.ts:72`) alongside `.docs/release-waivers/`. That design is rejected on three
+   counts:
+
+   - **It deadlocks.** The disposition file is itself a staged path that no task's `Files:`
+     block declares and that the machinery allowlist does not cover. Committing the record
+     that authorizes a widening is itself an out-of-scope commit. The escape hatch cannot be
+     used without a second, ad-hoc self-exemption.
+   - **It grants standing permission.** A committed file widens the allowed set for its task
+     for the rest of the build. A trailer authorizes exactly one commit — least privilege, and
+     it cannot silently keep applying after the reason for it has passed.
+   - **It costs machinery on the critical path.** The file design requires a markdown parser, a
+     docs-guard allowlist change, and a decision about whether to read the record from `HEAD`
+     or the working tree. The trailer requires none of them.
+
+   Amending the plan's own `Files:` block was rejected on separate grounds: `.docs/plans/` is
+   frozen during BUILD and is explicitly a Scope failure for `build_review` when modified
    mid-build.
 
-   A malformed disposition (unknown task id, empty `Paths:`, empty `Rationale:`) is treated as
-   absent, never as blanket permission — fail-closed on malformed input, consistent with the
-   release-waiver gate.
+   **Restoring reviewability.** The file design's one genuine advantage was landing inside the
+   graded diff. `build_review`'s grader receives a diff, not the commit log, so a trailer is
+   invisible to it; and this repository allows squash merge, so per-commit trailers survive
+   into `main` only via GitHub's auto-concatenated squash body. That gap is closed
+   deterministically by the backstop rather than by the author: `runContainmentFloor`
+   (decision 5) already walks branch commits, so it records every accepted `Scope:` widening —
+   path, rationale, task id, sha — into `.pipeline/containment-floor.json`, and that record is
+   supplied as a `build_review` input. Machinery-authored placement is correct here precisely
+   because it is engine-observed evidence rather than a self-granted permission.
 
 5. **Backstop at the build-step boundary.** A containment counterpart alongside
    `runPerTaskCommitFloor` reports violations that reached history through an unwired or
-   stale hook.
+   stale hook, and — per decision 4 — records every accepted `Scope:` widening so the
+   widenings are reviewable even though the grader never sees a commit message.
 
 6. **`build_review` is untouched.** Its Scope rubric and `remediate` routing remain exactly as
    they are, as defense in depth against correctly-pathed but behaviorally unrelated work.
@@ -104,11 +116,29 @@ Specifically:
   truth; the hook calls into the built engine rather than re-implementing the rule in shell.
 - The standing allowlist is the existing `MACHINERY_AUTHORED_PATHS`
   (`build-review-inputs.ts:60`, `['.docs/shipped/', '.pipeline/']`), reused, not redefined.
-- **Fail-open, always, on absence of evidence.** Abstain (exit 0) when: no task in the plan
-  declares a `Files:` block (legacy, non-contract-bearing plan — the
-  `wiring-probe.ts:578` precedent); `task-status.json` is missing, malformed, or has no row
-  for the stamped id; the row's `files` is absent or empty; no `Task:` trailer is present; or
-  any error is thrown. The check blocks only on positive evidence of a violation.
+- **Only an explicit `**Files:**` line is a declaration.** `parsePlanTaskPaths` falls back to
+  harvesting backticked path tokens from bullet items when a task section has no `**Files:**`
+  line (`plan-task-parse.ts:224`). Those paths are incidental, not declared — the exact
+  phantom-path class recorded in #548 — and a section relying on the fallback yields a
+  NON-empty set, so an "abstain when `files` is empty" rule would not catch it. `seedTaskStatus`
+  therefore writes `files` only for sections carrying a literal `**Files:**` line; a
+  fallback-derived set seeds no `files` at all and the check abstains. This requires
+  `parsePlanTaskPaths` to expose per-section declaration provenance (it currently discards
+  `hasFilesLine`), or a declared-only variant beside it.
+- **Exit codes are three-valued.** `0` = allowed, `2` = violation, **any other code** =
+  abstain. `COMMIT_MSG_HOOK` runs under `set -e` (`git-hook-assets.ts:92`), so the hook must
+  capture the status (`|| rc=$?`) rather than let a non-zero propagate, and must block only on
+  `2`. A two-valued "non-zero means violation" contract would make a stale `dist`, an
+  unregistered subcommand, or a node crash indistinguishable from a real violation — turning
+  the intended fail-open into a fail-closed wedge of every commit in the worktree. This is the
+  concrete form of the #625 stale-`dist` risk that architecture-review F3 flags.
+- **Fail-open, always, on absence of evidence.** Abstain when: no task in the plan declares a
+  `Files:` block (legacy, non-contract-bearing plan — the `wiring-probe.ts:578` precedent);
+  `task-status.json` is missing, malformed, or has no row for the stamped id; the row's `files`
+  is absent or empty; no `Task:` trailer is present; the stamped row's status is not
+  `in_progress` (a stale `.pipeline/current-task` yields a well-formed but wrong trailer, which
+  would otherwise judge correct work against a previous task's declared set); or any error is
+  thrown. The check blocks only on positive evidence of a violation.
 - Existing exemptions are inherited wholesale by sitting inside the current guarded block:
   merge commits, `--amend`, rebase replay, and `CONDUCT_ENGINE_COMMIT=1`.
 
@@ -140,13 +170,23 @@ context. A long-dead code path becomes live and tested. No legitimate work is de
 
 **Negative / risks.**
 
-- *A false positive wedges a live build.* Mitigated by blanket fail-open on every absence-of-
-  evidence condition, the inherited exemption ladder, and the machinery allowlist. A plan that
-  under-declares paths produces a refusal — which is the intended signal, resolved by
-  recording a disposition, not by deleting work.
-- *The scope disposition becomes a rubber stamp.* Accepted. It is committed and reviewable,
-  and `build_review`'s semantic rubric still judges whether the widened work belongs. A
-  recorded, reviewable decision is strictly better than today's silent drift.
+- *A false positive wedges a live build.* Mitigated by the three-valued exit contract, blanket
+  fail-open on every absence-of-evidence condition, the inherited exemption ladder, and the
+  machinery allowlist. A plan that under-declares paths produces a refusal — which is the
+  intended signal, resolved by adding a `Scope:` trailer, not by deleting work.
+- *Routine under-declaration produces routine refusals.* Real commits touch incidentals plans
+  rarely enumerate — command registration in `src/conductor/src/index.ts`, `CHANGELOG.md`, a
+  regenerated HARNESS.md model table (integrity check 5a). Each is a refusal. This is the
+  highest-frequency failure mode, not the "low" friction the risk framing implies, and the
+  `Scope:` trailer is what makes it a five-second fix rather than a stall. The plan must ship
+  the hook in report-only mode behind a flag first — printing the refusal, exiting 0, with the
+  backstop recording what it would have blocked across real builds — and flip to blocking in a
+  follow-up once that data shows the refusal rate is what this ADR assumes. Enforcing on the
+  daemon's critical path with only untested-in-production fail-open logic is not a risk this
+  ADR is entitled to take on the strength of reasoning alone.
+- *The `Scope:` trailer becomes a rubber stamp.* Accepted. It is recorded by the backstop and
+  supplied to `build_review`, whose semantic rubric still judges whether the widened work
+  belongs. A recorded, reviewable decision is strictly better than today's silent drift.
 - *Breaking surface.* This edits `hook wiring` / the `commit-msg` asset, a canonical breaking
   surface for the release gate. The plan must resolve migration-versus-waiver explicitly.
 
@@ -160,3 +200,5 @@ fields (`normalizeTasks` ignores them), so no consumer changes.
 | No engine writer populates `t.files` today | 95% | verified — grepped all `task-status.json` writers; `NormalizedTask` lacks the field | Fix narrows to changing the question and severity only |
 | Git hooks are live for daemon-authored build commits | 90% | inferred — `COMMIT_MSG_HOOK` already rejects malformed `Task:` trailers in production | Primary enforcement is inert in those worktrees; the backstop carries it |
 | Reviving `t.files` breaks no existing consumer | 90% | inferred — `normalizeTasks` ignores unknown fields; the only `t.files` reader is the dead hook block | A consumer reading `files` with different semantics would need reconciliation |
+| `build_review`'s grader receives a diff, not commit messages | 90% | verified — no `git log`/message plumbing in `build-review-inputs.ts` or `build-review-prompt.ts` | The backstop's widening record is redundant; decision 4 simplifies but stays correct |
+| This repository squash- or rebase-merges (no merge commits) | 95% | verified — `allow_merge_commit: false`, squash and rebase both enabled | Per-commit `Scope:` trailers would survive to `main` directly, making the backstop record belt-and-braces |
