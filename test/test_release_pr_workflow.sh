@@ -31,3 +31,13 @@ grep -q 'group: release-pr-maintenance' "$WORKFLOW"
 grep -q 'cancel-in-progress: false' "$WORKFLOW"
 grep -q 'github-token: \${{ steps.app-token.outputs.token }}' "$WORKFLOW"
 grep -q 'runReleasePrAction' "$WORKFLOW"
+
+# Publication is separate from maintenance: its action proves the main commit
+# came from this exact App-owned release branch before mutating a tag/release.
+PUBLISHER_WORKFLOW="$ROOT_DIR/.github/workflows/release.yml"
+grep -q 'runReleasePublisherAction' "$PUBLISHER_WORKFLOW"
+grep -q "branch: 'automation/release-pr'" "$PUBLISHER_WORKFLOW"
+grep -q "appLogin: '\${{ steps.app-token.outputs.app-slug }}\[bot\]'" "$PUBLISHER_WORKFLOW"
+if rg -q 'release-unreleased-state\.sh|Rewrite CHANGELOG and bump VERSION|git push origin main|gh release create' "$PUBLISHER_WORKFLOW"; then
+  exit 1
+fi

@@ -57,43 +57,31 @@ no release commit, no GitHub Release.
 This eligibility policy is specific to this repository's custom-step configuration. Consumer projects
 without it follow the global harness release convention unchanged.
 
-### How "empty" is decided
+### How an empty release set is decided
 
-`.github/scripts/release-unreleased-state.sh` makes the call deterministically. It fails hard when
-`CHANGELOG.md` is missing or has no exact `## [Unreleased]` line, then awk-scans the first Unreleased
-block for a line that is both non-blank and does not start with `### `. Bare `### Added` subheadings
-therefore do **not** count as content. It emits `release_pending=true` or `release_pending=false`.
+The release-PR maintainer creates a candidate only from complete, eligible merged-PR metadata. If it
+has no candidate, no release PR exists to merge and publication is a no-op. The publisher also ignores
+ordinary `main` pushes: it publishes only a merged `automation/release-pr` owned by the configured GitHub
+App and carrying successful, head-bound release-candidate audit evidence.
 
-Note the asymmetry: the CI scripts read only the *first* `[Unreleased]` block, while the release gate's
-`extractUnreleasedBody` gathers across consecutive Unreleased sections until the first versioned
-`## [x.y.z]` heading, tolerating duplicates.
-
-The release gate does **not** require `[Unreleased]` to be non-empty. `release-gate.ts:359-362` states it
-directly: integrity owns CHANGELOG structure, and the gate reads the body only for the migration-block
-check — ordinary release content may be empty.
+The release gate does **not** require `[Unreleased]` to be non-empty. Integrity owns the changelog's
+structure; the gate reads release metadata only for migration-block validation.
 
 ## What CI does on merge to main
 
-`.github/workflows/release.yml` triggers on `push` to `main` and is skipped when the head commit message
-contains `[skip ci]`, so its own release commit does not recurse. It holds `contents: write`.
+`.github/workflows/release.yml` triggers on every `push` to `main`, serializes publication, then obtains a
+narrowly scoped GitHub App token. It loads `runReleasePublisherAction`, which verifies all release authority
+before any mutation:
 
-1. **Checkout** with `fetch-depth: 0`.
-2. **Classify pending release content** — runs `.github/scripts/release-unreleased-state.sh` and captures
-   `release_pending`.
-3. **Read VERSION** — hard-fails on a missing file or a non-semver value; exports `version` and
-   `tag=v$version`.
-4. **Skip if the tag exists** — `git rev-parse refs/tags/$tag`.
-5. **Rewrite CHANGELOG and bump VERSION** — only when `release_pending == 'true'` and the tag does not
-   exist. Awk extracts the `[Unreleased]` body to `/tmp/release-body.md`; a python3 snippet replaces the
-   first `## [Unreleased]` with `## [Unreleased]` followed by `## [X.Y.Z] - <UTC today>`, raising
-   `SystemExit` if the marker is absent; then `VERSION` is bumped to the next patch.
-6. **Commit, tag, push** — as `github-actions[bot]`, committing `CHANGELOG.md` and `VERSION` with the
-   message `chore(release): vX.Y.Z [skip ci]`, creating an annotated tag, and pushing both `main` and the
-   tag.
-7. **Create the GitHub Release** — `gh release create <tag> --title <tag> --notes-file /tmp/release-body.md`.
+1. The main commit must be the merge commit of the configured App-owned `automation/release-pr` into `main`.
+2. That PR must have successful release-candidate audit evidence bound to its exact head.
+3. The merged files must contain a matching `VERSION` and non-empty versioned `CHANGELOG.md` section.
+4. Existing tag and GitHub Release state must match the approved artifact; retries create only a missing tag
+   or release.
 
-Steps 5 through 7 are all gated on `release_pending == 'true'`. An empty `[Unreleased]` merges cleanly and
-produces no release.
+The publisher creates the annotated tag and GitHub Release through GitHub APIs. It never rewrites
+`CHANGELOG.md`, bumps `VERSION`, creates a release commit, or pushes `main`. An ordinary merge or an empty
+candidate set is ignored and produces no release.
 
 ## The self-host release gate
 
