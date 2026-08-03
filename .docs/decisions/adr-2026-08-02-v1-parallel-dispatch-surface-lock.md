@@ -152,6 +152,55 @@ breaking-in-v1 tightening (§6). Both are bounded and are the point of a Wave B 
 - `skills/pipeline/SKILL.md:52-66, 83, 103` documents removed `current-task` behavior. Only
   the part that states S1's contract is corrected here; the remainder is #531's to fix.
 
+## Sequencing: this spec is not buildable yet
+
+Added 2026-08-02 after operator review. The pins below are sound, but two of them describe
+surfaces whose owning decisions are still open. Building this spec before those land would
+pin a shape that is about to be redefined — the exact failure this feature exists to prevent,
+committed one level up. #552 is now `blocked_by` both.
+
+**#1016 — `TaskStatusFile` has two incompatible declarations.** `types/state.ts:77-81`
+declares `TaskStatus { status }` and a `Record<string, TaskStatus>` file type; `task-seed.ts:13-24`
+declares `TaskStatusRecord { id, name?, status?, [key: string]: unknown }` inside
+`{ plan_ref?, tasks?: [] }`. These disagree about the file's top-level shape, and #1016 exists
+to reconcile them. S4 and Story 3 pin "the row shape tolerates unknown fields" — but *which*
+declaration is authoritative is #1016's call, not this feature's. Pinning first would either
+bless the wrong declaration or pin both. **S4/Story 3/Task 3 must follow #1016.**
+
+**#531 — parallel-safe attribution.** #531 owns the mechanism by which a commit is attributed
+to its task under concurrency, and its own desired outcome asks for #474 to be explicitly
+`blocked_by` it. S1 freezes `.pipeline/current-task`'s format and S2/S8 reserve where
+lane-scoped attribution may live. Those constrain #531's solution space before #531 has
+chosen a mechanism. This ADR states elsewhere that it "does not choose #531's mechanism, and
+must not" — honoring that means #531's DECIDE lands first and this lock records its outcome,
+rather than fencing it in advance. **S1/S2/S8 must follow #531's merged spec.**
+
+Neither is a defect in the analysis: the surface enumeration, the three corrections to #474's
+premise, and the release-gate reasoning all hold independently. What changes is the order.
+
+### Program-level ordering (not a code dependency)
+
+`#228` sequences Wave A (autonomy correctness) before Wave B (one-way doors), and Wave A still
+has open items — `#714`, `#550`, `#564`, `#1016`, `#1019`, `#1014`, `#1021`. This feature is
+Wave B. Building it now would spend daemon capacity ahead of the correctness work that makes
+any build trustworthy, and `#1014`/`#1021` specifically weaken the CI signal this ADR's
+enforcement strategy depends on — the pins are vitest tests, which do run, but the surrounding
+integrity and bash suites are the ones those issues call unreliable.
+
+### Merge-order coordination (not blocking)
+
+`#1227` (spec PR #1262, plan-scope containment) has `seedTaskStatus` write `files: string[]`
+per row. If it merges first, Task 3's round-trip test must use a field name other than
+`files`, which will by then be engine-written. Recorded in the conflict check as C2; it
+changes one test fixture, not a decision.
+
+### Recommended follow-up outside this spec
+
+`#474` is not `blocked_by` `#531` today, despite #531's desired outcome asking for exactly
+that link ("observable as an explicit `blocked_by` link, not an unstated assumption"). Adding
+it is a one-line graph fix that belongs to whoever owns #474's backlog entry, not to this
+spec.
+
 ## Escalation: the one breaking-in-v1 tightening
 
 #552's negative path requires that a surface which cannot be made forward-compatible ships

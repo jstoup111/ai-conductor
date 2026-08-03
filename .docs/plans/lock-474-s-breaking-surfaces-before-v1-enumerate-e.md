@@ -7,6 +7,13 @@
 **Scope:** ship the enforcement that makes each pinned surface real. This plan does **not**
 implement #474 — no stream detection, no concurrent dispatch, no overlap veto engine.
 
+> **Not buildable yet (2026-08-02, operator review).** #552 is `blocked_by` #1016 and #531.
+> Task 3 must follow #1016, which reconciles the two incompatible `TaskStatusFile`
+> declarations this task would otherwise pin. Tasks 1 and 6 must follow #531's merged spec,
+> which owns the attribution mechanism that S1/S2/S8 constrain. Tasks 2, 4, 5, 7, 8, 9, 10 and
+> 11 have no such dependency and are buildable once the program reaches Wave B. See the ADR's
+> Sequencing section.
+
 ---
 
 ### Task 1: Freeze the `current-task` stamp format and reserve the lanes path
