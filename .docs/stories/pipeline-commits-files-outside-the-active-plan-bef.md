@@ -43,6 +43,13 @@ and `src/conductor/test/engine/config.test.ts`
 **When** the rows are seeded
 **Then** rows are created with no `files` field, and seeding does not throw.
 
+**Given** a plan task section with no `**Files:**` line but with bullet items containing
+backticked path tokens, which `parsePlanTaskPaths` harvests via its prose fallback
+(`plan-task-parse.ts:224`)
+**When** the rows are seeded
+**Then** that task's row carries no `files` field — only an explicit `**Files:**` line is a
+declaration, so the fallback's incidental paths can never become blocking scope (#548).
+
 ---
 
 ## Story TI-2: A commit outside the active task's declared paths is refused
@@ -61,7 +68,9 @@ its test
 **Then** the hook exits non-zero and the commit is refused
 **And** stderr names task id `3`
 **And** stderr lists both offending paths
-**And** stderr names both forward paths: narrow the commit, or record a scope disposition
+**And** stderr names both forward paths: narrow the commit, or justify the widening with a
+`Scope:` trailer
+**And** stderr prints the exact `Scope: <path> — <rationale>` line to add, one per offending path
 **And** stderr does not instruct the author to delete the work.
 
 **Given** a refused commit
@@ -121,9 +130,30 @@ its test
 **When** the hook runs
 **Then** the hook exits 0.
 
+**Given** the stamped row exists and has `files`, but its status is not `in_progress` — a stale
+`.pipeline/current-task` produced a well-formed but wrong trailer
+**When** the hook runs with paths outside that row's declared set
+**Then** the hook exits 0, rather than judging correct work against a previous task's scope.
+
 **Given** the engine entry point the hook calls is unavailable or throws
 **When** the hook runs
 **Then** the hook exits 0 and emits a diagnostic on stderr.
+
+### Exit-code contract
+
+**Given** the check is invoked as a subprocess
+**When** it completes
+**Then** it exits `0` for allowed, `2` for a violation, and any other code means abstain.
+
+**Given** the check exits `1`, `127`, or any code other than `0` or `2` — a stale `dist`, an
+unregistered subcommand, a node crash
+**When** the `commit-msg` hook evaluates the result
+**Then** the commit proceeds, because only `2` blocks.
+
+**Given** `COMMIT_MSG_HOOK` runs under `set -e` (`git-hook-assets.ts:92`)
+**When** the check exits non-zero
+**Then** the hook has captured the status rather than letting it propagate, so the shell's
+errexit cannot convert an abstention into a refusal.
 
 ### Inherited exemptions
 
@@ -143,48 +173,48 @@ its test
 
 ---
 
-## Story TI-4: A recorded scope disposition widens the allowed set
+## Story TI-4: A `Scope:` trailer widens the allowed set for the commit it rides on
 
 **As** a build agent with a legitimate collateral edit
-**I want** to record an explicit, reviewable widening
-**So that** required work proceeds without deleting it and without silent drift.
+**I want** to justify the widening in the commit message itself
+**So that** required work proceeds without deleting it, without silent drift, and without a
+separate record that would itself be an out-of-scope commit.
 
 ### Happy path
 
-**Given** `.docs/scope-dispositions/<stem>.md` records `Task: 3`, a `Paths:` list containing
-`src/conductor/src/engine/artifacts.ts`, and a non-empty `Rationale:`
-**And** the staged diff for task 3 contains that path
+**Given** the staged diff for task 3 contains the undeclared path
+`src/conductor/src/engine/artifacts.ts`
+**And** the commit message carries
+`Scope: src/conductor/src/engine/artifacts.ts — needed to register the new command`
 **When** the hook runs
 **Then** the commit is accepted.
 
-**Given** a disposition naming task 3
-**And** a staged diff for task 4 containing that same path, with no disposition for task 4
+**Given** a diff widening two undeclared paths
+**And** the message carries one `Scope:` trailer per path
 **When** the hook runs
-**Then** the commit is refused — a disposition widens only the task it names.
+**Then** the commit is accepted — the trailer is repeatable.
 
-**Given** a build phase is active and the docs-guard is enforcing
-**When** an agent writes `.docs/scope-dispositions/<stem>.md`
-**Then** the write is permitted, because the prefix is always-allowed.
+**Given** a commit accepted via a `Scope:` trailer
+**When** the next commit stages the same undeclared path without a `Scope:` trailer
+**Then** that commit is refused — a trailer authorizes exactly the commit it rides on, never a
+standing widening for the task.
 
-**Given** a scope disposition is committed
-**When** the feature's diff is assembled for `build_review`
-**Then** the disposition file appears in the graded diff and in the PR diff.
+**Given** the author is mid-BUILD with the docs-guard enforcing
+**When** they add a `Scope:` trailer and re-run `git commit`
+**Then** no `.docs/` write is required, so the docs-guard is never consulted.
 
 ### Negative paths
 
-**Given** a disposition with an empty `Paths:` list
+**Given** a `Scope:` trailer naming a path that is not in the staged set
 **When** the hook runs against an undeclared path
-**Then** the commit is refused — a malformed disposition is treated as absent, never as blanket permission.
+**Then** the commit is refused — a malformed trailer is treated as absent, never as blanket
+permission.
 
-**Given** a disposition with an empty or missing `Rationale:`
+**Given** a `Scope:` trailer with an empty or missing rationale, or a bare `Scope:` with no path
 **When** the hook runs against an undeclared path
 **Then** the commit is refused.
 
-**Given** a disposition naming a task id that exists in no plan task
-**When** the hook runs
-**Then** the disposition is ignored and the commit is refused.
-
-**Given** a disposition listing path `A`
+**Given** a `Scope:` trailer for path `A`
 **And** a staged diff containing declared paths plus `A` plus undeclared path `B`
 **When** the hook runs
 **Then** the commit is refused, and stderr names `B` only — not `A`.
@@ -208,9 +238,16 @@ no plan task declares
 **When** the containment floor runs
 **Then** it reports a violation naming task 3, the commit sha, and that path.
 
-**Given** a violating path covered by a committed scope disposition for that task
+**Given** a commit whose undeclared path is covered by a `Scope:` trailer on that same commit
 **When** the containment floor runs
 **Then** it reports satisfied.
+
+**Given** any commit accepted via a `Scope:` trailer
+**When** the containment floor runs
+**Then** it records the widening — path, rationale, task id, and sha — into
+`.pipeline/containment-floor.json`
+**And** that record is supplied as a `build_review` input, so widenings stay reviewable even
+though the grader receives a diff rather than the commit log.
 
 ### Negative paths
 
@@ -252,6 +289,40 @@ reproduced as the remedy.
 **And** a staged commit changing only `src/conductor/src/engine/config.ts`
 **When** the check runs
 **Then** the commit is accepted — the regression test discriminates, rather than refusing everything.
+
+---
+
+## Story TI-7: The hook ships report-only before it blocks
+
+**As** a daemon operator
+**I want** the refusal path observable before it is enforced
+**So that** the real refusal rate is measured on live builds rather than assumed.
+
+### Happy path
+
+**Given** report-only mode is active — the default this feature ships
+**And** a staged diff violating the active task's declared paths
+**When** the `commit-msg` hook runs
+**Then** the full refusal message is printed to stderr
+**And** the hook exits 0 and the commit proceeds.
+
+**Given** report-only mode is active
+**When** a commit is accepted despite a violation
+**Then** the containment floor records what would have been blocked, so the refusal rate is
+recoverable from `.pipeline/containment-floor.json` without re-running any build.
+
+**Given** enforcing mode is enabled
+**When** the same violating commit is attempted
+**Then** the commit is refused per TI-2 — the two modes differ only in whether the exit is
+acted on.
+
+### Negative path
+
+**Given** report-only mode is active
+**And** the check abstains for any TI-3 reason
+**When** the hook runs
+**Then** nothing is printed and the commit proceeds — report-only widens what is allowed, never
+what is reported.
 
 ---
 

@@ -12,22 +12,28 @@
 ## Summary
 
 A 14-task plan adding deterministic plan-scope containment at the git commit boundary, a
-reviewable scope-disposition escape hatch, and an engine-side backstop. All matching logic
-lives in one new TypeScript module reusing existing primitives; the `commit-msg` hook calls
-into it rather than re-implementing anything in shell.
+`Scope:` commit-trailer escape hatch, and an engine-side backstop. All matching logic lives in
+one new TypeScript module reusing existing primitives; the `commit-msg` hook calls into it
+rather than re-implementing anything in shell. The hook ships report-only; enforcement is a
+follow-up flip earned on live data (architecture-review F6).
 
 ## Technical Approach
 
 - One new pure module, `plan-scope-containment.ts`, owns the containment decision. It takes
-  staged paths, a resolved task row, and parsed dispositions, and returns a verdict. Pure and
-  fully unit-testable with no git or filesystem access.
+  staged paths, a resolved task row, and the commit's `Scope:` trailers, and returns a verdict.
+  Pure and fully unit-testable with no git or filesystem access.
 - A thin CLI entry point (`conduct-ts scope-check`) exposes it to the hook so the shell never
-  parses markdown or implements path matching.
-- `seedTaskStatus` gains a `files` field per row, sourced from the existing
-  `parsePlanTaskPaths`.
+  parses markdown or implements path matching. Its exit contract is three-valued — `0` allowed,
+  `2` violation, anything else abstain — because `COMMIT_MSG_HOOK` runs under `set -e` and a
+  two-valued contract would turn a stale `dist` into a fail-closed wedge (F2).
+- `seedTaskStatus` gains a `files` field per row, sourced from `parsePlanTaskPaths` but written
+  **only** for task sections carrying an explicit `**Files:**` line — never from the parser's
+  prose-bullet fallback, whose incidental paths would otherwise become blocking scope (F5 risk
+  table, #548 class).
 - The dead bundling block in `COMMIT_MSG_HOOK` is replaced by a call to that CLI.
 - The engine backstop lands beside the existing per-task coverage floor, reusing its
-  fail-soft report shape.
+  fail-soft report shape, and additionally records accepted `Scope:` widenings so they reach
+  `build_review` — whose inputs carry a diff, not the commit log.
 - Every abstention condition from architecture-review F2 is an individually named test.
 
 ## Prerequisites
@@ -45,13 +51,19 @@ into it rather than re-implementing anything in shell.
 1. Write failing tests: seeding a plan whose Task 3 declares two paths produces a row with
    `files` containing exactly those, and a `same as Task 1` task inherits Task 1's set.
 2. Verify RED.
-3. In `seedTaskStatus`, call `parsePlanTaskPaths(planText)` and write `files: [...paths]` onto
-   each seeded row. `TaskStatusRecord` already carries an open index signature.
-4. Verify GREEN.
-5. Commit `feat(engine): seed plan-declared paths onto task rows`.
+3. Expose per-section declaration provenance from `parsePlanTaskPaths` — it currently computes
+   `hasFilesLine` and discards it — either as an additional return field or a declared-only
+   variant beside it. Existing callers keep their current behavior unchanged.
+4. In `seedTaskStatus`, call it and write `files: [...paths]` onto each seeded row **whose
+   section carried an explicit `**Files:**` line**. `TaskStatusRecord` already carries an open
+   index signature.
+5. Verify GREEN.
+6. Commit `feat(engine): seed plan-declared paths onto task rows`.
 
 **Files:**
+- `src/conductor/src/engine/plan-task-parse.ts` — expose declaration provenance
 - `src/conductor/src/engine/task-seed.ts` — populate `files` per row
+- `src/conductor/test/engine/plan-task-parse.test.ts` — provenance tests
 - `src/conductor/test/engine/task-seed.test.ts` — seeding tests
 
 **Wired-into:** `src/conductor/src/engine/task-seed.ts#seedTaskStatus`
@@ -65,7 +77,9 @@ into it rather than re-implementing anything in shell.
 **Steps:**
 1. Add failing tests: re-seeding preserves `in_progress` and terminal statuses and all other
    existing fields; `**Files:** none` yields an empty array rather than an absent field or a
-   wildcard; a plan with no `Files:` block anywhere seeds rows with no `files` and does not throw.
+   wildcard; a plan with no `Files:` block anywhere seeds rows with no `files` and does not throw;
+   a section with no `**Files:**` line but with backticked path bullets — the prose fallback —
+   seeds NO `files`, so its incidental paths can never block a commit (#548 class).
 2. Verify RED.
 3. Adjust the merge path so `files` is additive and never clobbers preserved rows.
 4. Verify GREEN.
@@ -130,7 +144,9 @@ into it rather than re-implementing anything in shell.
 **Steps:**
 1. Add failing table tests, one case per architecture-review F2 condition: no task declares a
    `Files:` block anywhere; no row for the stamped id; row with absent `files`; row with empty
-   `files`; no task id supplied.
+   `files`; no task id supplied; and a stamped row whose status is not `in_progress` (a stale
+   `.pipeline/current-task` yields a well-formed but wrong trailer, which would otherwise judge
+   correct work against a previous task's declared set).
 2. Verify RED.
 3. Implement abstention so the evaluator returns allowed for every one; it blocks only on
    positive evidence.
@@ -144,46 +160,47 @@ into it rather than re-implementing anything in shell.
 **Wired-into:** same as Task 3
 **Dependencies:** Task 3
 
-### Task 6: Scope disposition parser
+### Task 6: `Scope:` trailer parser
 
 **Story:** TI-4
 **Type:** happy-path
 
 **Steps:**
-1. Write failing tests for parsing `.docs/scope-dispositions/<stem>.md`: a well-formed record
-   yields `{taskId, paths[], rationale}`; multiple records in one file parse independently.
+1. Write failing tests for parsing `Scope: <path> — <rationale>` trailers out of a commit
+   message: a well-formed trailer yields `{path, rationale}`; the trailer is repeatable and
+   multiple occurrences parse independently; both `—` and `-` separate path from rationale.
 2. Verify RED.
-3. Implement the parser and wire dispositions into the evaluator as a per-task widening of the
-   allowed set.
+3. Implement the parser and wire trailers into the evaluator as a widening of the allowed set
+   for this commit only — never a standing widening for the task.
 4. Verify GREEN.
-5. Commit `feat(engine): parse scope dispositions`.
+5. Commit `feat(engine): parse Scope: commit trailers`.
 
 **Files:**
-- `src/conductor/src/engine/scope-disposition.ts` — parser
+- `src/conductor/src/engine/scope-trailer.ts` — parser
 - `src/conductor/src/engine/plan-scope-containment.ts` — apply widening
-- `src/conductor/test/engine/scope-disposition.test.ts` — parser tests
+- `src/conductor/test/engine/scope-trailer.test.ts` — parser tests
 
 **Wired-into:** `src/conductor/src/engine/plan-scope-containment.ts#evaluateScopeContainment`
 **Dependencies:** Task 3
 
-### Task 7: Scope disposition — fail-closed on malformed input
+### Task 7: `Scope:` trailer — fail-closed on malformed input
 
 **Story:** TI-4
 **Type:** negative-path
 
 **Steps:**
-1. Add failing tests: empty `Paths:`, missing or empty `Rationale:`, and an unknown task id
-   are each treated as absent, never as blanket permission; a disposition for task 3 does not
-   widen task 4; a diff containing a dispositioned path `A` plus an undeclared `B` is refused
-   naming `B` only.
+1. Add failing tests: a path not present in the staged set, a missing or empty rationale, and a
+   bare `Scope:` with no path are each treated as absent, never as blanket permission; a diff
+   containing a trailered path `A` plus an undeclared `B` is refused naming `B` only; a widening
+   accepted on one commit does not carry to the next commit staging the same path.
 2. Verify RED.
 3. Harden the parser and the widening application.
 4. Verify GREEN.
-5. Commit `fix(engine): treat malformed scope dispositions as absent`.
+5. Commit `fix(engine): treat malformed Scope: trailers as absent`.
 
 **Files:**
-- `src/conductor/src/engine/scope-disposition.ts` — validation
-- `src/conductor/test/engine/scope-disposition.test.ts` — malformed-input matrix
+- `src/conductor/src/engine/scope-trailer.ts` — validation
+- `src/conductor/test/engine/scope-trailer.test.ts` — malformed-input matrix
 
 **Wired-into:** same as Task 6
 **Dependencies:** Task 6
@@ -194,10 +211,11 @@ into it rather than re-implementing anything in shell.
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing tests: the CLI reads staged paths, task id, `task-status.json`, and
-   dispositions, exits 0 when allowed and non-zero on violation; the violation message names
-   the task id, every offending path, the exact disposition file path to create with its
-   required fields, and never instructs deletion (conflict-check C1 mitigations 1 and 2).
+1. Write failing tests: the CLI reads staged paths, task id, `task-status.json`, and the commit
+   message's `Scope:` trailers; it exits `0` when allowed and `2` on violation, and every other
+   exit code means abstain. The violation message names the task id, every offending path, the
+   exact `Scope: <path> — <rationale>` line to add per path, and never instructs deletion
+   (conflict-check C1 mitigations 1 and 2).
 2. Verify RED.
 3. Implement `runScopeCheck` and register `detectScopeCheckCommand` in the CLI dispatcher.
 4. Verify GREEN.
@@ -240,11 +258,13 @@ into it rather than re-implementing anything in shell.
 **Steps:**
 1. Write failing tests in a temp git repo: merge commit, `--amend`, rebase replay,
    `CONDUCT_ENGINE_COMMIT=1`, and a commit with no `Task:` trailer each succeed with staged
-   paths outside the declared set; an unavailable or throwing `scope-check` binary exits 0
-   with a stderr diagnostic.
+   paths outside the declared set; an unavailable, unregistered, or throwing `scope-check`
+   exits 0 with a stderr diagnostic; a check exiting `1` or `127` allows the commit while a
+   check exiting `2` refuses it.
 2. Verify RED.
-3. Ensure the invocation sits inside the guarded block and that a dispatch failure is
-   distinguished from a returned violation.
+3. Ensure the invocation sits inside the guarded block, that the exit status is captured
+   (`|| rc=$?`) so `set -e` at `git-hook-assets.ts:92` cannot convert an abstention into a
+   refusal, and that only `2` blocks.
 4. Verify GREEN.
 5. Commit `fix(hooks): preserve exemptions and fail open on scope-check failure`.
 
@@ -255,26 +275,30 @@ into it rather than re-implementing anything in shell.
 **Wired-into:** same as Task 9
 **Dependencies:** Task 9
 
-### Task 11: Allow scope-disposition writes during BUILD
+### Task 11: Report-only mode as the shipped default
 
-**Story:** TI-4
+**Story:** TI-7
 **Type:** infrastructure
 
 **Steps:**
-1. Write failing tests: `DOCS_WRITE_ALWAYS_ALLOWED` contains `.docs/scope-dispositions/`;
-   `resolveDocsAllowlist` returns it for every step; the docs-guard permits a write to that
-   prefix while `phase-active` is present and still denies `.docs/plans/`.
+1. Write failing tests: in report-only mode a violation prints the full refusal message and the
+   hook exits 0; in enforcing mode the same input refuses; an abstention prints nothing in
+   either mode; the shipped default is report-only.
 2. Verify RED.
-3. Add the prefix to `DOCS_WRITE_ALWAYS_ALLOWED`.
+3. Implement the mode as a single config-resolved flag read by the hook, defaulting to
+   report-only per architecture-review F6. Enforcement is a follow-up one-line flip once
+   `.pipeline/containment-floor.json` from real builds shows the refusal rate this design
+   assumes.
 4. Verify GREEN.
-5. Commit `feat(engine): always allow scope-disposition writes`.
+5. Commit `feat(hooks): ship plan-scope containment report-only`.
 
 **Files:**
-- `src/conductor/src/engine/phase-marker.ts` — extend the always-allowed list
-- `src/conductor/test/engine/phase-marker.test.ts` — allowlist tests
+- `src/conductor/src/engine/scope-check-cli.ts` — mode resolution and reporting branch
+- `src/conductor/src/engine/git-hook-assets.ts` — honor report-only
+- `src/conductor/test/engine/scope-check-cli.test.ts` — mode tests
 
-**Wired-into:** `src/conductor/src/engine/phase-marker.ts#resolveDocsAllowlist`
-**Dependencies:** none
+**Wired-into:** `src/conductor/src/engine/git-hook-assets.ts#COMMIT_MSG_HOOK`
+**Dependencies:** Task 10
 
 ### Task 12: Engine-side containment backstop
 
@@ -284,7 +308,10 @@ into it rather than re-implementing anything in shell.
 **Steps:**
 1. Write failing tests: branch commits inside declared paths report satisfied; a commit
    stamped `Task: 3` touching an undeclared path reports a violation with task id, sha, and
-   path; a dispositioned path reports satisfied.
+   path; a path covered by a `Scope:` trailer on that same commit reports satisfied; every
+   accepted widening is recorded with its path, rationale, task id, and sha, and that record is
+   supplied as a `build_review` input — the grader receives a diff, not the commit log, so this
+   is the only way a widening reaches review.
 2. Verify RED.
 3. Implement `runContainmentFloor` beside the coverage floor, reusing `filesForCommit` and the
    Task 3 evaluator, and write `.pipeline/containment-floor.json`.
@@ -328,13 +355,15 @@ into it rather than re-implementing anything in shell.
 
 **Steps:**
 1. Write a failing acceptance test reproducing the #1074 shape: a config-only plan, then a
-   staged commit changing `artifacts.ts` and `changelog-pr-finalizer-cli.ts`, asserting
-   deterministic refusal naming the task id and both paths, that no file is deleted, and that
-   a commit changing only `config.ts` is accepted.
+   staged commit changing `artifacts.ts` and `changelog-pr-finalizer-cli.ts`, asserting — with
+   enforcement enabled — deterministic refusal naming the task id and both paths, that no file
+   is deleted, that the same commit is accepted once each path carries a `Scope:` trailer, and
+   that a commit changing only `config.ts` is accepted.
 2. Verify RED.
-3. Update `docs/reference/settings-and-hooks.md` (commit-msg containment behavior),
-   `docs/explanation/gates.md` (the new gate and the disposition contract), and
-   `docs/reference/cli.md` (`conduct-ts scope-check`). Add a `CHANGELOG.md` `[Unreleased]`
+3. Update `docs/reference/settings-and-hooks.md` (commit-msg containment behavior and the
+   report-only default), `docs/explanation/gates.md` (the new gate and the `Scope:` trailer
+   contract), and `docs/reference/cli.md` (`conduct-ts scope-check` and its three-valued exit
+   codes). Add a `CHANGELOG.md` `[Unreleased]`
    entry and a `## Migration` section with a runnable ```bash migration``` block that re-wires
    git hooks in existing worktrees — required because this changes real hook behavior, so the
    waiver path does not apply (architecture-review F4). Do not touch `VERSION`.
@@ -344,7 +373,7 @@ into it rather than re-implementing anything in shell.
 **Files:**
 - `src/conductor/test/acceptance/plan-scope-containment.acceptance.test.ts` — regression test
 - `docs/reference/settings-and-hooks.md` — hook behavior
-- `docs/explanation/gates.md` — gate and disposition contract
+- `docs/explanation/gates.md` — gate and `Scope:` trailer contract
 - `docs/reference/cli.md` — `scope-check`
 - `CHANGELOG.md` — `[Unreleased]` entry and migration block
 
@@ -360,23 +389,22 @@ Task 1 (seed files)
 Task 3 (containment evaluator)
   ├── Task 4 (matching + allowlist negatives)
   ├── Task 5 (abstention matrix)
-  └── Task 6 (disposition parser)
-        ├── Task 7 (malformed dispositions)
-        └── Task 12 (containment floor)
+  └── Task 6 (Scope: trailer parser)
+        ├── Task 7 (malformed trailers)
+        └── Task 12 (containment floor + widening record)
               └── Task 13 (floor fail-soft)
 
 Task 5, Task 7
-  └── Task 8 (scope-check CLI)
+  └── Task 8 (scope-check CLI, three-valued exit)
         └── Task 9 (replace dead hook block)
               └── Task 10 (exemptions + fail-open)
+                    └── Task 11 (report-only default)
 
-Task 11 (docs-guard allowlist) — independent
-
-Task 10, Task 11, Task 13
+Task 11, Task 13
   └── Task 14 (regression test, docs, migration)
 ```
 
-Tasks 1-2, 3, and 11 are independent roots and may run in parallel.
+Tasks 1-2 and 3 are independent roots and may run in parallel.
 
 ## Validation
 

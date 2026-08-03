@@ -32,21 +32,21 @@ Without mitigation this feature makes #1258 strictly worse: the daemon already a
 failures before an operator parked it. Adding a hard commit refusal to that loop converts a
 spin into a wedge.
 
-**Why it is not a blocker.** The scope-disposition path (TI-4) is exactly the contract #1258
+**Why it is not a blocker.** The `Scope:` trailer path (TI-4) is exactly the contract #1258
 says is missing — it names the file, records why the planned behavior requires touching it,
-and puts that reasoning in the reviewed diff. #1258's own stated root cause is "no shared
-contract for compile-only compatibility edits discovered after planning." This feature
-supplies one.
+and the containment floor puts that reasoning in front of `build_review`. #1258's own stated
+root cause is "no shared contract for compile-only compatibility edits discovered after
+planning." This feature supplies one. Report-only shipping (TI-7) further guarantees that the
+#1258 loop cannot be converted from a spin into a wedge before the refusal rate is measured.
 
 **Binding mitigations, carried into the plan:**
 
-1. The refusal message MUST name the disposition path concretely — the file to create and the
-   required fields — not merely say "record a scope disposition." A build agent that cannot
-   discover the escape hatch from the error text will delete work instead, which is the #989
-   harm.
+1. The refusal message MUST print the exact `Scope: <path> — <rationale>` line to add, one per
+   offending path — not merely say "justify the widening." A build agent that cannot discover
+   the escape hatch from the error text will delete work instead, which is the #989 harm.
 2. The refusal MUST be distinguishable from a generic commit failure so the loop does not
    read it as a test failure and retry blindly.
-3. A story-level test asserts the refusal message contains the disposition instructions
+3. A story-level test asserts the refusal message contains the copy-pasteable `Scope:` lines
    (folded into TI-2's happy path).
 
 **Residual risk: accepted.** An agent may still fail to use the hatch and spin. That is
@@ -87,13 +87,17 @@ ask different questions (paths versus behavior) at different times (commit versu
 and this feature changes neither `build_review`'s prompt nor its `remediate` routing. A commit
 refused by the hook never reaches `build_review`, so no finding is raised twice.
 
-## C5 — LOW — `.docs/scope-dispositions/` and the docs-guard
+## C5 — RESOLVED BY DESIGN — the escape hatch no longer touches `.docs/`
 
-The docs-guard default-denies `.docs/` writes during BUILD. TI-4 requires writing there
-mid-build. Resolved by adding the prefix to `DOCS_WRITE_ALWAYS_ALLOWED`, the same list that
-already carries `.docs/release-waivers/`. No conflict with `build_review`, which treats only
-`.docs/architecture|plans|specs|stories` as approved-artifact Scope failures — the new prefix
-is not among them.
+An earlier revision wrote the widening record to `.docs/scope-dispositions/<stem>.md`, which
+required an interaction with the docs-guard (default-denies `.docs/` writes during BUILD) and
+an addition to `DOCS_WRITE_ALWAYS_ALLOWED`. That design was rejected for a stronger reason than
+the docs-guard: the record file is itself a staged path outside the task's declared set, so
+committing it is itself a violation — the hatch deadlocks.
+
+TI-4 is now a `Scope:` commit trailer. It writes no file, so the docs-guard is never consulted
+and this conflict does not arise. The dropped `DOCS_WRITE_ALWAYS_ALLOWED` change also removes a
+consumer-visible surface from the diff.
 
 ## C6 — LOW — Reviving `t.files` on task rows
 

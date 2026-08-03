@@ -113,13 +113,13 @@ plan-level decision rather than a silent deletion.
 "reject so the builder deletes it" gate. Deleting flagged work is the failure mode the
 harness has already been burned by. The check refuses the *commit* at the moment it is
 attempted, leaving the working tree intact, and offers exactly two forward paths: narrow the
-commit to the task's declared paths, or record an explicit scope disposition that widens the
-plan. Neither path destroys work. This is strictly better than the status quo not because it
+commit to the task's declared paths, or justify the widening with a `Scope:` trailer on the
+commit message itself. Neither path destroys work. This is strictly better than the status quo not because it
 deletes sooner, but because it forces the plan-vs-work reconciliation to happen while the
 author still has the context — instead of hours later, in front of a reviewer whose only
 lever is deletion.
 
-## Hypotheses from the filer — dispositions
+## Hypotheses from the filer — verdicts
 
 Both were carried into discovery labeled as candidates, not the chosen approach.
 
@@ -156,7 +156,8 @@ semantic rubric and its `remediate` routing are untouched.
 
 Refusal semantics, per the #989 lesson above: the hook **rejects the commit and leaves the
 working tree untouched**. It never stages a deletion, never suggests deletion as the remedy,
-and its message offers both forward paths (narrow the commit / record a scope disposition).
+and its message offers both forward paths (narrow the commit / add a `Scope:` trailer), printing
+the exact trailer line to add for each offending path.
 
 ## Open design questions carried into architecture-review
 
@@ -164,8 +165,10 @@ and its message offers both forward paths (narrow the commit / record a scope di
   already sets the precedent (`LEGACY_PLAN_ADVISORY_REASON`, `wiring-probe.ts:578`): a plan is
   contract-bearing the moment any task declares the contract; otherwise findings are demoted
   to advisory. The same fail-open-on-legacy rule should apply here.
-- The shape and storage of the explicit scope disposition that lets a legitimate collateral
-  edit through.
+- The shape and storage of the explicit widening record that lets a legitimate collateral edit
+  through. **Resolved in the ADR:** a repeatable `Scope: <path> — <rationale>` commit trailer. A
+  committed file under `.docs/` was considered and rejected — the record is itself a staged path
+  outside the task's declared set, so committing it would itself be refused.
 - Whether always-allowed infrastructure paths (`.pipeline/`, `.docs/` evidence sidecars,
   `CHANGELOG.md`) need a standing allowlist, and whether that allowlist is configurable.
 

@@ -29,7 +29,7 @@ flowchart TD
         stamp["prepare-commit-msg<br/>stamps <code>Task: N</code><br/><i>from .pipeline/current-task</i>"]
         msg["commit-msg hook<br/><i>git-hook-assets.ts</i>"]
         contain{{"<b>containment check (NEW)</b><br/>staged paths ⊆ task N paths?"}}
-        disp[("<b>.docs/scope-dispositions/&lt;stem&gt;.md</b><br/>(NEW — in-diff, reviewable)")]
+        disp["<b>Scope: path — rationale</b><br/>(NEW — commit trailer,<br/>widens this commit only)"]
     end
 
     subgraph gates["Gate boundary"]
@@ -45,10 +45,11 @@ flowchart TD
     stamp --> msg --> contain
     disp -.->|"widens allowed set"| contain
     contain -->|"⊆ ok"| accept["commit accepted"]
-    contain -->|"violation"| reject["<b>exit 1 — commit refused</b><br/>task id + offending paths<br/><i>working tree untouched</i>"]
+    contain -->|"violation"| reject["<b>exit 2 — commit refused</b><br/>task id + offending paths<br/>+ the Scope: line to add<br/><i>working tree untouched</i>"]
+    contain -->|"any other exit"| accept
     accept --> floor
     accept --> cfloor
-    cfloor -->|"violation reached history"| review
+    cfloor -->|"violation reached history<br/>+ accepted widenings"| review
     floor --> review
     review -->|"scope FAIL"| remediate
 
@@ -78,9 +79,13 @@ sequenceDiagram
     A->>G: git commit (artifacts.ts,<br/>changelog-pr-finalizer-cli.ts)
     G->>H: run hook, Task: 3
     H->>S: read task 3 files[]
-    H-->>G: NOT ⊆ declared → exit 1
+    H-->>G: NOT ⊆ declared → exit 2
     G-->>A: REFUSED — task 3, offending:<br/>artifacts.ts, changelog-pr-finalizer-cli.ts<br/>(working tree intact)
-    Note over A: forward paths: narrow the commit,<br/>or record a scope disposition.<br/>Never "delete the work".
+    Note over A: forward paths: narrow the commit,<br/>or add "Scope: &lt;path&gt; — &lt;rationale&gt;"<br/>to the message. Never "delete the work".
+    A->>G: git commit, message + Scope: trailers
+    G->>H: run hook, Task: 3
+    H-->>G: trailers widen this commit → exit 0
+    G-->>A: commit accepted; widening recorded<br/>by the containment floor for build_review
 ```
 
 ## Key decisions embodied here
@@ -104,13 +109,30 @@ into the built engine rather than re-implementing the rule in shell.
 only lever is deletion destroys legitimate work. Refusal at the commit boundary leaves the
 working tree fully intact and names two non-destructive forward paths.
 
-**The scope disposition lives in `.docs/`, not `.pipeline/`.** It must be inside the reviewed
-diff to satisfy "explicit, reviewable" — `build_review` excludes `.pipeline/` as
-machinery-authored, so a disposition there would be invisible to both grader and human. It
-must also be writable while the docs-guard freezes `.docs/` during BUILD, which the
-`DOCS_WRITE_ALWAYS_ALLOWED` prefix list provides. That list today contains exactly
-`.docs/release-waivers/` — the identical pattern of a committed, in-diff record that widens a
-gate — so `.docs/scope-dispositions/` joins it.
+**The widening rides on the commit message, not on a committed file.** A file at
+`.docs/scope-dispositions/<stem>.md` was the original design and is rejected: the file is
+itself a staged path that no task's `Files:` block declares and that the machinery allowlist
+does not cover, so the commit introducing the record that authorizes a widening is itself an
+out-of-scope commit — the escape hatch deadlocks. A `Scope: <path> — <rationale>` trailer
+cannot deadlock (a message is not a staged path), authorizes exactly the commit it rides on
+rather than conferring standing permission for the rest of the build, and is read by the
+`git interpret-trailers` call the hook already makes at `git-hook-assets.ts:100` — no markdown
+parser, no docs-guard change.
+
+**Reviewability is restored by the backstop, not by the author.** `build_review`'s inputs carry
+a diff, not the commit log, and this repository squash- or rebase-merges, so a trailer alone
+would not reach the grader. `runContainmentFloor` therefore records every accepted widening —
+path, rationale, task id, sha — into `.pipeline/containment-floor.json` and supplies it as a
+`build_review` input. Machinery-authored placement is correct for that record precisely because
+it is engine-observed evidence rather than a self-granted permission.
+
+**The check is three-valued, and ships report-only.** `COMMIT_MSG_HOOK` runs under `set -e`
+(`git-hook-assets.ts:92`), so a two-valued "non-zero means violation" contract would make a
+stale `dist`, an unregistered subcommand, and a node crash indistinguishable from a real
+violation — every intended abstention would fail closed. `0` allows, `2` refuses, any other
+code abstains, and the hook captures the status rather than letting errexit propagate it. The
+feature ships report-only (print the refusal, exit 0) so the real refusal rate is measured on
+live builds before enforcement is switched on.
 
 **Standing allowlist follows existing precedent.** `build-review-inputs.ts:60` already
 excludes `MACHINERY_AUTHORED_PATHS = ['.docs/shipped/', '.pipeline/']` from the graded diff.
