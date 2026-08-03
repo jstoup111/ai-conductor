@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
@@ -9,6 +9,31 @@ import {
   snapshotParkedMarkers,
 } from './park-leak-guard.js';
 import { applyParkTeardownDecision } from './global-setup.js';
+import { writeAutoPark } from '../src/engine/park-marker.js';
+
+const CHILD_FIXTURE_ENV = 'AI_CONDUCTOR_PARK_LEAK_CHILD_FIXTURE';
+const DOCUMENTED_LEAKED_SLUGS = ['slug-1', 'non-git-feature', 'callback-fire-test'];
+
+if (process.env[CHILD_FIXTURE_ENV] === '1') {
+  describe('park leak ceiling child fixture', () => {
+    it('writes documented slugs under config-owned run root', async () => {
+      const fixture = await mkdtemp(join(tmpdir(), 'park-leak-fixture-'));
+      try {
+        expect(process.env.GIT_CEILING_DIRECTORIES?.split(':')).toContain(tmpdir());
+
+        await Promise.all(
+          DOCUMENTED_LEAKED_SLUGS.map((slug) => writeAutoPark(fixture, slug, 'fixture regression')),
+        );
+
+        await expect(readdir(join(fixture, '.daemon', 'parked'))).resolves.toEqual(
+          [...DOCUMENTED_LEAKED_SLUGS].sort(),
+        );
+      } finally {
+        await rm(fixture, { recursive: true, force: true });
+      }
+    });
+  });
+}
 
 describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
   const temporaryDirectories: string[] = [];
@@ -170,6 +195,42 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
       vi.doUnmock('./engine-dist-guard.js');
       vi.resetModules();
     }
+  });
+
+  it('keeps the documented fixture slugs out of an enclosing repository parked ledger', async () => {
+    const enclosingRepository = await createGitRepository();
+    const nestedTmpdir = join(enclosingRepository, 'nested-tmpdir');
+    await mkdir(nestedTmpdir);
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      TMPDIR: nestedTmpdir,
+      [CHILD_FIXTURE_ENV]: '1',
+    };
+    delete childEnv.AI_CONDUCTOR_TEST_TMP_ROOT;
+
+    await execa(
+      process.execPath,
+      [
+        join('node_modules', 'vitest', 'vitest.mjs'),
+        'run',
+        '--config',
+        'test/fixtures/park-leak-child.vitest.config.ts',
+        'test/park-leak-guard.test.ts',
+        '--testNamePattern',
+        'writes documented slugs under config-owned run root',
+        '--reporter=dot',
+        '--silent',
+      ],
+      { cwd: process.cwd(), env: childEnv },
+    );
+
+    const enclosingMarkers = await readdir(join(enclosingRepository, '.daemon', 'parked'))
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code === 'ENOENT') return [];
+        throw error;
+      });
+
+    expect(enclosingMarkers).toEqual([]);
   });
 
   async function loadParkLifecycleSetup(
