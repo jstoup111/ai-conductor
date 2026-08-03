@@ -66,44 +66,49 @@ assert_absent "workflow no longer shells out through the legacy release CLI" \
   "gh release create" "$workflow"
 
 audit=$(<"$TRANSITION_AUDIT")
-assert_contains "transition audit remains visibly unapproved" \
-  "**Status:** proposed — not approved and not consumed" "$audit"
+assert_contains "transition audit is recorded as consumed" \
+  "**Status:** consumed — operator-approved and applied" "$audit"
 assert_contains "transition audit exposes the operator approval record" \
   "## Operator approval record" "$audit"
-assert_contains "transition audit refuses silent uncertainty" \
-  "every item as unresolved" "$audit"
-assert_contains "transition audit records legacy entry count" \
-  "| Legacy \`[Unreleased]\` bullet entries | 552 | unresolved |" "$audit"
-assert_contains "transition audit records the post-tag commit range" \
-  "v0.99.17..a8efea389854322808abf56af41923ef468f76a1" "$audit"
-assert_contains "transition audit records post-tag reference count" \
-  "| Distinct \`#NNN\` references found in those commit subjects/bodies | 877 | unresolved |" "$audit"
+assert_contains "transition audit resolves every inventory row" \
+  "No item remains unresolved." "$audit"
+assert_absent "transition audit leaves no unresolved disposition" \
+  "| unresolved |" "$audit"
+assert_contains "transition audit refuses a second transition" \
+  "no further transition request will be honored" "$audit"
 
-legacy_entry_count=$(awk '
+# The bot-owned maintainer refuses to render while [Unreleased] still carries
+# legacy prose (`renderReleaseCandidate` throws on a non-empty pending section),
+# so the transition is only complete once that section holds no entries.
+pending_entry_count=$(awk '
   /^## \[Unreleased\]/{ in_unreleased = 1; next }
-  in_unreleased && /^## \[/{ exit }
+  in_unreleased && /^## /{ exit }
   in_unreleased && /^- /{ count += 1 }
   END { print count + 0 }
 ' "$CHANGELOG")
-if [ "$legacy_entry_count" -ne 552 ]; then
-  printf 'FAIL transition audit legacy count drift (expected 552, got %s)\n' "$legacy_entry_count"
+if [ "$pending_entry_count" -ne 0 ]; then
+  printf 'FAIL [Unreleased] must stay empty — implementation branches never write it (got %s entries)\n' \
+    "$pending_entry_count"
   exit 1
 fi
 
-audit_legacy_hash=$(printf '%s\n' "$audit" | sed -n 's/.*bullet-list SHA-256 `\([0-9a-f]*\)`.*/\1/p')
-actual_legacy_hash=$(awk '
-  /^## \[Unreleased\]/{ in_unreleased = 1; next }
-  in_unreleased && /^## \[/{ exit }
-  in_unreleased { print }
-' "$CHANGELOG" | awk '/^- /{ print NR ":" $0 }' | sha256sum | awk '{ print $1 }')
-if [ "$audit_legacy_hash" != "$actual_legacy_hash" ]; then
-  printf 'FAIL transition audit legacy inventory hash drift\n'
+if ! grep -qE '^## \[0\.99\.20\] - [0-9]{4}-[0-9]{2}-[0-9]{2}$' "$CHANGELOG"; then
+  printf 'FAIL consumed transition must publish its curated ## [0.99.20] section\n'
+  exit 1
+fi
+
+# Exactly one pending section: the duplicate [Unreleased] headings that the
+# transition retitled must never reappear.
+unreleased_heading_count=$(grep -c '^## \[Unreleased\]$' "$CHANGELOG")
+if [ "$unreleased_heading_count" -ne 1 ]; then
+  printf 'FAIL CHANGELOG must carry exactly one [Unreleased] heading (got %s)\n' \
+    "$unreleased_heading_count"
   exit 1
 fi
 
 renderer="$HARNESS_DIR/src/conductor/src/engine/release-renderer.ts"
-category_render_line=$(rg -n "for \(const category of categoryOrder\)" "$renderer" | cut -d: -f1)
-migration_render_line=$(rg -n "const migrations =" "$renderer" | cut -d: -f1)
+category_render_line=$(grep -n "for (const category of categoryOrder)" "$renderer" | cut -d: -f1)
+migration_render_line=$(grep -n "const migrations =" "$renderer" | cut -d: -f1)
 if [ -z "$category_render_line" ] || [ -z "$migration_render_line" ] || [ "$category_render_line" -ge "$migration_render_line" ]; then
   printf 'FAIL release renderer must render migration blocks after release-note categories\n'
   exit 1

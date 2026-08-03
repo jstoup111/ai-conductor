@@ -1,58 +1,65 @@
 # One-time release backlog transition audit
 
-**Status:** proposed — not approved and not consumed
+**Status:** consumed — operator-approved and applied
 
-**Prepared from:** `v0.99.17..a8efea389854322808abf56af41923ef468f76a1`
-**Authority:** the first bot-owned release PR may seed this proposal only after the operator replaces this status with `approved` and resolves every item below.
+**Applied by:** the `chore/changelog-transition-0-99-20` pull request, by hand.
+**Prepared from:** `v0.99.17..5e519da96` (the merge of [#1265](https://github.com/jstoup111/ai-conductor/pull/1265))
+**Authority:** the operator curated this transition directly in `CHANGELOG.md` rather
+than routing it through the first bot-generated release PR. `runReleasePrAction`'s
+`transition` seam is therefore never exercised: the maintainer sees an empty
+`[Unreleased]` and a published `## [0.99.20]` section, and renders every later release
+from structured merged-PR metadata alone.
 
 ## Decision rule
 
-This is the one permitted semantic-curation pass.  The recurring release-PR
-maintainer must not interpret, consolidate, or discard legacy prose.  It can
-only copy an operator-approved audit into the first generated release PR.
+This was the one permitted semantic-curation pass. The recurring release-PR maintainer
+must not interpret, consolidate, or discard legacy prose; it renders only from
+`Release-*` metadata declared in merged pull-request bodies.
 
-An item is *included* only when it has a final reader-facing outcome; it is
-*consolidated* only when the target included outcome is named; and it is
-*excluded* only with a reader-facing reason.  Anything else is *unresolved*.
-The current checkout has no authoritative offline mapping from changelog prose
-or commit-message references to merged GitHub PR metadata, so this audit
-deliberately records every item as unresolved rather than silently inventing a
-disposition.
+An item is *included* when it has a final reader-facing outcome; *consolidated* when it
+is folded into a broader included outcome; and *excluded* with a reader-facing reason.
+No item remains unresolved.
 
 ## Exhaustive inventory
 
 | Input | Count | Disposition | Evidence |
 | --- | ---: | --- | --- |
-| Legacy `[Unreleased]` bullet entries | 552 | unresolved | `CHANGELOG.md` lines 18–4805 at the recorded source revision; extracted bullet-list SHA-256 `f23e1e190f4f18a4540221ee4afe7761774a05f90fe8f341d9baf463459673d4` |
-| Post-tag commits | 1,588 | unresolved | `git rev-list v0.99.17..a8efea389854322808abf56af41923ef468f76a1` |
-| Distinct `#NNN` references found in those commit subjects/bodies | 877 | unresolved | sorted-reference SHA-256 `4da8489451ca69debece154ab107080e99b3e176b23fe729b9e55f6f587226a7` |
+| Legacy `[Unreleased]` bullet entries | 552 | consolidated | `CHANGELOG.md` lines 12–523 at the recorded source revision |
+| Additional bullets stranded under interleaved `## Migration` headings | 2 | consolidated | `CHANGELOG.md` lines 524–4813 at the recorded source revision |
+| Duplicate `## [Unreleased]` headings in published history | 2 | included | Retitled `## [Unversioned] — pre-0.99.4 development` and `## [Unversioned] — pre-0.4.0 development`; content preserved verbatim |
+| Queued runnable `` ```bash migration `` fences | 19 | included | Moved verbatim, in source order, into the single `## Migration` section under `## [0.99.20]` |
+| Post-tag commits | 1,588 | consolidated | `git rev-list v0.99.17..5e519da96` |
 
-The first row is a per-entry disposition: every one of the 552 source bullets
-is unresolved pending review.  The last two rows are a per-reference
-disposition: every candidate-looking post-tag reference is unresolved pending
-the authoritative merged-PR collection required by the release maintainer.
-Duplicates are intentionally retained by the source inventories; no text or
-reference is treated as proof of a merge or a release note.
+## Applied dispositions
 
-## Proposed cleaned pending set
+**Consolidated (552 + 2 → 43 reader-facing entries).** The legacy queue was rewritten
+into themed Added/Changed/Fixed/Removed entries under `## [0.99.20] - 2026-08-03`, each
+citing the representative issues for its theme. Per-change granularity remains
+recoverable from `git log v0.99.17..v0.99.20`.
 
-No cleaned reader-facing entries are proposed yet.  This is intentional: the
-legacy queue is too large and its PR identities are not locally authoritative.
-Replacing it before a reviewer identifies final outcomes would turn uncertainty
-into an exclusion.  The first release PR must therefore remain blocked until
-the operator supplies an approved list of included/consolidated/excluded
-dispositions and the unresolved count reaches zero.
+**Excluded, with reasons.** These classes were dropped rather than folded in:
+
+- *Net-zero churn* — behavior introduced and then removed inside this same window has no
+  reader-facing outcome to report. This covers the semantic attribution verification lane
+  and its `attribution_enforcement_cutover` / `attribution_judge_cutover` keys, the
+  per-task evidence gate, the RTK install path, and the Serena integration. Each survives
+  only as a single `Removed` entry naming its retirement.
+- *Superseded within the window* — a fix and its own follow-up regression fix are reported
+  as one outcome; `conduct-ts finalize-changelog-pr` entries are dropped entirely, since
+  [#1265](https://github.com/jstoup111/ai-conductor/pull/1265) retired that command.
+- *Specification-only* — "spec landed for #N" entries record DECIDE artifacts, not
+  implementation, and the repository's own eligibility policy holds that they add no
+  changelog entry.
+- *Repository bookkeeping* — committed shipped-records, backfilled `Owner:` intake
+  markers, `version_freeze` advances, and CI-config touch-ups are internal to this
+  repository and not reader-facing.
 
 ## Operator approval record
 
-Before the transition is seeded, the operator must:
+The operator reviewed and approved the condensation aggressiveness (theme summary, with
+net-zero churn removed), the migration-fence treatment (retain all 19 verbatim, in
+order), and the version-drift resolution (a single `[0.99.20]` section; neither `0.99.18`
+nor `0.99.19` was ever tagged, so integrity check 9c never asks for them).
 
-1. Replace every `unresolved` disposition with `included`, `consolidated`, or
-   `excluded` and record its reason (and consolidation target where applicable).
-2. Replace **Status: proposed** with **Status: approved** in the version that
-   the first release PR copies.
-3. Review and merge that first release PR.  Once its audit is on the base
-   branch with **Status: consumed**, the maintainer refuses all later transition
-   requests and uses only deterministic structured PR metadata.
-
-No approval has been recorded by this artifact.
+This audit is consumed. Later releases are rendered from structured PR metadata only, and
+no further transition request will be honored.
