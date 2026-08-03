@@ -185,7 +185,11 @@ import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-aut
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
 import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
-import { parseReleaseDisposition } from './release-metadata.js';
+import {
+  mergeReleaseMetadataBlock,
+  parseReleaseDisposition,
+  snapshotReleaseMetadataBlock,
+} from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
@@ -1126,6 +1130,8 @@ export class Conductor {
   private shipDraftPrAttempted = false;
   /** Stable identity of the draft opened at SHIP entry, retained until finish. */
   private shipDraftPrUrl: string | undefined;
+  /** Exact repository-local release metadata captured before finish dispatches. */
+  private releaseMetadataSnapshot: { prUrl: string; block: string } | undefined;
   /** Strict merged-history verifier; injection is limited to hermetic tests. */
   private verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
   /** Strict finish verifier; production defaults to evaluateShipmentEvidence. */
@@ -1296,6 +1302,10 @@ export class Conductor {
         // Warn-only
         repairLog(`[conductor-repair] bodyFloor failed: ${err}`);
       }
+
+      // /finish may replace the complete PR body. Restore only the captured
+      // repository-local release disposition and keep its reader-facing prose.
+      await this.restoreFinishReleaseMetadata(prUrl);
 
       // Step 4: Ensure PR is ready (draft→ready flip)
       try {
@@ -2472,6 +2482,63 @@ export class Conductor {
     }
 
     return { ok: true };
+  }
+
+  /** This repository-local mechanism is unavailable to consumer configurations. */
+  private releaseDispositionFlowActive(): boolean {
+    return this.isSelfBuild() &&
+      this.config.steps?.['release-disposition']?.skill ===
+        '.agents/skills/release-disposition/SKILL.md';
+  }
+
+  /** Capture only a valid, re-readable release block before finish can replace the body. */
+  private async snapshotFinishReleaseMetadata(): Promise<void> {
+    this.releaseMetadataSnapshot = undefined;
+    if (!this.releaseDispositionFlowActive() || !this.shipDraftPrUrl) return;
+
+    try {
+      const { stdout } = await this.gh(
+        ['pr', 'view', this.shipDraftPrUrl, '--json', 'body'],
+        { cwd: this.projectRoot },
+      );
+      const body = (JSON.parse(stdout) as { body?: unknown }).body;
+      if (typeof body !== 'string') throw new Error('PR body is absent');
+      const block = snapshotReleaseMetadataBlock(body);
+      if (block === null) throw new Error('release metadata is malformed or non-canonical');
+      this.releaseMetadataSnapshot = { prUrl: this.shipDraftPrUrl, block };
+    } catch (error) {
+      (this.log ?? console.warn)(
+        `[release-metadata] pre-finish snapshot unavailable; preserving remote body without mutation: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Restore the snapshot only after a verified remote read/write cycle. */
+  private async restoreFinishReleaseMetadata(prUrl: string): Promise<void> {
+    const snapshot = this.releaseMetadataSnapshot;
+    if (!this.releaseDispositionFlowActive() || !snapshot || snapshot.prUrl !== prUrl) return;
+
+    try {
+      const readBody = async (): Promise<string> => {
+        const { stdout } = await this.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: this.projectRoot });
+        const body = (JSON.parse(stdout) as { body?: unknown }).body;
+        if (typeof body !== 'string') throw new Error('PR body is absent');
+        return body;
+      };
+      const before = await readBody();
+      if (snapshotReleaseMetadataBlock(before) === snapshot.block) return;
+      const merged = mergeReleaseMetadataBlock(before, snapshot.block);
+      if (merged === null) throw new Error('captured release metadata is no longer valid');
+      await this.gh(['pr', 'edit', prUrl, '--body', merged], { cwd: this.projectRoot });
+      const after = await readBody();
+      if (snapshotReleaseMetadataBlock(after) !== snapshot.block) {
+        throw new Error('release metadata restore could not be verified');
+      }
+    } catch (error) {
+      (this.log ?? console.warn)(
+        `[release-metadata] post-finish restore unavailable; preserving remote body without further mutation: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /** Read and parse the exact retained draft body through the injected GitHub seam. */
@@ -4523,6 +4590,13 @@ export class Conductor {
               phase: step.phase,
               allow: resolveDocsAllowlist(step.name),
             });
+          }
+
+          // The repository-local release-disposition gate writes machine-owned
+          // metadata into the retained SHIP draft. Capture it immediately
+          // before finish dispatches, because finish may replace the body.
+          if (step.name === 'finish') {
+            await this.snapshotFinishReleaseMetadata();
           }
 
           let result: StepRunResult;

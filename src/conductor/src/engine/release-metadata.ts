@@ -26,6 +26,8 @@ type ReleaseFieldName = typeof fieldNames[number];
 const releaseFieldNames = new Set<string>(fieldNames);
 const migrationSectionRe = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/;
 const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
+const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
+const migrationBlockRe = /(?:\r?\n)?## Migration\s*\r?\n```bash migration\s*\r?\n[\s\S]*?```(?=\r?\n##\s|$)/g;
 
 function invalidReleaseDisposition(field: string): never {
   throw new Error(`Invalid release disposition: ${field}`);
@@ -89,4 +91,50 @@ export function parseReleaseDisposition(body: string): ReleaseDisposition {
     note,
     ...(migration === undefined ? {} : { migration }),
   };
+}
+
+/** Return the exact contiguous release block, or null when it cannot be safely preserved. */
+export function snapshotReleaseMetadataBlock(body: string): string | null {
+  let disposition: ReleaseDisposition;
+  try {
+    disposition = parseReleaseDisposition(body);
+  } catch {
+    return null;
+  }
+
+  const lineEnd = '\\r?\\n';
+  const fields = disposition.disposition === 'note'
+    ? [
+        'Release-Disposition: note',
+        'Release-Category: (?:Added|Changed|Deprecated|Removed|Fixed|Security)',
+        'Release-Semver: (?:major|minor|patch)',
+        'Release-Note: .+',
+      ].join(lineEnd)
+    : 'Release-Disposition: no-note';
+  const match = new RegExp(`^(${fields})(?=${lineEnd}|$)`, 'm').exec(body);
+  if (!match) return null;
+
+  let block = match[1]!;
+  if (disposition.disposition === 'note' && disposition.migration !== undefined) {
+    const migration = new RegExp(
+      `^## Migration${lineEnd}(\`\`\`bash migration${lineEnd}[\\s\\S]*?\`\`\`)`,
+      'm',
+    ).exec(body);
+    if (!migration) return null;
+    const between = body.slice(match.index + block.length, migration.index);
+    if (!/^\r?\n(?:\r?\n)?$/.test(between)) return null;
+    block += `${between}${migration[0]}`;
+  }
+  return block;
+}
+
+/** Preserve reader content while replacing all structured release metadata with one snapshot. */
+export function mergeReleaseMetadataBlock(body: string, snapshot: string): string | null {
+  if (snapshotReleaseMetadataBlock(snapshot) !== snapshot) return null;
+  const readerContent = body
+    .replace(releaseMetadataLineRe, '')
+    .replace(migrationBlockRe, '')
+    .replace(/(?:\r?\n){3,}/g, '\n\n')
+    .trim();
+  return readerContent.length > 0 ? `${readerContent}\n\n${snapshot}` : snapshot;
 }
