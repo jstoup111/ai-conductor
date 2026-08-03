@@ -319,3 +319,93 @@ describe('engine/release-pr-action — candidate audit readiness (Task 13)', () 
     expect(github.publishReleaseReadiness).not.toHaveBeenCalled();
   });
 });
+
+describe('engine/release-pr-action — one-time audited backlog transition (Task 20)', () => {
+  const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+  const generatedFiles = { 'CHANGELOG.md': '# Changelog\n', VERSION: '1.2.4\n' };
+
+  function dependencies(baseAudit?: string) {
+    return {
+      git: {
+        readBranchFiles: vi.fn(async () => undefined),
+        readBaseFile: vi.fn(async () => baseAudit),
+        pushGeneratedBranch: vi.fn(async () => undefined),
+      },
+      github: {
+        findOpenReleasePullRequest: vi.fn(async () => undefined),
+        createPullRequest: vi.fn(async () => ({ number: 42 })),
+        updatePullRequest: vi.fn(async () => undefined),
+      },
+    };
+  }
+
+  it('seeds the approved audit exactly once and makes it a generated release surface', async () => {
+    const { git, github } = dependencies();
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Approved transition.',
+      transition: {
+        status: 'approved',
+        auditPath: '.github/release-transition-audit.md',
+        audit: '# Release transition audit\n\nStatus: approved\n',
+        unresolved: [],
+      },
+    })).resolves.toEqual({ action: 'created', pullRequestNumber: 42, branchUpdated: true, transitionConsumed: true });
+
+    expect(git.pushGeneratedBranch).toHaveBeenCalledWith(expect.objectContaining({
+      files: {
+        ...generatedFiles,
+        '.github/release-transition-audit.md': '# Release transition audit\n\nStatus: approved\n',
+      },
+    }));
+  });
+
+  it('refuses an unapproved or unresolved proposal before GitHub or branch mutation', async () => {
+    const { git, github } = dependencies();
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Pending transition.',
+      transition: {
+        status: 'proposed',
+        auditPath: '.github/release-transition-audit.md',
+        audit: '# Release transition audit\n',
+        unresolved: ['legacy entry 1'],
+      },
+    })).rejects.toThrow(/operator-approved|unresolved/i);
+
+    expect(git.pushGeneratedBranch).not.toHaveBeenCalled();
+    expect(github.findOpenReleasePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses to rerun after the approved transition audit is recorded on the base branch', async () => {
+    const { git, github } = dependencies('# Release transition audit\n\nStatus: consumed\n');
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Duplicate transition.',
+      transition: {
+        status: 'approved',
+        auditPath: '.github/release-transition-audit.md',
+        audit: '# Release transition audit\n\nStatus: approved\n',
+        unresolved: [],
+      },
+    })).rejects.toThrow(/transition.*(consumed|complete|already)/i);
+
+    expect(git.pushGeneratedBranch).not.toHaveBeenCalled();
+    expect(github.findOpenReleasePullRequest).not.toHaveBeenCalled();
+  });
+});

@@ -10,6 +10,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+<!-- One-time transition proposal: `.github/release-transition-audit.md` is
+     deliberately unresolved and awaits explicit operator approval. -->
+
 ### Fixed
 
 - Keep daemon provider preparation bounded before spawn with an independently configurable deadline, one automatic replacement, and diagnosable `needs-human` exhaustion halts while treating quiet running-provider output as status-only telemetry ([implementation PR #1231](https://github.com/jstoup111/ai-conductor/pull/1231)).

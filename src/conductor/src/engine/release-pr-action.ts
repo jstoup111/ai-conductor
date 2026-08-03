@@ -13,6 +13,8 @@ export interface ReleasePrConfig {
 
 export interface ReleasePrGit {
   readBranchFiles(branch: string): Promise<Record<string, string> | undefined>;
+  /** Read a durable transition marker from the base branch before seeding it. */
+  readBaseFile?(branch: string, path: string): Promise<string | undefined>;
   pushGeneratedBranch(input: {
     branch: string;
     base: string;
@@ -71,6 +73,20 @@ export interface ReleasePrActionInput {
   rerenderForCurrentMain?: (mainHead: string) => Promise<ReleasePrRender>;
   /** When present, render exhaustive evidence and publish a head-bound readiness result. */
   audit?: readonly ReleaseAuditCandidate[];
+  /**
+   * Explicit operator approval for the one-time legacy backlog seed. The
+   * maintainer only copies this static proposal into its first release PR; it
+   * never performs semantic curation itself.
+   */
+  transition?: ReleaseBacklogTransition;
+}
+
+export interface ReleaseBacklogTransition {
+  status: 'proposed' | 'approved';
+  auditPath: string;
+  audit: string;
+  /** Unresolved items require an operator decision before approval is valid. */
+  unresolved: readonly string[];
 }
 
 export interface ReleasePrRender {
@@ -84,11 +100,13 @@ export type ReleasePrActionResult = {
   action: 'created' | 'updated';
   pullRequestNumber: number;
   branchUpdated: boolean;
+  transitionConsumed?: true;
 };
 
 /** Create the designated release PR or update its generated release surfaces. */
 export async function runReleasePrAction(input: ReleasePrActionInput): Promise<ReleasePrActionResult> {
   assertAppIdentity(input.config.appLogin);
+  await assertTransitionCanSeed(input);
   assertAuditDependencies(input);
   const existingPullRequest = await input.github.findOpenReleasePullRequest();
   if (existingPullRequest !== undefined) {
@@ -97,7 +115,7 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
 
   let render: ReleasePrRender = {
     expectedMainHead: input.expectedMainHead ?? '',
-    generatedFiles: input.generatedFiles,
+    generatedFiles: generatedFilesWithTransition(input),
     title: input.title,
     body: renderBodyWithAudit(input.body, input.audit),
   };
@@ -160,7 +178,30 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
       summary: `All ${input.audit.length} release candidates are accounted for.`,
     });
   }
-  return result;
+  return input.transition === undefined ? result : { ...result, transitionConsumed: true };
+}
+
+function generatedFilesWithTransition(input: ReleasePrActionInput): Record<string, string> {
+  if (input.transition === undefined) return input.generatedFiles;
+  return { ...input.generatedFiles, [input.transition.auditPath]: input.transition.audit };
+}
+
+async function assertTransitionCanSeed(input: ReleasePrActionInput): Promise<void> {
+  const transition = input.transition;
+  if (transition === undefined) return;
+  if (transition.status !== 'approved' || transition.unresolved.length > 0) {
+    throw new Error('Release backlog transition requires an operator-approved proposal with no unresolved items');
+  }
+  if (transition.audit.trim() === '') {
+    throw new Error('Release backlog transition requires a non-empty approved audit');
+  }
+  if (input.git.readBaseFile === undefined) {
+    throw new Error('Release backlog transition requires a base-file reader for its consumed-once guard');
+  }
+  const existingAudit = await input.git.readBaseFile(input.config.base, transition.auditPath);
+  if (existingAudit?.includes('Status: consumed') === true) {
+    throw new Error('Release backlog transition is already consumed on the base branch');
+  }
 }
 
 function renderBodyWithAudit(body: string, audit: readonly ReleaseAuditCandidate[] | undefined): string {
