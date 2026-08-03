@@ -24,4 +24,31 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       disposition: 'no-note',
     });
   });
+
+  it.each([
+    ['missing disposition', 'Release-Category: Fixed\nRelease-Semver: patch\nRelease-Note: Correct a defect.', 'Disposition'],
+    ['multiple dispositions', 'Release-Disposition: note\nRelease-Disposition: no-note', 'Disposition'],
+    ['invalid category', 'Release-Disposition: note\nRelease-Category: Other\nRelease-Semver: patch\nRelease-Note: Correct a defect.', 'Category'],
+    ['invalid semver', 'Release-Disposition: note\nRelease-Category: Fixed\nRelease-Semver: hotfix\nRelease-Note: Correct a defect.', 'Semver'],
+    ['empty note', 'Release-Disposition: note\nRelease-Category: Fixed\nRelease-Semver: patch\nRelease-Note:   ', 'Note'],
+    ['no-note category', 'Release-Disposition: no-note\nRelease-Category: Fixed', 'Category'],
+    ['no-note semver', 'Release-Disposition: no-note\nRelease-Semver: patch', 'Semver'],
+    ['no-note note', 'Release-Disposition: no-note\nRelease-Note: Correct a defect.', 'Note'],
+  ])('rejects %s', (_scenario, body, invalidField) => {
+    expect(() => parseReleaseDisposition(body)).toThrow(`Invalid release disposition: ${invalidField}`);
+  });
+
+  it.each([
+    ['workflow expression', '${{ github.event.pull_request.title }}'],
+    ['shell-like text', '$(touch /tmp/release-metadata-should-not-run)'],
+  ])('keeps %s in note content as inert data', (_scenario, note) => {
+    expect(
+      parseReleaseDisposition([
+        'Release-Disposition: note',
+        'Release-Category: Changed',
+        'Release-Semver: patch',
+        `Release-Note: ${note}`,
+      ].join('\n')),
+    ).toMatchObject({ disposition: 'note', note });
+  });
 });
