@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -135,4 +135,95 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
 
     await expect(resolveRealParkedDir(root)).resolves.toBeNull();
   });
+
+  it('snapshots the real parked directory at setup and evaluates it after pipeline, tmux, and signals', async () => {
+    const calls: string[] = [];
+    const teardown = await loadParkLifecycleSetup(calls);
+
+    await teardown();
+
+    expect(calls).toEqual([
+      'park:before',
+      'pipeline',
+      'tmux',
+      'signals',
+      'park:after',
+    ]);
+  });
+
+  it('warns on unexpected parked-ledger checking failures but rethrows a guard verdict', async () => {
+    const warning = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const unexpectedTeardown = await loadParkLifecycleSetup([], { throwOnAfterSnapshot: true });
+      await expect(unexpectedTeardown()).resolves.toBeUndefined();
+      expect(warning).toHaveBeenCalledWith(expect.stringContaining('park-leak-guard: NOT enforced'));
+
+      const guardTeardown = await loadParkLifecycleSetup([], { addedAfter: true });
+      await expect(guardTeardown()).rejects.toThrow(/#1251/);
+    } finally {
+      warning.mockRestore();
+      vi.doUnmock('./park-leak-guard.js');
+      vi.doUnmock('./pipeline-leak-guard.js');
+      vi.doUnmock('./tmpdir-leak-guard.js');
+      vi.doUnmock('./tmux-leak-guard.js');
+      vi.doUnmock('./signals-leak-guard.js');
+      vi.doUnmock('./engine-dist-guard.js');
+      vi.resetModules();
+    }
+  });
+
+  async function loadParkLifecycleSetup(
+    calls: string[],
+    options: { addedAfter?: boolean; throwOnAfterSnapshot?: boolean } = {},
+  ): Promise<() => Promise<void>> {
+    vi.resetModules();
+    let parkedSnapshots = 0;
+    vi.doMock('./park-leak-guard.js', () => ({
+      resolveRealParkedDir: async () => '/real/.daemon/parked',
+      snapshotParkedMarkers: async () => {
+        parkedSnapshots += 1;
+        calls.push(parkedSnapshots === 1 ? 'park:before' : 'park:after');
+        if (options.throwOnAfterSnapshot && parkedSnapshots === 2) throw new Error('unexpected');
+        return { exists: true, markers: parkedSnapshots === 2 && options.addedAfter ? { leaked: 'yes' } : {} };
+      },
+      diffParkedMarkers: (before: { markers: Record<string, string> }, after: { markers: Record<string, string> }) => ({
+        added: Object.keys(after.markers).filter(slug => !(slug in before.markers)),
+        removed: [],
+        modified: [],
+      }),
+    }));
+    vi.doMock('./pipeline-leak-guard.js', () => ({
+      snapshotPipeline: async () => ({ exists: false, entries: new Map() }),
+      diffPipeline: () => {
+        calls.push('pipeline');
+        return { added: [], modified: [] };
+      },
+    }));
+    vi.doMock('./tmpdir-leak-guard.js', () => ({
+      RUN_TMP_ROOT_ENV: 'TEST_RUN_TMP_ROOT',
+      createRunTmpRoot: async () => '/tmp/run-root',
+      removeRunTmpRoot: async () => {},
+      snapshotTmpdirEntries: async () => ({ exists: true, entries: new Set() }),
+      diffTmpdirEntries: () => ({ stray: [], ignored: [] }),
+    }));
+    vi.doMock('./tmux-leak-guard.js', () => ({
+      snapshotDaemonSessions: () => ({ exists: true, sessions: new Map() }),
+      sweepStaleDaemonSessions: () => ({ killed: [] }),
+      reapLeakedDaemonSessions: () => {
+        calls.push('tmux');
+        return { killed: [], indeterminate: [] };
+      },
+    }));
+    vi.doMock('./signals-leak-guard.js', () => ({
+      snapshotEngineerSignals: async () => ({ exists: true, lines: [] }),
+      diffEngineerSignals: () => {
+        calls.push('signals');
+        return { addedTestProjectLines: 0 };
+      },
+    }));
+    vi.doMock('./engine-dist-guard.js', () => ({ ensureEngineDist: async () => false }));
+
+    const { default: setup } = await import('./global-setup.js');
+    return await setup();
+  }
 });

@@ -2,7 +2,13 @@ import { rmSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { snapshotPipeline, diffPipeline } from './pipeline-leak-guard.js';
-import type { ParkedMarkersDiff } from './park-leak-guard.js';
+import {
+  diffParkedMarkers,
+  resolveRealParkedDir,
+  snapshotParkedMarkers,
+  type ParkedMarkersDiff,
+  type ParkedMarkersSnapshot,
+} from './park-leak-guard.js';
 import {
   createRunTmpRoot,
   diffTmpdirEntries,
@@ -246,6 +252,10 @@ export default async function setup() {
   }
 
   const beforeState = await snapshotPipeline(process.cwd());
+  const realParkedDir = await resolveRealParkedDir(process.cwd());
+  const parkedMarkersBefore: ParkedMarkersSnapshot = realParkedDir
+    ? await snapshotParkedMarkers(realParkedDir)
+    : { exists: false, markers: {} };
 
   // Tmpdir leak guard (#1112), part 2 of 2 — the GUARD. Baseline the REAL
   // tmpdir's top-level entries here, before any test has run, so the teardown
@@ -368,6 +378,24 @@ export default async function setup() {
     // failure is the more specific diagnosis and still throws first.
     const tmpdirAfter = await snapshotTmpdirEntries(realTmpdir);
     applyTmpdirTeardownDecision(diffTmpdirEntries(tmpdirBefore, tmpdirAfter), realTmpdir);
+
+    // Parked-marker leak guard (#1251): runs last, after every established
+    // teardown guard. It observes the actual repository ledger, not any
+    // test-process redirect, and never repairs a marker it detects.
+    try {
+      const parkedMarkersAfter: ParkedMarkersSnapshot = realParkedDir
+        ? await snapshotParkedMarkers(realParkedDir)
+        : { exists: false, markers: {} };
+      applyParkTeardownDecision(diffParkedMarkers(parkedMarkersBefore, parkedMarkersAfter));
+    } catch (err) {
+      if (err instanceof Error && err.message.startsWith('park-leak-guard:')) {
+        throw err;
+      }
+      console.error(
+        `park-leak-guard: NOT enforced (fail-safe): unexpected error while checking the ` +
+          `real parked marker ledger — investigate manually: ${err}`
+      );
+    }
   }
 }
 
