@@ -7,6 +7,8 @@ export type ReleaseDisposition =
       category: ReleaseCategory;
       semver: ReleaseSemver;
       note: string;
+      /** Exact runnable fence(s), retained for the release renderer. */
+      migration?: string;
     }
   | { disposition: 'no-note' };
 
@@ -22,9 +24,26 @@ const semverImpacts = new Set<ReleaseSemver>(['major', 'minor', 'patch']);
 const fieldNames = ['Disposition', 'Category', 'Semver', 'Note'] as const;
 type ReleaseFieldName = typeof fieldNames[number];
 const releaseFieldNames = new Set<string>(fieldNames);
+const migrationSectionRe = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/;
+const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
 
 function invalidReleaseDisposition(field: string): never {
   throw new Error(`Invalid release disposition: ${field}`);
+}
+
+/** True only for the exact fence syntax that `bin/migrate` executes. */
+export function isRunnableMigrationBlock(value: string): boolean {
+  return runnableMigrationFenceRe.test(value);
+}
+
+function parseMigrationBlock(body: string): string | undefined {
+  const section = body.match(migrationSectionRe);
+  if (!section) return undefined;
+
+  const migration = section[1]!.trim();
+  if (migration === 'none') return undefined;
+  if (!isRunnableMigrationBlock(migration)) invalidReleaseDisposition('Migration');
+  return migration;
 }
 
 /** Parse the machine-readable release declaration embedded in an implementation PR body. */
@@ -51,6 +70,7 @@ export function parseReleaseDisposition(body: string): ReleaseDisposition {
     for (const field of fieldNames.slice(1)) {
       if (fields.has(field)) invalidReleaseDisposition(field);
     }
+    if (parseMigrationBlock(body) !== undefined) invalidReleaseDisposition('Migration');
     return { disposition };
   }
 
@@ -61,10 +81,12 @@ export function parseReleaseDisposition(body: string): ReleaseDisposition {
   if (semver === undefined || !semverImpacts.has(semver as ReleaseSemver)) invalidReleaseDisposition('Semver');
   if (note === undefined || note.length === 0) invalidReleaseDisposition('Note');
 
+  const migration = parseMigrationBlock(body);
   return {
     disposition,
     category: category as ReleaseCategory,
     semver: semver as ReleaseSemver,
     note,
+    ...(migration === undefined ? {} : { migration }),
   };
 }

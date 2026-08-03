@@ -5,12 +5,13 @@
 //   1. TR-8  integrity suite  — `test/test_harness_integrity.sh` must exit 0
 //              (missing script or timeout → HALT, never a silent pass).
 //   2. TR-10 migration block  — a breaking surface requires a runnable
-//              ```bash migration``` block that `bin/migrate` can execute.
+//              PR-metadata block that `bin/migrate` can execute.
 // Every failure writes a distinct HALT reason; uncertainty errs toward HALT.
 
 import { execa } from 'execa';
 import { access as fsAccess, constants } from 'node:fs/promises';
 import { join } from 'node:path';
+import { isRunnableMigrationBlock, type ReleaseDisposition } from '../release-metadata.js';
 import { writeSelfHostHalt, type GateVerdict } from './gate-halt.js';
 
 export const INTEGRITY_SCRIPT = 'test/test_harness_integrity.sh';
@@ -74,38 +75,6 @@ export async function runIntegritySuite(opts: IntegrityOptions): Promise<GateVer
     };
   }
   return { ok: true };
-}
-
-// ── CHANGELOG [Unreleased] parsing for TR-10 ─────────────────────────────────
-
-const HEADER_RE = /^##\s+\[([^\]]+)\]/;
-
-/**
- * Extract the text under `## [Unreleased]` up to the next VERSIONED header.
- * Tolerates duplicate `## [Unreleased]` headers (the real CHANGELOG has them):
- * content is gathered across consecutive Unreleased sections until the first
- * versioned `## [x.y.z]` header. Returns null when there is no Unreleased header.
- */
-export function extractUnreleasedBody(changelog: string | null | undefined): string | null {
-  if (changelog == null) return null;
-  const lines = changelog.split('\n');
-  let i = 0;
-  // Find the first real Unreleased header.
-  for (; i < lines.length; i++) {
-    const m = lines[i].trim().match(HEADER_RE);
-    if (m && m[1].toLowerCase() === 'unreleased') break;
-  }
-  if (i >= lines.length) return null;
-  const body: string[] = [];
-  for (i += 1; i < lines.length; i++) {
-    const m = lines[i].trim().match(HEADER_RE);
-    if (m) {
-      if (m[1].toLowerCase() === 'unreleased') continue; // skip duplicate headers
-      break; // reached the next versioned section
-    }
-    body.push(lines[i]);
-  }
-  return body.join('\n');
 }
 
 // ── TR-10: migration block for breaking surfaces ─────────────────────────────
@@ -285,7 +254,6 @@ export async function evaluateWaiver(input: {
 }
 
 const MIGRATION_SECTION_RE = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/;
-const MIGRATION_FENCE_RE = /```bash migration\s*\n[\s\S]*?```/;
 
 /**
  * True when the text has a runnable migration block — a ```bash migration``` fence
@@ -295,8 +263,8 @@ const MIGRATION_FENCE_RE = /```bash migration\s*\n[\s\S]*?```/;
 export function hasRunnableMigrationBlock(text: string | null | undefined): boolean {
   if (text == null) return false;
   const section = text.match(MIGRATION_SECTION_RE);
-  if (!section) return false;
-  return MIGRATION_FENCE_RE.test(section[1]);
+  const migration = section?.[1].trim() ?? text.trim();
+  return isRunnableMigrationBlock(migration);
 }
 
 /**
@@ -327,8 +295,10 @@ export function evaluateMigration(input: {
 export interface ReleaseGateOptions {
   projectRoot: string;
   harnessRoot: string;
-  /** Read a file's text, or null when absent (used for CHANGELOG). */
+  /** Read a file's text, or null when absent (used for a migration waiver). */
   readText: (path: string) => Promise<string | null>;
+  /** Parsed release metadata from the implementation PR. */
+  releaseMetadata?: ReleaseDisposition;
   /** The build's changed files (git name-status), or null if undeterminable. */
   changedFiles: () => Promise<ChangedFile[] | null>;
   writeHalt?: (projectRoot: string, reason: string) => Promise<void>;
@@ -356,16 +326,13 @@ export async function runReleaseArtifactGate(opts: ReleaseGateOptions): Promise<
     return integrity;
   }
 
-  const changelog = await opts.readText(join(opts.harnessRoot, 'CHANGELOG.md'));
-  // Integrity owns CHANGELOG structure. The release gate reads the body only
-  // for the migration-block check; ordinary release content may be empty.
-  const unreleasedBody = extractUnreleasedBody(changelog);
-
   const changedFiles = await opts.changedFiles();
   const surfaces = classifyBreakingSurfaces(changedFiles);
+  const migrationBlock =
+    opts.releaseMetadata?.disposition === 'note' ? opts.releaseMetadata.migration : undefined;
   const migration = evaluateMigration({
     surfaces,
-    hasBlock: hasRunnableMigrationBlock(unreleasedBody),
+    hasBlock: migrationBlock !== undefined && hasRunnableMigrationBlock(migrationBlock),
   });
   if (!migration.ok) {
     // Rule 4: an uncertain (null) change set can never prove freshness (rule 1),
