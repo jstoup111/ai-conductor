@@ -157,7 +157,7 @@ describe('self-host wiring — default bundle members forward to the real primit
     const text = await readFile(conductorSrc, 'utf-8');
     const start = text.indexOf('runSelfBuildDispatch');
     const end = text.indexOf(
-      'async run(): Promise<OperatorParkedTermination | undefined>',
+      '  /** Apply the existing safety authority to the actual resolved provider. */',
     );
 
     expect(start).toBeGreaterThan(-1);
