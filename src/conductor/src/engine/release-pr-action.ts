@@ -20,7 +20,7 @@ export interface ReleasePrGit {
 }
 
 export interface ReleasePrGithub {
-  findOpenReleasePullRequest(): Promise<{ number: number } | undefined>;
+  findOpenReleasePullRequest(): Promise<ReleasePullRequest | undefined>;
   createPullRequest(input: {
     head: string;
     base: string;
@@ -28,6 +28,14 @@ export interface ReleasePrGithub {
     body: string;
   }): Promise<{ number: number }>;
   updatePullRequest(input: { number: number; title: string; body: string }): Promise<void>;
+}
+
+/** The complete remote identity required before this action may mutate its branch. */
+export interface ReleasePullRequest {
+  number: number;
+  author: string;
+  head: string;
+  base: string;
 }
 
 export interface ReleasePrActionInput {
@@ -47,7 +55,14 @@ export type ReleasePrActionResult = {
 
 /** Create the designated release PR or update its generated release surfaces. */
 export async function runReleasePrAction(input: ReleasePrActionInput): Promise<ReleasePrActionResult> {
+  assertAppIdentity(input.config.appLogin);
+  const existingPullRequest = await input.github.findOpenReleasePullRequest();
+  if (existingPullRequest !== undefined) {
+    assertOwnedPullRequest(existingPullRequest, input.config);
+  }
+
   const existingFiles = await input.git.readBranchFiles(input.config.branch);
+  assertNoForeignBranchFiles(existingFiles, input.generatedFiles);
   const branchUpdated = !sameGeneratedFiles(existingFiles, input.generatedFiles);
   if (branchUpdated) {
     await input.git.pushGeneratedBranch({
@@ -58,7 +73,6 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
     });
   }
 
-  const existingPullRequest = await input.github.findOpenReleasePullRequest();
   if (existingPullRequest === undefined) {
     const created = await input.github.createPullRequest({
       head: input.config.branch,
@@ -75,6 +89,35 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
     body: input.body,
   });
   return { action: 'updated', pullRequestNumber: existingPullRequest.number, branchUpdated };
+}
+
+function assertAppIdentity(appLogin: string): void {
+  if (appLogin.trim() === '') {
+    throw new Error('Release maintenance requires a configured App identity');
+  }
+}
+
+function assertOwnedPullRequest(pullRequest: ReleasePullRequest, config: ReleasePrConfig): void {
+  if (pullRequest.author !== config.appLogin) {
+    throw new Error(`Existing release PR owner does not match configured App identity: ${pullRequest.author}`);
+  }
+  if (pullRequest.base !== config.base) {
+    throw new Error(`Existing release PR base does not match configured base: ${pullRequest.base}`);
+  }
+  if (pullRequest.head !== config.branch) {
+    throw new Error(`Existing release PR head does not match configured branch: ${pullRequest.head}`);
+  }
+}
+
+function assertNoForeignBranchFiles(
+  current: Record<string, string> | undefined,
+  generated: Record<string, string>,
+): void {
+  if (current === undefined) return;
+  const foreignPaths = Object.keys(current).filter((path) => !(path in generated)).sort();
+  if (foreignPaths.length > 0) {
+    throw new Error(`Release branch contains foreign edits outside generated surfaces: ${foreignPaths.join(', ')}`);
+  }
 }
 
 function sameGeneratedFiles(

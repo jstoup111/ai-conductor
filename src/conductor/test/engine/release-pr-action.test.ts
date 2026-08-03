@@ -41,7 +41,12 @@ describe('engine/release-pr-action — bot-owned release PR upsert (Task 9)', ()
       pushGeneratedBranch: vi.fn(async () => undefined),
     };
     const github = {
-      findOpenReleasePullRequest: vi.fn(async () => ({ number: 42 })),
+      findOpenReleasePullRequest: vi.fn(async () => ({
+        number: 42,
+        author: config.appLogin,
+        head: config.branch,
+        base: config.base,
+      })),
       createPullRequest: vi.fn(async () => ({ number: 99 })),
       updatePullRequest: vi.fn(async () => undefined),
     };
@@ -56,5 +61,102 @@ describe('engine/release-pr-action — bot-owned release PR upsert (Task 9)', ()
       body: 'Updated release description.',
     });
     expect(github.createPullRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe('engine/release-pr-action — ownership and recovery (Task 10)', () => {
+  const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+  const generatedFiles = { 'CHANGELOG.md': '# Changelog\n', VERSION: '1.2.4\n' };
+
+  function ownedPullRequest(number = 42) {
+    return { number, author: config.appLogin, base: config.base, head: config.branch };
+  }
+
+  function dependencies(overrides: {
+    branchFiles?: Record<string, string>;
+    pullRequest?: ReturnType<typeof ownedPullRequest> | undefined;
+    create?: () => Promise<{ number: number }>;
+  } = {}) {
+    return {
+      git: {
+        readBranchFiles: vi.fn(async () => overrides.branchFiles),
+        pushGeneratedBranch: vi.fn(async () => undefined),
+      },
+      github: {
+        findOpenReleasePullRequest: vi.fn(async () => overrides.pullRequest),
+        createPullRequest: vi.fn(overrides.create ?? (async () => ({ number: 42 }))),
+        updatePullRequest: vi.fn(async () => undefined),
+      },
+    };
+  }
+
+  it('fails before GitHub or Git mutation when the configured App identity is absent', async () => {
+    const { git, github } = dependencies();
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config: { ...config, appLogin: '  ' },
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Generated release.',
+    })).rejects.toThrow(/App identity/i);
+
+    expect(git.readBranchFiles).not.toHaveBeenCalled();
+    expect(github.findOpenReleasePullRequest).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ ...ownedPullRequest(), author: 'foreign[bot]' }, 'owner'],
+    [{ ...ownedPullRequest(), base: 'release-base' }, 'base'],
+    [{ ...ownedPullRequest(), head: 'release/foreign' }, 'head'],
+  ])('rejects a release PR with the wrong %s before mutating the generated branch', async (pullRequest, field) => {
+    const { git, github } = dependencies({ pullRequest });
+
+    await expect(runReleasePrAction({ git, github, config, generatedFiles, title: 'Release 1.2.4', body: 'Generated release.' }))
+      .rejects.toThrow(new RegExp(field, 'i'));
+
+    expect(git.pushGeneratedBranch).not.toHaveBeenCalled();
+    expect(github.updatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('refuses to overwrite a foreign branch file outside the generated release surfaces', async () => {
+    const { git, github } = dependencies({
+      branchFiles: { ...generatedFiles, 'docs/foreign-edit.md': 'do not replace\n' },
+      pullRequest: ownedPullRequest(),
+    });
+
+    await expect(runReleasePrAction({ git, github, config, generatedFiles, title: 'Release 1.2.4', body: 'Generated release.' }))
+      .rejects.toThrow(/foreign.*docs\/foreign-edit\.md/i);
+
+    expect(git.pushGeneratedBranch).not.toHaveBeenCalled();
+    expect(github.updatePullRequest).not.toHaveBeenCalled();
+  });
+
+  it('recovers after a branch-only partial success without another push or a duplicate PR', async () => {
+    const branchFiles: Record<string, string> = {};
+    const git = {
+      readBranchFiles: vi.fn(async () => Object.keys(branchFiles).length === 0 ? undefined : { ...branchFiles }),
+      pushGeneratedBranch: vi.fn(async ({ files }: { files: Record<string, string> }) => {
+        Object.assign(branchFiles, files);
+      }),
+    };
+    let openPullRequest: ReturnType<typeof ownedPullRequest> | undefined;
+    const github = {
+      findOpenReleasePullRequest: vi.fn(async () => openPullRequest),
+      createPullRequest: vi.fn(async () => {
+        openPullRequest = ownedPullRequest(42);
+        throw new Error('response lost after PR creation');
+      }),
+      updatePullRequest: vi.fn(async () => undefined),
+    };
+    const action = { git, github, config, generatedFiles, title: 'Release 1.2.4', body: 'Generated release.' };
+
+    await expect(runReleasePrAction(action)).rejects.toThrow(/response lost/i);
+    await expect(runReleasePrAction(action)).resolves.toEqual({ action: 'updated', pullRequestNumber: 42, branchUpdated: false });
+
+    expect(git.pushGeneratedBranch).toHaveBeenCalledTimes(1);
+    expect(github.createPullRequest).toHaveBeenCalledTimes(1);
+    expect(github.updatePullRequest).toHaveBeenCalledTimes(1);
   });
 });
