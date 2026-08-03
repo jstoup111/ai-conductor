@@ -15,7 +15,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm, access, readFile } from 'fs/promises';
+import { mkdtemp, rm, access, readFile, writeFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -107,7 +107,7 @@ function makeGuardrails(overrides: Partial<SelfHostGuardrails> = {}) {
 }
 
 /** A runner that records the CLAUDE_CONFIG_DIR seen at dispatch time per step. */
-function recordingRunner(onStep?: (step: StepName) => void): {
+function recordingRunner(onStep?: (step: StepName) => void | Promise<void>): {
   runner: StepRunner;
   seen: Array<{ step: StepName; configDir: string | undefined }>;
 } {
@@ -115,11 +115,32 @@ function recordingRunner(onStep?: (step: StepName) => void): {
   const runner: StepRunner = {
     run: vi.fn(async (step: StepName) => {
       seen.push({ step, configDir: process.env.CLAUDE_CONFIG_DIR });
-      onStep?.(step);
+      await onStep?.(step);
       return { success: true };
     }),
   };
   return { runner, seen };
+}
+
+function releaseDispositionConfig(): Record<string, unknown> {
+  return {
+    steps: {
+      'release-disposition': {
+        after: 'rebase',
+        skill: '.agents/skills/release-disposition/SKILL.md',
+        enforcement: 'gating',
+        completion_artifact: '.pipeline/release-disposition-pass',
+      },
+    },
+  };
+}
+
+function releaseDispositionRunner(projectRoot: string) {
+  return recordingRunner(async (step) => {
+    if ((step as string) === 'release-disposition') {
+      await writeFile(join(projectRoot, '.pipeline/release-disposition-pass'), 'PASS\n', 'utf8');
+    }
+  });
 }
 
 describe('self-host wiring — default bundle members forward to the real primitives', () => {
@@ -314,7 +335,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   it('passes runnable migration metadata from the retained draft PR to releaseGate', async () => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails } = makeGuardrails();
-    const { runner } = recordingRunner();
+    const { runner } = releaseDispositionRunner(dir);
     const prUrl = 'https://github.com/acme/harness/pull/42';
     const metadataBody = [
       'Release-Disposition: note',
@@ -339,7 +360,11 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       return { stdout: JSON.stringify({ body: metadataBody }) };
     };
 
-    await selfBuildConductor(guardrails, runner, { gh, runGh }).run();
+    await selfBuildConductor(guardrails, runner, {
+      gh,
+      runGh,
+      config: releaseDispositionConfig(),
+    }).run();
 
     expect(guardrails.releaseGate).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -359,7 +384,7 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
   ] as const)('HALTs before finish when release metadata has %s', async (_caseName, runGh, reason) => {
     await writeState(statePath, preBuildDoneState());
     const { guardrails } = makeGuardrails();
-    const { runner, seen } = recordingRunner();
+    const { runner, seen } = releaseDispositionRunner(dir);
     const gh: GhRunner = async (args) => {
       if (args[0] === 'pr' && args[1] === 'view') {
         if (_caseName === 'unresolved draft identity') throw new Error('no PR');
@@ -368,7 +393,11 @@ describe('self-host Phase 6 — daemon-loop wiring', () => {
       return { stdout: '' };
     };
 
-    await selfBuildConductor(guardrails, runner, { gh, runGh }).run();
+    await selfBuildConductor(guardrails, runner, {
+      gh,
+      runGh,
+      config: releaseDispositionConfig(),
+    }).run();
 
     expect(guardrails.releaseGate).not.toHaveBeenCalled();
     expect(seen.find((entry) => entry.step === 'finish')).toBeUndefined();

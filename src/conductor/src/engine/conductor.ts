@@ -2470,7 +2470,13 @@ export class Conductor {
     }
 
     if (sh.releaseArtifactGate) {
-      const releaseMetadata = await this.readShipDraftReleaseMetadata();
+      // Release-disposition metadata is authoritative only for this
+      // repository's explicitly configured flow. Other self-host callers
+      // retain the established release-gate contract, whose metadata input is
+      // optional, and therefore must not require a retained draft PR.
+      const releaseMetadata = this.releaseDispositionFlowActive()
+        ? await this.readShipDraftReleaseMetadata()
+        : { ok: true as const, value: undefined };
       if (!releaseMetadata.ok) return releaseMetadata;
       const verdict = await this.guardrails.releaseGate({
         projectRoot: this.projectRoot,

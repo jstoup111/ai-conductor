@@ -92,7 +92,7 @@ describe('repository-local maintain-documentation contract', () => {
           enforcement: 'gating',
           completion_artifact: '.pipeline/maintain-documentation-pass',
         },
-        configuredOrder: ['rebase', 'maintain-documentation', 'finish'],
+        configuredOrder: ['rebase', 'maintain-documentation', 'release-disposition'],
         manualTestDisabled: true,
         missingSkillError:
           'Custom step "maintain-documentation" skill file not found: <root>/.agents/skills/maintain-documentation/SKILL.md',
