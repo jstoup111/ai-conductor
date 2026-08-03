@@ -2,7 +2,7 @@ name: release-metadata
 
 on:
   pull_request:
-    types: [opened, reopened, synchronize, edited]
+    types: [opened, reopened, synchronize, edited, ready_for_review]
 
 permissions:
   contents: read
@@ -13,7 +13,7 @@ jobs:
     name: release-metadata
     # The generated release PR carries a candidate audit, not implementation
     # disposition fields. Its completeness is checked by release maintenance.
-    if: github.event.pull_request.head.ref != 'automation/release-pr'
+    if: github.event.pull_request.head.ref != 'automation/release-pr' && !github.event.pull_request.draft
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
