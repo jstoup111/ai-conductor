@@ -1,6 +1,7 @@
 export * from './types/index.js';
 export { parseArgs, createProgram, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
+export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
 
 import type { RunMode } from './types/index.js';
 
