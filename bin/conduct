@@ -349,12 +349,21 @@ check_harness_update_tagged() {
   latest_tag=$(git -C "$HARNESS_DIR" tag -l 'v*.*.*' --sort=-v:refname 2>/dev/null | head -1)
   [ -z "$latest_tag" ] && return 0
 
-  local current_version
-  current_version=$(conductor_cfg_get currentVersion "")
+  # The checked-out release is authoritative. VERSION intentionally advances
+  # immediately after a release, so neither it nor a stale config value can
+  # identify the installed tagged release. Between tags, retain the tag that a
+  # prior successful update recorded; with neither identity, do not guess.
+  local checked_out_tag current_version
+  checked_out_tag=$(git -C "$HARNESS_DIR" describe --tags --exact-match HEAD --match 'v*.*.*' 2>/dev/null || echo "")
+  if [ -n "$checked_out_tag" ]; then
+    current_version="$checked_out_tag"
+    conductor_cfg_set currentVersion "$current_version"
+  else
+    current_version=$(conductor_cfg_get currentVersion "")
+  fi
 
-  if [ -z "$current_version" ] || [[ "$current_version" == main@* ]]; then
-    # No recorded tagged version — seed it silently and return.
-    conductor_cfg_set currentVersion "$latest_tag"
+  if ! [[ "$current_version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    warn "Installed tagged release is unverifiable; cannot check for tagged updates."
     return 0
   fi
 
