@@ -2,11 +2,9 @@
  * SHIP-phase-entry draft PR publisher.
  *
  * The implementation PR used to be born at `finish`, at the very end of the
- * run. Everything that needs a PR *number* before then — most visibly the
- * `{{IMPLEMENTATION_PR}}` CHANGELOG token that `conduct-ts
- * finalize-changelog-pr` substitutes — had to be crammed into the finish turn,
- * and when the agent skipped it the finish completion gate refused and the
- * feature cycled through SHIP again.
+ * run. Opening it at SHIP entry lets the remaining ship steps work against the
+ * same draft while the implementation branch stays out of release-artifact
+ * maintenance.
  *
  * So the PR is now opened as a **draft** at the START of the SHIP phase and the
  * finish step flips it ready-for-review (`ensureShipReady`, already wired

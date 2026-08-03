@@ -93,10 +93,6 @@ import {
   makeProductionManualTestRecordRunners,
 } from './engine/manual-test-record-cli.js';
 import {
-  detectFinalizeChangelogPrCommand,
-  dispatchFinalizeChangelogPr,
-} from './engine/changelog-pr-finalizer-cli.js';
-import {
   detectDeriveFeedbackCommand,
   dispatchDeriveFeedback,
 } from './engine/derive-feedback-cli.js';
@@ -502,15 +498,6 @@ async function main(): Promise<void> {
   const finishRecordCmd = detectFinishRecordCommand(process.argv);
   if (finishRecordCmd) {
     const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
-    process.exit(code);
-  }
-
-  // Changelog PR finalization runs NON-INTERACTIVELY after the implementation
-  // PR exists. Malformed use is recognized as a guide command so it can never
-  // fall through and launch a feature pipeline.
-  const finalizeChangelogPrCmd = detectFinalizeChangelogPrCommand(process.argv);
-  if (finalizeChangelogPrCmd) {
-    const code = await dispatchFinalizeChangelogPr(finalizeChangelogPrCmd, process.cwd());
     process.exit(code);
   }
 

@@ -3111,11 +3111,8 @@ export class Conductor {
         //
         // Every skip has been evaluated, so this is the first SHIP step that
         // will actually execute — i.e. the start of the ship phase. Publishing
-        // here (rather than at `finish`) means the PR number exists for the
-        // whole SHIP tail: `conduct-ts finalize-changelog-pr` can substitute
-        // the `{{IMPLEMENTATION_PR}}` CHANGELOG token during the phase instead
-        // of only inside the finish turn, which is what used to leave stale
-        // tokens behind and cycle the feature back through SHIP.
+        // here (rather than at `finish`) gives the remaining ship steps a draft
+        // PR without making the implementation branch a release-artifact writer.
         //
         // The PR stays a DRAFT until `finish` flips it (ensureShipReady, run
         // from repairFinishPr and verified by the finish ship-readiness gate in

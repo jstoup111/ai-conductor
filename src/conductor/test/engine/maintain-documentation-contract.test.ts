@@ -532,7 +532,7 @@ describe('repository-local maintain-documentation contract', () => {
     });
   });
 
-  it('defines notable implementation changelog selection and format', async () => {
+  it('defines implementation release-disposition selection and format', async () => {
     const skill = await readFile(canonicalSkill, 'utf-8');
     const changelog =
       skill.match(/## Changelog decisions\n([\s\S]*?)(?=\n## |$)/)?.[1] ?? '';
@@ -545,10 +545,10 @@ describe('repository-local maintain-documentation contract', () => {
     expect({
       selection: {
         notableRequired:
-          /notable reader-visible implementation change.*(?:require|add).*changelog entry/is.test(
+          /notable reader-visible implementation change.*requires a release-note disposition/i.test(
             selection,
           ),
-        nonNotableMayPass: /non-notable implementation.*PASS without.*entry/i.test(selection),
+        nonNotableMayPass: /non-notable implementation.*PASS.*explicit no-note disposition/i.test(selection),
         exclusions: {
           specOnly: /spec-only/i.test(selection),
           documentationOnly: /documentation-only/i.test(selection),
@@ -560,27 +560,20 @@ describe('repository-local maintain-documentation contract', () => {
         oneSentence: /exactly one.*sentence/i.test(format),
         presentTense: /present-tense/i.test(format),
         readerOutcomeFirst: /led by the reader outcome/i.test(format),
-        preFinishToken:
-          /pre-finish.*exactly one required `\{\{IMPLEMENTATION_PR\}\}` token/is.test(format),
-        specOptional: /spec PR link.*optional.*when known/i.test(format),
-        implementationRequired: /implementation.*required/i.test(format),
-        finalLink: format.includes('[implementation PR #N](URL)'),
-        exactExample: format.includes(
-          '- Add ... ([spec PR #123](…); {{IMPLEMENTATION_PR}}).',
-        ),
+        prMetadata: /category and semver impact.*implementation PR metadata/i.test(format),
+        noChangelogWrite: /do not edit `CHANGELOG\.md`/i.test(format),
       },
       blocking: {
         outcome: /return BLOCKED.*pass marker absent/i.test(blocking),
-        missingRequiredEntry: /missing required notable entry/i.test(blocking),
-        missingToken: /missing implementation token/i.test(blocking),
-        duplicateToken: /duplicate implementation token/i.test(blocking),
+        missingRequiredEntry: /missing required release-note disposition/i.test(blocking),
+        missingNoNote: /missing explicit no-note disposition/i.test(blocking),
         multipleSentences: /multiple sentences/i.test(blocking),
         futureTense: /future tense/i.test(blocking),
         internalMechanicsFirst: /internal mechanics first/i.test(blocking),
       },
       migrationBlocks: {
         runnable: /runnable migration blocks/i.test(format),
-        separate: /separate from.*one-sentence entry/i.test(format),
+        separate: /separate from.*one-sentence (?:entry|release note)/i.test(format),
       },
     }).toEqual({
       selection: {
@@ -597,17 +590,13 @@ describe('repository-local maintain-documentation contract', () => {
         oneSentence: true,
         presentTense: true,
         readerOutcomeFirst: true,
-        preFinishToken: true,
-        specOptional: true,
-        implementationRequired: true,
-        finalLink: true,
-        exactExample: true,
+        prMetadata: true,
+        noChangelogWrite: true,
       },
       blocking: {
         outcome: true,
         missingRequiredEntry: true,
-        missingToken: true,
-        duplicateToken: true,
+        missingNoNote: true,
         multipleSentences: true,
         futureTense: true,
         internalMechanicsFirst: true,
@@ -679,7 +668,14 @@ describe('repository-local maintain-documentation contract', () => {
 
     expect({
       claudePolicy: policyContract(claudePolicy),
-      pullRequestTemplate: policyContract(pullRequestTemplate),
+      pullRequestTemplate: {
+        declaresNoNote: /Release-Disposition: no-note/.test(pullRequestTemplate),
+        declaresNoteFields:
+          /Release-Disposition: note[\s\S]*Release-Category:[\s\S]*Release-Semver:[\s\S]*Release-Note:/i.test(
+            pullRequestTemplate,
+          ),
+        retainsMigration: /```bash migration/.test(pullRequestTemplate),
+      },
       mutationProbes: {
         rewritesChangelog: !noReleaseContract(
           'An empty [Unreleased] is a successful no-release path that rewrites the changelog.',
@@ -728,27 +724,9 @@ describe('repository-local maintain-documentation contract', () => {
         },
       },
       pullRequestTemplate: {
-        notableOnly: true,
-        nonNotableAllowed: true,
-        emptyUnreleased: {
-          successfulNoRelease: true,
-          noChangelogRewrite: true,
-          noVersionBump: true,
-          noTag: true,
-          noReleaseCommit: true,
-          noGitHubRelease: true,
-        },
-        breakingMigration: true,
-        readme: {
-          localRefinement: true,
-          canonicalAffectedDocs: true,
-          unchangedUnlessLanding: true,
-        },
-        consumerIsolation: true,
-        removedContradictions: {
-          noUniversalEntryRequirement: true,
-          noEmptyFailureClaim: true,
-        },
+        declaresNoNote: true,
+        declaresNoteFields: true,
+        retainsMigration: true,
       },
       mutationProbes: {
         rewritesChangelog: true,
