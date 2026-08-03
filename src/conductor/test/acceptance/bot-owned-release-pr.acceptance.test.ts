@@ -1,396 +1,586 @@
 /**
- * RED acceptance specs for the bot-owned release PR.
+ * Acceptance specs for the bot-owned release PR.
  *
  * Stories: .docs/stories/changelog-unreleased-is-a-shared-write-target-conf.md
  * Plan:    .docs/plans/changelog-unreleased-is-a-shared-write-target-conf.md
  * Track:   technical — no PRD/FR coverage table applies.
  *
- * These specs exercise the three production action entry points named by the
- * approved plan. Git and GitHub are faithful in-memory fakes; no network,
- * ambient credentials, shell evaluation, or real repository mutation occurs.
- * Pure parsing, semver ordering, waiver matrices, workflow YAML structure,
- * update-channel identity, FINISH cleanup, and generic rebase behavior remain
- * unit-covered by Tasks 1-8 and 12-19. This file owns the cross-operation
- * flows: validate -> collect -> render -> upsert; retry/stale reconciliation;
- * approve -> tag -> release; and the one-time transition lifecycle.
+ * This file owns the CROSS-OPERATION flows over the production seams the
+ * approved plan named: validate -> collect -> render -> upsert; stale/partial
+ * reconciliation; approve -> tag -> release; and the one-time transition
+ * lifecycle. Per-module error matrices (parsing, pagination completeness,
+ * semver ordering, waivers, workflow YAML, update channels) stay in the
+ * focused engine tests for each module.
  *
- * The modules do not exist at RED time. They are dynamically imported inside
- * each test so Vitest executes the specs and reports assertion failures rather
- * than failing collection/type-checking on a missing static import.
+ * Git and GitHub are faithful in-memory adapters. No network, ambient
+ * credentials, shell evaluation, or real repository mutation occurs.
  */
 
 import { describe, expect, it } from 'vitest';
 
-type Action = (input: Record<string, unknown>) => Promise<Record<string, unknown>>;
+import {
+  collectReleaseCandidates,
+  type ReleaseCandidatePullRequest,
+} from '../../src/engine/release-candidates.js';
+import { runReleaseMetadataCheckAction } from '../../src/engine/release-metadata-check-action.js';
+import {
+  runReleasePrAction,
+  type ReleasePrGit,
+  type ReleasePrGithub,
+  type ReleasePullRequest,
+} from '../../src/engine/release-pr-action.js';
+import {
+  runReleasePublisherAction,
+  type MergedReleasePullRequest,
+  type ReleasePublisherGit,
+  type ReleasePublisherGithub,
+} from '../../src/engine/release-publisher-action.js';
+import { renderReleaseCandidate } from '../../src/engine/release-renderer.js';
 
-async function loadAction(modulePath: string, exportName: string): Promise<Action> {
-  const mod = (await import(modulePath)) as Record<string, unknown>;
-  const action = mod[exportName];
-  if (typeof action !== 'function') {
-    throw new Error(`expected export "${exportName}" to be a function (not yet implemented)`);
-  }
-  return action as Action;
-}
+const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
 
+/** Hostile note text: shell syntax, a workflow expression, and a Markdown link. */
+const HOSTILE_NOTE = 'Keep `$(touch /tmp/pwned)` and ${{ secrets.TOKEN }} inert; see [docs](https://example.test).';
 const NOTE_BODY = [
   'Release-Disposition: note',
   'Release-Category: Changed',
   'Release-Semver: minor',
-  'Release-Note: Keep `$(touch /tmp/pwned)` and ${{ secrets.TOKEN }} inert; see [docs](https://example.test).',
+  `Release-Note: ${HOSTILE_NOTE}`,
 ].join('\n');
-
 const NO_NOTE_BODY = 'Release-Disposition: no-note';
 
-interface PullRequest {
-  number: number;
-  merged: boolean;
-  head: string;
-  base: string;
-  author: string;
-  body: string;
-  mergeSha: string;
-}
+const CHANGELOG = '# Changelog\n\n## [Unreleased]\n\n## [1.2.3] - 2026-07-01\n\n### Added\n\n- Previously released entry.\n';
 
-function implementationPr(overrides: Partial<PullRequest> = {}): PullRequest {
+function mergedPr(overrides: Partial<ReleaseCandidatePullRequest> = {}): ReleaseCandidatePullRequest {
   return {
     number: 41,
     merged: true,
-    head: 'feat/metadata',
-    base: 'main',
-    author: 'maintainer',
-    body: NOTE_BODY,
+    mergedAt: '2026-08-01T00:00:00Z',
     mergeSha: 'merge-41',
+    body: NOTE_BODY,
     ...overrides,
   };
 }
 
-class FakeGithub {
-  pages: PullRequest[][] = [];
-  openReleasePr: PullRequest | undefined;
-  checks: Array<Record<string, unknown>> = [];
-  createdPrs: Array<Record<string, unknown>> = [];
-  updatedPrs: Array<Record<string, unknown>> = [];
-  releases: Array<Record<string, unknown>> = [];
-  failCreatePr = false;
-  failCreateRelease = false;
-
-  async listMergedPullRequests(page: number): Promise<{ items: PullRequest[]; hasNextPage: boolean }> {
-    return { items: this.pages[page - 1] ?? [], hasNextPage: page < this.pages.length };
-  }
-
-  async findOpenReleasePullRequest(): Promise<PullRequest | undefined> {
-    return this.openReleasePr;
-  }
-
-  async publishCheck(input: Record<string, unknown>): Promise<void> {
-    this.checks.push(input);
-  }
-
-  async createPullRequest(input: Record<string, unknown>): Promise<{ number: number }> {
-    if (this.failCreatePr) throw new Error('simulated PR creation failure');
-    this.createdPrs.push(input);
-    return { number: 900 };
-  }
-
-  async updatePullRequest(input: Record<string, unknown>): Promise<void> {
-    this.updatedPrs.push(input);
-  }
-
-  async createRelease(input: Record<string, unknown>): Promise<void> {
-    if (this.failCreateRelease) throw new Error('simulated release creation failure');
-    this.releases.push(input);
-  }
+/** Collect and render the pending set exactly as the maintainer workflow does. */
+async function collectAndRender(pages: ReleaseCandidatePullRequest[][]) {
+  const mergeCommits = pages.flat().map((pullRequest) => pullRequest.mergeSha);
+  const collection = await collectReleaseCandidates({
+    git: {
+      latestTag: async () => 'v1.2.3',
+      mergeRange: async () => mergeCommits,
+    },
+    github: {
+      listMergedPullRequests: async (page: number) => ({
+        items: pages[page - 1] ?? [],
+        hasNextPage: page < pages.length,
+        totalCount: pages.flat().length,
+      }),
+    },
+  });
+  const rendered = renderReleaseCandidate({
+    currentVersion: '1.2.3',
+    date: '2026-08-02',
+    changelog: CHANGELOG,
+    candidates: collection.candidates,
+  });
+  return {
+    collection,
+    rendered,
+    generatedFiles: { 'CHANGELOG.md': rendered.changelog, VERSION: `${rendered.version}\n` },
+    audit: collection.candidates.map(({ number, mergeSha, disposition }) => ({ number, mergeSha, disposition })),
+  };
 }
 
-class FakeGit {
-  mainHeads = ['main-1'];
-  pushes: Array<Record<string, unknown>> = [];
-  tags: Array<Record<string, unknown>> = [];
+/** In-memory Git remote for the generated release branch. */
+class FakeGit implements ReleasePrGit {
+  mainHeads: string[] = ['main-1'];
   branchFiles = new Map<string, Record<string, string>>();
-  existingTags = new Map<string, string>();
-
-  async latestTag(): Promise<string> {
-    return 'v0.99.17';
-  }
-
-  async mainHead(): Promise<string> {
-    return this.mainHeads.length > 1 ? this.mainHeads.shift()! : this.mainHeads[0]!;
-  }
-
-  async mergeRange(): Promise<string[]> {
-    return ['merge-41', 'merge-42'];
-  }
+  baseFiles = new Map<string, string>();
+  pushes: Array<{ branch: string; expectedBaseHead?: string; files: Record<string, string>; message: string }> = [];
+  private branchHead = 0;
 
   async readBranchFiles(branch: string): Promise<Record<string, string> | undefined> {
     return this.branchFiles.get(branch);
   }
 
-  async pushGeneratedBranch(input: Record<string, unknown>): Promise<void> {
+  async readBaseFile(_branch: string, path: string): Promise<string | undefined> {
+    return this.baseFiles.get(path);
+  }
+
+  async readMainHead(): Promise<string> {
+    return this.mainHeads.length > 1 ? this.mainHeads.shift()! : this.mainHeads[0]!;
+  }
+
+  async readBranchHead(): Promise<string> {
+    return `release-head-${this.branchHead}`;
+  }
+
+  async pushGeneratedBranch(input: {
+    branch: string;
+    base: string;
+    expectedBaseHead?: string;
+    files: Record<string, string>;
+    message: string;
+  }): Promise<void> {
     this.pushes.push(input);
-    const branch = String(input.branch);
-    this.branchFiles.set(branch, input.files as Record<string, string>);
-  }
-
-  async tagTarget(tag: string): Promise<string | undefined> {
-    return this.existingTags.get(tag);
-  }
-
-  async createAnnotatedTag(input: Record<string, unknown>): Promise<void> {
-    this.tags.push(input);
-    this.existingTags.set(String(input.tag), String(input.target));
+    this.branchFiles.set(input.branch, input.files);
+    this.branchHead += 1;
   }
 }
 
-const releaseConfig = {
-  branch: 'release/pending',
-  base: 'main',
-  appLogin: 'release-app[bot]',
-};
+/** In-memory GitHub for the designated release PR. */
+class FakeGithub implements ReleasePrGithub {
+  openReleasePr: ReleasePullRequest | undefined;
+  created: Array<{ head: string; base: string; title: string; body: string }> = [];
+  updated: Array<{ number: number; title: string; body: string }> = [];
+  readiness: Array<{ pullRequestNumber: number; head: string; summary: string }> = [];
+  failCreatePullRequest = false;
 
-describe('TI-1/TI-2 — required disposition survives validation and release rendering', () => {
-  it('normalizes valid note/no-note PRs while keeping hostile note text inert', async () => {
-    const check = await loadAction(
-      '../../src/engine/release-metadata-check-action.js',
-      'runReleaseMetadataCheckAction',
-    );
-    const github = new FakeGithub();
+  async findOpenReleasePullRequest(): Promise<ReleasePullRequest | undefined> {
+    return this.openReleasePr;
+  }
 
-    const note = await check({ event: { pullRequest: implementationPr() }, github });
-    const noNote = await check({
-      event: { pullRequest: implementationPr({ number: 42, body: NO_NOTE_BODY }) },
-      github,
+  async createPullRequest(input: { head: string; base: string; title: string; body: string }): Promise<{ number: number }> {
+    if (this.failCreatePullRequest) throw new Error('simulated PR creation failure');
+    this.created.push(input);
+    return { number: 900 };
+  }
+
+  async updatePullRequest(input: { number: number; title: string; body: string }): Promise<void> {
+    this.updated.push(input);
+  }
+
+  async publishReleaseReadiness(input: {
+    pullRequestNumber: number;
+    head: string;
+    conclusion: 'success';
+    summary: string;
+  }): Promise<void> {
+    this.readiness.push({ pullRequestNumber: input.pullRequestNumber, head: input.head, summary: input.summary });
+  }
+}
+
+describe('TI-1/TI-2/TI-3/TI-5 — validate, collect, render, and maintain one release PR', () => {
+  it('carries a hostile note inertly from PR metadata into one created release PR with head-bound readiness', async () => {
+    const outputs = new Map<string, string>();
+    await runReleaseMetadataCheckAction({
+      github: {},
+      context: { payload: { pull_request: { body: NOTE_BODY } } },
+      core: { setOutput: (name, value) => void outputs.set(name, value) },
     });
-
-    expect(note).toMatchObject({
+    await runReleaseMetadataCheckAction({
+      github: {},
+      context: { payload: { pull_request: { body: NO_NOTE_BODY } } },
+      core: { setOutput: (name, value) => void outputs.set(`no-note:${name}`, value) },
+    });
+    expect(JSON.parse(outputs.get('release-disposition')!)).toMatchObject({
       disposition: 'note',
       category: 'Changed',
       semver: 'minor',
+      note: HOSTILE_NOTE,
     });
-    expect(String(note.note)).toContain('$(touch /tmp/pwned)');
-    expect(String(note.note)).toContain('${{ secrets.TOKEN }}');
-    expect(noNote).toMatchObject({ disposition: 'no-note' });
-    expect(github.checks).toHaveLength(2);
+    expect(JSON.parse(outputs.get('no-note:release-disposition')!)).toEqual({ disposition: 'no-note' });
+
+    // Two pages: one notable candidate, one explicit no-note candidate.
+    const { collection, rendered, generatedFiles, audit } = await collectAndRender([
+      [mergedPr()],
+      [mergedPr({ number: 42, mergeSha: 'merge-42', mergedAt: '2026-08-01T01:00:00Z', body: NO_NOTE_BODY })],
+    ]);
+    expect(collection.completeness).toEqual({ status: 'complete' });
+    expect(rendered.version).toBe('1.3.0');
+    // The hostile text survives as inert data; the no-note candidate never reaches the reader.
+    expect(rendered.changelog).toContain(HOSTILE_NOTE);
+    expect(rendered.changelog).toContain('implementation PR #41');
+    expect(rendered.changelog).not.toContain('#42');
+    // Previously released history is retained.
+    expect(rendered.changelog).toContain('## [1.2.3] - 2026-07-01');
+
+    const git = new FakeGit();
+    const github = new FakeGithub();
+    const first = await runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: `Release ${rendered.version}`,
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+    });
+
+    expect(first).toMatchObject({ action: 'created', pullRequestNumber: 900, branchUpdated: true });
+    expect(github.created).toHaveLength(1);
+    expect(git.pushes).toHaveLength(1);
+    expect(git.pushes[0]!.expectedBaseHead).toBe('main-1');
+    expect(git.pushes[0]!.files.VERSION).toBe('1.3.0\n');
+    // Every candidate appears exactly once in the audit, including the no-note one.
+    expect(github.created[0]!.body).toMatch(/\|\s*#41\s*\|[^\n]*included/);
+    expect(github.created[0]!.body).toMatch(/\|\s*#42\s*\|[^\n]*no-note/);
+    // Readiness is bound to the exact generated-branch head that was just pushed.
+    expect(github.readiness).toEqual([
+      { pullRequestNumber: 900, head: 'release-head-1', summary: 'All 2 release candidates are accounted for.' },
+    ]);
   });
 
-  it.each([
-    ['', 'disposition'],
-    ['Release-Disposition: no-note\nRelease-Semver: patch', 'semver'],
-    ['Release-Disposition: note\nRelease-Category: Unknown\nRelease-Semver: patch\nRelease-Note: x', 'category'],
-    ['Release-Disposition: note\nRelease-Category: Fixed\nRelease-Semver: sideways\nRelease-Note: x', 'semver'],
-  ])('fails closed for invalid metadata and emits no normalized result: %s', async (body, field) => {
-    const check = await loadAction(
-      '../../src/engine/release-metadata-check-action.js',
-      'runReleaseMetadataCheckAction',
-    );
+  it('updates the same release PR on a later merge and stays content-idempotent for an unchanged range', async () => {
+    const { generatedFiles, rendered, audit } = await collectAndRender([[mergedPr()]]);
+    const git = new FakeGit();
     const github = new FakeGithub();
+    const common = {
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: `Release ${rendered.version}`,
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+    };
 
-    await expect(check({ event: { pullRequest: implementationPr({ body }) }, github })).rejects.toThrow(
-      new RegExp(field, 'i'),
-    );
-    expect(github.checks.at(-1)).toMatchObject({ conclusion: 'failure' });
+    await runReleasePrAction(common);
+    github.openReleasePr = { number: 900, author: config.appLogin, head: config.branch, base: config.base };
+
+    const second = await runReleasePrAction(common);
+
+    expect(second).toMatchObject({ action: 'updated', pullRequestNumber: 900, branchUpdated: false });
+    expect(github.created).toHaveLength(1);
+    expect(github.updated).toHaveLength(1);
+    expect(git.pushes).toHaveLength(1);
+  });
+
+  it('fails closed without mutating anything when the open release PR is not the designated bot PR', async () => {
+    const { generatedFiles, rendered, audit } = await collectAndRender([[mergedPr()]]);
+    const git = new FakeGit();
+    const github = new FakeGithub();
+    github.openReleasePr = { number: 77, author: 'maintainer', head: 'feat/metadata', base: config.base };
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: `Release ${rendered.version}`,
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+    })).rejects.toThrow(/owner does not match/i);
+
+    expect(git.pushes).toEqual([]);
+    expect(github.created).toEqual([]);
+    expect(github.updated).toEqual([]);
   });
 });
 
-describe('TI-3/TI-4/TI-5 — one complete, serialized, idempotent release PR', () => {
-  it('collects every page, renders distinct candidates, creates once, then updates the same PR', async () => {
-    const maintain = await loadAction(
-      '../../src/engine/release-pr-action.js',
-      'runReleasePrAction',
-    );
-    const github = new FakeGithub();
+describe('TI-4 — stale and partially-failed maintenance cannot lose candidates', () => {
+  it('rerenders once at the observed main head and pushes only the refreshed content', async () => {
+    const stale = await collectAndRender([[mergedPr()]]);
+    const fresh = await collectAndRender([
+      [mergedPr()],
+      [mergedPr({ number: 42, mergeSha: 'merge-42', mergedAt: '2026-08-01T02:00:00Z' })],
+    ]);
     const git = new FakeGit();
-    github.pages = [
-      [implementationPr()],
-      [implementationPr({ number: 42, body: NOTE_BODY, mergeSha: 'merge-42' })],
-    ];
+    const github = new FakeGithub();
+    git.mainHeads = ['main-2'];
+    const rerenders: string[] = [];
 
-    const first = await maintain({
-      event: { action: 'closed', pullRequest: implementationPr() },
-      github,
+    const result = await runReleasePrAction({
       git,
-      appAuthenticated: true,
-      config: releaseConfig,
+      github,
+      config,
+      generatedFiles: stale.generatedFiles,
+      title: 'Release 1.3.0',
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit: fresh.audit,
+      rerenderForCurrentMain: async (mainHead: string) => {
+        rerenders.push(mainHead);
+        return {
+          expectedMainHead: mainHead,
+          generatedFiles: fresh.generatedFiles,
+          title: 'Release 1.3.0',
+          body: 'Automated release proposal.',
+        };
+      },
     });
 
-    expect(first).toMatchObject({ action: 'created', pullRequestNumber: 900 });
-    expect(github.createdPrs).toHaveLength(1);
+    expect(rerenders).toEqual(['main-2']);
     expect(git.pushes).toHaveLength(1);
-    const files = git.pushes[0]!.files as Record<string, string>;
-    expect(files.CHANGELOG_MD.match(/Keep `\$\(touch/g)).toHaveLength(2);
-    expect(files.VERSION).toBe('0.100.0\n');
-    expect(files.CANDIDATE_AUDIT).toMatch(/#41[\s\S]*included/);
-    expect(files.CANDIDATE_AUDIT).toMatch(/#42[\s\S]*included/);
+    expect(git.pushes[0]!.expectedBaseHead).toBe('main-2');
+    expect(git.pushes[0]!.files).toEqual(fresh.generatedFiles);
+    expect(result).toMatchObject({ action: 'created', branchUpdated: true });
+  });
 
-    github.openReleasePr = implementationPr({
-      number: 900,
-      author: releaseConfig.appLogin,
-      head: releaseConfig.branch,
-    });
-    const second = await maintain({
-      event: { action: 'closed', pullRequest: implementationPr({ number: 42 }) },
-      github,
+  it('rejects a stale render outright when no rerender path is available', async () => {
+    const { generatedFiles, audit } = await collectAndRender([[mergedPr()]]);
+    const git = new FakeGit();
+    const github = new FakeGithub();
+    git.mainHeads = ['main-9'];
+
+    await expect(runReleasePrAction({
       git,
-      appAuthenticated: true,
-      config: releaseConfig,
-    });
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.3.0',
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+    })).rejects.toThrow(/stale release render/i);
 
-    expect(second).toMatchObject({ action: 'updated', pullRequestNumber: 900 });
-    expect(github.createdPrs).toHaveLength(1);
-    expect(github.updatedPrs).toHaveLength(1);
+    expect(git.pushes).toEqual([]);
+    expect(github.created).toEqual([]);
   });
 
-  it('rejects a stale main head before push and never overwrites newer evidence', async () => {
-    const maintain = await loadAction(
-      '../../src/engine/release-pr-action.js',
-      'runReleasePrAction',
-    );
-    const github = new FakeGithub();
+  it('reconciles a branch-pushed, PR-failed run into one PR without a second push', async () => {
+    const { generatedFiles, audit } = await collectAndRender([[mergedPr()]]);
     const git = new FakeGit();
-    github.pages = [[implementationPr(), implementationPr({ number: 42, mergeSha: 'merge-42' })]];
-    git.mainHeads = ['main-before', 'main-after'];
+    const github = new FakeGithub();
+    const input = {
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.3.0',
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+    };
 
-    await expect(
-      maintain({
-        event: { action: 'closed', pullRequest: implementationPr() },
-        github,
-        git,
-        appAuthenticated: true,
-        config: releaseConfig,
-        maxStaleRetries: 0,
-      }),
-    ).rejects.toThrow(/stale|main.*advanced/i);
-    expect(git.pushes).toHaveLength(0);
-    expect(github.createdPrs).toHaveLength(0);
+    github.failCreatePullRequest = true;
+    await expect(runReleasePrAction(input)).rejects.toThrow(/simulated PR creation failure/);
+    expect(git.pushes).toHaveLength(1);
+
+    github.failCreatePullRequest = false;
+    const recovered = await runReleasePrAction(input);
+
+    expect(recovered).toMatchObject({ action: 'created', pullRequestNumber: 900, branchUpdated: false });
+    expect(git.pushes).toHaveLength(1);
+    expect(github.created).toHaveLength(1);
   });
 
-  it.each([
-    [{ action: 'closed', pullRequest: implementationPr({ merged: false }) }, true, 'closed unmerged'],
-    [{ action: 'closed', pullRequest: implementationPr({ head: releaseConfig.branch }) }, true, 'release PR recursion'],
-    [{ action: 'closed', pullRequest: implementationPr() }, false, 'missing App credentials'],
-  ])('does not mutate for %s', async (event, appAuthenticated, reason) => {
-    const maintain = await loadAction(
-      '../../src/engine/release-pr-action.js',
-      'runReleasePrAction',
-    );
-    const github = new FakeGithub();
+  it('refuses to overwrite a foreign edit on the release branch', async () => {
+    const { generatedFiles, audit } = await collectAndRender([[mergedPr()]]);
     const git = new FakeGit();
-    github.pages = [[implementationPr(), implementationPr({ number: 42, mergeSha: 'merge-42' })]];
+    const github = new FakeGithub();
+    git.branchFiles.set(config.branch, { ...generatedFiles, 'docs/handwritten.md': 'operator edit' });
 
-    const invocation = maintain({ event, github, git, appAuthenticated, config: releaseConfig });
-    if (appAuthenticated) {
-      await expect(invocation).resolves.toMatchObject({ action: 'noop', reason });
-    } else {
-      await expect(invocation).rejects.toThrow(/App|credential/i);
-    }
-    expect(git.pushes).toHaveLength(0);
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.3.0',
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+    })).rejects.toThrow(/foreign edits/i);
+
+    expect(git.pushes).toEqual([]);
   });
 });
 
 describe('TI-6 — only a proven release-PR merge publishes', () => {
-  it('creates one annotated tag and GitHub Release, then recovers idempotently after a release failure', async () => {
-    const publish = await loadAction(
-      '../../src/engine/release-publisher-action.js',
-      'runReleasePublisherAction',
-    );
-    const github = new FakeGithub();
-    const git = new FakeGit();
-    github.failCreateRelease = true;
-    const event = {
-      action: 'closed',
-      pullRequest: implementationPr({
-        number: 900,
-        author: releaseConfig.appLogin,
-        head: releaseConfig.branch,
-        mergeSha: 'release-merge',
-      }),
-    };
-    const approved = {
-      version: '0.100.0',
-      tag: 'v0.100.0',
-      changelogSection: '## [0.100.0] - 2026-08-02\n\n### Changed\n- shipped (#41)',
-      candidateAuditComplete: true,
-    };
+  const releaseMerge: MergedReleasePullRequest = {
+    number: 900,
+    author: config.appLogin,
+    head: config.branch,
+    headCommit: 'release-head-1',
+    base: 'main',
+    mergeCommit: 'release-merge',
+  };
 
-    await expect(publish({ event, approved, github, git, config: releaseConfig })).rejects.toThrow(
-      /release creation failure/i,
-    );
-    expect(git.tags).toHaveLength(1);
+  function publisherFakes(overrides: {
+    pullRequest?: MergedReleasePullRequest | undefined;
+    files?: Record<string, string>;
+    audit?: { head: string; complete: boolean };
+    existingTag?: { commit: string };
+    failCreateRelease?: boolean;
+  } = {}) {
+    const tags: Array<{ tag: string; commit: string }> = [];
+    const releases: Array<{ tag: string; target: string; body: string }> = [];
+    const forbidden: string[] = [];
+    const existingTags = new Map<string, { commit: string }>();
+    if (overrides.existingTag !== undefined) existingTags.set('v1.3.0', overrides.existingTag);
 
-    github.failCreateRelease = false;
-    const recovered = await publish({ event, approved, github, git, config: releaseConfig });
-    expect(recovered).toMatchObject({ action: 'published', recoveredExistingTag: true });
-    expect(git.tags).toHaveLength(1);
-    expect(github.releases).toHaveLength(1);
+    const git: ReleasePublisherGit = {
+      readCommitFiles: async () => {
+        if (overrides.files === undefined) forbidden.push('readCommitFiles');
+        return overrides.files;
+      },
+      readAnnotatedTag: async (tag: string) => existingTags.get(tag),
+      createAnnotatedTag: async ({ tag, commit }) => {
+        tags.push({ tag, commit });
+        existingTags.set(tag, { commit });
+      },
+    };
+    const github: ReleasePublisherGithub = {
+      findMergedPullRequestByMergeCommit: async () => overrides.pullRequest,
+      readReleaseAudit: async () => {
+        if (overrides.audit === undefined) forbidden.push('readReleaseAudit');
+        return overrides.audit;
+      },
+      findReleaseByTag: async () => undefined,
+      createRelease: async (input) => {
+        if (overrides.failCreateRelease === true) throw new Error('simulated release creation failure');
+        releases.push({ tag: input.tag, target: input.target, body: input.body });
+      },
+    };
+    return { git, github, tags, releases, forbidden };
+  }
+
+  it('publishes exactly one annotated tag and GitHub Release from the approved artifacts', async () => {
+    const { rendered } = await collectAndRender([[mergedPr()]]);
+    const fakes = publisherFakes({
+      pullRequest: releaseMerge,
+      audit: { head: 'release-head-1', complete: true },
+      files: { VERSION: '1.3.0\n', 'CHANGELOG.md': rendered.changelog },
+    });
+
+    const result = await runReleasePublisherAction({
+      git: fakes.git,
+      github: fakes.github,
+      config,
+      event: { branch: 'main', commit: 'release-merge' },
+    });
+
+    expect(result).toEqual({ state: 'published', version: '1.3.0' });
+    expect(fakes.tags).toEqual([{ tag: 'v1.3.0', commit: 'release-merge' }]);
+    expect(fakes.releases).toHaveLength(1);
+    expect(fakes.releases[0]!.body).toContain(HOSTILE_NOTE);
   });
 
   it.each([
-    [implementationPr(), 'implementation PR'],
-    [implementationPr({ number: 900, author: 'foreign[bot]', head: releaseConfig.branch }), 'foreign PR'],
-    [implementationPr({ number: 900, author: releaseConfig.appLogin, head: 'release/foreign' }), 'foreign branch'],
-  ])('rejects %s provenance before tag or release mutation', async (pullRequest, reason) => {
-    const publish = await loadAction(
-      '../../src/engine/release-publisher-action.js',
-      'runReleasePublisherAction',
-    );
-    const github = new FakeGithub();
-    const git = new FakeGit();
+    ['an ordinary implementation merge', { ...releaseMerge, number: 41, author: 'maintainer', head: 'feat/metadata' }],
+    ['a foreign bot on the release branch', { ...releaseMerge, author: 'foreign[bot]' }],
+    ['the App on a foreign branch', { ...releaseMerge, head: 'release/foreign' }],
+    ['a direct push with no PR', undefined],
+  ])('ignores %s before reading any release artifact', async (_case, pullRequest) => {
+    const fakes = publisherFakes({ pullRequest });
 
-    await expect(
-      publish({
-        event: { action: 'closed', pullRequest },
-        approved: { version: '0.100.0', candidateAuditComplete: true },
-        github,
-        git,
-        config: releaseConfig,
-      }),
-    ).rejects.toThrow(new RegExp(reason, 'i'));
-    expect(git.tags).toHaveLength(0);
-    expect(github.releases).toHaveLength(0);
+    const result = await runReleasePublisherAction({
+      git: fakes.git,
+      github: fakes.github,
+      config,
+      event: { branch: 'main', commit: 'release-merge' },
+    });
+
+    expect(result).toEqual({ state: 'ignored' });
+    expect(fakes.forbidden).toEqual([]);
+    expect(fakes.tags).toEqual([]);
+    expect(fakes.releases).toEqual([]);
+  });
+
+  it('rejects an approved merge whose candidate audit is not bound to the merged head', async () => {
+    const { rendered } = await collectAndRender([[mergedPr()]]);
+    const fakes = publisherFakes({
+      pullRequest: releaseMerge,
+      audit: { head: 'release-head-0', complete: true },
+      files: { VERSION: '1.3.0\n', 'CHANGELOG.md': rendered.changelog },
+    });
+
+    const result = await runReleasePublisherAction({
+      git: fakes.git,
+      github: fakes.github,
+      config,
+      event: { branch: 'main', commit: 'release-merge' },
+    });
+
+    expect(result).toMatchObject({ state: 'rejected' });
+    expect(fakes.tags).toEqual([]);
+    expect(fakes.releases).toEqual([]);
+  });
+
+  it('finishes the same release after a tag-created, release-failed run without a duplicate tag', async () => {
+    const { rendered } = await collectAndRender([[mergedPr()]]);
+    const files = { VERSION: '1.3.0\n', 'CHANGELOG.md': rendered.changelog };
+    const audit = { head: 'release-head-1', complete: true };
+    const event = { branch: 'main', commit: 'release-merge' };
+    const failing = publisherFakes({ pullRequest: releaseMerge, audit, files, failCreateRelease: true });
+
+    await expect(runReleasePublisherAction({
+      git: failing.git,
+      github: failing.github,
+      config,
+      event,
+    })).rejects.toThrow(/simulated release creation failure/);
+    expect(failing.tags).toEqual([{ tag: 'v1.3.0', commit: 'release-merge' }]);
+
+    const recovering = publisherFakes({
+      pullRequest: releaseMerge,
+      audit,
+      files,
+      existingTag: { commit: 'release-merge' },
+    });
+
+    const result = await runReleasePublisherAction({
+      git: recovering.git,
+      github: recovering.github,
+      config,
+      event,
+    });
+
+    expect(result).toEqual({ state: 'published', version: '1.3.0' });
+    expect(recovering.tags).toEqual([]);
+    expect(recovering.releases).toHaveLength(1);
   });
 });
 
-describe('TI-7 — one-time audited backlog transition', () => {
-  it('requires exhaustive operator-approved dispositions and refuses a second transition', async () => {
-    const maintain = await loadAction(
-      '../../src/engine/release-pr-action.js',
-      'runReleasePrAction',
-    );
-    const github = new FakeGithub();
-    const git = new FakeGit();
-    github.pages = [[implementationPr(), implementationPr({ number: 42, mergeSha: 'merge-42' })]];
-    const transition = {
-      status: 'approved',
-      legacyEntries: ['feature A', 'repair A'],
-      dispositions: [
-        { entry: 'feature A', disposition: 'included', note: 'Final feature A behavior' },
-        { entry: 'repair A', disposition: 'consolidated', into: 'feature A' },
-        { pullRequest: 41, disposition: 'included' },
-        { pullRequest: 42, disposition: 'no-note' },
-      ],
-    };
+describe('TI-7 — the legacy pending set transitions exactly once', () => {
+  const auditPath = '.docs/release/backlog-transition.md';
+  const approvedAudit = 'Status: approved\n\n| Legacy entry | Disposition |\n| --- | --- |\n| Old repair | consolidated |\n';
 
-    const first = await maintain({
-      event: { type: 'transition' },
-      transition,
-      github,
+  async function seedInput(git: FakeGit, github: FakeGithub, transition: {
+    status: 'proposed' | 'approved';
+    unresolved: readonly string[];
+  }) {
+    const { generatedFiles, audit } = await collectAndRender([[mergedPr()]]);
+    return {
       git,
-      appAuthenticated: true,
-      config: releaseConfig,
-    });
-    expect(first).toMatchObject({ action: 'created', transitionConsumed: true });
-    expect(String((git.pushes[0]!.files as Record<string, string>).CANDIDATE_AUDIT)).toMatch(
-      /feature A[\s\S]*repair A[\s\S]*#41[\s\S]*#42/,
-    );
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.3.0',
+      body: 'Automated release proposal.',
+      expectedMainHead: 'main-1',
+      audit,
+      transition: { ...transition, auditPath, audit: approvedAudit },
+    };
+  }
 
-    await expect(
-      maintain({
-        event: { type: 'transition' },
-        transition,
-        github,
-        git,
-        appAuthenticated: true,
-        config: releaseConfig,
-      }),
-    ).rejects.toThrow(/transition.*(complete|consumed|already)/i);
+  it('seeds the operator-approved audit into the first release PR as a generated surface', async () => {
+    const git = new FakeGit();
+    const github = new FakeGithub();
+
+    const result = await runReleasePrAction(await seedInput(git, github, { status: 'approved', unresolved: [] }));
+
+    expect(result).toMatchObject({ action: 'created', transitionConsumed: true });
+    expect(git.pushes[0]!.files[auditPath]).toBe(approvedAudit);
+  });
+
+  it.each([
+    ['an unapproved proposal', { status: 'proposed' as const, unresolved: [] }],
+    ['an approved proposal with unresolved items', { status: 'approved' as const, unresolved: ['Ambiguous entry'] }],
+  ])('refuses %s before any Git or GitHub mutation', async (_case, transition) => {
+    const git = new FakeGit();
+    const github = new FakeGithub();
+
+    await expect(runReleasePrAction(await seedInput(git, github, transition)))
+      .rejects.toThrow(/operator-approved proposal with no unresolved items/i);
+
+    expect(git.pushes).toEqual([]);
+    expect(github.created).toEqual([]);
+  });
+
+  it('refuses to rerun once the transition is recorded consumed on the base branch', async () => {
+    const git = new FakeGit();
+    const github = new FakeGithub();
+    git.baseFiles.set(auditPath, 'Status: consumed\n');
+
+    await expect(runReleasePrAction(await seedInput(git, github, { status: 'approved', unresolved: [] })))
+      .rejects.toThrow(/already consumed/i);
+
+    expect(git.pushes).toEqual([]);
+    expect(github.created).toEqual([]);
   });
 });

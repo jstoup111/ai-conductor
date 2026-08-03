@@ -1,22 +1,35 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  aggregateReleaseSemver,
   renderReleaseCandidateAudit,
   renderReleaseCandidate,
 } from '../../src/engine/release-renderer.js';
 
 describe('engine/release-renderer — deterministic release candidates (Task 6)', () => {
+  // Semver aggregation is internal to rendering; it is proven through the version
+  // the renderer proposes, which is the only surface the release flow consumes.
   it.each([
-    [['patch'], 'patch'],
-    [['patch', 'minor', 'patch'], 'minor'],
-    [['patch', 'minor', 'major', 'patch'], 'major'],
-  ] as const)('selects the highest semver impact from %j', (impacts, expected) => {
-    expect(aggregateReleaseSemver(impacts)).toBe(expected);
+    [['patch'], '1.2.4'],
+    [['patch', 'minor', 'patch'], '1.3.0'],
+    [['patch', 'minor', 'major', 'patch'], '2.0.0'],
+  ] as const)('proposes the version dictated by the highest impact in %j', (impacts, expected) => {
+    const rendered = renderReleaseCandidate({
+      currentVersion: '1.2.3',
+      date: '2026-08-02',
+      changelog: changelogWithEmptyUnreleased(),
+      candidates: impacts.map((semver, index) => candidate(index + 1, 'Fixed', semver, `Note ${index + 1}.`)),
+    });
+
+    expect(rendered.version).toBe(expected);
   });
 
   it('rejects an unknown semver impact rather than rendering a partial release', () => {
-    expect(() => aggregateReleaseSemver(['patch', 'hotfix'] as never)).toThrow('Invalid release semver: hotfix');
+    expect(() => renderReleaseCandidate({
+      currentVersion: '1.2.3',
+      date: '2026-08-02',
+      changelog: changelogWithEmptyUnreleased(),
+      candidates: [candidate(41, 'Fixed', 'hotfix' as never, 'Correct a race.')],
+    })).toThrow('Invalid release semver: hotfix');
   });
 
   it('renders grouped category entries with attributable PR links and migrations in candidate order', () => {

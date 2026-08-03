@@ -38,6 +38,8 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCb);
 
 const PR_URL = 'https://github.com/acme/repo/pull/42';
+/** Attempt cap shared by the sweep configurations under test. */
+const ATTEMPT_CAP = 3;
 
 describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
   let origin: string;
@@ -122,7 +124,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     const outcome = await autoresolve.resolveConflictingPr(
       { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
       'feat/widget',
-      { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: 3 },
+      { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
         runSuite: async (_projectRoot: string) => {
@@ -138,7 +140,10 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     );
 
     expect(outcome.kind).toBe('escalated');
-    expect(resolverCalls).toBe(1);
+    // No CHANGELOG special case remains: the conflict is dispatched to the generic
+    // resolver, and a resolver that reports success without resolving is retried up
+    // to the configured attempt cap before escalation — never silently accepted.
+    expect(resolverCalls).toBe(ATTEMPT_CAP);
     expect(suiteCalls).toBe(0);
     const { stdout: remoteFeatureTipAfterResolution } = await execFile(
       'git',
@@ -252,7 +257,15 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
         runSuite: async (_projectRoot: string) => ({ exitCode: 1, durationMs: 42, configured: true }),
-        resolver: async () => ({ resolved: true }),
+        resolver: async ({ projectRoot }: { projectRoot: string }) => {
+          await writeFile(
+            join(projectRoot, 'CHANGELOG.md'),
+            '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature widget entry\n- Sibling bar entry\n',
+          );
+          await execFile('git', ['add', 'CHANGELOG.md'], { cwd: projectRoot });
+          await execFile('git', ['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: projectRoot });
+          return { resolved: true };
+        },
         log: (msg: string) => logLines.push(msg),
       },
     );

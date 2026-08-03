@@ -45,7 +45,7 @@ export interface ReleaseAuditCandidate {
 }
 
 /** Return the most significant declared impact, rejecting values outside the metadata contract. */
-export function aggregateReleaseSemver(impacts: readonly string[]): ReleaseSemver {
+function aggregateReleaseSemver(impacts: readonly string[]): ReleaseSemver {
   let highest: ReleaseSemver | undefined;
   for (const impact of impacts) {
     if (!(impact in semverRank)) throw new Error(`Invalid release semver: ${impact}`);

@@ -106,7 +106,7 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 - `src/conductor/test/engine/self-host/release-gate.test.ts` — breaking/malformed cases
 - `src/conductor/src/engine/release-metadata.ts` — migration field representation
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#runReleaseArtifactGate`  
+**Wired-into:** `src/conductor/src/engine/conductor.ts#runSelfHostFinishGates`
 **Dependencies:** Task 2
 
 ### Task 5: Preserve fresh waiver behavior under the new gate
