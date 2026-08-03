@@ -52,6 +52,11 @@ const GREEN_CHECKS: Check[] = [
   { status: 'COMPLETED', conclusion: 'SUCCESS' },
 ];
 const PENDING_CHECKS: Check[] = [{ status: 'IN_PROGRESS', conclusion: null }];
+/** One terminal failure while another check is still running (rollup classifies as `failed`). */
+const FAILED_WITH_RUNNING_CHECKS: Check[] = [
+  { status: 'COMPLETED', conclusion: 'FAILURE' },
+  { status: 'IN_PROGRESS', conclusion: null },
+];
 
 interface GhCall {
   args: string[];
@@ -170,6 +175,41 @@ describe('mergeable-sweep ci-failed label lifecycle + bounded CI-fix dispatch', 
     const ciFailedCalls = calls.filter((c) => c.args.join(' ').includes('ci-failed'));
     expect(ciFailedCalls).toHaveLength(0);
     expect(dispatched).toHaveLength(0);
+  });
+
+  it('a failed rollup with a still-running check is deferred: no dispatch, no attempt burn, ci-failed label still applied', async () => {
+    const prUrl = 'https://github.com/acme/widget/pull/1';
+    await enrollWatch(projectRoot, { prUrl, slug: 'widget', repoCwd: projectRoot });
+
+    const calls: GhCall[] = [];
+    const gh = makeGh({ [prUrl]: { checks: FAILED_WITH_RUNNING_CHECKS } }, calls);
+    const dispatched: WatchEntry[] = [];
+
+    await sweepMergeableLabels({
+      projectRoot,
+      runGh: gh,
+      ciFix: {
+        enabled: true,
+        // Real eligibility: the rollup is `failed`, but one check has not
+        // reached a terminal state, so remediation must wait for the next tick.
+        isEligible: async (entry: WatchEntry, state: PrMergeState) =>
+          isEligibleForCiFix(entry, state, {}, new Date()),
+        dispatch: async (entry: WatchEntry) => {
+          dispatched.push(entry);
+        },
+      },
+    });
+
+    expect(dispatched).toHaveLength(0);
+    const [persisted] = await readEntries(projectRoot);
+    expect(persisted.ciFixAttempts ?? 0).toBe(0);
+    expect(persisted.lastCiFixAt).toBeUndefined();
+
+    // Labeling is informational and unaffected by the dispatch deferral.
+    const labelCreateCalls = calls.filter(
+      (c) => c.args[0] === 'label' && c.args[1] === 'create' && c.args[2] === 'ci-failed',
+    );
+    expect(labelCreateCalls).toHaveLength(1);
   });
 
   it('TR-3 happy: bumps ciFixAttempts + stamps lastCiFixAt BEFORE dispatch, persisted in the registry', async () => {

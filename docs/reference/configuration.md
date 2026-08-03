@@ -868,6 +868,15 @@ Normalization contract:
 Eligibility failures return `{ eligible: false, reason }` and skip — they never halt
 (`src/conductor/src/engine/ci-fix.ts:230-264`).
 
+Remediation waits for terminal CI. A rollup counts as `failed` as soon as one check fails, even
+while sibling checks are still queued or running, so the eligibility gate defers any PR that still
+has a non-terminal check — reason `checks-not-terminal`
+(`src/conductor/src/engine/ci-fix.ts#nonTerminalCheckNames`). A check is terminal once it reports a
+conclusion (`SUCCESS`, `FAILURE`, `CANCELLED`, `TIMED_OUT`, `SKIPPED`, …); `QUEUED`, `IN_PROGRESS`,
+`PENDING`, `WAITING`, `REQUESTED`, `EXPECTED`, and a missing conclusion are not. A deferral burns no
+attempt — the next sweep tick re-reads the PR and dispatches once every check has finished. When the
+PR state carries no check-rollup detail at all, the gate does not block.
+
 Draft PRs are never dispatched to the CI fix loop. The sweep still labels them (`ci-failed`,
 `mergeable`) but logs `skipping ci-fix for <url> (draft PR)` instead of collecting them as
 candidates — a draft PR belongs to an in-flight build, and fixing its CI would fight the running

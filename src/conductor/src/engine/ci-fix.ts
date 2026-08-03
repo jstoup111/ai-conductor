@@ -146,6 +146,48 @@ export async function buildCiFixHint(
 }
 
 /**
+ * Check statuses/conclusions that are NOT terminal — the run is queued, waiting,
+ * or still executing, so its outcome is not yet known. Everything else that
+ * carries a conclusion (`SUCCESS`, `FAILURE`, `CANCELLED`, `TIMED_OUT`,
+ * `SKIPPED`, `NEUTRAL`, …) has finished and will not change.
+ */
+const NON_TERMINAL_CHECK_STATES = new Set([
+  'QUEUED',
+  'IN_PROGRESS',
+  'PENDING',
+  'WAITING',
+  'REQUESTED',
+  'EXPECTED',
+]);
+
+/**
+ * Names of the rollup entries that have not reached a terminal state.
+ *
+ * A check is non-terminal when its `status` is a queued/running state, when its
+ * `conclusion` is one (some commit-status rollups report `PENDING` there), or
+ * when it carries no conclusion at all — the same "still running" signal
+ * `pr-labels.ts#isCheckFailingOrPending` uses.
+ *
+ * An absent/empty rollup yields an empty list: no rollup detail is no evidence
+ * of a running check, so the caller's gate must not block on it.
+ */
+export function nonTerminalCheckNames(
+  rollup?: Array<{ status?: string | null; conclusion?: string | null; name?: string }> | null,
+): string[] {
+  if (!rollup || rollup.length === 0) return [];
+  return rollup
+    .filter((check) => {
+      const status = (check.status ?? '').toUpperCase();
+      const conclusion = (check.conclusion ?? '').toUpperCase();
+      if (NON_TERMINAL_CHECK_STATES.has(status)) return true;
+      if (NON_TERMINAL_CHECK_STATES.has(conclusion)) return true;
+      // No conclusion recorded yet → the run has not finished.
+      return conclusion.length === 0;
+    })
+    .map((check) => check.name?.trim() || '(unnamed check)');
+}
+
+/**
  * Result of eligibility check. When `eligible` is false, `reason` explains why.
  */
 export interface EligibilityResult {
@@ -160,8 +202,9 @@ export interface EligibilityResult {
  *   1. Attempts < 2 (cap gate)
  *   2. PR does not have needs-remediation label (sticky)
  *   3. PR mergeable !== 'CONFLICTING' (conflict resolution takes precedence)
- *   4. No resolution in flight (shared serial guard)
- *   5. Cooldown elapsed since last CI fix attempt
+ *   4. Every check in the rollup has reached a terminal state (no queued/running check)
+ *   5. No resolution in flight (shared serial guard)
+ *   6. Cooldown elapsed since last CI fix attempt
  *
  * Each rejection is logged with a reason. The function returns early on the
  * first rejection for efficiency.
@@ -234,7 +277,25 @@ async function evaluateEligibilityGates(
     };
   }
 
-  // Gate 4: Shared serial guard (Task 14)
+  // Gate 4: every check has reached a terminal state.
+  // A rollup classifies as `failed` as soon as ONE check fails, even while its
+  // siblings are still queued or running. Remediating then acts on incomplete
+  // results: the RETRY hint can only name the checks that already finished, and
+  // a run that is about to fail seconds later is invisible to the fix session —
+  // burning an attempt on a partial picture. Defer instead; the next sweep tick
+  // re-reads the PR and dispatches once every check is terminal. No counter is
+  // burned, because the sweep bumps `ciFixAttempts` only after this gate passes.
+  const nonTerminal = nonTerminalCheckNames(prState.statusCheckRollup);
+  if (nonTerminal.length > 0) {
+    const shown = nonTerminal.slice(0, 3).join(', ');
+    const overflow = nonTerminal.length > 3 ? ` +${nonTerminal.length - 3} more` : '';
+    return {
+      eligible: false,
+      reason: `CI checks not finished: ${shown}${overflow} (checks-not-terminal)`,
+    };
+  }
+
+  // Gate 5: Shared serial guard (Task 14)
   // Task 14: any resolution in flight → defer without counter burn (serial)
   if (isResolutionInFlight()) {
     return {
@@ -243,7 +304,7 @@ async function evaluateEligibilityGates(
     };
   }
 
-  // Gate 5: Cooldown elapsed (Task 14)
+  // Gate 6: Cooldown elapsed (Task 14)
   // Task 14: lastCiFixAt within cooldown → ineligible (cooldown)
   if (entry.lastCiFixAt) {
     const lastAttemptTime = new Date(entry.lastCiFixAt);
