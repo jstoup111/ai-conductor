@@ -24,12 +24,16 @@ export interface MergedReleasePullRequest {
 
 export interface ReleasePublisherGit {
   readCommitFiles(commit: string): Promise<Record<string, string> | undefined>;
+  /** Read an existing annotated tag so a retry cannot recreate or overwrite it. */
+  readAnnotatedTag(tag: string): Promise<{ commit: string } | undefined>;
   createAnnotatedTag(input: { tag: string; commit: string; message: string }): Promise<void>;
 }
 
 export interface ReleasePublisherGithub {
   findMergedPullRequestByMergeCommit(commit: string): Promise<MergedReleasePullRequest | undefined>;
   readReleaseAudit(input: { pullRequestNumber: number }): Promise<{ head: string; complete: boolean } | undefined>;
+  /** Read a previously-created release so completed publication is idempotent. */
+  findReleaseByTag(tag: string): Promise<{ tag: string; title: string; body: string; target: string } | undefined>;
   createRelease(input: { tag: string; title: string; body: string; target: string }): Promise<void>;
 }
 
@@ -73,9 +77,37 @@ export async function runReleasePublisherAction(
   }
 
   const tag = `v${approved.version}`;
-  await input.git.createAnnotatedTag({ tag, commit: input.event.commit, message: `Release ${tag}` });
-  await input.github.createRelease({ tag, title: tag, body: approved.body, target: input.event.commit });
+  const existingTag = await input.git.readAnnotatedTag(tag);
+  if (existingTag !== undefined && existingTag.commit !== input.event.commit) {
+    return {
+      state: 'rejected',
+      reason: `The existing ${tag} tag points to ${existingTag.commit}, not approved commit ${input.event.commit}.`,
+    };
+  }
+
+  const release = { tag, title: tag, body: approved.body, target: input.event.commit };
+  const existingRelease = await input.github.findReleaseByTag(tag);
+  if (existingRelease !== undefined && !sameRelease(existingRelease, release)) {
+    return { state: 'rejected', reason: `The existing ${tag} GitHub Release does not match the approved release artifact.` };
+  }
+
+  if (existingTag === undefined) {
+    await input.git.createAnnotatedTag({ tag, commit: input.event.commit, message: `Release ${tag}` });
+  }
+  if (existingRelease === undefined) {
+    await input.github.createRelease(release);
+  }
   return { state: 'published', version: approved.version };
+}
+
+function sameRelease(
+  actual: { tag: string; title: string; body: string; target: string },
+  expected: { tag: string; title: string; body: string; target: string },
+): boolean {
+  return actual.tag === expected.tag
+    && actual.title === expected.title
+    && actual.body === expected.body
+    && actual.target === expected.target;
 }
 
 function isDesignatedMergedReleasePullRequest(
