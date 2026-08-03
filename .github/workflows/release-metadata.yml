@@ -11,6 +11,9 @@ permissions:
 jobs:
   release-metadata:
     name: release-metadata
+    # The generated release PR carries a candidate audit, not implementation
+    # disposition fields. Its completeness is checked by release maintenance.
+    if: github.event.pull_request.head.ref != 'automation/release-pr'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

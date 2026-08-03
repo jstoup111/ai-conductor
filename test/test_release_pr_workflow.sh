@@ -9,6 +9,9 @@ TEMPLATE="$ROOT_DIR/.github/pull_request_template.md"
 grep -q 'types: \[opened, reopened, synchronize, edited\]' "$METADATA_WORKFLOW"
 grep -q 'actions/github-script@v9' "$METADATA_WORKFLOW"
 grep -q 'runReleaseMetadataCheckAction' "$METADATA_WORKFLOW"
+# The bot-generated release PR has an audit body rather than implementation PR
+# disposition metadata, so validation applies only to implementation branches.
+rg -U -q "github\.event\.pull_request\.head\.ref != 'automation/release-pr'" "$METADATA_WORKFLOW"
 grep -q '^Release-Disposition: no-note$' "$TEMPLATE"
 grep -q 'Release-Category:' "$TEMPLATE"
 grep -q 'Release-Semver:' "$TEMPLATE"
@@ -30,7 +33,15 @@ grep -q 'permission-pull-requests: write' "$WORKFLOW"
 grep -q 'group: release-pr-maintenance' "$WORKFLOW"
 grep -q 'cancel-in-progress: false' "$WORKFLOW"
 grep -q 'github-token: \${{ steps.app-token.outputs.token }}' "$WORKFLOW"
+grep -q 'persist-credentials: false' "$WORKFLOW"
+grep -q 'RELEASE_PR_APP_TOKEN: \${{ steps.app-token.outputs.token }}' "$WORKFLOW"
 grep -q 'runReleasePrAction' "$WORKFLOW"
+# The github-script bridge must compose the complete exported action contract;
+# passing only Actions globals crashes before release-PR maintenance can begin.
+rg -U -q '(?s)runReleasePrAction\(\{.*git,.*github:.*config:.*generatedFiles:.*title:.*body,' "$WORKFLOW"
+if rg -U -q 'runReleasePrAction\(\{\s*github\s*,\s*context\s*,\s*core\s*\}\)' "$WORKFLOW"; then
+  exit 1
+fi
 
 # Publication is separate from maintenance: its action proves the main commit
 # came from this exact App-owned release branch before mutating a tag/release.
