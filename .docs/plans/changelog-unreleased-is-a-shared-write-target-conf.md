@@ -138,10 +138,26 @@ Why a custom step rather than engine code:
 The step's skill lives in the repository-local catalog (`.agents/skills/release-disposition/SKILL.md`)
 per `scope-check`, not the shipped `skills/` catalog.
 
-**Fail-closed requirement.** The gate now depends on a GitHub read, which can fail offline
-(observed: the daemon logging `fetch origin main failed (offline?)`). Unreachable GitHub,
-an unresolvable PR identity, an absent disposition, and a malformed disposition MUST each
-produce a HALT verdict — never a pass, and never a silent skip of the migration check.
+**Fail-closed requirement, scoped to the active flow (operator decision).** The gate now
+depends on a GitHub read, which can fail offline (observed: the daemon logging
+`fetch origin main failed (offline?)`). The fail-closed rule applies **only when the
+release-disposition flow is active** — i.e. `releaseDispositionFlowActive()`: a self-build
+whose config declares the `release-disposition` step. Metadata resolution MUST be guarded by
+that predicate; an unguarded resolver breaks every self-host finish that has no draft PR.
+
+When the flow is active:
+
+- Unreachable GitHub, an unresolvable PR identity, an absent disposition, and a malformed
+  disposition MUST each produce a HALT verdict — never a pass, never a silent skip of the
+  migration check.
+- An explicit `Release-Disposition: no-note` MUST **pass**. It is a valid, deliberate
+  disposition, and this repository's release rule already exempts documentation-only,
+  specification-only, and internal non-notable changes from a changelog entry. A docs-only
+  self-build therefore receives `no-note` from the `release-disposition` step and clears the
+  gate without an entry.
+
+When the flow is **not** active, `runSelfHostFinishGates` behaves exactly as it did before
+this feature: no metadata is resolved and no metadata-derived HALT is possible.
 
 **Steps:**
 1. Write failing release-gate tests that supply structured metadata rather than feature-owned changelog content.
@@ -149,7 +165,7 @@ produce a HALT verdict — never a pass, and never a silent skip of the migratio
 3. Refactor the gate input to validate the parsed runnable migration block for classified breaking surfaces.
 4. Add the `release-disposition` repository-local custom step: its SKILL.md, its `.ai-conductor/config.yml` declaration (`after: maintain-documentation`, `enforcement: gating`, `completion_artifact`, `llm_provider: claude`), and a registry test proving it is inserted before `finish`.
 5. Finalize the structured disposition onto the retained draft implementation PR before the pre-finish gate, then resolve, parse, and pass it into `guardrails.releaseGate` from `runSelfHostFinishGates` through the injected GitHub boundary.
-6. Verify GREEN, including exact `bin/migrate`-compatible fence preservation, and prove through the production caller that a classified breaking surface with runnable PR-metadata migration passes while unreachable, missing, and malformed metadata each HALT.
+6. Verify GREEN, including exact `bin/migrate`-compatible fence preservation, and prove through the production caller that: a classified breaking surface with runnable PR-metadata migration passes; unreachable, missing, and malformed metadata each HALT; an explicit `no-note` disposition passes; and a self-build with the flow inactive reaches the gates unchanged (regression coverage for `harness-daemon-profile.test.ts` and `codex-self-host-isolation.acceptance.test.ts`).
 7. Commit `feat(release): validate migrations from PR metadata`.
 
 **Files:**
