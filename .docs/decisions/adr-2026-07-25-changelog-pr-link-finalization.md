@@ -1,7 +1,8 @@
 # ADR: Finish resolves an exact changelog implementation-PR token
 
 **Date:** 2026-07-25
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** `adr-2026-08-01-bot-owned-release-pr`
 **Deciders:** Project operator and maintain-documentation architecture review
 
 ## Context

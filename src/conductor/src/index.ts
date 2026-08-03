@@ -6,7 +6,6 @@ export { runReleasePrAction } from './engine/release-pr-action.js';
 export { collectReleaseCandidates } from './engine/release-candidates.js';
 export { renderReleaseCandidate, renderReleaseCandidateAudit } from './engine/release-renderer.js';
 export { runReleasePublisherAction } from './engine/release-publisher-action.js';
-export { releasePrGithubAppAuth } from './engine/github-app-auth.js';
 
 import type { RunMode } from './types/index.js';
 

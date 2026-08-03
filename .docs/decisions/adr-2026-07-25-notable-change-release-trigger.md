@@ -1,7 +1,8 @@
 # ADR: Notable changelog content triggers a release
 
 **Date:** 2026-07-25
-**Status:** APPROVED
+**Status:** SUPERSEDED
+**Superseded by:** `adr-2026-08-01-bot-owned-release-pr`
 **Deciders:** Project operator and maintain-documentation conflict resolution
 **Supersedes in part:** `adr-2026-06-30-halt-based-release-gates` — ReleaseArtifactGate's
 non-empty `[Unreleased]` requirement only
