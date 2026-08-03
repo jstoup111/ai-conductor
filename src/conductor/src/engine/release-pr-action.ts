@@ -14,9 +14,13 @@ export interface ReleasePrGit {
   pushGeneratedBranch(input: {
     branch: string;
     base: string;
+    /** The main commit this render was derived from; adapters must reject a changed base. */
+    expectedBaseHead?: string;
     files: Record<string, string>;
     message: string;
   }): Promise<void>;
+  /** Read the current base head immediately before a guarded generated-branch push. */
+  readMainHead?(branch: string): Promise<string>;
 }
 
 export interface ReleasePrGithub {
@@ -45,6 +49,22 @@ export interface ReleasePrActionInput {
   generatedFiles: Record<string, string>;
   title: string;
   body: string;
+  /** The base commit from which the caller collected candidates and rendered generatedFiles. */
+  expectedMainHead?: string;
+  /** Number of times a stale render may be regenerated before the action fails closed. */
+  maxStaleRetries?: number;
+  /**
+   * Recollect and rerender at a newly observed main head. This is injected so the
+   * action keeps no local recovery ledger and never chooses stale content itself.
+   */
+  rerenderForCurrentMain?: (mainHead: string) => Promise<ReleasePrRender>;
+}
+
+export interface ReleasePrRender {
+  expectedMainHead: string;
+  generatedFiles: Record<string, string>;
+  title: string;
+  body: string;
 }
 
 export type ReleasePrActionResult = {
@@ -61,34 +81,67 @@ export async function runReleasePrAction(input: ReleasePrActionInput): Promise<R
     assertOwnedPullRequest(existingPullRequest, input.config);
   }
 
-  const existingFiles = await input.git.readBranchFiles(input.config.branch);
-  assertNoForeignBranchFiles(existingFiles, input.generatedFiles);
-  const branchUpdated = !sameGeneratedFiles(existingFiles, input.generatedFiles);
-  if (branchUpdated) {
+  let render: ReleasePrRender = {
+    expectedMainHead: input.expectedMainHead ?? '',
+    generatedFiles: input.generatedFiles,
+    title: input.title,
+    body: input.body,
+  };
+  let staleRetries = 0;
+  let branchUpdated: boolean;
+
+  while (true) {
+    const existingFiles = await input.git.readBranchFiles(input.config.branch);
+    assertNoForeignBranchFiles(existingFiles, render.generatedFiles);
+    branchUpdated = !sameGeneratedFiles(existingFiles, render.generatedFiles);
+    if (!branchUpdated) break;
+
+    const expectedMainHead = render.expectedMainHead;
+    if (expectedMainHead !== '') {
+      const mainHead = await readRequiredMainHead(input.git, input.config.base);
+      if (mainHead !== expectedMainHead) {
+        if (staleRetries >= (input.maxStaleRetries ?? 1) || input.rerenderForCurrentMain === undefined) {
+          throw new Error(`Stale release render: main advanced from ${expectedMainHead} to ${mainHead}`);
+        }
+        staleRetries += 1;
+        render = await input.rerenderForCurrentMain(mainHead);
+        continue;
+      }
+    }
+
     await input.git.pushGeneratedBranch({
       branch: input.config.branch,
       base: input.config.base,
-      files: input.generatedFiles,
-      message: `chore(release): prepare ${releaseVersion(input.generatedFiles.VERSION)}`,
+      ...(expectedMainHead === '' ? {} : { expectedBaseHead: expectedMainHead }),
+      files: render.generatedFiles,
+      message: `chore(release): prepare ${releaseVersion(render.generatedFiles.VERSION)}`,
     });
+    break;
   }
 
   if (existingPullRequest === undefined) {
     const created = await input.github.createPullRequest({
       head: input.config.branch,
       base: input.config.base,
-      title: input.title,
-      body: input.body,
+      title: render.title,
+      body: render.body,
     });
     return { action: 'created', pullRequestNumber: created.number, branchUpdated };
   }
 
   await input.github.updatePullRequest({
     number: existingPullRequest.number,
-    title: input.title,
-    body: input.body,
+    title: render.title,
+    body: render.body,
   });
   return { action: 'updated', pullRequestNumber: existingPullRequest.number, branchUpdated };
+}
+
+async function readRequiredMainHead(git: ReleasePrGit, base: string): Promise<string> {
+  if (git.readMainHead === undefined) {
+    throw new Error('Release maintenance cannot verify the expected main head without a Git main-head reader');
+  }
+  return git.readMainHead(base);
 }
 
 function assertAppIdentity(appLogin: string): void {

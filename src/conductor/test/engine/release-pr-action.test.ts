@@ -160,3 +160,92 @@ describe('engine/release-pr-action — ownership and recovery (Task 10)', () => 
     expect(github.updatePullRequest).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('engine/release-pr-action — stale render protection (Task 11)', () => {
+  const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+  const generatedFiles = { 'CHANGELOG.md': '# Changelog\n', VERSION: '1.2.4\n' };
+
+  function dependencies(mainHeads: string[]) {
+    return {
+      git: {
+        readBranchFiles: vi.fn(async (): Promise<Record<string, string> | undefined> => undefined),
+        readMainHead: vi.fn(async () => mainHeads.shift() ?? 'main-current'),
+        pushGeneratedBranch: vi.fn(async () => undefined),
+      },
+      github: {
+        findOpenReleasePullRequest: vi.fn(async () => undefined),
+        createPullRequest: vi.fn(async () => ({ number: 42 })),
+        updatePullRequest: vi.fn(async () => undefined),
+      },
+    };
+  }
+
+  it('rejects a render whose expected main head advanced before the generated branch push', async () => {
+    const { git, github } = dependencies(['main-after']);
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Generated release.',
+      expectedMainHead: 'main-before',
+      maxStaleRetries: 0,
+    })).rejects.toThrow(/stale.*main|main.*advanced/i);
+
+    expect(git.pushGeneratedBranch).not.toHaveBeenCalled();
+    expect(github.createPullRequest).not.toHaveBeenCalled();
+  });
+
+  it('rerenders at the observed main head once, then pushes only the refreshed content', async () => {
+    const { git, github } = dependencies(['main-after', 'main-after']);
+    const refreshedFiles = { 'CHANGELOG.md': '# Changelog\n# refreshed\n', VERSION: '1.2.5\n' };
+    const rerenderForCurrentMain = vi.fn(async (mainHead: string) => ({
+      expectedMainHead: mainHead,
+      generatedFiles: refreshedFiles,
+      title: 'Release 1.2.5',
+      body: 'Refreshed release.',
+    }));
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Generated release.',
+      expectedMainHead: 'main-before',
+      maxStaleRetries: 1,
+      rerenderForCurrentMain,
+    })).resolves.toEqual({ action: 'created', pullRequestNumber: 42, branchUpdated: true });
+
+    expect(rerenderForCurrentMain).toHaveBeenCalledOnce();
+    expect(rerenderForCurrentMain).toHaveBeenCalledWith('main-after');
+    expect(git.pushGeneratedBranch).toHaveBeenCalledWith({
+      branch: config.branch,
+      base: config.base,
+      expectedBaseHead: 'main-after',
+      files: refreshedFiles,
+      message: 'chore(release): prepare 1.2.5',
+    });
+  });
+
+  it('does not push duplicate generated content even when the duplicate event has a current main head', async () => {
+    const { git, github } = dependencies(['main-current']);
+    git.readBranchFiles.mockResolvedValue({ ...generatedFiles });
+
+    await expect(runReleasePrAction({
+      git,
+      github,
+      config,
+      generatedFiles,
+      title: 'Release 1.2.4',
+      body: 'Generated release.',
+      expectedMainHead: 'main-current',
+    })).resolves.toEqual({ action: 'created', pullRequestNumber: 42, branchUpdated: false });
+
+    expect(git.pushGeneratedBranch).not.toHaveBeenCalled();
+    expect(github.createPullRequest).toHaveBeenCalledOnce();
+  });
+});
