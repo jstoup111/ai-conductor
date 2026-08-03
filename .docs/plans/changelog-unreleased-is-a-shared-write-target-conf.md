@@ -94,17 +94,44 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 **Story:** TI-2 — runnable migration happy path and missing/malformed migration negatives  
 **Type:** happy-path
 
+**Sequencing amendment (operator-approved).** The original task specified the gate's
+*input shape* but never sequenced where the metadata comes from in production, leaving
+`runSelfHostFinishGates` calling `guardrails.releaseGate` with no metadata. The omission is
+an ordering problem, not a missing call:
+
+- `src/conductor/src/engine/conductor.ts:4143` runs the self-host release gates **before**
+  `finish`, deliberately, so the daemon never opens a PR behind a failing gate.
+- The release disposition lives in the implementation PR body.
+- At gate time that body is still the SHIP-start placeholder — `ship-draft-pr.ts:143-160`
+  writes `SHIP_DRAFT_PR_NOTE`, and `/finish` authors the real body afterward.
+
+**Resolution: finalize the metadata onto the existing draft PR before the pre-finish gate.**
+The pre-finish safety boundary does not move. The draft PR identity opened at SHIP start is
+retained through SHIP entry; its body is finalized with the structured release disposition
+ahead of the gate; the gate reads and parses that body through the conductor's injected
+GitHub boundary. `/finish` continues to author the reader-facing title/body and mark the PR
+ready — finalizing metadata must not pre-empt that.
+
+**Fail-closed requirement.** The gate now depends on a GitHub read, which can fail offline
+(observed: the daemon logging `fetch origin main failed (offline?)`). Unreachable GitHub,
+an unresolvable PR identity, an absent disposition, and a malformed disposition MUST each
+produce a HALT verdict — never a pass, and never a silent skip of the migration check.
+
 **Steps:**
 1. Write failing release-gate tests that supply structured metadata rather than feature-owned changelog content.
 2. Verify RED.
 3. Refactor the gate input to validate the parsed runnable migration block for classified breaking surfaces.
-4. Verify GREEN, including exact `bin/migrate`-compatible fence preservation.
-5. Commit `feat(release): validate migrations from PR metadata`.
+4. Finalize the structured disposition onto the retained draft implementation PR before the pre-finish gate, then resolve, parse, and pass it into `guardrails.releaseGate` from `runSelfHostFinishGates` through the injected GitHub boundary.
+5. Verify GREEN, including exact `bin/migrate`-compatible fence preservation, and prove through the production caller that a classified breaking surface with runnable PR-metadata migration passes while unreachable, missing, and malformed metadata each HALT.
+6. Commit `feat(release): validate migrations from PR metadata`.
 
 **Files:**
 - `src/conductor/src/engine/self-host/release-gate.ts` — structured migration input
 - `src/conductor/test/engine/self-host/release-gate.test.ts` — breaking/malformed cases
 - `src/conductor/src/engine/release-metadata.ts` — migration field representation
+- `src/conductor/src/engine/conductor.ts` — resolve/parse the implementation PR disposition and supply `releaseMetadata` to `guardrails.releaseGate`; fail closed when it cannot be resolved
+- `src/conductor/src/engine/ship-draft-pr.ts` — retain draft PR identity and finalize release metadata onto its body before the pre-finish gate
+- `src/conductor/test/engine/self-host/wiring.test.ts` — production-path coverage: metadata reaches `releaseGate`; unreachable/missing/malformed each HALT
 
 **Wired-into:** `src/conductor/src/engine/conductor.ts#runSelfHostFinishGates`
 **Dependencies:** Task 2
