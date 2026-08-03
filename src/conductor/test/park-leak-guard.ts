@@ -34,6 +34,10 @@ export function diffParkedMarkers(
   before: ParkedMarkersSnapshot,
   after: ParkedMarkersSnapshot,
 ): ParkedMarkersDiff {
+  if (!before.exists || !after.exists) {
+    return { added: [], removed: [], modified: [] };
+  }
+
   const added = Object.keys(after.markers).filter((slug) => !(slug in before.markers));
   const removed = Object.keys(before.markers).filter((slug) => !(slug in after.markers));
   const modified = Object.keys(after.markers).filter(

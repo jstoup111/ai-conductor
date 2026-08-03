@@ -43,6 +43,19 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
     });
   });
 
+  it('returns an absent snapshot when the parked marker baseline cannot be read', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-test-'));
+    temporaryDirectories.push(root);
+    const markers = join(root, '.daemon', 'parked');
+    await mkdir(join(root, '.daemon'));
+    await writeFile(markers, 'not a directory');
+
+    await expect(snapshotParkedMarkers(markers)).resolves.toEqual({
+      exists: false,
+      markers: {},
+    });
+  });
+
   it('classifies added, removed, and changed marker content without false positives', () => {
     expect(diffParkedMarkers(
       { exists: true, markers: { unchanged: 'same', removed: 'before', modified: 'old' } },
@@ -59,5 +72,21 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
       { exists: true, markers: { feature: 'parked by operator\n' } },
       { exists: true, markers: { feature: 'parked by operator\n' } },
     )).toEqual({ added: [], removed: [], modified: [] });
+  });
+
+  it('returns an empty diff when either snapshot is absent', () => {
+    expect([
+      diffParkedMarkers(
+        { exists: false, markers: {} },
+        { exists: true, markers: { feature: 'parked by operator\n' } },
+      ),
+      diffParkedMarkers(
+        { exists: true, markers: { feature: 'parked by operator\n' } },
+        { exists: false, markers: {} },
+      ),
+    ]).toEqual([
+      { added: [], removed: [], modified: [] },
+      { added: [], removed: [], modified: [] },
+    ]);
   });
 });
