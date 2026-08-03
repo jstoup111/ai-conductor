@@ -7389,8 +7389,8 @@ export class Conductor {
    * Handle the `rebase` step entirely in the engine (ADR-001 / Phase 9.0):
    * rebase the feature branch onto the discovered base, classify the outcome,
    * write the authoritative gate verdicts (including FR-5 kickbacks), emit the
-   * structured outcome event, and — on a conflict that isn't a CHANGELOG-only
-   * auto-resolve — write `.pipeline/HALT` and leave the rebase paused. The
+   * structured outcome event, and — on a conflict — write `.pipeline/HALT`
+   * and leave the rebase paused. The
    * outcome is stashed on `lastRebaseOutcome` so `advanceTail` doesn't recompute
    * the verdict and so a HALT routes the loop to stop.
    */

@@ -424,93 +424,6 @@ export async function rebaseStateActive(
   return false;
 }
 
-// ── CHANGELOG auto-resolution (FR-7) ─────────────────────────────────────────
-
-const CHANGELOG = 'CHANGELOG.md';
-const UNRELEASED_HEADING = /^##\s+\[Unreleased\]/im;
-
-/**
- * Extract THIS feature's additions to the `## [Unreleased]` block as the list
- * of lines present in `headContent` but not in `baseContent`. Captured from
- * base..HEAD BEFORE rebasing so they can be re-appended after taking the base
- * version on conflict. Only `[Unreleased]`-block lines are considered.
- */
-export function unreleasedAdditions(
-  baseContent: string,
-  headContent: string,
-): string[] {
-  const baseBlock = unreleasedBlockLines(baseContent);
-  const headBlock = unreleasedBlockLines(headContent);
-  const baseSet = new Set(baseBlock.map((l) => l.trim()));
-  // This feature's net-new content lines (ignore blanks/section headings).
-  return headBlock.filter((line) => {
-    const t = line.trim();
-    if (t.length === 0) return false;
-    if (/^#{2,3}\s/.test(t)) return false; // skip nested headings like ### Added
-    return !baseSet.has(t);
-  });
-}
-
-/** Lines inside the `## [Unreleased]` block, up to the next `## ` heading. */
-function unreleasedBlockLines(content: string): string[] {
-  const lines = content.split('\n');
-  const out: string[] = [];
-  let capturing = false;
-  for (const line of lines) {
-    if (UNRELEASED_HEADING.test(line)) {
-      capturing = true;
-      continue;
-    }
-    if (capturing && /^##\s+/.test(line)) break; // next top-level section
-    if (capturing) out.push(line);
-  }
-  return out;
-}
-
-/**
- * Produce the resolved CHANGELOG: the base/upstream version plus this
- * feature's `[Unreleased]` additions re-appended exactly once. Returns null
- * when the safe append cannot be applied (no `[Unreleased]` block in the base
- * → conflict is structurally outside the block → caller HALTs).
- */
-export function buildResolvedChangelog(
-  baseContent: string,
-  featureAdditions: string[],
-): string | null {
-  if (!UNRELEASED_HEADING.test(baseContent)) return null;
-
-  const baseBlock = unreleasedBlockLines(baseContent);
-  const present = new Set(baseBlock.map((l) => l.trim()));
-  // Dedup: only append additions the base doesn't already contain (no false
-  // negative = no duplicate block; no false positive = nothing dropped).
-  const toAppend = featureAdditions.filter((l) => !present.has(l.trim()));
-  if (toAppend.length === 0) return baseContent;
-
-  const lines = baseContent.split('\n');
-  // Find the end of the [Unreleased] block (first `## ` after the heading, or EOF).
-  let headingIdx = -1;
-  for (let i = 0; i < lines.length; i++) {
-    if (UNRELEASED_HEADING.test(lines[i])) {
-      headingIdx = i;
-      break;
-    }
-  }
-  let insertAt = lines.length;
-  for (let i = headingIdx + 1; i < lines.length; i++) {
-    if (/^##\s+/.test(lines[i])) {
-      insertAt = i;
-      break;
-    }
-  }
-  // Trim a single trailing blank line inside the block so appends stay tidy.
-  let tail = insertAt;
-  while (tail > headingIdx + 1 && lines[tail - 1].trim() === '') tail--;
-  const before = lines.slice(0, tail);
-  const after = lines.slice(insertAt);
-  const block = [...before, ...toAppend, '', ...after];
-  return block.join('\n');
-}
-
 // ── HALT (FR-8) ──────────────────────────────────────────────────────────────
 
 /**
@@ -555,7 +468,6 @@ export type RebaseOutcome =
   | { kind: 'noop' }
   | { kind: 'mergeable_skip' }
   | { kind: 'changed'; changedCodePaths: string[]; featureSurface?: string[] }
-  | { kind: 'changelog_resolved' }
   | { kind: 'conflict_halt'; conflicts: string[]; reason: string };
 
 /** A protected-artifact refusal raised before git starts a rebase. */
@@ -573,8 +485,7 @@ export class ProtectedArtifactSealRejection extends Error {
  *   noop               → branch already current; nothing to do (FR-4).
  *   mergeable_skip      → behind but cleanly mergeable at normal finish.
  *   changed            → clean rebase that changed code/test paths (FR-5).
- *   changelog_resolved → CHANGELOG-only conflict auto-resolved (FR-7).
- *   conflict_halt      → any other / mixed conflict (FR-8); rebase left paused.
+ *   conflict_halt      → a conflict or rebase error; rebase left paused.
  */
 /** Optional capabilities injectable into `performRebase` (Task 15). */
 export interface PerformRebaseOpts {
@@ -665,12 +576,10 @@ export async function performRebase(
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
 
-  // Snapshot the pre-rebase tree + the feature's CHANGELOG additions BEFORE the
-  // rebase moves HEAD, so we can (a) classify changed paths and (b) re-append
-  // the feature's [Unreleased] lines if CHANGELOG conflicts.
+  // Snapshot the pre-rebase tree before the rebase moves HEAD so clean replay
+  // classification and evidence translation can use the original commit.
   const preTree = (await git(['rev-parse', 'HEAD'])).stdout.trim();
   const mergeBase = (await git(['merge-base', 'HEAD', base.ref])).stdout.trim();
-  const featureAdditions = await captureFeatureChangelog(git, mergeBase || base.ref);
   const translateCompletedRebase = async (): Promise<void> => {
     if (!opts?.translateAfterRebase) return;
     const ontoSha = (await git(['rev-parse', base.ref])).stdout.trim();
@@ -709,46 +618,12 @@ export async function performRebase(
     };
   }
 
-  // FR-7: auto-resolve ONLY when CHANGELOG.md is the SOLE conflict.
-  if (conflicts.length === 1 && conflicts[0] === CHANGELOG) {
-    const resolved = await tryResolveChangelogConflict(
-      git,
-      projectRoot,
-      featureAdditions,
-    );
-    if (resolved) {
-      await translateCompletedRebase();
-      return { kind: 'changelog_resolved' };
-    }
-    // Could not safely resolve (conflict outside [Unreleased]) → HALT.
-    return {
-      kind: 'conflict_halt',
-      conflicts,
-      reason: 'CHANGELOG conflict is outside the [Unreleased] block — cannot auto-resolve',
-    };
-  }
-
-  // Any non-CHANGELOG or mixed conflict → HALT (rebase stays paused).
+  // Any conflict remains paused for the generic resolver or a human.
   return {
     kind: 'conflict_halt',
     conflicts,
-    reason:
-      conflicts.includes(CHANGELOG)
-        ? 'CHANGELOG conflicts alongside other files — not auto-resolving'
-        : 'rebase conflict requires human resolution',
+    reason: 'rebase conflict requires human resolution',
   };
-}
-
-/** Capture this feature's CHANGELOG `[Unreleased]` additions from base..HEAD. */
-async function captureFeatureChangelog(
-  git: GitRunner,
-  baseRef: string,
-): Promise<string[]> {
-  const head = await git(['show', `HEAD:${CHANGELOG}`]);
-  if (head.exitCode !== 0) return []; // no CHANGELOG on the branch
-  const base = await git(['show', `${baseRef}:${CHANGELOG}`]);
-  const baseContent = base.exitCode === 0 ? base.stdout : '';
-  return unreleasedAdditions(baseContent, head.stdout);
 }
 
 /** Classify a clean rebase by whether it touched any code/test path. */
@@ -798,37 +673,6 @@ async function classifyClean(
   return { kind: 'changed', changedCodePaths: codePaths, featureSurface };
 }
 
-/**
- * Attempt the CHANGELOG-only auto-resolution: take the base's version (which
- * carries siblings' merged entries), re-append this feature's [Unreleased]
- * lines, stage it, and `git rebase --continue`. Returns false (no resolve)
- * when the safe append can't be applied, leaving the rebase paused.
- *
- * Note the rebase ours/theirs inversion: during a rebase, `:2:`/--ours is the
- * branch being rebased ONTO (the base), and `:3:`/--theirs is the commit being
- * replayed (this feature). We take the base side as the foundation.
- */
-async function tryResolveChangelogConflict(
-  git: GitRunner,
-  projectRoot: string,
-  featureAdditions: string[],
-): Promise<boolean> {
-  // The base/upstream version is `:2:` (ours) during a rebase replay.
-  const baseSide = await git(['show', `:2:${CHANGELOG}`]);
-  if (baseSide.exitCode !== 0) return false;
-  const resolved = buildResolvedChangelog(baseSide.stdout, featureAdditions);
-  if (resolved === null) return false;
-
-  await writeFile(join(projectRoot, CHANGELOG), resolved, 'utf-8');
-  const add = await git(['add', CHANGELOG]);
-  if (add.exitCode !== 0) return false;
-  const cont = await git(['-c', 'core.editor=true', 'rebase', '--continue']);
-  if (cont.exitCode !== 0) {
-    // Continue failed (e.g. a further conflict surfaced) → leave paused, HALT.
-    return false;
-  }
-  return true;
-}
 
 // ── Resolution loop (feat/rebase-resolution-skill) ───────────────────────────
 
@@ -1063,7 +907,7 @@ export async function runGatedRebaseResolution(opts: {
  * Write the gate verdicts implied by a rebase outcome and return whether the
  * rebase gate itself is satisfied (→ proceed to finish) or the loop must HALT.
  *
- *   noop / mergeable_skip / changelog_resolved → rebase satisfied (no downstream invalidation).
+ *   noop / mergeable_skip → rebase satisfied (no downstream invalidation).
  *   changed                   → rebase satisfied, BUT downstream gates
  *                               (build, + manual_test if it ran) are kicked
  *                               back unsatisfied so the loop re-verifies.
@@ -1092,11 +936,9 @@ export async function applyRebaseVerdicts(
         ? 'branch already current with base'
         : outcome.kind === 'mergeable_skip'
           ? 'branch is mergeable with base; rebase skipped'
-        : outcome.kind === 'changelog_resolved'
-          ? 'CHANGELOG-only conflict auto-resolved; branch current'
-          : outcome.kind === 'changed' && outcome.featureSurface === undefined
-            ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
-            : 'rebased onto base (code changed — downstream re-verify)',
+        : outcome.kind === 'changed' && outcome.featureSurface === undefined
+          ? 'rebased onto base (code changed — feature surface F uncomputable, fail-closed to legacy invalidate-all)'
+          : 'rebased onto base (code changed — downstream re-verify)',
     checkedAt: Date.now(),
   };
   await writeVerdict(projectRoot, 'rebase', satisfiedVerdict);
@@ -1203,7 +1045,7 @@ export async function applyRebaseVerdicts(
  *
  * A rebase outcome is "done" for state-recording purposes whenever
  * `applyRebaseVerdicts` wrote a satisfied gate verdict — i.e. every outcome
- * kind except `conflict_halt` (noop / changelog_resolved / changed all leave
+ * kind except `conflict_halt` (noop / changed leave
  * the branch current with base). A `conflict_halt` outcome parks the step for
  * human resolution and must NOT be stamped `done` — the gate stays
  * unsatisfied and a resumed run needs to re-attempt the rebase.
@@ -1320,9 +1162,6 @@ export async function emitRebaseEvent(
           changedPaths: outcome.changedCodePaths,
         });
         break;
-      case 'changelog_resolved':
-        await events.emit({ type: 'rebase_changelog_resolved' });
-        break;
       case 'conflict_halt':
         await events.emit({
           type: 'rebase_conflict_halt',
@@ -1333,17 +1172,6 @@ export async function emitRebaseEvent(
     }
   } catch {
     /* best-effort: event failure must not affect the rebase result */
-  }
-}
-
-/** Read the CHANGELOG additions captured for HALT resume detection (FR-9). */
-export async function readChangelogIfPresent(
-  projectRoot: string,
-): Promise<string | null> {
-  try {
-    return await readFile(join(projectRoot, CHANGELOG), 'utf-8');
-  } catch {
-    return null;
   }
 }
 
@@ -1552,8 +1380,8 @@ function parsePath(path: string): { dir: string; name: string; ext: string } {
 // ── Tier 1 resolver driver ──────────────────────────────────────────────────
 
 /**
- * Tier 1 deterministic resolution driver: compose the CHANGELOG resolver +
- * keep-both resolver for .docs/ conflicts on a paused rebase.
+ * Tier 1 deterministic resolution driver for safe .docs/ keep-both conflicts
+ * on a paused rebase.
  *
  * Returns {resolved: string[], remaining: string[]} tracking which conflicted
  * files were resolved and which remain. A file is considered resolved if:
@@ -1566,10 +1394,9 @@ function parsePath(path: string): { dir: string; name: string; ext: string } {
  * attempted. The rebase remains paused with a mix of staged + unstaged conflicts.
  *
  * Operates in one pass:
- *   1. Identify CHANGELOG conflicts and attempt resolution (stage only, no continue)
- *   2. Identify .docs/ conflicts and attempt resolution (stage only, no continue)
- *   3. Attempt ONE rebase --continue
- *   4. Check what conflicts remain
+ *   1. Identify .docs/ conflicts and attempt resolution (stage only, no continue)
+ *   2. Attempt ONE rebase --continue
+ *   3. Check what conflicts remain
  */
 export async function runTier1(
   git: GitRunner,
@@ -1583,14 +1410,6 @@ export async function runTier1(
   }
 
   const staged: string[] = [];
-
-  // Attempt to stage CHANGELOG resolution if CHANGELOG.md is in conflicts.
-  if (originalConflicts.includes(CHANGELOG)) {
-    const changelogStaged = await tier1StageChangelog(git, projectRoot);
-    if (changelogStaged) {
-      staged.push(CHANGELOG);
-    }
-  }
 
   // Attempt to stage .docs/ resolutions for .docs/ conflicts.
   const docsConflicts = originalConflicts.filter((f) => f.startsWith('.docs/'));
@@ -1621,40 +1440,6 @@ export async function runTier1(
   // but the rebase didn't advance. Report them as attempted (staged) but not fully resolved.
   const finalConflicts = await conflictedFiles(git);
   return { resolved: staged, remaining: finalConflicts };
-}
-
-/**
- * Attempt to stage a CHANGELOG.md conflict resolution using the existing auto-resolver.
- * During a paused rebase, extracts feature additions from the conflict stages
- * (`:3:` is the feature version), builds the resolved version, and stages it.
- * Does NOT run rebase --continue.
- *
- * Returns true if staged, false if the resolver could not safely apply.
- */
-async function tier1StageChangelog(
-  git: GitRunner,
-  projectRoot: string,
-): Promise<boolean> {
-  // Get the base/upstream version (`:2:` during rebase is ours/the base).
-  const baseSide = await git(['show', `:2:${CHANGELOG}`]);
-  if (baseSide.exitCode !== 0) return false;
-
-  // Get the feature version (`:3:` during rebase is theirs/the feature).
-  const featureSide = await git(['show', `:3:${CHANGELOG}`]);
-  if (featureSide.exitCode !== 0) return false;
-
-  // Extract feature additions by comparing feature side with base side.
-  const featureAdditions = unreleasedAdditions(baseSide.stdout, featureSide.stdout);
-
-  // Try the auto-resolve (same logic as performRebase).
-  const resolved = buildResolvedChangelog(baseSide.stdout, featureAdditions);
-  if (resolved === null) return false;
-
-  await writeFile(join(projectRoot, CHANGELOG), resolved, 'utf-8');
-  const add = await git(['add', CHANGELOG]);
-  if (add.exitCode !== 0) return false;
-
-  return true;
 }
 
 /**

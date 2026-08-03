@@ -101,7 +101,6 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   rebase_gate_reverified: 'not-audited-by-design',
   rebase_gate_preserved: 'not-audited-by-design',
   rebase_gate_invalidated: 'not-audited-by-design',
-  rebase_changelog_resolved: 'not-audited-by-design',
   rebase_conflict_halt: 'not-audited-by-design',
   rebase_citation_residue: 'not-audited-by-design',
   rebase_resolution_attempt: 'not-audited-by-design',
@@ -248,7 +247,6 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     gate: 'build_review',
     matchedPaths: ['src/a.ts'],
   },
-  rebase_changelog_resolved: { type: 'rebase_changelog_resolved' },
   rebase_conflict_halt: { type: 'rebase_conflict_halt', reason: 'conflict', conflicts: ['a.ts'] },
   rebase_citation_residue: {
     type: 'rebase_citation_residue',
