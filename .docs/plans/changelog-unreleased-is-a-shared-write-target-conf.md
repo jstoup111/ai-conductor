@@ -322,20 +322,46 @@ this feature: no metadata is resolved and no metadata-derived HALT is possible.
 **Story:** TI-3 and TI-4 — App credential, merged-event filter, concurrency, and no-recursion behavior  
 **Type:** infrastructure
 
+**Authentication-contract amendment (operator decision, resolves the as-built
+`adr-2026-08-01-bot-owned-release-pr` HALT).** The as-built review found
+`releasePrGithubAppAuth` (`src/conductor/src/engine/github-app-auth.ts:6`) unreachable:
+exported at `src/conductor/src/index.ts:9`, referenced only by its own unit test, while both
+workflows hardcode the same secret names and permissions in YAML. **Resolution: delete the
+constant, its unit test, and its index export.** The YAML is the sole source of truth for App
+authentication.
+
+Rationale:
+
+- **A TS constant can never be authoritative here.** GitHub Actions resolves
+  `${{ secrets.* }}` during YAML evaluation; a workflow's secret reference cannot be
+  parameterized from TypeScript. The constant could only ever mirror the YAML, never drive it.
+- **The drift guard already exists, closer to the truth.** `test/test_release_pr_workflow.sh:30-34`
+  already asserts `app-id: ${{ secrets.RELEASE_PR_APP_ID }}`,
+  `private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}`, and the
+  `permission-contents/pull-requests/checks: write` stanzas directly against the workflow.
+  A second test comparing YAML to a constant nothing else reads would be a tautological guard.
+- **No security difference.** The module holds secret *names*, never values; values live in
+  GitHub Actions secrets under every alternative.
+
+Deleting is therefore a scope correction, not a capability loss: the shipped behavior the
+module claimed to provide is already provided, and already tested, at the workflow boundary.
+
 **Steps:**
 1. Extend failing structural workflow tests for App-token creation, minimum permissions, closed-and-merged filtering, one concurrency group, and release-PR recursion exclusion.
 2. Verify RED.
-3. Add the maintainer workflow using the reusable App credential seam and exported action.
-4. Verify GREEN without contacting GitHub.
-5. Commit `ci(release): maintain one serialized release PR`.
+3. Add the maintainer workflow using the App credential stanzas declared directly in YAML.
+4. Delete `src/conductor/src/engine/github-app-auth.ts`, its unit test, and its `src/conductor/src/index.ts` export; confirm no remaining reference in `src/`, `.github/`, `bin/`, `skills/`, or `.agents/`.
+5. Verify GREEN without contacting GitHub, with `test/test_release_pr_workflow.sh:30-34` retained as the authentication-contract guard.
+6. Commit `ci(release): maintain one serialized release PR`.
 
 **Files:**
 - `.github/workflows/release-pr.yml` — merge trigger, App token, concurrency, action call
-- `test/test_release_pr_workflow.sh` — workflow contract assertions
-- `src/conductor/src/engine/github-app-auth.ts` — reusable credential configuration contract
-- `src/conductor/test/engine/github-app-auth.test.ts` — scoped configuration tests
+- `test/test_release_pr_workflow.sh` — workflow contract assertions, including the App auth guard
+- ~~`src/conductor/src/engine/github-app-auth.ts`~~ — deleted; YAML is the sole source of truth
+- ~~`src/conductor/test/engine/github-app-auth.test.ts`~~ — deleted with the module
+- `src/conductor/src/index.ts` — drop the `releasePrGithubAppAuth` export
 
-**Wired-into:** `.github/workflows/release-pr.yml#release-pr-maintenance`  
+**Wired-into:** `.github/workflows/release-pr.yml#release-pr-maintenance` (workflow-declared auth; no engine module)  
 **Dependencies:** Tasks 9, 10, 11
 
 ### Task 13: Present the exhaustive audit on the release PR
@@ -522,6 +548,34 @@ the audit status is not `approved` or any item remains unresolved.
 **Wired-into:** `src/conductor/src/engine/release-pr-action.ts#runReleasePrAction`  
 **Dependencies:** Tasks 6, 8, 12, 13, 16
 
+### Task 21: Realign contributor instructions with the shipped release flow
+
+**Story:** TI-5 — contributors and agents follow the shipped release path, not the retired one  
+**Type:** infrastructure
+
+Added by operator decision from the as-built architecture review (non-blocking findings 2
+and 4). `docs/contributing/releases.md` was updated during the build; `CLAUDE.md` was not.
+Its "Release & Update Gates" section still directs contributors to add entries under
+`[Unreleased]` and to put migration blocks in `CHANGELOG.md`, and still describes the retired
+CI rewrite ("reads `VERSION`, tags, rewrites the `[Unreleased]` block"). Left stale, agents
+keep writing to the shared target this feature exists to eliminate — the instruction file
+would actively defeat the feature.
+
+**Steps:**
+1. Rewrite `CLAUDE.md`'s "Release & Update Gates" section to the shipped flow: release intent is declared in implementation-PR metadata; migration blocks travel in that metadata; the bot-owned release PR is the only writer of `CHANGELOG.md`/`VERSION`.
+2. Preserve the rules that survive unchanged — the migration-block requirement for breaking changes, the waiver mechanism and its canonical surface names, and the semver tiers.
+3. Correct the architecture document header from "Proposed repository-local flow" to as-built wording.
+4. Verify no remaining instruction anywhere in `CLAUDE.md` or `AGENTS.md` tells an author to hand-edit `CHANGELOG.md`'s `[Unreleased]`, and that root agent-instruction parity still passes.
+5. Commit `docs(release): realign contributor instructions with the shipped flow`.
+
+**Files:**
+- `CLAUDE.md` — "Release & Update Gates" rewritten to the PR-metadata flow
+- `AGENTS.md` — kept in parity (integrity check 15)
+- `.docs/architecture/changelog-unreleased-is-a-shared-write-target-conf.md` — as-built header wording
+
+**Wired-into:** none (contributor and agent instructions; no runtime surface)  
+**Dependencies:** Tasks 17, 18, 20
+
 ## Task Dependency Graph
 
 ```text
@@ -535,6 +589,7 @@ the audit status is not `approved` or any item remains unresolved.
 12,15 -> 16 -> 17
 3,12 -> 18 -> 19
 6,8,12,13,16 -> 20
+17,18,20 -> 21
 ```
 
 ## Integration Points
