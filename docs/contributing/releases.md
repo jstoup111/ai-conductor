@@ -109,7 +109,7 @@ implementation PR's release metadata — the `## Migration` section of the PR bo
 
 #### Canonical breaking surfaces
 
-Reproduced verbatim from `release-gate.ts:139-144`:
+Reproduced verbatim from `release-gate.ts:108-113`:
 
 ```ts
 export const CANONICAL_BREAKING_SURFACES = [
@@ -141,8 +141,11 @@ A `null` change set — one the gate could not determine — returns
 #### What counts as a migration block
 
 ```ts
+// release-gate.ts
 const MIGRATION_SECTION_RE = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/;
-const MIGRATION_FENCE_RE = /```bash migration\s*\n[\s\S]*?```/;
+
+// release-metadata.ts
+const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
 ```
 
 A ```` ```bash migration ```` fence inside a `## Migration` (or `### Migration`) section. These mirror
