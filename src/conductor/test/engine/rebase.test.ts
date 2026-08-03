@@ -12,8 +12,6 @@ import {
   rebaseStateActive,
   isCodeOrTestPath,
   filterCodeOrTestPaths,
-  unreleasedAdditions,
-  buildResolvedChangelog,
   writeHalt,
   applyRebaseVerdicts,
   recordRebaseStepCompletion,
@@ -590,36 +588,6 @@ describe('engine/rebase — path classifier (FR-5)', () => {
   });
 });
 
-describe('engine/rebase — CHANGELOG resolution (FR-7)', () => {
-  const base =
-    '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Sibling bar entry\n';
-  const head =
-    '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature foo entry\n';
-
-  it('captures this feature additions (head minus base)', () => {
-    expect(unreleasedAdditions(base, head)).toEqual(['- Feature foo entry']);
-  });
-
-  it('resolves to base + feature additions, each exactly once', () => {
-    const additions = unreleasedAdditions(base, head);
-    const resolved = buildResolvedChangelog(base, additions);
-    expect(resolved).not.toBeNull();
-    expect(resolved).toContain('- Sibling bar entry');
-    expect(resolved).toContain('- Feature foo entry');
-    expect(resolved!.match(/- Feature foo entry/g)).toHaveLength(1);
-    expect(resolved!.match(/- Sibling bar entry/g)).toHaveLength(1);
-  });
-
-  it('does not duplicate an addition the base already has (dedup)', () => {
-    const resolved = buildResolvedChangelog(base, ['- Sibling bar entry']);
-    expect(resolved!.match(/- Sibling bar entry/g)).toHaveLength(1);
-  });
-
-  it('declines (null) when base has no [Unreleased] block', () => {
-    expect(buildResolvedChangelog('# Changelog\n\n## [1.0.0]\n', ['- x'])).toBeNull();
-  });
-});
-
 describe('engine/rebase — HALT (FR-8)', () => {
   let dir: string;
   beforeEach(async () => {
@@ -643,6 +611,36 @@ describe('engine/rebase — HALT (FR-8)', () => {
     await writeHalt(dir, ['src/feature.ts']);
     const cls = await readFile(join(dir, '.pipeline/HALT.class'), 'utf-8');
     expect(cls).toBe('needs-human');
+  });
+
+  it('leaves a CHANGELOG conflict paused for the generic resolver', async () => {
+    let conflictChecks = 0;
+    const git: GitRunner = async (args) => {
+      if (args.join(' ') === 'rev-parse --is-inside-work-tree') {
+        return { exitCode: 0, stdout: 'true\n', stderr: '' };
+      }
+      if (args.join(' ') === 'remote') return { exitCode: 0, stdout: '', stderr: '' };
+      if (args.join(' ') === 'rev-list --count HEAD..main') {
+        return { exitCode: 0, stdout: '1\n', stderr: '' };
+      }
+      if (args.join(' ') === 'diff --name-only --diff-filter=U') {
+        conflictChecks += 1;
+        return { exitCode: 0, stdout: conflictChecks === 1 ? '' : 'CHANGELOG.md\n', stderr: '' };
+      }
+      if (args.join(' ') === 'show HEAD:CHANGELOG.md' || args.join(' ') === 'show main:CHANGELOG.md') {
+        return { exitCode: 0, stdout: '# Changelog\n\n## [Unreleased]\n', stderr: '' };
+      }
+      if (args.join(' ') === 'rebase --autostash main') {
+        return { exitCode: 1, stdout: '', stderr: 'conflict' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    };
+
+    await expect(performRebase(git, dir, 'main')).resolves.toEqual({
+      kind: 'conflict_halt',
+      conflicts: ['CHANGELOG.md'],
+      reason: 'rebase conflict requires human resolution',
+    });
   });
 });
 
@@ -724,11 +722,6 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       'prd_audit',
       'architecture_review_as_built',
     ]);
-  });
-
-  it('changelog_resolved (docs-only) → satisfied, NO kickback (FR-5×FR-7)', async () => {
-    const r = await applyRebaseVerdicts(dir, { kind: 'changelog_resolved' }, true);
-    expect(r).toEqual({ satisfied: true, kickedBack: [], reverified: [] });
   });
 
   it('conflict_halt → rebase NOT satisfied', async () => {
@@ -1325,7 +1318,6 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       'rebase_noop',
       'rebase_mergeable_skip',
       'rebase_changed',
-      'rebase_changelog_resolved',
       'rebase_conflict_halt',
     ] as const) {
       events.on(t, (e) => { seen.push(e.type); });
@@ -1333,13 +1325,11 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
     await emitRebaseEvent(events, { kind: 'noop' });
     await emitRebaseEvent(events, { kind: 'mergeable_skip' });
     await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['src/a.ts'] });
-    await emitRebaseEvent(events, { kind: 'changelog_resolved' });
     await emitRebaseEvent(events, { kind: 'conflict_halt', conflicts: ['x'], reason: 'r' });
     expect(seen).toEqual([
       'rebase_noop',
       'rebase_mergeable_skip',
       'rebase_changed',
-      'rebase_changelog_resolved',
       'rebase_conflict_halt',
     ]);
   });
@@ -1543,77 +1533,6 @@ describe('engine/rebase — performRebase translateAfterRebase capability (Task 
         baselineCommit: newHead,
         rebaseline: {
           fromCommit: baselineCommit,
-          toCommit: newHead,
-          trigger: expect.any(String),
-          paths: [],
-        },
-      },
-    });
-  }, 20000);
-
-  it('translates and rotates the seal after auto-resolving a CHANGELOG-only conflict', async () => {
-    const { performRebase, makeGitRunner } = await import('../../src/engine/rebase.js');
-    const { translateAfterRebase: realTranslateAfterRebase } = await import(
-      '../../src/engine/rebase-translate.js'
-    );
-
-    await writeFile(
-      join(repo, 'CHANGELOG.md'),
-      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n',
-    );
-    await g(['add', 'CHANGELOG.md']);
-    await g(['commit', '-q', '-m', 'changelog scaffold']);
-
-    await g(['checkout', '-q', '-b', 'feat']);
-    await writeFile(
-      join(repo, 'CHANGELOG.md'),
-      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature foo entry\n',
-    );
-    await g(['add', 'CHANGELOG.md']);
-    await g(['commit', '-q', '-m', 'feature changelog']);
-    const origHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
-    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: origHead });
-
-    await g(['checkout', '-q', 'main']);
-    await writeFile(
-      join(repo, 'CHANGELOG.md'),
-      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Sibling bar entry\n',
-    );
-    await g(['add', 'CHANGELOG.md']);
-    await g(['commit', '-q', '-m', 'sibling changelog']);
-    const onto = (await g(['rev-parse', 'HEAD'])).stdout.trim();
-    await g(['checkout', '-q', 'feat']);
-
-    const translateAfterRebase = vi.fn(realTranslateAfterRebase);
-    const git = makeGitRunner(repo);
-    const outcome = await performRebase(git, repo, 'main', { translateAfterRebase });
-    const newHead = (await g(['rev-parse', 'HEAD'])).stdout.trim();
-    const finalSeal = JSON.parse(
-      await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
-    ) as {
-      baselineCommit: string;
-      rebaselines: Array<{
-        fromCommit: string;
-        toCommit: string;
-        trigger: string;
-        paths: string[];
-      }>;
-    };
-
-    expect({
-      outcome: outcome.kind,
-      translationCalls: translateAfterRebase.mock.calls,
-      seal: {
-        baselineCommit: finalSeal.baselineCommit,
-        rebaseline: finalSeal.rebaselines.at(-1),
-      },
-    }).toEqual({
-      outcome: 'changelog_resolved',
-      translationCalls: [[git, repo, onto, origHead, newHead]],
-      seal: {
-        baselineCommit: newHead,
-        rebaseline: {
-          fromCommit: origHead,
           toCommit: newHead,
           trigger: expect.any(String),
           paths: [],

@@ -900,7 +900,7 @@ describe('engine/rebase — .docs keep-both resolver (negative scope cases)', ()
   });
 });
 
-describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolvers)', () => {
+describe('engine/rebase — runTier1 driver (.docs keep-both resolver)', () => {
   let repo: string;
   const g = (args: string[]) => execFile('git', args, { cwd: repo });
   const gc = (args: string[]) =>
@@ -912,10 +912,9 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
 
   /**
    * Mixed: CHANGELOG + code conflict.
-   * runTier1 should resolve the CHANGELOG, leaving only the code conflict.
-   * Returns {resolved: ['CHANGELOG.md'], remaining: ['src/code.ts']}
+   * Tier 1 leaves both conflicts for the generic resolver.
    */
-  it('CHANGELOG + code conflict: CHANGELOG resolved, code remains', async () => {
+  it('CHANGELOG + code conflict: both remain for generic resolution', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-changelog-code-'));
     await initTestRepo(repo);
 
@@ -983,17 +982,15 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
     // Run tier1 resolver
     const result = await runTier1(git, repo);
 
-    // CHANGELOG should be resolved
-    expect(result.resolved).toContain('CHANGELOG.md');
-    // But code conflict remains
+    expect(result.resolved).toEqual([]);
+    expect(result.remaining).toContain('CHANGELOG.md');
     expect(result.remaining).toContain('src/code.ts');
   });
 
   /**
-   * CHANGELOG-only conflict (no code conflicts): should be fully resolved.
-   * Returns {resolved: ['CHANGELOG.md'], remaining: []}
+   * CHANGELOG-only conflicts stay paused for generic resolution.
    */
-  it('CHANGELOG-only conflict: fully resolved', async () => {
+  it('CHANGELOG-only conflict: remains for generic resolution', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-changelog-only-'));
     await initTestRepo(repo);
 
@@ -1054,10 +1051,8 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
 
     // Now test runTier1
     const result = await runTier1(git, repo);
-    expect(result.resolved).toContain('CHANGELOG.md');
-    expect(result.remaining.length).toBe(0);
-    // Rebase should be complete and current
-    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    expect(result.resolved).toEqual([]);
+    expect(result.remaining).toEqual(['CHANGELOG.md']);
   });
 
   /**
@@ -1110,10 +1105,9 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
   });
 
   /**
-   * Mixed CHANGELOG + .docs/ conflicts: both resolved by their respective resolvers.
-   * Returns {resolved: ['CHANGELOG.md', '.docs/...'], remaining: []}
+   * Mixed CHANGELOG + .docs/ conflicts: only the generic .docs resolver applies.
    */
-  it('mixed CHANGELOG + .docs/ conflicts: both resolved', async () => {
+  it('mixed CHANGELOG + .docs/ conflicts: docs resolves while changelog remains', async () => {
     repo = await mkdtemp(join(tmpdir(), 'rebase-tier1-mixed-'));
     await initTestRepo(repo);
 
@@ -1183,12 +1177,9 @@ describe('engine/rebase — runTier1 driver (CHANGELOG + .docs keep-both resolve
     // Run tier1 resolver
     const result = await runTier1(git, repo);
 
-    // Both should be resolved
-    expect(result.resolved).toContain('CHANGELOG.md');
+    expect(result.resolved).not.toContain('CHANGELOG.md');
     expect(result.resolved.some((f) => f.includes('.docs/spec'))).toBe(true);
-    expect(result.remaining.length).toBe(0);
-    // Rebase complete and current
-    expect((await g(['rev-list', '--count', 'HEAD..main'])).stdout.trim()).toBe('0');
+    expect(result.remaining).toContain('CHANGELOG.md');
   });
 
   /**

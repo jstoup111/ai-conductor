@@ -4,30 +4,21 @@ import { join } from 'node:path';
 
 const FINISH_SKILL_PATH = join(process.cwd(), '..', '..', 'skills', 'finish', 'SKILL.md');
 
-describe('finish documentation finalization contract', () => {
+describe('finish documentation shipment contract', () => {
   let finishSkill: string;
 
   beforeAll(async () => {
     finishSkill = await readFile(FINISH_SKILL_PATH, 'utf-8');
   });
 
-  it('orders the complete finalization and durable shipment sequence after PR creation', () => {
+  it('orders durable shipment after PR creation without changelog finalization', () => {
     const sequenceStart = finishSkill.indexOf('**A PR finish is one ordered shipment sequence.**');
     const sequenceEnd = finishSkill.indexOf('For Keep (no remote', sequenceStart);
     const sequence = finishSkill.slice(sequenceStart, sequenceEnd);
-    const focusedPush = sequence.indexOf('git push  # focused changelog finalization push');
-    const conditionalEndMatch = /^\s*fi\s*$/m.exec(sequence.slice(focusedPush));
     const positions = {
       prCreated: sequence.indexOf(
         'After you have created or reused the PR **inline**',
       ),
-      finalize: sequence.indexOf('conduct-ts finalize-changelog-pr --pr-url <PR_URL>'),
-      changeGuard: sequence.indexOf('if ! git diff --quiet -- CHANGELOG.md; then'),
-      add: sequence.indexOf('git add CHANGELOG.md'),
-      commit: sequence.indexOf('git commit -m "docs(changelog): link implementation PR"'),
-      focusedPush,
-      conditionalEnd:
-        conditionalEndMatch === null ? -1 : focusedPush + conditionalEndMatch.index,
       shipped: sequence.indexOf('conduct-ts shipped-record --slug <slug> --pr <PR_URL>'),
       durablePush: sequence.indexOf('git push  # durable shipped-record push'),
       durableVerification: sequence.indexOf(
@@ -46,6 +37,7 @@ describe('finish documentation finalization contract', () => {
           (position, index, ordered) => index === 0 || ordered[index - 1] < position,
         ),
     );
+    expect(sequence).not.toMatch(/finalize-changelog-pr|IMPLEMENTATION_PR|CHANGELOG\.md/);
 
     const commandBlockMatch = /```\r?\n([\s\S]*?)\r?\n```/.exec(sequence);
     expect(commandBlockMatch).not.toBeNull();
@@ -55,18 +47,6 @@ describe('finish documentation finalization contract', () => {
       .filter(Boolean);
     expect(commands.at(-1)).toBe(
       'conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline',
-    );
-  });
-
-  it('commits and pushes only when finalization changes CHANGELOG.md', () => {
-    expect(finishSkill).toMatch(
-      /if ! git diff --quiet -- CHANGELOG\.md; then[\s\S]*git add CHANGELOG\.md[\s\S]*git commit -m "docs\(changelog\): link implementation PR"[\s\S]*git push  # focused changelog finalization push[^\n]*\r?\ngit merge-base --is-ancestor HEAD refs\/remotes\/origin\/<branch>\r?\nfi(?:\r?\n|$)/,
-    );
-  });
-
-  it('stops before durable shipment records when finalization, commit, or push fails', () => {
-    expect(finishSkill).toMatch(
-      /If finalization, the focused commit, or its push fails, \*\*STOP immediately\.\*\*[\s\S]{0,800}Do NOT run `conduct-ts shipped-record`[\s\S]{0,800}Do NOT run `conduct-ts finish-record`[\s\S]{0,800}Do NOT write `\.pipeline\/finish-choice`/,
     );
   });
 
@@ -111,9 +91,9 @@ describe('finish documentation finalization contract', () => {
     });
   });
 
-  it('preserves the existing finish path when no implementation token exists', () => {
+  it('keeps shipped-record failure as the finish blocker', () => {
     expect(finishSkill).toMatch(
-      /When no implementation-PR token exists,[\s\S]{0,500}successful no-op[\s\S]{0,500}do not create a changelog commit or push[\s\S]{0,500}continue with the existing shipped-record sequence/,
+      /If either\s+fails, STOP: do not run `finish-record`, do not write local completion markers, and do not report\s+the feature shipped/,
     );
   });
 });

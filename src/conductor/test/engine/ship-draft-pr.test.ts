@@ -95,7 +95,7 @@ describe('openShipDraftPr', () => {
     expect(create![create!.indexOf('--title') + 1]).toBe('feat: widget import flow');
   });
 
-  it('marks the placeholder body with the engine body-floor marker so /finish must author a real one', async () => {
+  it('leaves release disposition selection to the pre-finish custom step', async () => {
     const { git } = aheadGit();
     const { gh, calls: ghCalls } = createsGh();
 
@@ -105,15 +105,19 @@ describe('openShipDraftPr', () => {
     const body = create[create.indexOf('--body') + 1];
     expect(body).toContain(PR_BODY_FLOOR_MARKER);
     expect(body).toContain(SHIP_DRAFT_PR_NOTE);
+    expect(body).not.toMatch(/^Release-Disposition:/m);
     // Never a halt PR: no halt banner, no needs-remediation title prefix.
     expect(body).not.toContain('irrecoverable daemon HALT');
     expect(create[create.indexOf('--title') + 1]).not.toContain('needs-remediation');
   });
 
-  it('reuses an already-open PR instead of creating a second one', async () => {
+  it('reuses an already-open PR without preserving or choosing a release disposition', async () => {
     const { git } = aheadGit();
     const { gh, calls: ghCalls } = fakeGh((args) => {
-      if (args[1] === 'view') return { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) };
+      if (args[1] === 'view' && args.includes('url,state')) {
+        return { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) };
+      }
+      if (args[1] === 'view' && args.includes('body')) return { stdout: JSON.stringify({ body: 'old draft' }) };
       return { stdout: '' };
     });
 
@@ -128,6 +132,7 @@ describe('openShipDraftPr', () => {
 
     expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
     expect(ghCalls.filter((c) => c[1] === 'create')).toHaveLength(0);
+    expect(ghCalls.filter((c) => c[1] === 'edit')).toHaveLength(0);
   });
 
   it('does not push or open a PR when the branch has no commits over base', async () => {

@@ -56,7 +56,6 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   rebase_gate_reverified: { render: false, persist: false, audit: false },
   rebase_gate_preserved: { render: false, persist: false, audit: false },
   rebase_gate_invalidated: { render: false, persist: false, audit: false },
-  rebase_changelog_resolved: { render: false, persist: false, audit: false },
   rebase_conflict_halt: { render: false, persist: false, audit: false },
   rebase_citation_residue: { render: false, persist: false, audit: false },
   rebase_resolution_attempt: { render: false, persist: false, audit: false },

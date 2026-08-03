@@ -1,0 +1,179 @@
+name: release-pr-maintenance
+
+on:
+  pull_request:
+    types: [closed]
+
+# The installation token below, rather than the workflow token, grants the two
+# writes needed to update the dedicated release branch and its one pull request.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  release-pr-maintenance:
+    if: >-
+      github.event.pull_request.merged == true &&
+      github.event.pull_request.head.ref != 'automation/release-pr'
+    runs-on: ubuntu-latest
+    concurrency:
+      group: release-pr-maintenance
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-checks: write
+      - uses: actions/github-script@v9
+        env:
+          RELEASE_PR_APP_LOGIN: ${{ steps.app-token.outputs.app-slug }}[bot]
+          RELEASE_PR_APP_TOKEN: ${{ steps.app-token.outputs.token }}
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const {
+              collectReleaseCandidates,
+              renderReleaseCandidate,
+              runReleasePrAction,
+            } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            const { readFile, writeFile } = await import('node:fs/promises');
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const base = context.payload.repository.default_branch;
+            const branch = 'automation/release-pr';
+            const generatedPaths = ['CHANGELOG.md', 'VERSION'];
+            const appRemote = `https://x-access-token:${encodeURIComponent(process.env.RELEASE_PR_APP_TOKEN)}@github.com/${owner}/${repo}.git`;
+            await exec.exec('git', ['remote', 'set-url', 'origin', appRemote], { silent: true });
+
+            async function gitOutput(args, ignoreReturnCode = false) {
+              const result = await exec.getExecOutput('git', args, { silent: true, ignoreReturnCode });
+              if (result.exitCode !== 0 && !ignoreReturnCode) throw new Error(`git ${args.join(' ')} failed`);
+              return result.stdout.trim();
+            }
+
+            const git = {
+              latestTag: () => gitOutput(['describe', '--tags', '--abbrev=0']),
+              mergeRange: async (tag) => (await gitOutput(['rev-list', '--merges', `${tag}..HEAD`])).split('\n').filter(Boolean),
+              readMainHead: async () => {
+                await exec.exec('git', ['fetch', 'origin', base], { silent: true });
+                return gitOutput(['rev-parse', 'FETCH_HEAD']);
+              },
+              readBranchHead: async () => (await gitOutput(['ls-remote', 'origin', `refs/heads/${branch}`])).split(/\s+/)[0],
+              readBranchFiles: async () => {
+                const remote = await gitOutput(['ls-remote', '--heads', 'origin', branch]);
+                if (remote === '') return undefined;
+                await exec.exec('git', ['fetch', 'origin', `refs/heads/${branch}:refs/remotes/origin/${branch}`], { silent: true });
+                const files = {};
+                for (const path of generatedPaths) {
+                  const value = await gitOutput(['show', `refs/remotes/origin/${branch}:${path}`], true);
+                  if (value !== '') files[path] = `${value}\n`;
+                }
+                return files;
+              },
+              pushGeneratedBranch: async ({ expectedBaseHead, files, message }) => {
+                const currentBaseHead = await git.readMainHead(base);
+                if (expectedBaseHead !== undefined && currentBaseHead !== expectedBaseHead) {
+                  throw new Error(`Stale release render: main advanced from ${expectedBaseHead} to ${currentBaseHead}`);
+                }
+                const remoteBranch = await gitOutput(['ls-remote', '--heads', 'origin', branch]);
+                if (remoteBranch === '') {
+                  await exec.exec('git', ['checkout', '--force', '-B', branch, currentBaseHead], { silent: true });
+                } else {
+                  await exec.exec('git', ['fetch', 'origin', branch], { silent: true });
+                  await exec.exec('git', ['checkout', '--force', '-B', branch, 'FETCH_HEAD'], { silent: true });
+                }
+                for (const [path, content] of Object.entries(files)) await writeFile(path, content);
+                await exec.exec('git', ['add', '--', ...Object.keys(files)], { silent: true });
+                await exec.exec('git', ['-c', 'user.name=release-pr-maintainer', '-c', 'user.email=release-pr-maintainer@users.noreply.github.com', 'commit', '-m', message], { silent: true });
+                await exec.exec('git', ['push', '--force-with-lease=refs/heads/automation/release-pr', 'origin', 'HEAD:refs/heads/automation/release-pr'], { silent: true });
+              },
+            };
+
+            const pullRequests = await github.paginate(github.rest.pulls.list, {
+              owner, repo, state: 'closed', per_page: 100,
+            });
+            const candidates = await collectReleaseCandidates({
+              git,
+              github: {
+                listMergedPullRequests: async (page) => ({
+                  items: page === 1 ? pullRequests.map((pullRequest) => ({
+                    number: pullRequest.number,
+                    merged: pullRequest.merged_at !== null,
+                    mergedAt: pullRequest.merged_at,
+                    mergeSha: pullRequest.merge_commit_sha ?? '',
+                    body: pullRequest.body ?? '',
+                  })) : [],
+                  hasNextPage: false,
+                  totalCount: pullRequests.length,
+                }),
+              },
+            });
+            if (candidates.completeness.status !== 'complete') {
+              throw new Error(`Release candidates are incomplete: ${JSON.stringify(candidates.completeness.reasons)}`);
+            }
+            const notedCandidates = candidates.candidates.filter((candidate) => candidate.disposition.disposition === 'note');
+            if (notedCandidates.length === 0) {
+              core.notice('No reader-visible release candidates are pending.');
+              return;
+            }
+            const rendered = renderReleaseCandidate({
+              currentVersion: (await readFile('VERSION', 'utf8')).trim(),
+              changelog: await readFile('CHANGELOG.md', 'utf8'),
+              candidates: candidates.candidates,
+              date: new Date().toISOString().slice(0, 10),
+            });
+            const releaseGithub = {
+              findOpenReleasePullRequest: async () => {
+                const { data } = await github.rest.pulls.list({ owner, repo, state: 'open', head: `${owner}:${branch}`, base });
+                const pullRequest = data[0];
+                return pullRequest === undefined ? undefined : {
+                  number: pullRequest.number, author: pullRequest.user?.login ?? '', head: pullRequest.head.ref, base: pullRequest.base.ref,
+                };
+              },
+              createPullRequest: async (input) => {
+                const { data } = await github.rest.pulls.create({ owner, repo, ...input });
+                return { number: data.number };
+              },
+              updatePullRequest: async ({ number, title, body }) => {
+                await github.rest.pulls.update({ owner, repo, pull_number: number, title, body });
+              },
+              publishReleaseReadiness: async ({ pullRequestNumber, head, conclusion, summary }) => {
+                await github.rest.checks.create({
+                  owner,
+                  repo,
+                  name: 'release-candidate-audit',
+                  head_sha: head,
+                  status: 'completed',
+                  conclusion,
+                  output: { title: 'Release candidate audit', summary: `${summary}\n\nRelease PR #${pullRequestNumber}` },
+                });
+              },
+            };
+            await runReleasePrAction({
+              git,
+              github: releaseGithub,
+              config: { branch, base, appLogin: process.env.RELEASE_PR_APP_LOGIN },
+              generatedFiles: { 'CHANGELOG.md': rendered.changelog, VERSION: `${rendered.version}\n` },
+              title: `Release ${rendered.version}`,
+              body: 'Automated release proposal. Review and merge to publish.',
+              expectedMainHead: await gitOutput(['rev-parse', 'HEAD']),
+              audit: candidates.candidates.map(({ number, mergeSha, disposition }) => ({ number, mergeSha, disposition })),
+            });

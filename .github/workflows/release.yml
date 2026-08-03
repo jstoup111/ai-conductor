@@ -2,113 +2,141 @@ name: release
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
+# The workflow token never publishes a release. The job receives a narrowly
+# scoped GitHub App installation token after checkout/build for that purpose.
 permissions:
-  contents: write
+  contents: read
+  pull-requests: read
+  checks: read
 
 jobs:
   release:
     runs-on: ubuntu-latest
-    # Skip the auto-commit this workflow creates so we don't recurse forever.
-    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    concurrency:
+      group: release-publisher
+      cancel-in-progress: false
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
+          ref: ${{ github.sha }}
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: read
+          permission-checks: read
+      - name: Publish proven release PR merge
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { runReleasePublisherAction } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            const { owner, repo } = context.repo;
+            const commit = context.sha;
 
-      - name: Classify pending release content
-        id: release_state
-        run: |
-          bash .github/scripts/release-unreleased-state.sh >> "$GITHUB_OUTPUT"
+            const contentAt = async (path, ref) => {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path, ref });
+              if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
+                throw new Error(`Expected ${path} to be a file at ${ref}`);
+              }
+              return Buffer.from(data.content, data.encoding).toString('utf8');
+            };
+            const missing = error => error && error.status === 404;
 
-      - name: Read VERSION
-        id: version
-        run: |
-          if [ ! -f VERSION ]; then
-            echo "VERSION file missing" >&2
-            exit 1
-          fi
-          version=$(tr -d '[:space:]' < VERSION)
-          if ! echo "$version" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
-            echo "VERSION '$version' is not valid semver" >&2
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+            const result = await runReleasePublisherAction({
+              config: {
+                branch: 'automation/release-pr',
+                base: 'main',
+                appLogin: '${{ steps.app-token.outputs.app-slug }}[bot]',
+              },
+              event: { branch: context.ref.replace('refs/heads/', ''), commit },
+              git: {
+                async readCommitFiles(ref) {
+                  try {
+                    const [changelog, version] = await Promise.all([
+                      contentAt('CHANGELOG.md', ref),
+                      contentAt('VERSION', ref),
+                    ]);
+                    return { 'CHANGELOG.md': changelog, VERSION: version };
+                  } catch (error) {
+                    if (missing(error)) return undefined;
+                    throw error;
+                  }
+                },
+                async readAnnotatedTag(tag) {
+                  try {
+                    const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+                    if (ref.object.type !== 'tag') return undefined;
+                    const { data: annotated } = await github.rest.git.getTag({ owner, repo, tag_sha: ref.object.sha });
+                    return annotated.object.type === 'commit' ? { commit: annotated.object.sha } : undefined;
+                  } catch (error) {
+                    if (missing(error)) return undefined;
+                    throw error;
+                  }
+                },
+                async createAnnotatedTag({ tag, commit: target, message }) {
+                  const { data: annotated } = await github.rest.git.createTag({
+                    owner, repo, tag, message, object: target, type: 'commit',
+                  });
+                  await github.rest.git.createRef({ owner, repo, ref: `refs/tags/${tag}`, sha: annotated.sha });
+                },
+              },
+              github: {
+                async findMergedPullRequestByMergeCommit(mergeCommit) {
+                  const { data: candidates } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner, repo, commit_sha: mergeCommit,
+                  });
+                  const candidate = candidates.find(pull => pull.merge_commit_sha === mergeCommit);
+                  if (candidate === undefined) return undefined;
+                  const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: candidate.number });
+                  if (!pull.merged || pull.merge_commit_sha !== mergeCommit) return undefined;
+                  return {
+                    number: pull.number,
+                    author: pull.user?.login ?? '',
+                    head: pull.head.ref,
+                    headCommit: pull.head.sha,
+                    base: pull.base.ref,
+                    mergeCommit,
+                  };
+                },
+                async readReleaseAudit({ pullRequestNumber }) {
+                  const pull = await github.rest.pulls.get({ owner, repo, pull_number: pullRequestNumber });
+                  const { data } = await github.rest.checks.listForRef({ owner, repo, ref: pull.data.head.sha, filter: 'latest' });
+                  const audit = data.check_runs.find(check => check.name === 'release-candidate-audit');
+                  return audit === undefined
+                    ? undefined
+                    : { head: pull.data.head.sha, complete: audit.conclusion === 'success' };
+                },
+                async findReleaseByTag(tag) {
+                  try {
+                    const { data } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+                    return { tag: data.tag_name, title: data.name ?? '', body: data.body ?? '', target: data.target_commitish };
+                  } catch (error) {
+                    if (missing(error)) return undefined;
+                    throw error;
+                  }
+                },
+                async createRelease({ tag, title, body, target }) {
+                  await github.rest.repos.createRelease({
+                    owner, repo, tag_name: tag, name: title, body, target_commitish: target,
+                  });
+                },
+              },
+            });
 
-      - name: Skip if tag already exists
-        id: tag_check
-        run: |
-          tag="${{ steps.version.outputs.tag }}"
-          if git rev-parse "refs/tags/$tag" >/dev/null 2>&1; then
-            echo "Tag $tag already exists — nothing to release."
-            echo "skip=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "skip=false" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Rewrite CHANGELOG and bump VERSION
-        if: steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'
-        id: rewrite
-        run: |
-          version="${{ steps.version.outputs.version }}"
-          tag="${{ steps.version.outputs.tag }}"
-          today=$(date -u +%Y-%m-%d)
-
-          # Extract the Unreleased block for the GitHub Release body.
-          awk '
-            /^## \[Unreleased\]/ { inblock=1; next }
-            inblock && /^## / { exit }
-            inblock { print }
-          ' CHANGELOG.md > /tmp/release-body.md
-
-          # Replace "## [Unreleased]" with "## [Unreleased]\n\n## [X.Y.Z] - today"
-          NEW_VERSION="$version" RELEASE_DATE="$today" python3 -c '
-          import os
-          from pathlib import Path
-          path = Path("CHANGELOG.md")
-          text = path.read_text()
-          marker = "## [Unreleased]"
-          version = os.environ["NEW_VERSION"]
-          date = os.environ["RELEASE_DATE"]
-          replacement = f"## [Unreleased]\n\n## [{version}] - {date}"
-          if marker not in text:
-              raise SystemExit("CHANGELOG.md missing ## [Unreleased] marker")
-          path.write_text(text.replace(marker, replacement, 1))
-          '
-
-          # Bump VERSION to the next patch.
-          major=$(echo "$version" | cut -d. -f1)
-          minor=$(echo "$version" | cut -d. -f2)
-          patch=$(echo "$version" | cut -d. -f3)
-          next_patch=$((patch + 1))
-          echo "${major}.${minor}.${next_patch}" > VERSION
-
-          echo "body_path=/tmp/release-body.md" >> "$GITHUB_OUTPUT"
-
-      - name: Commit, tag, push
-        if: steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'
-        env:
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add CHANGELOG.md VERSION
-          git commit -m "chore(release): ${TAG} [skip ci]"
-          git tag -a "${TAG}" -m "Release ${TAG}"
-          git push origin main
-          git push origin "${TAG}"
-
-      - name: Create GitHub Release
-        if: steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-        run: |
-          gh release create "${TAG}" \
-            --title "${TAG}" \
-            --notes-file /tmp/release-body.md
+            if (result.state === 'rejected') core.setFailed(result.reason);
+            if (result.state === 'ignored') core.info('No approved release PR merge to publish.');

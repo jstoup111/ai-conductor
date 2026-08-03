@@ -335,7 +335,6 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       { type: 'rebase_noop' },
       { type: 'rebase_mergeable_skip' } as unknown as ConductorEvent,
       { type: 'rebase_changed', changedPaths: ['a.ts'] },
-      { type: 'rebase_changelog_resolved' },
       { type: 'rebase_conflict_halt', reason: 'conflict', conflicts: ['a.ts'] },
       { type: 'rebase_resolution_attempt', index: 1, cap: 3 },
       { type: 'rebase_resolution_succeeded' },

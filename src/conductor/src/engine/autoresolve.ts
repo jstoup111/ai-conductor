@@ -350,7 +350,7 @@ export async function withResolveWorktree<T>(
  * Story: "Remaining conflicts go to the gated /rebase session, bounded"
  * (adr-2026-07-04-widen-rebase-resolution-dispatch-to-sweep)
  *
- * Tier 2 runs after Tier 1 (deterministic CHANGELOG + .docs/ resolvers).
+ * Tier 2 runs after Tier 1's deterministic .docs/ resolver.
  * When remaining conflicts exist, Tier 2 dispatches them to `resolveRebaseConflicts`
  * with a bounded cap read from `rebase_resolution_attempts` in the harness config.
  *
@@ -367,7 +367,7 @@ export async function withResolveWorktree<T>(
  * @param cap          Maximum attempts for resolution; 0 disables tier 2
  * @param resolver     Injected resolver function (dispatches to /rebase or test stub)
  * @returns            Reclassified RebaseOutcome: unchanged conflict_halt or reclassified as
- *                     'noop', 'changed', or 'changelog_resolved' if resolver succeeds
+ *                     'noop' or 'changed' if resolver succeeds
  */
 export async function runTier2(
   git: GitRunner,
@@ -843,7 +843,7 @@ export async function escalate(
  *   2. Determine the base to rebase onto (resolveBase, auto-discovers origin/main)
  *   3. Capture pre-rebase feature commit subjects (for work-preservation guards)
  *   4. Start the rebase; if no conflicts → return refreshed (already current)
- *   5. Run Tier1 (deterministic CHANGELOG + .docs/ resolution)
+ *   5. Run Tier1 (deterministic .docs/ resolution)
  *   6. If conflicts remain, run Tier2 (bounded assistant dispatch via resolver)
  *   7. Run acceptance guards (rebase state, branch current, commits preserved)
  *   8. Run suite gate (full suite must pass before pushing)
@@ -912,7 +912,7 @@ export async function resolveConflictingPr(
 
     // Rebase paused with conflicts — enter resolution pipeline
 
-    // Stage 1: Deterministic resolution (CHANGELOG + .docs/)
+    // Stage 1: Deterministic .docs/ resolution
     const tier1Result = await runTier1(git, worktreePath);
     log(`${prUrl}: tier1 resolved ${tier1Result.resolved.length} file(s); ${tier1Result.remaining.length} remain`);
 

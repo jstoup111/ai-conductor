@@ -10,6 +10,9 @@ Release cadence: tags `vX.Y.Z` are cut automatically by CI on merge to `main`
 
 ## [Unreleased]
 
+<!-- One-time transition proposal: `.github/release-transition-audit.md` is
+     deliberately unresolved and awaits explicit operator approval. -->
+
 ### Fixed
 
 - Keep GitHub's native checks authoritative for CI status by never applying the redundant

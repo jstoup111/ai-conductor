@@ -3,41 +3,13 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 HARNESS_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CLASSIFIER="$HARNESS_DIR/.github/scripts/release-unreleased-state.sh"
 WORKFLOW="$HARNESS_DIR/.github/workflows/release.yml"
+TRANSITION_AUDIT="$HARNESS_DIR/.github/release-transition-audit.md"
+CHANGELOG="$HARNESS_DIR/CHANGELOG.md"
 
 PASS=0
 FAIL=0
 TOTAL=0
-
-assert_classifier_result() {
-  local description=$1
-  local expected_status=$2
-  local expected_output=$3
-  TOTAL=$((TOTAL + 1))
-  if [ "$CLASSIFIER_STATUS" -eq "$expected_status" ] && [ "$CLASSIFIER_OUTPUT" = "$expected_output" ]; then
-    printf 'PASS %s\n' "$description"
-    PASS=$((PASS + 1))
-  else
-    printf 'FAIL %s (expected: exit %s, %s; got: exit %s, %s)\n' \
-      "$description" "$expected_status" "$expected_output" "$CLASSIFIER_STATUS" "$CLASSIFIER_OUTPUT"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_classifier_failure() {
-  local description=$1
-  local expected_message=$2
-  TOTAL=$((TOTAL + 1))
-  if [ "$CLASSIFIER_STATUS" -ne 0 ] && [ "$CLASSIFIER_OUTPUT" = "$expected_message" ]; then
-    printf 'PASS %s\n' "$description"
-    PASS=$((PASS + 1))
-  else
-    printf 'FAIL %s (expected: non-zero exit with %s; got: exit %s, %s)\n' \
-      "$description" "$expected_message" "$CLASSIFIER_STATUS" "$CLASSIFIER_OUTPUT"
-    FAIL=$((FAIL + 1))
-  fi
-}
 
 assert_contains() {
   local description=$1
@@ -67,162 +39,80 @@ assert_absent() {
   fi
 }
 
-assert_unreleased_migration_invokes_update() {
-  local description=$1
-  local migration
-  migration=$(awk '
-    /^## \[Unreleased\]$/ { in_unreleased=1; next }
-    in_unreleased && /^## \[/ { exit }
-    in_unreleased && /^```bash migration$/ { in_migration=1; next }
-    in_migration && /^```$/ { exit }
-    in_migration { print }
-  ' "$HARNESS_DIR/CHANGELOG.md")
-  TOTAL=$((TOTAL + 1))
-  if printf '%s\n' "$migration" |
-    grep -Eq '^[[:space:]]*\./bin/install --update([[:space:]]|$)'; then
-    printf 'PASS %s\n' "$description"
-    PASS=$((PASS + 1))
-  else
-    printf 'FAIL %s (Unreleased bash migration must execute ./bin/install --update)\n' \
-      "$description"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_step_before() {
-  local description=$1
-  local first_step=$2
-  local second_step=$3
-  local first_line second_line
-  first_line=$(grep -nFx -- "      - name: $first_step" "$WORKFLOW" | head -1 | cut -d: -f1)
-  second_line=$(grep -nFx -- "      - name: $second_step" "$WORKFLOW" | head -1 | cut -d: -f1)
-  TOTAL=$((TOTAL + 1))
-  if [ -n "$first_line" ] && [ -n "$second_line" ] && [ "$first_line" -lt "$second_line" ]; then
-    printf 'PASS %s\n' "$description"
-    PASS=$((PASS + 1))
-  else
-    printf 'FAIL %s (first: %s, second: %s)\n' "$description" "${first_line:-missing}" "${second_line:-missing}"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_step_field() {
-  local description=$1
-  local step_name=$2
-  local field=$3
-  local expected=$4
-  local actual
-  actual=$(step_block "$step_name" | awk -v prefix="        $field: " '
-    index($0, prefix) == 1 { print substr($0, length(prefix) + 1); exit }
-  ')
-  TOTAL=$((TOTAL + 1))
-  if [ "$actual" = "$expected" ]; then
-    printf 'PASS %s\n' "$description"
-    PASS=$((PASS + 1))
-  else
-    printf 'FAIL %s (expected %s: %s, got: %s)\n' \
-      "$description" "$field" "$expected" "${actual:-missing}"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-assert_step_run_command() {
-  local description=$1
-  local step_name=$2
-  local expected=$3
-  local actual
-  actual=$(step_block "$step_name" | awk '
-    $0 == "        run: |" { in_run=1; next }
-    in_run && /^          [^[:space:]#]/ {
-      sub(/^          /, "")
-      print
-      exit
-    }
-  ')
-  TOTAL=$((TOTAL + 1))
-  if [ "$actual" = "$expected" ]; then
-    printf 'PASS %s\n' "$description"
-    PASS=$((PASS + 1))
-  else
-    printf 'FAIL %s (expected first run command: %s, got: %s)\n' \
-      "$description" "$expected" "${actual:-missing}"
-    FAIL=$((FAIL + 1))
-  fi
-}
-
-step_block() {
-  local step_name=$1
-  awk -v target="      - name: $step_name" '
-    $0 == target { found=1 }
-    found && $0 != target && /^      - / { exit }
-    found { print }
-  ' "$WORKFLOW"
-}
-
-run_classifier() {
-  CLASSIFIER_OUTPUT=$(bash "$CLASSIFIER" "$1" 2>&1)
-  CLASSIFIER_STATUS=$?
-}
-
-fixture_dir=$(mktemp -d)
-trap 'rm -rf "$fixture_dir"' EXIT
-
-printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Ship a notable feature.\n\n## [1.0.0] - 2026-01-01\n' \
-  > "$fixture_dir/substantive.md"
-run_classifier "$fixture_dir/substantive.md"
-assert_classifier_result "substantive Unreleased content is release-pending" \
-  "0" "release_pending=true"
-
-printf '# Changelog\n\n## [Unreleased]\n\n## [1.0.0] - 2026-01-01\n' \
-  > "$fixture_dir/empty.md"
-run_classifier "$fixture_dir/empty.md"
-assert_classifier_result "empty Unreleased content is not release-pending" \
-  "0" "release_pending=false"
-
-printf '# Changelog\n\n## [Unreleased]\n\n### Added\n\n### Changed\n\n### Fixed\n\n## [1.0.0] - 2026-01-01\n' \
-  > "$fixture_dir/subheaders-only.md"
-run_classifier "$fixture_dir/subheaders-only.md"
-assert_classifier_result "subheader-only Unreleased content is not release-pending" \
-  "0" "release_pending=false"
-
-printf '# Changelog\n\n## [1.0.0] - 2026-01-01\n\n- Historical entry.\n' \
-  > "$fixture_dir/missing-header.md"
-run_classifier "$fixture_dir/missing-header.md"
-assert_classifier_failure "missing Unreleased header fails closed" \
-  "CHANGELOG.md missing ## [Unreleased] header"
-
-run_classifier "$fixture_dir/missing-file.md"
-assert_classifier_failure "missing changelog file fails closed" \
-  "CHANGELOG.md missing"
-
 workflow=$(<"$WORKFLOW")
-classifier_invocation='bash .github/scripts/release-unreleased-state.sh >> "$GITHUB_OUTPUT"'
-assert_step_field "classifier exposes release state through the expected step id" \
-  "Classify pending release content" "id" "release_state"
-assert_step_run_command "classifier step invokes the release-state script" \
-  "Classify pending release content" "$classifier_invocation"
-assert_step_before "classification precedes changelog and version mutation" \
-  "Classify pending release content" "Rewrite CHANGELOG and bump VERSION"
-assert_step_before "classification precedes commit, tag, and push" \
-  "Classify pending release content" "Commit, tag, push"
-assert_step_before "classification precedes GitHub Release creation" \
-  "Classify pending release content" "Create GitHub Release"
+assert_contains "workflow handles only pushes to main" \
+  "branches: [main]" "$workflow"
+assert_contains "workflow uses the publisher action" \
+  "runReleasePublisherAction" "$workflow"
+assert_contains "workflow obtains a dedicated App token" \
+  "actions/create-github-app-token@v2" "$workflow"
+assert_contains "publisher receives the App token, not GITHUB_TOKEN" \
+  "github-token: \${{ steps.app-token.outputs.token }}" "$workflow"
+assert_contains "publisher is serialized for retry-safe publication" \
+  "group: release-publisher" "$workflow"
+assert_contains "publisher config names the designated release branch" \
+  "branch: 'automation/release-pr'" "$workflow"
+assert_contains "publisher config derives the bot identity from the App token" \
+  "appLogin: '\${{ steps.app-token.outputs.app-slug }}[bot]'" "$workflow"
+assert_contains "publisher reports an ignored event as an empty release set" \
+  "result.state === 'ignored'" "$workflow"
+assert_absent "legacy Unreleased classifier is no longer a release trigger" \
+  "release-unreleased-state.sh" "$workflow"
+assert_absent "workflow no longer rewrites CHANGELOG on main" \
+  "Rewrite CHANGELOG and bump VERSION" "$workflow"
+assert_absent "workflow no longer commits a release directly to main" \
+  "git push origin main" "$workflow"
+assert_absent "workflow no longer shells out through the legacy release CLI" \
+  "gh release create" "$workflow"
 
-mutation_guard="steps.release_state.outputs.release_pending == 'true' && steps.tag_check.outputs.skip == 'false'"
-assert_step_field "rewrite and VERSION bump are guarded by pending content" \
-  "Rewrite CHANGELOG and bump VERSION" "if" "$mutation_guard"
-assert_step_field "commit, tag, and push are guarded by pending content" \
-  "Commit, tag, push" "if" "$mutation_guard"
-assert_step_field "GitHub Release creation is guarded by pending content" \
-  "Create GitHub Release" "if" "$mutation_guard"
-assert_absent "empty content no longer reaches the former hard-fail verification step" \
-  "Verify [Unreleased] has content" "$workflow"
-assert_unreleased_migration_invokes_update \
-  "Unreleased migration executes the supported installer update path"
+audit=$(<"$TRANSITION_AUDIT")
+assert_contains "transition audit remains visibly unapproved" \
+  "**Status:** proposed — not approved and not consumed" "$audit"
+assert_contains "transition audit exposes the operator approval record" \
+  "## Operator approval record" "$audit"
+assert_contains "transition audit refuses silent uncertainty" \
+  "every item as unresolved" "$audit"
+assert_contains "transition audit records legacy entry count" \
+  "| Legacy \`[Unreleased]\` bullet entries | 552 | unresolved |" "$audit"
+assert_contains "transition audit records the post-tag commit range" \
+  "v0.99.17..a8efea389854322808abf56af41923ef468f76a1" "$audit"
+assert_contains "transition audit records post-tag reference count" \
+  "| Distinct \`#NNN\` references found in those commit subjects/bodies | 877 | unresolved |" "$audit"
+
+legacy_entry_count=$(awk '
+  /^## \[Unreleased\]/{ in_unreleased = 1; next }
+  in_unreleased && /^## \[/{ exit }
+  in_unreleased && /^- /{ count += 1 }
+  END { print count + 0 }
+' "$CHANGELOG")
+if [ "$legacy_entry_count" -ne 552 ]; then
+  printf 'FAIL transition audit legacy count drift (expected 552, got %s)\n' "$legacy_entry_count"
+  exit 1
+fi
+
+audit_legacy_hash=$(printf '%s\n' "$audit" | sed -n 's/.*bullet-list SHA-256 `\([0-9a-f]*\)`.*/\1/p')
+actual_legacy_hash=$(awk '
+  /^## \[Unreleased\]/{ in_unreleased = 1; next }
+  in_unreleased && /^## \[/{ exit }
+  in_unreleased { print }
+' "$CHANGELOG" | awk '/^- /{ print NR ":" $0 }' | sha256sum | awk '{ print $1 }')
+if [ "$audit_legacy_hash" != "$actual_legacy_hash" ]; then
+  printf 'FAIL transition audit legacy inventory hash drift\n'
+  exit 1
+fi
+
+renderer="$HARNESS_DIR/src/conductor/src/engine/release-renderer.ts"
+category_render_line=$(rg -n "for \(const category of categoryOrder\)" "$renderer" | cut -d: -f1)
+migration_render_line=$(rg -n "const migrations =" "$renderer" | cut -d: -f1)
+if [ -z "$category_render_line" ] || [ -z "$migration_render_line" ] || [ "$category_render_line" -ge "$migration_render_line" ]; then
+  printf 'FAIL release renderer must render migration blocks after release-note categories\n'
+  exit 1
+fi
+
 printf '\nResults: %s/%s passed\n' "$PASS" "$TOTAL"
 if [ "$FAIL" -gt 0 ]; then
   printf '%s assertion(s) failed.\n' "$FAIL"
   exit 1
 fi
 
-printf 'All release-unreleased-state tests passed.\n'
+printf 'All release publisher workflow tests passed.\n'

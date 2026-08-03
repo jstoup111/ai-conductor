@@ -38,6 +38,8 @@ import { promisify } from 'node:util';
 const execFile = promisify(execFileCb);
 
 const PR_URL = 'https://github.com/acme/repo/pull/42';
+/** Attempt cap shared by the sweep configurations under test. */
+const ATTEMPT_CAP = 3;
 
 describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
   let origin: string;
@@ -81,7 +83,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     };
   }
 
-  it('a CHANGELOG-only conflict resolves deterministically, at zero dispatch cost, and publishes with the label restored (FR-3/FR-4/FR-6 happy)', async () => {
+  it('a CHANGELOG-only conflict is handed to the generic resolver (FR-3/FR-4)', async () => {
     // Base (origin/main) and the feature branch both append DIFFERENT entries
     // under [Unreleased] → a rebase conflict confined to CHANGELOG.md.
     await writeFile(join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n### Added\n\n');
@@ -122,7 +124,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
     const outcome = await autoresolve.resolveConflictingPr(
       { prUrl: PR_URL, slug: 'widget', repoCwd: dir },
       'feat/widget',
-      { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: 3 },
+      { enabled: true, suiteCommand: 'true', cooldownMinutes: 60, attemptCap: ATTEMPT_CAP },
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
         runSuite: async (_projectRoot: string) => {
@@ -137,30 +139,19 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       },
     );
 
-    expect(outcome.kind).toBe('refreshed');
-    // FR-6: zero assistant-session cost on the fully-deterministic path.
-    expect(resolverCalls).toBe(0);
-    expect(suiteCalls).toBe(1);
-
-    // FR-3/FR-4: origin now carries BOTH entries exactly once, no markers.
-    await execFile('git', ['fetch', 'origin', 'feat/widget'], { cwd: dir });
-    const { stdout: changelog } = await execFile(
-      'git',
-      ['show', 'origin/feat/widget:CHANGELOG.md'],
-      { cwd: dir },
-    );
-    expect(changelog).toContain('- Feature widget entry');
-    expect(changelog).toContain('- Sibling bar entry');
-    expect(changelog).not.toContain('<<<<<<<');
+    expect(outcome.kind).toBe('escalated');
+    // No CHANGELOG special case remains: the conflict is dispatched to the generic
+    // resolver, and a resolver that reports success without resolving is retried up
+    // to the configured attempt cap before escalation — never silently accepted.
+    expect(resolverCalls).toBe(ATTEMPT_CAP);
+    expect(suiteCalls).toBe(0);
     const { stdout: remoteFeatureTipAfterResolution } = await execFile(
       'git',
       ['rev-parse', 'origin/feat/widget'],
       { cwd: dir },
     );
-    expect(remoteFeatureTipAfterResolution.trim()).not.toBe(remoteFeatureTipBeforeResolution.trim());
-
-    // FR-16: the outcome is logged, identifying the PR.
-    expect(logLines.some((l) => l.includes(PR_URL) && /refreshed/i.test(l))).toBe(true);
+    expect(remoteFeatureTipAfterResolution.trim()).toBe(remoteFeatureTipBeforeResolution.trim());
+    expect(logLines.some((l) => l.includes(PR_URL) && /escalat/i.test(l))).toBe(true);
   });
 
   it('a genuinely semantic conflict short-circuits Tier 2 after one dispatch and escalates with the reason (FR-7/FR-13)', async () => {
@@ -230,7 +221,7 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
   });
 
   it('a red suite aborts the attempt before publishing and escalates with the suite failure as the reason (FR-10/FR-12 negative)', async () => {
-    // A CHANGELOG-only conflict — Tier 1 resolves cleanly — but the suite is red.
+    // A generic resolver completes this conflict before the suite gate runs.
     await writeFile(join(dir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n### Added\n\n');
     await gDir(['add', '.']);
     await gDir(['commit', '-q', '-m', 'changelog scaffold']);
@@ -266,7 +257,15 @@ describe('integration/autoresolve-loop — sweep-resolution pipeline', () => {
       {
         runGh: fakeGhFor(labelCalls, commentBodies),
         runSuite: async (_projectRoot: string) => ({ exitCode: 1, durationMs: 42, configured: true }),
-        resolver: async () => ({ resolved: true }),
+        resolver: async ({ projectRoot }: { projectRoot: string }) => {
+          await writeFile(
+            join(projectRoot, 'CHANGELOG.md'),
+            '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature widget entry\n- Sibling bar entry\n',
+          );
+          await execFile('git', ['add', 'CHANGELOG.md'], { cwd: projectRoot });
+          await execFile('git', ['-c', 'core.editor=true', 'rebase', '--continue'], { cwd: projectRoot });
+          return { resolved: true };
+        },
         log: (msg: string) => logLines.push(msg),
       },
     );

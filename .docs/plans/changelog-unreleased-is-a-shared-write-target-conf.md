@@ -94,19 +94,93 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 **Story:** TI-2 — runnable migration happy path and missing/malformed migration negatives  
 **Type:** happy-path
 
+**Sequencing amendment (operator-approved).** The original task specified the gate's
+*input shape* but never sequenced where the metadata comes from in production, leaving
+`runSelfHostFinishGates` calling `guardrails.releaseGate` with no metadata. The omission is
+an ordering problem, not a missing call:
+
+- `src/conductor/src/engine/conductor.ts:4143` runs the self-host release gates **before**
+  `finish`, deliberately, so the daemon never opens a PR behind a failing gate.
+- The release disposition lives in the implementation PR body.
+- At gate time that body is still the SHIP-start placeholder — `ship-draft-pr.ts:143-160`
+  writes `SHIP_DRAFT_PR_NOTE`, and `/finish` authors the real body afterward.
+
+**Resolution: finalize the metadata onto the existing draft PR before the pre-finish gate.**
+The pre-finish safety boundary does not move. The draft PR identity opened at SHIP start is
+retained through SHIP entry; its body is finalized with the structured release disposition
+ahead of the gate; the gate reads and parses that body through the conductor's injected
+GitHub boundary. `/finish` continues to author the reader-facing title/body and mark the PR
+ready — finalizing metadata must not pre-empt that.
+
+**Disposition authority (operator decision, resolves `stall:disposition-authority`).** The
+authoritative pre-gate writer is a new **repository-local custom step, `release-disposition`**,
+declared in this repo's `.ai-conductor/config.yml` and anchored `after: maintain-documentation`
+— immediately before `finish`. It judges the feature's own diff and authors the structured
+disposition (`Release-Disposition` / `Release-Category` / `Release-Semver` / `Release-Note`, plus
+any runnable migration block) **directly onto the retained SHIP draft PR body**, then the gate
+reads that body. `/finish` continues to author the reader-facing title/body afterward and must
+not clobber the metadata block.
+
+Why a custom step rather than engine code:
+
+- **Self-host-only by construction.** The step exists only in this repository's config, which
+  consumers do not have — no `isSelfBuild()` branch is added to the engine. This is the same
+  mechanism and precedent as the existing `maintain-documentation` custom step.
+- **Ordering is expressible and verified.** `after` accepts a built-in or an earlier custom step
+  (`src/conductor/src/engine/steps.ts:532-533`), and the step registry that the pre-finish gate
+  iterates is built by `buildStepRegistry` (`src/conductor/src/engine/conductor.ts:2557`), so a
+  step anchored before `finish` runs before the gate at `conductor.ts:4143` — daemon path included.
+- **No new authority ledger.** The step writes to the PR body, so merged PR metadata remains the
+  single authority per the ADR; `completion_artifact` is evidence only, never the source of truth.
+- **Gate-loop membership is inherited.** A custom step inserted among the loop steps joins the
+  gate loop automatically, so a downstream kickback can re-open it.
+
+The step's skill lives in the repository-local catalog (`.agents/skills/release-disposition/SKILL.md`)
+per `scope-check`, not the shipped `skills/` catalog.
+
+**Fail-closed requirement, scoped to the active flow (operator decision).** The gate now
+depends on a GitHub read, which can fail offline (observed: the daemon logging
+`fetch origin main failed (offline?)`). The fail-closed rule applies **only when the
+release-disposition flow is active** — i.e. `releaseDispositionFlowActive()`: a self-build
+whose config declares the `release-disposition` step. Metadata resolution MUST be guarded by
+that predicate; an unguarded resolver breaks every self-host finish that has no draft PR.
+
+When the flow is active:
+
+- Unreachable GitHub, an unresolvable PR identity, an absent disposition, and a malformed
+  disposition MUST each produce a HALT verdict — never a pass, never a silent skip of the
+  migration check.
+- An explicit `Release-Disposition: no-note` MUST **pass**. It is a valid, deliberate
+  disposition, and this repository's release rule already exempts documentation-only,
+  specification-only, and internal non-notable changes from a changelog entry. A docs-only
+  self-build therefore receives `no-note` from the `release-disposition` step and clears the
+  gate without an entry.
+
+When the flow is **not** active, `runSelfHostFinishGates` behaves exactly as it did before
+this feature: no metadata is resolved and no metadata-derived HALT is possible.
+
 **Steps:**
 1. Write failing release-gate tests that supply structured metadata rather than feature-owned changelog content.
 2. Verify RED.
 3. Refactor the gate input to validate the parsed runnable migration block for classified breaking surfaces.
-4. Verify GREEN, including exact `bin/migrate`-compatible fence preservation.
-5. Commit `feat(release): validate migrations from PR metadata`.
+4. Add the `release-disposition` repository-local custom step: its SKILL.md, its `.ai-conductor/config.yml` declaration (`after: maintain-documentation`, `enforcement: gating`, `completion_artifact`, `llm_provider: claude`), and a registry test proving it is inserted before `finish`.
+5. Finalize the structured disposition onto the retained draft implementation PR before the pre-finish gate, then resolve, parse, and pass it into `guardrails.releaseGate` from `runSelfHostFinishGates` through the injected GitHub boundary.
+6. Verify GREEN, including exact `bin/migrate`-compatible fence preservation, and prove through the production caller that: a classified breaking surface with runnable PR-metadata migration passes; unreachable, missing, and malformed metadata each HALT; an explicit `no-note` disposition passes; and a self-build with the flow inactive reaches the gates unchanged (regression coverage for `harness-daemon-profile.test.ts` and `codex-self-host-isolation.acceptance.test.ts`).
+7. Commit `feat(release): validate migrations from PR metadata`.
 
 **Files:**
 - `src/conductor/src/engine/self-host/release-gate.ts` — structured migration input
 - `src/conductor/test/engine/self-host/release-gate.test.ts` — breaking/malformed cases
 - `src/conductor/src/engine/release-metadata.ts` — migration field representation
+- `src/conductor/src/engine/conductor.ts` — resolve/parse the implementation PR disposition and supply `releaseMetadata` to `guardrails.releaseGate`; fail closed when it cannot be resolved
+- `src/conductor/src/engine/ship-draft-pr.ts` — retain draft PR identity and finalize release metadata onto its body before the pre-finish gate
+- `src/conductor/test/engine/self-host/wiring.test.ts` — production-path coverage: metadata reaches `releaseGate`; unreachable/missing/malformed each HALT
+- `.agents/skills/release-disposition/SKILL.md` — repository-local skill: judge the diff, author the structured disposition onto the draft PR body
+- `.ai-conductor/config.yml` — `release-disposition` custom-step declaration (`after: maintain-documentation`, gating, completion artifact)
+- `src/conductor/test/engine/steps.test.ts` — registry coverage proving `release-disposition` inserts before `finish` and joins the gate loop
+- `docs/reference/steps.md` — document the new step (required by the repo's documentation-upkeep rule)
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#runReleaseArtifactGate`  
+**Wired-into:** `src/conductor/src/engine/conductor.ts#runSelfHostFinishGates`
 **Dependencies:** Task 2
 
 ### Task 5: Preserve fresh waiver behavior under the new gate
@@ -248,20 +322,46 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 **Story:** TI-3 and TI-4 — App credential, merged-event filter, concurrency, and no-recursion behavior  
 **Type:** infrastructure
 
+**Authentication-contract amendment (operator decision, resolves the as-built
+`adr-2026-08-01-bot-owned-release-pr` HALT).** The as-built review found
+`releasePrGithubAppAuth` (`src/conductor/src/engine/github-app-auth.ts:6`) unreachable:
+exported at `src/conductor/src/index.ts:9`, referenced only by its own unit test, while both
+workflows hardcode the same secret names and permissions in YAML. **Resolution: delete the
+constant, its unit test, and its index export.** The YAML is the sole source of truth for App
+authentication.
+
+Rationale:
+
+- **A TS constant can never be authoritative here.** GitHub Actions resolves
+  `${{ secrets.* }}` during YAML evaluation; a workflow's secret reference cannot be
+  parameterized from TypeScript. The constant could only ever mirror the YAML, never drive it.
+- **The drift guard already exists, closer to the truth.** `test/test_release_pr_workflow.sh:30-34`
+  already asserts `app-id: ${{ secrets.RELEASE_PR_APP_ID }}`,
+  `private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}`, and the
+  `permission-contents/pull-requests/checks: write` stanzas directly against the workflow.
+  A second test comparing YAML to a constant nothing else reads would be a tautological guard.
+- **No security difference.** The module holds secret *names*, never values; values live in
+  GitHub Actions secrets under every alternative.
+
+Deleting is therefore a scope correction, not a capability loss: the shipped behavior the
+module claimed to provide is already provided, and already tested, at the workflow boundary.
+
 **Steps:**
 1. Extend failing structural workflow tests for App-token creation, minimum permissions, closed-and-merged filtering, one concurrency group, and release-PR recursion exclusion.
 2. Verify RED.
-3. Add the maintainer workflow using the reusable App credential seam and exported action.
-4. Verify GREEN without contacting GitHub.
-5. Commit `ci(release): maintain one serialized release PR`.
+3. Add the maintainer workflow using the App credential stanzas declared directly in YAML.
+4. Delete `src/conductor/src/engine/github-app-auth.ts`, its unit test, and its `src/conductor/src/index.ts` export; confirm no remaining reference in `src/`, `.github/`, `bin/`, `skills/`, or `.agents/`.
+5. Verify GREEN without contacting GitHub, with `test/test_release_pr_workflow.sh:30-34` retained as the authentication-contract guard.
+6. Commit `ci(release): maintain one serialized release PR`.
 
 **Files:**
 - `.github/workflows/release-pr.yml` — merge trigger, App token, concurrency, action call
-- `test/test_release_pr_workflow.sh` — workflow contract assertions
-- `src/conductor/src/engine/github-app-auth.ts` — reusable credential configuration contract
-- `src/conductor/test/engine/github-app-auth.test.ts` — scoped configuration tests
+- `test/test_release_pr_workflow.sh` — workflow contract assertions, including the App auth guard
+- ~~`src/conductor/src/engine/github-app-auth.ts`~~ — deleted; YAML is the sole source of truth
+- ~~`src/conductor/test/engine/github-app-auth.test.ts`~~ — deleted with the module
+- `src/conductor/src/index.ts` — drop the `releasePrGithubAppAuth` export
 
-**Wired-into:** `.github/workflows/release-pr.yml#release-pr-maintenance`  
+**Wired-into:** `.github/workflows/release-pr.yml#release-pr-maintenance` (workflow-declared auth; no engine module)  
 **Dependencies:** Tasks 9, 10, 11
 
 ### Task 13: Present the exhaustive audit on the release PR
@@ -407,20 +507,39 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 **Wired-into:** none (removes obsolete special handling; generic `src/conductor/src/engine/conductor.ts#runRebase` remains)  
 **Dependencies:** Tasks 3, 18
 
-### Task 20: Produce the one-time audited release backlog transition
+### Task 20: Deliver the release backlog transition mechanism and its unresolved audit
 
 **Story:** TI-7 — include/consolidate/exclude proposal, operator approval input, uncertainty, and rerun refusal  
 **Type:** infrastructure
 
+**Scope amendment (operator-approved, supersedes the original Task 20).** The original
+task directed the build session to exercise semantic judgment once and emit a *cleaned
+pending set* into `CHANGELOG.md`. That curation is explicitly **out of scope for this
+feature** and is deferred to issue #217 ("Condense and correct CHANGELOG [Unreleased]
+before re-enabling releases"), for two reasons:
+
+1. **No authoritative mapping.** The checkout has no offline mapping from legacy changelog
+   prose or commit-message `#NNN` references to merged GitHub PR metadata. Any disposition
+   the build session invented would convert uncertainty into a silent exclusion — the exact
+   failure the transition guard exists to prevent.
+2. **Ordering.** #217 requires the curation to land alone, immediately before the
+   release-workflow fix (#218), with nothing else in flight. Performing it inside a feature
+   build violates that constraint.
+
+This feature therefore delivers the transition **mechanism** plus an exhaustive,
+deliberately-unresolved audit; #217 resolves the dispositions and rewrites `[Unreleased]`.
+The guard fails closed in the interim: the first bot-owned release PR refuses to seed while
+the audit status is not `approved` or any item remains unresolved.
+
 **Steps:**
 1. Create a failing transition check that requires every legacy `[Unreleased]` entry and relevant post-tag PR to have an included, consolidated, excluded, or unresolved audit disposition.
 2. Verify RED against the current uncurated backlog.
-3. Use the build session's semantic judgment once to generate the audit and cleaned proposed backlog; encode unresolved items explicitly and add a consumed-once transition guard for the release-PR maintainer.
-4. Verify GREEN for exhaustive accounting, migration ordering, and refusal to rerun after transition completion; leave the exact proposal visible for operator PR approval.
+3. Generate the exhaustive audit inventory with content hashes, recording every item as `unresolved` and naming #217 as the resolver; add a consumed-once transition guard for the release-PR maintainer.
+4. Verify GREEN for exhaustive accounting, migration ordering, refusal to seed while unapproved or unresolved, and refusal to rerun after transition completion.
 5. Commit `chore(release): propose audited backlog transition`.
 
 **Files:**
-- `CHANGELOG.md` — one-time cleaned pending set (transition exception to steady-state ownership)
+- `CHANGELOG.md` — legacy `[Unreleased]` left intact behind a pointer comment to the audit; curation deferred to #217 (no cleaned pending set in this feature)
 - `.github/release-transition-audit.md` — one-time exhaustive include/consolidate/exclude/unresolved evidence consumed by the first release PR
 - `src/conductor/src/engine/release-pr-action.ts` — transition guard/seed handling
 - `src/conductor/test/engine/release-pr-action.test.ts` — seed and rerun-refusal cases
@@ -428,6 +547,34 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 
 **Wired-into:** `src/conductor/src/engine/release-pr-action.ts#runReleasePrAction`  
 **Dependencies:** Tasks 6, 8, 12, 13, 16
+
+### Task 21: Realign contributor instructions with the shipped release flow
+
+**Story:** TI-5 — contributors and agents follow the shipped release path, not the retired one  
+**Type:** infrastructure
+
+Added by operator decision from the as-built architecture review (non-blocking findings 2
+and 4). `docs/contributing/releases.md` was updated during the build; `CLAUDE.md` was not.
+Its "Release & Update Gates" section still directs contributors to add entries under
+`[Unreleased]` and to put migration blocks in `CHANGELOG.md`, and still describes the retired
+CI rewrite ("reads `VERSION`, tags, rewrites the `[Unreleased]` block"). Left stale, agents
+keep writing to the shared target this feature exists to eliminate — the instruction file
+would actively defeat the feature.
+
+**Steps:**
+1. Rewrite `CLAUDE.md`'s "Release & Update Gates" section to the shipped flow: release intent is declared in implementation-PR metadata; migration blocks travel in that metadata; the bot-owned release PR is the only writer of `CHANGELOG.md`/`VERSION`.
+2. Preserve the rules that survive unchanged — the migration-block requirement for breaking changes, the waiver mechanism and its canonical surface names, and the semver tiers.
+3. Correct the architecture document header from "Proposed repository-local flow" to as-built wording.
+4. Verify no remaining instruction anywhere in `CLAUDE.md` or `AGENTS.md` tells an author to hand-edit `CHANGELOG.md`'s `[Unreleased]`, and that root agent-instruction parity still passes.
+5. Commit `docs(release): realign contributor instructions with the shipped flow`.
+
+**Files:**
+- `CLAUDE.md` — "Release & Update Gates" rewritten to the PR-metadata flow
+- `AGENTS.md` — kept in parity (integrity check 15)
+- `.docs/architecture/changelog-unreleased-is-a-shared-write-target-conf.md` — as-built header wording
+
+**Wired-into:** none (contributor and agent instructions; no runtime surface)  
+**Dependencies:** Tasks 17, 18, 20
 
 ## Task Dependency Graph
 
@@ -442,6 +589,7 @@ This 20-task plan replaces feature-authored changelog/version edits with typed P
 12,15 -> 16 -> 17
 3,12 -> 18 -> 19
 6,8,12,13,16 -> 20
+17,18,20 -> 21
 ```
 
 ## Integration Points

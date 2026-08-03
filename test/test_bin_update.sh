@@ -234,7 +234,8 @@ echo -e "${BOLD}Story 1 — force update check${NC}"
 REPO=$(make_repo "s1-uptodate")
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
-git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
 set_current_version "$HOME_DIR" v0.4.0
 
 run_update "$REPO" "$HOME_DIR"
@@ -280,7 +281,8 @@ assert "--auto with autoCheck=false: silent no-op (no lastCheckedAt)" "$([ -z "$
 REPO=$(make_repo "s7-auto-enabled")
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.4.0
-git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
 
 run_update "$REPO" "$HOME_DIR" --auto
 assert "--auto with autoCheck!=false: exits 0" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
@@ -307,7 +309,8 @@ echo ""
 echo -e "${BOLD}Story 6 — first-run seeding${NC}"
 
 REPO=$(make_repo "s6")
-git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
 HOME_DIR=$(make_isolated_home)
 # currentVersion intentionally unset.
 
@@ -315,13 +318,65 @@ run_update "$REPO" "$HOME_DIR"
 assert "seeds currentVersion silently" "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
 assert "no update prompt on first-run seed" "$(case "$OUT" in *"Update to"*) echo 1;; *) echo 0;; esac)"
 
+# ─── #1005: tagged installs use installed release identity ─────────────────
+
+echo ""
+echo -e "${BOLD}#1005 — tagged install identity${NC}"
+
+# The post-release VERSION is intentionally ahead of the installed v0.3.0
+# checkout. A stale forward-looking config must not suppress the v0.4.0
+# update: the exact checked-out tag is the authority for tagged installs.
+REPO=$(make_repo "i17-installed-tag")
+OLD_RELEASE_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$OLD_RELEASE_SHA"
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.4.0
+
+run_update "$REPO" "$HOME_DIR"
+assert "checked-out tag wins over forward-looking recorded version" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
+assert "checked-out tag repairs recorded tagged identity" "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.3.0" ] && echo 0 || echo 1)"
+
+# A checkout between release tags with neither an exact tag nor a previously
+# recorded tagged identity cannot safely compare releases. It must report that
+# status as unverifiable instead of seeding from the latest remote tag.
+REPO=$(make_repo "i17-unknown-identity")
+git -C "$REPO" commit -q --allow-empty -m "between releases"
+BETWEEN_RELEASES_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$BETWEEN_RELEASES_SHA"
+HOME_DIR=$(make_isolated_home)
+
+run_update "$REPO" "$HOME_DIR"
+assert "unknown tagged identity does not offer an update" "$(case "$OUT" in *"Harness update available"*) echo 1;; *) echo 0;; esac)"
+assert "unknown tagged identity reports an unverifiable installed version" "$(case "$OUT" in *"unverifiable"*) echo 0;; *) echo 1;; esac)"
+assert "unknown tagged identity does not record the latest tag" "$([ -z "$(cfg_get "$HOME_DIR" currentVersion)" ] && echo 0 || echo 1)"
+
+# A non-exact checkout can still be a tagged install when its prior successful
+# update recorded the tag. That record is the fallback authority.
+REPO=$(make_repo "i17-recorded-tag")
+git -C "$REPO" commit -q --allow-empty -m "between releases"
+BETWEEN_RELEASES_SHA=$(git -C "$REPO" rev-parse HEAD)
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q "$BETWEEN_RELEASES_SHA"
+HOME_DIR=$(make_isolated_home)
+set_current_version "$HOME_DIR" v0.3.0
+
+run_update "$REPO" "$HOME_DIR"
+assert "recorded tagged identity remains update authority off-tag" "$(case "$OUT" in *"v0.3.0 → v0.4.0"*) echo 0;; *) echo 1;; esac)"
+
 # ─── Story 5: no-TTY guidance ───────────────────────────────────────────────
 
 echo ""
 echo -e "${BOLD}Story 5 — no-TTY guidance${NC}"
 
 REPO=$(make_repo "s5")
-git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q v0.3.0
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
 BEFORE_SHA=$(git -C "$REPO" rev-parse HEAD)
@@ -344,6 +399,7 @@ REPO=$(make_repo "s3-accept")
 # distinguish "checked out v0.3.0's commit" from "checked out v0.4.0's".
 git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
 git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" checkout -q v0.3.0
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
 
@@ -355,7 +411,9 @@ assert "accept: invokes bin/migrate" "$([ -f "$REPO/.migrate-calls" ] && echo 0 
 assert "accept: advances currentVersion" "$([ "$(cfg_get "$HOME_DIR" currentVersion)" = "v0.4.0" ] && echo 0 || echo 1)"
 
 REPO=$(make_repo "s3-decline")
-git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" commit -q --allow-empty -m "v0.4.0"
+git -C "$REPO" tag v0.4.0
+git -C "$REPO" checkout -q v0.3.0
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
 BEFORE_SHA=$(git -C "$REPO" rev-parse HEAD)
@@ -373,6 +431,7 @@ REPO=$(make_repo "s3-rollback")
 stub_migrate "$REPO" 1
 git -C "$REPO" add -A && git -C "$REPO" commit -q -m "restub" --allow-empty
 git -C "$REPO" tag v0.4.0 >/dev/null 2>&1 || true
+git -C "$REPO" checkout -q v0.3.0
 HOME_DIR=$(make_isolated_home)
 set_current_version "$HOME_DIR" v0.3.0
 BEFORE_SHA=$(git -C "$REPO" rev-parse HEAD)
@@ -407,7 +466,9 @@ make_main_repo() {
 PAIR=$(make_main_repo "s4-accept")
 REPO="${PAIR%%|*}"; ORIGIN="${PAIR##*|}"
 HOME_DIR=$(make_isolated_home)
-set_current_version "$HOME_DIR" main@0000000
+# A tagged-channel record must not affect main-channel detection: main compares
+# commits, not release tags or VERSION.
+set_current_version "$HOME_DIR" v0.4.0
 run_update "$REPO" "$HOME_DIR" --set-channel main
 
 WORK="$TMP_ROOT/s4-accept-push"

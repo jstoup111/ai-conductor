@@ -184,7 +184,12 @@ import { waitForCredentialsChange, readOperatorCredentialsState } from './self-h
 import { preflightBuildAuthCheck as checkBuildAuth } from './self-host/build-auth-preflight.js';
 import { readDaemonBuildToken, createDaemonTokenContentClassifier } from './self-host/daemon-build-token.js';
 import type { ChangedFile } from './self-host/release-gate.js';
-import type { GateVerdict } from './self-host/gate-halt.js';
+import { writeSelfHostHalt, type GateVerdict } from './self-host/gate-halt.js';
+import {
+  mergeReleaseMetadataBlock,
+  parseReleaseDisposition,
+  snapshotReleaseMetadataBlock,
+} from './release-metadata.js';
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
@@ -1123,6 +1128,10 @@ export class Conductor {
    * a single push + `gh pr view` rather than repeating them at every SHIP step.
    */
   private shipDraftPrAttempted = false;
+  /** Stable identity of the draft opened at SHIP entry, retained until finish. */
+  private shipDraftPrUrl: string | undefined;
+  /** Exact repository-local release metadata captured before finish dispatches. */
+  private releaseMetadataSnapshot: { prUrl: string; block: string } | undefined;
   /** Strict merged-history verifier; injection is limited to hermetic tests. */
   private verifyMergedShipment?: (prUrl: string, slug: string) => Promise<VerifiedMergedPrResult>;
   /** Strict finish verifier; production defaults to evaluateShipmentEvidence. */
@@ -1294,6 +1303,10 @@ export class Conductor {
         repairLog(`[conductor-repair] bodyFloor failed: ${err}`);
       }
 
+      // /finish may replace the complete PR body. Restore only the captured
+      // repository-local release disposition and keep its reader-facing prose.
+      await this.restoreFinishReleaseMetadata(prUrl);
+
       // Step 4: Ensure PR is ready (draft→ready flip)
       try {
         await ensureShipReady(gh, cwd, prUrl, repairLog);
@@ -1324,6 +1337,7 @@ export class Conductor {
       planPath,
       gh: this.gh,
       repairFinishPr,
+      releaseMetadataPreservationRequired: this.releaseDispositionFlowActive(),
       // Live wiring-reachability probe (Task 18): computes fresh
       // WiringEvidence via wiring-probe.ts's orchestrator when the
       // wiring_check predicate finds no pre-existing evidence fixture,
@@ -2456,16 +2470,124 @@ export class Conductor {
     }
 
     if (sh.releaseArtifactGate) {
+      // Release-disposition metadata is authoritative only for this
+      // repository's explicitly configured flow. Other self-host callers
+      // retain the established release-gate contract, whose metadata input is
+      // optional, and therefore must not require a retained draft PR.
+      const releaseMetadata = this.releaseDispositionFlowActive()
+        ? await this.readShipDraftReleaseMetadata()
+        : { ok: true as const, value: undefined };
+      if (!releaseMetadata.ok) return releaseMetadata;
       const verdict = await this.guardrails.releaseGate({
         projectRoot: this.projectRoot,
         harnessRoot: this.projectRoot,
         readText: (p) => this.readTextOrNull(p),
         changedFiles: () => this.selfBuildChangedFiles(),
+        releaseMetadata: releaseMetadata.value,
       });
       if (!verdict.ok) return verdict;
     }
 
     return { ok: true };
+  }
+
+  /** This repository-local mechanism is unavailable to consumer configurations. */
+  private releaseDispositionFlowActive(): boolean {
+    return this.isSelfBuild() &&
+      this.config.steps?.['release-disposition']?.skill ===
+        '.agents/skills/release-disposition/SKILL.md';
+  }
+
+  /** Capture only a valid, re-readable release block before finish can replace the body. */
+  private async snapshotFinishReleaseMetadata(): Promise<void> {
+    this.releaseMetadataSnapshot = undefined;
+    if (!this.releaseDispositionFlowActive()) return;
+
+    if (!this.shipDraftPrUrl) {
+      throw new Error('pre-finish snapshot unavailable: retained draft PR identity is absent');
+    }
+
+    try {
+      const { stdout } = await this.gh(
+        ['pr', 'view', this.shipDraftPrUrl, '--json', 'body'],
+        { cwd: this.projectRoot },
+      );
+      const body = (JSON.parse(stdout) as { body?: unknown }).body;
+      if (typeof body !== 'string') throw new Error('PR body is absent');
+      const block = snapshotReleaseMetadataBlock(body);
+      if (block === null) throw new Error('release metadata is malformed or non-canonical');
+      this.releaseMetadataSnapshot = { prUrl: this.shipDraftPrUrl, block };
+    } catch (error) {
+      throw new Error(
+        `pre-finish snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Restore the snapshot only after a verified remote read/write cycle. */
+  private async restoreFinishReleaseMetadata(prUrl: string): Promise<void> {
+    const snapshot = this.releaseMetadataSnapshot;
+    if (!this.releaseDispositionFlowActive()) return;
+    if (!snapshot || snapshot.prUrl !== prUrl) {
+      throw new Error('pre-finish snapshot unavailable for the retained draft PR');
+    }
+
+    try {
+      const readBody = async (): Promise<string> => {
+        const { stdout } = await this.gh(['pr', 'view', prUrl, '--json', 'body'], { cwd: this.projectRoot });
+        const body = (JSON.parse(stdout) as { body?: unknown }).body;
+        if (typeof body !== 'string') throw new Error('PR body is absent');
+        return body;
+      };
+      const before = await readBody();
+      if (snapshotReleaseMetadataBlock(before) === snapshot.block) return;
+      const merged = mergeReleaseMetadataBlock(before, snapshot.block);
+      if (merged === null) throw new Error('captured release metadata is no longer valid');
+      await this.gh(['pr', 'edit', prUrl, '--body', merged], { cwd: this.projectRoot });
+      const after = await readBody();
+      if (snapshotReleaseMetadataBlock(after) !== snapshot.block) {
+        throw new Error('release metadata restore could not be verified');
+      }
+    } catch (error) {
+      throw new Error(
+        `post-finish restore unavailable: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /** Read and parse the exact retained draft body through the injected GitHub seam. */
+  private async readShipDraftReleaseMetadata(): Promise<
+    | { ok: false; reason: string }
+    | { ok: true; value: ReturnType<typeof parseReleaseDisposition> }
+  > {
+    if (!this.shipDraftPrUrl) {
+      const reason = 'Self-host release gate HALT: retained draft PR identity is unavailable.';
+      await writeSelfHostHalt(this.projectRoot, reason);
+      return { ok: false, reason };
+    }
+
+    let body: string;
+    try {
+      const { stdout } = await this.runGh(
+        ['pr', 'view', this.shipDraftPrUrl, '--json', 'body'],
+        { cwd: this.projectRoot },
+      );
+      const value = JSON.parse(stdout) as { body?: unknown };
+      if (typeof value.body !== 'string') throw new Error('PR body is absent');
+      body = value.body;
+    } catch (err) {
+      const reason = `Self-host release gate HALT: GitHub is unreachable or the retained draft PR cannot be resolved (${String(err)}).`;
+      await writeSelfHostHalt(this.projectRoot, reason);
+      return { ok: false, reason };
+    }
+
+    try {
+      return { ok: true, value: parseReleaseDisposition(body) };
+    } catch (err) {
+      const reason = `Self-host release gate HALT: retained draft PR has absent or malformed release disposition (${String(err)}).`;
+      await writeSelfHostHalt(this.projectRoot, reason);
+      return { ok: false, reason };
+    }
   }
 
   /**
@@ -3111,11 +3233,8 @@ export class Conductor {
         //
         // Every skip has been evaluated, so this is the first SHIP step that
         // will actually execute — i.e. the start of the ship phase. Publishing
-        // here (rather than at `finish`) means the PR number exists for the
-        // whole SHIP tail: `conduct-ts finalize-changelog-pr` can substitute
-        // the `{{IMPLEMENTATION_PR}}` CHANGELOG token during the phase instead
-        // of only inside the finish turn, which is what used to leave stale
-        // tokens behind and cycle the feature back through SHIP.
+        // here (rather than at `finish`) gives the remaining ship steps a draft
+        // PR without making the implementation branch a release-artifact writer.
         //
         // The PR stays a DRAFT until `finish` flips it (ensureShipReady, run
         // from repairFinishPr and verified by the finish ship-readiness gate in
@@ -3129,7 +3248,7 @@ export class Conductor {
         // Advisory: openShipDraftPr never throws and a failure only logs.
         if (step.phase === 'SHIP' && !this.shipDraftPrAttempted) {
           this.shipDraftPrAttempted = true;
-          await openShipDraftPr({
+          const draftPr = await openShipDraftPr({
             gh: this.gh,
             git: this.git,
             cwd: this.projectRoot,
@@ -3138,6 +3257,7 @@ export class Conductor {
             featureDesc: state.feature_desc,
             log: this.log ?? console.warn,
           });
+          if (draftPr.outcome === 'published') this.shipDraftPrUrl = draftPr.prUrl;
         }
 
         // Execute parallel group (T15 — Promise.all fan-out)
@@ -4484,6 +4604,13 @@ export class Conductor {
               phase: step.phase,
               allow: resolveDocsAllowlist(step.name),
             });
+          }
+
+          // The repository-local release-disposition gate writes machine-owned
+          // metadata into the retained SHIP draft. Capture it immediately
+          // before finish dispatches, because finish may replace the body.
+          if (step.name === 'finish') {
+            await this.snapshotFinishReleaseMetadata();
           }
 
           let result: StepRunResult;
@@ -7392,8 +7519,8 @@ export class Conductor {
    * Handle the `rebase` step entirely in the engine (ADR-001 / Phase 9.0):
    * rebase the feature branch onto the discovered base, classify the outcome,
    * write the authoritative gate verdicts (including FR-5 kickbacks), emit the
-   * structured outcome event, and — on a conflict that isn't a CHANGELOG-only
-   * auto-resolve — write `.pipeline/HALT` and leave the rebase paused. The
+   * structured outcome event, and — on a conflict — write `.pipeline/HALT`
+   * and leave the rebase paused. The
    * outcome is stashed on `lastRebaseOutcome` so `advanceTail` doesn't recompute
    * the verdict and so a HALT routes the loop to stop.
    */

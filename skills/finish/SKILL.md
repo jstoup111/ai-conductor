@@ -250,29 +250,12 @@ by invoking another skill), run every command below from the feature worktree, i
 without ending your turn in between:
 
 ```
-conduct-ts finalize-changelog-pr --pr-url <PR_URL>
-if ! git diff --quiet -- CHANGELOG.md; then
-git add CHANGELOG.md
-git commit -m "docs(changelog): link implementation PR"
-git push  # focused changelog finalization push; follow §1b's safe-push rules
-git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
-fi
 conduct-ts shipped-record --slug <slug> --pr <PR_URL>
 git cat-file -e "HEAD:.docs/shipped/<slug>.md"
 git push  # durable shipped-record push; follow §1b's safe-push rules
 git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
 conduct-ts finish-record --choice pr --pr-url <PR_URL> --pipeline-dir /abs/path/to/.pipeline
 ```
-
-When no implementation-PR token exists, finalization is a successful no-op. `CHANGELOG.md`
-remains unchanged; do not create a changelog commit or push; continue with the existing shipped-record sequence.
-
-If finalization, the focused commit, or its push fails, **STOP immediately.**
-Do NOT run `conduct-ts shipped-record`.
-Do NOT run `conduct-ts finish-record`.
-Do NOT write `.pipeline/finish-choice` manually.
-A failed focused-push ancestry check has the same STOP contract. Do not hand-write any substitute
-shipment record.
 
 `shipped-record` is historically best-effort and may warn while exiting zero, so its exit code
 alone is not evidence. The `git cat-file` and post-push ancestry checks are mandatory. If either
@@ -496,37 +479,6 @@ Explain what failed and what to do next:
 
 **In daemon mode:** a missing `finish-choice` marker leaves the completion gate unsatisfied
 (Story 1), routing to HALT for human review.
-
-- **Changelog PR-link finalization (immediately after the PR/push STOP gate passes,
-  before the shipped record):** on the feature branch, run
-  ```
-  conduct-ts finalize-changelog-pr --pr-url <PR_URL>
-  ```
-  using the exact PR URL confirmed by the STOP gate above. This is unconditional —
-  run it for every outcome that reaches this point (auto mode and interactive Option 2
-  alike), not only when you believe a placeholder is present; the command is a
-  no-op when `CHANGELOG.md` has no `{{IMPLEMENTATION_PR}}` token, and this is one of
-  the two valid successful outcomes:
-  - **Token replaced:** `git diff --quiet -- CHANGELOG.md` is non-zero (the file
-    changed). Commit and push it:
-    ```
-    git add CHANGELOG.md
-    git commit -m "docs(changelog): link implementation PR"
-    git push  # follow §1b's safe-push rules
-    git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>
-    ```
-  - **No-op (no token present):** `git diff --quiet -- CHANGELOG.md` is zero (no
-    change). Do not create a changelog commit or push; continue.
-  Before moving on, verify no unsubstituted token remains:
-  ```
-  grep -c '{{IMPLEMENTATION_PR}}' CHANGELOG.md
-  ```
-  This MUST print `0` (or the file must not contain the string at all, which greps
-  as exit 1 with no output — either is acceptable, a nonzero count is not). If the
-  count is nonzero, or `finalize-changelog-pr` itself fails, **STOP**: do NOT run
-  `conduct-ts shipped-record` or `conduct-ts finish-record`, and do NOT write
-  `finish-choice` by hand. A CHANGELOG entry with a literal `{{IMPLEMENTATION_PR}}`
-  token merged to the base branch is not a finishable state.
 - **Shipped record (before handing the PR to the human):** on the feature
   branch, run `conduct-ts shipped-record --slug <slug> --pr <PR_URL>` (where
   `<slug>` is the plan-file stem, `.docs/plans/<slug>.md`), then push using
@@ -599,9 +551,6 @@ After executing the chosen option:
 - [ ] HEAD pushed and present at the recorded PR's head (push evidence — the gate verifies
       `refs/remotes/origin/<branch>` contains HEAD)
 - [ ] PR/merge-local shipment has `.docs/shipped/<slug>.md` committed at HEAD; PR shipment pushed that exact HEAD before `finish-record`
-- [ ] If Option 2 (PR): `conduct-ts finalize-changelog-pr --pr-url <url>` ran (unconditionally, for
-      every PR outcome) and `grep -c '{{IMPLEMENTATION_PR}}' CHANGELOG.md` confirms no unsubstituted
-      token remains at HEAD before `shipped-record`/`finish-record` ran
 - [ ] Diverged branch: staleness proven (ORIG_HEAD ancestry / reflog `rebase (finish):` entry) before `--force-with-lease` (never pulled)
 - [ ] On unproven staleness (foreign commits): stopped with no force of any kind
 - [ ] On lease failure: stopped with no plain `--force`, no pull, no `finish-choice`

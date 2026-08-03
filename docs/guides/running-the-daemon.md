@@ -203,10 +203,9 @@ first SHIP step is dispatched — not at `finish`. The engine pushes the feature
 push; it never forces) and opens one draft PR against the discovered base branch, with a
 placeholder title and body.
 
-This exists so the PR *number* is available for the whole ship tail. `conduct-ts
-finalize-changelog-pr` can substitute the `{{IMPLEMENTATION_PR}}` CHANGELOG token during the phase
-instead of only inside the finish turn; previously a missed substitution left a literal token that
-the finish completion gate refused, cycling the feature back through SHIP.
+This keeps the PR available for the whole ship tail while the implementation branch remains out of
+release-artifact maintenance. The serialized release-PR workflow owns pending `CHANGELOG.md` and
+`VERSION` changes after implementation PRs merge.
 
 What the draft window does and does not mean:
 

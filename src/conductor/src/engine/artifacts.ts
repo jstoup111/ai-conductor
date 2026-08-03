@@ -33,10 +33,6 @@ import {
   type ShipmentEvidenceResult,
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
-import {
-  branchNewImplementationPrTokenLineIndexes,
-  resolveBaseChangelogContent,
-} from './changelog-pr-finalizer-cli.js';
 
 export type ArtifactLifecycleScope = 'feature' | 'repository' | 'run';
 
@@ -941,6 +937,12 @@ export interface CompletionContext {
     prUrl: string,
     opts?: { mode?: 'capture-only' | 'full' },
   ) => Promise<void>;
+  /**
+   * Self-host release disposition preservation is a correctness boundary: a
+   * failed repair must block finish rather than use the normal warn-only
+   * presentation-repair fallback.
+   */
+  releaseMetadataPreservationRequired?: boolean;
   /**
    * Injected wiring-reachability probe runner (Task 18 — ties Layer 1's
    * `runWiringProbe`/`verifyDeclaredSites`/`orphanBackstop`/
@@ -2727,33 +2729,6 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
       const durableEvidence = await verifyDurableShipmentEvidence(dir, ctx, prUrl);
       if (durableEvidence) return durableEvidence;
 
-      // adr-2026-07-06-daemon-false-ship-guard follow-up: a shipped PR whose
-      // CHANGELOG entry still carries the maintain-documentation placeholder
-      // token means `conduct-ts finalize-changelog-pr` never ran (or ran and
-      // was never pushed) before finish converged. Fail closed rather than
-      // let a literal `{{IMPLEMENTATION_PR}}` token reach the base branch —
-      // this was previously only caught by an operator noticing after the
-      // fact. Scoped to choice === 'pr': merge-local never creates a PR URL
-      // to substitute, so the token-substitution contract doesn't apply.
-      if (choice === 'pr') {
-        try {
-          const changelog = await readFile(join(dir, 'CHANGELOG.md'), 'utf-8');
-          const branchNewTokenLines = branchNewImplementationPrTokenLineIndexes(
-            changelog,
-            await resolveBaseChangelogContent(ctx.git ?? makeGitRunner(dir)),
-          );
-          if (branchNewTokenLines === null || branchNewTokenLines.length > 0) {
-            return {
-              done: false,
-              reason: `CHANGELOG.md still contains an unsubstituted {{IMPLEMENTATION_PR}} token — run 'conduct-ts finalize-changelog-pr --pr-url ${prUrl}', commit, and push before finish can complete`,
-              missing: 'other',
-            };
-          }
-        } catch {
-          // No CHANGELOG.md at this path, or unreadable — not this gate's
-          // concern; other checks cover repo-layout problems.
-        }
-      }
     }
 
     // ---- Phase 2: presentation — only reached once every Phase 1 evidence
@@ -2834,6 +2809,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         try {
           await ctx.repairFinishPr(prUrl, { mode: 'full' });
         } catch (error) {
+          if (ctx.releaseMetadataPreservationRequired) {
+            return {
+              done: false,
+              reason: `release metadata preservation failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)}`,
+              missing: 'other',
+            };
+          }
           console.warn(
             `[finish] repair failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing (warn-only)`,
           );

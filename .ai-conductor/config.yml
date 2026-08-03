@@ -117,3 +117,9 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
+  release-disposition:
+    llm_provider: [codex, claude]
+    after: maintain-documentation
+    skill: .agents/skills/release-disposition/SKILL.md
+    enforcement: gating
+    completion_artifact: .pipeline/release-disposition-pass

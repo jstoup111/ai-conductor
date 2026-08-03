@@ -11,7 +11,18 @@ Every concurrent feature currently edits the same `CHANGELOG.md` `[Unreleased]` 
 
 The solution is deliberately repository-local. It depends on ai-conductor's GitHub repository, custom release gate, `VERSION`, tagged/main update channels, and release workflow; it does not change the release convention installed into consumer repositories.
 
-This decision absorbs the intended outcomes of GitHub issues #217, #218, #282, and #1005. It coordinates with #158 through a reusable GitHub App authentication seam without absorbing that issue's broader daemon/issue-mutation scope. It removes changelog-specific triggers from #1152 and #1172 without superseding their broader rebase-verification and FINISH-transaction outcomes. The post-release multi-version migration exercise in #219 remains separate.
+This decision absorbs the intended outcomes of GitHub issues #217, #218, #282, and #1005. It coordinates with #158 through workflow-declared GitHub App authentication without absorbing that issue's broader daemon/issue-mutation scope.
+
+> **Amendment (2026-08-03, operator decision at the as-built review).** This ADR originally
+> described App authentication as a *reusable engine seam* — a typed constant holding the
+> secret names and requested permissions. That seam is **not** part of the shipped design.
+> GitHub Actions resolves `${{ secrets.* }}` during YAML evaluation, so an engine constant
+> can only mirror a workflow's credential stanza, never drive it; the constant shipped with
+> no production caller and was deleted. App authentication is declared directly in the
+> workflow YAML, and the authentication contract is enforced against that YAML by
+> `test/test_release_pr_workflow.sh`, which asserts the secret names and the minimum
+> permission surface. Consequence: there is no engine-level auth module for #158 to reuse.
+> Any future sharing with #158 starts from the workflow contract and its structural test. It removes changelog-specific triggers from #1152 and #1172 without superseding their broader rebase-verification and FINISH-transaction outcomes. The post-release multi-version migration exercise in #219 remains separate.
 
 The recurring path must be deterministic. Semantic consolidation of the already-accumulated `[Unreleased]` backlog is a one-time transition task whose proposal requires operator approval.
 
@@ -73,7 +84,7 @@ As a one-time transition, automation analyzes the current `[Unreleased]` entries
 ### Follow-up Actions
 
 - [ ] Define the structured PR metadata and deterministic validation contract.
-- [ ] Implement the serialized release-PR maintainer with GitHub App authentication.
+- [ ] Implement the serialized release-PR maintainer with workflow-declared GitHub App authentication (no engine-level auth module — see the 2026-08-03 amendment above).
 - [ ] Define branch identity, idempotent regeneration, stale-run protection, and recovery behavior.
 - [ ] Separate release-PR maintenance from deterministic publication.
 - [ ] Replace feature-time changelog and VERSION gates with metadata/completeness gates.

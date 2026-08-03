@@ -10,6 +10,7 @@ import {
   hasRunnableMigrationBlock,
   runReleaseArtifactGate,
 } from '../../../src/engine/self-host/release-gate.js';
+import { parseReleaseDisposition } from '../../../src/engine/release-metadata.js';
 
 // Phase 5 (TR-8/10): the ReleaseArtifactGate — integrity suite and Migration
 // block. Both fail-closed: an absent/unknown input HALTs, never silently passes.
@@ -160,6 +161,60 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
 
   const GOOD_CHANGELOG = `## [Unreleased]\n\n### Added\n- self-host guardrails\n\n## [0.99.18]\n- old\n`;
 
+  it('accepts a parsed runnable migration from structured PR metadata without reading CHANGELOG', async () => {
+    const migration = '```bash migration\n./bin/install --update\n```';
+    const releaseMetadata = parseReleaseDisposition([
+      'Release-Disposition: note',
+      'Release-Category: Changed',
+      'Release-Semver: major',
+      'Release-Note: Preserve a consumer migration.',
+      '',
+      '## Migration',
+      '',
+      migration,
+    ].join('\n'));
+
+    expect(releaseMetadata).toMatchObject({ migration });
+
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => {
+        throw new Error('the structured migration gate must not read CHANGELOG');
+      },
+      releaseMetadata,
+      changedFiles: async () => [{ status: 'M', path: 'bin/conduct' }],
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+
+    expect(v).toEqual({ ok: true });
+  });
+
+  it.each([
+    [
+      'a non-runnable fence',
+      [
+        'Release-Disposition: note',
+        'Release-Category: Changed',
+        'Release-Semver: major',
+        'Release-Note: Preserve a consumer migration.',
+        '',
+        '## Migration',
+        '',
+        '```bash',
+        './bin/install --update',
+        '```',
+      ].join('\n'),
+    ],
+    [
+      'a runnable migration on an explicit no-note disposition',
+      ['Release-Disposition: no-note', '', '## Migration', '', '```bash migration', './bin/install --update', '```'].join('\n'),
+    ],
+  ])('rejects %s in structured metadata', (_scenario, body) => {
+    expect(() => parseReleaseDisposition(body)).toThrow('Invalid release disposition: Migration');
+  });
+
   it('both sub-gates satisfied → pass, no HALT', async () => {
     const v = await runReleaseArtifactGate({
       projectRoot,
@@ -231,5 +286,91 @@ describe('runReleaseArtifactGate — composed, HALT on first failure (TR-8/10)',
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf-8');
     expect(halt).toMatch(/migration block required/i);
     expect(halt).toMatch(/could not be determined|fail-closed/i);
+  });
+
+  it('accepts a fresh waiver that covers the classified breaking surface', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: bin/conduct CLI\n\nRationale: This command edit is internal-only.\n',
+      changedFiles: async () => [
+        { status: 'M', path: 'bin/conduct' },
+        { status: 'A', path: '.docs/release-waivers/internal-conduct.md' },
+      ],
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+
+    expect(v).toEqual({ ok: true });
+  });
+
+  it('rejects a valid waiver that was not committed in the current change set', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: bin/conduct CLI\n\nRationale: This command edit is internal-only.\n',
+      changedFiles: async () => [{ status: 'M', path: 'bin/conduct' }],
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/not committed with this change set|prior feature/i);
+  });
+
+  it('rejects a malformed fresh waiver', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: not a canonical surface\n\nRationale: This command edit is internal-only.\n',
+      changedFiles: async () => [
+        { status: 'M', path: 'bin/conduct' },
+        { status: 'A', path: '.docs/release-waivers/internal-conduct.md' },
+      ],
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/malformed/i);
+  });
+
+  it('rejects a fresh waiver that only partially covers classified breaking surfaces', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => 'Waives: bin/conduct CLI\n\nRationale: This command edit is internal-only.\n',
+      changedFiles: async () => [
+        { status: 'M', path: 'bin/conduct' },
+        { status: 'M', path: 'hooks/claude/rtk-rewrite.sh' },
+        { status: 'A', path: '.docs/release-waivers/internal-conduct.md' },
+      ],
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/does not cover: hook wiring/i);
+  });
+
+  it('rejects an uncertain change set without reading a waiver', async () => {
+    const v = await runReleaseArtifactGate({
+      projectRoot,
+      harnessRoot,
+      readText: async () => {
+        throw new Error('uncertain changes must not evaluate waivers');
+      },
+      changedFiles: async () => null,
+      access: async () => {},
+      exec: async () => ({ code: 0, timedOut: false }),
+    });
+
+    expect(v.ok).toBe(false);
+    if (v.ok) return;
+    expect(v.reason).toMatch(/could not be determined|fail-closed/i);
+    expect(v.reason).not.toMatch(/waiver/i);
   });
 });

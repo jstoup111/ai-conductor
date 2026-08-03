@@ -422,61 +422,6 @@ describe('integration/rebase-loop', () => {
   // pin.
 
 
-  it('auto-resolves a CHANGELOG-only conflict keeping both entries exactly once (FR-7)', async () => {
-    // Both base and branch append a DIFFERENT entry under ## [Unreleased] →
-    // a rebase conflict confined to CHANGELOG.md.
-    await execFileAsync('git', ['init', '-b', BASE, dir]);
-    await git('config', 'user.email', 'test@example.com');
-    await git('config', 'user.name', 'Test');
-    await git('config', 'commit.gpgsign', 'false');
-    await writeFile(
-      join(dir, 'CHANGELOG.md'),
-      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n',
-    );
-    await git('add', '.');
-    await git('commit', '-m', 'changelog scaffold');
-
-    // Feature branch adds its own entry.
-    await git('checkout', '-b', 'feature/foo');
-    await writeFile(
-      join(dir, 'CHANGELOG.md'),
-      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Feature foo entry\n',
-    );
-    await git('add', '.');
-    await git('commit', '-m', 'feature changelog');
-
-    // Base advances with a sibling entry in the SAME spot.
-    await git('checkout', BASE);
-    await writeFile(
-      join(dir, 'CHANGELOG.md'),
-      '# Changelog\n\n## [Unreleased]\n\n### Added\n\n- Sibling bar entry\n',
-    );
-    await git('add', '.');
-    await git('commit', '-m', 'sibling changelog');
-    await git('checkout', 'feature/foo');
-
-    await writeState(statePath, { ...FRONT_DONE });
-    const ran: string[] = [];
-    let completed = false;
-    events.on('feature_complete', () => {
-      completed = true;
-    });
-
-    await conductorWith(passthroughRunner(ran)).run();
-
-    expect(completed).toBe(true);
-    await expect(access(join(dir, '.pipeline/DONE'))).resolves.toBeUndefined();
-
-    const changelog = await readFile(join(dir, 'CHANGELOG.md'), 'utf-8');
-    // Both entries present, each exactly once; no conflict markers left behind.
-    expect(changelog).toContain('- Feature foo entry');
-    expect(changelog).toContain('- Sibling bar entry');
-    expect(changelog.match(/- Feature foo entry/g)).toHaveLength(1);
-    expect(changelog.match(/- Sibling bar entry/g)).toHaveLength(1);
-    expect(changelog).not.toContain('<<<<<<<');
-    expect(changelog).not.toContain('>>>>>>>');
-  });
-
   it('HALTs (worktree kept, rebase paused, no PR) on a non-CHANGELOG conflict (FR-8)', async () => {
     // Base and branch modify the SAME source file differently → real conflict.
     await execFileAsync('git', ['init', '-b', BASE, dir]);

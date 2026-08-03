@@ -160,20 +160,35 @@ Create a branch before making changes, and open a PR to merge.
 
 ## Release & Update Gates
 
-The harness uses a semver tagging system and an auto-update flow. Every change
-to this repo must honor these gates:
+Implementation branches never write `CHANGELOG.md` or `VERSION`. A bot-owned release
+PR is the sole writer of both, maintained by a serialized GitHub Actions workflow from
+merged implementation-PR metadata. See [docs/contributing/releases.md](docs/contributing/releases.md)
+for the full mechanism.
 
-1. **Changelog for notable implementations.** A changelog entry is required only when the PR contains a notable reader-visible implementation change. A non-notable implementation may ship without a changelog entry. Specification-only, documentation-only, internal non-notable, and no-implementation changes do not add an entry.
+1. **Every PR declares a release disposition.** `.github/pull_request_template.md`'s
+   **Release metadata** section carries the contract. The default,
+   `Release-Disposition: no-note`, covers non-notable, specification-only,
+   documentation-only, and no-implementation changes. A notable reader-visible
+   implementation change replaces it with:
+   ```
+   Release-Disposition: note
+   Release-Category: Added
+   Release-Semver: patch
+   Release-Note: Reader-facing summary of the delivered change.
+   ```
+   Category is one of Added, Changed, Deprecated, Removed, Fixed, Security. Semver is
+   one of major, minor, patch. A required check validates the disposition on every PR
+   open/update and fails closed on missing, malformed, or contradictory metadata.
 
-   An empty `[Unreleased]` is a successful no-release path with no changelog rewrite, no VERSION bump, no tag, no release commit, and no GitHub Release.
+   This rule applies to this repository only. For consumer projects without this
+   custom-step configuration, the global harness release convention remains unchanged.
 
-   This rule applies to this repository only. For consumer projects without this custom-step configuration, the global harness release convention remains unchanged.
-
-2. **Migration blocks for breaking changes.** Breaking changes still require a runnable `bash migration` block. Any PR that changes
-   `settings.json` schema, hook wiring, skill symlink targets, or `bin/conduct`
-   CLI MUST include a `## Migration` section in `CHANGELOG.md` with a runnable
-   ```` ```bash migration ```` fenced block. `bin/migrate` will execute these
-   blocks (after user approval) when consumers update past this version.
+2. **Migration blocks for breaking changes travel in the PR body, not `CHANGELOG.md`.**
+   Any PR that changes `settings.json` schema, hook wiring, skill symlink targets, or
+   `bin/conduct` CLI MUST include a runnable ```` ```bash migration ```` fence inside a
+   `## Migration` section of the PR body (the same section the release-metadata parser
+   reads). `bin/migrate` will execute these blocks (after user approval) when consumers
+   update past the release that carries them.
 
    **Waiver (self-host builds only, adr-2026-07-06-migration-gate-waiver).**
    When the self-host release gate's path-based classifier flags a breaking
@@ -197,23 +212,21 @@ to this repo must honor these gates:
    waiver when the edit changes actual CLI/hook/schema *behavior* — that
    always needs a real migration block.
 
-3. **Releases are cut by CI on merge to main.** `.github/workflows/release.yml`
-   reads `VERSION`, tags `vX.Y.Z`, rewrites the `[Unreleased]` block under
-   `## [X.Y.Z] - <today>`, bumps `VERSION` to the next patch, and publishes a
-   GitHub Release. There is no manual release script. Version bumps beyond
-   patch happen by editing `VERSION` directly in the PR so reviewers can see
-   the semver decision.
+3. **The bot-owned release PR is maintained on every merge to main, and publication
+   is gated on its provenance.** `.github/workflows/release-pr.yml` collects complete,
+   eligible merged-PR metadata since the latest tag and upserts one `automation/release-pr`
+   PR carrying the rendered `CHANGELOG.md`/`VERSION` candidate and an exhaustive audit.
+   `.github/workflows/release.yml` publishes only when the commit on `main` is that exact
+   PR's merge, with matching audit evidence bound to its head — it ignores ordinary pushes
+   to `main`. There is no manual release script and no feature-branch VERSION edit:
+   the release PR's renderer computes the next `VERSION` by aggregating the highest
+   `Release-Semver` declared across its candidates.
 
-4. **Semver rules:**
+4. **Semver rules** (declared per-PR via `Release-Semver`, aggregated by the release PR):
    - **MAJOR** — breaking change to skill contracts, `bin/conduct` CLI, or
      `settings.json` schema.
    - **MINOR** — new skill, new hook, new gate, additive HARNESS.md rule.
    - **PATCH** — bug fix, wording, non-behavioral cleanup.
-
-   **Before creating a PR**, the active host agent MUST present the proposed VERSION bump to
-   the user for approval. State the current VERSION, the proposed new VERSION,
-   and the semver justification (which rule applies). Do not edit VERSION or
-   create the PR until the user confirms.
 
 5. **Integrity checks apply to release artifacts too.**
    `test/test_harness_integrity.sh` validates: `VERSION` is valid semver,

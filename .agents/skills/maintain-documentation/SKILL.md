@@ -153,26 +153,23 @@ If a required claim cannot be verified, return BLOCKED. Never guess or weaken th
 
 ### Selection
 
-- A notable reader-visible implementation change requires a changelog entry.
-- A non-notable implementation may PASS without a changelog entry.
-- Do not add an entry for a spec-only change, documentation-only change, internal and non-notable change, or no implementation change.
+- A notable reader-visible implementation change requires a release-note disposition in its PR metadata; the serialized release PR renders the changelog entry after merge.
+- A non-notable implementation may PASS with an explicit no-note disposition.
+- Spec-only, documentation-only, internal and non-notable, and no implementation change use the explicit no-note disposition.
+- Do not author or finalize `CHANGELOG.md` on an implementation branch.
 
 ### Entry format
 
-- Write exactly one present-tense sentence led by the reader outcome.
-- In pre-finish mode, include exactly one required `{{IMPLEMENTATION_PR}}` token.
-- The spec PR link is optional; include it when known. The implementation reference is required.
-- Use the final implementation link shape `[implementation PR #N](URL)`.
-- Use this exact example format: `- Add ... ([spec PR #123](…); {{IMPLEMENTATION_PR}}).`
-- Preserve runnable migration blocks separate from the one-sentence entry.
+- Write the reader-facing release note as exactly one present-tense sentence led by the reader outcome.
+- Record its category and semver impact in the implementation PR metadata; use the explicit no-note disposition when no entry is eligible.
+- Do not edit `CHANGELOG.md`; the release PR renderer supplies implementation attribution. Preserve runnable migration blocks separate from the one-sentence release note.
 
 ### Blocking validation
 
 For any condition below, return BLOCKED and keep the pass marker absent:
 
-- missing required notable entry
-- missing implementation token
-- duplicate implementation token
+- missing required release-note disposition
+- missing explicit no-note disposition for a non-notable implementation
 - multiple sentences
 - future tense
 - internal mechanics first

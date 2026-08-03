@@ -463,10 +463,6 @@ export type ConductorEvent =
       matchedPaths: string[];
     }
   | {
-      /** A CHANGELOG-only conflict was auto-resolved (FR-7). */
-      type: 'rebase_changelog_resolved';
-    }
-  | {
       /** A non-trivial/mixed conflict parked the feature (FR-8). */
       type: 'rebase_conflict_halt';
       reason: string;

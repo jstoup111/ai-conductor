@@ -32,6 +32,7 @@ import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
@@ -385,5 +386,243 @@ describe('conductor/finish-repair', () => {
     await ctx.repairFinishPr('https://github.com/example/repo/pull/1');
 
     expect(featureLogs).toContain('[conductor-repair] retitleFloor failed: Error: retitle sentinel');
+  });
+
+  it('restores the pre-finish release metadata without replacing finish-authored reader content', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const metadata = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Preserve release metadata after finish.',
+    ].join('\n');
+    let body = `${metadata}\n\nDraft reader content.`;
+    const edits: string[] = [];
+    const gh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1]!;
+        edits.push(body);
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+
+    body = '## What Changed\n\nFinish-authored reader content.';
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr(prUrl);
+
+    expect({ body, edits }).toEqual({
+      body: `## What Changed\n\nFinish-authored reader content.\n\n${metadata}`,
+      edits: [`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`],
+    });
+  });
+
+  it('replaces altered and duplicate metadata with exactly the captured block', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const snapshot = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Preserve release metadata after finish.',
+    ].join('\n');
+    let body = snapshot;
+    const gh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1]!;
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+
+    body = [
+      '## What Changed',
+      '',
+      'Finish-authored reader content.',
+      '',
+      'Release-Disposition: no-note',
+      'Release-Disposition: note',
+      'Release-Category: Changed',
+      'Release-Semver: minor',
+      'Release-Note: Altered metadata.',
+    ].join('\n');
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr(prUrl);
+
+    expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${snapshot}`);
+  });
+
+  it('does not read or mutate metadata outside the self-host release-disposition flow', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    let body = 'Finish-authored reader content.';
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1]!;
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: false,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await ctx.repairFinishPr(prUrl);
+
+    expect({ body, metadataEdits: calls.filter((args) => args.includes('--body')) }).toEqual({
+      body: 'Finish-authored reader content.',
+      metadataEdits: [],
+    });
+  });
+
+  it('fails closed before finish completion when the release metadata snapshot is unavailable', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const calls: string[][] = [];
+    const gh: GhRunner = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'pr' && args[1] === 'view') throw new Error('GitHub unavailable');
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+
+    await expect((conductor as any).snapshotFinishReleaseMetadata()).rejects.toThrow(
+      'pre-finish snapshot unavailable',
+    );
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature', worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr', 'utf-8');
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ pr_url: prUrl }), 'utf-8');
+    ctx.isHeadPushed = undefined;
+    ctx.shipmentEvidence = async () => ({
+      kind: 'valid', slug: 'test-feature', pr: prUrl,
+      recordPath: '.docs/shipped/test-feature.md', hash: 'test-hash', commit: 'test-commit',
+    });
+
+    const result = await checkStepCompletion(dir, 'finish', ctx);
+
+    expect(result).toMatchObject({ done: false });
+    expect(result.reason).toContain('release metadata preservation failed');
+    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
+  });
+
+  it('fails finish completion and never readies the PR when restore readback cannot verify metadata', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const metadata = [
+      'Release-Disposition: note', 'Release-Category: Fixed', 'Release-Semver: patch',
+      'Release-Note: Preserve release metadata after finish.',
+    ].join('\n');
+    const calls: string[][] = [];
+    let body = metadata;
+    let readCount = 0;
+    const gh: GhRunner = async (args: string[]) => {
+      calls.push(args);
+      if (args[0] === 'pr' && args[1] === 'view' && args.some((arg) => arg.includes('body'))) {
+        readCount++;
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [], body }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = 'finish body without release metadata';
+        return { stdout: '{}' };
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ title: 'feat: test', isDraft: false, labels: [] }) };
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+    body = 'Finish-authored reader content.';
+    const ctx = await (conductor as any).completionCtx({
+      feature_desc: 'test feature', worktree_branch: 'feat/test-feature',
+    } satisfies ConductState);
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline/finish-choice'), 'pr', 'utf-8');
+    await writeFile(join(dir, '.pipeline/conduct-state.json'), JSON.stringify({ pr_url: prUrl }), 'utf-8');
+    ctx.isHeadPushed = undefined;
+    ctx.shipmentEvidence = async () => ({
+      kind: 'valid',
+      slug: 'test-feature',
+      pr: prUrl,
+      recordPath: '.docs/shipped/test-feature.md',
+      hash: 'test-hash',
+      commit: 'test-commit',
+    });
+
+    const result = await checkStepCompletion(dir, 'finish', ctx);
+
+    expect(result).toMatchObject({ done: false });
+    expect(result.reason).toContain('release metadata preservation failed');
+    expect(readCount).toBeGreaterThanOrEqual(3);
+    expect(calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
   });
 });

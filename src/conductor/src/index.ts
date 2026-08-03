@@ -1,6 +1,11 @@
 export * from './types/index.js';
 export { parseArgs, createProgram, type CLIOptions } from './cli.js';
 export { runShipmentReconcileAction } from './engine/shipment-reconcile-action.js';
+export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-action.js';
+export { runReleasePrAction } from './engine/release-pr-action.js';
+export { collectReleaseCandidates } from './engine/release-candidates.js';
+export { renderReleaseCandidate, renderReleaseCandidateAudit } from './engine/release-renderer.js';
+export { runReleasePublisherAction } from './engine/release-publisher-action.js';
 
 import type { RunMode } from './types/index.js';
 
@@ -89,10 +94,6 @@ import {
   dispatchManualTestRecord,
   makeProductionManualTestRecordRunners,
 } from './engine/manual-test-record-cli.js';
-import {
-  detectFinalizeChangelogPrCommand,
-  dispatchFinalizeChangelogPr,
-} from './engine/changelog-pr-finalizer-cli.js';
 import {
   detectDeriveFeedbackCommand,
   dispatchDeriveFeedback,
@@ -499,15 +500,6 @@ async function main(): Promise<void> {
   const finishRecordCmd = detectFinishRecordCommand(process.argv);
   if (finishRecordCmd) {
     const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
-    process.exit(code);
-  }
-
-  // Changelog PR finalization runs NON-INTERACTIVELY after the implementation
-  // PR exists. Malformed use is recognized as a guide command so it can never
-  // fall through and launch a feature pipeline.
-  const finalizeChangelogPrCmd = detectFinalizeChangelogPrCommand(process.argv);
-  if (finalizeChangelogPrCmd) {
-    const code = await dispatchFinalizeChangelogPr(finalizeChangelogPrCmd, process.cwd());
     process.exit(code);
   }
 

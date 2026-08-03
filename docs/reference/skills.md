@@ -6,7 +6,7 @@ nav_order: 7
 
 # Skills
 
-The catalog of all 32 skills: 29 under `skills/` and 3 repository-local ones under `.agents/skills/`.
+The catalog of all 33 skills: 29 under `skills/` and 4 repository-local ones under `.agents/skills/`.
 For each, the frontmatter, the engine step that invokes it, what it reads, what it writes, and whether
 it blocks.
 
@@ -53,7 +53,7 @@ point rather than shipping a loadable skill at all; that is
 [#1098](https://github.com/jstoup111/ai-conductor/issues/1098).
 
 The repository integrity suite checks that every `skills/*/SKILL.md` has `name`, `description`,
-`enforcement`, and `phase`. The three `.agents/skills/` entries are outside that check and declare only
+`enforcement`, and `phase`. The four `.agents/skills/` entries are outside that check and declare only
 `name` and `description`.
 
 ## Index
@@ -90,6 +90,7 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `finish` | gating | ship | — | `finish` (21) | Blocking |
 | `pr` | advisory | ship | — | none — operator-invoked; `/finish` inlines it rather than calling it | Neither |
 | `maintain-documentation` | (none) | (none) | — | custom step after `rebase` | Blocking, this repository only |
+| `release-disposition` | (none) | (none) | — | custom step after `maintain-documentation` | Blocking, this repository only |
 | `write-tests` | (none) | (none) | — | none — unwired | Neither |
 
 Gate roles: **Blocking** means a non-passing result stops progression. **Advisory** means it runs and
@@ -630,6 +631,24 @@ apply to this repository. See [self-hosting](../guides/self-hosting.md).
 - **Gate role** — blocking. On `BLOCKED` the pass marker stays absent. Blocking conditions include
   unverifiable claims, unresolved contradictions in authoritative evidence, dangling-link removals, and
   changelog validation failures.
+
+### release-disposition
+
+> Judge this repository's implementation diff and write its authoritative structured release disposition to the retained SHIP draft PR before finish.
+
+- **Frontmatter** — `name` and `description` only. No `enforcement`, `phase`, `standalone`, `requires`,
+  or `model`.
+- **Engine step** — a custom step wired in `.ai-conductor/config.yml` with `after: maintain-documentation`,
+  `enforcement: gating`, and `completion_artifact: .pipeline/release-disposition-pass`. It lands before
+  `finish` and inherits the SHIP loop-gate behavior.
+- **Inputs** — the implementation diff, the retained SHIP draft PR, and the migration-surface classifier.
+  The diff decides the disposition; the PR body is the authority once written.
+- **Outputs** — structured metadata written directly to the PR body plus
+  `.pipeline/release-disposition-review.md` and the PASS-only
+  `.pipeline/release-disposition-pass` evidence marker. `finish` preserves the metadata while writing
+  reader-facing PR content.
+- **Gate role** — blocking. It fails closed when the draft cannot be read or updated, metadata is invalid,
+  or a required migration is not runnable.
 
 ### scope-check
 
