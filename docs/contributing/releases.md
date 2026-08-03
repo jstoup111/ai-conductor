@@ -17,9 +17,9 @@ PR opens. For contributors preparing a PR.
 - Integrity check 9a requires `^[0-9]+\.[0-9]+\.[0-9]+$`. See [validation](validation.md).
 - The release workflow re-reads it and hard-fails on a missing file or a non-semver value.
 
-There is no manual release script. CI bumps the patch digit itself after every release. A MAJOR or MINOR
-bump happens by editing `VERSION` directly in the PR, so reviewers see the semver decision in the diff.
-Present the proposed bump for approval before opening the PR.
+There is no manual release script, and an implementation PR never edits `VERSION` — it declares
+`Release-Semver` (`major`, `minor`, or `patch`) in its release metadata instead. The bot-owned release
+PR aggregates the highest declared impact across its candidates and computes the next `VERSION` itself.
 
 ### Version freeze
 
@@ -103,8 +103,9 @@ none can be mistaken for a pass:
 
 ### Sub-gate 2: the migration block
 
-A change touching a canonical breaking surface requires a runnable migration block in the CHANGELOG's
-`[Unreleased]` body. Uncertainty fails closed.
+A change touching a canonical breaking surface requires a runnable migration block in the
+implementation PR's release metadata — the `## Migration` section of the PR body, parsed into
+`ReleaseDisposition.migration` — not `CHANGELOG.md`. Uncertainty fails closed.
 
 #### Canonical breaking surfaces
 
@@ -203,8 +204,11 @@ so it never even mentions that a waiver exists.
 
 ## Pull request expectations
 
-`.github/pull_request_template.md` carries five sections: **Summary**, **Changelog**, **Migration**
-(answer it even when the answer is `none`), **Documentation**, and **Test plan**. Its checkboxes are:
+`.github/pull_request_template.md` carries five sections: **Summary**, **Release metadata**,
+**Migration** (answer it even when the answer is `none`), **Documentation**, and **Test plan**. The
+Release metadata section defaults to `Release-Disposition: no-note`; a notable reader-visible change
+replaces it with `Release-Disposition: note` plus `Release-Category`, `Release-Semver`, and
+`Release-Note`. A required check validates this section on every PR open/update. Its checkboxes are:
 
 - Canonical affected documentation updated, or not applicable
 - README landing-page contract updated, or not affected
