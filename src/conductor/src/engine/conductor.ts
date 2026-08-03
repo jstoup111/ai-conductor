@@ -1337,6 +1337,7 @@ export class Conductor {
       planPath,
       gh: this.gh,
       repairFinishPr,
+      releaseMetadataPreservationRequired: this.releaseDispositionFlowActive(),
       // Live wiring-reachability probe (Task 18): computes fresh
       // WiringEvidence via wiring-probe.ts's orchestrator when the
       // wiring_check predicate finds no pre-existing evidence fixture,
@@ -2494,7 +2495,11 @@ export class Conductor {
   /** Capture only a valid, re-readable release block before finish can replace the body. */
   private async snapshotFinishReleaseMetadata(): Promise<void> {
     this.releaseMetadataSnapshot = undefined;
-    if (!this.releaseDispositionFlowActive() || !this.shipDraftPrUrl) return;
+    if (!this.releaseDispositionFlowActive()) return;
+
+    if (!this.shipDraftPrUrl) {
+      throw new Error('pre-finish snapshot unavailable: retained draft PR identity is absent');
+    }
 
     try {
       const { stdout } = await this.gh(
@@ -2507,8 +2512,8 @@ export class Conductor {
       if (block === null) throw new Error('release metadata is malformed or non-canonical');
       this.releaseMetadataSnapshot = { prUrl: this.shipDraftPrUrl, block };
     } catch (error) {
-      (this.log ?? console.warn)(
-        `[release-metadata] pre-finish snapshot unavailable; preserving remote body without mutation: ${error instanceof Error ? error.message : String(error)}`,
+      throw new Error(
+        `pre-finish snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }
@@ -2516,7 +2521,10 @@ export class Conductor {
   /** Restore the snapshot only after a verified remote read/write cycle. */
   private async restoreFinishReleaseMetadata(prUrl: string): Promise<void> {
     const snapshot = this.releaseMetadataSnapshot;
-    if (!this.releaseDispositionFlowActive() || !snapshot || snapshot.prUrl !== prUrl) return;
+    if (!this.releaseDispositionFlowActive()) return;
+    if (!snapshot || snapshot.prUrl !== prUrl) {
+      throw new Error('pre-finish snapshot unavailable for the retained draft PR');
+    }
 
     try {
       const readBody = async (): Promise<string> => {
@@ -2535,8 +2543,8 @@ export class Conductor {
         throw new Error('release metadata restore could not be verified');
       }
     } catch (error) {
-      (this.log ?? console.warn)(
-        `[release-metadata] post-finish restore unavailable; preserving remote body without further mutation: ${error instanceof Error ? error.message : String(error)}`,
+      throw new Error(
+        `post-finish restore unavailable: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
   }

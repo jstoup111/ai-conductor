@@ -51,4 +51,25 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
       ].join('\n')),
     ).toMatchObject({ disposition: 'note', note });
   });
+
+  it('rejects duplicate Migration sections while retaining one runnable migration', () => {
+    const metadata = [
+      'Release-Disposition: note',
+      'Release-Category: Changed',
+      'Release-Semver: major',
+      'Release-Note: Preserve a consumer migration.',
+      '',
+      '## Migration',
+      '',
+      '```bash migration',
+      './bin/install --update',
+      '```',
+    ].join('\n');
+
+    expect(parseReleaseDisposition(metadata)).toMatchObject({
+      migration: '```bash migration\n./bin/install --update\n```',
+    });
+    expect(() => parseReleaseDisposition(`${metadata}\n\n## Migration\n\nnone`))
+      .toThrow('Invalid release disposition: Migration');
+  });
 });

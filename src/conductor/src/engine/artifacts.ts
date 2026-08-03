@@ -938,6 +938,12 @@ export interface CompletionContext {
     opts?: { mode?: 'capture-only' | 'full' },
   ) => Promise<void>;
   /**
+   * Self-host release disposition preservation is a correctness boundary: a
+   * failed repair must block finish rather than use the normal warn-only
+   * presentation-repair fallback.
+   */
+  releaseMetadataPreservationRequired?: boolean;
+  /**
    * Injected wiring-reachability probe runner (Task 18 — ties Layer 1's
    * `runWiringProbe`/`verifyDeclaredSites`/`orphanBackstop`/
    * `checkContractConsistency` orchestration into the gate live). When the
@@ -2803,6 +2809,13 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         try {
           await ctx.repairFinishPr(prUrl, { mode: 'full' });
         } catch (error) {
+          if (ctx.releaseMetadataPreservationRequired) {
+            return {
+              done: false,
+              reason: `release metadata preservation failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)}`,
+              missing: 'other',
+            };
+          }
           console.warn(
             `[finish] repair failed for ${prUrl}: ${error instanceof Error ? error.message : String(error)} — continuing (warn-only)`,
           );

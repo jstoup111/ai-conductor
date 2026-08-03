@@ -24,7 +24,7 @@ const semverImpacts = new Set<ReleaseSemver>(['major', 'minor', 'patch']);
 const fieldNames = ['Disposition', 'Category', 'Semver', 'Note'] as const;
 type ReleaseFieldName = typeof fieldNames[number];
 const releaseFieldNames = new Set<string>(fieldNames);
-const migrationSectionRe = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/;
+const migrationSectionRe = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/g;
 const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
 const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
 const migrationBlockRe = /(?:\r?\n)?## Migration\s*\r?\n```bash migration\s*\r?\n[\s\S]*?```(?=\r?\n##\s|$)/g;
@@ -39,10 +39,11 @@ export function isRunnableMigrationBlock(value: string): boolean {
 }
 
 function parseMigrationBlock(body: string): string | undefined {
-  const section = body.match(migrationSectionRe);
-  if (!section) return undefined;
+  const sections = [...body.matchAll(migrationSectionRe)];
+  if (sections.length === 0) return undefined;
+  if (sections.length !== 1) invalidReleaseDisposition('Migration');
 
-  const migration = section[1]!.trim();
+  const migration = sections[0]![1]!.trim();
   if (migration === 'none') return undefined;
   if (!isRunnableMigrationBlock(migration)) invalidReleaseDisposition('Migration');
   return migration;
