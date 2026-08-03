@@ -1,5 +1,6 @@
 import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { execa } from 'execa';
 
 export interface ParkedMarkersSnapshot {
   exists: boolean;
@@ -10,6 +11,16 @@ export interface ParkedMarkersDiff {
   added: string[];
   removed: string[];
   modified: string[];
+}
+
+/** Resolve the main repository's parked-marker directory for any Git checkout. */
+export async function resolveRealParkedDir(cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execa('git', ['-C', cwd, 'rev-parse', '--git-common-dir']);
+    return join(dirname(resolve(cwd, stdout)), '.daemon', 'parked');
+  } catch {
+    return null;
+  }
 }
 
 /** Snapshot the top-level regular marker files in a parked-marker directory. */

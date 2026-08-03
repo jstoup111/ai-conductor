@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'fs';
+import { mkdtempSync, realpathSync } from 'fs';
 import { mkdtemp, readdir, rm } from 'fs/promises';
 import { join } from 'path';
 
@@ -126,11 +126,34 @@ export function ensureRunTmpRootSync(
   env: NodeJS.ProcessEnv = process.env
 ): string {
   const existing = env[RUN_TMP_ROOT_ENV];
-  if (existing) return existing;
+  const createdRunRoot = existing ?? mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
+  let runRoot: string;
 
-  const runRoot = mkdtempSync(join(realTmpdir, RUN_TMP_ROOT_PREFIX));
+  try {
+    // A symlinked real tmpdir makes mkdtemp return a non-canonical path. Git
+    // compares ceiling paths against its canonical traversal path, so install
+    // the resolved root rather than relying on equivalent-looking strings.
+    runRoot = realpathSync(createdRunRoot);
+  } catch (error) {
+    throw new Error(
+      `tmpdir-leak-guard: unable to resolve realpath for run root ${createdRunRoot}`,
+      { cause: error }
+    );
+  }
+
   env[RUN_TMP_ROOT_ENV] = runRoot;
   env.TMPDIR = runRoot;
+
+  const ceilings = env.GIT_CEILING_DIRECTORIES;
+  if (!ceilings) {
+    env.GIT_CEILING_DIRECTORIES = runRoot;
+  } else if (!ceilings.split(':').includes(runRoot)) {
+    // Config modules are re-evaluated in watch mode, while forked workers
+    // inherit this environment. Preserve any caller-installed ceilings and
+    // append ours exactly once so either path gets the same Git boundary.
+    env.GIT_CEILING_DIRECTORIES = `${ceilings}:${runRoot}`;
+  }
+
   return runRoot;
 }
 

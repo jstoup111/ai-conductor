@@ -2,8 +2,8 @@
 // pure stray/ignored classification, and the throw-vs-warn teardown decision.
 // No vitest wiring involved: each seam is exercised directly, the same split
 // used by signals-leak-guard.test.ts and global-setup-engineer-signals.test.ts.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile, readdir } from 'fs/promises';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { mkdtemp, mkdir, realpath, readdir, rm, symlink, writeFile } from 'fs/promises';
 import { existsSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -60,6 +60,72 @@ describe('tmpdir-leak-guard: run root lifecycle', () => {
 
     expect(second).toBe(first);
     expect(await readdir(fakeRealTmpdir)).toHaveLength(1);
+  });
+
+  it('canonicalizes the run root and appends it to the Git ceiling directories', async () => {
+    const aliasedTmpdir = join(fakeRealTmpdir, 'symlink-to-real-tmpdir');
+    await symlink(fakeRealTmpdir, aliasedTmpdir, 'dir');
+    const env: NodeJS.ProcessEnv = { GIT_CEILING_DIRECTORIES: '/already/a/ceiling' };
+
+    const runRoot = ensureRunTmpRootSync(aliasedTmpdir, env);
+    const canonicalRoot = await realpath(runRoot);
+
+    expect(runRoot).toBe(canonicalRoot);
+    expect(env.TMPDIR).toBe(canonicalRoot);
+    expect(env[RUN_TMP_ROOT_ENV]).toBe(canonicalRoot);
+    expect(env.GIT_CEILING_DIRECTORIES).toBe(`/already/a/ceiling:${canonicalRoot}`);
+  });
+
+  it('sets the Git ceiling directories to the canonical run root when no ceiling exists', async () => {
+    const env: NodeJS.ProcessEnv = {};
+
+    const runRoot = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const canonicalRoot = await realpath(runRoot);
+
+    expect(env.GIT_CEILING_DIRECTORIES).toBe(canonicalRoot);
+  });
+
+  it('does not add a second root or duplicate ceiling entry after a config reload', async () => {
+    const env: NodeJS.ProcessEnv = { GIT_CEILING_DIRECTORIES: '/already/a/ceiling' };
+
+    const first = ensureRunTmpRootSync(fakeRealTmpdir, env);
+    const canonicalRoot = await realpath(first);
+    const second = ensureRunTmpRootSync(fakeRealTmpdir, env);
+
+    expect(second).toBe(canonicalRoot);
+    expect(env.GIT_CEILING_DIRECTORIES).toBe(`/already/a/ceiling:${canonicalRoot}`);
+    expect(env.GIT_CEILING_DIRECTORIES?.split(':')).toEqual([
+      '/already/a/ceiling',
+      canonicalRoot,
+    ]);
+    expect((await readdir(fakeRealTmpdir)).filter(entry => entry.startsWith(RUN_TMP_ROOT_PREFIX)))
+      .toHaveLength(1);
+  });
+
+  it('throws a named error when the run root cannot be canonicalized', async () => {
+    const env: NodeJS.ProcessEnv = {};
+    vi.resetModules();
+    vi.doMock('fs', async importOriginal => {
+      const original = await importOriginal<typeof import('fs')>();
+      return {
+        ...original,
+        realpathSync: () => {
+          throw new Error('simulated realpath failure');
+        },
+      };
+    });
+
+    try {
+      const { ensureRunTmpRootSync: ensureWithFailingRealpath } = await import(
+        './tmpdir-leak-guard.js'
+      );
+      expect(() => ensureWithFailingRealpath(fakeRealTmpdir, env)).toThrow(
+        /^tmpdir-leak-guard:.*realpath.*run root/i
+      );
+    } finally {
+      vi.doUnmock('fs');
+      vi.resetModules();
+    }
   });
 
   it('removes the run root and everything a leaking test left inside it', async () => {

@@ -2,8 +2,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import {
   diffParkedMarkers,
+  resolveRealParkedDir,
   snapshotParkedMarkers,
 } from './park-leak-guard.js';
 import { applyParkTeardownDecision } from './global-setup.js';
@@ -17,6 +19,16 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
     const markers = join(root, '.daemon', 'parked');
     await mkdir(markers, { recursive: true });
     return markers;
+  }
+
+  async function createGitRepository(): Promise<string> {
+    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-repo-'));
+    temporaryDirectories.push(root);
+    await execa('git', ['init', '--initial-branch=main', root]);
+    await execa('git', ['-C', root, 'config', 'user.email', 'test@example.com']);
+    await execa('git', ['-C', root, 'config', 'user.name', 'Test User']);
+    await execa('git', ['-C', root, 'commit', '--allow-empty', '-m', 'initial']);
+    return root;
   }
 
   afterEach(async () => {
@@ -101,5 +113,26 @@ describe('park-leak-guard: snapshotParkedMarkers & diffParkedMarkers', () => {
 
   it('returns silently when the parked marker diff is empty', () => {
     expect(() => applyParkTeardownDecision({ added: [], removed: [], modified: [] })).not.toThrow();
+  });
+
+  it('resolves the real parked directory from a fixture repository and linked worktree', async () => {
+    const root = await createGitRepository();
+    const worktree = join(root, 'linked-worktree');
+    await execa('git', ['-C', root, 'worktree', 'add', '-b', 'linked', worktree]);
+
+    await expect(Promise.all([
+      resolveRealParkedDir(root),
+      resolveRealParkedDir(worktree),
+    ])).resolves.toEqual([
+      join(root, '.daemon', 'parked'),
+      join(root, '.daemon', 'parked'),
+    ]);
+  });
+
+  it('returns null outside a Git repository', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'park-leak-guard-non-git-'));
+    temporaryDirectories.push(root);
+
+    await expect(resolveRealParkedDir(root)).resolves.toBeNull();
   });
 });
