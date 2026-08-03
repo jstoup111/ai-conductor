@@ -16,9 +16,9 @@ graph TD
     end
 
     subgraph WF["live-smoke workflow (new file, NOT in ci-gate)"]
-        MATRIX{"provider matrix<br/>claude | codex"}
+        MATRIX{"provider matrix<br/>claude (codex leg deferred)"}
         INSTALL["install provider CLI<br/>+ npm ci + npm run build"]
-        SECRET[("Actions secrets<br/>CLAUDE_CODE_OAUTH_TOKEN<br/>CODEX_API_KEY")]
+        SECRET[("Actions secret<br/>CLAUDE_CODE_OAUTH_TOKEN")]
         TIMEOUT["job timeout-minutes<br/>outer wall-clock bound"]
     end
 
@@ -26,7 +26,7 @@ graph TD
         GATE{"credential + binary present?"}
         SKIP["skip (advisory mode)<br/>fail (gate mode)"]
         SEED["temp repo: initTestRepo<br/>copy test/fixtures/daemon-e2e/<br/>seed .pipeline/conduct-state.json"]
-        REALPROV["ClaudeProvider | CodexProvider<br/>real subprocess"]
+        REALPROV["ClaudeProvider<br/>real subprocess"]
         METER["token meter wrapper<br/>sums InvokeResult.tokenUsage"]
     end
 
@@ -70,16 +70,18 @@ graph TD
 
 ## Component notes
 
-**What is new.** Only three things: the smoke test file, one workflow file, and a diagnostics
-helper extracted from `test/engine/daemon-e2e-fixture.test.ts:35` so both tiers share one dump
-implementation. No file under `src/conductor/src/` changes.
+**What is new.** Only four things: the smoke test file, the token-meter fixture, one workflow file,
+and two extra artifacts dumped by the existing diagnostics function at
+`test/engine/daemon-e2e-fixture.test.ts:35`, which is exported so both tiers share one dump
+implementation rather than diverging. No file under `src/conductor/src/` changes.
 
 **The swap seam.** The deterministic tier already injects its provider by construction —
 `new DefaultStepRunner(fake.provider, …)` at `daemon-e2e-fixture.test.ts:272-282`, handed to a real
-`Conductor` inside `runDaemon`'s `runFeature`. The live tier substitutes a real
-`ClaudeProvider` / `CodexProvider` (`src/execution/claude-provider.ts:475`,
-`src/execution/codex-provider.ts:154`) at that same seam. The plugin registry
-(`plugin-loader.ts:140`) is not involved, so no production selection logic changes.
+`Conductor` inside `runDaemon`'s `runFeature`. The live tier substitutes a real `ClaudeProvider`
+(`src/execution/claude-provider.ts:475`) at that same seam. The plugin registry
+(`plugin-loader.ts:140`) is not involved, so no production selection logic changes. A second provider
+leg would substitute `CodexProvider` (`src/execution/codex-provider.ts:154`) at the identical
+argument — the seam is provider-agnostic, which is why deferring that leg costs no rework.
 
 **The token meter.** A thin `LLMProvider` decorator wraps the real adapter, forwards `invoke` /
 `invokeInteractive` unchanged, and accumulates `InvokeResult.tokenUsage`

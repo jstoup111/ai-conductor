@@ -47,10 +47,10 @@ satisfy; the build must not silently paper over either.
 
 | # | Assumption | Basis | Confidence | Impact if wrong | How to confirm |
 | --- | --- | --- | --- | --- | --- |
-| A1 | `CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_API_KEY` will be provisioned as Actions secrets. | Verified 2026-08-02 that the repository has **zero** secrets and **zero** variables (`gh secret list`, `gh variable list`, both empty, exit 0). | Verified-absent today | Every dispatched run skips both legs and reports green-but-empty — the exact failure mode this feature exists to remove. | Operator creates both secrets; the workflow's summary line names which legs were credentialed. |
-| A2 | Both provider CLIs can be installed on an `ubuntu-latest` runner non-interactively. | Inferred. The repo installs neither in CI today; no workflow references either binary. | 75% | The install step fails and the tier never runs. | Plan Task 1 dispatches the workflow with an install-and-`--version` step only, before any live dispatch is wired. |
+| A1 | `CLAUDE_CODE_OAUTH_TOKEN` will be provisioned as an Actions secret. | Verified 2026-08-02 that the repository has **zero** secrets and **zero** variables (`gh secret list`, `gh variable list`, both empty, exit 0). | Verified-absent today | Every dispatched run skips and reports green-but-empty — the exact failure mode this feature exists to remove. | Operator creates the secret; the workflow's summary line names whether the leg was credentialed. |
+| A2 | The `claude` CLI can be installed on an `ubuntu-latest` runner non-interactively. | Inferred. The repo installs it in no workflow today; no workflow references the binary. | 75% | The install step fails and the tier never runs. | The first dispatch of the Task 5 workflow surfaces this immediately, before any secret is provisioned — an install failure is visible without spending a live run. |
 | A3 | A real agent completes the one-task fixture deterministically enough to reach `DONE` without a halt. | Inferred from the fixture's minimality (one task, one declared file, `test/fixtures/daemon-e2e/plan.md`). | 70% | The tier is flaky and gets ignored. | Advisory-only invocation absorbs this; a flake is itself signal about real-agent output shapes, which is the point of the tier. Do **not** add a silent retry. |
-| A4 | The Codex leg can authenticate headlessly via `CODEX_API_KEY`. | Inferred from `docs/reference/environment.md:32` ("Switches Codex authentication to API-key mode"); no CI precedent exists in this repo. | 65% | The Codex leg never produces signal while the Claude leg does. | Plan sequences Claude first and Codex second, so a Codex-auth dead end does not block the Claude tier from landing. |
+| A4 | The Codex leg can authenticate headlessly via `CODEX_API_KEY`. | Inferred from `docs/reference/environment.md:32` ("Switches Codex authentication to API-key mode"); no CI precedent exists in this repo. | 65% | The Codex leg never produces signal while the Claude leg does. | **Resolved by deferral 2026-08-02** — the Codex leg is out of this feature's scope, so the assumption is no longer load-bearing. It becomes load-bearing again for whoever adds the second matrix entry. |
 | A5 | `test/setup.ts`'s global `AI_CONDUCTOR_NO_REAL_EXEC=1` must be cleared for a live dispatch. | Verified — `test/setup.ts:33-39` sets it globally; `daemon-tmux-smoke.test.ts:76-77` already deletes it around its own cases. | 90% | The live test blocks its own real execution and reports a misleading failure. | The plan's first live task asserts the variable is unset inside the smoke file. |
 
 ## Decisions recorded
@@ -64,14 +64,27 @@ satisfy; the build must not silently paper over either.
    `providerCalls: 3` and a byte-exact commit body. Both are properties of the script, not of the
    pipeline, and a real agent will violate them while behaving correctly. Addressed by ADR
    `live-tier-asserts-outcomes-not-scripts`.
-2. **Extract the diagnostics dump rather than copying it.** `dumpPipelineDiagnostics`
+2. **Widen the diagnostics dump in place; do not copy it.** `dumpPipelineDiagnostics`
    (`daemon-e2e-fixture.test.ts:35-68`) is the failure-output contract both tiers owe CI. Two
-   divergent copies would let the live tier's output rot unnoticed. The shared helper must also
-   dump `task-status.json` and `task-evidence.json`, which the current version omits and which a
-   live-agent failure needs to identify the seam.
+   divergent copies would let the live tier's output rot unnoticed, so the live tier imports the
+   existing function rather than restating it. It must also dump `task-status.json` and
+   `task-evidence.json`, which the current version omits and which a live-agent failure needs to
+   identify the seam. Extracting it to a standalone module is **not** worth its own task at two
+   callers; revisit at three.
 3. **The workflow must not join `ci-gate`.** Adding it to `ci.yml:132`'s `needs` list would make a
    live-agent flake block merges, contradicting the issue's stated advisory requirement.
-4. **Reserve the release-gate seam now, wire it later.** The operator intends this tier to gate a
+4. **Bound the build, because the build cannot check its own output.** This is the finding that
+   sets the plan's size. The repository has no provider secrets and the smoke file is excluded from
+   `npm test`, so every gate signal available *during* the build is structural — the file skips
+   cleanly, the default suite ignores it, the workflow parses. The live behavior this feature exists
+   to produce is first exercised only when an operator dispatches the workflow with a secret in
+   place. Build time therefore buys unverifiable output at the margin, and the plan is scoped to six
+   tasks with RED/GREEN folded wherever the assertion and its implementation are one small unit.
+   Deferring the Codex leg (finding 5) follows from the same reasoning.
+5. **Ship one provider leg first.** See
+   `adr-2026-08-02-live-smoke-manual-dispatch-and-reusable-gate`. Claude has a proven headless auth
+   pattern in this repo; Codex does not. Retain the matrix shape so the second leg is additive.
+6. **Reserve the release-gate seam now, wire it later.** The operator intends this tier to gate a
    release once the changelog/unreleased-issue implementation merges. Shipping `workflow_call` with
    a `require_credentials` input costs almost nothing now and avoids rewriting the workflow's
    contract later; actually wiring it into `release.yml` belongs to #1259 and is out of scope here.

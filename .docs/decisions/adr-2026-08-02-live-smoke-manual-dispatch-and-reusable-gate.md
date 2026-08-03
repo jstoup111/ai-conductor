@@ -32,8 +32,20 @@ input, default `false`:
 - **Gate mode** (`true`, reserved for the future release caller): a missing credential is a
   **failure**. A release must never pass because its smoke tier silently skipped.
 
-**Matrix:** two legs, `claude` and `codex`, each independently credentialed and independently
-skippable. One leg's missing credential never suppresses the other's signal.
+**Matrix:** the provider is a matrix dimension with a single `claude` value and `fail-fast: false`.
+Each leg is independently credentialed and independently skippable, so one leg's missing credential
+never suppresses another's signal.
+
+**Codex is deferred, not dropped (amended 2026-08-02).** The original decision shipped both a
+`claude` and a `codex` leg. Two facts moved Codex to a follow-on. First, headless `CODEX_API_KEY`
+auth has no CI precedent anywhere in this repository, making it the assumption in this feature least
+likely to hold (65%, per the architecture review's ledger). Second, and more decisive: nothing this
+feature builds can be verified by the build that builds it — there are no secrets and the smoke file
+is excluded from `npm test` — so every additional task spends build time on output no gate can
+check. Concentrating that time on the leg with a proven auth pattern
+(`test/engine/build-token-auth.smoke.test.ts`) buys the most signal per task. The matrix shape is
+retained precisely so the Codex leg is one entry plus one credential var when someone dispatches the
+Claude leg successfully and wants the second.
 
 **Out of scope:** wiring this workflow into `release.yml`. That belongs to #1259 and depends on the
 changelog/unreleased-issue implementation landing first. This ADR only guarantees the seam exists so

@@ -18,13 +18,14 @@ apply on a leg that actually ran; ST-5 defines when a leg does not run. They are
 ## System conflicts & how each is resolved
 
 1. **`dumpPipelineDiagnostics` is a shared write target with the deterministic tier (real, managed).**
-   ST-3 extracts the helper currently inlined at
+   ST-3 widens and exports the dump currently inlined at
    `src/conductor/test/engine/daemon-e2e-fixture.test.ts:35-68`, which means editing a file this
-   feature does not own. *Resolution:* the extraction is pure motion plus two additive dumps
-   (`task-status.json`, `task-evidence.json`); the deterministic tier's assertions are untouched, and
-   its four existing cases must still pass unchanged as part of the same task. Verified 2026-08-02:
-   **no open PR touches that file** (11 open PRs, all spec-landing or unrelated features), so the
-   extraction lands without contention. **Not a blocker.**
+   feature does not own. *Resolution:* the edit is two additive dumps (`task-status.json`,
+   `task-evidence.json`) plus an `export` keyword; the deterministic tier's assertions are untouched,
+   and its four existing cases must still pass unchanged as part of the same task. Extraction to a
+   standalone module is deliberately **not** done — at two callers it would be motion for its own
+   sake. Verified 2026-08-02: **no open PR touches that file** (11 open PRs, all spec-landing or
+   unrelated features), so the edit lands without contention. **Not a blocker.**
 
 2. **Smoke-tier gating idioms are already inconsistent — #1021 (real, managed).**
    `docs/contributing/testing.md:276-280` records that the nine existing smoke files disagree on
@@ -84,7 +85,8 @@ apply on a leg that actually ran; ST-5 defines when a leg does not run. They are
 
 ## Open dependency (not a conflict, but blocking signal)
 
-Both matrix legs are inert until `CLAUDE_CODE_OAUTH_TOKEN` and `CODEX_API_KEY` exist as repository
-secrets. Verified 2026-08-02: the repository has zero secrets and zero variables. The feature is
-still landable and testable without them — ST-5's skip path is exactly the uncredentialed behavior —
-but the tier produces no live signal until the operator provisions them.
+The tier is inert until `CLAUDE_CODE_OAUTH_TOKEN` exists as a repository secret. Verified
+2026-08-02: the repository has zero secrets and zero variables. The feature is still landable and
+testable without it — ST-5's skip path is exactly the uncredentialed behavior — but the tier produces
+no live signal until the operator provisions it. `CODEX_API_KEY` is not a dependency of this
+feature; the Codex leg is deferred to a follow-on.

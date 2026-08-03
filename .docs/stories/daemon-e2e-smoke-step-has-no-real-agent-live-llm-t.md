@@ -19,13 +19,18 @@ the incidents that motivated #630 were exactly that class: `## Task Graph` parse
 corroboration paths (#548). A script never writes a surprising heading, so the deterministic tier is
 structurally blind to them.
 
-This feature adds a second tier that swaps only the injected provider for a real `claude` or `codex`
-subprocess, at the same constructor seam
-(`daemon-e2e-fixture.test.ts:272-282`). No production code changes.
+This feature adds a second tier that swaps only the injected provider for a real `claude` subprocess,
+at the same constructor seam (`daemon-e2e-fixture.test.ts:272-282`). No production code changes.
 
 Verified 2026-08-02: the repository has zero Actions secrets and no workflow using `schedule`,
-`cron`, or `workflow_dispatch`. Both provider credentials must be provisioned before either matrix
-leg produces signal.
+`cron`, or `workflow_dispatch`. The provider credential must be provisioned before the tier produces
+signal.
+
+**Scope note.** A second (Codex) provider leg is deliberately deferred, not dropped. Headless
+`CODEX_API_KEY` auth has no CI precedent in this repository, so proving it would spend the most build
+time on the least verifiable part of the feature. The workflow keeps a provider matrix shape so
+adding that leg later is one entry plus one credential var. Recorded in
+`adr-2026-08-02-live-smoke-manual-dispatch-and-reusable-gate`.
 
 ---
 
@@ -39,8 +44,8 @@ scripted tier cannot produce.
 
 - **Given** a temp git repository seeded with `test/fixtures/daemon-e2e/` and a
   `.pipeline/conduct-state.json` whose pre-build steps are resolved
-- **And** a real `ClaudeProvider` (or `CodexProvider`) injected at the `DefaultStepRunner`
-  constructor seam in place of the scripted fake
+- **And** a real `ClaudeProvider` injected at the `DefaultStepRunner` constructor seam in place of
+  the scripted fake
 - **When** the smoke test runs `runDaemon` with the fixture as its only backlog item
 - **Then** `.pipeline/DONE` exists
 - **And** `.pipeline/HALT` does not exist and `.daemon/parked/<slug>` does not exist
@@ -118,8 +123,9 @@ state printed, **so that** I can identify the failing seam without reproducing t
 
 - **Given** the diagnostics dump currently inlined at `daemon-e2e-fixture.test.ts:35-68`
 - **When** the live tier is added
-- **Then** the dump is extracted to a shared helper that both the deterministic and live tiers call
+- **Then** that dump is widened in place and exported, and the live tier imports it
 - **And** no second, divergent copy of the dump exists in the repository
+- **And** the deterministic tier's four existing cases still pass unchanged
 
 ---
 
@@ -134,7 +140,7 @@ state printed, **so that** I can identify the failing seam without reproducing t
 - **When** `npm test` runs in `src/conductor`
 - **Then** the file is excluded by the existing `vitest.config.ts` exclude glob and does not execute
 - **And** `test/structural/test-execution-policy.test.ts` still passes, since the live file is a
-  smoke file and is therefore permitted to spawn `claude` and `codex`
+  smoke file and is therefore permitted to spawn `claude`
 
 ### Scenario: the workflow is absent from the required gate (negative path)
 
@@ -168,12 +174,14 @@ fail loudly, **so that** a release can never pass because its smoke tier quietly
 - **When** the credential check runs
 - **Then** the job fails before any provider dispatch, naming the missing secret
 
-### Scenario: one leg's absence does not suppress the other (negative path)
+### Scenario: the matrix stays open to a second provider leg (negative path)
 
-- **Given** the Claude credential is present and the Codex credential is absent, in advisory mode
-- **When** the matrix runs
-- **Then** the Claude leg executes a full live run and reports its verdict
-- **And** the Codex leg skips independently, without affecting the Claude leg's result
+- **Given** the workflow declares its provider as a matrix with a single `claude` value and
+  `fail-fast: false`
+- **When** a second provider leg is added later
+- **Then** it is one matrix entry plus one credential variable, requiring no restructuring of the job
+- **And** a leg whose credential is absent skips independently, without affecting any other leg's
+  result
 
 ### Scenario: the global real-exec guard is cleared for the live file (negative path)
 
