@@ -351,6 +351,12 @@ Agent-authored, engine-validated. Alphabetized.
 | `version-signal.json` | `{ verdict, level, files, classifiedAt }` — the PATCH auto-pass audit | `self-host/version-gate.ts` |
 | `wiring-evidence.json` | `{ schema, base, head, tasks: [{ id, contract, gaps: [{ kind, message }], proofs?: [{ kind: 'same-file-composition', export, caller, file, rootChain[] }] }], layer2: { applicable, reason? }, waivers[] }`; seven gap kinds; a `proofs` entry records an independently-verified same-file root-to-caller-to-export chain, corroborating context only — never authority on its own | `wiring-probe.ts` |
 
+In a post-repair BUILD-verification round, the presence of either gate artifact or its recorded PASS
+verdict does not exclude its member from dispatch. The member's own evidence rule decides reuse or
+recomputation: `wiring_check` compares its recorded head with the current head, and `test_suite`
+reuses only a matching content fingerprint. The round join, not a file left on disk, then decides
+whether the member is satisfied.
+
 All of these are ephemeral. Losing one re-runs its step; none of them is the durable record of anything.
 
 ### Sentinel markers
@@ -553,7 +559,7 @@ One JSON object per line: a `ConductorEvent` spread plus a writer-stamped ISO-86
 no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` for an interactive run and
 `<worktreePath>/.pipeline/events.jsonl` per feature under the daemon. Gitignored, never committed.
 
-`ConductorEvent` defines **60 variants**. `EventPersister` subscribes to the **32** names in
+`ConductorEvent` defines **62 variants**. `EventPersister` subscribes to the **34** names in
 `ALL_EVENT_TYPES` and writes only those:
 
 `step_started`, `step_completed`, `step_failed`, `provider_attempt`, `feature_usage_total`,
@@ -562,7 +568,13 @@ no rotation, no truncation, no size cap. Path is `<pipelineDir>/events.jsonl` fo
 `credentials_park`, `credentials_park_progress`, `feature_complete`, `dashboard_refresh`, `auto_heal`,
 `mode_skip`, `build_progress`, `unattributed_progress`, `build_no_progress`, `build_stall`,
 `renderer_error`, `when_skip`, `parallel_started`, `parallel_completed`, `parallel_failure`,
-`attribution_divergence`.
+`attribution_divergence`, `build_member_evidence_reused`, `build_member_evidence_recomputed`.
+
+The BUILD-member settle events carry only a member, decision, and closed basis classification:
+`build_member_evidence_reused` is `reuse` with `fingerprint-match`;
+`build_member_evidence_recomputed` is `recompute` with `recorded-head-versus-current-head`,
+`fingerprint-mismatch`, or `fresh-evidence-required`. They make reuse observable without becoming a
+second validity authority; the BUILD group join still decides round satisfaction.
 
 `session_policy` records when the fail-closed `supportsSessionResume` capability seam suppresses a
 would-be session resume. Both built-in providers declare the capability false, so this is diagnostic

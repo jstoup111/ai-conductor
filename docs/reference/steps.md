@@ -128,6 +128,13 @@ whenever its outcome is a no-verdict (other than an auth failure, which parks an
 passing dispatch whose recomputed gate verdict is not `satisfied` — there is no ambiguous or
 partial-credit outcome to reconcile, unlike the SHIP-tail `validation` group.
 
+After a BUILD repair, the next `build_verification` round dispatches every non-skipped member,
+including a member with a passing verdict left on disk by an earlier round. A stored verdict is not
+membership authority: only the current round's join declares a member satisfied. Each dispatched
+member decides its own work from its existing evidence. `wiring_check` re-derives when its recorded
+head differs from the current head; `test_suite` reuses a matching content fingerprint or derives a
+fresh suite result. Reuse does not consume retry or kickback budget.
+
 ## Tier skips
 
 Tier S skips 8 steps. Tiers M and L skip none.
