@@ -377,6 +377,20 @@ describe('verifyProtectedArtifactSeal', () => {
     });
   });
 
+  it('keeps the BUILD halt backstop for a task that edits a sealed artifact', async () => {
+    const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' })).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/another-feature.md',
+    });
+  });
+
   it.each([
     ['deleted', async (repo: string) => rm(join(repo, '.docs/plans/feature.md')),
       'Protected artifact deleted: .docs/plans/feature.md'],
