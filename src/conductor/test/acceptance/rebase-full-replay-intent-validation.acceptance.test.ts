@@ -44,6 +44,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import {
   makeGitRunner,
   performRebase,
+  rebaseStateActive,
   resolveRebaseConflicts,
   writeHalt,
   type RebaseOutcome,
@@ -207,6 +208,7 @@ describe('Story 2 — HALT with actionable ambiguity evidence', () => {
     expect(attempts).toBe(1);
     expect(outcome).toMatchObject({ kind: 'conflict_halt', reason: ambiguity });
     if (outcome.kind !== 'conflict_halt') throw new Error('expected semantic ambiguity HALT');
+    expect(await rebaseStateActive(gitRunner, repo)).toBe(true);
     await writeHalt(repo, outcome.conflicts, outcome.reason);
     const halt = await readFile(join(repo, '.pipeline', 'HALT'), 'utf8');
     expect(halt).toContain(ambiguity);
