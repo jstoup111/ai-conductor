@@ -2455,7 +2455,7 @@ export class Conductor {
    * VERSION/CHANGELOG/integrity artifacts of the build worktree (`projectRoot`),
    * which IS the harness being shipped.
    */
-  private async runSelfHostFinishGates(): Promise<GateVerdict> {
+  private async runSelfHostFinishGates(branch?: string): Promise<GateVerdict> {
     const sh = resolveSelfHostConfig(this.config);
 
     if (sh.versionApprovalGate) {
@@ -2475,7 +2475,7 @@ export class Conductor {
       // retain the established release-gate contract, whose metadata input is
       // optional, and therefore must not require a retained draft PR.
       const releaseMetadata = this.releaseDispositionFlowActive()
-        ? await this.readShipDraftReleaseMetadata()
+        ? await this.readShipDraftReleaseMetadata(branch)
         : { ok: true as const, value: undefined };
       if (!releaseMetadata.ok) return releaseMetadata;
       const verdict = await this.guardrails.releaseGate({
@@ -2498,25 +2498,95 @@ export class Conductor {
         '.agents/skills/release-disposition/SKILL.md';
   }
 
+  /**
+   * The retained SHIP draft PR's identity, resolved from DURABLE state.
+   *
+   * `shipDraftPrUrl` is assigned only by `openShipDraftPr`, which is advisory
+   * (never throws) and latched to one attempt per run. A single transient
+   * `git push` failure on a run whose PR is ALREADY open therefore leaves the
+   * field unset for the rest of the run, and the fail-closed release gate then
+   * halts a feature whose draft is sitting open on origin. The BRANCH survives
+   * that failure, so ask GitHub which PR belongs to it.
+   *
+   * Deliberately narrow, so the gate stays fail-closed:
+   *   - **OPEN only.** A CLOSED or MERGED PR is not a retained draft — finish
+   *     must never flip or rewrite release metadata onto one — so those fall
+   *     through and the caller still HALTs.
+   *   - **head AND base pinned.** Matches only the current feature branch
+   *     against the current base; an unrelated branch's PR can never satisfy
+   *     it, and an unresolved base means no match rather than a looser lookup.
+   *   - **Draft-ness NOT required.** `finish` flips this same PR
+   *     ready-for-review, and a re-entered SHIP phase legitimately sees a ready
+   *     PR. `findOrCreatePr` already treats any OPEN PR for the branch as that
+   *     branch's PR; this agrees with it rather than opening a second one.
+   *
+   * Memoized into `shipDraftPrUrl` so every later consumer (the pre-finish
+   * snapshot, the finish-time restore) shares one identity.
+   */
+  private async resolveRetainedShipDraftPrUrl(
+    branch: string | undefined,
+  ): Promise<string | undefined> {
+    if (this.shipDraftPrUrl) return this.shipDraftPrUrl;
+
+    const head = branch ?? this.worktreeBranch;
+    if (!head || head === 'HEAD' || !this.baseBranch) return undefined;
+
+    try {
+      const { stdout } = await this.runGh(
+        [
+          'pr', 'list',
+          '--head', head,
+          '--base', this.baseBranch,
+          '--state', 'open',
+          '--json', 'url,state',
+          '--limit', '10',
+        ],
+        { cwd: this.projectRoot },
+      );
+      const rows: unknown = JSON.parse(stdout);
+      if (!Array.isArray(rows)) return undefined;
+      const match = rows.find(
+        (row): row is { url: string; state: string } =>
+          typeof row === 'object' &&
+          row !== null &&
+          (row as { state?: unknown }).state === 'OPEN' &&
+          typeof (row as { url?: unknown }).url === 'string' &&
+          (row as { url: string }).url.length > 0,
+      );
+      if (!match) return undefined;
+      this.shipDraftPrUrl = match.url;
+      (this.log ?? console.warn)(
+        `[ship-draft-pr] recovered retained draft PR identity for ${head} from origin: ${match.url}`,
+      );
+      return match.url;
+    } catch (err) {
+      (this.log ?? console.warn)(
+        `[ship-draft-pr] branch lookup for ${head} could not resolve a retained draft PR: ${err}`,
+      );
+      return undefined;
+    }
+  }
+
   /** Capture only a valid, re-readable release block before finish can replace the body. */
-  private async snapshotFinishReleaseMetadata(): Promise<void> {
+  private async snapshotFinishReleaseMetadata(branch?: string): Promise<void> {
     this.releaseMetadataSnapshot = undefined;
     if (!this.releaseDispositionFlowActive()) return;
 
-    if (!this.shipDraftPrUrl) {
+    const prUrl = await this.resolveRetainedShipDraftPrUrl(branch);
+    if (!prUrl) {
       throw new Error('pre-finish snapshot unavailable: retained draft PR identity is absent');
     }
 
     try {
       const { stdout } = await this.gh(
-        ['pr', 'view', this.shipDraftPrUrl, '--json', 'body'],
+        ['pr', 'view', prUrl, '--json', 'body'],
         { cwd: this.projectRoot },
       );
       const body = (JSON.parse(stdout) as { body?: unknown }).body;
       if (typeof body !== 'string') throw new Error('PR body is absent');
       const block = snapshotReleaseMetadataBlock(body);
       if (block === null) throw new Error('release metadata is malformed or non-canonical');
-      this.releaseMetadataSnapshot = { prUrl: this.shipDraftPrUrl, block };
+      this.releaseMetadataSnapshot = { prUrl, block };
     } catch (error) {
       throw new Error(
         `pre-finish snapshot unavailable: ${error instanceof Error ? error.message : String(error)}`,
@@ -2556,12 +2626,16 @@ export class Conductor {
   }
 
   /** Read and parse the exact retained draft body through the injected GitHub seam. */
-  private async readShipDraftReleaseMetadata(): Promise<
+  private async readShipDraftReleaseMetadata(branch: string | undefined): Promise<
     | { ok: false; reason: string }
     | { ok: true; value: ReturnType<typeof parseReleaseDisposition> }
   > {
-    if (!this.shipDraftPrUrl) {
-      const reason = 'Self-host release gate HALT: retained draft PR identity is unavailable.';
+    const prUrl = await this.resolveRetainedShipDraftPrUrl(branch);
+    if (!prUrl) {
+      const reason =
+        'Self-host release gate HALT: retained draft PR identity is unavailable — ' +
+        `no OPEN pull request exists for ${branch ?? this.worktreeBranch ?? 'the feature branch'} ` +
+        `into ${this.baseBranch ?? 'an unresolved base branch'}.`;
       await writeSelfHostHalt(this.projectRoot, reason);
       return { ok: false, reason };
     }
@@ -2569,7 +2643,7 @@ export class Conductor {
     let body: string;
     try {
       const { stdout } = await this.runGh(
-        ['pr', 'view', this.shipDraftPrUrl, '--json', 'body'],
+        ['pr', 'view', prUrl, '--json', 'body'],
         { cwd: this.projectRoot },
       );
       const value = JSON.parse(stdout) as { body?: unknown };
@@ -4264,7 +4338,7 @@ export class Conductor {
         // of dispatching finish. The daemon never opens a PR with an unapproved
         // bump or a failing integrity/CHANGELOG/migration state, and never merges.
         if (this.isSelfBuild() && step.name === 'finish') {
-          const verdict = await this.runSelfHostFinishGates();
+          const verdict = await this.runSelfHostFinishGates(state.worktree_branch);
           if (!verdict.ok) {
             state[step.name] = 'stale';
             await writeState(this.stateFilePath, state);
@@ -4610,7 +4684,7 @@ export class Conductor {
           // metadata into the retained SHIP draft. Capture it immediately
           // before finish dispatches, because finish may replace the body.
           if (step.name === 'finish') {
-            await this.snapshotFinishReleaseMetadata();
+            await this.snapshotFinishReleaseMetadata(state.worktree_branch);
           }
 
           let result: StepRunResult;
