@@ -171,6 +171,11 @@ If the remediation plan is missing, stale, malformed, or has gaps it does not co
 to deterministic routing rather than trusting a partial plan. Unknown dispositions are dropped, not
 honored.
 
+An ordinary `build` disposition must carry concrete tasks — a taskless `build` gap is dropped and the run
+halts instead of dispatching an empty route to the builder. The one exception is a build-stall question:
+there the answer legitimately lives in the gap's `rationale` with `tasks: []`, so a taskless `build` is
+accepted only when the gap's source is a build-stall.
+
 ### Where a `build_review` FAIL goes
 
 A `build_review` FAIL is not an unconditional kickback to `build`. The engine reads the rubric the grader
