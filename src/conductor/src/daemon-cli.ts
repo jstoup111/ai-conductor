@@ -1031,6 +1031,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       finishPublication: createProductionFinishPublicationCoordinator({
         projectRoot: wt.path,
         stateFilePath,
+        baseBranch,
         git: makeFinishPublicationGit(),
         gh: makeProductionGh(),
       }),

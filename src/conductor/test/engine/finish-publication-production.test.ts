@@ -8,6 +8,70 @@ import type { ConductState } from '../../src/types/index.js';
 const commandResult = { stdout: '' };
 
 describe('production FINISH publication composition', () => {
+  it('establishes a missing draft PR against the supplied base branch', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-establish-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+
+      const state = {
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
+      } as ConductState;
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        if (args[0] === 'rev-list') return { stdout: '1\n' };
+        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        return { stdout: '' };
+      });
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return { stdout: '' };
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/feature') {
+          throw new Error('no open PR');
+        }
+        if (args[0] === 'pr' && args[1] === 'create') {
+          state.pr_url = prUrl;
+          return { stdout: `${prUrl}\n` };
+        }
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
+          return { stdout: JSON.stringify({ url: prUrl, title: 'draft', body: 'draft', isDraft: true }) };
+        }
+        return { stdout: '' };
+      });
+      const events: unknown[] = [];
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        git,
+        gh,
+        baseBranch: 'trunk',
+      });
+
+      await expect(
+        coordinator.advance({
+          state,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async (event) => { events.push(event); },
+        }),
+      ).resolves.toMatchObject({ kind: 'publication_retry', transition: 'establish_pr' });
+
+      expect(git).toHaveBeenCalledWith(['rev-list', '--count', 'trunk..HEAD'], { cwd: root });
+      expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['--base', 'trunk']), { cwd: root });
+      expect(events).toContainEqual(expect.objectContaining({
+        type: 'finish_publication_transition', phase: 'completed', transition: 'establish_pr',
+      }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { mode: 'interactive' as const, daemon: false },
     { mode: 'default' as const, daemon: false },
@@ -26,6 +90,7 @@ describe('production FINISH publication composition', () => {
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
         git,
         gh,
       });

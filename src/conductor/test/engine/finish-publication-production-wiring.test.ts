@@ -17,5 +17,15 @@ describe('production FINISH coordinator wiring', () => {
       expect(source).toContain('createProductionFinishPublicationCoordinator');
       expect(source).toMatch(/new Conductor\(\{[\s\S]*?finishPublication:\s*createProductionFinishPublicationCoordinator\(/);
     }
+
+    expect(foreground).toMatch(
+      /const finishPublicationBaseBranch\s*=\s*\(await originDefaultBranch\(makeGitRunner\(projectRoot\)\)\) \?\? 'main';/,
+    );
+    expect(foreground).toMatch(
+      /finishPublication:\s*createProductionFinishPublicationCoordinator\(\{[\s\S]*?baseBranch:\s*finishPublicationBaseBranch/,
+    );
+    expect(daemon).toMatch(
+      /finishPublication:\s*createProductionFinishPublicationCoordinator\(\{[\s\S]*?baseBranch,/
+    );
   });
 });

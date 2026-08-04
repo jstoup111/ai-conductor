@@ -39,6 +39,8 @@ export interface ProductionFinishPublicationCoordinator {
 export interface ProductionFinishPublicationDeps {
   projectRoot: string;
   stateFilePath: string;
+  /** Resolved PR base branch from the owning production composition root. */
+  baseBranch: string;
   git: GitRunner;
   gh: GhRunner;
   /** The existing fail-closed finish-record entry, injectable for tests. */
@@ -185,7 +187,7 @@ export function createProductionFinishPublicationCoordinator(
             gh: deps.gh,
             cwd: deps.projectRoot,
             branch: state.worktree_branch,
-            baseBranch: undefined,
+            baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
           },
           createShippedRecord: async () => {

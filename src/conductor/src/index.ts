@@ -1166,6 +1166,12 @@ async function main(): Promise<void> {
   // startup.
   await spawnAutoUpdateCheck();
 
+  // FINISH and SHIP-entry draft publication both need a concrete PR base.
+  // Resolve origin's declared default with the existing local `main` fallback
+  // so foreground publication never receives an undefined base.
+  const finishPublicationBaseBranch =
+    (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
+
   const conductor = new Conductor({
     stateFilePath,
     stepRunner,
@@ -1177,12 +1183,14 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     providerExecution,
     projectRoot,
+    baseBranch: finishPublicationBaseBranch,
     // FINISH mechanics are engine-owned. Keep this explicit at the foreground
     // composition root so production cannot silently fall back to the
     // judgment-only StepRunner path used before the coordinator existed.
     finishPublication: createProductionFinishPublicationCoordinator({
       projectRoot,
       stateFilePath,
+      baseBranch: finishPublicationBaseBranch,
       git: makeProductionGit(),
       gh: makeProductionGh(),
     }),
