@@ -252,7 +252,10 @@ on-disk gate verdict, step status, or timestamp is sufficient authority on its o
 
 - A repair that provably could not affect wiring still re-runs the wiring probe. Bounded, deterministic,
   no LLM dispatch, and visible in the new events.
-- Two accepted story assertions need amendment notes: the width-1 ordering pin in
+- Two accepted story assertions needed amendment notes, authored in DECIDE and committed with this
+  spec because a BUILD-phase agent cannot write another feature's `.docs/stories/` file (phase-scoped
+  write-guard, protected-artifact seal, and `build_review` Scope rubric all forbid it): the width-1
+  ordering pin in
   `deterministic-test-suite-step.md` (at width 1 a round may now run a single member) and the wiring
   gate's selector/advanceTail integration assertion, whose divergence case changes from "block" to
   "dispatch the prerequisite". Neither intent changes; both wordings do.
@@ -266,6 +269,7 @@ on-disk gate verdict, step status, or timestamp is sufficient authority on its o
 - [ ] Re-dispatch every member of a post-repair round; make the join the sole satisfaction declarer.
 - [ ] Resolve, never block, a tail-selected step whose entry gate rejects a prerequisite.
 - [ ] Emit and render the per-member reuse-versus-recompute decision with its basis.
-- [ ] Amend the two pinned story assertions named above in the same change set.
+- [x] Amend the two pinned story assertions named above — done in DECIDE, committed with this spec.
+- [ ] Align those two assertions' regression tests, which live under `src/conductor/test/`.
 - [ ] Update `docs/reference/steps.md`, `docs/explanation/gates.md`, `docs/reference/artifacts.md`,
       `docs/guides/running-the-daemon.md`, and `docs/runbooks/stalled-or-stuck-feature.md`.

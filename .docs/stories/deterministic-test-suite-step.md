@@ -27,6 +27,15 @@ after BUILD so a deterministic failure does not spend build-review tokens.
 - Given `validation_concurrency` is one, when the deterministic group runs,
   then it executes `wiring_check` before `test_suite` and still waits for both
   passing outcomes before starting `build_review`.
+  **Refined by `adr-2026-08-03-build-repair-member-reuse-validity.md` (#1249):**
+  this pins declared member ORDER and the wait-for-every-dispatched-member rule,
+  not a guarantee that both members always execute. A round dispatches every
+  member the existing skip rules leave eligible, so a round in which one member
+  is skipped legitimately runs a single member — and `build_review` still starts
+  only after the join declares every prerequisite satisfied. The ordering and
+  wait-for-all intent is unchanged; only the "executes both" reading is narrowed
+  (established precedent: this repository's amendment of the #420 pinned
+  enumeration).
 
 #### Negative Paths
 
@@ -46,7 +55,8 @@ after BUILD so a deterministic failure does not spend build-review tokens.
       build_review → SHIP` with the deterministic members joined before review.
 - [ ] A failing-member test proves zero `build_review` model invocations and
       zero SHIP validator invocations.
-- [ ] A cap-one test proves stable `wiring_check`, then `test_suite`, ordering.
+- [ ] A cap-one test proves stable `wiring_check`, then `test_suite`, ordering
+      across the members that round dispatches (see the #1249 refinement above).
 
 ## Story 2: Join deterministic outcomes without corrupting gate state
 
