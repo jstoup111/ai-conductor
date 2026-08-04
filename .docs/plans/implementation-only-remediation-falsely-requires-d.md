@@ -54,7 +54,7 @@ Keep the current `RemediationDisposition` union and engine phase guard. First pi
 **Files:**
 - `skills/remediate/SKILL.md` — authoritative skill disposition rubric and output guidance
 
-**Wired-into:** none (existing machine-consumed skill surface)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 1
 
@@ -73,7 +73,7 @@ Keep the current `RemediationDisposition` union and engine phase guard. First pi
 **Files:**
 - `agents/remediation-planner.md` — planner-agent disposition judgment contract
 
-**Wired-into:** none (existing planner prompt loaded by the remediate skill)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 2
 
