@@ -1941,6 +1941,16 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}`,
         };
       }
+
+      const uncommittedPaths = await uncommittedPathsOrNull(ctx);
+      if (uncommittedPaths) {
+        const names = uncommittedPaths.slice(0, 3).join(', ');
+        const more = uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : '';
+        return {
+          done: false,
+          reason: `${uncommittedPaths.length} uncommitted paths: ${names}${more}`,
+        };
+      }
       return { done: true };
     }
 

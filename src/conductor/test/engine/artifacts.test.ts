@@ -2013,6 +2013,46 @@ describe('engine/artifacts', () => {
         expect(result).toEqual({ done: true });
       });
 
+      it('withholds build completion when all tasks resolve but the worktree has an uncommitted path', async () => {
+        await writePlan('### Task 1: First task\n**Story:** 1\n');
+        await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
+          worktreeStatus: async () => ' M src/a.ts\n',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toContain('uncommitted');
+        expect(result.reason).toContain('src/a.ts');
+      });
+
+      it('truncates dirty-worktree completion feedback after the first three paths', async () => {
+        const taskHeadings = Array.from(
+          { length: 7 },
+          (_, index) => `### Task ${index + 1}: Task ${index + 1}\n**Story:** ${index + 1}\n`,
+        ).join('\n');
+        await writePlan(taskHeadings);
+        await writeTasks(
+          Array.from(
+            { length: 7 },
+            (_, index) => ({ id: String(index + 1), name: `Task ${index + 1}`, status: 'completed' }),
+          ),
+        );
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
+          worktreeStatus: async () =>
+            ' M src/a.ts\n M src/b.ts\n M src/c.ts\n M src/d.ts\n M src/e.ts\n M src/f.ts\n M src/g.ts\n',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toContain('src/a.ts, src/b.ts, src/c.ts');
+        expect(result.reason).toContain('(+4 more)');
+      });
+
       // Task 5: mixed-evidence coverage — some tasks resolved via
       // task-status.json rows, others resolved only via Task:-trailered
       // commits, all unioned together to complete the build.
