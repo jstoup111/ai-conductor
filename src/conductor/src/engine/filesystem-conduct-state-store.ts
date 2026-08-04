@@ -1,4 +1,5 @@
 import { readState, writeState } from './state.js';
+import { evaluateConductStateMutation } from './conduct-state-conflicts.js';
 import type { ConductState, StateResult } from '../types/state.js';
 import type {
   NamedAtomicStateMutationBatch,
@@ -47,11 +48,9 @@ export function createFilesystemConductStateStore(
 
       const state = current.value;
       const currentValue = (state as Record<string, unknown>)[mutation.field];
-      if (!Object.is(currentValue, mutation.expected)) {
-        return {
-          kind: 'conflict',
-          message: `Expected ${mutation.field} to match before ${mutation.intent}`,
-        };
+      const result = evaluateConductStateMutation(currentValue, mutation);
+      if (result.kind !== 'applied') {
+        return result;
       }
 
       const nextState: ConductState = {

@@ -6,6 +6,7 @@ import {
   createFilesystemConductStateStore,
   type ConductStatePersistence,
 } from '../../src/engine/filesystem-conduct-state-store.js';
+import type { StateMutation } from '../../src/engine/conduct-state-store.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
@@ -32,6 +33,13 @@ function persistenceWritesToDisk(writes: ConductState[]): ConductStatePersistenc
     },
   };
 }
+
+type NonAppliedMutationCase = {
+  name: string;
+  initialState: ConductState;
+  mutation: StateMutation<ConductState>;
+  disposition: 'idempotent' | 'resolved' | 'conflict';
+};
 
 async function writeLegacyWholeSnapshot(path: string, state: ConductState): Promise<void> {
   await writeState(path, state);
@@ -92,6 +100,79 @@ describe('filesystem conduct state store', () => {
     const expectedState = { ...initialState, complexity_tier: 'M' };
     expect(writes).toEqual([expectedState]);
     expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual(expectedState);
+  });
+
+  it.each<NonAppliedMutationCase>([
+    {
+      name: 'an idempotent stale expectation',
+      initialState: { complexity_tier: 'M' },
+      mutation: {
+        field: 'complexity_tier',
+        expected: 'S',
+        intent: 'record assessed complexity',
+        next: 'M',
+      },
+      disposition: 'idempotent',
+    },
+    {
+      name: 'a terminal completion resolution',
+      initialState: { feature_status: 'complete' },
+      mutation: {
+        field: 'feature_status',
+        expected: undefined,
+        intent: 'clear stale feature status',
+        next: undefined,
+      },
+      disposition: 'resolved',
+    },
+    {
+      name: 'an unruled same-field mismatch',
+      initialState: { complexity_tier: 'M' },
+      mutation: {
+        field: 'complexity_tier',
+        expected: 'S',
+        intent: 'record assessed complexity',
+        next: 'L',
+      },
+      disposition: 'conflict',
+    },
+    {
+      name: 'a stale done-to-stale invalidation',
+      initialState: { plan: 'done' },
+      mutation: {
+        field: 'plan',
+        expected: 'pending',
+        intent: 'invalidate superseded plan',
+        next: 'stale',
+      },
+      disposition: 'conflict',
+    },
+  ])('leaves state bytes and persistence untouched for $name', async ({
+    initialState,
+    mutation,
+    disposition,
+  }) => {
+    const statePath = await createStatePath();
+    await writeState(statePath, initialState);
+    const originalBytes = await readFile(statePath, 'utf-8');
+    const writes: ConductState[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistenceWritesToDisk(writes),
+    );
+
+    const result = await store.apply(mutation);
+
+    if (disposition === 'conflict') {
+      expect(result).toMatchObject({ kind: 'conflict' });
+      if (result.kind === 'conflict') {
+        expect(result.message).toContain(mutation.field);
+      }
+    } else {
+      expect(result).toEqual({ kind: disposition });
+    }
+    expect(await readFile(statePath, 'utf-8')).toBe(originalBytes);
+    expect(writes).toEqual([]);
   });
 
   it('re-reads after a stale whole snapshot and changes only the command-owned field', async () => {
