@@ -75,17 +75,19 @@ type PublicationEvidence = {
   branchPushed: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   shippedRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
-  pr:
-    | {
-        identity: 'one';
-        url: string;
-        prose: 'accepted' | 'stale' | 'placeholder' | 'indeterminate';
-        ready: boolean;
-      }
-    | { identity: 'none' }
-    | { identity: 'ambiguous'; urls: readonly string[] }
-    | { identity: 'indeterminate' };
+  pr: PublicationPullRequest;
 };
+
+export type PublicationPullRequest =
+  | {
+      identity: 'one';
+      url: string;
+      prose: 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      ready: boolean;
+    }
+  | { identity: 'none' }
+  | { identity: 'ambiguous'; urls: readonly string[] }
+  | { identity: 'indeterminate' };
 
 export type PublicationSnapshot =
   | (PublicationEvidence & { mode: 'daemon'; intent: DaemonPublicationIntent })
@@ -114,7 +116,12 @@ export type PushEvidenceObservation =
 
 /** GitHub's authoritative view of the one PR eligible for this feature. */
 export type PullRequestObservation =
-  | { state: 'one'; url: string; prose: 'accepted' | 'stale' | 'placeholder'; ready: boolean }
+  | {
+      state: 'one';
+      url: string;
+      prose: 'accepted' | 'stale' | 'placeholder' | 'halt';
+      ready: boolean;
+    }
   | { state: 'missing' }
   | { state: 'ambiguous'; urls: readonly string[] }
   | { state: 'malformed' }
@@ -526,10 +533,50 @@ export function preflightFinishPublication(
   return { kind: 'ready_for_judgment' };
 }
 
+/**
+ * The only provider-owned FINISH decision is whether the observed PR's title
+ * and body need repair. Everything else is selected from durable evidence.
+ */
+export type PrProseJudgmentRequest = {
+  kind: 'finish_pr_prose_quality';
+  pullRequestUrl: string;
+  qualityScope: readonly ['title', 'body'];
+  maximumPasses: 1;
+};
+
+/** The bounded provider result; failure mapping remains a later coordinator concern. */
+export type PrProseJudgmentResult =
+  | { kind: 'accepted' }
+  | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' };
+
+type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
+  prose: 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+};
+
+/**
+ * A typed predicate protects the expensive boundary: accepted observed prose
+ * is final for this pass, while a stale or incomplete observation earns one
+ * request. The predicate performs no provider work itself.
+ */
+export function isPrProseJudgmentNeeded(
+  pr: PublicationPullRequest,
+): pr is PrWithJudgmentNeeded {
+  return pr.identity === 'one' && pr.prose !== 'accepted';
+}
+
+function prProseJudgmentRequest(pr: PrWithJudgmentNeeded): PrProseJudgmentRequest {
+  return {
+    kind: 'finish_pr_prose_quality',
+    pullRequestUrl: pr.url,
+    qualityScope: ['title', 'body'],
+    maximumPasses: 1,
+  };
+}
+
 export interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
   effects: {
-    dispatchJudgment(): Promise<void>;
+    dispatchJudgment(request: PrProseJudgmentRequest): Promise<PrProseJudgmentResult>;
     /**
      * The existing shipped-record primitive writes, commits, and pushes the
      * record. It is injected here because `observe` remains the authority for
@@ -546,7 +593,7 @@ export interface AdvanceFinishPublicationInput {
 }
 
 export type AdvanceFinishPublicationResult =
-  | { kind: 'advanced'; transition: 'establish_pr' | 'write_shipped_record' | 'judge_pr_prose' }
+  | { kind: 'advanced'; transition: PublicationTransition }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | {
       kind: 'publication_retry';
@@ -644,8 +691,12 @@ export async function advanceFinishPublication(
     };
   }
 
-  await input.effects.dispatchJudgment();
-  return { kind: 'advanced', transition: 'judge_pr_prose' };
+  if (isPrProseJudgmentNeeded(snapshot.pr)) {
+    await input.effects.dispatchJudgment(prProseJudgmentRequest(snapshot.pr));
+    return { kind: 'advanced', transition: 'judge_pr_prose' };
+  }
+
+  return { kind: 'advanced', transition: nextFinishPublicationTransition(snapshot) };
 }
 
 /**
