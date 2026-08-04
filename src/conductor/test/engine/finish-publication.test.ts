@@ -23,7 +23,7 @@ type PublicationCondition =
 interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
   effects: {
-    dispatchJudgment(...args: unknown[]): Promise<void>;
+    dispatchJudgment(...args: unknown[]): Promise<unknown>;
     createShippedRecord?: () => Promise<void>;
     establishPr?: {
       gh: GhRunner;
@@ -502,7 +502,7 @@ describe('resolveUnattendedPublicationIntent', () => {
 
 describe('advanceFinishPublication preflight', () => {
   it('reaches the judgment boundary once when observed publication, SHIP, and release readiness are valid', async () => {
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -515,7 +515,7 @@ describe('advanceFinishPublication preflight', () => {
   });
 
   it('returns the exact release-readiness blocker before dispatching judgment', async () => {
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -535,7 +535,7 @@ describe('advanceFinishPublication preflight', () => {
   });
 
   it('selects the stable SHIP blocker before an indeterminate release-readiness result without dispatching judgment', async () => {
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -558,7 +558,7 @@ describe('advanceFinishPublication preflight', () => {
 
 describe('advanceFinishPublication PR identity', () => {
   it('reuses an observed existing draft identity without opening another PR', async () => {
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
     const draft = draftPrFakes(() => new Error('must not call GitHub'));
 
     await expect(
@@ -583,7 +583,7 @@ describe('advanceFinishPublication PR identity', () => {
       .fn<() => Promise<PublicationSnapshot>>()
       .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
       .mockResolvedValueOnce(readyPublicationSnapshot());
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
@@ -595,7 +595,7 @@ describe('advanceFinishPublication PR identity', () => {
   });
 
   it('halts ambiguous PR identity without guessing a publication mutation', async () => {
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
     const draft = draftPrFakes(() => new Error('must not call GitHub'));
 
     await expect(
@@ -618,7 +618,7 @@ describe('advanceFinishPublication PR identity', () => {
     const observe = vi
       .fn<() => Promise<PublicationSnapshot>>()
       .mockResolvedValue(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }));
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
@@ -636,7 +636,7 @@ describe('advanceFinishPublication PR identity', () => {
 describe('advanceFinishPublication durable shipped evidence', () => {
   it('reuses an existing verified shipped record without invoking its writer', async () => {
     const createShippedRecord = vi.fn(async () => undefined);
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -655,7 +655,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
     const createShippedRecord = vi.fn(async () => {
       shippedRecord = 'valid';
     });
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -673,7 +673,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
 
   it('refuses mismatched shipped evidence without overwriting it', async () => {
     const createShippedRecord = vi.fn(async () => undefined);
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -691,7 +691,7 @@ describe('advanceFinishPublication durable shipped evidence', () => {
     const createShippedRecord = vi.fn(async () => {
       throw new Error('git push failed');
     });
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
 
     await expect(
       advanceFinishPublication({
@@ -763,6 +763,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       let request: unknown;
       const dispatchJudgment = vi.fn(async (receivedRequest: unknown) => {
         request = receivedRequest;
+        return { kind: 'accepted' };
       });
 
       await expect(
@@ -791,7 +792,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
   );
 
   it('dispatches again only when prose becomes stale after an accepted retry', async () => {
-    const dispatchJudgment = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
     const observe = vi
       .fn<() => Promise<PublicationSnapshot>>()
       .mockResolvedValueOnce(
@@ -823,6 +824,89 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
     await expect(
       advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['timeout', { kind: 'timed_out' }, 'judgment_timed_out'],
+    ['provider unavailable', { kind: 'provider_unavailable' }, 'judgment_provider_unavailable'],
+  ] as const)(
+    'keeps verified publication progress retryable when judgment reports %s',
+    async (_failure, judgmentResult, reason) => {
+      const dispatchJudgment = vi.fn(async () => judgmentResult);
+      const createShippedRecord = vi.fn(async () => undefined);
+      const draft = draftPrFakes(() => new Error('must not create another PR'));
+
+      await expect(
+        advanceFinishPublication({
+          observe: async () => readyPublicationSnapshot(),
+          effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
+        }),
+      ).resolves.toEqual({
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason,
+      });
+
+      expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+      expect(createShippedRecord).not.toHaveBeenCalled();
+      expect(draft.gitCalls).toHaveLength(0);
+      expect(draft.ghCalls).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ['refusal', { kind: 'refused' }, 'judgment_refused'],
+    [
+      'malformed prose',
+      { kind: 'revision_required', reason: 'structurally_incomplete' },
+      'judgment_malformed_prose',
+    ],
+  ] as const)(
+    'requires a human without rolling back verified publication progress when judgment returns %s',
+    async (_failure, judgmentResult, reason) => {
+      const dispatchJudgment = vi.fn(async () => judgmentResult);
+      const createShippedRecord = vi.fn(async () => undefined);
+      const draft = draftPrFakes(() => new Error('must not create another PR'));
+
+      await expect(
+        advanceFinishPublication({
+          observe: async () => readyPublicationSnapshot(),
+          effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
+        }),
+      ).resolves.toEqual({ kind: 'human_required', reason });
+
+      expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+      expect(createShippedRecord).not.toHaveBeenCalled();
+      expect(draft.gitCalls).toHaveLength(0);
+      expect(draft.ghCalls).toHaveLength(0);
+    },
+  );
+
+  it('does not repeat judgment after a successful pass is re-observed as accepted', async () => {
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'placeholder';
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' };
+    });
+    const observe = vi.fn(async () =>
+      readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose,
+          ready: false,
+        },
+      }),
+    );
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
   });
 });

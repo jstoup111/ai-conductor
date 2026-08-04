@@ -544,10 +544,13 @@ export type PrProseJudgmentRequest = {
   maximumPasses: 1;
 };
 
-/** The bounded provider result; failure mapping remains a later coordinator concern. */
+/** The bounded provider result, including fail-closed judgment outcomes. */
 export type PrProseJudgmentResult =
   | { kind: 'accepted' }
-  | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' };
+  | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' }
+  | { kind: 'timed_out' }
+  | { kind: 'provider_unavailable' }
+  | { kind: 'refused' };
 
 type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
   prose: 'stale' | 'placeholder' | 'halt' | 'indeterminate';
@@ -597,10 +600,51 @@ export type AdvanceFinishPublicationResult =
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | {
       kind: 'publication_retry';
-      transition: 'establish_pr' | 'write_shipped_record';
+      transition: PublicationTransition;
       reason: string;
     }
-  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' | 'invalid_shipped_record' };
+  | {
+      kind: 'human_required';
+      reason:
+        | 'ambiguous_pr_identity'
+        | 'invalid_shipped_record'
+        | 'judgment_placeholder_prose'
+        | 'judgment_halt_prose'
+        | 'judgment_malformed_prose'
+        | 'judgment_refused';
+    };
+
+function mapPrProseJudgmentResult(
+  result: PrProseJudgmentResult,
+): AdvanceFinishPublicationResult {
+  switch (result.kind) {
+    case 'accepted':
+      return { kind: 'advanced', transition: 'judge_pr_prose' };
+    case 'timed_out':
+      return {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_timed_out',
+      };
+    case 'provider_unavailable':
+      return {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_provider_unavailable',
+      };
+    case 'refused':
+      return { kind: 'human_required', reason: 'judgment_refused' };
+    case 'revision_required':
+      switch (result.reason) {
+        case 'placeholder':
+          return { kind: 'human_required', reason: 'judgment_placeholder_prose' };
+        case 'halt':
+          return { kind: 'human_required', reason: 'judgment_halt_prose' };
+        case 'structurally_incomplete':
+          return { kind: 'human_required', reason: 'judgment_malformed_prose' };
+      }
+  }
+}
 
 /**
  * The narrow Task 7 coordinator seam: observe first, stop on deterministic
@@ -692,8 +736,20 @@ export async function advanceFinishPublication(
   }
 
   if (isPrProseJudgmentNeeded(snapshot.pr)) {
-    await input.effects.dispatchJudgment(prProseJudgmentRequest(snapshot.pr));
-    return { kind: 'advanced', transition: 'judge_pr_prose' };
+    try {
+      return mapPrProseJudgmentResult(
+        await input.effects.dispatchJudgment(prProseJudgmentRequest(snapshot.pr)),
+      );
+    } catch {
+      // The dispatcher can lose its response after the provider has returned.
+      // Re-observation on the next FINISH pass is authoritative, so retain the
+      // already verified PR and shipped-record effects and retry only judgment.
+      return {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_dispatch_failed',
+      };
+    }
   }
 
   return { kind: 'advanced', transition: nextFinishPublicationTransition(snapshot) };
