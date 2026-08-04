@@ -167,6 +167,19 @@ describe('Story 2 — HALT with actionable ambiguity evidence', () => {
     return { gitRunner, conflict };
   }
 
+  it('requires actionable ambiguity evidence and stops the bounded attempt at the first semantic ambiguity', async () => {
+    const skill = await readFile(REBASE_SKILL, 'utf8');
+
+    expectContract(skill, /\{"resolved": false, "reason":/i, 'emit ambiguity evidence through the false-result JSON contract');
+    expectContract(skill, /reason.{0,180}replay commit/is, 'identify the replay commit in a false-result reason');
+    expectContract(skill, /reason.{0,180}(?:file|path).{0,180}(?:line|region|hunk)/is, 'identify the affected file and line range or conflict region');
+    expectContract(skill, /reason.{0,180}(?:source|incoming).{0,180}intent.{0,180}upstream.{0,180}intent/is, 'identify the competing source and upstream intentions');
+    expectContract(skill, /reason.{0,180}missing decision/is, 'identify the decision that blocks a safe merge');
+    expectContract(skill, /unavailable context.{0,180}(?:reason|fact|evidence)|(?:reason|fact|evidence).{0,180}unavailable context/is, 'state explicitly when required context is unavailable');
+    expectContract(skill, /(?:do not|must not|never).{0,120}(?:confidence|confident).{0,180}(?:reason|ambigu|resolve)|(?:reason|ambigu|resolve).{0,180}(?:do not|must not|never).{0,120}(?:confidence|confident)/is, 'reject vague confidence claims as an ambiguity reason');
+    expectContract(skill, /first.{0,120}ambiguity.{0,180}(?:stop|short-circuit|halt).{0,180}(?:do\s+not|must\s+not|never).{0,180}(?:edit|stage|continue|later attempt|another (?:hunk|conflict))|(?:do\s+not|must\s+not|never).{0,180}(?:edit|stage|continue|later attempt|another (?:hunk|conflict)).{0,180}first.{0,120}ambiguity/is, 'short-circuit without continuing after semantic ambiguity');
+  });
+
   it('preserves specific semantic ambiguity from fake provider output through the bounded flow and HALT', async () => {
     const ambiguity =
       'replay commit abc1234; replay.ts lines 1-3; source intends feature behavior, ' +

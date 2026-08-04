@@ -69,6 +69,30 @@ and relevant upstream change/intent. If the source or upstream context is
 unavailable or leaves the intended behavior ambiguous, do not guess: emit
 `{"resolved": false, "reason": "..."}` and stop.
 
+### Ambiguity Gate — Stop at the First Cannot-Resolve Judgment
+
+At the **first semantic ambiguity**, stop this bounded attempt immediately. Do
+not edit, stage, run `git rebase --continue`, inspect another conflict, or
+consume a later attempt while this ambiguity remains unresolved. Do not defer
+the decision to a later replay hunk or guess which behavior wins.
+
+The false-result `reason` must name the replay commit, affected file and line
+range or conflict region, the competing source intent and upstream intent, and
+the missing decision that prevents a safe merge. Use this shape when the facts
+are known:
+
+```
+replay commit <REBASE_HEAD SHA>; <file> <lines or hunk>; source intends <behavior>; upstream intends <behavior>; missing decision: <what must be decided>
+```
+
+When a required fact cannot be obtained, say `unavailable context: <fact and
+why it is unavailable>` explicitly in the reason. Preserve every known part of
+the evidence rather than inventing the unavailable fact.
+
+Do not use a vague confidence claim (for example, "cannot determine with
+confidence" or a confidence percentage) as the reason for ambiguity. State the
+specific competing intentions and missing decision instead.
+
 Removing conflict markers or reaching a clean index is **not** evidence that
 the replay is correct. Do not infer correctness from conflict-marker removal
 alone; the captured source and upstream intent must support the resolution.
@@ -96,10 +120,10 @@ For each conflicted file:
 4. If the conflict is in a generated file (lock files, compiled artifacts):
    prefer `theirs` unless the project has a clear policy.
 
-**If you cannot determine the correct resolution with confidence** — conflicting
-business logic, missing context, overlapping semantic changes — **do not guess**.
-Emit `{"resolved": false, "reason": "<specific description of what makes this
-unsafe>"}` immediately. A wrong guess is worse than a HALT.
+**If the correct resolution is semantically ambiguous** — conflicting business
+logic, missing context, overlapping semantic changes — apply the Ambiguity Gate
+above. Emit its actionable `{"resolved": false, "reason": "..."}` and stop
+immediately. A wrong guess is worse than a HALT.
 
 ### 5. Stage and Validate the Complete Replay
 
@@ -220,7 +244,13 @@ clean working tree on the rebased branch).
 ```
 when any conflict hunk was judged unsafe to resolve, the rebase is still
 in progress, and a human must intervene. Be specific in `reason` — name the
-files and what made the conflict ambiguous.
+replay commit, file and line range or hunk, competing source/upstream
+intentions, and the missing decision. If required context is unavailable, say
+`unavailable context: ...` explicitly. For example:
+
+```
+{"resolved": false, "reason": "replay commit abc1234; src/auth.ts lines 41-58; source intends session renewal; upstream intends token removal; missing decision: whether renewal remains supported"}
+```
 
 No other output format is accepted. Do not emit JSON anywhere else in your
 output; the runner takes the **last** JSON line.
