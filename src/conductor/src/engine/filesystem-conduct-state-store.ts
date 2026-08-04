@@ -9,7 +9,9 @@ import {
 } from './conduct-state-conflicts.js';
 import type { ConductState, StateResult } from '../types/state.js';
 import type {
+  ConductStateStore,
   NamedAtomicStateMutationBatch,
+  PrivilegedStateReplacement,
   StateMutation,
   StateMutationResult,
 } from './conduct-state-store.js';
@@ -40,10 +42,8 @@ export interface AtomicStateTemporaryFile {
   handle?: Awaited<ReturnType<typeof open>>;
 }
 
-export interface FilesystemConductStateStore {
+export interface FilesystemConductStateStore extends ConductStateStore<ConductState> {
   read(): Promise<StateResult<ConductState>>;
-  apply(mutation: StateMutation<ConductState>): Promise<StateMutationResult>;
-  applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult>;
 }
 
 const defaultAtomicFilesystem: AtomicStateFilesystem = {
@@ -196,6 +196,27 @@ export function createFilesystemConductStateStore(
         }), state);
         try {
           await resolvedPersistence.write(path, nextState);
+        } catch (error) {
+          return { kind: 'persistence', message: `Failed to persist state: ${error}` };
+        }
+        return { kind: 'applied' };
+      });
+    },
+
+    async replace(
+      replacement: PrivilegedStateReplacement<ConductState>,
+    ): Promise<StateMutationResult> {
+      return whileHoldingLease(async () => {
+        // A reset is intentionally destructive, but only after the current
+        // document has been proven readable while this writer owns the lease.
+        // This keeps corrupt or empty input from being silently overwritten.
+        const current = await readState(path);
+        if (!current.ok) {
+          return { kind: 'persistence', message: current.error.message };
+        }
+
+        try {
+          await resolvedPersistence.write(path, replacement.next);
         } catch (error) {
           return { kind: 'persistence', message: `Failed to persist state: ${error}` };
         }

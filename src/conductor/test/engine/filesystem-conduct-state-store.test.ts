@@ -7,8 +7,12 @@ import {
   type AtomicStateFilesystem,
   type ConductStatePersistence,
 } from '../../src/engine/filesystem-conduct-state-store.js';
+import type { ConductStateLease } from '../../src/engine/conduct-state-lease.js';
 import type { StateMutationDiagnostic } from '../../src/engine/conduct-state-conflicts.js';
-import type { StateMutation } from '../../src/engine/conduct-state-store.js';
+import type {
+  PrivilegedStateReplacement,
+  StateMutation,
+} from '../../src/engine/conduct-state-store.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
 
@@ -122,6 +126,15 @@ const atomicMutation: StateMutation<ConductState> = {
   next: 'M',
 };
 
+const resetState: PrivilegedStateReplacement<ConductState> = {
+  intent: 'operator requested a clean start-over',
+  next: {
+    feature_desc: 'fresh feature description',
+    bootstrap: 'pending',
+  },
+  privileged: true,
+};
+
 describe('filesystem conduct state store', () => {
   it('reads existing flat conduct-state JSON through the established compatibility path', async () => {
     const statePath = await createStatePath();
@@ -177,6 +190,113 @@ describe('filesystem conduct state store', () => {
     const expectedState = { ...initialState, complexity_tier: 'M' };
     expect(writes).toEqual([expectedState]);
     expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual(expectedState);
+  });
+
+  it('does not give ordinary mutations deletion authority over omitted fields', async () => {
+    const statePath = await createStatePath();
+    const initialState: ConductState = {
+      feature_desc: 'retain existing state',
+      complexity_tier: 'S',
+      pr_url: 'https://github.com/acme/repo/pull/101',
+      feature_status: 'complete',
+      finish: 'done',
+    };
+    await writeState(statePath, initialState);
+    const store = createFilesystemConductStateStore(statePath);
+
+    await expect(store.apply({
+      field: 'complexity_tier',
+      expected: 'S',
+      intent: 'record reassessed complexity',
+      next: 'M',
+    })).resolves.toEqual({ kind: 'applied' });
+
+    await expect(readFile(statePath, 'utf8')).resolves.toEqual(expect.stringContaining(
+      '"pr_url": "https://github.com/acme/repo/pull/101"',
+    ));
+    await expect(readFile(statePath, 'utf8')).resolves.toEqual(expect.stringContaining(
+      '"feature_status": "complete"',
+    ));
+  });
+
+  it('uses privileged replacement to intentionally clear reset-only state including PR and completion', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, {
+      feature_desc: 'prior feature description',
+      bootstrap: 'done',
+      build: 'done',
+      finish: 'done',
+      pr_url: 'https://github.com/acme/repo/pull/101',
+      feature_status: 'complete',
+      artifact_approvals: {
+        '/project/.docs/plans/feature.md': {
+          sha256: 'abc123',
+          approved_at: '2026-08-04T12:00:00.000Z',
+        },
+      },
+    });
+    const store = createFilesystemConductStateStore(statePath);
+
+    await expect(store.replace(resetState)).resolves.toEqual({ kind: 'applied' });
+
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(
+      '{\n  "feature_desc": "fresh feature description",\n  "bootstrap": "pending"\n}\n',
+    );
+  });
+
+  it.each([
+    ['corrupt', '{not valid JSON\n'],
+    ['empty', ''],
+  ] as const)('refuses a %s state replacement and preserves the original bytes', async (_case, originalBytes) => {
+    const statePath = await createStatePath();
+    await writeFile(statePath, originalBytes, 'utf8');
+    const store = createFilesystemConductStateStore(statePath);
+
+    await expect(store.replace(resetState)).resolves.toMatchObject({ kind: 'persistence' });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(originalBytes);
+  });
+
+  it('does not replace state when its lease cannot be acquired', async () => {
+    const statePath = await createStatePath();
+    const originalBytes = '{\n  "pr_url": "https://github.com/acme/repo/pull/101",\n  "feature_status": "complete"\n}\n';
+    await writeFile(statePath, originalBytes, 'utf8');
+    const unavailableLease: ConductStateLease = {
+      async acquire() {
+        return { kind: 'timeout', message: 'lease held by another writer', ok: false };
+      },
+    };
+    const store = createFilesystemConductStateStore(
+      statePath,
+      undefined,
+      undefined,
+      undefined,
+      unavailableLease,
+    );
+
+    await expect(store.replace(resetState)).resolves.toEqual({
+      kind: 'lease',
+      message: 'lease held by another writer',
+    });
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(originalBytes);
+  });
+
+  it('preserves prior bytes when atomic replacement fails during a privileged replacement', async () => {
+    const statePath = await createStatePath();
+    const originalBytes = '{\n  "pr_url": "https://github.com/acme/repo/pull/101",\n  "feature_status": "complete"\n}\n';
+    await writeFile(statePath, originalBytes, 'utf8');
+    const filesystem = createAtomicFilesystemFixture(new Set(['rename-temp']));
+    const store = createFilesystemConductStateStore(statePath, undefined, undefined, filesystem);
+
+    await expect(store.replace(resetState)).resolves.toMatchObject({ kind: 'persistence' });
+    expect(filesystem.calls).toEqual([
+      'create-temp',
+      'write-temp',
+      'sync-temp',
+      'close-temp',
+      'rename-temp',
+      'cleanup-temp',
+    ]);
+    await expect(readFile(statePath, 'utf8')).resolves.toBe(originalBytes);
   });
 
   it.each<NonAppliedMutationCase>([
