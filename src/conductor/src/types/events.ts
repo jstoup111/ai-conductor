@@ -389,6 +389,31 @@ export type ConductorEvent =
       };
     }
   | {
+      /**
+       * A BUILD-verification member settled using its own existing evidence.
+       * This is observability only; the group join remains the sole authority
+       * that declares the member satisfied for the round.
+       */
+      type: 'build_member_evidence_reused';
+      member: 'wiring_check' | 'test_suite';
+      decision: 'reuse';
+      basis: 'fingerprint-match';
+    }
+  | {
+      /**
+       * A BUILD-verification member settled after deriving fresh evidence.
+       * The basis is a closed, sanitized classification rather than raw
+       * evidence, command output, credentials, or host paths.
+       */
+      type: 'build_member_evidence_recomputed';
+      member: 'wiring_check' | 'test_suite';
+      decision: 'recompute';
+      basis:
+        | 'recorded-head-versus-current-head'
+        | 'fingerprint-mismatch'
+        | 'fresh-evidence-required';
+    }
+  | {
       /** A downstream step re-opened an upstream gate (plan/stories). */
       type: 'kickback';
       from: StepName;

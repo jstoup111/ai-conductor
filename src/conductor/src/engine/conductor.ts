@@ -3413,6 +3413,10 @@ export class Conductor {
               1,
               Math.min(this.validationConcurrency, membership.dispatchable.length),
             );
+            // Native BUILD members report their evidence decision through
+            // their own StepRunResult. The join only observes that result;
+            // it does not add another validity predicate.
+            const nativeBranchResults = new Map<string, StepRunResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
@@ -3424,10 +3428,14 @@ export class Conductor {
                   if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
                     return runNativeGroupBranch(
                       member,
-                      () =>
-                        member.name === 'wiring_check'
+                      async () => {
+                        const result = member.name === 'wiring_check'
                           ? this.runWiringCheckStep(state)
-                          : this.runTestSuiteStep(),
+                          : this.runTestSuiteStep();
+                        const settled = await result;
+                        nativeBranchResults.set(member.name, settled);
+                        return settled;
+                      },
                       {
                         onMemberEvent: (event) => {
                           if (event.phase === 'result' && event.outcome === 'verdict:pass') {
@@ -3644,6 +3652,46 @@ export class Conductor {
                   memberName,
                   await computeAndWriteVerdict(this.projectRoot, memberName, dispatchCtx),
                 );
+              }
+            }
+
+            // Task 11: once the BUILD join has accepted a member's own
+            // evidence result, make that reuse/recompute decision observable.
+            // The event is derived exclusively from the native branch result
+            // already used by this round; it grants no new validity authority.
+            if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
+              for (let idx = 0; idx < membership.dispatchable.length; idx += 1) {
+                const member = membership.dispatchable[idx]!;
+                const outcome = outcomes[idx];
+                if (
+                  (member.name !== 'wiring_check' && member.name !== 'test_suite') ||
+                  outcome?.kind !== 'verdict' ||
+                  outcome.verdict !== 'pass' ||
+                  !gateVerdicts.get(member.name)?.satisfied
+                ) {
+                  continue;
+                }
+                const verification = nativeBranchResults.get(member.name)?.fullSuiteVerification;
+                if (member.name === 'test_suite' && verification?.status === 'REUSED') {
+                  await emitTracked({
+                    type: 'build_member_evidence_reused',
+                    member: 'test_suite',
+                    decision: 'reuse',
+                    basis: 'fingerprint-match',
+                  });
+                  continue;
+                }
+                await emitTracked({
+                  type: 'build_member_evidence_recomputed',
+                  member: member.name,
+                  decision: 'recompute',
+                  basis: member.name === 'wiring_check'
+                    ? 'recorded-head-versus-current-head'
+                    : verification?.status === 'EXECUTED' &&
+                        verification.freshness.reason === 'fingerprint_mismatch'
+                      ? 'fingerprint-mismatch'
+                      : 'fresh-evidence-required',
+                });
               }
             }
 
