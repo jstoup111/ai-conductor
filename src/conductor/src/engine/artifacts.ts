@@ -3355,7 +3355,8 @@ export async function readRemediationPlan(
       disposition === 'build' &&
       tasks.length === 0 &&
       source !== 'build_stall' &&
-      source !== 'build-stall'
+      source !== 'build-stall' &&
+      source !== 'build_stall_zero_work'
     ) {
       invalidTasklessBuild = true;
       continue;

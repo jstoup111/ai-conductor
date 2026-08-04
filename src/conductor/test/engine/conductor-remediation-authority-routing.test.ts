@@ -177,6 +177,7 @@ describe('planRemediation implementation-only authority routing', () => {
   it.each([
     { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
     { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+    { source: 'build_stall_zero_work', evidenceFile: '.pipeline/build-stall-question.md' },
   ])('preserves a taskless BUILD answer to a $source build-stall question', async ({ source, evidenceFile }) => {
     const runner: StepRunner = {
       run: async () => {
