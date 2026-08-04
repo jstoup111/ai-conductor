@@ -86,6 +86,40 @@ describe('Story 1 — validate the complete replay before continuing', () => {
     expectContract(skill, /upstream (?:change|context|intent)/i, 'inspect the upstream change and intent');
     expectContract(skill, /conflict markers?.{0,120}(?:not|never|insufficient)|(?:not|never).{0,120}conflict markers?/is, 'refuse to infer correctness only from removed conflict markers');
   });
+
+  it('reviews the complete staged replay and stops unexplained changes before continue', async () => {
+    const skill = await readFile(REBASE_SKILL, 'utf8');
+
+    expectContract(skill, /complete staged (?:diff|replay|resolution)|entire staged (?:diff|replay|resolution)|git diff --cached/i, 'review the complete staged replay before continue');
+    expectContract(skill, /every staged change.{0,180}(?:source intent|upstream adaptation|attribut)/is, 'attribute every staged change to replay intent or an upstream adaptation');
+    expectContract(skill, /unexplained (?:cross-file|staged)\s+(?:edit|change).{0,180}(?:resolved.{0,80}false|must not continue|do not continue)|(?:resolved.{0,80}false|must not continue|do not continue).{0,180}unexplained (?:cross-file|staged)\s+(?:edit|change)/is, 'stop on an unexplained staged or cross-file change');
+  });
+});
+
+describe('Story 3 — preserve coordinated resolution freedom', () => {
+  it('permits explained coordinated edits outside the immediate conflict surface', async () => {
+    const skill = await readFile(REBASE_SKILL, 'utf8');
+
+    expectContract(skill, /(?:cross-file|coordinated|supporting).{0,180}(?:outside|beyond).{0,120}(?:conflict|conflicted) (?:hunk|file)|outside (?:the )?(?:directly )?(?:conflict|conflicted) (?:hunk|file).{0,180}(?:cross-file|coordinated|supporting)/is, 'permit coordinated edits outside the immediate conflict surface');
+    expectContract(skill, /(?:cross-file|coordinated|supporting).{0,180}(?:source intent|upstream adaptation).{0,180}(?:explain|attribut|validat)|(?:explain|attribut|validat).{0,180}(?:source intent|upstream adaptation).{0,180}(?:cross-file|coordinated|supporting)/is, 'require coordinated edits to be explained by replay intent and upstream adaptation');
+  });
+
+  it('rejects mechanical edit-surface rules as the acceptance boundary', async () => {
+    const skill = await readFile(REBASE_SKILL, 'utf8');
+
+    for (const forbiddenBoundary of [
+      'file allowlist',
+      'hunk-only restriction',
+      'whole-patch equality',
+      'deterministic resolver',
+    ]) {
+      expectContract(
+        skill,
+        new RegExp(`(?:do not|must not|never|reject).{0,100}${forbiddenBoundary}`, 'is'),
+        `reject ${forbiddenBoundary} as the acceptance boundary`,
+      );
+    }
+  });
 });
 
 describe('Story 2 — HALT with actionable ambiguity evidence', () => {

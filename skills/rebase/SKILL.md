@@ -101,12 +101,47 @@ business logic, missing context, overlapping semantic changes — **do not guess
 Emit `{"resolved": false, "reason": "<specific description of what makes this
 unsafe>"}` immediately. A wrong guess is worse than a HALT.
 
-### 5. Stage and Continue
+### 5. Stage and Validate the Complete Replay
 
-After resolving all conflicted files in this round:
+Stage the resolution, then inspect the **complete staged diff** before
+continuing. Do not limit this review to conflict markers, conflicted hunks, or
+the files that originally conflicted:
 
 ```bash
 git add <resolved-files>
+git diff --cached
+git diff --cached --summary
+git diff --cached --check
+```
+
+Review every staged change, including content, file additions or deletions,
+renames, and mode changes. Every staged change must be attributable to the
+replay source intent or a necessary upstream adaptation. An unexplained staged
+change means the replay is unsafe: do not continue; emit
+`{"resolved": false, "reason": "..."}` and stop. An unexplained cross-file
+edit likewise means the replay is unsafe: do not continue; emit
+`{"resolved": false, "reason": "..."}` and stop.
+
+Coordinated supporting edits outside the directly conflicted hunk or file are
+permitted when needed to adapt the replay after upstream refactoring. Explain
+and validate every coordinated cross-file edit against both the replay source
+intent and the necessary upstream adaptation before continuing.
+
+The complete-replay attribution judgment is the acceptance boundary:
+
+- Do not use a file allowlist as the acceptance boundary.
+- Do not use a hunk-only restriction as the acceptance boundary.
+- Do not use whole-patch equality as the acceptance boundary.
+- Do not use a deterministic resolver as the acceptance boundary.
+
+Those mechanical restrictions reject valid semantic adaptations; they do not
+establish whether the staged replay preserves its intent.
+
+### 6. Continue
+
+Only after the staged replay passes attribution review:
+
+```bash
 git rebase --continue
 ```
 
@@ -115,7 +150,7 @@ another conflict hunk. If another conflict hunk appears, return to step 2 and
 resolve it (still within this single invocation). Continue until the rebase
 completes or an unsafe hunk is reached.
 
-### 6. Safety Rules (Non-Negotiable)
+### 7. Safety Rules (Non-Negotiable)
 
 - **NEVER run `git rebase --abort`** — this drops the in-progress commit work.
   The conductor's engine guards (FR-8 not-current / FR-9 dropped-commit) will
@@ -129,7 +164,7 @@ completes or an unsafe hunk is reached.
   running during BUILD must not call this skill; doing so violates the
   harness "no ad-hoc rebase mid-build" rule.
 
-### 7. Result Contract
+### 8. Result Contract
 
 The conductor's `DefaultStepRunner` parses the last JSON object emitted to
 stdout. This contract is **load-bearing** — the conductor decides whether to
@@ -162,7 +197,12 @@ output; the runner takes the **last** JSON line.
 - [ ] All conflicted files identified via `git diff --name-only --diff-filter=U`
 - [ ] Both sides of every conflict hunk read and understood before editing
 - [ ] No conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) remain in any file
-- [ ] `git add` run on every resolved file before `git rebase --continue`
+- [ ] Complete staged diff, summary, and whitespace errors reviewed before continue
+- [ ] Every staged change attributed to source intent or necessary upstream adaptation
+- [ ] Every coordinated edit outside a conflicted hunk/file explained and validated
+- [ ] Unexplained staged and cross-file changes halted rather than continued
+- [ ] No file allowlist, hunk-only restriction, whole-patch equality, or deterministic resolver used as the acceptance boundary
+- [ ] `git add` run on every resolved file before staged replay review and `git rebase --continue`
 - [ ] `git rebase --abort` and `git rebase --skip` were NOT used
 - [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`
 - [ ] If `{"resolved": true}`: `git status` shows clean working tree on rebased branch
