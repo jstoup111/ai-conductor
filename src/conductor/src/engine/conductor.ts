@@ -3504,6 +3504,12 @@ export class Conductor {
           });
           if (draftPr.outcome === 'published') {
             this.shipDraftPrUrl = draftPr.prUrl;
+            // FINISH observes PR identity from durable feature state, not a
+            // process-local SHIP latch. Persist the already-created draft so a
+            // resumed coordinator can verify and advance it without issuing a
+            // second create-capable operation.
+            state.pr_url = draftPr.prUrl;
+            await savePrUrl(this.stateFilePath, draftPr.prUrl);
 
             // `findOrCreatePr` adopts any OPEN PR for the branch UNTOUCHED, so a
             // `needs-remediation` placeholder left by an earlier HALT becomes the

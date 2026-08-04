@@ -45,6 +45,8 @@ import {
   Conductor,
   type OperatorParkedTermination,
 } from './engine/conductor.js';
+import { createProductionFinishPublicationCoordinator } from './engine/finish-publication-production.js';
+import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/event-persister.js';
@@ -1024,6 +1026,14 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       modelPolicy: selectedRuntime.policy,
       providerExecution,
       projectRoot: wt.path,
+      // Daemon FINISH shares the same engine-owned coordinator as foreground
+      // conduct; its git/GitHub boundaries remain injectable at this root.
+      finishPublication: createProductionFinishPublicationCoordinator({
+        projectRoot: wt.path,
+        stateFilePath,
+        git: makeFinishPublicationGit(),
+        gh: makeProductionGh(),
+      }),
       worktreeBranch: wt.branch,
       log: featureLog,
       // Self-host guardrails (Phase 6): activate the bundle only when this daemon

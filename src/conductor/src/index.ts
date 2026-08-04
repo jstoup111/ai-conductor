@@ -25,6 +25,8 @@ import { realpathSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
+import { createProductionFinishPublicationCoordinator } from './engine/finish-publication-production.js';
+import { makeProductionGit } from './engine/pr-labels.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
@@ -1175,6 +1177,15 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     providerExecution,
     projectRoot,
+    // FINISH mechanics are engine-owned. Keep this explicit at the foreground
+    // composition root so production cannot silently fall back to the
+    // judgment-only StepRunner path used before the coordinator existed.
+    finishPublication: createProductionFinishPublicationCoordinator({
+      projectRoot,
+      stateFilePath,
+      git: makeProductionGit(),
+      gh: makeProductionGh(),
+    }),
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,
     onCheckpoint: (s) => promptHost.checkpoint(s),
