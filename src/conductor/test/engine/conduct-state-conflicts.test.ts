@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { evaluateConductStateMutation } from '../../src/engine/conduct-state-conflicts.js';
+import {
+  evaluateConductStateMutation,
+  type StateMutationDiagnostic,
+} from '../../src/engine/conduct-state-conflicts.js';
 import type { StateMutation } from '../../src/engine/conduct-state-store.js';
 import type { ConductState } from '../../src/types/state.js';
 
@@ -93,5 +96,58 @@ describe('evaluateConductStateMutation', () => {
     }
 
     expect(result).toEqual({ kind: disposition });
+  });
+});
+
+describe('state mutation diagnostics', () => {
+  it('emits a structured, redacted conflict diagnostic without raw unbounded values', () => {
+    const diagnostics: StateMutationDiagnostic[] = [];
+    const secret = `Bearer ${'s'.repeat(2_048)}`;
+    const result = evaluateConductStateMutation('existing description', {
+      field: 'feature_desc',
+      expected: secret,
+      intent: 'record feature description',
+      next: 'replacement description',
+    }, {
+      writer: 'conductor',
+      emit: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(result).toMatchObject({ kind: 'conflict' });
+    expect(diagnostics).toEqual([{
+      field: 'feature_desc',
+      writer: 'conductor',
+      intent: 'record feature description',
+      disposition: 'conflict',
+      expected: { kind: 'string', length: 256, redacted: true, truncated: true },
+      current: { kind: 'string', length: 20, redacted: true, truncated: false },
+      next: { kind: 'string', length: 23, redacted: true, truncated: false },
+    }]);
+    expect(JSON.stringify(diagnostics)).not.toContain(secret);
+    expect(JSON.stringify(diagnostics)).not.toContain('Bearer');
+  });
+
+  it('emits the same safe diagnostic shape when terminal completion resolves a mutation', () => {
+    const diagnostics: StateMutationDiagnostic[] = [];
+    const result = evaluateConductStateMutation('complete', {
+      field: 'feature_status',
+      expected: undefined,
+      intent: 'clear stale feature status',
+      next: undefined,
+    } as unknown as StateMutation<ConductState>, {
+      writer: 'filesystem-conduct-state-store',
+      emit: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(result).toEqual({ kind: 'resolved' });
+    expect(diagnostics).toEqual([{
+      field: 'feature_status',
+      writer: 'filesystem-conduct-state-store',
+      intent: 'clear stale feature status',
+      disposition: 'resolved',
+      expected: { kind: 'undefined' },
+      current: { kind: 'string', length: 8, redacted: true, truncated: false },
+      next: { kind: 'undefined' },
+    }]);
   });
 });

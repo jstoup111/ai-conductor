@@ -1,5 +1,8 @@
 import { readState, writeState } from './state.js';
-import { evaluateConductStateMutation } from './conduct-state-conflicts.js';
+import {
+  evaluateConductStateMutation,
+  type StateMutationDiagnostics,
+} from './conduct-state-conflicts.js';
 import type { ConductState, StateResult } from '../types/state.js';
 import type {
   NamedAtomicStateMutationBatch,
@@ -34,6 +37,7 @@ const defaultPersistence: ConductStatePersistence = {
 export function createFilesystemConductStateStore(
   path: string,
   persistence: ConductStatePersistence = defaultPersistence,
+  diagnostics?: StateMutationDiagnostics,
 ): FilesystemConductStateStore {
   return {
     read(): Promise<StateResult<ConductState>> {
@@ -48,7 +52,7 @@ export function createFilesystemConductStateStore(
 
       const state = current.value;
       const currentValue = (state as Record<string, unknown>)[mutation.field];
-      const result = evaluateConductStateMutation(currentValue, mutation);
+      const result = evaluateConductStateMutation(currentValue, mutation, diagnostics);
       if (result.kind !== 'applied') {
         return result;
       }

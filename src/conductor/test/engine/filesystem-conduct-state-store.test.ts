@@ -6,6 +6,7 @@ import {
   createFilesystemConductStateStore,
   type ConductStatePersistence,
 } from '../../src/engine/filesystem-conduct-state-store.js';
+import type { StateMutationDiagnostic } from '../../src/engine/conduct-state-conflicts.js';
 import type { StateMutation } from '../../src/engine/conduct-state-store.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState } from '../../src/types/state.js';
@@ -173,6 +174,36 @@ describe('filesystem conduct state store', () => {
     }
     expect(await readFile(statePath, 'utf-8')).toBe(originalBytes);
     expect(writes).toEqual([]);
+  });
+
+  it('forwards safe conflict diagnostics through the injected writer seam', async () => {
+    const statePath = await createStatePath();
+    await writeState(statePath, { feature_desc: 'existing description' });
+    const diagnostics: StateMutationDiagnostic[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistenceWritesToDisk([]),
+      {
+        writer: 'test-client',
+        emit: (diagnostic) => diagnostics.push(diagnostic),
+      },
+    );
+
+    await expect(store.apply({
+      field: 'feature_desc',
+      expected: `token=${'x'.repeat(1_024)}`,
+      intent: 'record feature description',
+      next: 'replacement description',
+    })).resolves.toMatchObject({ kind: 'conflict' });
+
+    expect(diagnostics).toEqual([expect.objectContaining({
+      field: 'feature_desc',
+      writer: 'test-client',
+      intent: 'record feature description',
+      disposition: 'conflict',
+      expected: { kind: 'string', length: 256, redacted: true, truncated: true },
+    })]);
+    expect(JSON.stringify(diagnostics)).not.toContain('token=');
   });
 
   it('re-reads after a stale whole snapshot and changes only the command-owned field', async () => {
