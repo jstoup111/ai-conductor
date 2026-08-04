@@ -5,6 +5,10 @@ import {
   parseRebaseResolutionOutput,
 } from '../../src/engine/step-runners.js';
 import type { ResolutionContext } from '../../src/engine/rebase.js';
+import { CODEX_MODEL_POLICY } from '../../src/engine/provider-model-policy.js';
+import { ModelAvailability } from '../../src/engine/model-availability.js';
+import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
+import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 
 // ── Stub boundary ─────────────────────────────────────────────────────────────
 // Tests stub `provider.invoke` — the same seam used by all other step-runner
@@ -222,5 +226,44 @@ describe('DefaultStepRunner.resolveRebaseConflict', () => {
     // resolveRebaseConflict is a one-shot helper — it must not increment the
     // main step call count (which drives cooldown escalation).
     expect(runner.callCount).toBe(countBefore);
+  });
+
+  it('delivers Codex the semantic $rebase invocation and canonical replay-safety reinforcement through the fake provider only', async () => {
+    const codex: LLMProvider = {
+      ...makeProvider({ success: true, output: 'resolved, probably', exitCode: 0 }),
+      lifecycleCapability: { synchronousSpawnPermit: true },
+    };
+    const runner = new DefaultStepRunner(codex, 'session-1', '/wt/feature-x', {
+      config: {
+        llm_provider: 'codex',
+        steps: { rebase: { llm_provider: 'codex' } },
+      },
+      sessionStore: new ProviderSessionStore({ createSessionId: () => 'codex-rebase-session' }),
+      providerRuntimes: new ProviderRuntimeSet([{
+        key: 'codex',
+        provider: codex,
+        lifecycleCapability: { synchronousSpawnPermit: true },
+        policy: CODEX_MODEL_POLICY,
+        builtIn: true,
+        availability: new ModelAvailability(CODEX_MODEL_POLICY.modelFallbackLadder),
+      }]),
+      configuredProviders: ['codex'],
+    });
+
+    const result = await runner.resolveRebaseConflict(sampleCtx);
+
+    expect(result.resolved).toBe(false);
+    expect(codex.invoke).toHaveBeenCalledOnce();
+    expect(codex.invokeInteractive).not.toHaveBeenCalled();
+    const options = (codex.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(options.prompt).toBe('$rebase');
+    expect(options.systemPrompt).toContain('full replay');
+    expect(options.systemPrompt).toContain('source intent');
+    expect(options.systemPrompt).toContain('upstream intent');
+    expect(options.systemPrompt).toContain('first semantic ambiguity');
+    expect(options.systemPrompt).toContain('ambiguity');
+    expect(options.systemPrompt).toContain('HALT');
+    expect(options.systemPrompt).toContain('canonical rebase skill workflow');
+    expect(options.systemPrompt).toContain('do not replace');
   });
 });

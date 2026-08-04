@@ -636,6 +636,31 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         { stepRunner: runner, onMemberEvent },
         1,
       );
+      const codexCalls = codexInteractive.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        interactive: options.interactive,
+        dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+        model: options.model,
+        effort: options.effort,
+      }));
+      const claudeCalls = claudeInteractive.mock.calls.map(([options]) => ({
+        prompt: options.prompt,
+        sessionId: options.sessionId,
+        resume: options.resume,
+        cwd: options.cwd,
+        interactive: options.interactive,
+        dangerouslySkipPermissions: options.dangerouslySkipPermissions,
+        model: options.model,
+        effort: options.effort,
+      }));
+
+      // Branch scheduling is concurrent, so the opaque IDs' global minting
+      // order is intentionally unspecified. The contract is that each
+      // invocation, including the manual retry, owns a fresh branch session.
+      expect(new Set([...codexCalls, ...claudeCalls].map(({ sessionId }) => sessionId)).size).toBe(4);
 
       expect({
         capturedCalls: capturedInteractive.mock.calls,
@@ -645,25 +670,11 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           codex: codexInvoke.mock.calls,
         },
         beginBranchCalls: beginBranch.mock.calls,
-        codexCalls: codexInteractive.mock.calls.map(([options]) => ({
-          prompt: options.prompt,
-          sessionId: options.sessionId,
-          resume: options.resume,
-          cwd: options.cwd,
-          interactive: options.interactive,
-          dangerouslySkipPermissions: options.dangerouslySkipPermissions,
-          model: options.model,
-          effort: options.effort,
+        codexCalls: codexCalls.map(({ sessionId: _sessionId, ...call }) => ({
+          ...call,
         })),
-        claudeCalls: claudeInteractive.mock.calls.map(([options]) => ({
-          prompt: options.prompt,
-          sessionId: options.sessionId,
-          resume: options.resume,
-          cwd: options.cwd,
-          interactive: options.interactive,
-          dangerouslySkipPermissions: options.dangerouslySkipPermissions,
-          model: options.model,
-          effort: options.effort,
+        claudeCalls: claudeCalls.map(({ sessionId: _sessionId, ...call }) => ({
+          ...call,
         })),
         completionOrder,
         resultEvents,
@@ -689,7 +700,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         codexCalls: [
           {
             prompt: "$manual-test",
-            sessionId: "manual-codex-attempt-1",
             resume: false,
             cwd: "/tmp/project",
             interactive: true,
@@ -699,7 +709,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           },
           {
             prompt: "$manual-test",
-            sessionId: "manual-codex-attempt-2",
             resume: false,
             cwd: "/tmp/project",
             interactive: true,
@@ -709,7 +718,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
           },
           {
             prompt: "$architecture-review --as-built",
-            sessionId: "architecture-codex-session",
             resume: false,
             cwd: "/tmp/project",
             interactive: true,
@@ -721,7 +729,6 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
         claudeCalls: [
           {
             prompt: "/prd-audit",
-            sessionId: "prd-claude-session",
             resume: false,
             cwd: "/tmp/project",
             interactive: true,

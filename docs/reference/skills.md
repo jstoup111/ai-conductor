@@ -571,6 +571,13 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 - **Gate role** — blocking through the structural step. An unresolved result or an unsafe hunk retries
   up to a cap and then HALTs. Non-negotiable prohibitions: never `--abort`, never `--skip`, never
   `push --force`, never invoke mid-build.
+- **Replay verification** — before editing, the skill captures the replay source commit's and
+  upstream's intent as an evidence ledger, and HALTs at the first semantic ambiguity rather than
+  guessing. Before `git rebase --continue`, it reviews the complete staged diff (not just the
+  conflicted hunks) and requires every staged change to be attributable to the source or a
+  necessary upstream adaptation. After `git rebase --continue`, it inspects the resulting replay
+  commit against the retained pre-continue identity and validated intent, and only emits
+  `{"resolved": true}` once every replay commit — including the final one — has reconciled.
 
 ### finish
 
