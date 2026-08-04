@@ -72,6 +72,32 @@ This test runs in ordinary CI without a separate workflow job.
 and `*.smoke.test.ts` names, so the existing `conductor` job's `npm test`
 invocation runs it and reports through `ci-gate`.
 
+### Live-provider daemon E2E smoke
+
+`test/engine/daemon-e2e-live.smoke.test.ts` is the opt-in real-provider layer
+over that deterministic fixture. It dispatches the real Claude provider, then
+asserts a successful terminal state (`DONE`, with no `HALT` or park marker), a
+new commit, the declared fixture change, and a `Task: 1` trailer. On failure it
+uses the deterministic fixture's shared `dumpPipelineDiagnostics` helper to
+print the daemon log, halt reason, task status, task evidence, and park markers.
+
+It needs the `claude` binary and the `CLAUDE_CODE_OAUTH_TOKEN` secret; set
+`DAEMON_E2E_LIVE_SMOKE=0` to disable an otherwise credentialed local run. Its
+token meter defaults `DAEMON_E2E_LIVE_TOKEN_CAP` to `100000`; lower that value
+when running the smoke manually. Run it directly from `src/conductor`:
+
+```bash
+npx vitest run test/engine/daemon-e2e-live.smoke.test.ts
+```
+
+The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
+is advisory when dispatched normally: a missing credential records a skipped
+provider run. A caller can set `require_credentials: true` to make the same
+missing-secret condition fail. Claude is the single current matrix entry. To
+add a provider, expand that matrix in this workflow, wire its credential into
+the job environment, and extend the smoke's provider setup and assertions in
+the same change; do not create a parallel live-E2E workflow.
+
 ## Linters
 
 Three linters run in CI, each scoped to what `tsc` and `bash -n` cannot tell you.
@@ -267,6 +293,7 @@ gate on top. There is no `npm run smoke` — run each file directly.
 | `test/execution/codex-provider.smoke.test.ts` | Opt-in: `CODEX_CLI_SMOKE_TEST=1` plus the `codex` binary | `CODEX_CLI_SMOKE_TEST=1 npx vitest run test/execution/codex-provider.smoke.test.ts` |
 | `test/backlog-priority.smoke.test.ts` | Opt-in: `PRIORITY_GH_SMOKE` set | `PRIORITY_GH_SMOKE=1 npx vitest run test/backlog-priority.smoke.test.ts` |
 | `test/engine/build-token-auth.smoke.test.ts` | Opt-out: needs the binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `BUILD_TOKEN_AUTH_SMOKE=0` | `npx vitest run test/engine/build-token-auth.smoke.test.ts` |
+| `test/engine/daemon-e2e-live.smoke.test.ts` | Opt-out: needs the `claude` binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `DAEMON_E2E_LIVE_SMOKE=0`; cap defaults to `DAEMON_E2E_LIVE_TOKEN_CAP=100000` | `npx vitest run test/engine/daemon-e2e-live.smoke.test.ts` |
 
 > **Known limitation.** Three of the five files in `test/smoke/` — `finish-record`,
 > `publish-interrupted`, and `surgical-finish-retry` — are plain `describe` blocks with no env gate at
