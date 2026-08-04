@@ -3351,7 +3351,12 @@ export async function readRemediationPlan(
     // A taskless BUILD disposition is only a usable answer to a build-stall
     // question. Every ordinary autonomous BUILD disposition must carry the
     // concrete work that makes the route dispatchable.
-    if (disposition === 'build' && tasks.length === 0 && source !== 'build_stall') {
+    if (
+      disposition === 'build' &&
+      tasks.length === 0 &&
+      source !== 'build_stall' &&
+      source !== 'build-stall'
+    ) {
       invalidTasklessBuild = true;
       continue;
     }
