@@ -127,16 +127,21 @@ immediately. A wrong guess is worse than a HALT.
 
 ### 5. Stage and Validate the Complete Replay
 
-Stage the resolution, then inspect the **complete staged diff** before
-continuing. Do not limit this review to conflict markers, conflicted hunks, or
-the files that originally conflicted:
+Stage the resolution and every intended supporting edit, then inspect the
+**complete staged diff** before continuing. Do not limit this review to
+conflict markers, conflicted hunks, or the files that originally conflicted:
 
 ```bash
-git add <resolved-files>
+git add <resolved-files> <supporting-edits>
 git diff --cached
 git diff --cached --summary
 git diff --cached --check
 ```
+
+Every intended supporting edit must be staged before the complete staged-replay
+review; do not leave a justified supporting edit unstaged. The names passed to
+`git add` are not a file allowlist or an acceptance boundary: the complete
+staged replay remains subject to the attribution review below.
 
 Review every staged change, including content, file additions or deletions,
 renames, and mode changes. Every staged change must be attributable to the
@@ -269,7 +274,7 @@ output; the runner takes the **last** JSON line.
 - [ ] Every coordinated edit outside a conflicted hunk/file explained and validated
 - [ ] Unexplained staged and cross-file changes halted rather than continued
 - [ ] No file allowlist, hunk-only restriction, whole-patch equality, or deterministic resolver used as the acceptance boundary
-- [ ] `git add` run on every resolved file before staged replay review and `git rebase --continue`
+- [ ] `git add` run on every resolved file and intended supporting edit before staged replay review and `git rebase --continue`
 - [ ] Pre-continue replay identity and validated intent retained before every continue
 - [ ] Newly created replay commit inspected after every continue before advancing
 - [ ] Each resulting replay reconciled with its validated intent before another conflict or success

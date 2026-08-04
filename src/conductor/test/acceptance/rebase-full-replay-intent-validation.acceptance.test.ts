@@ -96,6 +96,12 @@ describe('Story 1 — validate the complete replay before continuing', () => {
     expectContract(skill, /unexplained (?:cross-file|staged)\s+(?:edit|change).{0,180}(?:resolved.{0,80}false|must not continue|do not continue)|(?:resolved.{0,80}false|must not continue|do not continue).{0,180}unexplained (?:cross-file|staged)\s+(?:edit|change)/is, 'stop on an unexplained staged or cross-file change');
   });
 
+  it('stages every intended supporting edit before the complete staged-replay review', async () => {
+    const skill = await readFile(REBASE_SKILL, 'utf8');
+
+    expectContract(skill, /every intended supporting edit.{0,180}(?:must|is required to).{0,80}stage.{0,240}(?:complete staged[- ](?:diff|replay|review)|git diff --cached)/is, 'stage every intended supporting edit before the complete staged-replay review');
+  });
+
   it('validates each resulting replay commit before another conflict or successful completion', async () => {
     const skill = await readFile(REBASE_SKILL, 'utf8');
 
