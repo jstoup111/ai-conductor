@@ -30,7 +30,7 @@ import { execa } from 'execa';
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
-import type { StepName, RecoveryOption, RecoveryContext } from '../../src/types/index.js';
+import type { StepName, StepStatus, RecoveryOption, RecoveryContext } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import {
@@ -176,6 +176,169 @@ describe('engine/conductor', () => {
         expect.objectContaining({ field: 'last_step', next: step.name }),
       ],
     });
+  });
+
+  it('commits terminal completion through the injected store before reporting success', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const completed: ConductorEvent[] = [];
+    events.on('feature_complete', (event) => {
+      completed.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+      daemon: true,
+    });
+    const state: ConductState = { feature_desc: 'terminal-state-store' };
+
+    await (conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun(state, 'complete\n');
+
+    expect(state.feature_status).toBe('complete');
+    expect(stateStore.applyBatch).toHaveBeenCalledWith({
+      name: 'complete verified feature run',
+      mutations: [expect.objectContaining({
+        field: 'feature_status', expected: undefined, next: 'complete',
+      })],
+    });
+    expect(completed).toHaveLength(1);
+  });
+
+  it('does not report terminal success when the completion mutation is refused', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'conflict', message: 'completion changed elsewhere' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const completed: ConductorEvent[] = [];
+    events.on('feature_complete', (event) => {
+      completed.push(event);
+    });
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+      daemon: true,
+    });
+
+    await expect((conductor as unknown as {
+      completeRun(state: ConductState, doneMarkerBody: string): Promise<void>;
+    }).completeRun({}, 'complete\n')).rejects.toThrow('completion changed elsewhere');
+
+    expect(completed).toHaveLength(0);
+  });
+
+  it('persists only settled signal completions through the store', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+    const state: ConductState = { manual_test: 'in_progress' };
+
+    await (conductor as unknown as {
+      commitSignalCompletions(
+        state: ConductState,
+        signal: NodeJS.Signals,
+        completions: Record<string, StepStatus>,
+      ): Promise<void>;
+    }).commitSignalCompletions(state, 'SIGINT', { manual_test: 'done' });
+
+    expect(state.manual_test).toBe('done');
+    expect(stateStore.applyBatch).toHaveBeenCalledWith({
+      name: 'record SIGINT partial group completion',
+      mutations: [expect.objectContaining({
+        field: 'manual_test', expected: 'in_progress', next: 'done',
+      })],
+    });
+  });
+
+  it('logs but does not reject when signal persistence is refused', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'lease', message: 'lease held elsewhere' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const log = vi.fn();
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+      log,
+    });
+
+    await expect((conductor as unknown as {
+      persistSignalCompletionsBestEffort(
+        state: ConductState,
+        signal: NodeJS.Signals,
+        completions: Record<string, StepStatus>,
+      ): Promise<void>;
+    }).persistSignalCompletionsBestEffort(
+      { manual_test: 'in_progress' },
+      'SIGTERM',
+      { manual_test: 'done' },
+    )).resolves.toBeUndefined();
+
+    expect(log).toHaveBeenCalledWith(expect.stringContaining('SIGTERM could not persist'));
+  });
+
+  it('commits checkpoint back-navigation as one guarded state batch', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+    const state: ConductState = {
+      worktree: 'done',
+      memory: 'done',
+      explore: 'done',
+      complexity: 'done',
+      stories: 'done',
+    };
+
+    await (conductor as unknown as {
+      navigateStateBack(
+        state: ConductState,
+        target: StepName,
+        steps: typeof ALL_STEPS,
+      ): Promise<number>;
+    }).navigateStateBack(state, 'explore', ALL_STEPS);
+
+    expect(state.explore).toBe('pending');
+    expect(state.complexity).toBe('stale');
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'navigate back to explore',
+      mutations: expect.arrayContaining([
+        expect.objectContaining({ field: 'explore', expected: 'done', next: 'pending' }),
+        expect.objectContaining({ field: 'complexity', expected: 'done', next: 'stale' }),
+      ]),
+    }));
   });
 
   it('records session/run timestamps and supplied worktree metadata as one initialization batch', async () => {
@@ -8085,13 +8248,24 @@ describe('engine/conductor', () => {
     });
 
     it('stores prUrl in state when finish step returns a URL', async () => {
+      const stateStore: ConductStateStore<ConductState> = {
+        apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+        applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+        replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      };
       const runner: StepRunner = {
         run: async (step: StepName) => {
           if (step === 'finish') return { success: true, output: 'https://github.com/org/repo/pull/42' };
           return { success: true };
         },
       };
-      const conductor = new Conductor({ projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events });
+      const conductor = new Conductor({
+        projectRoot: dir,
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        stateStore,
+      });
 
       const completeEvents: Array<{ prUrl?: string }> = [];
       events.on('feature_complete', (e) => {
@@ -8100,11 +8274,12 @@ describe('engine/conductor', () => {
 
       await conductor.run();
 
-      const result = await readState(statePath);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value.pr_url).toBe('https://github.com/org/repo/pull/42');
-      }
+      expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
+        name: 'adopt finish pull request URL',
+        mutations: [expect.objectContaining({
+          field: 'pr_url', expected: undefined, next: 'https://github.com/org/repo/pull/42',
+        })],
+      }));
       // feature_complete event should include the prUrl
       expect(completeEvents[0].prUrl).toBe('https://github.com/org/repo/pull/42');
     });
