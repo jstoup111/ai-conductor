@@ -93,7 +93,7 @@ export type StateMutation<State extends object> = {
     field: Field;
     expected: State[Field];
     intent: string;
-    next: State[Field];
+    next: Exclude<State[Field], undefined>;
   };
 }[Extract<keyof State, string>];
 

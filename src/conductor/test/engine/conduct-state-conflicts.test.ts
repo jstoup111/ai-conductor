@@ -38,14 +38,14 @@ describe('evaluateConductStateMutation', () => {
       disposition: 'idempotent',
     },
     {
-      name: 'resolves a stale removal of terminal feature completion',
+      name: 'resolves a dynamically shaped stale removal of terminal feature completion',
       currentValue: 'complete',
       mutation: {
         field: 'feature_status',
         expected: undefined,
         intent: 'clear stale feature status',
         next: undefined,
-      },
+      } as unknown as StateMutation<ConductState>,
       disposition: 'resolved',
     },
     {

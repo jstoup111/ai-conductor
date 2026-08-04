@@ -14,6 +14,7 @@ import type {
 type ExampleState = {
   build_status: "pending" | "done";
   feature_status: "running" | "complete";
+  optional_marker?: string;
 };
 
 describe("ConductStateStore", () => {
@@ -91,6 +92,13 @@ describe("ConductStateStore", () => {
       intent: "record verified feature completion",
       next: "complete",
     };
+    const undefinedOptionalNext: StateMutation<ExampleState> = {
+      field: "optional_marker",
+      expected: "present",
+      intent: "clear optional marker",
+      // @ts-expect-error Ordinary mutations must not use undefined to delete an optional field.
+      next: undefined,
+    };
     // @ts-expect-error Atomic batches are named invariants, never anonymous groups.
     const unnamedBatch: NamedAtomicStateMutationBatch<ExampleState> = {
       mutations: [completeFeature],
@@ -130,6 +138,7 @@ describe("ConductStateStore", () => {
       missingIntent,
       mismatchedFieldValue,
       mismatchedFieldExpectation,
+      undefinedOptionalNext,
       unnamedBatch,
       invalidReplacement,
     ];

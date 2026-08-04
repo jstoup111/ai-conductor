@@ -122,7 +122,7 @@ describe('filesystem conduct state store', () => {
         expected: undefined,
         intent: 'clear stale feature status',
         next: undefined,
-      },
+      } as unknown as StateMutation<ConductState>,
       disposition: 'resolved',
     },
     {
