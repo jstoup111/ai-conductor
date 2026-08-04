@@ -94,6 +94,16 @@ describe('Story 1 — validate the complete replay before continuing', () => {
     expectContract(skill, /every staged change.{0,180}(?:source intent|upstream adaptation|attribut)/is, 'attribute every staged change to replay intent or an upstream adaptation');
     expectContract(skill, /unexplained (?:cross-file|staged)\s+(?:edit|change).{0,180}(?:resolved.{0,80}false|must not continue|do not continue)|(?:resolved.{0,80}false|must not continue|do not continue).{0,180}unexplained (?:cross-file|staged)\s+(?:edit|change)/is, 'stop on an unexplained staged or cross-file change');
   });
+
+  it('validates each resulting replay commit before another conflict or successful completion', async () => {
+    const skill = await readFile(REBASE_SKILL, 'utf8');
+
+    expectContract(skill, /retain.{0,180}(?:pre-continue|before continue).{0,180}(?:replay (?:commit )?(?:identity|id)|source commit)/is, 'retain the pre-continue replay identity');
+    expectContract(skill, /(?:after|post)[ -]continue.{0,180}(?:newly created|resulting) replay commit|(?:newly created|resulting) replay commit.{0,180}(?:after|post)[ -]continue/is, 'inspect the newly created replay commit after continue');
+    expectContract(skill, /(?:cannot|does not|fails to).{0,180}(?:reconcile|match|preserve).{0,180}validated intent.{0,180}(?:resolved.{0,80}false|must not report.{0,80}resolved.{0,80}true)|(?:resolved.{0,80}false|must not report.{0,80}resolved.{0,80}true).{0,180}(?:cannot|does not|fails to).{0,180}(?:reconcile|match|preserve).{0,180}validated intent/is, 'refuse resolved:true when the replay cannot reconcile with validated intent');
+    expectContract(skill, /(?:another|subsequent) conflict.{0,180}(?:return|resume|repeat).{0,180}(?:step 2|capture replay intent)|(?:return|resume|repeat).{0,180}(?:step 2|capture replay intent).{0,180}(?:another|subsequent) conflict/is, 'begin a fresh validation cycle for a subsequent conflicted commit');
+    expectContract(skill, /(?:final|completed) replay.{0,180}(?:inspect|validat).{0,180}(?:resolved.{0,80}true|report(?:ing)? success)|(?:resolved.{0,80}true|report(?:ing)? success).{0,180}(?:final|completed) replay.{0,180}(?:inspect|validat)/is, 'inspect the final replay before reporting success');
+  });
 });
 
 describe('Story 3 — preserve coordinated resolution freedom', () => {

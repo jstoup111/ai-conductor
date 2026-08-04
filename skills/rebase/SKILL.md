@@ -137,7 +137,7 @@ The complete-replay attribution judgment is the acceptance boundary:
 Those mechanical restrictions reject valid semantic adaptations; they do not
 establish whether the staged replay preserves its intent.
 
-### 6. Continue
+### 6. Continue and Validate the Resulting Replay Commit
 
 Only after the staged replay passes attribution review:
 
@@ -145,10 +145,47 @@ Only after the staged replay passes attribution review:
 git rebase --continue
 ```
 
-`git rebase --continue` may open an editor for the commit message or encounter
-another conflict hunk. If another conflict hunk appears, return to step 2 and
-resolve it (still within this single invocation). Continue until the rebase
-completes or an unsafe hunk is reached.
+Before running continue, retain the **pre-continue replay identity** and the
+validated source/upstream intent in the evidence ledger. The retained identity
+must identify the source commit being replayed, so the resulting commit can be
+reviewed as the same replay rather than treated as an unrelated new `HEAD`.
+
+After `git rebase --continue` returns, inspect the **newly created replay
+commit** before advancing to another conflict or reporting success:
+
+```bash
+git rev-parse HEAD
+git show --format=fuller --stat HEAD
+git diff --find-renames HEAD^ HEAD
+git diff --check HEAD^ HEAD
+```
+
+Compare the resulting replay commit's content, files, modes, and intent with
+the retained pre-continue replay identity and the intent validated in step 5.
+Confirm that the newly created commit preserves that validated intent, allowing
+only the already-explained upstream adaptations. Do not rely on a matching
+subject line, clean working tree, or successful `rebase --continue` as proof
+that the replay is correct.
+
+If the resulting replay commit cannot be reconciled with the validated intent,
+or its changes cannot be explained by the retained replay source plus necessary
+upstream adaptation, stop immediately. Emit `{"resolved": false, "reason":
+"..."}`; do not report `{"resolved": true}` or advance to another replay.
+
+`git rebase --continue` may open an editor for the commit message, stop at a
+subsequent conflict, or complete the rebase:
+
+- If it stops at another conflict, first finish the resulting-commit inspection
+  above, then return to step 2 to capture replay intent for that subsequent
+  conflicted commit. Do not reuse the prior commit's identity or validation
+  ledger for the new replay.
+- If it completes the rebase, inspect and validate that final replay commit
+  before reporting success. Emit `{"resolved": true}` only after every replay
+  commit, including the final replay, has reconciled with its validated intent
+  and `git status` is clean on the rebased branch.
+
+Continue this review loop until the rebase completes or an unsafe replay is
+reached, still within this single invocation.
 
 ### 7. Safety Rules (Non-Negotiable)
 
@@ -203,6 +240,12 @@ output; the runner takes the **last** JSON line.
 - [ ] Unexplained staged and cross-file changes halted rather than continued
 - [ ] No file allowlist, hunk-only restriction, whole-patch equality, or deterministic resolver used as the acceptance boundary
 - [ ] `git add` run on every resolved file before staged replay review and `git rebase --continue`
+- [ ] Pre-continue replay identity and validated intent retained before every continue
+- [ ] Newly created replay commit inspected after every continue before advancing
+- [ ] Each resulting replay reconciled with its validated intent before another conflict or success
+- [ ] A post-continue mismatch emitted `{"resolved": false}` and never `{"resolved": true}`
+- [ ] A subsequent conflict started a fresh source-intent and staged-replay validation cycle
+- [ ] Final replay commit inspected and reconciled before reporting `{"resolved": true}`
 - [ ] `git rebase --abort` and `git rebase --skip` were NOT used
 - [ ] Final line of stdout is exactly `{"resolved": true}` or `{"resolved": false, "reason": "..."}`
 - [ ] If `{"resolved": true}`: `git status` shows clean working tree on rebased branch
