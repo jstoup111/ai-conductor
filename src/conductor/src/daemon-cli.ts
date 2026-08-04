@@ -114,7 +114,11 @@ import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-ma
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
 import { getStepStatus, readState } from './engine/state.js';
 import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
-import { deriveDaemonBaseState, persistDaemonBaseState } from './engine/daemon-state.js';
+import {
+  deriveDaemonBaseState,
+  persistDaemonBaseState,
+  preseedDaemonStepStatuses,
+} from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
 import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
@@ -370,12 +374,10 @@ export const PRESEEDED_DONE: StepName[] = [
 export function preseedStepStatuses(
   tier: ComplexityTier | undefined,
 ): Record<string, StepStatus> {
-  const resolvedTier = tier ?? 'M';
-  return Object.fromEntries(
-    PRESEEDED_DONE.map((name) => [
-      name,
-      getStepDefinition(name).skippableForTiers.includes(resolvedTier) ? 'skipped' : 'done',
-    ]),
+  return preseedDaemonStepStatuses(
+    tier,
+    PRESEEDED_DONE,
+    (name, resolvedTier) => getStepDefinition(name).skippableForTiers.includes(resolvedTier),
   );
 }
 

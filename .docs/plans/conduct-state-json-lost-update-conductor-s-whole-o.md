@@ -394,7 +394,7 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/engine/filesystem-conduct-state-store.ts`
 - `src/conductor/src/engine/state.ts`
 
-**Wired-into:** `src/conductor/src/engine/filesystem-conduct-state-store.ts#createFilesystemConductStateStore` (all fixture seeding enters through the adapter; no raw writer is exported)
+**Wired-into:** `src/conductor/src/engine/filesystem-conduct-state-store.ts#createFilesystemConductStateStore`
 
 **Dependencies:** Task 17
 

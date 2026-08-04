@@ -84,6 +84,16 @@ function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string 
 }
 
 describe('conduct-state lease', () => {
+  it('creates a missing state parent before acquiring its lease', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'conduct-state-lease-parent-'));
+    temporaryDirectories.push(directory);
+    const statePath = join(directory, '.pipeline', 'conduct-state.json');
+
+    await writeState(statePath, { complexity_tier: 'M' });
+
+    await expect(readFile(statePath, 'utf8')).resolves.toContain('"complexity_tier": "M"');
+  });
+
   it('returns a typed timeout without stealing from a live owner', async () => {
     const statePath = '/worktree/live/.pipeline/conduct-state.json';
     const filesystem = sharedLeaseFilesystem();

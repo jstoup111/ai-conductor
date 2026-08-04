@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 
 const DEFAULT_WAIT_TIMEOUT_MS = 1_000;
@@ -66,7 +67,10 @@ export type ConductStateLeaseRecoveryDiagnostic =
   };
 
 const defaultFilesystem: ConductStateLeaseFilesystem = {
-  acquireDirectory: (path) => mkdir(path),
+  async acquireDirectory(path): Promise<void> {
+    await mkdir(dirname(path), { recursive: true });
+    await mkdir(path);
+  },
   writeOwner: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),
   readOwner: (path) => readFile(path, 'utf8'),
   writeRecoveryClaim: (path, contents) => writeFile(path, contents, { encoding: 'utf8', flag: 'wx' }),
