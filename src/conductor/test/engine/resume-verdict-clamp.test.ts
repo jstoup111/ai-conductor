@@ -533,4 +533,53 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(blocked).not.toContain('build_review');
     });
   });
+
+  // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
+  describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
+    async function selectTailWithBuildStatus(buildStatus: 'done' | 'failed'): Promise<number | null | 'halt'> {
+      const seed = seedDoneThrough('finish');
+      seed.build = buildStatus;
+      seed.wiring_check = 'pending';
+      await writeState(statePath, seed as ConductState);
+
+      for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
+        if (name !== 'wiring_check') {
+          await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
+        }
+      }
+
+      const { runner } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        verifyArtifacts: true,
+      });
+      return (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail(
+        ALL_STEPS.find((step) => step.name === 'finish')!,
+        seed as ConductState,
+        new Map(),
+        ALL_STEPS,
+        (name) => ALL_STEPS.findIndex((step) => step.name === name),
+      );
+    }
+
+    it('selects the failed prerequisite when the selector considers its verdict satisfied', async () => {
+      const selectedIndex = await selectTailWithBuildStatus('failed');
+
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+    });
+
+    it('selects the originally-unsatisfied gate once its prerequisite is fresh', async () => {
+      const selectedIndex = await selectTailWithBuildStatus('done');
+
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'wiring_check'));
+    });
+  });
 });

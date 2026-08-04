@@ -7382,13 +7382,26 @@ export class Conductor {
       return steps.length;
     }
 
+    // The selector's verdict-based satisfaction predicate can disagree with
+    // the state-based predicate that the selected step's entry gate uses.
+    // Apply the same backward-only, bounded reconciliation as resume entry so
+    // the tail never selects a step whose own gate immediately rejects an
+    // earlier prerequisite.
+    const selectedIndex = clampToRunnablePrerequisite(
+      steps,
+      state,
+      indexOf(decision.step),
+    );
+    const selectedStep = steps[selectedIndex];
+    if (!selectedStep) return indexOf(decision.step);
+
     // Oscillation / stuck guard: cap how many times any single gate may be
     // selected before it satisfies. Catches a gate whose verdict never improves
     // and a build↔plan kickback oscillation.
-    const sel = (stuckGate.get(decision.step) ?? 0) + 1;
-    stuckGate.set(decision.step, sel);
+    const sel = (stuckGate.get(selectedStep.name) ?? 0) + 1;
+    stuckGate.set(selectedStep.name, sel);
     if (sel > MAX_GATE_SELECTIONS) {
-      const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
+      const reason = `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`;
       await writeState(this.stateFilePath, state).catch(() => {});
       await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
@@ -7399,11 +7412,11 @@ export class Conductor {
     // The selector only returns UNSATISFIED gates; if such a gate is still
     // marked 'done' (its verdict went false via kickback/recompute), reset it to
     // 'pending' so the loop re-runs it instead of skipping it as already-resolved.
-    if (getStepStatus(state, decision.step) === 'done') {
-      (state as Record<string, unknown>)[decision.step] = 'pending';
+    if (getStepStatus(state, selectedStep.name) === 'done') {
+      (state as Record<string, unknown>)[selectedStep.name] = 'pending';
       await writeState(this.stateFilePath, state);
     }
-    return indexOf(decision.step);
+    return selectedIndex;
   }
 
   /**
