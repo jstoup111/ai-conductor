@@ -47,6 +47,13 @@ export interface RehabilitateHaltPrDeps {
   prUrl: string;
   sourceRef: string | undefined | null;
   log?: (msg: string) => void;
+  /**
+   * Leave draft status alone. The draft→ready flip is the one mechanic in this
+   * function that is genuinely finish-only — a retained SHIP draft PR must stay
+   * a draft until the ship gates have run. Every other mechanic (unlabel, body
+   * marker, Closes injection) is safe at any point in the SHIP phase.
+   */
+  preserveDraft?: boolean;
 }
 
 interface PrViewState {
@@ -105,7 +112,9 @@ export async function rehabilitateHaltPr(
   // which retries each mutation (bounded, with backoff) and re-reads to
   // confirm — the same verify-after-write guarantee ADR
   // adr-2026-07-05-halt-pr-presentation-reliability (D5) requires here.
-  const cleanupResult = await cleanupHaltPresentation(gh, cwd, prUrl, log);
+  const cleanupResult = await cleanupHaltPresentation(gh, cwd, prUrl, log, defaultSleep, {
+    preserveDraft: deps.preserveDraft === true,
+  });
   const anyFailed = cleanupResult === 'partial';
 
   // Idempotent Closes injection — injectIssueRef swallows gh failures internally
@@ -406,6 +415,161 @@ export async function postHaltHistoryComment(
 
   await comment(gh, cwd, prUrl, parts.join('\n'), log);
   return 'posted';
+}
+
+export interface MakeRetainedPrPresentableDeps {
+  gh: GhRunner;
+  cwd: string;
+  /** The retained SHIP PR adopted by `openShipDraftPr`. */
+  prUrl: string;
+  /** Intake source ref, for the idempotent `Closes` injection. */
+  sourceRef?: string | undefined | null;
+  featureDesc?: string;
+  branch?: string;
+  /** Contents of `.pipeline/halt-user-input-required`, for the halt-history comment. */
+  haltReason?: string | null;
+  /** Optional `## Test evidence` line for the body floor. */
+  testEvidenceLine?: string;
+  log?: (msg: string) => void;
+}
+
+export type RetainedPrPresentableOutcome =
+  /** No halt signal on the retained PR — zero mutations issued. */
+  | 'not-halt-pr'
+  /** Every applicable presentation repair succeeded (or was already done). */
+  | 'repaired'
+  /** Halt signal present but some mutation could not be confirmed (logged). */
+  | 'partial'
+  /** The state read failed — nothing attempted. */
+  | 'gh-unavailable';
+
+/** True when any of the three stateless halt signals is observable on the PR. */
+function hasHaltSignal(view: PrViewState): boolean {
+  return (
+    view.title.startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
+    view.labels.includes(NEEDS_REMEDIATION_LABEL) ||
+    (view.body ?? '').includes(HALT_PR_BANNER_SENTINEL)
+  );
+}
+
+/**
+ * Make the retained SHIP PR presentable for the FIRST SHIP-phase step that
+ * consumes it, whatever that step is.
+ *
+ * ## Why this exists
+ *
+ * `openShipDraftPr` adopts any OPEN PR already on the branch (`findOrCreatePr`
+ * returns it untouched). When an earlier HALT left a `needs-remediation`
+ * placeholder PR on the branch, that placeholder silently becomes the retained
+ * SHIP PR. Every presentation repair used to be bound to the `finish` step, so
+ * a SHIP-phase step scheduled BEFORE finish — any config-declared custom step,
+ * e.g. one that writes release metadata into the retained PR — was handed a
+ * remediation placeholder and could only refuse.
+ *
+ * This is the same repair set `repairFinishPr` applies, minus the one mechanic
+ * that is genuinely finish-only:
+ *
+ *   - halt-history comment (idempotent, marker-guarded) — preserved first, while
+ *     the halt signals are still observable
+ *   - `needs-remediation` label + body marker removal, **draft preserved**
+ *   - `Closes` injection — verified safe here: it needs only the intake
+ *     `sourceRef` (committed during DECIDE) plus the PR body, it is idempotent
+ *     via `bodyReferencesIssue`, and the ref is inert until merge, which a draft
+ *     PR cannot reach
+ *   - retitle floor (`needs-remediation: …` → `feat: …`)
+ *   - body floor (strip the halt banner, floor a `## Summary`)
+ *
+ * **Excluded: the draft→ready flip.** Flipping the retained PR ready here would
+ * put it up for review before the ship gates ran. `finish` still owns that
+ * (`ensureShipReady`).
+ *
+ * Idempotent by construction: every mechanic detects its own halt signal and
+ * no-ops when it is already gone, so running this at SHIP adoption AND again at
+ * finish leaves exactly one repaired PR and one halt-history comment.
+ *
+ * Never throws — this is advisory, exactly like `openShipDraftPr`.
+ */
+export async function makeRetainedPrPresentable(
+  deps: MakeRetainedPrPresentableDeps,
+): Promise<RetainedPrPresentableOutcome> {
+  const { gh, cwd, prUrl } = deps;
+  const log = deps.log ?? (() => {});
+
+  // One state read up front. The overwhelmingly common case — a PR with no halt
+  // signal — costs exactly this read and issues zero mutations, so putting the
+  // repair on the SHIP-adoption path does not tax every ordinary run.
+  let view: PrViewState;
+  try {
+    const { stdout } = await gh(['pr', 'view', prUrl, '--json', 'title,isDraft,labels,body'], {
+      cwd,
+    });
+    view = parsePrView(stdout);
+  } catch (err) {
+    log(`[halt-pr-rehab] retained-PR state read failed for ${prUrl} — skipping repair: ${err}`);
+    return 'gh-unavailable';
+  }
+  if (!hasHaltSignal(view)) return 'not-halt-pr';
+
+  // Step 0: preserve the remediation narrative as a PR COMMENT before anything
+  // rewrites the presentation. Marker-guarded, so a second call never doubles it.
+  try {
+    await postHaltHistoryComment({
+      gh,
+      cwd,
+      prUrl,
+      haltReason: deps.haltReason,
+      log,
+    });
+  } catch (err) {
+    log(`[halt-pr-rehab] retained-PR halt-history capture failed for ${prUrl}: ${err}`);
+  }
+
+  // Step 1: label + body marker + Closes, with draft status left alone.
+  let rehabOutcome: RehabilitationOutcome = 'not-halt-pr';
+  try {
+    rehabOutcome = await rehabilitateHaltPr({
+      gh,
+      cwd,
+      prUrl,
+      sourceRef: deps.sourceRef ?? undefined,
+      log,
+      preserveDraft: true,
+    });
+  } catch (err) {
+    log(`[halt-pr-rehab] retained-PR rehabilitation failed for ${prUrl}: ${err}`);
+    return 'partial';
+  }
+
+  let anyFailed = rehabOutcome === 'partial' || rehabOutcome === 'gh-unavailable';
+
+  // Step 2: retitle floor (`needs-remediation:` → `feat: …`).
+  try {
+    await retitleFloor(gh, cwd, prUrl, { featureDesc: deps.featureDesc, branch: deps.branch }, log);
+  } catch (err) {
+    log(`[halt-pr-rehab] retained-PR retitleFloor failed for ${prUrl}: ${err}`);
+    anyFailed = true;
+  }
+
+  // Step 3: body floor (strip the halt banner, floor a `## Summary`).
+  try {
+    const floored = await bodyFloor(
+      gh,
+      cwd,
+      prUrl,
+      {
+        featureDesc: deps.featureDesc,
+        sourceRef: deps.sourceRef,
+        testEvidenceLine: deps.testEvidenceLine,
+      },
+      log,
+    );
+    if (floored === 'partial') anyFailed = true;
+  } catch (err) {
+    log(`[halt-pr-rehab] retained-PR bodyFloor failed for ${prUrl}: ${err}`);
+    anyFailed = true;
+  }
+
+  return anyFailed ? 'partial' : 'repaired';
 }
 
 export type BodyFloorOutcome = 'not-halt-body' | 'floored' | 'partial';

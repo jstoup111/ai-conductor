@@ -990,6 +990,9 @@ export async function removeBodyMarker(
  * @param prUrl - URL of the PR to clean up
  * @param log - Optional logging callback
  * @param sleep - Optional sleep injection for backoff (defaults to setTimeout-based sleep)
+ * @param opts - `preserveDraft: true` suppresses the draft→ready flip (and drops
+ *   draft-ness from the verification), for callers that repair presentation while
+ *   the PR must legitimately stay a draft — see `makeRetainedPrPresentable`.
  * @returns 'confirmed' if all three markers verified removed, 'partial' otherwise
  */
 export async function cleanupHaltPresentation(
@@ -998,7 +1001,9 @@ export async function cleanupHaltPresentation(
   prUrl: string,
   log?: (msg: string) => void,
   sleep: (ms: number) => Promise<void> = defaultSleep,
+  opts: { preserveDraft?: boolean } = {},
 ): Promise<'confirmed' | 'partial'> {
+  const preserveDraft = opts.preserveDraft === true;
   try {
     // ── Step 1: read current state ────────────────────────────────────────
     const beforeCleanup = await readHaltPresentation(runGh, cwd, prUrl, log);
@@ -1037,8 +1042,12 @@ export async function cleanupHaltPresentation(
 
     // ── Step 3: convert to ready (remove draft status) ─────────────────────
     // Call setReady whenever we removed a label (which implies the PR was in halt status)
-    // or if the PR is currently in draft status
-    if (hasLabel || beforeCleanup.isDraft) {
+    // or if the PR is currently in draft status.
+    //
+    // Suppressed entirely under `preserveDraft`: a retained SHIP draft PR must
+    // stay a draft until `finish` flips it, so a mid-SHIP presentation repair
+    // must never make the PR ready-for-review ahead of the ship gates.
+    if (!preserveDraft && (hasLabel || beforeCleanup.isDraft)) {
       await setReady(runGh, cwd, prUrl, log);
     }
 
@@ -1054,7 +1063,9 @@ export async function cleanupHaltPresentation(
 
     // ── Step 6: verify all three markers are gone ────────────────────────
     const hasResidualLabel = afterCleanup.labels.includes('needs-remediation');
-    const isDraft = afterCleanup.isDraft;
+    // Under preserveDraft a still-draft PR is the intended end state, so it is
+    // never a residual marker.
+    const isDraft = preserveDraft ? false : afterCleanup.isDraft;
     const hasBodyMarker = afterCleanup.body.includes(NEEDS_REMEDIATION_BODY_MARKER);
 
     if (!hasResidualLabel && !isDraft && !hasBodyMarker) {

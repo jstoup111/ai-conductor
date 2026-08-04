@@ -103,6 +103,7 @@ import {
 import {
   ALL_STEPS,
   buildStepRegistry,
+  firstShipConsumer,
   shouldSkipForBootstrapMode,
   shouldSkipForUpstreamSkip,
   getGroupForStep,
@@ -264,6 +265,7 @@ import {
   bodyFloor,
   ensureShipReady,
   postHaltHistoryComment,
+  makeRetainedPrPresentable,
 } from './halt-pr-rehabilitation.js';
 import { computeCostRollup, toFeatureUsageTotals, type CostRollup } from './cost-rollup.js';
 import { openShipDraftPr } from './ship-draft-pr.js';
@@ -1182,6 +1184,117 @@ export class Conductor {
   private taskEvidence: TaskEvidence | null = null;
 
   /**
+   * Resolve the intake `sourceRef` (`owner/repo#N`) for this feature from its
+   * committed `.docs/intake/<plan-stem>.md` marker. Returns undefined for a
+   * hand-authored spec, an unresolvable plan, or any read failure — every
+   * consumer treats undefined as "no issue linkage" and no-ops.
+   *
+   * Shared by the finish-time repair and the SHIP-adoption presentation repair,
+   * so both derive the ref from exactly one place.
+   */
+  private async resolveIntakeSourceRef(
+    featureDesc: string | undefined,
+    planPath: string | undefined,
+  ): Promise<string | undefined> {
+    if (!featureDesc || !planPath) return undefined;
+    try {
+      const stem = planStem(planPath);
+      const intakeMarkerPath = join(this.projectRoot, `.docs/intake/${stem}.md`);
+      const intakeContent = await readFile(intakeMarkerPath, 'utf-8').catch(() => null);
+      return parseIntakeSourceRef(intakeContent);
+    } catch {
+      // Intake marker read failed — no source ref (no-op in every repair).
+      return undefined;
+    }
+  }
+
+  /**
+   * Best-effort `## Test evidence` line for a floored PR body, derived from
+   * `.pipeline/task-status.json`. Undefined on any error — the floor then omits
+   * the section entirely. Also undefined when ZERO tasks are complete: the floor
+   * must never assert completion that did not happen (three merged PRs shipped
+   * "- [x] 0/16 plan tasks completed").
+   */
+  private async resolveFloorTestEvidenceLine(): Promise<string | undefined> {
+    try {
+      const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
+      const raw = await readFile(statusPath, 'utf-8');
+      const parsed = JSON.parse(raw) as unknown;
+      const tasks = normalizeTasks(parsed);
+      if (tasks.length === 0) return undefined;
+      const completed = tasks.filter(
+        (t) => t.status === 'completed' || t.status === 'skipped',
+      ).length;
+      return completed > 0
+        ? `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Repair the retained SHIP PR's presentation at ADOPTION time, so the first
+   * SHIP-phase step that consumes it sees a real implementation PR rather than a
+   * `needs-remediation` halt placeholder.
+   *
+   * `openShipDraftPr` adopts whatever OPEN PR already exists for the branch. A
+   * feature that halted earlier has one: the reconciliation placeholder. Every
+   * presentation repair used to be bound to the `finish` step, so any SHIP step
+   * scheduled before finish — including a config-declared custom step — was
+   * handed the placeholder and could only refuse.
+   *
+   * ADVISORY, exactly like `openShipDraftPr`: never throws, one log line per
+   * outcome. Idempotent — the finish-time repair still runs and re-running the
+   * mechanics on an already-repaired PR issues no mutations.
+   */
+  private async makeRetainedShipPrPresentable(
+    prUrl: string,
+    state: ConductState,
+    consumerStep: StepName | undefined,
+  ): Promise<void> {
+    const log = this.log ?? console.warn;
+    try {
+      let planPath: string | undefined;
+      try {
+        planPath = await resolveFeaturePlanPath(this.projectRoot, state.feature_desc);
+      } catch {
+        planPath = undefined;
+      }
+      const sourceRef = await this.resolveIntakeSourceRef(state.feature_desc, planPath);
+      const haltReason = await readFile(
+        join(this.projectRoot, '.pipeline/halt-user-input-required'),
+        'utf-8',
+      ).catch(() => null);
+
+      const outcome = await makeRetainedPrPresentable({
+        gh: this.gh,
+        cwd: this.projectRoot,
+        prUrl,
+        sourceRef,
+        featureDesc: state.feature_desc,
+        branch: state.worktree_branch,
+        haltReason,
+        testEvidenceLine: await this.resolveFloorTestEvidenceLine(),
+        log,
+      });
+
+      // 'not-halt-pr' is the ordinary case and 'gh-unavailable' already logged
+      // its own line — only a repair that actually ran is worth reporting.
+      if (outcome === 'repaired' || outcome === 'partial') {
+        log(
+          `[ship-draft-pr] retained PR ${prUrl} presentation repair: ${outcome} ` +
+            `(before first SHIP consumer '${consumerStep ?? 'unknown'}')`,
+        );
+      }
+    } catch (err) {
+      log(
+        `[ship-draft-pr] retained PR presentation repair failed for ${prUrl} (advisory): ${err}`,
+      );
+    }
+  }
+
+  /**
    * The CompletionContext handed to every gate evaluation. `getHeadSha` feeds
    * the manual_test whitewash guard (#367); it resolves the worktree's real
    * HEAD and returns null (never throws) when there is no usable repo, which
@@ -1205,18 +1318,7 @@ export class Conductor {
     }
 
     // Resolve sourceRef from intake marker for repair callback
-    let sourceRef: string | undefined;
-    if (state.feature_desc && planPath) {
-      try {
-        const stem = planStem(planPath);
-        const intakeMarkerPath = join(this.projectRoot, `.docs/intake/${stem}.md`);
-        const intakeContent = await readFile(intakeMarkerPath, 'utf-8').catch(() => null);
-        sourceRef = parseIntakeSourceRef(intakeContent);
-      } catch {
-        // Intake marker read failed — sourceRef remains undefined (no-op in repair)
-        sourceRef = undefined;
-      }
-    }
+    const sourceRef = await this.resolveIntakeSourceRef(state.feature_desc, planPath);
 
     // Compose the repair callback that applies the four repairs in order
     const repairFinishPr = async (
@@ -1254,24 +1356,7 @@ export class Conductor {
       // then simply omits the "Test evidence" section. Also omitted when ZERO
       // tasks are complete: the floor must never assert completion that did
       // not happen (three merged PRs shipped "- [x] 0/16 plan tasks completed").
-      let testEvidenceLine: string | undefined;
-      try {
-        const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
-        const raw = await readFile(statusPath, 'utf-8');
-        const parsed = JSON.parse(raw) as unknown;
-        const tasks = normalizeTasks(parsed);
-        if (tasks.length > 0) {
-          const completed = tasks.filter(
-            (t) => t.status === 'completed' || t.status === 'skipped',
-          ).length;
-          testEvidenceLine =
-            completed > 0
-              ? `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`
-              : undefined;
-        }
-      } catch {
-        testEvidenceLine = undefined;
-      }
+      const testEvidenceLine = await this.resolveFloorTestEvidenceLine();
 
       // Step 1: Rehabilitate halt PR (unlabel, title fix, close injection)
       try {
@@ -3348,7 +3433,24 @@ export class Conductor {
             featureDesc: state.feature_desc,
             log: this.log ?? console.warn,
           });
-          if (draftPr.outcome === 'published') this.shipDraftPrUrl = draftPr.prUrl;
+          if (draftPr.outcome === 'published') {
+            this.shipDraftPrUrl = draftPr.prUrl;
+
+            // `findOrCreatePr` adopts any OPEN PR for the branch UNTOUCHED, so a
+            // `needs-remediation` placeholder left by an earlier HALT becomes the
+            // retained SHIP PR. Make it presentable HERE — at adoption — because
+            // the first SHIP-phase step that consumes it is whatever the RESOLVED
+            // registry puts first (built-ins plus config-declared custom steps,
+            // which inherit their `after:` target's phase), not necessarily
+            // `finish`. Binding the repair to `finish` by name is exactly the
+            // asymmetry that handed a custom pre-finish SHIP step a placeholder
+            // PR it could only refuse. The draft→ready flip stays finish-only.
+            await this.makeRetainedShipPrPresentable(
+              draftPr.prUrl,
+              state,
+              firstShipConsumer(steps)?.name,
+            );
+          }
         }
 
         // Execute parallel group (T15 — Promise.all fan-out)

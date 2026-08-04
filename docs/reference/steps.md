@@ -80,6 +80,13 @@ writes the authoritative structured metadata to the retained SHIP draft PR, and 
 completion evidence in `.pipeline/release-disposition-pass`. The later `finish` step preserves that
 metadata while supplying the reader-facing PR body.
 
+Both configured gates read the **retained SHIP PR**, which the engine adopts at SHIP-phase entry. If
+that PR is a reused `needs-remediation` halt placeholder, the engine makes it presentable at
+adoption — before the first SHIP-phase step in the resolved registry is dispatched, custom or
+built-in — so a SHIP step scheduled ahead of `finish` never reads a remediation placeholder. The
+draft→ready flip remains finish-only. See
+[running the daemon](../guides/running-the-daemon.md#a-reused-halt-pr-is-made-presentable-at-ship-entry-not-at-finish).
+
 ## Out-of-band steps
 
 These have full step definitions and are dispatchable, but hold no slot in the sequential loop.
