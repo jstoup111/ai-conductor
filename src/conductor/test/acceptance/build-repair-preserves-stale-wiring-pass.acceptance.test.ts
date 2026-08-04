@@ -23,7 +23,7 @@ import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 
-describe('BUILD repair preserves a prior wiring pass without stranding review', () => {
+describe('BUILD repair re-dispatches every verification member without stranding review', () => {
   const dirs: string[] = [];
 
   afterEach(async () => {
@@ -31,7 +31,7 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('settles a re-dispatched member from its own still-valid evidence before build_review', async () => {
+  it('re-dispatches every member after a BUILD-verification repair before build_review', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-repair-stale-wiring-'));
     dirs.push(projectRoot);
     const stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
@@ -54,10 +54,9 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
       architecture_review: 'done',
       acceptance_specs: 'done',
       build: 'done',
-      // A prior BUILD round left this member done with a satisfied gate
-      // verdict. The repaired round must still dispatch it: only its new
-      // join may declare satisfaction for the repaired tree.
-      wiring_check: 'done',
+      // Both members must be dispatchable so the first group round can kick
+      // back to BUILD, then prove the repaired round re-dispatches both.
+      wiring_check: 'pending',
       test_suite: 'pending',
       build_review: 'pending',
     };
@@ -67,7 +66,6 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
       JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
     );
     await writeVerdict(projectRoot, 'build', { satisfied: true, checkedAt: 1 });
-    await writeVerdict(projectRoot, 'wiring_check', { satisfied: true, checkedAt: 1 });
 
     let wiringRuns = 0;
     let buildRuns = 0;
@@ -152,10 +150,12 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
 
     await conductor.run();
 
+    // The initial full round runs wiring once; the repaired full round runs it
+    // once more. Normal width-one reuse has dedicated regression coverage in
+    // deterministic-build-verification-flow.acceptance.test.ts.
     expect(wiringRuns).toBe(2);
-    // The repaired round re-dispatches test_suite, but the member's own
-    // content-addressed verifier settles it as REUSED. The conductor does
-    // not derive a separate validity decision from its prior gate verdict.
+    // Repaired test_suite settles from its own content-addressed evidence;
+    // a prior gate verdict is never the authority for this REUSED outcome.
     expect(suiteOutcomes).toEqual(['INDETERMINATE', 'REUSED']);
     expect(buildRuns).toBe(1);
     expect(reviewRuns).toBe(1);
