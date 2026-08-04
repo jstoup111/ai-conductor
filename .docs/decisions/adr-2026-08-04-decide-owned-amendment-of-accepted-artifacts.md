@@ -1,4 +1,4 @@
-# ADR: Amending an accepted `.docs/` artifact is a DECIDE-time act, enforced deterministically at every skill that can direct one
+# ADR: DECIDE mutates accepted `.docs/` artifacts directly, and never emits a task that mutates one
 
 Status: APPROVED
 Date: 2026-08-04
@@ -23,42 +23,29 @@ Nothing misbehaved. Every component did exactly what it was specified to do:
   (`.docs/decisions/architecture-review-2026-08-03-build-repair-member-reuse-validity.md:91`).
 - `plan` faithfully turned that into Task 14, "Amend the two accepted assertions whose wording this
   changes", with both sealed paths on its `**Files:**` line.
-- BUILD executed Task 14 exactly as written, adding one dated additive note to each file.
+- BUILD executed Task 14 exactly as written.
 - The seal refused, correctly: `namesOwnFeature` (`protected-artifact-seal.ts:508-511`) is false for
   both stems, so `inspectSeal` fell through to the halt at `:630`.
 
-The defect is not in any component. It is in the **hand-off**: DECIDE produced a correct amendment
-*intent* and had no sanctioned way to *perform* it, so it expressed the intent as work for the one
-phase structurally forbidden to do it.
-
-Two further facts bound the solution space, and both were verified by reading the code:
-
-1. **Autonomous remediation cannot rewind to DECIDE.** `decideKickbackDisposition`
-   (`kickback-policy.ts:7-23`) halts any daemon-mode kickback whose target step has
-   `phase === 'DECIDE'`. Observed live on `changelog-unreleased-is-a-shared-write-target-conf` at
-   2026-08-03T11:48:15. Any design whose mid-BUILD answer is "rewind to DECIDE" converts a
-   self-healing build into an operator interrupt — which the intake explicitly rules out as
-   not an improvement.
-2. **The prescribed recovery does not exist.** The halt text
-   (`rebase.ts:453-463`) instructs the operator to "perform an audited reseal with the engine rotation
-   function". `rotateProtectedArtifactSeal` is exported from its module but is not re-exported from
-   `src/index.ts` and has no command in `cli.ts`. Its permission predicate
-   (`evaluateProtectedArtifactSealRotation:269-318`) additionally *refuses* feature-authored changes by
-   construction — `Feature-authored protected artifact change cannot rotate seal` at `:704-707`. A
-   design that routes amendments through a reseal is therefore blocked on #1281 and, even after it,
-   asks an operator to approve every amendment by hand.
+The defect is in the hand-off. DECIDE detected the amendment correctly and then, having no sanctioned
+way to *perform* it, emitted it as a task — handing the work to the one phase structurally forbidden
+to do it.
 
 ## Decision
 
-### 1. The amendment is performed at DECIDE, in place, before BUILD exists
+**DECIDE mutates the artifact itself. DECIDE never emits a task that mutates a DECIDE artifact.**
 
-An amendment to an accepted `.docs/` artifact is authored during the same DECIDE pass that produces
-the plan, committed on the spec branch, in the artifact itself.
+Those two sentences are the whole decision. Everything below is how each is made real.
 
-The mechanism this exploits is already in the engine and needs no new tolerance: **the seal baseline is
-taken at first BUILD entry**. An amendment that landed at DECIDE is part of that baseline. There is
-nothing for the seal to detect, nothing to rotate, and no reseal command required. This design does not
-depend on #1281.
+### 1. The mutation happens at DECIDE, in place
+
+An amendment to an accepted `.docs/` artifact is written into that artifact during the DECIDE pass
+that necessitates it, and committed on the spec branch.
+
+The mechanism this relies on is already in the engine: **the seal baseline is created at first BUILD
+entry** (`conductor.ts:4677`). A mutation performed during DECIDE is therefore *part of* that
+baseline, not a deviation from it. Nothing for the seal to detect, nothing to rotate, no reseal
+command needed — which is why this does not depend on #1281.
 
 The note form is the convention already used throughout this repository's corpus and named
 "established" inside three separate artifacts, but codified in no skill. It is now codified:
@@ -67,37 +54,34 @@ The note form is the convention already used throughout this repository's corpus
 > **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
 ```
 
-Amendments are **additive**. An accepted assertion's original text is never rewritten or deleted; the
-note sits with it. Git holds the history, and a reader of the old assertion sees the correction next
-to it rather than a silent replacement.
+Amendments are additive. The original assertion is never rewritten or deleted; the note sits with it,
+so a reader of the old text sees the correction beside it rather than a silent replacement.
 
-### 2. The rule binds every skill that can direct a mutation, not just `plan`
+### 2. The ban on tasking a mutation binds every skill, not just `plan`
 
-This is not a `/plan` bug fix. The intent originates in three different DECIDE skills and is consumed
-by two more, so the contract is stated once in `HARNESS.md` and each affected skill carries its half:
+The amendment intent originates in three different DECIDE skills, so a single-skill fix would leave
+two paths that still produce a task pointing at a sealed artifact. The contract is stated once in
+`HARNESS.md`; each affected skill carries its half:
 
 | Skill | Obligation |
 |---|---|
-| `conflict-check` | Already detects falsified assertions. Now **performs** the amendment and records it in the ledger, instead of deferring it to a later phase. |
-| `architecture-review` | A review conclusion that an accepted assertion is falsified records a ledger row; it never instructs a later phase to "amend in the same change set". |
-| `stories` | Its one vague sentence about superseding stories gains the codified note form and the ledger row. |
-| `plan` | MUST NOT emit a task whose `**Files:**` names a sealed artifact. Amendments are already performed by the time `plan` runs; there is nothing left to task. |
-| `remediate` | MUST NOT assign a disposition that routes a protected-artifact amendment to `build` or `acceptance_specs`. |
-| `tdd` / `pipeline` | BUILD-side: an accepted assertion discovered falsified mid-build takes the deferred-request route below. |
+| `conflict-check` | Already detects falsified assertions. Now **performs** the mutation instead of deferring it. |
+| `architecture-review` | A review that finds an accepted assertion falsified performs the mutation; it never instructs a later phase to "amend in the same change set". |
+| `stories` | Its one vague sentence about superseding stories gains the codified note form and performs the mutation. |
+| `plan` | MUST NOT emit a task whose `**Files:**` names a sealed artifact. By the time `plan` runs the mutation is already done; there is nothing left to task. |
+| `remediate` | MUST NOT assign a disposition routing a sealed-artifact change to `build` or `acceptance_specs`. |
 
 ### 3. Scope of the ban: sealed directories, other features' artifacts
 
-Answering the intake's open decision #3 from the code rather than by preference:
+Answered from the code rather than by preference:
 
 - **Which paths.** The four sealed directories only — `.docs/architecture`, `.docs/plans`,
   `.docs/specs`, `.docs/stories` (`protected-artifact-seal.ts:17-22`). Not all of `.docs/`. The wider
-  `classifyMutationTarget` policy (all of `.docs/`, minus a per-step allowlist) remains as the
-  runtime write-guard and is unchanged; this ban is about what a *plan may direct*, and directing an
-  edit to `.docs/coherence/` or `.docs/decisions/` is not the failure this ADR addresses.
+  `classifyMutationTarget` write-guard policy is unchanged; this ban governs what a plan may *direct*.
 - **Whose artifacts.** Another feature's. A path whose stem names the current feature is already
-  tolerated by the seal as a reported self-amendment (#1047), and `remediation-append` depends on
-  exactly that tolerance to write remediation tasks into the feature's own plan. Banning own-feature
-  paths would break shipped machinery to solve a problem it does not have.
+  tolerated by the seal as a reported self-amendment (#1047), and `remediation-append` depends on that
+  tolerance to write remediation tasks into the feature's own plan. Banning own-feature paths would
+  break shipped machinery to solve a problem it does not have.
 
 ### 4. Enforcement is deterministic and engine-side, at two checkpoints
 
@@ -105,88 +89,109 @@ Per this repository's Design Principle, the fix for a repeatedly-violated rule i
 rejects at the moment of the mistake, not stronger prompt text.
 
 - **Authoring-time**, a blocking `conduct-ts` check over the plan, invoked by `/plan` — the same shape
-  as the existing advisory `overlap-scan` and as PR #1190's `validate-wired-into`, but blocking. It
-  reuses `parsePlanTaskPaths` for the task→paths map and the seal module's own directory set and
-  own-feature predicate for the policy, so a future change to what "sealed" means propagates for free.
-- **Land-time**, in `land-spec.ts` alongside the existing coherence, DRAFT-ADR, and tier gates. This is
-  the backstop that does not depend on an agent having run the authoring check. A merged spec whose
-  plan violates the rule is refused before any daemon can build it.
+  as the existing advisory `overlap-scan`, but blocking. It reuses `parsePlanTaskPaths` for the
+  task→paths map and the seal module's own directory set and own-feature predicate for the policy, so
+  a future change to what "sealed" means propagates for free.
+- **Land-time**, in `land-spec.ts` alongside the existing gates. This is the backstop that does not
+  depend on an agent having run the authoring check. A merged spec whose plan violates the rule is
+  refused before any daemon can build it.
 
-Enforcement is **mechanical, not LLM-judged**. The question "does this path lie under a sealed
-directory and not name this feature" is a set-membership test with an authoritative answer already in
-the engine. An LLM judge would be slower, non-deterministic, and strictly worse at the one thing this
-check does.
+Enforcement is **mechanical, not LLM-judged**. "Does this path lie under a sealed directory and not
+name this feature" is set membership with an authoritative answer already in the engine.
 
-### 5. Mid-BUILD discovery routes to a deferred amendment request, and never blocks
+### 5. A mid-BUILD discovery returns to DECIDE. There is no BUILD-side route.
 
-BUILD legitimately learns things DECIDE could not predict. When a BUILD session concludes that an
-accepted assertion is now false, it writes a row to `.docs/amendments/<plan-stem>.md` — a path
-**outside** the sealed set and on the `.docs/` write allowlist — and **the build continues**. Nothing
-halts, no rewind is attempted, no operator is interrupted.
+When BUILD learns that an accepted assertion is falsified, that finding belongs to DECIDE and goes to
+DECIDE. Concretely: `remediate` may never dispose such a gap to `build` or `acceptance_specs`; it
+routes to the owning DECIDE step, which in daemon mode reaches the existing operator gate
+(`kickback-policy.ts:7-23`).
 
-The fail-closed half is at SHIP, and it fails closed on *silence*, not on the build: `finish` refuses
-to complete while an unresolved request row exists without being carried into the PR body and filed as
-a follow-up issue. The accepted corpus can therefore be temporarily out of date, but it can never be
-*silently* out of date — which is precisely the guarantee the intake asks for.
+**No new artifact, no deferred-request file, no parallel ledger, no new write-allowlist entry.**
+
+This reverses an earlier draft of this ADR, and the reasoning is the crux of the whole issue. That
+draft gave BUILD an unsealed directory to record an amendment request in, so the build could continue
+and SHIP could surface the request later. It was justified by the intake's own line that "a rule that
+converts a self-healing build into an operator interrupt is not an improvement."
+
+That justification is wrong. A mechanism whose purpose is to let BUILD record a DECIDE-owned decision
+*without going to DECIDE* is a bypass of DECIDE wearing the costume of a ledger. It re-creates the
+exact failure this issue exists to end — a DECIDE-scope mutation handled outside DECIDE — while adding
+an artifact directory, a write-guard exception, a parser, and a SHIP gate to maintain. The correct
+response to "BUILD found something DECIDE missed" is to send it to DECIDE, not to invent somewhere
+else to put it.
+
+Liveness is protected by making the path rare rather than by routing around it: `conflict-check`
+already detects falsified assertions before `plan` runs, and §1 makes it act on that detection. The
+mid-BUILD case is the residue after that detector has run, and a residue that needs a human is
+acceptable where a bypass is not.
+
+### 6. The fail-closed guarantee needs no new machinery
+
+The intake asks that the corpus never *silently* contradict shipped behavior. It already cannot. If
+DECIDE fails to amend a falsified assertion and BUILD then edits it, the seal halts loudly and names
+the path — that halt is the fail-closed backstop, and this ADR leaves it unchanged. If BUILD does not
+edit it, `build_review`'s existing Scope rubric judges DECIDE-artifact modifications against the
+approved plan (per `adr-2026-07-27-protected-artifact-seal-self-amendment-visibility`).
+
+No new SHIP gate, no new `finish` predicate. The guarantee the intake wants is the one the seal
+already provides; what was missing was a sanctioned way to satisfy it, which is §1.
 
 ## Alternatives considered and rejected
 
 **Enforcement alone (the filer's hypothesis).** Cross-check `**Files:**` against the sealed set and
 reject. Rejected as incomplete on the filer's own reasoning: applied to the observed incident it would
-have blocked the plan at authoring time with no sanctioned way to produce an amendment the change
-genuinely needed. It is half of this decision, not a decision.
+have blocked the plan with no sanctioned way to produce an amendment the change genuinely needed. It
+is half of this decision, not a decision.
 
-**Loosen the seal — tolerate any amendment the plan explicitly declares.** Cheap, keeps builds
-self-healing, and requires no skill changes. Rejected: it converts the seal from tamper detection into
-a declaration checkbox, and any BUILD session that can write a plan can write itself the permission.
-#1254's stated desired outcome is the exact opposite. It also fails the provider-neutrality test in
-the worst way — the declaration would be trusted from a session the write-guard already cannot police.
+**A BUILD-writable amendment ledger / deferred request.** Rejected — see §5. This is the bypass the
+issue is about.
 
-**Route mid-BUILD discovery through remediation to a DECIDE step.** Rejected on measured behavior:
-`decideKickbackDisposition` halts every daemon-mode DECIDE kickback. This is the operator-interrupt
-outcome the intake names as not an improvement.
+**Loosen the seal — tolerate any amendment the plan explicitly declares.** Rejected: it converts the
+seal from tamper detection into a declaration checkbox, and any BUILD session that can write a plan
+can write itself the permission. #1254's stated desired outcome is the exact opposite.
 
 **Amend via an operator-approved reseal.** Rejected: it depends on #1281 shipping a command that does
-not exist, the rotation predicate refuses feature-authored changes by construction, and it puts a human
-in the loop for every amendment — the halt/rekick checkpoint that
-`adr-2026-07-27-protected-artifact-seal-self-amendment-visibility` already removed once.
+not exist, the rotation predicate refuses feature-authored changes by construction
+(`protected-artifact-seal.ts:704-707`), and it puts a human in the loop for *every* amendment — the
+checkpoint `adr-2026-07-27-protected-artifact-seal-self-amendment-visibility` already removed once.
 
 **A superseding-artifact convention instead of in-place notes.** Mirrors the ADR supersession rule in
 `conflict-check`. Rejected for stories: a superseding story file fragments one assertion across two
-documents, and the corpus already uses in-place dated notes in over a dozen places. Codifying the
-convention in use beats importing a different one.
+documents, and the corpus already uses in-place dated notes in over a dozen places.
 
 ## Consequences
 
-- The observed incident becomes impossible in two independent ways: the amendment is performed before
-  BUILD exists, and a plan that tries to task it is rejected at authoring and again at land.
-- `.docs/amendments/` is a new artifact directory. It is deliberately unsealed; a future change that
-  seals it would re-create this bug for the mid-BUILD route.
-- The rule narrows what a plan may contain. Existing merged plans are unaffected — enforcement is at
-  authoring and land, not retroactive over the corpus.
-- #1281 remains worth shipping as an operator escape hatch for the case where the rule is right and
-  reality disagrees, but no longer blocks amendment work.
+- The observed incident becomes impossible in two independent ways: the mutation happens before BUILD
+  exists, and a plan that tries to task it is rejected at authoring and again at land.
+- A mid-BUILD discovery in daemon mode reaches the operator gate. This is accepted, not worked around.
+  Its frequency is bounded by `conflict-check` acting at DECIDE time.
+- No new artifact directory, no new write-guard exception, no new SHIP gate. The net machinery added
+  is one scan, one land-gate call, and skill text.
+- The rule narrows what a plan may contain. Enforcement is at authoring and land, not retroactive over
+  merged plans.
+- #1281 remains worth shipping as an operator escape hatch, but no longer blocks amendment work.
 
 ## Verify-Claims Verdict
 
 Load-bearing claims and their basis:
 
-- Sealed directory set is a hardcoded four-entry list, not config — **verified**, read at
+- Sealed directory set is a hardcoded four-entry list, not config — **verified**,
   `protected-artifact-seal.ts:17-22`.
-- Own-feature amendments are tolerated and reported rather than halting — **verified**, read at
-  `:624-626` and `:508-511`.
+- Own-feature amendments are tolerated and reported rather than halting — **verified**, `:624-626`
+  and `:508-511`.
 - The seal baseline is written at first BUILD entry — **verified**, `createProtectedArtifactSeal`
   called from `conductor.ts:4677`.
-- Daemon-mode DECIDE kickbacks always halt — **verified**, `kickback-policy.ts:7-23`.
+- Daemon-mode DECIDE kickbacks reach an operator gate — **verified**, `kickback-policy.ts:7-23`.
 - No reseal command is reachable from the CLI — **verified**, no match for reseal/rotate across
   `bin/`, `cli.ts`, `cli-builtins.ts`; `index.ts` re-exports nothing from the seal module.
-- `conflict-check` already emits `Required Amendments` — **verified**, read at
-  `.docs/conflicts/build-repair-preserves-stale-wiring-pass-and-halts.md:60-64`.
+- `conflict-check` already emits `Required Amendments` before `plan` runs — **verified**, read at
+  `.docs/conflicts/build-repair-preserves-stale-wiring-pass-and-halts.md:60-64`, with step ordering
+  confirmed in `steps.ts` (`conflict_check` at 99, `plan` at 109).
 - The dated-note convention is in use but codified nowhere — **verified**, present in a dozen
   `.docs/stories/` files and named "established" in three artifacts; absent from all of `skills/`
   and `docs/`.
 - Codex bypasses the Claude-only docs write-guard — **inferred, 95%**, from #1254's recorded
-  observation rather than a reproduction run here. Impact if wrong: none to this design, which
-  places every check engine-side regardless.
+  observation rather than a reproduction here. Impact if wrong: none to this design, which places
+  every check engine-side regardless.
 
 No unconfirmed load-bearing assumption remains.

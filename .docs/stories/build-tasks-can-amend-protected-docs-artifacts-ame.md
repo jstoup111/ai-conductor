@@ -1,32 +1,32 @@
 **Status:** Accepted
 
-# Technical Stories: Amendment of accepted `.docs/` artifacts belongs to DECIDE
+# Technical Stories: DECIDE mutates accepted `.docs/` artifacts; no task may
 
 Track: technical (no PRD — acceptance criteria live here)
 Tier: M
 Design: `.docs/decisions/adr-2026-08-04-decide-owned-amendment-of-accepted-artifacts.md`
 Refs: jstoup111/ai-conductor#1293
 
-## Story TS-1: DECIDE performs the amendment instead of deferring it
+## Story TS-1: DECIDE performs the mutation instead of deferring it
 
 **Requirement:** Technical intent — authoring a change that will invalidate an existing accepted
 assertion produces the amendment in the same DECIDE pass that produces the plan.
 
-As a DECIDE skill that has just concluded an accepted assertion is falsified, I want a defined act
-that writes the amendment into the artifact now, so that the correction lands on the spec branch
-before BUILD exists and no later phase is asked to make it.
+As a DECIDE skill that has just concluded an accepted assertion is falsified, I want to write the
+amendment into that artifact now, so that the correction lands on the spec branch before BUILD exists
+and no later phase is asked to make it.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
 - Given a DECIDE pass whose change falsifies an assertion in another feature's accepted story, when
-  `conflict-check` detects it, then it writes the dated amendment note into that story in place and
-  records a row naming the amended path in the feature's amendment ledger.
+  `conflict-check` detects it, then it writes the dated amendment note into that story in place during
+  the same pass.
 - Given an `architecture-review` that concludes an accepted assertion is falsified, when the review
-  report is written, then it records a ledger row rather than instructing a later phase to amend.
+  completes, then the amendment has been performed rather than described as work for a later phase.
 - Given a `stories` pass that supersedes or modifies an existing accepted story, when the new story is
-  written, then the superseded assertion carries the same dated note form and a ledger row.
+  written, then the superseded assertion carries the same codified dated-note form.
 - Given a feature whose DECIDE pass amended another feature's accepted story, when BUILD entry creates
   the protected-artifact seal, then the amended content is the sealed baseline and BUILD runs to
   completion with no protected-artifact halt.
@@ -35,17 +35,17 @@ before BUILD exists and no later phase is asked to make it.
 
 - Given an amendment note, when it is written, then the original assertion text is still present —
   the note is additive and never rewrites or deletes the text it corrects.
-- Given a DECIDE pass that falsifies no accepted assertion, when it completes, then it records an
-  empty ledger and writes no amendment note; the convention adds no ceremony to the common case.
-- Given a ledger row naming a path that does not exist or lies outside the sealed directories, when
-  the ledger is validated, then it is rejected naming the row and the path rather than silently
-  accepted.
+- Given a DECIDE pass that falsifies no accepted assertion, when it completes, then it writes no
+  amendment note and creates no artifact; the convention adds no ceremony to the common case.
+- Given a DECIDE pass that performs an amendment, when it completes, then it produces no separate
+  record file — the mutated artifact and its git history are the only record.
 
 ### Done When
 
 - [ ] The dated amendment-note form is codified in the skills that may produce one, not left as
       repository folklore.
-- [ ] `conflict-check`, `architecture-review`, and `stories` each perform-and-record rather than defer.
+- [ ] `conflict-check`, `architecture-review`, and `stories` each perform the mutation rather than
+      defer it.
 - [ ] An end-to-end proof shows a DECIDE-authored amendment landing in the seal baseline and BUILD
       completing without a halt.
 - [ ] A no-amendment DECIDE pass is proven to add no artifact churn.
@@ -124,92 +124,24 @@ and a seal halt.
 - [ ] A violating spec is proven refused and a clean one proven to land.
 - [ ] Tier independence is proven.
 
-## Story TS-4: A mid-BUILD discovery is recorded and the build keeps going
-
-**Requirement:** Technical intent — a mid-BUILD discovery that an accepted assertion is about to be
-falsified has a defined, non-manual route that does not convert a self-healing build into an operator
-interrupt.
-
-As a BUILD session that has just learned an accepted assertion is now false, I want to record that
-fact somewhere I am permitted to write, so that the knowledge survives without halting the build or
-requiring a rewind the daemon cannot perform.
-
-### Acceptance Criteria
-
-#### Happy Path
-
-- Given a BUILD session that concludes an accepted assertion is falsified, when it records an
-  amendment request, then the request is written under the unsealed amendment directory and the build
-  continues to its next step.
-- Given that request, when the protected-artifact seal is next verified, then it does not fire — the
-  request path lies outside the sealed directories.
-- Given that request, when the `.docs` write-guard evaluates the write, then it is allowed for every
-  supported provider, not only the one whose host hooks are wired.
-
-#### Negative Paths
-
-- Given a mid-BUILD amendment request, when it is written, then no halt marker is created, no
-  kickback is queued, and no rewind to a DECIDE step is attempted.
-- Given a BUILD session, when it attempts to write the amendment into the accepted artifact itself
-  rather than into a request, then the existing seal refusal is unchanged — this story adds a
-  sanctioned route, it does not weaken the ban.
-- Given a build with no mid-BUILD discovery, when it completes, then no request artifact is created.
-
-### Done When
-
-- [ ] The amendment directory is on the `.docs` write allowlist and outside the sealed set, with both
-      properties proven.
-- [ ] A recorded request is proven not to halt, kick back, or rewind.
-- [ ] A direct write to a sealed artifact from BUILD is proven to still refuse.
-
-## Story TS-5: An unresolved amendment request fails closed at SHIP
-
-**Requirement:** Technical intent — the accepted story corpus never silently contradicts shipped
-behavior; if an assertion is falsified and not amended, something fails closed and says so.
-
-As the operator, I want a shipped feature that falsified an accepted assertion to say so in its pull
-request and leave a tracked follow-up, so that the corpus can be temporarily stale but never
-silently wrong.
-
-### Acceptance Criteria
-
-#### Happy Path
-
-- Given a feature carrying an unresolved amendment request, when `finish` runs, then the request's
-  content is carried into the pull-request body and a follow-up issue is filed for the amendment.
-- Given a feature carrying no unresolved request, when `finish` runs, then its behavior is unchanged.
-
-#### Negative Paths
-
-- Given an unresolved request that could not be carried into the pull-request body or filed, when
-  `finish` runs, then it refuses to report completion and names the request it could not surface —
-  the failure is on the silence, never on the build.
-- Given a request whose amendment was already performed during the same feature's DECIDE pass, when
-  `finish` runs, then it is treated as resolved and raises nothing.
-- Given the SHIP fail-closed condition, when it triggers, then the build's own verification verdicts
-  are untouched — it reports an unsurfaced amendment, not a build failure.
-
-### Done When
-
-- [ ] An unresolved request is proven to reach both the pull-request body and a filed follow-up.
-- [ ] Failure to surface is proven to fail closed with the request named.
-- [ ] A resolved request and a feature with no requests are both proven to change nothing.
-
-## Story TS-6: Remediation never routes a sealed-artifact amendment back to BUILD
+## Story TS-4: A BUILD-discovered falsification returns to DECIDE, never to BUILD
 
 **Requirement:** Technical intent — a remediation finding that requires changing a protected DECIDE
-artifact is never routed to the phase whose seal rejects it.
+artifact returns to its owning DECIDE phase; it is never routed back to BUILD.
 
-As the remediation planner, I want a gap that requires amending another feature's sealed artifact to
-take the recorded-request route, so that it cannot be dispatched into a phase guaranteed to halt on it.
+As the remediation planner, I want a gap that requires amending another feature's sealed artifact
+routed to the phase that owns the mutation, so that it can never be dispatched into a phase guaranteed
+to halt on it and so that no parallel record is invented to avoid the trip.
 
 ### Acceptance Criteria
 
 #### Happy Path
 
 - Given a remediation gap whose fix requires amending another feature's sealed artifact, when
-  dispositions are assigned, then it is recorded as an amendment request rather than given a `build`
-  or `acceptance_specs` disposition.
+  dispositions are assigned, then it is routed to its owning DECIDE step and never given a `build` or
+  `acceptance_specs` disposition.
+- Given that routing in daemon mode, when the loop evaluates it, then it reaches the existing
+  operator gate rather than any new gate introduced by this change.
 - Given a remediation gap requiring a change to the feature's **own** plan, when dispositions are
   assigned, then the existing plan-append behavior is unchanged.
 
@@ -217,11 +149,17 @@ take the recorded-request route, so that it cannot be dispatched into a phase gu
 
 - Given a remediation gap of any other category, when dispositions are assigned, then the existing
   routing table is unchanged — this story narrows one case, it does not restructure remediation.
-- Given a remediation gap routed to an amendment request, when the loop continues, then no DECIDE
-  rewind is attempted and the existing operator-only DECIDE gate is never reached on its account.
+- Given a BUILD session that discovers a falsified accepted assertion, when it proceeds, then it
+  writes no request artifact, no ledger, and no record outside the sealed artifact — the finding
+  travels through remediation only.
+- Given a BUILD task that edits a sealed artifact despite the rule, when the seal is verified, then
+  the existing halt fires unchanged and names the path; this story adds no tolerance and removes no
+  backstop.
 
 ### Done When
 
-- [ ] A sealed-artifact remediation gap is proven to take the request route.
-- [ ] Own-plan append is proven unchanged.
-- [ ] Every other disposition is proven unchanged.
+- [ ] A sealed-artifact remediation gap is proven to route to DECIDE and never to `build` or
+      `acceptance_specs`.
+- [ ] The existing operator gate is proven to be the one reached, with no new gate added.
+- [ ] Own-plan append and every other disposition are proven unchanged.
+- [ ] The seal's existing halt is proven unchanged as the fail-closed backstop.
