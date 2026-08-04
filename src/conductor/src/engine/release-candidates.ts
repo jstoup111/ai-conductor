@@ -10,6 +10,11 @@ export interface ReleaseCandidatePullRequest {
 
 export interface ReleaseCandidateGit {
   latestTag(): Promise<string>;
+  /**
+   * Every commit that landed on the base branch after `tag`. Repositories that
+   * disable merge commits land each PR as a single-parent squash or rebase
+   * commit, so this range is not restricted to merge commits.
+   */
   mergeRange(tag: string): Promise<string[]>;
 }
 
@@ -19,6 +24,14 @@ export interface ReleaseCandidateGithub {
     hasNextPage: boolean;
     totalCount: number;
   }>;
+  /**
+   * Merged pull requests GitHub associates with a commit that is not itself any
+   * pull request's merge sha. A rebase merge replays every branch commit onto
+   * the base branch and reports only the last one as `merge_commit_sha`; the
+   * earlier ones are explained by the same pull request. Omitting this reader,
+   * or failing the lookup, leaves such a commit unexplained (fail-closed).
+   */
+  pullRequestNumbersForCommit?(commitSha: string): Promise<number[]>;
 }
 
 export interface ReleaseCandidate {
@@ -106,9 +119,19 @@ export async function collectReleaseCandidates(input: {
 
   const candidates: ReleaseCandidate[] = [];
   const audit: ReleaseCandidateAudit[] = [];
+  const candidateNumbers = new Set(
+    [...uniqueMergeCommits].flatMap((mergeSha) =>
+      (pullRequestsByMerge.get(mergeSha) ?? []).map((pullRequest) => pullRequest.number)),
+  );
   for (const mergeSha of uniqueMergeCommits) {
     const matchingPullRequests = pullRequestsByMerge.get(mergeSha) ?? [];
     if (matchingPullRequests.length === 0) {
+      // A rebase-merged pull request contributes its non-head commits to this
+      // range too. Those are already represented by the pull request's own
+      // merge sha, so attributing them keeps the range complete without
+      // duplicating a candidate. Anything else — a direct push, or a commit
+      // whose pull request is outside this range — stays unexplained.
+      if (await isExplainedByRangePullRequest(input.github, mergeSha, candidateNumbers)) continue;
       reasons.push({ kind: 'unexplained-merge', mergeSha });
       continue;
     }
@@ -137,6 +160,20 @@ export async function collectReleaseCandidates(input: {
   }
 
   return { latestTag, mergeCommits, candidates, audit, completeness: { status: 'complete' } };
+}
+
+async function isExplainedByRangePullRequest(
+  github: ReleaseCandidateGithub,
+  commitSha: string,
+  candidateNumbers: ReadonlySet<number>,
+): Promise<boolean> {
+  if (github.pullRequestNumbersForCommit === undefined) return false;
+  try {
+    const numbers = await github.pullRequestNumbersForCommit(commitSha);
+    return numbers.some((number) => candidateNumbers.has(number));
+  } catch {
+    return false;
+  }
 }
 
 function incompleteCollection(
