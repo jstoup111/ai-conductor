@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
 import { parsePlanTaskPaths } from '../../src/engine/plan-task-parse.js';
@@ -32,7 +32,7 @@ const fixtureTouchedPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/touched.txt', import.meta.url),
 );
 
-async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
+export async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
   const logPath = join(worktreeDir, '.daemon/daemon.log');
   const daemonLog = await readFile(logPath, 'utf-8').catch(() => null);
 
@@ -52,6 +52,19 @@ async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
     console.error(haltReason);
   }
 
+  for (const [label, path] of [
+    ['task status', join(worktreeDir, '.pipeline/task-status.json')],
+    ['task evidence', join(worktreeDir, '.pipeline/task-evidence.json')],
+  ]) {
+    const contents = await readFile(path, 'utf-8').catch(() => null);
+    if (contents === null) {
+      console.error(`${label} not found at ${path}`);
+    } else {
+      console.error(`${label} at ${path}`);
+      console.error(contents);
+    }
+  }
+
   const parkedDir = join(worktreeDir, '.daemon/parked');
   const parkedEntries = await readdir(parkedDir).catch(() => []);
   if (parkedEntries.length === 0) {
@@ -66,6 +79,43 @@ async function dumpPipelineDiagnostics(worktreeDir: string): Promise<void> {
     }
   }
 }
+
+describe('daemon E2E diagnostics', () => {
+  it('dumps daemon, halt, task status, and task evidence artifacts', async () => {
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-diagnostics-'));
+    const stderr: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      stderr.push(args.map(String).join(' '));
+    });
+
+    try {
+      await mkdir(join(worktreeDir, '.daemon'), { recursive: true });
+      await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreeDir, '.daemon/daemon.log'), 'daemon diagnostic\n');
+      await writeFile(join(worktreeDir, '.pipeline/HALT'), 'halt diagnostic\n');
+      await writeFile(join(worktreeDir, '.pipeline/task-status.json'), '{"tasks":[]}\n');
+      await writeFile(join(worktreeDir, '.pipeline/task-evidence.json'), '{"evidence":[]}\n');
+
+      await dumpPipelineDiagnostics(worktreeDir);
+
+      const output = stderr.join('\n');
+      expect({
+        daemon: output.includes('daemon diagnostic'),
+        halt: output.includes('halt diagnostic'),
+        taskEvidence: output.includes('"evidence":[]'),
+        taskStatus: output.includes('"tasks":[]'),
+      }).toEqual({
+        daemon: true,
+        halt: true,
+        taskEvidence: true,
+        taskStatus: true,
+      });
+    } finally {
+      errorSpy.mockRestore();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  });
+});
 
 function createDaemonLogSink(worktreeDir: string): (message: string) => void {
   const daemonDir = join(worktreeDir, '.daemon');
