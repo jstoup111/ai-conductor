@@ -54,7 +54,10 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
       architecture_review: 'done',
       acceptance_specs: 'done',
       build: 'done',
-      wiring_check: 'pending',
+      // A prior BUILD round left this member done with a satisfied gate
+      // verdict. The repaired round must still dispatch it: only its new
+      // join may declare satisfaction for the repaired tree.
+      wiring_check: 'done',
       test_suite: 'pending',
       build_review: 'pending',
     };
@@ -64,6 +67,7 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
       JSON.stringify({ tasks: [{ id: 't1', status: 'completed' }] }),
     );
     await writeVerdict(projectRoot, 'build', { satisfied: true, checkedAt: 1 });
+    await writeVerdict(projectRoot, 'wiring_check', { satisfied: true, checkedAt: 1 });
 
     let wiringRuns = 0;
     let buildRuns = 0;

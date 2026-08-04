@@ -2741,6 +2741,11 @@ export class Conductor {
     // partial join on a HALT/failed round" invariant), since those paths
     // run only after this is cleared and never consult it themselves.
     let inFlightGroupCompletions: Record<string, StepStatus> | undefined;
+    // A deterministic BUILD-verification failure routed this invocation back
+    // through build. Its next verification round must establish every
+    // non-skipped member afresh; old member state/gate verdicts cannot stand
+    // in for that round's join.
+    let buildRepairVerificationPending = false;
     let signalExitRequested = false;
 
     // Save state on SIGINT/SIGTERM/SIGHUP before exit
@@ -3325,12 +3330,21 @@ export class Conductor {
           // dispatches — real fan-out of the still-dispatchable members lands
           // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
+          const reverifyDoneBuildMembers =
+            builtinGroup.name === BUILD_VERIFICATION_GROUP.name &&
+            (
+              buildRepairVerificationPending ||
+              (await Promise.all(
+                builtinGroup.members.map((member) => readVerdict(this.projectRoot, member)),
+              )).some((verdict) => verdict?.satisfied === true)
+            );
           const membership = resolveGroupMembership(
             builtinGroup,
             state,
             groupTrack,
             this.modelPolicyForStep(step.name),
             this.config,
+            reverifyDoneBuildMembers,
           );
           // Engagement is keyed to the first member that still needs work,
           // rather than blindly to members[0]. A nominal entry that was
@@ -3724,6 +3738,7 @@ export class Conductor {
                 }
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
+                buildRepairVerificationPending = true;
                 if (hasNoVerdict) {
                   for (const member of membership.dispatchable) {
                     (state as Record<string, unknown>)[member.name] = 'stale';
@@ -7945,6 +7960,7 @@ export function resolveGroupMembership(
   track: Track,
   modelPolicy: ProviderModelPolicy,
   config?: HarnessConfig,
+  reverifyDoneMembers = false,
 ): { members: GroupMember[]; dispatchable: GroupMember[]; allSkipped: boolean } {
   const tier = state.complexity_tier ?? 'L';
   const members: GroupMember[] = group.members.map((name) => {
@@ -7966,10 +7982,13 @@ export function resolveGroupMembership(
     // Task 27: resume-awareness — a member already marked 'done' in state
     // (e.g. persisted mid-group, when a SIGINT landed after this member
     // settled but before its siblings/the join did) is already satisfied.
-    // It gets a VerdictOutcome (not skipped — it genuinely ran and passed,
-    // unlike a skip cascade) and is excluded from `dispatchable` below so a
-    // resumed run never re-dispatches work already done.
-    const alreadyDone = !skip && getStepStatus(state, name) === 'done';
+    // A BUILD repair invalidates the prior verification round. Its next
+    // group join is the only satisfaction authority, so every non-skipped
+    // member must dispatch rather than reuse a prior state/verdict.
+    const alreadyDone =
+      !skip &&
+      !reverifyDoneMembers &&
+      getStepStatus(state, name) === 'done';
     return {
       name,
       skill: stepDef.skillName ?? '',
