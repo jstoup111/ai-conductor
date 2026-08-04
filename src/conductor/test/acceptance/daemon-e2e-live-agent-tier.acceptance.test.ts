@@ -125,6 +125,13 @@ describe('live-agent daemon E2E tier (#1124)', () => {
       CLAUDE_CODE_OAUTH_TOKEN: '',
       DAEMON_E2E_LIVE_SMOKE: '0',
       TMPDIR: childTmpdir,
+      // Pin the child's reporter output to plain text. Under CI the parent's
+      // environment turns colour ON, and a coloured summary interleaves ANSI
+      // escapes between "Test Files" and "1 passed" — which the assertion below
+      // cannot match. Locally (no CI, not a TTY) colour is off, so the
+      // assertion passed on a developer machine and failed only in CI.
+      NO_COLOR: '1',
+      FORCE_COLOR: '0',
     };
     delete childEnv.AI_CONDUCTOR_TEST_TMP_ROOT;
 

@@ -646,3 +646,23 @@ export function validateFromStep(from: string | undefined, config: HarnessConfig
   if (validStepNames.includes(from as StepName)) return null;
   return `Invalid --from step "${from}".\nValid steps: ${validStepNames.join(', ')}`;
 }
+
+/**
+ * The first SHIP-phase step in a RESOLVED step registry — i.e. the first step
+ * that can consume the retained SHIP PR.
+ *
+ * Derived from the registry, never from a step NAME. Pass the same resolved
+ * list the conductor loop walks (`buildStepRegistry(config)`, the resolution
+ * {@link validateFromStep} uses), so config-declared custom SHIP steps count
+ * exactly like built-ins: a custom step inherits its `after:` target's phase, so
+ * one inserted anywhere in the SHIP tail can legitimately be the first consumer.
+ *
+ * The engine opens/adopts the retained PR at SHIP-phase entry, so every repair
+ * the consumers depend on must have happened by then — this is what "the first
+ * SHIP consumer" means, and why no consumer may be identified by name.
+ *
+ * Returns undefined for a registry with no SHIP-phase step.
+ */
+export function firstShipConsumer(steps: StepDefinition[]): StepDefinition | undefined {
+  return steps.find((s) => s.phase === 'SHIP');
+}

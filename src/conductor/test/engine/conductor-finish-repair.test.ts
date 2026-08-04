@@ -31,6 +31,8 @@ import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner, StepRunResult } from '../../src/engine/conductor.js';
 import type { ConductState } from '../../src/types/index.js';
 import type { GhRunner } from '../../src/engine/pr-labels.js';
+import { HALT_PR_BANNER_LINES, NEEDS_REMEDIATION_BODY_MARKER } from '../../src/engine/pr-labels.js';
+import { HALT_HISTORY_COMMENT_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { checkStepCompletion } from '../../src/engine/artifacts.js';
 
@@ -483,6 +485,91 @@ describe('conductor/finish-repair', () => {
     await ctx.repairFinishPr(prUrl);
 
     expect(body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${snapshot}`);
+  });
+
+  it('preserves the metadata snapshot/restore when a halt PR was already repaired at SHIP adoption', async () => {
+    // Full sequence with the new SHIP-adoption repair in front of it:
+    //   adoption repair (halt placeholder → presentable, still draft)
+    //   → release-disposition writes metadata → pre-finish snapshot
+    //   → finish repair rewrites the body → metadata restored, PR ready.
+    const prUrl = 'https://github.com/example/repo/pull/1';
+    const metadata = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: patch',
+      'Release-Note: Preserve release metadata after finish.',
+    ].join('\n');
+    const pr = {
+      title: 'needs-remediation: feat/test-feature — manual remediation required',
+      body: [NEEDS_REMEDIATION_BODY_MARKER, '', ...HALT_PR_BANNER_LINES].join('\n'),
+      isDraft: true,
+      labels: ['needs-remediation'] as string[],
+      comments: [] as string[],
+    };
+    const gh: GhRunner = async (args: string[]) => {
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          stdout: JSON.stringify({
+            title: pr.title,
+            isDraft: pr.isDraft,
+            labels: pr.labels.map((name) => ({ name })),
+            body: pr.body,
+            comments: pr.comments.map((body) => ({ body })),
+          }),
+        };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit') {
+        const t = args.indexOf('--title');
+        if (t >= 0) pr.title = args[t + 1]!;
+        const b = args.indexOf('--body');
+        if (b >= 0) pr.body = args[b + 1]!;
+      }
+      if (args[0] === 'pr' && args[1] === 'ready') pr.isDraft = args.includes('--undo');
+      if (args[0] === 'pr' && args[1] === 'comment') {
+        pr.comments.push(args[args.indexOf('--body') + 1] ?? '');
+      }
+      if (args[0] === 'api' && args[args.indexOf('--method') + 1] === 'DELETE') {
+        const name = decodeURIComponent(String(args[3] ?? '').split('/labels/')[1] ?? '');
+        pr.labels = pr.labels.filter((l) => l !== name);
+      }
+      return { stdout: '{}' };
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: makeSuccessfulRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      selfHost: true,
+      config: { steps: { 'release-disposition': { skill: '.agents/skills/release-disposition/SKILL.md' } } },
+      gh,
+    });
+    const state = {
+      feature_desc: 'test feature',
+      worktree_branch: 'feat/test-feature',
+    } satisfies ConductState;
+
+    // 1. SHIP adoption: the placeholder becomes presentable, and stays a draft.
+    await (conductor as any).makeRetainedShipPrPresentable(prUrl, state, 'release-disposition');
+    expect(pr.title).not.toContain('needs-remediation:');
+    expect(pr.labels).not.toContain('needs-remediation');
+    expect(pr.isDraft).toBe(true);
+
+    // 2. release-disposition writes its metadata into the retained draft body.
+    pr.body = `${pr.body}\n\n${metadata}`;
+    (conductor as any).shipDraftPrUrl = prUrl;
+    await (conductor as any).snapshotFinishReleaseMetadata();
+
+    // 3. finish authors reader content over the body, then repairs.
+    pr.body = '## What Changed\n\nFinish-authored reader content.';
+    const ctx = await (conductor as any).completionCtx(state);
+    await ctx.repairFinishPr(prUrl);
+
+    expect(pr.body).toBe(`## What Changed\n\nFinish-authored reader content.\n\n${metadata}`);
+    // Only finish flips the retained PR ready-for-review.
+    expect(pr.isDraft).toBe(false);
+    // The halt narrative was captured exactly once, at adoption.
+    expect(pr.comments.filter((c) => c.includes(HALT_HISTORY_COMMENT_MARKER))).toHaveLength(1);
   });
 
   it('does not read or mutate metadata outside the self-host release-disposition flow', async () => {

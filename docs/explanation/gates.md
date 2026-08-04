@@ -94,7 +94,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `architecture_review_as_built` | an unrecognized verdict passing by default — only an explicit approval verdict satisfies it |
 | `retro` | a retro from a different feature or a prior session counting for this one |
 | `finish` | a finish that never happened — a fresh finish choice is required, and the `pr` choice additionally requires a recorded PR URL |
-| `finish` (presentation) | a PR shipping with halt boilerplate or an engine-generated placeholder body — the PR's presentation is read *before* any deterministic repair, and a reused halt PR is kicked back once so `/pr` authors a real templated body. The kickback is bounded to one attempt per `pr_url` (recorded in `.pipeline/pr-body-regen-attempt.json`); on the next pass the engine's floor runs as a last resort so the feature still converges |
+| `finish` (presentation) | a PR shipping with halt boilerplate or an engine-generated placeholder body — the PR's presentation is read *before* any deterministic repair, and a reused halt PR is kicked back once so `/pr` authors a real templated body. The kickback is bounded to one attempt per `pr_url` (recorded in `.pipeline/pr-body-regen-attempt.json`); on the next pass the engine's floor runs as a last resort so the feature still converges. A reused halt PR's *presentation* is repaired earlier still — at SHIP-phase adoption, so SHIP steps that run before `finish` do not read a `needs-remediation` placeholder; the draft→ready flip stays finish-only |
 
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 

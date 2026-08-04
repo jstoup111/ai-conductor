@@ -674,6 +674,34 @@ it by hand. The check is fail-closed in both directions: it reads the committed 
 torn-down worktree cannot hide the record), and it refuses to guess a slug for any branch the daemon
 did not cut, so a hand-authored PR is never touched.
 
+### A reused halt PR is made presentable at SHIP entry, not at finish
+
+The conductor opens the implementation PR as a draft at SHIP-phase entry, and that publisher adopts
+whatever OPEN PR already exists for the branch rather than opening a second one. A feature that
+halted earlier already has one: the `needs-remediation` placeholder the halt-PR reconciliation sweep
+opened. So the placeholder silently becomes the **retained SHIP PR** that every later ship step
+reads.
+
+The deterministic presentation repair therefore runs at that adoption point — before the first
+SHIP-phase step is dispatched — rather than only at `finish`. It clears the `needs-remediation`
+label and body marker, rewrites a `needs-remediation:` title to `feat: <feature>`, strips the halt
+banner from the body, and preserves the remediation narrative as a single PR comment. Whichever step
+the resolved step registry puts first in the SHIP phase — a built-in or a config-declared custom
+step — sees a real implementation PR.
+
+Two properties are deliberate:
+
+- **The PR stays a draft.** Only `finish` flips it ready-for-review, after the ship gates have run.
+  Nothing else in the repair touches draft status.
+- **The repair is advisory and idempotent.** It never throws into the build loop, a PR with no halt
+  signal costs one read and zero mutations, and the finish-time repair still runs — repairing twice
+  leaves one repaired PR and one halt-history comment.
+
+Before this, every repair was bound to the `finish` step, which runs last. Any SHIP step scheduled
+ahead of finish was handed the placeholder and could only refuse — a step that writes release
+metadata into the retained PR, for instance, would correctly decline to write it into a remediation
+placeholder and then fail its own completion artifact on every retry.
+
 ### Kickback-cap halt
 
 The kickback budget is durable for each gate: it survives daemon re-dispatch while the feature's
