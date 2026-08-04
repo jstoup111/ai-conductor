@@ -506,8 +506,8 @@ describe('deterministic BUILD verification group', () => {
         count: 1,
       }],
       gates: {
-        wiring_check: 'pending',
-        test_suite: 'pending',
+        wiring_check: 'stale',
+        test_suite: 'stale',
         build_review: undefined,
       },
     });

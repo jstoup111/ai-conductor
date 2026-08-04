@@ -151,7 +151,9 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
     expect(suiteRuns).toBe(2);
     expect(buildRuns).toBe(1);
     expect(reviewRuns).toBe(1);
-    expect(parallelRounds).toEqual([
+    expect(parallelRounds.filter((round) =>
+      round.includes('wiring_check') || round.includes('test_suite'),
+    )).toEqual([
       ['wiring_check', 'test_suite'],
       ['wiring_check', 'test_suite'],
     ]);

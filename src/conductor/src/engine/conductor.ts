@@ -3726,7 +3726,7 @@ export class Conductor {
                 state = nav.state;
                 if (hasNoVerdict) {
                   for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'pending';
+                    (state as Record<string, unknown>)[member.name] = 'stale';
                   }
                   if (fullSuiteFailure?.status === 'FAILED') state.test_suite = 'failed';
                 } else {
