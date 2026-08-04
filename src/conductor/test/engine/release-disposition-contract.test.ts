@@ -39,9 +39,7 @@ describe('repository-local release-disposition contract', () => {
       claudeTarget: canonicalDir,
       byteIdentical: true,
       config: {
-        // Pinned to Claude so the run-level `[codex, claude]` sequence does not
-        // put the codex candidate first, and to the cheap `sonnet` tier: this
-        // step judges a diff and writes a short structured disposition.
+        // Provider pinned so `claude` resolves ahead of the run-level codex entry (#1285).
         llm_provider: 'claude',
         model: 'sonnet',
         after: 'maintain-documentation',
