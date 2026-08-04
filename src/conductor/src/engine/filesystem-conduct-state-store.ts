@@ -1,4 +1,7 @@
-import { readState, writeState } from './state.js';
+import { randomUUID } from 'node:crypto';
+import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { readState } from './state.js';
 import {
   evaluateConductStateMutation,
   type StateMutationDiagnostics,
@@ -18,15 +21,97 @@ export interface ConductStatePersistence {
   write(path: string, state: ConductState): Promise<void>;
 }
 
+/**
+ * Filesystem boundary for atomic state replacement. Keeping this injectable
+ * lets tests fail each durability boundary without depending on host I/O.
+ */
+export interface AtomicStateFilesystem {
+  createTemp(directory: string): Promise<AtomicStateTemporaryFile>;
+  writeTemp(temp: AtomicStateTemporaryFile, contents: string): Promise<void>;
+  syncTemp(temp: AtomicStateTemporaryFile): Promise<void>;
+  closeTemp(temp: AtomicStateTemporaryFile): Promise<void>;
+  renameTemp(tempPath: string, statePath: string): Promise<void>;
+  cleanupTemp(tempPath: string): Promise<void>;
+}
+
+export interface AtomicStateTemporaryFile {
+  path: string;
+  handle?: Awaited<ReturnType<typeof open>>;
+}
+
 export interface FilesystemConductStateStore {
   read(): Promise<StateResult<ConductState>>;
   apply(mutation: StateMutation<ConductState>): Promise<StateMutationResult>;
   applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult>;
 }
 
-const defaultPersistence: ConductStatePersistence = {
-  write: writeState,
+const defaultAtomicFilesystem: AtomicStateFilesystem = {
+  async createTemp(directory): Promise<AtomicStateTemporaryFile> {
+    await mkdir(directory, { recursive: true });
+    const path = join(directory, `.conduct-state.${process.pid}.${randomUUID()}.tmp`);
+    return { path, handle: await open(path, 'wx') };
+  },
+
+  async writeTemp(temp, contents): Promise<void> {
+    if (!temp.handle) {
+      throw new Error(`Temporary state file is not open: ${temp.path}`);
+    }
+    await temp.handle.writeFile(contents, 'utf-8');
+  },
+
+  async syncTemp(temp): Promise<void> {
+    if (!temp.handle) {
+      throw new Error(`Temporary state file is not open: ${temp.path}`);
+    }
+    await temp.handle.sync();
+  },
+
+  async closeTemp(temp): Promise<void> {
+    if (!temp.handle) {
+      throw new Error(`Temporary state file is not open: ${temp.path}`);
+    }
+    await temp.handle.close();
+  },
+
+  renameTemp: rename,
+  async cleanupTemp(path): Promise<void> {
+    await rm(path, { force: true });
+  },
 };
+
+function createAtomicPersistence(filesystem: AtomicStateFilesystem): ConductStatePersistence {
+  return {
+    async write(path, state): Promise<void> {
+      let temporary: AtomicStateTemporaryFile | undefined;
+      let closeAttempted = false;
+
+      try {
+        temporary = await filesystem.createTemp(dirname(path));
+        await filesystem.writeTemp(temporary, `${JSON.stringify(state, null, 2)}\n`);
+        await filesystem.syncTemp(temporary);
+        closeAttempted = true;
+        await filesystem.closeTemp(temporary);
+        await filesystem.renameTemp(temporary.path, path);
+      } catch (error) {
+        if (temporary && !closeAttempted) {
+          try {
+            await filesystem.closeTemp(temporary);
+          } catch {
+            // The original write failure remains the authoritative result.
+          }
+        }
+        if (temporary) {
+          try {
+            await filesystem.cleanupTemp(temporary.path);
+          } catch {
+            // Cleanup is best effort; never report success after the write failed.
+          }
+        }
+        throw error;
+      }
+    },
+  };
+}
 
 /**
  * Creates the local persistent adapter for the backwards-compatible flat
@@ -36,9 +121,12 @@ const defaultPersistence: ConductStatePersistence = {
  */
 export function createFilesystemConductStateStore(
   path: string,
-  persistence: ConductStatePersistence = defaultPersistence,
+  persistence?: ConductStatePersistence,
   diagnostics?: StateMutationDiagnostics,
+  filesystem: AtomicStateFilesystem = defaultAtomicFilesystem,
 ): FilesystemConductStateStore {
+  const resolvedPersistence = persistence ?? createAtomicPersistence(filesystem);
+
   return {
     read(): Promise<StateResult<ConductState>> {
       return readState(path);
@@ -62,7 +150,7 @@ export function createFilesystemConductStateStore(
         [mutation.field]: mutation.next,
       };
       try {
-        await persistence.write(path, nextState);
+        await resolvedPersistence.write(path, nextState);
       } catch (error) {
         return { kind: 'persistence', message: `Failed to persist state: ${error}` };
       }
@@ -91,7 +179,7 @@ export function createFilesystemConductStateStore(
         [mutation.field]: mutation.next,
       }), state);
       try {
-        await persistence.write(path, nextState);
+        await resolvedPersistence.write(path, nextState);
       } catch (error) {
         return { kind: 'persistence', message: `Failed to persist state: ${error}` };
       }

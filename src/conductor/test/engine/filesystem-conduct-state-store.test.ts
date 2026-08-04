@@ -1,9 +1,10 @@
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   createFilesystemConductStateStore,
+  type AtomicStateFilesystem,
   type ConductStatePersistence,
 } from '../../src/engine/filesystem-conduct-state-store.js';
 import type { StateMutationDiagnostic } from '../../src/engine/conduct-state-conflicts.js';
@@ -45,6 +46,81 @@ type NonAppliedMutationCase = {
 async function writeLegacyWholeSnapshot(path: string, state: ConductState): Promise<void> {
   await writeState(path, state);
 }
+
+/**
+ * Task 7's atomic-replacement boundary. The adapter owns this seam rather
+ * than delegating one opaque whole-file write, so failure injection can prove
+ * that an accepted mutation never tears the previous JSON document.
+ */
+type AtomicPersistenceOperation =
+  | 'create-temp'
+  | 'write-temp'
+  | 'sync-temp'
+  | 'close-temp'
+  | 'rename-temp'
+  | 'cleanup-temp';
+
+type AtomicFilesystemFixture = AtomicStateFilesystem & {
+  calls: AtomicPersistenceOperation[];
+  tempDirectories: string[];
+};
+
+function createAtomicFilesystemFixture(
+  failures: ReadonlySet<AtomicPersistenceOperation> = new Set(),
+): AtomicFilesystemFixture {
+  const calls: AtomicPersistenceOperation[] = [];
+  const tempDirectories: string[] = [];
+  const fail = (operation: AtomicPersistenceOperation): void => {
+    if (failures.has(operation)) {
+      throw new Error(`injected ${operation} failure`);
+    }
+  };
+
+  return {
+    calls,
+    tempDirectories,
+    async createTemp(directory) {
+      calls.push('create-temp');
+      tempDirectories.push(directory);
+      fail('create-temp');
+      return { path: join(directory, '.conduct-state.test.tmp') };
+    },
+    async writeTemp(temp, contents): Promise<void> {
+      calls.push('write-temp');
+      fail('write-temp');
+      await writeFile(temp.path, contents, 'utf-8');
+    },
+    async syncTemp(): Promise<void> {
+      calls.push('sync-temp');
+      fail('sync-temp');
+    },
+    async closeTemp(): Promise<void> {
+      calls.push('close-temp');
+      fail('close-temp');
+    },
+    async renameTemp(tempPath, statePath): Promise<void> {
+      calls.push('rename-temp');
+      fail('rename-temp');
+      await rename(tempPath, statePath);
+    },
+    async cleanupTemp(tempPath): Promise<void> {
+      calls.push('cleanup-temp');
+      fail('cleanup-temp');
+      await rm(tempPath, { force: true });
+    },
+  };
+}
+
+/**
+ * The fourth argument preserves the existing persistence/diagnostics
+ * injection slots while giving Task 7 a precise filesystem failure seam.
+ */
+const atomicMutation: StateMutation<ConductState> = {
+  field: 'complexity_tier',
+  expected: 'S',
+  intent: 'record assessed complexity',
+  next: 'M',
+};
 
 describe('filesystem conduct state store', () => {
   it('reads existing flat conduct-state JSON through the established compatibility path', async () => {
@@ -392,5 +468,70 @@ describe('filesystem conduct state store', () => {
 
     expect(writes).toEqual([]);
     await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
+  });
+
+  it.each([
+    {
+      name: 'temporary-file creation',
+      failures: new Set<AtomicPersistenceOperation>(['create-temp']),
+      calls: ['create-temp'],
+    },
+    {
+      name: 'temporary-file sync',
+      failures: new Set<AtomicPersistenceOperation>(['sync-temp']),
+      calls: ['create-temp', 'write-temp', 'sync-temp', 'close-temp', 'cleanup-temp'],
+    },
+    {
+      name: 'temporary-file close',
+      failures: new Set<AtomicPersistenceOperation>(['close-temp']),
+      calls: ['create-temp', 'write-temp', 'sync-temp', 'close-temp', 'cleanup-temp'],
+    },
+    {
+      name: 'atomic rename',
+      failures: new Set<AtomicPersistenceOperation>(['rename-temp']),
+      calls: ['create-temp', 'write-temp', 'sync-temp', 'close-temp', 'rename-temp', 'cleanup-temp'],
+    },
+    {
+      name: 'cleanup after a sync failure',
+      failures: new Set<AtomicPersistenceOperation>(['sync-temp', 'cleanup-temp']),
+      calls: ['create-temp', 'write-temp', 'sync-temp', 'close-temp', 'cleanup-temp'],
+    },
+  ] as const)('returns persistence failure and preserves the exact prior JSON bytes on $name failure', async ({
+    failures,
+    calls,
+  }) => {
+    const statePath = await createStatePath();
+    const originalBytes = '{\n  "complexity_tier": "S",\n  "legacy_marker": "keep these bytes"\n}\n';
+    await writeFile(statePath, originalBytes, 'utf-8');
+    const filesystem = createAtomicFilesystemFixture(failures);
+    const store = createFilesystemConductStateStore(statePath, undefined, undefined, filesystem);
+
+    await expect(store.apply(atomicMutation)).resolves.toMatchObject({ kind: 'persistence' });
+    expect(filesystem.calls).toEqual(calls);
+    expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual({
+      complexity_tier: 'S',
+      legacy_marker: 'keep these bytes',
+    });
+    await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
+  });
+
+  it('uses a same-directory temporary file and atomically writes backward-compatible formatted JSON', async () => {
+    const statePath = await createStatePath();
+    await writeFile(statePath, '{"complexity_tier":"S","legacy_marker":"retained"}', 'utf-8');
+    const filesystem = createAtomicFilesystemFixture();
+    const store = createFilesystemConductStateStore(statePath, undefined, undefined, filesystem);
+
+    await expect(store.apply(atomicMutation)).resolves.toEqual({ kind: 'applied' });
+    expect(filesystem.tempDirectories).toEqual([dirname(statePath)]);
+    expect(filesystem.calls).toEqual([
+      'create-temp',
+      'write-temp',
+      'sync-temp',
+      'close-temp',
+      'rename-temp',
+    ]);
+    await expect(readFile(statePath, 'utf-8')).resolves.toBe(
+      '{\n  "complexity_tier": "M",\n  "legacy_marker": "retained"\n}\n',
+    );
   });
 });
