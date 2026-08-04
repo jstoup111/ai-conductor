@@ -115,4 +115,83 @@ describe('planRemediation implementation-only authority routing', () => {
       decideHaltWritten: false,
     });
   });
+
+  it.each([
+    {
+      id: 'adr-2026-07-27-provider-lifecycle',
+      target: 'architecture_review',
+      rationale:
+        'The approved provider lifecycle no longer accommodates the required credential handoff; change or clarify the approved architecture before implementation can proceed.',
+    },
+    {
+      id: 'plan-in-scope-omission',
+      target: 'plan',
+      rationale:
+        'The approved architecture is sound, but the active plan omits the in-scope credential handoff task required to implement it.',
+    },
+  ] as const)(
+    'halts in daemon mode when remediation genuinely requires DECIDE target $target',
+    async ({ id, target, rationale }) => {
+      const dispatched: StepName[] = [];
+      const runner: StepRunner = {
+        run: async (step) => {
+          dispatched.push(step);
+          await writeFile(
+            join(projectRoot, '.pipeline/remediation.json'),
+            JSON.stringify({
+              dispositions: [
+                {
+                  id,
+                  disposition: target,
+                  category: null,
+                  rationale,
+                  tasks: [],
+                },
+              ],
+            }),
+            'utf8',
+          );
+          return { success: true };
+        },
+      };
+      const conductor = new Conductor({
+        stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+        stepRunner: runner,
+        events: new ConductorEventEmitter(),
+        projectRoot,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: false,
+        maxRetries: 1,
+      });
+
+      const outcome = await (conductor as unknown as {
+        planRemediation: (
+          state: ConductState,
+          steps: typeof ALL_STEPS,
+          dispatchContext: string,
+          hintSource: { source: string; evidenceFile: string },
+        ) => Promise<{ kind: string; detail?: string }>;
+      }).planRemediation(
+        {
+          session_started_at: Date.now() - 1_000,
+          feature_desc: 'feature',
+        } as ConductState,
+        ALL_STEPS,
+        'as-built architecture review blocked',
+        {
+          source: 'architecture-review-as-built',
+          evidenceFile: '.pipeline/architecture-review-as-built.md',
+        },
+      );
+
+      expect({ outcome, dispatched }).toMatchObject({
+        outcome: {
+          kind: 'halt',
+          detail: expect.stringContaining(`DECIDE step '${target}'`),
+        },
+        dispatched: ['remediate'],
+      });
+    },
+  );
 });
