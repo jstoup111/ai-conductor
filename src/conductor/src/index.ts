@@ -17,7 +17,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
 }
 
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
 import { realpathSync } from 'node:fs';
@@ -122,6 +122,7 @@ import {
 import { makeGitRunner, originDefaultBranch } from './engine/rebase.js';
 import { createBlockerResolver } from './engine/blocker-resolver.js';
 import { runOverlapScan, renderReport as renderOverlapReport } from './engine/overlap-scan.js';
+import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
 import { makeProductionGh } from './engine/pr-labels.js';
 import { hasSession, sessionNameForRepo, respawnPane } from './engine/daemon-tmux.js';
 import { resolveOtelConfig } from './engine/otel/otel-config.js';
@@ -401,6 +402,50 @@ export async function overlapScanCommand(
   return 0;
 }
 
+// --- Plan protected-targets subcommand (Task 6) ---
+
+export interface PlanProtectedTargetsDispatch {
+  kind: 'plan-protected-targets';
+  path: string;
+}
+
+/** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
+export function detectPlanProtectedTargetsCommand(
+  argv: string[],
+): PlanProtectedTargetsDispatch | null {
+  if (argv[2] !== 'plan-protected-targets' || !argv[3]) return null;
+  return { kind: 'plan-protected-targets', path: argv[3] };
+}
+
+/**
+ * Read and scan exactly the named plan. The command is intentionally blocking:
+ * violations are printed in full and produce a non-zero exit code, while a
+ * clean plan exits zero. It never writes to the repository.
+ */
+export async function planProtectedTargetsCommand(
+  cmd: PlanProtectedTargetsDispatch,
+  deps: {
+    print?: (message: string) => void;
+    readFile?: typeof readFile;
+  } = {},
+): Promise<number> {
+  const print = deps.print ?? console.log;
+  const readPlan = deps.readFile ?? readFile;
+  const planText = await readPlan(cmd.path, 'utf8');
+  const planStem = basename(cmd.path, '.md');
+  const violations = scanPlanProtectedTargets(planText, planStem);
+
+  if (violations.length === 0) {
+    print('No protected-target violations found.');
+    return 0;
+  }
+
+  for (const { taskId, path } of violations) {
+    print(`Task ${taskId}: ${path}`);
+  }
+  return 1;
+}
+
 // --- Main ---
 
 async function main(): Promise<void> {
@@ -591,6 +636,12 @@ async function main(): Promise<void> {
   const overlapScanCmd = detectOverlapScanCommand(process.argv);
   if (overlapScanCmd) {
     const code = await overlapScanCommand(overlapScanCmd, { cwd: process.cwd() });
+    process.exit(code);
+  }
+
+  const planProtectedTargetsCmd = detectPlanProtectedTargetsCommand(process.argv);
+  if (planProtectedTargetsCmd) {
+    const code = await planProtectedTargetsCommand(planProtectedTargetsCmd);
     process.exit(code);
   }
 

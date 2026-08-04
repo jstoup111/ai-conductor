@@ -236,6 +236,13 @@ export function createProgram(): Command {
     .option('--base <ref>', 'Base branch to diff sibling branches against (default: origin default branch)')
     .option('--cwd <dir>', 'Repository directory to run the scan in (default: process.cwd())');
 
+  // Plan protected-target scan (Task 6). NON-INTERACTIVE: dispatched in
+  // index.ts before the pipeline boots. It reads the named plan only, reports
+  // every task/path violation, and exits non-zero when one is found.
+  program
+    .command('plan-protected-targets <path>')
+    .description('Blocking scan for plan tasks that target another feature’s protected artifact');
+
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
   // daemon (detectDaemonCommand); `daemon status` / `daemon logs` are read-only

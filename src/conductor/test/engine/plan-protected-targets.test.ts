@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { scanPlanProtectedTargets } from '../../src/engine/plan-protected-targets.js';
+import {
+  detectPlanProtectedTargetsCommand,
+  planProtectedTargetsCommand,
+} from '../../src/index.js';
 
 describe('engine/plan-protected-targets', () => {
   it('reports every other-feature story artifact named by Task 14', () => {
@@ -89,5 +96,69 @@ describe('engine/plan-protected-targets', () => {
 `;
 
     expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
+  });
+
+  it('blocks a violating plan and names every offending task and path', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'plan-protected-targets-cli-'));
+    const planPath = join(dir, 'feature.md');
+    await writeFile(planPath, `# Implementation Plan
+
+### Task 20: Amend another feature's stories
+
+**Files:**
+- .docs/stories/another-feature.md
+
+### Task 21: Amend another feature's plan
+
+**Files:**
+- .docs/plans/yet-another-feature.md
+`);
+
+    try {
+      const command = detectPlanProtectedTargetsCommand([
+        'node',
+        'conduct-ts',
+        'plan-protected-targets',
+        planPath,
+      ]);
+      const output: string[] = [];
+
+      expect(command).not.toBeNull();
+      await expect(planProtectedTargetsCommand(command!, { print: (line) => output.push(line) })).resolves.toBe(1);
+      expect(output.join('\n')).toContain('Task 20');
+      expect(output.join('\n')).toContain('.docs/stories/another-feature.md');
+      expect(output.join('\n')).toContain('Task 21');
+      expect(output.join('\n')).toContain('.docs/plans/yet-another-feature.md');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a clean plan', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'plan-protected-targets-cli-'));
+    const planPath = join(dir, 'feature.md');
+    await writeFile(planPath, `# Implementation Plan
+
+### Task 22: Amend this feature's accepted story
+
+**Files:**
+- .docs/stories/feature.md
+`);
+
+    try {
+      const command = detectPlanProtectedTargetsCommand([
+        'node',
+        'conduct-ts',
+        'plan-protected-targets',
+        planPath,
+      ]);
+      const output: string[] = [];
+
+      expect(command).not.toBeNull();
+      await expect(planProtectedTargetsCommand(command!, { print: (line) => output.push(line) })).resolves.toBe(0);
+      expect(output.join('\n')).toMatch(/no protected-target violations/i);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
