@@ -345,3 +345,31 @@ export type PublicationDisposition =
   | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
   | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'human_required'; reason: string };
+
+/**
+ * Parses the interactive host's raw choice without advancing publication.
+ * Only PR and keep are representable as coordinator intents; deferred,
+ * declined, and destructive choices remain explicit human decisions.
+ */
+export function resolveInteractivePublicationIntent(
+  choice: unknown,
+): InteractivePublicationIntent | Extract<PublicationDisposition, { kind: 'human_required' }> {
+  switch (choice) {
+    case 'pr':
+    case 'keep':
+      return {
+        outcome: choice,
+        authority: { kind: 'operator_confirmed', mode: 'interactive' },
+      };
+    case 'defer':
+      return { kind: 'human_required', reason: 'interactive_intent_deferred' };
+    case 'decline':
+      return { kind: 'human_required', reason: 'interactive_intent_declined' };
+    case 'merge-local':
+    case 'merge':
+    case 'discard':
+      return { kind: 'human_required', reason: 'interactive_intent_destructive_choice' };
+    default:
+      return { kind: 'human_required', reason: 'interactive_intent_unrecognized' };
+  }
+}

@@ -47,6 +47,17 @@ async function observePublicationSnapshot(input: ObservePublicationSnapshotInput
   return observer(input);
 }
 
+async function resolveInteractivePublicationIntent(choice: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const resolver = mod.resolveInteractivePublicationIntent;
+  if (typeof resolver !== 'function') {
+    throw new Error(
+      'expected export "resolveInteractivePublicationIntent" to be a function (not yet implemented)',
+    );
+  }
+  return resolver(choice);
+}
+
 function observerPorts(overrides: Partial<{
   implementationEvidence: ObservationState;
   shipEvidence: ObservationState;
@@ -248,4 +259,36 @@ describe('observePublicationSnapshot', () => {
       observePublicationSnapshot(observationInput(observerPorts({ pr }))),
     ).resolves.toMatchObject({ pr: expected });
   });
+});
+
+describe('resolveInteractivePublicationIntent', () => {
+  it.each([
+    ['pr', 'pr'],
+    ['keep', 'keep'],
+  ] as const)('preserves an operator-confirmed %s choice as interactive intent', async (_choice, outcome) => {
+    await expect(resolveInteractivePublicationIntent(outcome)).resolves.toEqual({
+      outcome,
+      authority: { kind: 'operator_confirmed', mode: 'interactive' },
+    });
+  });
+
+  it.each([
+    ['defer', 'interactive_intent_deferred'],
+    ['decline', 'interactive_intent_declined'],
+  ] as const)('halts %s without synthesizing a publication mutation', async (choice, reason) => {
+    await expect(resolveInteractivePublicationIntent(choice)).resolves.toEqual({
+      kind: 'human_required',
+      reason,
+    });
+  });
+
+  it.each(['merge-local', 'merge', 'discard'] as const)(
+    'halts the destructive %s choice for separate human action',
+    async (choice) => {
+      await expect(resolveInteractivePublicationIntent(choice)).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'interactive_intent_destructive_choice',
+      });
+    },
+  );
 });
