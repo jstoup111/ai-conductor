@@ -18,8 +18,13 @@ member in one status both predicates read alike, a post-repair round dispatches 
 member instead of trusting an on-disk verdict, and the tail selection can no longer pick a step whose
 own entry gate will reject a prerequisite. Reuse is not reimplemented — it stays inside each member's
 existing code-state-anchored evidence, which this plan does not modify. Fifteen scoped TDD tasks
-reproduce the incident, land the fix, make each member's settle decision observable, and amend the two
-accepted assertions whose wording this changes.
+reproduce the incident, land the fix, make each member's settle decision observable, and align the two
+pinned regression assertions whose stories this feature amended during DECIDE.
+
+**No task writes a `.docs/` path.** Every DECIDE artifact this feature changes — including the two
+amended stories — is committed with the spec. BUILD touches only `src/`, `test/`, and the human-facing
+`docs/` tree, which is what the phase-scoped write-guard, the protected-artifact seal, and
+`build_review`'s Scope rubric each independently require.
 
 ## Technical Approach
 
@@ -354,23 +359,28 @@ accepted assertions whose wording this changes.
 
 **Dependencies:** Task 11
 
-### Task 14: Amend the two accepted assertions whose wording this changes
+### Task 14: Align the two pinned test assertions with their amended stories
 
-**Story:** none (infrastructure: keep the accepted story corpus truthful in the same change set that changes the behavior it pins, per this repository's precedent for refining a pinned assertion)
+**Story:** none (infrastructure: bring the two pinned regression assertions into agreement with the story amendments already committed in this feature's spec, so the corpus and its tests never disagree)
 **Type:** infrastructure
 
+> **Scope note.** The prose amendments to `.docs/stories/deterministic-test-suite-step.md` and
+> `.docs/stories/2026-07-12-wiring-reachability-gate.md` were authored during DECIDE and are already
+> committed on this feature's spec branch. This task deliberately touches **no** `.docs/` path: the
+> phase-scoped write-guard allows only `.docs/release-waivers/` while `build` is the active step
+> (`phase-marker.ts` — `.docs/stories/` is allowed only under `retro`), and `build_review`'s Scope
+> rubric treats a `.docs/stories/` modification as a Scope failure. Only the test assertions move here.
+
 **Steps:**
-1. Add a dated amendment note to the width-1 ordering assertion so it reflects that a round may run a
-   single member, while declared member order and the wait-for-all-dispatched rule are unchanged.
-2. Add a dated amendment note to the selector integration assertion so its divergence case reads as
-   dispatch-the-prerequisite rather than block-and-return, with review still not entered.
-3. Update the corresponding test assertions to the amended shapes.
-4. Verify the amended tests pass and no other pinned assertion was edited.
-5. Commit with message: `docs(stories): amend pinned assertions for member re-verification`.
+1. Write the amended cap-one ordering assertion so it proves stable declared order across the members
+   that round dispatches, rather than asserting both members always execute.
+2. Write the amended selector integration assertion so its divergence case proves the prerequisite is
+   dispatched, while the agreement case still proves review is blocked exactly as before.
+3. Verify both amended assertions fail against the pre-fix tree and pass against the fixed tree.
+4. Verify no other pinned assertion was edited and no `.docs/` path was touched by this task.
+5. Commit with message: `test(engine): align pinned assertions with amended stories`.
 
 **Files:**
-- `.docs/stories/deterministic-test-suite-step.md`
-- `.docs/stories/2026-07-12-wiring-reachability-gate.md`
 - `src/conductor/test/acceptance/deterministic-build-verification-flow.acceptance.test.ts`
 - `src/conductor/test/wiring-gate-loop.test.ts`
 
@@ -425,8 +435,9 @@ accepted assertions whose wording this changes.
   run that ends without a terminal verdict.
 - After Task 13: an operator can read each member's settle decision and basis from the daemon log, and
   the sink registry's guarantees are intact.
-- Tasks 14 and 15 own the corpus and documentation contracts; both land in the same change set, never
-  afterwards.
+- Tasks 14 and 15 own the pinned-test-assertion and documentation contracts; both land in the same
+  change set, never afterwards. Neither writes a `.docs/` path — the story prose they correspond to was
+  already committed with this spec.
 
 ## Acceptance Coverage
 
@@ -452,8 +463,10 @@ accepted assertions whose wording this changes.
 - [x] Every accepted negative path maps to an explicit behavior-owning task.
 - [x] Every task declares dependencies and the graph is acyclic.
 - [x] Every new production surface declares a design-derived `Wired-into:` contract.
-- [x] No terminal catch-all validation task exists; Tasks 14 and 15 own the corpus and documentation
-      contracts only.
+- [x] No terminal catch-all validation task exists; Tasks 14 and 15 own the pinned-test-assertion and
+      documentation contracts only.
+- [x] No task writes any `.docs/` path; every DECIDE artifact this feature changes is committed with
+      the spec.
 - [x] The reproduction test is Task 1 and every fix task depends on it transitively.
 - [x] No task adds a gate-verdict field, a config key, a third satisfaction predicate, or a second
       validity authority over a member's evidence.

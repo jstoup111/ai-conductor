@@ -6,7 +6,7 @@
 five contracts TS-1–TS-5 touch: step-status semantics, `build_review` prerequisites, the gate verdict
 record, group membership and dispatchability, retry and kickback budget accounting, event-sink
 registry exhaustiveness, the daemon backstop halt class, and selector verdict authority
-**Verdict:** PASS — zero blocking conflicts; two accepted assertions require in-change-set amendment
+**Verdict:** PASS — zero blocking conflicts; two accepted assertions amended in DECIDE with this spec
 
 ## Pairwise Result Within the New Story Set
 
@@ -54,10 +54,10 @@ registry exhaustiveness, the daemon backstop halt class, and selector verdict au
 - **Resource contention:** none. No new lock, port, or shared mutable service; concurrency stays under
   the existing cap.
 - **Sequencing conflict:** the reproduction test precedes every fix task; the status reconciliation
-  precedes the membership and selection work; documentation and the two assertion amendments land in
-  the same change set.
+  precedes the membership and selection work; the two story amendments land in DECIDE with this spec,
+  and their test assertions plus the documentation land in the same implementation change set.
 
-## Required Amendments (same change set)
+## Required Amendments (authored in DECIDE, committed on this spec branch)
 
 1. `.docs/stories/deterministic-test-suite-step.md` — width-1 ordering assertion gains a reuse-aware
    caveat; declared member order and the wait-for-all-dispatched rule are unchanged.
@@ -67,6 +67,17 @@ registry exhaustiveness, the daemon backstop halt class, and selector verdict au
 
 Both follow the established precedent in this repository for a later feature refining a pinned
 assertion, with a dated amendment note rather than a superseding ADR.
+
+**These prose amendments belong to DECIDE and are committed with this spec — they are deliberately
+NOT plan tasks.** A BUILD-phase agent cannot make them: the phase-scoped `.docs` write-guard allows
+only `.docs/release-waivers/` while `build` is the active step (`phase-marker.ts`; `.docs/stories/` is
+allowed only under `retro`), the protected-artifact seal tolerates only own-feature self-amendment
+(`adr-2026-07-27-protected-artifact-seal-self-amendment-visibility`), and `build_review`'s Scope rubric
+treats a `.docs/stories/` modification as a Scope failure. Plan Task 14 therefore carries only the
+corresponding test-assertion updates, which live under `src/conductor/test/` and are unrestricted.
+This mirrors the operator amendment recorded in
+`.docs/plans/claude-within-step-retries-resume-the-prior-attemp.md`, where cross-feature shared-artifact
+edits were likewise completed ahead of BUILD for the same reason.
 
 ## Verify-Claims Verdict
 

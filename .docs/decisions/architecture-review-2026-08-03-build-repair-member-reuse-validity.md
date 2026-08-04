@@ -74,8 +74,8 @@ The central engine files (`conductor.ts`, `selector.ts`, `state.ts`) appear in m
 diffs, so broad candidate-file overlap is expected and is advisory merge risk rather than a design
 blocker. The semantically adjacent merged change, `74050ce97` (#1253), is complementary. The
 conflict-check report at `.docs/conflicts/build-repair-preserves-stale-wiring-pass-and-halts.md`
-enumerates the four accepted assertions this change interacts with and their dispositions; two need
-amendment notes in the same change set and neither reverses an accepted intent. No blocking overlap
+enumerates the four accepted assertions this change interacts with and their dispositions; two carry
+amendment notes authored in DECIDE and neither reverses an accepted intent. No blocking overlap
 found. Implementation stays scoped to the named seams; the sanctioned finish-time rebase resolves
 upstream movement.
 
@@ -88,7 +88,7 @@ upstream movement.
 | Always re-dispatching erases the concurrent group's latency benefit. | Performance | Low | Medium | Each member's own anchor short-circuits: the suite returns `REUSED` on a fingerprint match and wiring re-derives only on a head mismatch. The new events make the actual reuse rate measurable. |
 | A member settles from evidence it could not confirm. | Correctness | Low | High | Both anchors already fail closed to deriving fresh evidence; this change adds no preserve branch to either. Pinned by a negative-path test. |
 | New event types break the registry's pre-refactor sink-membership equivalence assertion. | Integration | Medium | Medium | The registry is a total record, so an undeclared type fails compilation; the equivalence assertion is scoped to the types it was written to cover, and a test pins that it still holds. |
-| Two accepted story assertions describe behavior that changes shape. | Integration | High | Low | Amend both in the same change set with a dated note, following the established precedent for refining a pinned assertion. |
+| Two accepted story assertions describe behavior that changes shape. | Integration | High | Low | Both amended with a dated note in DECIDE and committed with this spec, following the established precedent for refining a pinned assertion. A BUILD task could not do it: the phase-scoped `.docs` write-guard, the protected-artifact seal's own-feature-only rule, and `build_review`'s Scope rubric each forbid a build agent editing another feature's `.docs/stories/` file. |
 | The reproduction test cannot reproduce the observed sequence, invalidating the reconstructed mechanism. | Technical | Low | High | It is the plan's first task and a hard precondition on every fix task; failure to reproduce stops the plan and re-derives the mechanism before any fix is written. |
 
 ## ADRs Created
@@ -107,3 +107,6 @@ upstream movement.
    fingerprint contract.
 5. Every new production surface declares a design-derived `Wired-into:` contract naming a consumer from
    this review's Wiring Surface section.
+6. No implementation task writes any `.docs/` path. DECIDE artifacts — including the two amended
+   stories — are authored in DECIDE and committed with the spec; BUILD touches only `src/`, `test/`,
+   and the human-facing `docs/` tree.
