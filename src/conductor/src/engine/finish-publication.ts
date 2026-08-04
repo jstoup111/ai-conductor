@@ -45,6 +45,24 @@ type InteractivePublicationIntent = Extract<
   { authority: { kind: 'operator_confirmed'; mode: 'interactive' } }
 >;
 
+export type UnattendedPublicationMode = 'daemon' | 'foreground-auto';
+
+/**
+ * Capability observations are inputs from the composition root.  The intent
+ * policy is pure: it must not probe remotes or credentials itself.
+ */
+export interface UnattendedPublicationCapabilities {
+  remote: 'configured' | 'missing';
+  authentication: 'authenticated' | 'unavailable';
+}
+
+export interface UnattendedPublicationIntentInput {
+  mode: UnattendedPublicationMode;
+  capabilities: UnattendedPublicationCapabilities;
+  /** Reject a supplied outcome that diverges from the mode's safe policy. */
+  requestedOutcome?: unknown;
+}
+
 type PublicationEvidence = {
   implementationEvidence: 'valid' | 'invalid' | 'indeterminate';
   shipEvidence: 'valid' | 'invalid' | 'indeterminate';
@@ -372,4 +390,42 @@ export function resolveInteractivePublicationIntent(
     default:
       return { kind: 'human_required', reason: 'interactive_intent_unrecognized' };
   }
+}
+
+/**
+ * Resolves the existing unattended policy without probing or mutating any
+ * external boundary. Daemon runs are PR-only; foreground auto keeps committed
+ * work when remote publication is not available. Neither policy may synthesize
+ * an operator-only destructive outcome.
+ */
+export function resolveUnattendedPublicationIntent(
+  input: UnattendedPublicationIntentInput,
+): DaemonPublicationIntent | ForegroundAutoPublicationIntent | Extract<PublicationDisposition, { kind: 'human_required' }> {
+  const { mode, capabilities, requestedOutcome } = input;
+
+  if (
+    requestedOutcome === 'merge' ||
+    requestedOutcome === 'merge-local' ||
+    requestedOutcome === 'discard'
+  ) {
+    return { kind: 'human_required', reason: 'unattended_intent_destructive_choice' };
+  }
+
+  if (mode === 'daemon') {
+    if (requestedOutcome !== undefined && requestedOutcome !== 'pr') {
+      return { kind: 'human_required', reason: 'unattended_intent_unauthorized_outcome' };
+    }
+    return { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } };
+  }
+
+  const publicationAvailable =
+    capabilities.remote === 'configured' && capabilities.authentication === 'authenticated';
+  const outcome = publicationAvailable ? 'pr' : 'keep';
+  if (requestedOutcome !== undefined && requestedOutcome !== outcome) {
+    return { kind: 'human_required', reason: 'unattended_intent_unauthorized_outcome' };
+  }
+  if (publicationAvailable) {
+    return { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'foreground-auto' } };
+  }
+  return { outcome: 'keep', authority: { kind: 'unattended_policy', mode: 'foreground-auto' } };
 }

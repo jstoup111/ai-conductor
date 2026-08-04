@@ -58,6 +58,17 @@ async function resolveInteractivePublicationIntent(choice: unknown) {
   return resolver(choice);
 }
 
+async function resolveUnattendedPublicationIntent(input: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const resolver = mod.resolveUnattendedPublicationIntent;
+  if (typeof resolver !== 'function') {
+    throw new Error(
+      'expected export "resolveUnattendedPublicationIntent" to be a function (not yet implemented)',
+    );
+  }
+  return resolver(input);
+}
+
 function observerPorts(overrides: Partial<{
   implementationEvidence: ObservationState;
   shipEvidence: ObservationState;
@@ -288,6 +299,93 @@ describe('resolveInteractivePublicationIntent', () => {
       await expect(resolveInteractivePublicationIntent(choice)).resolves.toEqual({
         kind: 'human_required',
         reason: 'interactive_intent_destructive_choice',
+      });
+    },
+  );
+});
+
+describe('resolveUnattendedPublicationIntent', () => {
+  it.each([
+    [
+      'daemon',
+      {
+        mode: 'daemon',
+        capabilities: { remote: 'configured', authentication: 'authenticated' },
+      },
+      {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'daemon' },
+      },
+    ],
+    [
+      'foreground-auto with configured remote and authenticated publication',
+      {
+        mode: 'foreground-auto',
+        capabilities: { remote: 'configured', authentication: 'authenticated' },
+      },
+      {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+    ],
+    [
+      'foreground-auto with no remote',
+      {
+        mode: 'foreground-auto',
+        capabilities: { remote: 'missing', authentication: 'authenticated' },
+      },
+      {
+        outcome: 'keep',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+    ],
+    [
+      'foreground-auto with unavailable publication authentication',
+      {
+        mode: 'foreground-auto',
+        capabilities: { remote: 'configured', authentication: 'unavailable' },
+      },
+      {
+        outcome: 'keep',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+    ],
+  ] as const)('resolves the existing safe policy for %s', async (_row, input, expected) => {
+    await expect(resolveUnattendedPublicationIntent(input)).resolves.toEqual(expected);
+  });
+
+  it('halts an outcome that daemon policy does not authorize instead of choosing keep', async () => {
+    await expect(
+      resolveUnattendedPublicationIntent({
+        mode: 'daemon',
+        capabilities: { remote: 'configured', authentication: 'authenticated' },
+        requestedOutcome: 'keep',
+      }),
+    ).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'unattended_intent_unauthorized_outcome',
+    });
+  });
+
+  it.each([
+    ['daemon', 'merge'],
+    ['daemon', 'merge-local'],
+    ['daemon', 'discard'],
+    ['foreground-auto', 'merge'],
+    ['foreground-auto', 'merge-local'],
+    ['foreground-auto', 'discard'],
+  ] as const)(
+    'halts the destructive %s unattended %s request without synthesizing a mutation',
+    async (mode, requestedOutcome) => {
+      await expect(
+        resolveUnattendedPublicationIntent({
+          mode,
+          capabilities: { remote: 'configured', authentication: 'authenticated' },
+          requestedOutcome,
+        }),
+      ).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'unattended_intent_destructive_choice',
       });
     },
   );
