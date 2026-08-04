@@ -61,7 +61,7 @@ exception — reserved for two human categories only.
   Negative example: do not reopen architecture review when no approved architectural change or
   clarification is required.
 - **Reject contradictory dispositions.** It is forbidden and invalid to select
-  `architecture_review` when no architectural or product decision is needed; that
+  `architecture_review` when no architectural decision or product decision is needed; that
   `architecture_review` disposition is invalid. Route that clear conforming
   implementation/test/documentation work to `build` instead. Conversely, it is forbidden and
   invalid to select `build` when an unresolved or ambiguous architectural decision remains; that
