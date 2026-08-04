@@ -33,6 +33,10 @@ function persistenceWritesToDisk(writes: ConductState[]): ConductStatePersistenc
   };
 }
 
+async function writeLegacyWholeSnapshot(path: string, state: ConductState): Promise<void> {
+  await writeState(path, state);
+}
+
 describe('filesystem conduct state store', () => {
   it('reads existing flat conduct-state JSON through the established compatibility path', async () => {
     const statePath = await createStatePath();
@@ -123,5 +127,78 @@ describe('filesystem conduct state store', () => {
     const expectedState = { ...peerUpdate, complexity_tier: 'M' };
     expect(writes).toEqual([expectedState]);
     expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual(expectedState);
+  });
+
+  it.each([
+    ['A then B', 'A', 'B'],
+    ['B then A', 'B', 'A'],
+  ] as const)('shows the legacy whole-object path loses the first disjoint update when %s commits', async (_order, firstClient, secondClient) => {
+    const statePath = await createStatePath();
+    const initialState = {
+      feature_desc: 'preserve disjoint state changes',
+      complexity_tier: 'S',
+      pr_url: 'https://github.com/acme/repo/pull/101',
+      legacy_marker: { retained: true },
+    } as ConductState;
+    await writeState(statePath, initialState);
+
+    const staleClientA = JSON.parse(await readFile(statePath, 'utf-8')) as ConductState;
+    const staleClientB = JSON.parse(await readFile(statePath, 'utf-8')) as ConductState;
+    const clientSnapshots: Record<'A' | 'B', ConductState> = {
+      A: { ...staleClientA, complexity_tier: 'M' },
+      B: { ...staleClientB, pr_url: 'https://github.com/acme/repo/pull/102' },
+    };
+
+    await writeLegacyWholeSnapshot(statePath, clientSnapshots[firstClient]);
+    await writeLegacyWholeSnapshot(statePath, clientSnapshots[secondClient]);
+
+    expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual(clientSnapshots[secondClient]);
+  });
+
+  it.each([
+    ['A then B', 'A', 'B'],
+    ['B then A', 'B', 'A'],
+  ] as const)('preserves both disjoint client mutations when %s commits through the adapter', async (_order, firstClient, secondClient) => {
+    const statePath = await createStatePath();
+    const initialState = {
+      feature_desc: 'preserve disjoint state changes',
+      complexity_tier: 'S',
+      pr_url: 'https://github.com/acme/repo/pull/101',
+      legacy_marker: { retained: true },
+    } as ConductState;
+    await writeState(statePath, initialState);
+
+    const clientA = createFilesystemConductStateStore(statePath);
+    const clientB = createFilesystemConductStateStore(statePath);
+    const staleClientA = await clientA.read();
+    const staleClientB = await clientB.read();
+    if (!staleClientA.ok || !staleClientB.ok) {
+      throw new Error('expected both stale clients to read the initial state');
+    }
+
+    const mutations = {
+      A: {
+        field: 'complexity_tier',
+        expected: staleClientA.value.complexity_tier,
+        intent: 'record assessed complexity',
+        next: 'M',
+      },
+      B: {
+        field: 'pr_url',
+        expected: staleClientB.value.pr_url,
+        intent: 'record pull request URL',
+        next: 'https://github.com/acme/repo/pull/102',
+      },
+    } as const;
+    const clients = { A: clientA, B: clientB };
+
+    await clients[firstClient].apply(mutations[firstClient]);
+    await clients[secondClient].apply(mutations[secondClient]);
+
+    expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual({
+      ...initialState,
+      complexity_tier: 'M',
+      pr_url: 'https://github.com/acme/repo/pull/102',
+    });
   });
 });
