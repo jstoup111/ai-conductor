@@ -117,8 +117,19 @@ steps:
     skill: .agents/skills/maintain-documentation/SKILL.md
     enforcement: gating
     completion_artifact: .pipeline/maintain-documentation-pass
+  # Pinned to Claude (hotfix). With the run-level `[codex, claude]` sequence the
+  # engine resolves the codex candidate first and throws "Codex self-host
+  # isolation is unavailable for the resolved provider candidate" instead of
+  # falling through to claude, halting the step after all three retries.
+  # `model: sonnet` states the cheap tier explicitly: this step judges a diff and
+  # writes a short structured disposition, so it does not need a frontier model.
+  # Sonnet — not haiku — because the judgement is load-bearing (notability,
+  # category, semver) and a wrong call fails the release gate. Sonnet is also the
+  # value a custom step already resolves to via resolved-config.ts's
+  # FALLBACK_MODEL; pinning it keeps that intentional rather than incidental.
   release-disposition:
-    llm_provider: [codex, claude]
+    llm_provider: claude
+    model: sonnet
     after: maintain-documentation
     skill: .agents/skills/release-disposition/SKILL.md
     enforcement: gating
