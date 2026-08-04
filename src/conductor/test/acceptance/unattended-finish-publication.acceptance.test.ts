@@ -483,6 +483,119 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     expect(fixture.calls.some((call) => /merge/i.test(call))).toBe(false);
   });
 
+  it('keeps merge authority unreachable across production FINISH transitions and retries', async () => {
+    conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-no-merge-'));
+    const pipeline = join(conductorRoot, '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    const prUrl = 'https://github.com/acme/widget/pull/1172';
+    const githubCalls: string[][] = [];
+    let pullRequest: { url: string; title: string; body: string; isDraft: boolean } | undefined;
+
+    const rejectMergeAuthority = (args: string[]): void => {
+      const command = args.join(' ').toLowerCase();
+      if (
+        (args[0] === 'pr' && args[1] === 'merge') ||
+        command.includes('auto-merge') ||
+        command.includes('enablepullrequestautomerge') ||
+        command.includes('--auto')
+      ) {
+        throw new Error(`FINISH reached forbidden merge authority: gh ${args.join(' ')}`);
+      }
+    };
+    const gh = vi.fn(async (args: string[]) => {
+      rejectMergeAuthority(args);
+      githubCalls.push([...args]);
+      if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/feature') {
+        if (!pullRequest) throw new Error('no open PR');
+        return { stdout: JSON.stringify({ url: pullRequest.url, state: 'OPEN' }) };
+      }
+      if (args[0] === 'pr' && args[1] === 'create') {
+        pullRequest = {
+          url: prUrl,
+          title: 'feat: feature',
+          body: '<!-- conductor:pr-body-floor -->\n\n## Summary\n\nfeature',
+          isDraft: true,
+        };
+        return { stdout: `${prUrl}\n` };
+      }
+      if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl && pullRequest) {
+        return { stdout: JSON.stringify(pullRequest) };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready' && args[2] === prUrl && pullRequest) {
+        pullRequest.isDraft = false;
+        return { stdout: '' };
+      }
+      throw new Error(`unexpected GitHub command: gh ${args.join(' ')}`);
+    });
+    const git = vi.fn(async (args: string[]) => {
+      if (args[0] === 'remote') return { stdout: 'origin\n' };
+      if (args[0] === 'rev-list') return { stdout: '1\n' };
+      if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+      if (args[0] === 'merge-base') return { stdout: '' };
+      if (args[0] === 'push') return { stdout: '' };
+      throw new Error(`unexpected git command: git ${args.join(' ')}`);
+    });
+    const state = {
+      feature_desc: 'feature',
+      worktree_branch: 'feat/feature',
+      build_review: 'done',
+      test_suite: 'done',
+      manual_test: 'done',
+      architecture_review_as_built: 'done',
+    } as ConductState;
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: conductorRoot,
+      stateFilePath: join(pipeline, 'conduct-state.json'),
+      baseBranch: 'main',
+      git,
+      gh,
+      observeReleaseReadiness: async () => 'present',
+      writeShippedRecord: async () => {
+        await mkdir(join(conductorRoot!, '.docs', 'shipped'), { recursive: true });
+        await writeFile(join(conductorRoot!, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+        return 0;
+      },
+      recordFinish: async () => {
+        await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+        return 0;
+      },
+    });
+    const transitions: string[] = [];
+    let terminal: Awaited<ReturnType<typeof coordinator.advance>> | undefined;
+
+    for (let attempt = 0; attempt < 8; attempt++) {
+      terminal = await coordinator.advance({
+        state,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => {
+          if (!pullRequest) throw new Error('judgment requires a PR');
+          pullRequest.title = 'feat: publish coherent finish';
+          pullRequest.body = 'A reader-facing summary of the completed change.';
+          return { success: true };
+        },
+        emit: async (event) => {
+          if (event.type === 'finish_publication_transition' && event.phase === 'completed') {
+            transitions.push(event.transition);
+          }
+        },
+      });
+      if (terminal.kind === 'complete') break;
+    }
+
+    expect(terminal).toEqual({ kind: 'complete' });
+    expect(transitions).toEqual([
+      'establish_pr',
+      'write_shipped_record',
+      'judge_pr_prose',
+      'ready_pr',
+      'record_outcome',
+    ]);
+    expect(githubCalls.some((args) => args[0] === 'pr' && args[1] === 'merge')).toBe(false);
+    expect(githubCalls.some((args) => /auto-merge|enablepullrequestautomerge|--auto/i.test(args.join(' ')))).toBe(false);
+  });
+
   it('retains prior verified state when GitHub is unavailable during a load-bearing write', async () => {
     const advance = await loadAdvanceFinishPublication();
     const fixture = makePublicationFixture(
@@ -603,6 +716,7 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
         gh: async () => {
           throw new Error('GitHub must not be called for safe keep');
         },
+        observeReleaseReadiness: async () => 'present',
         recordFinish: async () => {
           await writeFile(join(conductorRoot!, '.pipeline', 'finish-choice'), 'keep\n');
           return 0;

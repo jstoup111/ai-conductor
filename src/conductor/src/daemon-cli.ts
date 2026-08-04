@@ -45,7 +45,10 @@ import {
   Conductor,
   type OperatorParkedTermination,
 } from './engine/conductor.js';
-import { createProductionFinishPublicationCoordinator } from './engine/finish-publication-production.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  createProductionReleaseReadinessObserver,
+} from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
 import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
@@ -1034,6 +1037,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         baseBranch,
         git: makeFinishPublicationGit(),
         gh: makeProductionGh(),
+        observeReleaseReadiness: createProductionReleaseReadinessObserver({
+          projectRoot: wt.path,
+          config,
+        }),
       }),
       worktreeBranch: wt.branch,
       log: featureLog,

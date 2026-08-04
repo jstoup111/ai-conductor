@@ -25,7 +25,10 @@ import { realpathSync } from 'node:fs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
 import { Conductor } from './engine/conductor.js';
-import { createProductionFinishPublicationCoordinator } from './engine/finish-publication-production.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  createProductionReleaseReadinessObserver,
+} from './engine/finish-publication-production.js';
 import { makeProductionGit } from './engine/pr-labels.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
@@ -1193,6 +1196,21 @@ async function main(): Promise<void> {
       baseBranch: finishPublicationBaseBranch,
       git: makeProductionGit(),
       gh: makeProductionGh(),
+      observeReleaseReadiness: createProductionReleaseReadinessObserver({
+        projectRoot,
+        config,
+      }),
+      acquireInteractiveIntent: async () => {
+        while (true) {
+          const answer = await promptHost.ask(
+            'Publication outcome: [p]ull request, [k]eep committed work, or [d]efer? ',
+          );
+          if (answer === 'p' || answer === 'pr' || answer === 'pull request') return 'pr';
+          if (answer === 'k' || answer === 'keep') return 'keep';
+          if (answer === 'd' || answer === 'defer') return 'defer';
+          console.log('  Invalid choice. Enter p, k, or d.');
+        }
+      },
     }),
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,

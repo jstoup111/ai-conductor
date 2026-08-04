@@ -1,13 +1,224 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  createProductionReleaseReadinessObserver,
+} from '../../src/engine/finish-publication-production.js';
+import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
+import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import type { ConductState } from '../../src/types/index.js';
 
 const commandResult = { stdout: '' };
 
 describe('production FINISH publication composition', () => {
+  it.each([
+    ['missing', 'missing'],
+    ['stale', 'stale'],
+    ['malformed', 'malformed'],
+    ['unavailable', 'unavailable'],
+    ['present', 'present'],
+  ] as const)('observes configured release-readiness evidence as %s', async (fixture, expected) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-readiness-observer-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      const marker = join(pipeline, 'release-disposition-pass');
+      const runStartedAt = Date.now();
+      if (fixture === 'stale' || fixture === 'present') {
+        await writeFile(marker, 'PASS\n');
+      } else if (fixture === 'malformed') {
+        await mkdir(marker);
+      }
+      if (fixture === 'stale') {
+        const staleDate = new Date(runStartedAt - 60_000);
+        await utimes(marker, staleDate, staleDate);
+      }
+      const observer = createProductionReleaseReadinessObserver({
+        projectRoot: root,
+        config: {
+          steps: {
+            'release-disposition': {
+              completion_artifact: '.pipeline/release-disposition-pass',
+            },
+          },
+        },
+      });
+      const state = {
+        ...({ 'release-disposition': 'done' } as Record<string, unknown>),
+        ...(fixture === 'unavailable'
+          ? {}
+          : { run_started_at: runStartedAt, session_started_at: runStartedAt + 60_000 }),
+      } as ConductState;
+
+      await expect(observer(state)).resolves.toBe(expected);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when release-readiness observation is not composed', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-readiness-unwired-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'feat: publish coherent finish',
+              body: 'Reader-facing summary.',
+              isDraft: true,
+            }),
+          };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+      });
+
+      const result = await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        emit: async () => {},
+      });
+
+      expect(result).toEqual({
+        kind: 'publication_retry',
+        condition: {
+          code: 'release_readiness_indeterminate',
+          message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+          nextAction: 'restore_release_readiness_observation',
+        },
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      label: 'missing',
+      observe: async () => 'missing' as const,
+      condition: {
+        code: 'release_readiness_missing',
+        message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+        nextAction: 'publish_release_readiness',
+      },
+    },
+    ...(['stale', 'malformed'] as const).map((observation) => ({
+      label: observation,
+      observe: async () => observation,
+      condition: {
+        code: 'release_readiness_invalid',
+        message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+        nextAction: 'restore_release_readiness',
+      },
+    })),
+    {
+      label: 'unavailable',
+      observe: async (): Promise<never> => { throw new Error('readiness store unavailable'); },
+      condition: {
+        code: 'release_readiness_indeterminate',
+        message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+        nextAction: 'restore_release_readiness_observation',
+      },
+    },
+  ])('blocks $label release readiness before judgment or publication mutation', async ({ observe, condition }) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-readiness-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        return commandResult;
+      });
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'feat: publish coherent finish',
+              body: 'Reader-facing summary.',
+              isDraft: true,
+            }),
+          };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const writeShippedRecord = vi.fn(async () => 0);
+      const recordFinish = vi.fn(async () => 0);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git,
+        gh,
+        observeReleaseReadiness: observe,
+        writeShippedRecord,
+        recordFinish,
+      });
+
+      const result = await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment,
+        emit: async () => {},
+      });
+
+      expect(result).toEqual({
+        kind: 'publication_retry',
+        condition,
+      });
+      expect(dispatchJudgment).not.toHaveBeenCalled();
+      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && ['create', 'ready'].includes(args[1]!))).toBe(false);
+      expect(writeShippedRecord).not.toHaveBeenCalled();
+      expect(recordFinish).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('establishes a missing draft PR against the supplied base branch', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-establish-'));
     try {
@@ -49,6 +260,7 @@ describe('production FINISH publication composition', () => {
         git,
         gh,
         baseBranch: 'trunk',
+        observeReleaseReadiness: async () => 'present',
       });
 
       await expect(
@@ -131,6 +343,7 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git,
         gh,
+        observeReleaseReadiness: async () => 'present',
       });
       const input = {
         state,
@@ -150,6 +363,66 @@ describe('production FINISH publication composition', () => {
       });
       expect(afterRestart).toEqual(beforeRestart);
       expect(dispatchJudgment).not.toHaveBeenCalled();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ['placeholder floor', `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\nDraft publication`, 'feat: draft publication'],
+    ['halt banner', `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, 'Needs remediation: publication'],
+  ])('keeps judgment required for %s prose without recording completion', async (_label, body, title) => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-prose-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') {
+          return {
+            stdout: JSON.stringify({ url: prUrl, title, body, isDraft: true }),
+          };
+        }
+        throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const recordFinish = vi.fn(async () => 0);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote'
+          ? { stdout: 'origin\n' }
+          : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        observeReleaseReadiness: async () => 'present',
+        recordFinish,
+      });
+
+      const result = await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          pr_url: prUrl,
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment,
+        emit: async () => {},
+      });
+
+      expect(result).toMatchObject({ kind: 'publication_retry', transition: 'judge_pr_prose' });
+      expect(dispatchJudgment).toHaveBeenCalledOnce();
+      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
+      expect(recordFinish).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }
@@ -176,6 +449,8 @@ describe('production FINISH publication composition', () => {
         baseBranch: 'main',
         git,
         gh,
+        observeReleaseReadiness: async () => 'present',
+        acquireInteractiveIntent: async () => 'keep',
       });
       const dispatchJudgment = vi.fn(async () => ({ success: true }));
 
@@ -198,4 +473,112 @@ describe('production FINISH publication composition', () => {
       await rm(root, { recursive: true, force: true });
     }
   });
+
+  it('acquires fresh interactive PR intent before every publication observation or effect', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-interactive-pr-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      const trace: string[] = [];
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const git = vi.fn(async (args: string[]) => {
+        trace.push(`git:${args.join(' ')}`);
+        if (args[0] === 'rev-list') return { stdout: '1\n' };
+        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        return commandResult;
+      });
+      const gh = vi.fn(async (args: string[]) => {
+        trace.push(`gh:${args.join(' ')}`);
+        if (args[0] === 'pr' && args[1] === 'view') throw new Error('no open PR');
+        if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${prUrl}\n` };
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      });
+      const writeShippedRecord = vi.fn(async () => { trace.push('shipped-record'); return 0; });
+      const recordFinish = vi.fn(async () => { trace.push('outcome-record'); return 0; });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git,
+        gh,
+        acquireInteractiveIntent: async () => { trace.push('operator-choice'); return 'pr'; },
+        observeReleaseReadiness: async () => { trace.push('release-readiness'); return 'present'; },
+        writeShippedRecord,
+        recordFinish,
+      });
+
+      const result = await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        emit: async () => {},
+      });
+
+      expect(result).toMatchObject({ kind: 'publication_retry', transition: 'establish_pr' });
+      expect(trace[0]).toBe('operator-choice');
+      expect(trace.indexOf('operator-choice')).toBeLessThan(trace.findIndex((entry) => entry.startsWith('git:push')));
+      expect(trace.indexOf('operator-choice')).toBeLessThan(trace.indexOf('release-readiness'));
+      expect(trace.indexOf('operator-choice')).toBeLessThan(trace.findIndex((entry) => entry.startsWith('gh:pr create')));
+      expect(writeShippedRecord).not.toHaveBeenCalled();
+      expect(recordFinish).not.toHaveBeenCalled();
+      await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).rejects.toThrow();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['defer', 'decline'] as const)(
+    'keeps interactive %s inert before any publication boundary',
+    async (choice) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-production-interactive-inert-'));
+      try {
+        const pipeline = join(root, '.pipeline');
+        await mkdir(pipeline);
+        const git = vi.fn(async () => commandResult);
+        const gh = vi.fn(async () => commandResult);
+        const readiness = vi.fn(async () => 'present' as const);
+        const writeShippedRecord = vi.fn(async () => 0);
+        const recordFinish = vi.fn(async () => 0);
+        const coordinator = createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          git,
+          gh,
+          acquireInteractiveIntent: async () => choice,
+          observeReleaseReadiness: readiness,
+          writeShippedRecord,
+          recordFinish,
+        });
+
+        const result = await coordinator.advance({
+          state: { feature_desc: 'feature' } as ConductState,
+          mode: 'interactive',
+          daemon: false,
+          dispatchJudgment: vi.fn(async () => ({ success: true })),
+          emit: async () => {},
+        });
+
+        expect(result).toEqual({
+          kind: 'human_required',
+          reason: choice === 'defer' ? 'interactive_intent_deferred' : 'interactive_intent_declined',
+        });
+        expect(git).not.toHaveBeenCalled();
+        expect(gh).not.toHaveBeenCalled();
+        expect(readiness).not.toHaveBeenCalled();
+        expect(writeShippedRecord).not.toHaveBeenCalled();
+        expect(recordFinish).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
 });

@@ -6,14 +6,18 @@
  * `finish-publication.ts`; this module is deliberately only its real-boundary
  * adapter.
  */
-import { access, readFile } from 'node:fs/promises';
+import { access, lstat, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
+import type { HarnessConfig } from '../types/config.js';
 import type { StepRunResult } from './conductor.js';
 import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
-import { NEEDS_REMEDIATION_TITLE_PREFIX } from './halt-pr-rehabilitation.js';
+import {
+  NEEDS_REMEDIATION_TITLE_PREFIX,
+  PR_BODY_FLOOR_MARKER,
+} from './halt-pr-rehabilitation.js';
 import { savePrUrl, writeState } from './state.js';
 import {
   dispatchFinishRecord,
@@ -51,7 +55,46 @@ export interface ProductionFinishPublicationDeps {
   /** The existing shipped-record entry, injectable for tests. */
   writeShippedRecord?: typeof dispatchShippedRecord;
   /** Release readiness is owned by the release gate; this is observation only. */
-  observeReleaseReadiness?: () => Promise<'present' | 'missing' | 'stale' | 'malformed' | 'unavailable'>;
+  observeReleaseReadiness?: (
+    state: ConductState,
+  ) => Promise<'present' | 'missing' | 'stale' | 'malformed' | 'unavailable'>;
+  /** Interactive intent comes from the host conversation, never finish-record output. */
+  acquireInteractiveIntent?: () => Promise<unknown>;
+}
+
+export interface ProductionReleaseReadinessObserverInput {
+  projectRoot: string;
+  config?: HarnessConfig;
+}
+
+/**
+ * Resolve the configured pre-FINISH release-disposition evidence. Repositories
+ * without that custom gate have no release-readiness prerequisite; a declared
+ * gate must provide a regular-file marker written during the current feature
+ * run. The feature-run floor survives process restarts, so a resumable FINISH
+ * does not invalidate readiness merely because it entered a new session.
+ */
+export function createProductionReleaseReadinessObserver(
+  input: ProductionReleaseReadinessObserverInput,
+): (state: ConductState) => Promise<'present' | 'missing' | 'stale' | 'malformed' | 'unavailable'> {
+  const releaseStep = input.config?.steps?.['release-disposition'];
+  if (releaseStep === undefined) return async () => 'present';
+
+  const completionArtifact = releaseStep.completion_artifact;
+  if (completionArtifact === undefined) return async () => 'malformed';
+  const artifactPath = join(input.projectRoot, completionArtifact);
+
+  return async (state) => {
+    if ((state as Record<string, unknown>)['release-disposition'] !== 'done') return 'missing';
+    if (!Number.isFinite(state.run_started_at)) return 'unavailable';
+    try {
+      const artifact = await lstat(artifactPath);
+      if (!artifact.isFile()) return 'malformed';
+      return artifact.mtimeMs < state.run_started_at! ? 'stale' : 'present';
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unavailable';
+    }
+  };
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -67,7 +110,9 @@ function prProse(title: unknown, body: unknown): 'accepted' | 'stale' | 'placeho
     prTitle.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
     prBody.includes(HALT_PR_BANNER_SENTINEL)
   ) return 'halt';
-  if (/AI_CONDUCTOR_PR_BODY_FLOOR|Draft opened automatically/i.test(text)) return 'placeholder';
+  if (prBody.includes(PR_BODY_FLOOR_MARKER) || /Draft opened automatically/i.test(text)) {
+    return 'placeholder';
+  }
   return 'accepted';
 }
 
@@ -85,9 +130,11 @@ export function createProductionFinishPublicationCoordinator(
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, emit }) {
-      const requestedOutcome = await readFile(join(pipelineDir, 'finish-choice'), 'utf8')
-        .then((value) => value.trim())
-        .catch(() => undefined);
+      const requestedOutcome = mode === 'interactive'
+        ? await deps.acquireInteractiveIntent?.()
+        : await readFile(join(pipelineDir, 'finish-choice'), 'utf8')
+          .then((value) => value.trim())
+          .catch(() => undefined);
       const intent =
         mode === 'interactive'
           ? resolveInteractivePublicationIntent(requestedOutcome)
@@ -165,7 +212,10 @@ export function createProductionFinishPublicationCoordinator(
                 : 'missing',
           },
           releaseReadiness: {
-            observeReleaseReadiness: deps.observeReleaseReadiness ?? (async () => 'present'),
+            observeReleaseReadiness: async () => {
+              if (deps.observeReleaseReadiness === undefined) throw new Error('release-readiness observer unavailable');
+              return deps.observeReleaseReadiness(state);
+            },
           },
         },
       };
