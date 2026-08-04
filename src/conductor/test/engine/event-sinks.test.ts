@@ -45,6 +45,26 @@ const PRE_REFACTOR_PERSISTED_EVENT_TYPES = [
   'attribution_divergence',
 ] satisfies Array<ConductorEvent['type']>;
 
+const BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES = [
+  'build_member_evidence_reused',
+  'build_member_evidence_recomputed',
+] satisfies Array<ConductorEvent['type']>;
+
+const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
+  ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
+  'verdict_freshness',
+  'operator_park_boundary',
+  // Seal-rebaseline decisions are durable telemetry: the record of which
+  // inherited seals were rebaselined (and which were refused as genuine
+  // DECIDE-artifact violations) has to outlive the run that made it.
+  'protected_artifact_rebaseline',
+  'protected_artifact_rebaseline_refused',
+] satisfies Array<ConductorEvent['type']>;
+
+const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
+  BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
+);
+
 const PRE_REFACTOR_AUDITED_EVENT_TYPES = [
   'gate_verdict',
   'step_retry',
@@ -80,6 +100,7 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'build_review_stale_mirage_regrade',
   'auto_park_contradiction',
   'verdict_freshness',
+  ...BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES,
   'protected_artifact_rebaseline',
   'protected_artifact_rebaseline_refused',
   'parallel_started',
@@ -177,8 +198,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 63 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(63);
+  it('is total over all 65 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(65);
   });
 
   it('routes verdict_freshness to every sink', () => {
@@ -189,19 +210,13 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('derives the persisted set without changing prior routing', () => {
+  it('keeps persisted routing equivalent over pre-settle types while including settle decisions', () => {
     const persisted = persistedEventTypes();
 
-    expect(new Set(persisted)).toEqual(new Set([
-      ...PRE_REFACTOR_PERSISTED_EVENT_TYPES,
-      'verdict_freshness',
-      'operator_park_boundary',
-      // Seal-rebaseline decisions are durable telemetry: the record of which
-      // inherited seals were rebaselined (and which were refused as genuine
-      // DECIDE-artifact violations) has to outlive the run that made it.
-      'protected_artifact_rebaseline',
-      'protected_artifact_rebaseline_refused',
-    ]));
+    expect(new Set(persisted.filter((type) =>
+      !buildMemberSettleDecisionEventTypes.has(type),
+    ))).toEqual(new Set(PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES));
+    expect(persisted).toEqual(expect.arrayContaining(BUILD_MEMBER_SETTLE_DECISION_EVENT_TYPES));
     expect(persisted).not.toEqual(Object.keys(EVENT_SINKS));
   });
 
