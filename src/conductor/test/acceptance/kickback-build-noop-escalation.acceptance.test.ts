@@ -374,9 +374,23 @@ describe('acceptance: kickback→build no-op escalation (#647)', () => {
   });
 
   // ── Story 4 happy (D3): the audit trail distinguishes a no-op kickback
-  // ("derived-already-complete") from a productive one ("did-work").
+  // ("derived-already-complete") from a productive one ("did-work"). The
+  // remediation still names a concrete BUILD task: its generated task-status
+  // entry is already evidence-complete, which is the D1 no-op shape.
   it('Story 4 happy: audit trail records derived-already-complete for a D1 no-op kickback', async () => {
-    await seedShipTail({ tasks: [{ id: 'task-1', status: 'completed' }] });
+    await seedShipTail({
+      tasks: [
+        { id: 'task-1', status: 'completed' },
+        { id: 'rem-1', status: 'completed' },
+      ],
+    });
+    const planPath = join(dir, '.docs/plans/feat.md');
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await writeFile(planPath, '# Implementation Plan\n\n### Task task-1: Existing work\n');
+    await writeFile(
+      join(dir, '.pipeline/engine-state.json'),
+      JSON.stringify({ activePlanPath: planPath }),
+    );
     const { all: emitted } = captureEvents(events);
     const runner: StepRunner = {
       run: vi.fn(async (step: StepName) => {
@@ -392,7 +406,12 @@ describe('acceptance: kickback→build no-op escalation (#647)', () => {
                   disposition: 'build',
                   category: null,
                   rationale: 'as-built review says the fix is missing',
-                  tasks: [],
+                  tasks: [
+                    {
+                      id: 'rem-1',
+                      title: 'Update src/conductor/src/engine/conductor.ts audit routing',
+                    },
+                  ],
                 },
               ],
             }),
