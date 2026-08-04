@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { validatePublicationSnapshot } from '../../src/engine/finish-publication.js';
+import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
 
@@ -23,12 +24,22 @@ interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
   effects: {
     dispatchJudgment(): Promise<void>;
+    establishPr?: {
+      gh: GhRunner;
+      git: GitRunner;
+      cwd: string;
+      branch: string;
+      baseBranch: string;
+      featureDesc?: string;
+    };
   };
 }
 
 type AdvanceFinishPublicationResult =
-  | { kind: 'advanced'; transition: 'judge_pr_prose' }
-  | { kind: 'publication_retry'; condition: PublicationCondition };
+  | { kind: 'advanced'; transition: 'judge_pr_prose' | 'establish_pr' }
+  | { kind: 'publication_retry'; condition: PublicationCondition }
+  | { kind: 'publication_retry'; transition: 'establish_pr'; reason: string }
+  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' };
 
 type AdvanceFinishPublication = (
   input: AdvanceFinishPublicationInput,
@@ -182,6 +193,34 @@ function observationInput(ports: PublicationObservationPorts): ObservePublicatio
       authority: { kind: 'unattended_policy', mode: 'daemon' },
     },
     ports,
+  };
+}
+
+function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error) {
+  const gitCalls: string[][] = [];
+  const ghCalls: string[][] = [];
+  const git: GitRunner = async (args) => {
+    gitCalls.push([...args]);
+    if (args[0] === 'rev-list') return { stdout: '1\n' };
+    return { stdout: '' };
+  };
+  const gh: GhRunner = async (args) => {
+    ghCalls.push([...args]);
+    const result = ghHandler(args);
+    if (result instanceof Error) throw result;
+    return result;
+  };
+  return {
+    deps: {
+      gh,
+      git,
+      cwd: '/repo',
+      branch: 'feat/widget',
+      baseBranch: 'main',
+      featureDesc: 'widget',
+    },
+    gitCalls,
+    ghCalls,
   };
 }
 
@@ -512,6 +551,83 @@ describe('advanceFinishPublication preflight', () => {
       },
     });
 
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+});
+
+describe('advanceFinishPublication PR identity', () => {
+  it('reuses an observed existing draft identity without opening another PR', async () => {
+    const dispatchJudgment = vi.fn(async () => undefined);
+    const draft = draftPrFakes(() => new Error('must not call GitHub'));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment, establishPr: draft.deps },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(draft.gitCalls).toHaveLength(0);
+    expect(draft.ghCalls).toHaveLength(0);
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens exactly one draft PR and re-observes its identity before advancing', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
+      .mockResolvedValueOnce(readyPublicationSnapshot());
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'establish_pr' });
+
+    expect(draft.ghCalls.filter((args) => args[1] === 'create')).toHaveLength(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('halts ambiguous PR identity without guessing a publication mutation', async () => {
+    const dispatchJudgment = vi.fn(async () => undefined);
+    const draft = draftPrFakes(() => new Error('must not call GitHub'));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({
+            pr: { identity: 'ambiguous', urls: ['https://github.com/acme/widget/pull/1', 'https://github.com/acme/widget/pull/2'] },
+          }),
+        effects: { dispatchJudgment, establishPr: draft.deps },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'ambiguous_pr_identity' });
+
+    expect(draft.gitCalls).toHaveLength(0);
+    expect(draft.ghCalls).toHaveLength(0);
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('does not claim PR identity when GitHub fails and re-observation remains absent', async () => {
+    const draft = draftPrFakes(() => new Error('GitHub unavailable'));
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValue(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }));
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'establish_pr',
+      reason: 'draft_pr_failed',
+    });
+
+    expect(observe).toHaveBeenCalledTimes(2);
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
 });

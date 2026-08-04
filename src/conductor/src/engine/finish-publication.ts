@@ -1,3 +1,8 @@
+import {
+  openShipDraftPr,
+  type OpenShipDraftPrDeps,
+} from './ship-draft-pr.js';
+
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
  * derives these values from authoritative repository and external evidence;
@@ -525,12 +530,20 @@ export interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
   effects: {
     dispatchJudgment(): Promise<void>;
+    /**
+     * Existing SHIP draft-PR primitive, supplied with injected Git/GitHub
+     * runners by the composition root. It is optional only because callers
+     * that already observed a stable identity never need this transition.
+     */
+    establishPr?: OpenShipDraftPrDeps;
   };
 }
 
 export type AdvanceFinishPublicationResult =
-  | { kind: 'advanced'; transition: 'judge_pr_prose' }
-  | { kind: 'publication_retry'; condition: PublicationCondition };
+  | { kind: 'advanced'; transition: 'establish_pr' | 'judge_pr_prose' }
+  | { kind: 'publication_retry'; condition: PublicationCondition }
+  | { kind: 'publication_retry'; transition: 'establish_pr'; reason: string }
+  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' };
 
 /**
  * The narrow Task 7 coordinator seam: observe first, stop on deterministic
@@ -539,9 +552,45 @@ export type AdvanceFinishPublicationResult =
 export async function advanceFinishPublication(
   input: AdvanceFinishPublicationInput,
 ): Promise<AdvanceFinishPublicationResult> {
-  const preflight = preflightFinishPublication(await input.observe());
+  const snapshot = await input.observe();
+  const preflight = preflightFinishPublication(snapshot);
   if (preflight.kind === 'blocked') {
     return { kind: 'publication_retry', condition: preflight.condition };
+  }
+
+  if (snapshot.pr.identity === 'ambiguous') {
+    return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'establish_pr') {
+    if (!input.effects.establishPr) {
+      return {
+        kind: 'publication_retry',
+        transition: 'establish_pr',
+        reason: 'draft_pr_effect_unavailable',
+      };
+    }
+
+    const draftPr = await openShipDraftPr(input.effects.establishPr);
+    const observedAfterEstablish = await input.observe();
+    if (
+      observedAfterEstablish.pr.identity === 'one' &&
+      observedAfterEstablish.branchPushed === 'valid'
+    ) {
+      return { kind: 'advanced', transition: 'establish_pr' };
+    }
+    if (observedAfterEstablish.pr.identity === 'ambiguous') {
+      return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+    }
+
+    return {
+      kind: 'publication_retry',
+      transition: 'establish_pr',
+      reason:
+        draftPr.outcome === 'published'
+          ? 'pr_identity_not_verified_after_establish'
+          : `draft_pr_${draftPr.outcome}`,
+    };
   }
 
   await input.effects.dispatchJudgment();

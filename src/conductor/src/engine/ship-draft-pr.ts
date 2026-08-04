@@ -154,12 +154,15 @@ export async function openShipDraftPr(
       '',
     ].join('\n');
 
-    const { prUrl } = await findOrCreatePr(
-      gh,
-      cwd,
-      { branch, base: baseBranch, draft: true, title, body },
-      log,
-    );
+    const opts = { branch, base: baseBranch, draft: true, title, body };
+    let { prUrl } = await findOrCreatePr(gh, cwd, opts, log);
+    // GitHub can complete `pr create` and lose the response before the
+    // runner receives a URL. Re-enter the existing find-or-create seam so
+    // its branch-pinned lookup recovers that draft instead of reporting a
+    // failed publication or creating a second identity on a later retry.
+    if (!prUrl) {
+      ({ prUrl } = await findOrCreatePr(gh, cwd, opts, log));
+    }
     if (!prUrl) {
       const reason = `gh could not open or resolve a draft PR for ${branch}`;
       log(`[ship-draft-pr] ${reason} (advisory, build continues)`);
