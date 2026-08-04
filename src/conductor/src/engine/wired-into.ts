@@ -108,8 +108,33 @@ const INERT_UNTIL = /^none\s*\(\s*inert until\s+(.+?)\s*\)$/i;
 /** `owner/repo#number`, e.g. `jstoup111/ai-conductor#999`. */
 const ISSUE_REF = /^([^\s/]+)\/([^\s/#]+)#(\d+)$/;
 
+/**
+ * A ref wrapped in Markdown inline code — `` `path` `` or ``` ``path`` ``` —
+ * with matching delimiter runs on both sides. Plan authors habitually
+ * backtick paths in prose, and the surrounding `**Wired-into:**` line is
+ * itself Markdown, so the delimiters are formatting, not part of the ref.
+ */
+const INLINE_CODE_WRAPPED = /^(`+)([^`].*?[^`]|[^`])\1$/;
+
+/**
+ * Strip a balanced Markdown inline-code wrapper from a ref. Refs with no
+ * wrapper — including ones carrying an unbalanced stray backtick — are
+ * returned unchanged, so this can never corrupt an otherwise-valid ref.
+ */
+function stripInlineCode(text: string): string {
+  return text.match(INLINE_CODE_WRAPPED)?.[2].trim() ?? text;
+}
+
+/**
+ * The single producer of `InertRef` values (`parseWiredIntoLine` is its only
+ * caller), so normalizing here covers every downstream consumer — notably
+ * `resolveWaiverRef` in wiring-probe.ts, which resolves a path-form ref
+ * against the filesystem and previously looked for a file whose name still
+ * contained the backticks.
+ */
 function classifyInertRef(text: string): InertRef {
-  const issueMatch = text.match(ISSUE_REF);
+  const ref = stripInlineCode(text);
+  const issueMatch = ref.match(ISSUE_REF);
   if (issueMatch) {
     return {
       form: 'issue',
@@ -118,7 +143,7 @@ function classifyInertRef(text: string): InertRef {
       number: Number(issueMatch[3]),
     };
   }
-  return { form: 'path', path: text };
+  return { form: 'path', path: ref };
 }
 
 /** One `path#symbol` entry, optionally wrapped in backticks. */

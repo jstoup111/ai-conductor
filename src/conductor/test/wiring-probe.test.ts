@@ -734,6 +734,36 @@ describe('computeWiringEvidence', () => {
     expect(task1?.gaps.some((g) => g.message.includes('unverifiable'))).toBe(true);
   });
 
+  it('resolves a path-form inert waiver whose ref is wrapped in Markdown inline code', async () => {
+    const target = 'global-setup.ts';
+    const planPath = join(projectRoot, 'plan.md');
+    await writeFile(join(projectRoot, target), 'export {};\n');
+    await writeFile(
+      planPath,
+      [
+        '### Task 1: Add fixture isolation',
+        `**Wired-into:** none (inert until \`${target}\`)`,
+        '',
+      ].join('\n'),
+    );
+
+    const evidence = await computeWiringEvidence({
+      runGit: fakeGitRouter({
+        head: 'headsha-inline-code-waiver',
+        originRef: 'origin/main',
+        base: 'basesha-inline-code-waiver',
+        diff: '',
+      }),
+      projectRoot,
+      planPath,
+      config: {} as HarnessConfig,
+      gh: NEVER_CALLED_GH,
+      anchor: '',
+    });
+
+    expect(evidence.tasks.find((task) => task.id === '1')?.gaps).toEqual([]);
+  });
+
   it('retains the orphan gap and appends the failed same-file proof reason in computed evidence', async () => {
     const planPath = join(projectRoot, 'plan.md');
     await writeFile(join(projectRoot, 'tsconfig.json'), '{}');
