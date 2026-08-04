@@ -88,7 +88,7 @@ function withRemediation(
                 disposition: 'build',
                 category: null,
                 rationale: 'fix the flagged drift',
-                tasks: [],
+                tasks: [{ id: 'gap-1-fix', title: 'Repair the flagged drift' }],
               },
             ],
           }),
