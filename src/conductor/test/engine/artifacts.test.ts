@@ -2024,8 +2024,97 @@ describe('engine/artifacts', () => {
         });
 
         expect(result.done).toBe(false);
+        const expectedMissing: CompletionResult['missing'] = 'uncommitted';
+        expect(result.missing).toBe(expectedMissing);
         expect(result.reason).toContain('uncommitted');
         expect(result.reason).toContain('src/a.ts');
+      });
+
+      describe('dirty-worktree predicate precedence', () => {
+        function dirtyWorktreeStatus() {
+          return vi.fn(async () => ' M src/dirty.ts\n');
+        }
+
+        it('keeps the halt-marker reason when the worktree is dirty', async () => {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+          await createFile(HALT_MARKER, 'awaiting user input');
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/halt-user-input-required/);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('keeps the missing-plan reason when the worktree is dirty', async () => {
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/missing.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/plan|missing|unreadable/i);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('keeps the empty-plan reason when the worktree is dirty', async () => {
+          await writePlan('# Empty Plan\n\nNo tasks defined.\n');
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/empty|no tasks/i);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('keeps the unresolved-task reason when the worktree is dirty', async () => {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'pending' }]);
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/tasks pending\/not completed/);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('reports missing: uncommitted only after every earlier predicate branch passes', async () => {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result).toMatchObject({
+            done: false,
+            missing: 'uncommitted',
+          });
+          expect(result.reason).toContain('src/dirty.ts');
+          expect(worktreeStatus).toHaveBeenCalledOnce();
+        });
       });
 
       it('truncates dirty-worktree completion feedback after the first three paths', async () => {
