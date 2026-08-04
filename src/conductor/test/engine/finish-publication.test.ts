@@ -24,6 +24,7 @@ interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
   effects: {
     dispatchJudgment(): Promise<void>;
+    createShippedRecord?: () => Promise<void>;
     establishPr?: {
       gh: GhRunner;
       git: GitRunner;
@@ -36,10 +37,10 @@ interface AdvanceFinishPublicationInput {
 }
 
 type AdvanceFinishPublicationResult =
-  | { kind: 'advanced'; transition: 'judge_pr_prose' | 'establish_pr' }
+  | { kind: 'advanced'; transition: 'judge_pr_prose' | 'establish_pr' | 'write_shipped_record' }
   | { kind: 'publication_retry'; condition: PublicationCondition }
-  | { kind: 'publication_retry'; transition: 'establish_pr'; reason: string }
-  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' };
+  | { kind: 'publication_retry'; transition: 'establish_pr' | 'write_shipped_record'; reason: string }
+  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' | 'invalid_shipped_record' };
 
 type AdvanceFinishPublication = (
   input: AdvanceFinishPublicationInput,
@@ -628,6 +629,108 @@ describe('advanceFinishPublication PR identity', () => {
     });
 
     expect(observe).toHaveBeenCalledTimes(2);
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+});
+
+describe('advanceFinishPublication durable shipped evidence', () => {
+  it('reuses an existing verified shipped record without invoking its writer', async () => {
+    const createShippedRecord = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(createShippedRecord).not.toHaveBeenCalled();
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates an absent shipped record once and re-observes strict evidence before advancing', async () => {
+    let shippedRecord: PublicationSnapshot['shippedRecord'] = 'missing';
+    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord }));
+    const createShippedRecord = vi.fn(async () => {
+      shippedRecord = 'valid';
+    });
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
+
+    expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
+      writes: 1,
+      observations: 2,
+    });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('refuses mismatched shipped evidence without overwriting it', async () => {
+    const createShippedRecord = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({ shippedRecord: 'invalid' }),
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
+
+    expect(createShippedRecord).not.toHaveBeenCalled();
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('keeps FINISH retryable when the shipped-record push fails', async () => {
+    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord: 'missing' }));
+    const createShippedRecord = vi.fn(async () => {
+      throw new Error('git push failed');
+    });
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'write_shipped_record',
+      reason: 'shipped_record_write_failed',
+    });
+
+    expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
+      writes: 1,
+      observations: 2,
+    });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('recovers a lost writer response by verifying the record before retrying', async () => {
+    let shippedRecord: PublicationSnapshot['shippedRecord'] = 'missing';
+    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord }));
+    const createShippedRecord = vi.fn(async () => {
+      shippedRecord = 'valid';
+      throw new Error('writer response lost after push');
+    });
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
+
+    expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
+      writes: 1,
+      observations: 2,
+    });
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
 });

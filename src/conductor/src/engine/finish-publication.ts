@@ -531,6 +531,12 @@ export interface AdvanceFinishPublicationInput {
   effects: {
     dispatchJudgment(): Promise<void>;
     /**
+     * The existing shipped-record primitive writes, commits, and pushes the
+     * record. It is injected here because `observe` remains the authority for
+     * strict committed-tree and PR-head verification.
+     */
+    createShippedRecord?: () => Promise<void>;
+    /**
      * Existing SHIP draft-PR primitive, supplied with injected Git/GitHub
      * runners by the composition root. It is optional only because callers
      * that already observed a stable identity never need this transition.
@@ -540,10 +546,14 @@ export interface AdvanceFinishPublicationInput {
 }
 
 export type AdvanceFinishPublicationResult =
-  | { kind: 'advanced'; transition: 'establish_pr' | 'judge_pr_prose' }
+  | { kind: 'advanced'; transition: 'establish_pr' | 'write_shipped_record' | 'judge_pr_prose' }
   | { kind: 'publication_retry'; condition: PublicationCondition }
-  | { kind: 'publication_retry'; transition: 'establish_pr'; reason: string }
-  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' };
+  | {
+      kind: 'publication_retry';
+      transition: 'establish_pr' | 'write_shipped_record';
+      reason: string;
+    }
+  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' | 'invalid_shipped_record' };
 
 /**
  * The narrow Task 7 coordinator seam: observe first, stop on deterministic
@@ -590,6 +600,47 @@ export async function advanceFinishPublication(
         draftPr.outcome === 'published'
           ? 'pr_identity_not_verified_after_establish'
           : `draft_pr_${draftPr.outcome}`,
+    };
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'write_shipped_record') {
+    // An invalid record can be a different feature's evidence, a stale hash,
+    // or an unpushed/malformed write. Replacing it would destroy the only
+    // diagnostic evidence, so require a human resolution rather than trying
+    // to overwrite it.
+    if (snapshot.shippedRecord === 'invalid') {
+      return { kind: 'human_required', reason: 'invalid_shipped_record' };
+    }
+    if (!input.effects.createShippedRecord) {
+      return {
+        kind: 'publication_retry',
+        transition: 'write_shipped_record',
+        reason: 'shipped_record_effect_unavailable',
+      };
+    }
+
+    let writeFailure: unknown;
+    try {
+      await input.effects.createShippedRecord();
+    } catch (error) {
+      // A response can be lost after a successful push. The mandatory
+      // re-observation below distinguishes that case from an actual failure.
+      writeFailure = error;
+    }
+
+    const observedAfterWrite = await input.observe();
+    if (observedAfterWrite.shippedRecord === 'valid') {
+      return { kind: 'advanced', transition: 'write_shipped_record' };
+    }
+    if (observedAfterWrite.shippedRecord === 'invalid') {
+      return { kind: 'human_required', reason: 'invalid_shipped_record' };
+    }
+    return {
+      kind: 'publication_retry',
+      transition: 'write_shipped_record',
+      reason: writeFailure
+        ? 'shipped_record_write_failed'
+        : 'shipped_record_not_verified_after_write',
     };
   }
 
