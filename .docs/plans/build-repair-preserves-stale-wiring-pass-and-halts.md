@@ -307,7 +307,7 @@ accepted assertions whose wording this changes.
 - `src/conductor/src/engine/conductor.ts`
 - `src/conductor/test/engine/event-persister.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/event-persister.ts#EventPersister, src/conductor/src/cli/daemon-cli.ts#renderDaemonEventUnsafe`
+**Wired-into:** `src/conductor/src/engine/event-persister.ts#EventPersister, src/conductor/src/daemon-cli.ts#renderDaemonEventUnsafe`
 
 **Dependencies:** Task 7
 
@@ -325,7 +325,7 @@ accepted assertions whose wording this changes.
 5. Commit with message: `feat(daemon): render build member settle decisions`.
 
 **Files:**
-- `src/conductor/src/cli/daemon-cli.ts`
+- `src/conductor/src/daemon-cli.ts`
 - `src/conductor/test/acceptance/staleness-decisions-invisible-in-daemon-log.acceptance.test.ts`
 
 **Wired-into:** same as Task 11
