@@ -23,10 +23,10 @@
 //       `verifyArtifacts: true`), seeded from the PRODUCTION exports — so if
 //       `coherence_check` is missing from the real set, the real conductor
 //       executes it and the test fails; and
-//   (c) a wiring guard on the real `daemon-cli.ts` source proving the stamping
-//       loop consumes the tier-correct derivation instead of the current
-//       unconditional `= 'done'` literal — so (b) cannot pass vacuously while
-//       production still stamps everything `done`.
+//   (c) wiring guards on the real daemon composition and state-derivation
+//       sources proving the daemon consumes the tier-correct derivation and
+//       resolves the tier before applying it — so (b) cannot pass vacuously
+//       while production still stamps everything `done`.
 //
 // SPEC ASSUMPTION (surfaced per the /verify-claims correctness gate): the ADR
 // and plan pin the BEHAVIOR (derive from `phase: 'DECIDE'`; stamp `'skipped'`
@@ -351,25 +351,30 @@ describe('Story 3 — preseeded steps carry a tier-correct status', () => {
   it('negative: the daemon stamping loop CONSUMES the tier-correct derivation (not a vacuous pass)', async () => {
     // Wiring guard (§3b): without this, every behavioral assertion above could
     // pass against a well-formed helper that production never calls, while the
-    // real stamping loop still writes an unconditional `'done'`.
-    const source = await readFile(
+    // real stamping loop still writes an unconditional `'done'`. The state
+    // mutation helper owns the fallback/stamping order; daemon-cli composes it.
+    const daemonSource = await readFile(
       fileURLToPath(new URL('../../src/daemon-cli.ts', import.meta.url)),
       'utf-8',
     );
+    const stateSource = await readFile(
+      fileURLToPath(new URL('../../src/engine/daemon-state.ts', import.meta.url)),
+      'utf-8',
+    );
 
-    expect(source).toMatch(/preseedStepStatuses/);
+    expect(daemonSource).toMatch(
+      /deriveDaemonBaseState\(observedState, item, preseedStepStatuses\)/,
+    );
     // The unconditional stamp is gone.
-    expect(source).not.toMatch(/\(baseState as Record<string, unknown>\)\[name\] = 'done';/);
+    expect(stateSource).not.toMatch(/\(baseState as Record<string, unknown>\)\[name\] = 'done';/);
     // Ordering hazard (plan Task 3): the tier fallback must precede stamping.
-    const fallbackAt = source.indexOf('baseState.complexity_tier = item.tier');
-    // The helper is exported near the module top; inspect its final reference,
-    // which is the production stamping call inside the daemon closure.
-    const stampAt = source.lastIndexOf('preseedStepStatuses');
+    const fallbackAt = stateSource.indexOf('baseState.complexity_tier = item.tier');
+    const stampAt = stateSource.indexOf('preseed(baseState.complexity_tier)');
     expect(fallbackAt).toBeGreaterThan(-1);
     expect(stampAt).toBeGreaterThan(-1);
     expect(
       fallbackAt,
-      'the complexity-tier fallback must be assigned BEFORE the preseed stamping loop',
+      'the complexity-tier fallback must be assigned BEFORE tier-correct statuses are derived',
     ).toBeLessThan(stampAt);
   });
 });
