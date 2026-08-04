@@ -79,6 +79,24 @@ Blockers from `/prd-audit`, as-built `/architecture-review`, and `/finish` route
 to the appropriate SDLC step or a required human decision. Neither path is pre-authored as
 speculative implementation work.
 
+### DECIDE Artifact Amendment Ownership
+
+When a DECIDE pass falsifies an assertion in an accepted DECIDE artifact, DECIDE amends that artifact
+in place on the spec branch before the first BUILD entry. Add the correction beside the original
+assertion in this additive form; never rewrite or delete the original text and never create a separate
+amendment record:
+
+```markdown
+> **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
+```
+
+BUILD never receives that mutation as a task. A plan task must not name another feature's artifact
+under `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`; authoring checks
+the plan with `conduct-ts plan-protected-targets <plan-path>`, and the spec land gate independently
+refuses a violating plan. A BUILD-discovered need for such an amendment returns to its owning DECIDE
+step through remediation rather than routing to BUILD or acceptance-spec work. Because DECIDE runs
+before the first BUILD seal baseline, its amendment is part of that baseline.
+
 **Checkpoints** are harness-level pauses (no Claude session). The user reviews output and
 chooses to continue, navigate back to a prior step, or quit. Navigating back marks the target
 step as `pending` and all downstream steps as `stale` (⚠), then re-runs from the target forward.

@@ -139,6 +139,18 @@ when its baseline is no longer an ancestor of `HEAD`. Both paths require every c
 artifact to equal the blob at `HEAD` and every `HEAD` blob to equal the base-branch tip. The engine
 records each rotation in `rebaselines` and logs the trigger, old and new commits, and paths.
 
+An accepted-artifact correction belongs to DECIDE, before that first BUILD entry. DECIDE writes the
+additive note beside the original assertion:
+
+```markdown
+> **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
+```
+
+The original assertion remains present, and no separate amendment artifact is created. This places the
+correction in the initial seal baseline. `conduct-ts plan-protected-targets <plan-path>` prevents a
+plan from assigning the same mutation to BUILD, and the land gate independently refuses a violating
+plan.
+
 An operator-approved plan or architecture amendment committed after first BUILD leaves this
 baseline stale by design. The amendment must be reviewed and then resealed through the engine-owned
 rotation function before the feature is re-queued. The audited rotation records the old and new

@@ -70,7 +70,7 @@ different times against different evidence.
 | --- | --- | --- | --- |
 | prerequisite | before every step | that step | 1 (universal) |
 | per-step completion | after a step runs, and whenever the loop re-scores it | that step, and the loop | 12 |
-| land-time | when a spec PR is landed | the spec, before anything is built | 7 |
+| land-time | when a spec PR is landed | the spec, before anything is built | 8 |
 | self-host | before the finish step, only when the harness is building itself | the PR | 6 |
 | hook | at the moment of a tool call | the individual edit, command, or dispatch | see [settings and hooks](../reference/settings-and-hooks.md) |
 
@@ -121,6 +121,12 @@ from specs that would waste a build.
 | tier agreement | a declared complexity tier that disagrees with the artifacts present |
 | coherence | a traceability record that does not connect outcomes, requirements, stories, and tasks |
 | mermaid render | a diagram that does not render — previously prose guidance, now enforced |
+| protected-target plan | a task that directs BUILD to amend another feature's sealed DECIDE artifact |
+
+Before land, plan authoring runs `conduct-ts plan-protected-targets <plan-path>`. It is a blocking,
+read-only check that reports every offending task/path pair. Land repeats the same judgment against
+the plan being landed, so a plan cannot bypass the rule by skipping the authoring command. Both gates
+apply at every tier and judge only the current plan, not historical plans already merged.
 
 The coherence gate is itself layered. It disengages entirely at tier S, and it does not apply retroactively:
 a change set with no coherence artifact path in it is treated as a legacy change, not a violation. Once
@@ -184,6 +190,10 @@ An ordinary `build` disposition must carry concrete tasks — a taskless `build`
 halts instead of dispatching an empty route to the builder. The one exception is a build-stall question:
 there the answer legitimately lives in the gap's `rationale` with `tasks: []`, so a taskless `build` is
 accepted only when the gap's source is a build-stall.
+
+A remediation gap that requires amending another feature's sealed DECIDE artifact is not eligible for
+`build` or `acceptance_specs`. It returns to the owning DECIDE step; in daemon mode the existing
+DECIDE kickback policy reaches the operator gate rather than attempting a BUILD-side bypass.
 
 ### Where a `build_review` FAIL goes
 

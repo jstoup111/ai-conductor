@@ -635,6 +635,25 @@ conduct-ts overlap-scan [--files <a.ts,b.ts>] [--source-ref <owner/repo#N>] [--b
 Advisory by contract: it always exits 0. Even an unexpected error prints `overlap-scan: unable to
 complete scan (<msg>)` and still returns 0. Reads git and queries `gh`; writes nothing.
 
+## `conduct-ts plan-protected-targets`
+
+```bash
+conduct-ts plan-protected-targets .docs/plans/<feature>.md
+```
+
+Blocking plan-authoring check for tasks that name another feature's artifact under
+`.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`. It reads exactly the
+named plan, resolves each task's `**Files:**` set (including `same` inheritance), and writes nothing.
+Own-feature paths and unsealed `.docs/` paths pass.
+
+| Outcome | Output | Exit |
+| --- | --- | --- |
+| No violations | `No protected-target violations found.` | 0 |
+| Violation | One `Task <id>: <path>` line per offending path | 1 |
+
+Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
+do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.
+
 ## `conduct-ts evidence`
 
 ```bash
