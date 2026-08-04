@@ -69,6 +69,7 @@ import {
   createProviderLifecycleEpisodeStore,
   type ProviderLifecycleEpisodeStore,
 } from './provider-lifecycle-store.js';
+import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -146,22 +147,6 @@ export function parseTierFromOutput(output: string): ComplexityTier | null {
     if (m) return m[1].toUpperCase() as ComplexityTier;
   }
   return null;
-}
-
-/**
- * FINISH's sole provider response is a bounded PR-prose verdict.  Keep the
- * parser deliberately narrow: non-JSON prose is left undefined so the
- * production coordinator fails closed rather than inventing acceptance.
- */
-export function parseFinishPrProseJudgment(output: string | undefined): unknown {
-  if (!output) return undefined;
-  const json = output.match(/\{\s*"kind"[\s\S]*?\}/)?.[0];
-  if (!json) return undefined;
-  try {
-    return JSON.parse(json) as unknown;
-  } catch {
-    return undefined;
-  }
 }
 
 /**

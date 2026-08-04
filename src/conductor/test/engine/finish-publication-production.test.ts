@@ -406,14 +406,15 @@ describe('production FINISH publication composition', () => {
   });
 
   it.each([
-    ['placeholder floor', `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\nDraft publication`, 'feat: draft publication', { kind: 'revision_required', reason: 'placeholder' }, { kind: 'human_required', reason: 'judgment_placeholder_prose' }],
-    ['halt banner', `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, 'Needs remediation: publication', { kind: 'revision_required', reason: 'halt' }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
-    ['structurally incomplete prose', `${PR_BODY_FLOOR_MARKER}\n\nIncomplete`, 'feat: publication', { kind: 'revision_required', reason: 'structurally_incomplete' }, { kind: 'human_required', reason: 'judgment_malformed_prose' }],
-    ['refused prose judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'refused' }, { kind: 'human_required', reason: 'judgment_refused' }],
-    ['timed out prose judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'timed_out' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
-    ['unavailable judgment provider', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'provider_unavailable' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
-    ['malformed structured judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'not_a_judgment' }, { kind: 'human_required', reason: 'judgment_malformed_prose' }],
-  ] as const)('carries the exact bounded judgment outcome for %s without recording completion', async (_label, body, title, publicationDisposition, expected) => {
+    ['placeholder floor', `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\nDraft publication`, 'feat: draft publication', { kind: 'revision_required', reason: 'placeholder' }, { kind: 'human_required', reason: 'judgment_placeholder_prose' }, undefined],
+    ['halt banner', `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, 'Needs remediation: publication', { kind: 'revision_required', reason: 'halt' }, { kind: 'human_required', reason: 'judgment_halt_prose' }, undefined],
+    ['structurally incomplete prose', `${PR_BODY_FLOOR_MARKER}\n\nIncomplete`, 'feat: publication', { kind: 'revision_required', reason: 'structurally_incomplete' }, { kind: 'human_required', reason: 'judgment_malformed_prose' }, undefined],
+    ['refused prose judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'refused' }, { kind: 'human_required', reason: 'judgment_refused' }, undefined],
+    ['timed out prose judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'timed_out' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }, undefined],
+    ['unavailable judgment provider', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'provider_unavailable' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }, undefined],
+    ['malformed structured judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'not_a_judgment' }, { kind: 'human_required', reason: 'judgment_malformed_prose' }, undefined],
+    ['raw bounded provider verdict', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', undefined, { kind: 'human_required', reason: 'judgment_placeholder_prose' }, '{"kind":"revision_required","reason":"placeholder"}'],
+  ] as const)('carries the exact bounded judgment outcome for %s without recording completion', async (_label, body, title, publicationDisposition, expected, output) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-prose-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -431,7 +432,7 @@ describe('production FINISH publication composition', () => {
         }
         throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
       });
-      const dispatchJudgment = vi.fn(async () => ({ success: true, publicationDisposition }));
+      const dispatchJudgment = vi.fn(async () => ({ success: true, publicationDisposition, output }));
       const recordFinish = vi.fn(async () => 0);
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,

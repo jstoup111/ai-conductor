@@ -32,6 +32,7 @@ import {
   type PrProseJudgmentRequest,
   type PrProseJudgmentResult,
 } from './finish-publication.js';
+import { decodePrProseJudgment } from './finish-pr-prose-judgment.js';
 
 export interface ProductionFinishPublicationCoordinator {
   advance(input: {
@@ -67,25 +68,6 @@ export interface ProductionFinishPublicationDeps {
    * coordinator never silently reduces it to a `gh pr ready` flip.
    */
   repairPresentation?: (input: { prUrl: string; state: ConductState }) => Promise<void>;
-}
-
-function isPrProseJudgmentResult(value: unknown): value is PrProseJudgmentResult {
-  if (typeof value !== 'object' || value === null || !('kind' in value)) return false;
-  const result = value as { kind?: unknown; reason?: unknown };
-  return result.kind === 'accepted' ||
-    result.kind === 'timed_out' ||
-    result.kind === 'provider_unavailable' ||
-    result.kind === 'refused' ||
-    (result.kind === 'revision_required' &&
-      (result.reason === 'placeholder' || result.reason === 'halt' || result.reason === 'structurally_incomplete'));
-}
-
-/** Decode the bounded provider contract; any successful unstructured reply is fail-closed prose. */
-export function decodePrProseJudgment(result: StepRunResult): PrProseJudgmentResult {
-  const structured = result.publicationDisposition;
-  if (isPrProseJudgmentResult(structured)) return structured;
-  if (!result.success) return { kind: 'provider_unavailable' };
-  return { kind: 'revision_required', reason: 'structurally_incomplete' };
 }
 
 export interface ProductionReleaseReadinessObserverInput {

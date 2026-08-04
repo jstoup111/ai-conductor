@@ -9,7 +9,6 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
   DefaultStepRunner,
-  parseFinishPrProseJudgment,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
@@ -35,14 +34,6 @@ function createMockProvider(): LLMProvider {
     invokeInteractive: vi.fn().mockResolvedValue(undefined),
   };
 }
-
-describe('parseFinishPrProseJudgment', () => {
-  it('extracts only the bounded typed JSON verdict and leaves prose unstructured', () => {
-    expect(parseFinishPrProseJudgment('Repaired.\n{"kind":"revision_required","reason":"placeholder"}'))
-      .toEqual({ kind: 'revision_required', reason: 'placeholder' });
-    expect(parseFinishPrProseJudgment('The prose looks good.')).toBeUndefined();
-  });
-});
 
 function interactiveRuntime(
   key: 'claude' | 'codex',
