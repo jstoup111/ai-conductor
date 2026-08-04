@@ -31,7 +31,7 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
   });
 
-  it('re-dispatches both verification members after repair and never blocks build_review on stale wiring state', async () => {
+  it('settles a re-dispatched member from its own still-valid evidence before build_review', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-repair-stale-wiring-'));
     dirs.push(projectRoot);
     const stateFilePath = join(projectRoot, '.pipeline', 'conduct-state.json');
@@ -106,15 +106,16 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
       },
     };
 
-    let suiteRuns = 0;
+    const suiteOutcomes: string[] = [];
     const ensure = vi.fn(async () => {
-      suiteRuns += 1;
-      if (suiteRuns === 1) {
+      if (suiteOutcomes.length === 0) {
+        suiteOutcomes.push('INDETERMINATE');
         return {
           status: 'INDETERMINATE',
           message: 'suite verifier returned no verdict',
         } as never;
       }
+      suiteOutcomes.push('REUSED');
       return { status: 'REUSED', evidence: {} as never } as const;
     });
     const events = new ConductorEventEmitter();
@@ -152,7 +153,10 @@ describe('BUILD repair preserves a prior wiring pass without stranding review', 
     await conductor.run();
 
     expect(wiringRuns).toBe(2);
-    expect(suiteRuns).toBe(2);
+    // The repaired round re-dispatches test_suite, but the member's own
+    // content-addressed verifier settles it as REUSED. The conductor does
+    // not derive a separate validity decision from its prior gate verdict.
+    expect(suiteOutcomes).toEqual(['INDETERMINATE', 'REUSED']);
     expect(buildRuns).toBe(1);
     expect(reviewRuns).toBe(1);
     expect(parallelRounds.filter((round) =>
