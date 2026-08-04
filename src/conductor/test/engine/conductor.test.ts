@@ -178,6 +178,142 @@ describe('engine/conductor', () => {
     });
   });
 
+  it('records session/run timestamps and supplied worktree metadata as one initialization batch', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const now = vi.spyOn(Date, 'now').mockReturnValue(1_725_000_000_000);
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+      worktreeBranch: 'feature/state-store',
+    });
+    const state: ConductState = {};
+
+    try {
+      const fresh = await (conductor as unknown as {
+        initializeRunState(state: ConductState): Promise<boolean>;
+      }).initializeRunState(state);
+
+      expect(fresh).toBe(true);
+      expect(state).toMatchObject({
+        session_started_at: 1_725_000_000_000,
+        run_started_at: 1_725_000_000_000,
+        worktree_branch: 'feature/state-store',
+      });
+      expect(stateStore.applyBatch).toHaveBeenCalledWith({
+        name: 'initialize conductor run',
+        mutations: expect.arrayContaining([
+          expect.objectContaining({ field: 'session_started_at', next: 1_725_000_000_000 }),
+          expect.objectContaining({ field: 'run_started_at', next: 1_725_000_000_000 }),
+          expect.objectContaining({ field: 'worktree_branch', next: 'feature/state-store' }),
+        ]),
+      });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('records native complexity and worktree DECIDE transitions through invariant batches', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+      mode: 'auto',
+    });
+    const complexityState: ConductState = {};
+    const worktreeState: ConductState = {};
+
+    await (conductor as unknown as {
+      runComplexityStep(state: ConductState): Promise<StepRunResult>;
+    }).runComplexityStep(complexityState);
+    await (conductor as unknown as {
+      runWorktreeStep(state: ConductState): Promise<StepRunResult>;
+    }).runWorktreeStep(worktreeState);
+
+    expect(complexityState).toMatchObject({
+      complexity_tier: 'L', complexity: 'done', last_step: 'complexity',
+    });
+    expect(worktreeState).toMatchObject({ worktree: 'done', last_step: 'worktree' });
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'record complexity decision',
+      mutations: expect.arrayContaining([
+        expect.objectContaining({ field: 'complexity_tier', next: 'L' }),
+        expect.objectContaining({ field: 'complexity', next: 'done' }),
+        expect.objectContaining({ field: 'last_step', next: 'complexity' }),
+      ]),
+    }));
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'record worktree step completion',
+      mutations: expect.arrayContaining([
+        expect.objectContaining({ field: 'worktree', next: 'done' }),
+        expect.objectContaining({ field: 'last_step', next: 'worktree' }),
+      ]),
+    }));
+  });
+
+  it('caches a committed DECIDE track marker through the recording store', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    await mkdir(join(dir, '.docs', 'track'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'track', 'feature.md'), 'Track: technical\n');
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+    const state: ConductState = {};
+
+    await expect((conductor as unknown as {
+      resolveTrack(state: ConductState): Promise<Track>;
+    }).resolveTrack(state)).resolves.toBe('technical');
+
+    expect(state).toMatchObject({ track: 'technical' });
+    expect(stateStore.apply).toHaveBeenCalledWith(expect.objectContaining({
+      field: 'track', expected: undefined, next: 'technical',
+    }));
+  });
+
+  it('propagates rejected initialization and DECIDE mutations', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'persistence', message: 'track write failed' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'persistence', message: 'state write failed' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+      mode: 'auto',
+    });
+
+    await expect((conductor as unknown as {
+      initializeRunState(state: ConductState): Promise<boolean>;
+    }).initializeRunState({})).rejects.toThrow('state write failed');
+    await expect((conductor as unknown as {
+      runComplexityStep(state: ConductState): Promise<StepRunResult>;
+    }).runComplexityStep({})).rejects.toThrow('state write failed');
+  });
+
   it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
     const module = await import('../../src/engine/conductor.js') as {
       toSpotAuditVerifierResult?: (result: unknown) => unknown;

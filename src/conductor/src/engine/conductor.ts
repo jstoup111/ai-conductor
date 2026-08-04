@@ -100,7 +100,11 @@ import {
   savePrUrl,
   extractPrUrl,
 } from './state.js';
-import type { ConductStateStore } from './conduct-state-store.js';
+import type {
+  ConductStateStore,
+  NamedAtomicStateMutationBatch,
+  StateMutation,
+} from './conduct-state-store.js';
 import { resolveConductorStateStore } from './conductor-deps.js';
 import {
   ALL_STEPS,
@@ -1563,6 +1567,70 @@ export class Conductor {
     }
   }
 
+  /**
+   * Apply a conductor-owned invariant through the state-store authority.
+   *
+   * The legacy whole-file write rejected on persistence failures. Store
+   * failures are result values, so translate them back to a rejected control
+   * flow at this composition boundary rather than letting a transition report
+   * success after its durable state was refused.
+   */
+  private async applyStateBatch(
+    batch: NamedAtomicStateMutationBatch<ConductState>,
+  ): Promise<void> {
+    const result = await this.stateStore.applyBatch(batch);
+    if ('message' in result) throw new Error(result.message);
+  }
+
+  private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
+    const result = await this.stateStore.apply(mutation);
+    if ('message' in result) throw new Error(result.message);
+  }
+
+  /** Read expectations immediately before constructing a guarded mutation. */
+  private async currentStateForMutation(): Promise<ConductState> {
+    const result = await readState(this.stateFilePath);
+    if (!result.ok) throw new Error(result.error.message);
+    return result.value;
+  }
+
+  private async initializeRunState(state: ConductState): Promise<boolean> {
+    const sessionStartedAt = Date.now();
+    const isFreshFeatureSession = !state.run_started_at;
+    const mutations: StateMutation<ConductState>[] = [
+      {
+        field: 'session_started_at',
+        expected: state.session_started_at,
+        intent: 'stamp conductor session start',
+        next: sessionStartedAt,
+      },
+    ];
+
+    if (this.worktreeBranch !== undefined) {
+      mutations.push({
+        field: 'worktree_branch',
+        expected: state.worktree_branch,
+        intent: 'record conductor worktree branch',
+        next: this.worktreeBranch,
+      });
+    }
+    if (isFreshFeatureSession) {
+      mutations.push({
+        field: 'run_started_at',
+        expected: state.run_started_at,
+        intent: 'stamp feature run start',
+        next: sessionStartedAt,
+      });
+    }
+
+    await this.applyStateBatch({ name: 'initialize conductor run', mutations });
+
+    state.session_started_at = sessionStartedAt;
+    if (this.worktreeBranch !== undefined) state.worktree_branch = this.worktreeBranch;
+    if (isFreshFeatureSession) state.run_started_at = sessionStartedAt;
+    return isFreshFeatureSession;
+  }
+
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
     this.stateStore = resolveConductorStateStore(this.stateFilePath, opts.stateStore);
@@ -2855,18 +2923,13 @@ export class Conductor {
 
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
-    if (this.worktreeBranch !== undefined) state.worktree_branch = this.worktreeBranch;
 
     // Stamp this conductor invocation. SHIP-phase completion predicates
     // compare artifact mtimes against this timestamp so a stale file left
     // over from a prior session can't satisfy a gate. Old state files
     // without this field are tolerated — predicates fail open when it's
     // missing.
-    const sessionStartedAt = Date.now();
-    state.session_started_at = sessionStartedAt;
-    const isFreshFeatureSession = !state.run_started_at;
-    if (isFreshFeatureSession) state.run_started_at = sessionStartedAt;
-    await writeState(this.stateFilePath, state);
+    const isFreshFeatureSession = await this.initializeRunState(state);
 
     // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
     // feature-session must not inherit a prior session's stale-mirage regrade
@@ -7906,14 +7969,46 @@ export class Conductor {
   private async runWorktreeStep(state: ConductState): Promise<StepRunResult> {
     const featureDesc = this.featureDesc ?? state.feature_desc;
     if (!featureDesc) {
+      const persisted = await this.currentStateForMutation();
+      await this.applyStateBatch({
+        name: 'record worktree step completion',
+        mutations: [
+          {
+            field: 'worktree',
+            expected: persisted.worktree,
+            intent: 'record worktree step completion',
+            next: 'done',
+          },
+          {
+            field: 'last_step',
+            expected: persisted.last_step,
+            intent: 'record last completed step',
+            next: 'worktree',
+          },
+        ],
+      });
       state.worktree = 'done';
       state.last_step = 'worktree';
-      await writeState(this.stateFilePath, state);
       return { success: true };
     }
+    const persisted = await this.currentStateForMutation();
+    const mutations: StateMutation<ConductState>[] = [];
     try {
       const { path, branch } = await new WorktreeManager(this.projectRoot).create(featureDesc);
-      state.feature_desc = featureDesc;
+      mutations.push(
+        {
+          field: 'worktree_dir',
+          expected: persisted.worktree_dir,
+          intent: 'record isolated worktree directory',
+          next: path,
+        },
+        {
+          field: 'worktree_branch',
+          expected: persisted.worktree_branch,
+          intent: 'record isolated worktree branch',
+          next: branch,
+        },
+      );
       state.worktree_dir = path;
       state.worktree_branch = branch;
     } catch (err) {
@@ -7923,11 +8018,31 @@ export class Conductor {
       console.warn(
         `[worktree] could not create an isolated worktree (${err instanceof Error ? err.message : String(err)}); continuing in-place.`,
       );
-      state.feature_desc = featureDesc;
     }
+    mutations.push(
+      {
+        field: 'feature_desc',
+        expected: persisted.feature_desc,
+        intent: 'record worktree feature description',
+        next: featureDesc,
+      },
+      {
+        field: 'worktree',
+        expected: persisted.worktree,
+        intent: 'record worktree step completion',
+        next: 'done',
+      },
+      {
+        field: 'last_step',
+        expected: persisted.last_step,
+        intent: 'record last completed step',
+        next: 'worktree',
+      },
+    );
+    await this.applyStateBatch({ name: 'record worktree step completion', mutations });
+    state.feature_desc = featureDesc;
     state.worktree = 'done';
     state.last_step = 'worktree';
-    await writeState(this.stateFilePath, state);
     return { success: true };
   }
 
@@ -8156,8 +8271,14 @@ export class Conductor {
         const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
         const parsed = parseTrack(content);
         if (parsed) {
+          const persisted = await this.currentStateForMutation();
+          await this.applyStateMutation({
+            field: 'track',
+            expected: persisted.track,
+            intent: 'cache resolved work track',
+            next: parsed,
+          });
           state.track = parsed;
-          await writeState(this.stateFilePath, state);
           return parsed;
         }
       }
@@ -8168,12 +8289,39 @@ export class Conductor {
   }
 
   private async runComplexityStep(state: ConductState): Promise<StepRunResult> {
-    // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
-    if (this.mode === 'auto') {
-      state.complexity_tier = state.complexity_tier ?? 'L';
+    const recordComplexity = async (tier: ComplexityTier): Promise<void> => {
+      const persisted = await this.currentStateForMutation();
+      await this.applyStateBatch({
+        name: 'record complexity decision',
+        mutations: [
+          {
+            field: 'complexity_tier',
+            expected: persisted.complexity_tier,
+            intent: 'record complexity tier',
+            next: tier,
+          },
+          {
+            field: 'complexity',
+            expected: persisted.complexity,
+            intent: 'record complexity step completion',
+            next: 'done',
+          },
+          {
+            field: 'last_step',
+            expected: persisted.last_step,
+            intent: 'record last completed step',
+            next: 'complexity',
+          },
+        ],
+      });
+      state.complexity_tier = tier;
       state.complexity = 'done';
       state.last_step = 'complexity';
-      await writeState(this.stateFilePath, state);
+    };
+
+    // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
+    if (this.mode === 'auto') {
+      await recordComplexity(state.complexity_tier ?? 'L');
       return { success: true };
     }
 
@@ -8194,10 +8342,7 @@ export class Conductor {
 
     if (!this.onComplexityAssessment) {
       // No UI callback — accept the recommendation or default to L.
-      state.complexity_tier = recommended ?? state.complexity_tier ?? 'L';
-      state.complexity = 'done';
-      state.last_step = 'complexity';
-      await writeState(this.stateFilePath, state);
+      await recordComplexity(recommended ?? state.complexity_tier ?? 'L');
       return { success: true };
     }
 
@@ -8214,10 +8359,7 @@ export class Conductor {
       };
     }
 
-    state.complexity_tier = tier;
-    state.complexity = 'done';
-    state.last_step = 'complexity';
-    await writeState(this.stateFilePath, state);
+    await recordComplexity(tier);
     return { success: true };
   }
 
