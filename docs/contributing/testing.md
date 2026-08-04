@@ -87,7 +87,7 @@ token meter defaults `DAEMON_E2E_LIVE_TOKEN_CAP` to `100000`; lower that value
 when running the smoke manually. Run it directly from `src/conductor`:
 
 ```bash
-npx vitest run test/engine/daemon-e2e-live.smoke.test.ts
+npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts
 ```
 
 The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
@@ -293,7 +293,7 @@ gate on top. There is no `npm run smoke` — run each file directly.
 | `test/execution/codex-provider.smoke.test.ts` | Opt-in: `CODEX_CLI_SMOKE_TEST=1` plus the `codex` binary | `CODEX_CLI_SMOKE_TEST=1 npx vitest run test/execution/codex-provider.smoke.test.ts` |
 | `test/backlog-priority.smoke.test.ts` | Opt-in: `PRIORITY_GH_SMOKE` set | `PRIORITY_GH_SMOKE=1 npx vitest run test/backlog-priority.smoke.test.ts` |
 | `test/engine/build-token-auth.smoke.test.ts` | Opt-out: needs the binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `BUILD_TOKEN_AUTH_SMOKE=0` | `npx vitest run test/engine/build-token-auth.smoke.test.ts` |
-| `test/engine/daemon-e2e-live.smoke.test.ts` | Opt-out: needs the `claude` binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `DAEMON_E2E_LIVE_SMOKE=0`; cap defaults to `DAEMON_E2E_LIVE_TOKEN_CAP=100000` | `npx vitest run test/engine/daemon-e2e-live.smoke.test.ts` |
+| `test/engine/daemon-e2e-live.smoke.test.ts` | Opt-out: needs the `claude` binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `DAEMON_E2E_LIVE_SMOKE=0`; cap defaults to `DAEMON_E2E_LIVE_TOKEN_CAP=100000` | `npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts` |
 
 > **Known limitation.** Three of the five files in `test/smoke/` — `finish-record`,
 > `publish-interrupted`, and `surgical-finish-retry` — are plain `describe` blocks with no env gate at

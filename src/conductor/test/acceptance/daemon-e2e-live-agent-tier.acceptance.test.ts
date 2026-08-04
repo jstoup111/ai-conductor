@@ -14,6 +14,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execa } from 'execa';
 import { describe, expect, it } from 'vitest';
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -103,5 +104,26 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(smoke).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
     expect(smoke).toMatch(/delete\s+process\.env\.AI_CONDUCTOR_NO_REAL_EXEC/);
     expect(smoke).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
+  });
+
+  it('collects the direct live-smoke command while retaining the normal Vitest environment', async () => {
+    const result = await execa(
+      'npx',
+      [
+        'vitest', 'run', '--config', 'vitest.live-smoke.config.ts',
+        'test/engine/daemon-e2e-live.smoke.test.ts', '--reporter=dot',
+      ],
+      {
+        cwd: CONDUCTOR_ROOT,
+        env: {
+          ...process.env,
+          AI_CONDUCTOR_NO_REAL_EXEC: '1',
+          CLAUDE_CODE_OAUTH_TOKEN: '',
+          DAEMON_E2E_LIVE_SMOKE: '0',
+        },
+      },
+    );
+
+    expect(result.stdout).toMatch(/Test Files\s+1 passed/);
   });
 });

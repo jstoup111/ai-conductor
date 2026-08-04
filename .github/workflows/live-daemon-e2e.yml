@@ -54,5 +54,5 @@ jobs:
         run: npm run build
         working-directory: src/conductor
       - name: Run live daemon E2E smoke
-        run: npx vitest run test/engine/daemon-e2e-live.smoke.test.ts
+        run: npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts
         working-directory: src/conductor
