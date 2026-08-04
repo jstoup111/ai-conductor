@@ -174,7 +174,10 @@ describe('planRemediation implementation-only authority routing', () => {
     });
   });
 
-  it('preserves a taskless BUILD answer to a build-stall question', async () => {
+  it.each([
+    { source: 'build_stall', evidenceFile: '.pipeline/build-stall-question.md' },
+    { source: 'build-stall', evidenceFile: '.pipeline/halt-user-input-required' },
+  ])('preserves a taskless BUILD answer to a $source build-stall question', async ({ source, evidenceFile }) => {
     const runner: StepRunner = {
       run: async () => {
         await writeFile(
@@ -221,8 +224,8 @@ describe('planRemediation implementation-only authority routing', () => {
       ALL_STEPS,
       'Remediate build stall: which validation boundary applies?',
       {
-        source: 'build_stall',
-        evidenceFile: '.pipeline/build-stall-question.md',
+        source,
+        evidenceFile,
       },
     );
 
