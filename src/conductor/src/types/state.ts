@@ -86,3 +86,38 @@ export type StateError = {
 };
 
 export type StateResult<T> = { ok: true; value: T } | { ok: false; error: StateError };
+
+/** A single field change with the writer's compare-and-set intent. */
+export type StateMutation<State extends object> = {
+  [Field in Extract<keyof State, string>]: {
+    field: Field;
+    expected: State[Field];
+    intent: string;
+    next: State[Field];
+  };
+}[Extract<keyof State, string>];
+
+/** A named invariant whose field changes must either all apply or none do. */
+export interface NamedAtomicStateMutationBatch<State extends object> {
+  name: string;
+  mutations: readonly StateMutation<State>[];
+}
+
+/** Explicit authority for deliberate whole-state replacement such as reset. */
+export interface PrivilegedStateReplacement<State extends object> {
+  intent: string;
+  next: State;
+  privileged: true;
+}
+
+export type StateMutationOutcome =
+  | { kind: 'applied' }
+  | { kind: 'idempotent' }
+  | { kind: 'resolved' };
+
+export type ConductStateStoreError =
+  | { kind: 'conflict'; message: string }
+  | { kind: 'lease'; message: string }
+  | { kind: 'persistence'; message: string };
+
+export type StateMutationResult = StateMutationOutcome | ConductStateStoreError;
