@@ -83,8 +83,7 @@ provider leg first.
 **Files:** `src/conductor/test/engine/daemon-e2e-fixture.test.ts`,
 `src/conductor/test/engine/daemon-e2e-diagnostics.test.ts`
 
-**Wired-into:** `src/conductor/test/engine/daemon-e2e-fixture.test.ts` (its own `catch` block) and,
-from Task 4, `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
+**Wired-into:** src/conductor/test/engine/daemon-e2e-live.smoke.test.ts#dumpPipelineDiagnostics
 
 **Dependencies:** none
 
@@ -109,7 +108,7 @@ from Task 4, `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 **Files:** `src/conductor/test/fixtures/token-meter.ts`,
 `src/conductor/test/engine/token-meter.test.ts`
 
-**Wired-into:** `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts` (from Task 4)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** none
 
@@ -131,7 +130,7 @@ from Task 4, `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 
 **Files:** `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 
-**Wired-into:** none (test-only surface)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 1, Task 2
 
@@ -158,7 +157,7 @@ from Task 4, `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 
 **Files:** `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 
-**Wired-into:** none (consumes the existing `runDaemon`/`Conductor` entry points)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 3
 
@@ -186,8 +185,7 @@ from Task 4, `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 
 **Files:** `.github/workflows/live-daemon-e2e.yml`
 
-**Wired-into:** none (workflow definition; invoked by `workflow_dispatch` and, later, by a
-`workflow_call` caller in #1259)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 4
 
@@ -210,7 +208,7 @@ from Task 4, `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 
 **Files:** `docs/contributing/testing.md`, `CHANGELOG.md`
 
-**Wired-into:** none (documentation only)
+**Wired-into:** none (no new production surface)
 
 **Dependencies:** Task 5
 

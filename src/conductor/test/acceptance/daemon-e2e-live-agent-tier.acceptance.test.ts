@@ -11,7 +11,9 @@
  * task-evidence artifacts.
  */
 
-import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
@@ -107,23 +109,43 @@ describe('live-agent daemon E2E tier (#1124)', () => {
   });
 
   it('collects the direct live-smoke command while retaining the normal Vitest environment', async () => {
-    const result = await execa(
-      'npx',
-      [
-        'vitest', 'run', '--config', 'vitest.live-smoke.config.ts',
-        'test/engine/daemon-e2e-live.smoke.test.ts', '--reporter=dot',
-      ],
-      {
-        cwd: CONDUCTOR_ROOT,
-        env: {
-          ...process.env,
-          AI_CONDUCTOR_NO_REAL_EXEC: '1',
-          CLAUDE_CODE_OAUTH_TOKEN: '',
-          DAEMON_E2E_LIVE_SMOKE: '0',
-        },
-      },
-    );
+    const parentRunRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+    // A nested Vitest run installs the same run-scoped tmpdir guards as its
+    // parent (test/global-setup.ts), so it needs a private tmpdir of its own.
+    // Inheriting AI_CONDUCTOR_TEST_TMP_ROOT would make the child adopt — and at
+    // teardown delete — the parent's run root mid-suite; inheriting only TMPDIR
+    // would make the child treat the parent's run root as the "real" tmpdir and
+    // report the parent's concurrent mkdtemp directories as leaks. Hand it a
+    // dedicated directory instead. It is created under the parent's run root,
+    // so the parent's own teardown reclaims it even if this test dies.
+    const childTmpdir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-nested-'));
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      AI_CONDUCTOR_NO_REAL_EXEC: '1',
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      DAEMON_E2E_LIVE_SMOKE: '0',
+      TMPDIR: childTmpdir,
+    };
+    delete childEnv.AI_CONDUCTOR_TEST_TMP_ROOT;
 
-    expect(result.stdout).toMatch(/Test Files\s+1 passed/);
+    try {
+      const result = await execa(
+        'npx',
+        [
+          'vitest', 'run', '--config', 'vitest.live-smoke.config.ts',
+          'test/engine/daemon-e2e-live.smoke.test.ts', '--reporter=dot',
+        ],
+        {
+          cwd: CONDUCTOR_ROOT,
+          env: childEnv,
+          extendEnv: false,
+        },
+      );
+
+      expect(result.stdout).toMatch(/Test Files\s+1 passed/);
+      expect(existsSync(parentRunRoot ?? '')).toBe(true);
+    } finally {
+      await rm(childTmpdir, { recursive: true, force: true });
+    }
   });
 });

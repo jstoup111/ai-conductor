@@ -5,17 +5,69 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execa } from 'execa';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider } from '../../src/execution/claude-provider.js';
+import type {
+  InvokeOptions,
+  InvokeResult,
+  LLMProvider,
+} from '../../src/execution/llm-provider.js';
 import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
-import { assertTokenCap, TokenMeter } from '../fixtures/token-meter.js';
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
+//
+// Both the meter and the cap predicate are deliberately file-local and
+// UNEXPORTED. This live smoke is their only consumer, so exporting them from a
+// shared test fixture module would add a new exported surface that no
+// production code reaches — exactly what the wiring-reachability gate's orphan
+// backstop reports as a gap. Their contract is covered by the ungated
+// self-check below, which the `daemon-e2e-live-agent-tier` acceptance test runs
+// in the ordinary suite by invoking this file directly.
+
+/** Test-local provider decorator that records the tokens used by this live smoke. */
+class TokenMeter implements LLMProvider {
+  readonly supportsSessionResume: boolean | undefined;
+  readonly lifecycleCapability: LLMProvider['lifecycleCapability'];
+  readonly readiness: LLMProvider['readiness'];
+  readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
+  readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
+  totalTokens = 0;
+
+  constructor(private readonly provider: LLMProvider) {
+    this.supportsSessionResume = provider.supportsSessionResume;
+    this.lifecycleCapability = provider.lifecycleCapability;
+    this.readiness = provider.readiness?.bind(provider);
+    this.prepareSelfHostAuth = provider.prepareSelfHostAuth?.bind(provider);
+    this.resolveSelfHostExecutable = provider.resolveSelfHostExecutable?.bind(provider);
+  }
+
+  async invoke(options: InvokeOptions): Promise<InvokeResult> {
+    const result = await this.provider.invoke(options);
+    this.record(result);
+    return result;
+  }
+
+  async invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
+    const result = await this.provider.invokeInteractive(options);
+    if (result) this.record(result);
+    return result;
+  }
+
+  private record(result: InvokeResult): void {
+    this.totalTokens += (result.tokenUsage?.input ?? 0) + (result.tokenUsage?.output ?? 0);
+  }
+}
+
+function assertTokenCap(totalTokens: number, cap: number): void {
+  if (totalTokens > cap) {
+    throw new Error(`Token cap ${cap} exceeded: observed ${totalTokens}`);
+  }
+}
 
 const fixturePlanPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/plan.md', import.meta.url),
@@ -53,6 +105,78 @@ const killSwitch = process.env.DAEMON_E2E_LIVE_SMOKE === '0';
 const shouldRun = claudeBinaryAvailable() && !killSwitch && !!hostToken;
 
 describe('daemon E2E live terminal guard', () => {
+  it('meters both provider methods and rejects totals above the configured cap', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn<LLMProvider['invoke']>()
+        .mockResolvedValueOnce({ success: true, output: 'done', exitCode: 0, tokenUsage: { input: 12, output: 3 } })
+        .mockResolvedValueOnce({ success: true, output: 'done', exitCode: 0 }),
+      invokeInteractive: vi.fn<LLMProvider['invokeInteractive']>()
+        .mockResolvedValue({ success: true, output: 'done', exitCode: 0, tokenUsage: { input: 5, output: 7 } }),
+    };
+    const meter = new TokenMeter(provider);
+    const options = { prompt: 'metered' } as InvokeOptions;
+
+    await meter.invoke(options);
+    await meter.invokeInteractive(options);
+    await meter.invoke(options);
+
+    expect({
+      total: meter.totalTokens,
+      forwardedInvoke: vi.mocked(provider.invoke).mock.calls.every(([sent]) => sent === options),
+      forwardedInteractive: vi.mocked(provider.invokeInteractive).mock.calls
+        .every(([sent]) => sent === options),
+      atCapThrows: (() => {
+        try {
+          assertTokenCap(meter.totalTokens, 27);
+          return false;
+        } catch {
+          return true;
+        }
+      })(),
+    }).toEqual({
+      total: 27,
+      forwardedInvoke: true,
+      forwardedInteractive: true,
+      atCapThrows: false,
+    });
+    expect(() => assertTokenCap(meter.totalTokens, 26)).toThrow(
+      'Token cap 26 exceeded: observed 27',
+    );
+  });
+
+  it('wraps a provider transparently, preserving capability flags and optional members', async () => {
+    const readiness = { state: 'ready', provider: 'codex', source: 'api-key' } as const;
+    const preparation = { args: ['--auth'] };
+    const provider: LLMProvider = {
+      supportsSessionResume: true,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn<LLMProvider['invoke']>()
+        .mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
+      invokeInteractive: vi.fn<LLMProvider['invokeInteractive']>()
+        .mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
+      readiness: vi.fn().mockResolvedValue(readiness),
+      prepareSelfHostAuth: vi.fn().mockResolvedValue(preparation),
+      resolveSelfHostExecutable: vi.fn().mockResolvedValue('claude'),
+    };
+    const meter = new TokenMeter(provider);
+
+    expect({
+      supportsSessionResume: meter.supportsSessionResume,
+      lifecycleCapability: meter.lifecycleCapability,
+      readiness: await meter.readiness?.(),
+      preparation: await meter.prepareSelfHostAuth?.({ provider: 'codex', homeDir: '/tmp/home' }),
+      executable: await meter.resolveSelfHostExecutable?.(),
+      untouchedTotal: meter.totalTokens,
+    }).toEqual({
+      supportsSessionResume: true,
+      lifecycleCapability: provider.lifecycleCapability,
+      readiness,
+      preparation,
+      executable: 'claude',
+      untouchedTotal: 0,
+    });
+  });
+
   it('does not dispatch a pre-halted fixture', async () => {
     const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-halted-'));
     const slug = 'daemon-e2e-live';
