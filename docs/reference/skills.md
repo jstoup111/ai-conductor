@@ -586,17 +586,18 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
 - **Engine step** — `finish` (index 21, SHIP, prerequisite `rebase`). Loop gate, gating, no tier skip.
-  The production coordinator dispatches this skill only for one bounded PR-title/body quality pass.
+  The production coordinator dispatches this skill only for one bounded retained-PR title/body quality
+  and repair pass.
 - **Inputs** — the retained PR identity plus its observed title and body. Deterministic BUILD, SHIP,
   release-readiness, push, shipped-record, and outcome evidence stays engine-owned.
-- **Outputs** — accepted reader-facing PR prose. The coordinator separately persists `state.pr_url`,
-  commits `.docs/shipped/<slug>.md`, and writes `.pipeline/finish-choice` through
-  `conduct-ts finish-record` after verification.
+- **Outputs** — accepted reader-facing PR prose or a bounded repair to the retained PR title/body. The
+  coordinator separately persists `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes
+  `.pipeline/finish-choice` through `conduct-ts finish-record` after verification.
 - **Gate role** — blocking. Missing or invalid deterministic evidence stops before this skill is
   dispatched. Placeholder, halt, or structurally incomplete prose prevents the final outcome record.
-- **Interaction** — foreground interactive conduct asks the operator for PR, keep, or defer before
-  any publication observation or mutation. Daemon and foreground-auto modes use their authorized
-  non-destructive policies. No FINISH transition has PR merge or auto-merge authority.
+- **Interaction** — attended default and interactive foreground conduct asks the operator for PR, keep,
+  or defer before any publication observation or mutation. Explicit foreground-auto and daemon modes
+  use engine policy. No FINISH transition has PR merge or auto-merge authority.
 
 ### pr
 
@@ -702,7 +703,7 @@ subagent facility, not by the engine — the engine dispatches skills, and skill
 | `domain-reviewer.md` | Domain integrity reviewer with veto authority over tests and implementations | `tdd` at both DOMAIN phases, `code-review` |
 | `prd-auditor.md` | Audits one `FR-N` against shipped code; finding authority, never fixes | `prd-audit` |
 | `remediation-planner.md` | Emits per-gap dispositions and concrete tasks; planning authority, never edits code | `remediate` |
-| `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline`; `finish` after interactive merge-local or confirmed discard only |
+| `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline` |
 | `planner.md` | Expands brief requirements into implementable specs | Nothing — see below |
 | `cto-security.md` | Authn/authz, input validation, OWASP top 10, vulnerability surface | `assess` |
 | `cto-data-integrity.md` | Transactions, event sourcing, race conditions, migrations | `assess` |

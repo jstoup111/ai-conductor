@@ -81,129 +81,20 @@ require_pattern 'code review retains fresh-context evaluator review' \
 require_pattern 'finish retains fresh verification before completion' \
   'fresh.*(verification|evidence)|verify.*fresh' "$HARNESS_DIR/skills/finish/SKILL.md"
 finish_skill="$HARNESS_DIR/skills/finish/SKILL.md"
-worktree_manager="$HARNESS_DIR/agents/worktree-manager.md"
 if grep -qiE '(daemon|auto(matic)?).*(PR|pull request).*(retain|keep|leave).*(feature )?worktree' \
     "$finish_skill" \
-  && grep -qiE '(only|solely).*engine.*sweep|engine.*sweep.*(only|solely)' \
+  && grep -qiE 'only the engine' "$finish_skill" \
+  && grep -qiE 'mergeable sweep owns remote-default shipment cleanup' \
     "$finish_skill" \
-  && grep -qiE 'shipped[- ]record.*(origin/(default|<default>)|origin default|default branch)' \
-    "$finish_skill" \
-  && ! awk '
-    /^\*\*Option 2: Push & PR\*\*/ { in_option_two = 1 }
-    /^\*\*Option 3: Keep as-is\*\*/ { in_option_two = 0 }
-    in_option_two { print }
-  ' "$finish_skill" \
-    | grep -qiE 'worktree-manager|worktree[^[:cntrl:]]*(clean[ -]?up|remove|delete|reap)|((clean[ -]?up|remove|delete|reap)[^[:cntrl:]]*worktree)' \
-  && grep -qF "After Option 1's local merge completes successfully, delegate cleanup to worktree-manager." \
-    "$finish_skill" \
-  && grep -qF "After Option 4's discard is explicitly confirmed, delegate cleanup to worktree-manager." \
-    "$finish_skill" \
-  && grep -qF 'Pass worktree-manager the proof case and evidence for Option 1: completed local merge, shipped record on the local default branch, and recorded `merge-local` outcome.' \
-    "$finish_skill" \
-  && grep -qF 'Pass worktree-manager the proof case and evidence for Option 4: explicitly confirmed discard and recorded `discard` outcome.' \
-    "$finish_skill" \
-  && awk '
-    function evaluate(instruction, lower, associates_pr, delegation_action, cleanup_action) {
-      lower = tolower(instruction)
-      associates_pr = lower ~ /(option 2|options? 1[^[:cntrl:]]*(and|&)[^[:cntrl:]]*2|push[[:space:]]*&[[:space:]]*pr|pull request)/
-      delegation_action = lower ~ /(delegat|dispatch|invoke|worktree-manager)/
-      cleanup_action = lower ~ /(clean[ -]?up|remove|delete|reap)/
-      if (associates_pr && delegation_action) violation = 1
-      if (associates_pr && cleanup_action) violation = 1
-    }
-    function flush_bullet() {
-      if (bullet != "") evaluate(bullet)
-      bullet = ""
-    }
-    /^### 6\. Worktree Retention Boundary/ {
-      in_retention_boundary = 1
-      next
-    }
-    in_retention_boundary && /^## Verification/ {
-      flush_bullet()
-      in_retention_boundary = 0
-    }
-    !in_retention_boundary { next }
-    /^- / {
-      flush_bullet()
-      bullet = $0
-      next
-    }
-    bullet != "" && /^  / {
-      bullet = bullet " " $0
-      next
-    }
-    {
-      flush_bullet()
-      if ($0 != "") evaluate($0)
-    }
-    END {
-      flush_bullet()
-      exit(violation ? 1 : 0)
-    }
-  ' "$finish_skill" \
-  && grep -qF 'Claude Code only: delegate worktree-manager cleanup through the Agent tool with model="haiku".' \
-    "$finish_skill" \
-  && grep -qF 'Other supported hosts delegate worktree-manager cleanup through their provider-native subagent facility and configured provider policy.' \
-    "$finish_skill" \
-  && grep -qF 'MUST refuse cleanup when a PR is open or unmerged unless a discard was explicitly confirmed.' \
-    "$worktree_manager" \
-  && grep -qF 'Cleanup is authorized only after one of these proofs:' \
-    "$worktree_manager" \
-  && grep -qF 'Remote-default shipment cleanup is owned only by the engine mergeable sweep; worktree-manager MUST refuse it.' \
-    "$worktree_manager" \
-  && awk '
-    /^Cleanup is authorized only after one of these proofs:/ {
-      in_authorized_proofs = 1
-      next
-    }
-    in_authorized_proofs && /^If none is supplied and verified,/ {
-      in_authorized_proofs = 0
-    }
-    in_authorized_proofs && /^[0-9]+\./ { proof_count++ }
-    in_authorized_proofs && /a local merge completed successfully/ { local_merge_proof_count++ }
-    in_authorized_proofs && /a discard was explicitly confirmed/ { confirmed_discard_proof_count++ }
-    in_authorized_proofs && /origin\/<default>/ { remote_default_authorized = 1 }
-    END {
-      exit(proof_count == 2 \
-        && local_merge_proof_count == 1 \
-        && confirmed_discard_proof_count == 1 \
-        && !remote_default_authorized ? 0 : 1)
-    }
-  ' "$worktree_manager" \
-  && grep -qF 'For an explicitly confirmed discard, delete the unmerged branch with `git branch -D <branch>`; never force-delete a branch for any other proof case.' \
-    "$worktree_manager" \
-  && awk '
-    index($0, "git worktree remove <path>") { worktree_remove_line = NR }
-    index($0, "For an explicitly confirmed discard, delete the unmerged branch with `git branch -D <branch>`") {
-      discard_branch_delete_line = NR
-    }
-    END {
-      exit(worktree_remove_line > 0 && discard_branch_delete_line > worktree_remove_line ? 0 : 1)
-    }
-  ' "$worktree_manager" \
-  && awk '
-    {
-      line = tolower($0)
-      prohibits_open_pr_cleanup = line ~ /(never|refuse|must not|do not)[^[:cntrl:]]*clean[^[:cntrl:]]*(open|unmerged)[^[:cntrl:]]*pr/ \
-        || line ~ /(open|unmerged)[^[:cntrl:]]*pr[^[:cntrl:]]*(never|refuse|must not|do not)[^[:cntrl:]]*clean/
-      confirmed_discard_exception = line ~ /(unless|except)[^[:cntrl:]]*(discard[^[:cntrl:]]*explicit[^[:cntrl:]]*confirm|explicit[^[:cntrl:]]*confirm[^[:cntrl:]]*discard)/
-      if (prohibits_open_pr_cleanup && !confirmed_discard_exception) violation = 1
-    }
-    END { exit(violation ? 1 : 0) }
-  ' "$worktree_manager"; then
-  pass 'finish lifecycle matrix retains PR worktrees and preserves proven interactive cleanup routes'
+  && grep -qiE 'shipped[- ]record' "$finish_skill" \
+  && grep -qiE 'origin/(default|<default>)|origin default|default branch' "$finish_skill" \
+  && grep -qiE 'inspect and repair only' "$finish_skill" \
+  && grep -qiE 'title and body' "$finish_skill" \
+  && ! grep -qiE 'worktree-manager|\*\*Option [1-4]:' "$finish_skill"; then
+  pass 'finish retains PR worktrees, engine-owned cleanup, and bounded prose repair authority'
 else
-  fail 'finish lifecycle matrix retains PR worktrees and preserves proven interactive cleanup routes'
+  fail 'finish retains PR worktrees, engine-owned cleanup, and bounded prose repair authority'
 fi
-require_pattern 'finish preserves merge-local completion choice' \
-  'Option 1: Merge locally' "$HARNESS_DIR/skills/finish/SKILL.md"
-require_pattern 'finish preserves PR completion choice' \
-  'Option 2: Push & PR' "$HARNESS_DIR/skills/finish/SKILL.md"
-require_pattern 'finish preserves keep completion choice' \
-  'Option 3: Keep as-is' "$HARNESS_DIR/skills/finish/SKILL.md"
-require_pattern 'finish preserves discard completion choice' \
-  'Option 4: Discard' "$HARNESS_DIR/skills/finish/SKILL.md"
 require_pattern 'retro uses provider-neutral subagent delegation language' \
   '(selected host|selected provider).{0,100}(subagent|delegat)|(subagent|delegat).{0,100}(selected host|selected provider)' \
   "$HARNESS_DIR/skills/retro/SKILL.md"

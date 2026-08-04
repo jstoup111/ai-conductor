@@ -18,12 +18,13 @@ publication transitions, and records completion.
 
 The coordinator, not this skill, owns every mechanical action: verifying SHIP
 and publication evidence, creating or reusing a PR identity, pushing commits,
-creating durable shipment evidence, applying PR presentation repair, marking a
-PR ready, and recording the final outcome.
+creating durable shipment evidence, marking a PR ready, and recording the
+final outcome.
 
-This skill must not create, edit, push, merge, discard, or ready a pull request.
-It must not write shipment evidence, completion markers, or outcome records.
-It never asks a provider to infer deterministic repository or external state.
+For `judge_pr_prose`, this skill may inspect and repair only the retained PR's
+title and body. It must not create, push, merge, ready, or otherwise change a
+PR; write shipment evidence, completion markers, or outcome records; or infer
+deterministic repository or external state.
 
 ## Fresh Verification
 
@@ -40,34 +41,20 @@ or options and leaves `.pipeline/finish-choice` unwritten. It preserves the
 evidence and routes an implementation failure to `/tdd` or `/pipeline`; it does
 not dispatch FINISH or hand off to `/pr`.
 
-### 1b. Publication Intent
+## Operator Intent
 
-## Interactive Intent
+Attended default and interactive foreground conduct asks the operator for `pr`,
+`keep`, or `defer` before any publication observation or mutation. Only `pr`
+and `keep` are eligible coordinator intents; `defer`, decline, or ambiguity
+requires a human decision and performs no publication action.
 
-In interactive conduct, ask the operator for an explicit publication intent.
-Only `pr` and `keep` are eligible for the coordinator. A deferred, declined,
-ambiguous, merge, or discard choice requires a human decision and must not cause
-any mechanical publication action.
-
-In foreground automatic and daemon conduct, intent comes from the configured
-mode policy. Do not invent an alternative outcome. In particular, unattended
-operation never merges or discards work.
-
-For compatibility with the interactive lifecycle, the available operator
-choices remain:
-
-**Option 1: Merge locally**
-
-**Option 2: Push & PR**
-
-**Option 3: Keep as-is**
-
-**Option 4: Discard**
+Explicit `foreground-auto` and daemon modes use their engine policy. Do not
+invent an alternative outcome.
 
 ## PR Prose Judgment
 
-When the coordinator supplies a PR for judgment, inspect only its title and
-body. Make one bounded quality pass:
+When the coordinator supplies a retained PR for judgment, make one bounded
+title/body quality and repair pass:
 
 - Accept prose that is specific, reader-oriented, and structurally complete.
 - Identify a concrete title/body defect when prose is placeholder, halt text, or
@@ -89,24 +76,15 @@ operator-owned outcomes halt for human review.
 
 Daemon and automatic PR outcomes retain the feature worktree. Only the engine
 mergeable sweep owns remote-default shipment cleanup, after the shipped-record
-is proven on origin/default branch. The coordinator does not delete a worktree.
-Only the engine mergeable sweep owns remote-default shipment cleanup.
-
-After Option 1's local merge completes successfully, delegate cleanup to worktree-manager.
-Pass worktree-manager the proof case and evidence for Option 1: completed local merge, shipped record on the local default branch, and recorded `merge-local` outcome.
-
-After Option 4's discard is explicitly confirmed, delegate cleanup to worktree-manager.
-Pass worktree-manager the proof case and evidence for Option 4: explicitly confirmed discard and recorded `discard` outcome.
-
-Claude Code only: delegate worktree-manager cleanup through the Agent tool with model="haiku".
-Other supported hosts delegate worktree-manager cleanup through their provider-native subagent facility and configured provider policy.
+is proven on origin/default branch. FINISH does not delete a worktree.
 
 ## Verification
 
-- [ ] Interactive intent is explicit when human authority is required.
-- [ ] The provider judged only PR title/body prose, at most once per observed
-      prose revision.
-- [ ] No provider action created, pushed, merged, discarded, readied, or
-      recorded publication state.
+- [ ] Attended default and interactive foreground intent is explicit before
+      publication activity.
+- [ ] The provider judged and, when needed, repaired only the retained PR
+      title/body, at most once per observed prose revision.
+- [ ] No provider action created, pushed, merged, readied, or recorded
+      publication state.
 - [ ] The coordinator, rather than prompt compliance, determined the terminal
       completion or halt disposition.
