@@ -8,6 +8,7 @@ export { renderReleaseCandidate, renderReleaseCandidateAudit } from './engine/re
 export { runReleasePublisherAction } from './engine/release-publisher-action.js';
 
 import type { RunMode } from './types/index.js';
+import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -15,47 +16,6 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
     process.exit(1);
   }
   return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
-}
-
-/** Clear every feature-state field only for an explicit reset/start-over choice. */
-export async function replaceCommandState(
-  stateFilePath: string,
-  intent: 'reset conductor state' | 'start over conductor state',
-  store: ConductStateStore<ConductState> = createFilesystemConductStateStore(stateFilePath),
-): Promise<void> {
-  requireStateMutation(await replaceState(stateFilePath, {}, intent, store), intent);
-}
-
-/** Atomically clear a verified-incomplete completion marker and restage failed steps. */
-export async function recoverCommandState(
-  stateFilePath: string,
-  observedState: ConductState,
-  failedSteps: readonly StepName[],
-  store: ConductStateStore<ConductState> = createFilesystemConductStateStore(stateFilePath),
-): Promise<void> {
-  const corrections = failedSteps.map((step) => ({
-    field: step,
-    expected: observedState[step],
-    intent: 'restage failed verification step',
-    next: 'pending',
-  } as StateMutation<ConductState>));
-  requireStateMutation(
-    await applyStateCorrection(
-      stateFilePath,
-      {
-        name: 'recover incomplete feature state',
-        deletions: [{
-          field: 'feature_status',
-          expected: observedState.feature_status,
-          intent: 'clear incomplete feature completion',
-        }],
-        mutations: corrections,
-        privileged: true,
-      },
-      store,
-    ),
-    'Feature recovery state update',
-  );
 }
 
 import { dirname, join } from 'node:path';
@@ -83,14 +43,7 @@ import {
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
-import {
-  applyStateCorrection,
-  readState,
-  replaceState,
-  requireStateMutation,
-} from './engine/state.js';
-import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
-import type { ConductStateStore, StateMutation } from './engine/conduct-state-store.js';
+import { readState } from './engine/state.js';
 import {
   parseArgs,
   renderFullHelp,

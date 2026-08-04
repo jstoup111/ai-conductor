@@ -1,10 +1,7 @@
 import { readFile } from 'fs/promises';
 import type { ConductState, StateResult } from '../types/index.js';
 import type { StepName, StepStatus, ComplexityTier } from '../types/index.js';
-import {
-  createFilesystemConductStateStore,
-  writeFilesystemConductStateFixture,
-} from './filesystem-conduct-state-store.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
 import type {
   ConductStateStore,
   PrivilegedStateCorrection,
@@ -79,14 +76,21 @@ function migrateState(state: ConductState): ConductState {
 }
 
 /**
- * Seed a test fixture through the adapter's atomic persistence seam. Production
- * callers use field mutations instead.
+ * Seed a test fixture through the adapter. Production callers use field
+ * mutations instead.
  */
 export async function writeState(
   path: string,
   state: ConductState,
 ): Promise<void> {
-  await writeFilesystemConductStateFixture(path, state);
+  requireStateMutation(
+    await createFilesystemConductStateStore(path).replace({
+      intent: 'seed test conduct state',
+      next: state,
+      privileged: true,
+    }),
+    'Test state fixture write',
+  );
 }
 
 /** Submit an explicit bounded update batch derived from one observed snapshot. */

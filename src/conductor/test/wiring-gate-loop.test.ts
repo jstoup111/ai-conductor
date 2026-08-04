@@ -468,7 +468,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     const checkIndex = wiringBlock.indexOf("checkKickbackToBuildEscalation('wiring_check')");
     const budgetIndex = wiringBlock.indexOf("consumeKickbackBudget('wiring_check'");
     const captureIndex = wiringBlock.indexOf("captureKickbackToBuildContext('wiring_check')");
-    const navigateIndex = wiringBlock.indexOf("navigateBack(state, 'build', steps)");
+    const navigateIndex = wiringBlock.indexOf("this.navigateStateBack(state, 'build', steps)");
 
     expect({
       checkBeforeBudget: checkIndex >= 0 && checkIndex < budgetIndex,

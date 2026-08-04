@@ -112,14 +112,9 @@ import {
 } from './engine/daemon-deps.js';
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
-import {
-  applyStateChanges,
-  getStepStatus,
-  readState,
-  requireStateMutation,
-} from './engine/state.js';
+import { getStepStatus, readState } from './engine/state.js';
 import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
-import type { ConductStateStore } from './engine/conduct-state-store.js';
+import { deriveDaemonBaseState, persistDaemonBaseState } from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
 import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
@@ -389,44 +384,6 @@ export function preseedStepStatuses(
  * front-half statuses. The copy is also the mutation payload, so the store
  * can compare it with the unmodified observed snapshot field by field.
  */
-export function deriveDaemonBaseState(
-  observedState: ConductState,
-  item: Pick<BacklogItem, 'slug' | 'tier' | 'track'>,
-): ConductState {
-  const baseState: ConductState = Object.keys(observedState).length > 0
-    ? { ...observedState }
-    : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
-
-  if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
-  for (const [name, status] of Object.entries(preseedStepStatuses(baseState.complexity_tier))) {
-    (baseState as Record<string, unknown>)[name] = status;
-  }
-  if (!baseState.track) baseState.track = item.track ?? 'product';
-  if (baseState.track === 'technical') {
-    (baseState as Record<string, unknown>)['prd'] = 'skipped';
-  }
-  if (!baseState.feature_desc) baseState.feature_desc = item.slug;
-
-  return baseState;
-}
-
-/** Persist only the daemon-owned base fields derived from its observed state. */
-export async function persistDaemonBaseState(
-  stateFilePath: string,
-  observedState: ConductState,
-  baseState: ConductState,
-  store: ConductStateStore<ConductState> = createFilesystemConductStateStore(stateFilePath),
-): Promise<void> {
-  const result = await applyStateChanges(
-    stateFilePath,
-    observedState,
-    baseState as Record<string, unknown>,
-    'seed daemon feature state',
-    store,
-  );
-  requireStateMutation(result, 'Daemon base-state update');
-}
-
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
 // plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
 // this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
@@ -1026,7 +983,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // backlog item (parsed from `.docs/complexity/<slug>.md`). Fall back to 'M'
     // for legacy/non-engineer specs that have no marker — that preserves the
     // exact prior behavior (M and L are BUILD-identical; only Small skips steps).
-    const baseState = deriveDaemonBaseState(observedState, item);
+    const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
 
     const stateStore = createFilesystemConductStateStore(stateFilePath);
     await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);

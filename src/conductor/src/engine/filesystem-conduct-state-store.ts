@@ -117,18 +117,6 @@ function createAtomicPersistence(filesystem: AtomicStateFilesystem): ConductStat
 }
 
 /**
- * Test-fixture seeding only. It deliberately bypasses the lease so injected
- * persistence fakes can materialize their accepted snapshot while the store
- * under test owns that lease; production mutations use the store below.
- */
-export async function writeFilesystemConductStateFixture(
-  path: string,
-  state: ConductState,
-): Promise<void> {
-  await createAtomicPersistence(defaultAtomicFilesystem).write(path, state);
-}
-
-/**
  * Creates the local persistent adapter for the backwards-compatible flat
  * conduct-state JSON file. Every mutation reads the current state immediately
  * before applying its one owned field, so a stale caller snapshot cannot be

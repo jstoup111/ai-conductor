@@ -256,6 +256,12 @@ describe('conduct-state writer boundary', () => {
     expect(await auditProductionSource()).toEqual([]);
   });
 
+  it('does not expose a raw fixture writer from the filesystem adapter', async () => {
+    const adapter = await import('../../src/engine/filesystem-conduct-state-store.js');
+
+    expect(adapter).not.toHaveProperty('writeFilesystemConductStateFixture');
+  });
+
   it('rejects an isolated raw writer fixture while allowing read-only state consumers', () => {
     const bypass = auditSource(
       'engine/bypass.ts',

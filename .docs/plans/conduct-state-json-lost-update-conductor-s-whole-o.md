@@ -42,7 +42,7 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/engine/conduct-state-store.ts`
 - `src/conductor/test/engine/conduct-state-store.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/state.ts#createStateHelpers, src/conductor/src/engine/conductor.ts#Conductor`
+**Wired-into:** `src/conductor/src/engine/state.ts#saveStepStatus, src/conductor/src/engine/conductor.ts#Conductor`
 
 **Dependencies:** none
 
@@ -62,7 +62,7 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/engine/filesystem-conduct-state-store.ts`
 - `src/conductor/test/engine/filesystem-conduct-state-store.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/state.ts#createStateHelpers`
+**Wired-into:** `src/conductor/src/engine/state.ts#saveStepStatus`
 
 **Dependencies:** Task 1
 
@@ -225,7 +225,7 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/engine/filesystem-conduct-state-store.ts`
 - `src/conductor/test/engine/filesystem-conduct-state-store.test.ts`
 
-**Wired-into:** `src/conductor/src/index.ts#runReset, src/conductor/src/index.ts#runStartOver`
+**Wired-into:** `src/conductor/src/engine/command-state.ts#replaceCommandState`
 
 **Dependencies:** Task 9
 
@@ -245,7 +245,7 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/engine/state.ts`
 - `src/conductor/test/engine/state.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor, src/conductor/src/engine/finish-record-cli.ts#runFinishRecord`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#Conductor, src/conductor/src/engine/finish-record-cli.ts#dispatchFinishRecord`
 
 **Dependencies:** Task 10
 
@@ -348,7 +348,7 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/engine/finish-record-cli.ts`
 - `src/conductor/test/engine/finish-record-cli.test.ts`
 
-**Wired-into:** `src/conductor/src/index.ts#finishRecordCommand`
+**Wired-into:** `src/conductor/src/engine/finish-record-cli.ts#dispatchFinishRecord`
 
 **Dependencies:** Task 15
 
@@ -368,10 +368,12 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 - `src/conductor/src/daemon-cli.ts`
 - `src/conductor/src/index.ts`
 - `src/conductor/src/engine/state.ts`
+- `src/conductor/src/engine/command-state.ts`
+- `src/conductor/src/engine/daemon-state.ts`
 - `src/conductor/test/engine/daemon-cli.test.ts`
 - `src/conductor/test/engine/state.test.ts`
 
-**Wired-into:** `src/conductor/src/index.ts#main, src/conductor/src/daemon-cli.ts#runDaemonCommand`
+**Wired-into:** `src/conductor/src/engine/command-state.ts#recoverCommandState, src/conductor/src/engine/daemon-state.ts#persistDaemonBaseState`
 
 **Dependencies:** Task 16
 
@@ -390,8 +392,9 @@ Build an intent-bearing `ConductStateStore` port, a correct single-host filesyst
 **Files:**
 - `src/conductor/test/engine/conduct-state-writer-boundary.test.ts`
 - `src/conductor/src/engine/filesystem-conduct-state-store.ts`
+- `src/conductor/src/engine/state.ts`
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** `src/conductor/src/engine/filesystem-conduct-state-store.ts#createFilesystemConductStateStore` (all fixture seeding enters through the adapter; no raw writer is exported)
 
 **Dependencies:** Task 17
 

@@ -38,7 +38,7 @@ export function stateMutationValuesEqual(left: unknown, right: unknown): boolean
 }
 
 /** Produces metadata-only value descriptions suitable for diagnostics. */
-export function summarizeStateMutationValue(value: unknown): StateMutationValueSummary {
+function summarizeStateMutationValue(value: unknown): StateMutationValueSummary {
   if (value === undefined) {
     return { kind: 'undefined' };
   }

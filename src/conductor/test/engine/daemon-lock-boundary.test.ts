@@ -76,6 +76,12 @@ describe('daemon-lock boundary: confine lock primitive (FR-20, C3)', () => {
       // The rebase-repair ledger serializes durable `.pipeline` updates. It
       // neither references `daemon.pid` nor participates in daemon ownership.
       'engine/test-suite-remediation.ts',
+      // Conduct-state leasing protects one state file, not daemon process
+      // ownership; its separate owner record deliberately uses O_EXCL.
+      'engine/conduct-state-lease.ts',
+      // Atomic state replacement creates a unique same-directory temporary
+      // file before rename; it is unrelated to the daemon pidfile.
+      'engine/filesystem-conduct-state-store.ts',
     ];
 
     for (const file of allTs) {

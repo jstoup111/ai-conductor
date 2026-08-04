@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import {
   recordTestSuiteRemediation,
 } from './test-suite-remediation.js';
-import { relative, join } from 'node:path';
+import { dirname, relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import {
   HALT_MARKER,
@@ -1598,6 +1598,7 @@ export class Conductor {
     name: string,
     changes: Record<string, unknown>,
   ): Promise<void> {
+    await this.restoreMissingStateFile(state);
     const current = state as Record<string, unknown>;
     const mutations = Object.entries(changes)
       .filter(([field, next]) => !Object.is(current[field], next))
@@ -1626,6 +1627,7 @@ export class Conductor {
    * conflict rather than a lost update; untouched fields are never submitted.
    */
   private async persistPendingStateChanges(state: ConductState, name: string): Promise<void> {
+    await this.restoreMissingStateFile(state);
     const baseline = this.persistedStateSnapshot;
     if (!baseline) throw new Error('Conductor state baseline is unavailable');
 
@@ -1651,10 +1653,46 @@ export class Conductor {
     step: StepName,
     status: StepStatus,
   ): Promise<void> {
+    await this.restoreMissingStateFile(state);
     const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
     requireStateMutation(result, `Conductor step-status update for ${step}`);
     state[step] = status;
     state.last_step = step;
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /**
+   * Recreate a state file only when a mid-run `.pipeline` deletion removed it.
+   * Every restored field expects `undefined`, so a concurrent writer that has
+   * already recreated state produces a conflict rather than being overwritten.
+   */
+  private async restoreMissingStateFile(state: ConductState): Promise<void> {
+    if (!this.persistedStateSnapshot) return;
+    try {
+      await accessFile(this.stateFilePath);
+      return;
+    } catch {
+      // The parent directory and state file may have been removed mid-run.
+    }
+
+    const mutations = Object.entries(state)
+      .filter(([, value]) => value !== undefined)
+      .map(([field, next]) => ({
+        field,
+        expected: undefined,
+        intent: 'restore state after missing pipeline root',
+        next,
+      } as StateMutation<ConductState>));
+    if (mutations.length === 0) return;
+
+    await mkdir(dirname(this.stateFilePath), { recursive: true });
+    const result = await this.stateStore.applyBatch({
+      name: 'restore state after missing pipeline root',
+      mutations,
+    });
+    if ('message' in result) {
+      throw new Error(`State recovery after missing pipeline root failed: ${result.message}`);
+    }
     this.persistedStateSnapshot = { ...state };
   }
 
@@ -3662,8 +3700,9 @@ export class Conductor {
             // process-local SHIP latch. Persist the already-created draft so a
             // resumed coordinator can verify and advance it without issuing a
             // second create-capable operation.
-            state.pr_url = draftPr.prUrl;
-            await savePrUrl(this.stateFilePath, draftPr.prUrl);
+            await this.commitStateChanges(state, 'store ship draft pull request URL', {
+              pr_url: draftPr.prUrl,
+            });
 
             // `findOrCreatePr` adopts any OPEN PR for the branch UNTOUCHED, so a
             // `needs-remediation` placeholder left by an earlier HALT becomes the
@@ -5409,10 +5448,9 @@ export class Conductor {
                 continue;
               }
               const reason = `FINISH publication retry exhausted: ${route.reason}`;
-              state.finish = 'failed';
-              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               await emitTracked({ type: 'loop_halt', reason });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
@@ -5440,17 +5478,16 @@ export class Conductor {
                 // The failing FINISH step is not part of the done-only stale
                 // cascade, so explicitly restage it for the post-BUILD tail.
                 (state as Record<string, unknown>).finish = 'stale';
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 i = nav.index - 1; // for-loop i++ lands on build
                 continue stepLoop;
               }
               const reason =
                 `FINISH implementation evidence remains invalid after ${kickback.entry.count} ` +
                 `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${route.evidence}`;
-              state.finish = 'failed';
-              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               await emitTracked({ type: 'loop_halt', reason });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
@@ -5458,10 +5495,9 @@ export class Conductor {
             }
             if (route.kind === 'halt') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
-              state.finish = 'failed';
-              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, route.reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               await emitTracked({ type: 'loop_halt', reason: route.reason });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
@@ -7462,6 +7498,13 @@ export class Conductor {
       // retryable) instead of "loop ended without DONE or HALT marker" (error
       // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
       const reason = `conductor error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`;
+      await this.restoreMissingStateFile(state).catch((restoreError: unknown) => {
+        (this.log ?? console.warn)(
+          `conductor could not restore missing state after error: ${
+            restoreError instanceof Error ? restoreError.message : String(restoreError)
+          }`,
+        );
+      });
       if (!(await this.markerExists(LOOP_HALT_MARKER))) {
         await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       }

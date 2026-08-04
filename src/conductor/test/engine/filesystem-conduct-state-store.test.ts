@@ -35,7 +35,9 @@ function persistenceWritesToDisk(writes: ConductState[]): ConductStatePersistenc
   return {
     async write(path, state): Promise<void> {
       writes.push(state);
-      await writeState(path, state);
+      // This injected persistence fake runs while the store owns its lease.
+      // Its own direct materialization must not re-enter that lease.
+      await writeFile(path, `${JSON.stringify(state, null, 2)}\n`, 'utf-8');
     },
   };
 }

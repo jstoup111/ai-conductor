@@ -8,7 +8,7 @@ import type {
   StateMutation,
   StateMutationResult,
 } from '../../src/engine/conduct-state-store.js';
-import { recoverCommandState, replaceCommandState } from '../../src/index.js';
+import { recoverCommandState, replaceCommandState } from '../../src/engine/command-state.js';
 
 class RecordingConductStateStore implements ConductStateStore<ConductState> {
   readonly replacements: PrivilegedStateReplacement<ConductState>[] = [];
