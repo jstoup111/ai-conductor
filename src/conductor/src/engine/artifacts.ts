@@ -895,6 +895,13 @@ export interface CompletionContext {
    * environments without git behave exactly as before the guard existed.
    */
   getHeadSha?: () => Promise<string | null>;
+  /**
+   * Injectable working-tree status reader. Returns `git status --porcelain`
+   * output, or null when status cannot be determined. Absent/null/empty or a
+   * thrown probe fail open, so environments without git retain their prior
+   * completion behavior.
+   */
+  worktreeStatus?: () => Promise<string | null>;
   /** Whether the engine is running in daemon mode. Affects finish convergence (Story 2). */
   daemon?: boolean;
   /**
@@ -977,6 +984,32 @@ export interface CompletionContext {
    * so real callers need not wire this; tests inject a scratch-repo runner.
    */
   git?: GitRunner;
+}
+
+/**
+ * Return dirty paths reported by the optional working-tree probe, or null
+ * when the probe cannot establish a nonempty status. Renames report their
+ * destination path so callers can inspect the current worktree filename.
+ */
+export async function uncommittedPathsOrNull(ctx: CompletionContext): Promise<string[] | null> {
+  if (!ctx.worktreeStatus) return null;
+
+  try {
+    const porcelain = await ctx.worktreeStatus();
+    if (!porcelain) return null;
+
+    return porcelain
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const path = line.slice(3);
+        if (!/[RC]/.test(line.slice(0, 2))) return path;
+        const renameSeparator = path.indexOf(' -> ');
+        return renameSeparator === -1 ? path : path.slice(renameSeparator + 4);
+      });
+  } catch {
+    return null;
+  }
 }
 
 async function verifyDurableShipmentEvidence(

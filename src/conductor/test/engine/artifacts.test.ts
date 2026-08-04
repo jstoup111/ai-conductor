@@ -78,6 +78,7 @@ import {
   BUILD_REVIEW_VERDICT,
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
+  uncommittedPathsOrNull,
 } from '../../src/engine/artifacts.js';
 import type {
   CompletionResult,
@@ -4331,6 +4332,31 @@ Task 1 → Task 2
       const result = await checkStepCompletion(dir, 'build_review');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/no build-review verdict/i);
+    });
+  });
+
+  describe('uncommittedPathsOrNull', () => {
+    it.each([
+      ['an absent probe', {}],
+      ['an empty probe result', { worktreeStatus: async () => '' }],
+      ['a null probe result', { worktreeStatus: async () => null }],
+      ['a throwing probe', { worktreeStatus: async () => { throw new Error('unavailable'); } }],
+    ])('fails open for %s', async (_caseName, ctx) => {
+      await expect(uncommittedPathsOrNull(ctx)).resolves.toBeNull();
+    });
+
+    it('returns ordered paths from porcelain statuses, taking a rename destination', async () => {
+      await expect(
+        uncommittedPathsOrNull({
+          worktreeStatus: async () => 'MM src/changed.ts\n M docs/a -> b.md\nA  staged.ts\n?? new-file.ts\nR  orig-name.ts -> new-name.ts\n',
+        }),
+      ).resolves.toEqual([
+        'src/changed.ts',
+        'docs/a -> b.md',
+        'staged.ts',
+        'new-file.ts',
+        'new-name.ts',
+      ]);
     });
   });
 });
