@@ -5,7 +5,8 @@ import { tmpdir } from 'node:os';
 import { Conductor } from '../test-conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { checkGate } from '../../src/engine/gates.js';
+import { bumpKickbackGate, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,6 +22,41 @@ describe('deterministic BUILD verification group', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('accepts reconciled stale BUILD prerequisites at build review', () => {
+    expect(checkGate('build_review', {
+      wiring_check: 'stale',
+      test_suite: 'stale',
+    })).toEqual({ passed: true });
+  });
+
+  it('preserves the deterministic kickback cap at two unchanged attempts', () => {
+    const initial = bumpKickbackGate(undefined, {
+      treeHash: 'unchanged-tree',
+      resolvedCount: 1,
+      reason: 'first failure',
+    });
+    const second = bumpKickbackGate(initial.entry, {
+      treeHash: 'unchanged-tree',
+      resolvedCount: 1,
+      reason: 'second failure',
+    });
+    const exhausted = bumpKickbackGate(second.entry, {
+      treeHash: 'unchanged-tree',
+      resolvedCount: 1,
+      reason: 'third failure',
+    });
+
+    expect({
+      first: [initial.entry.count, initial.exhausted],
+      second: [second.entry.count, second.exhausted],
+      exhausted: [exhausted.entry.count, exhausted.exhausted],
+    }).toEqual({
+      first: [1, false],
+      second: [2, false],
+      exhausted: [2, true],
+    });
   });
 
   it('starts both native checks before release, joins in declaration order, and only then reviews', async () => {
