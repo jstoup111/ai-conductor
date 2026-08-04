@@ -45,4 +45,31 @@ describe('finish-publication domain types', () => {
 
     await expect(import('../../src/engine/finish-publication.js')).resolves.toBeTypeOf('object');
   });
+
+  it('selects release readiness as the first incomplete daemon PR transition', async () => {
+    type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
+    type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+    type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
+
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent: {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'daemon' },
+      } satisfies PublicationIntent,
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'missing',
+      branchPushed: 'valid',
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+      shippedRecord: 'valid',
+      outcomeRecord: 'valid',
+    };
+    const module = await import('../../src/engine/finish-publication.js');
+    const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
+      snapshot: PublicationSnapshot,
+    ) => PublicationTransition;
+
+    expect(nextFinishPublicationTransition(snapshot)).toBe('verify_release_readiness');
+  });
 });

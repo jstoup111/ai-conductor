@@ -48,7 +48,7 @@ type InteractivePublicationIntent = Extract<
 type PublicationEvidence = {
   implementationEvidence: 'valid' | 'invalid' | 'indeterminate';
   shipEvidence: 'valid' | 'invalid' | 'indeterminate';
-  releaseReadiness: 'valid' | 'invalid' | 'indeterminate';
+  releaseReadiness: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   branchPushed: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   shippedRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
   outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
@@ -76,6 +76,37 @@ export type PublicationTransition =
   | 'judge_pr_prose'
   | 'ready_pr'
   | 'record_outcome';
+
+/**
+ * Selects the first publication effect still required by a closed snapshot.
+ * Every result is a resumable transition; the coordinator owns performing it
+ * and obtaining the next authoritative snapshot.
+ */
+export function nextFinishPublicationTransition(
+  snapshot: PublicationSnapshot,
+): PublicationTransition {
+  if (snapshot.pr.identity !== 'one' || snapshot.branchPushed !== 'valid') {
+    return 'establish_pr';
+  }
+
+  if (snapshot.releaseReadiness !== 'valid') {
+    return 'verify_release_readiness';
+  }
+
+  if (snapshot.shippedRecord !== 'valid') {
+    return 'write_shipped_record';
+  }
+
+  if (snapshot.pr.prose !== 'accepted') {
+    return 'judge_pr_prose';
+  }
+
+  if (!snapshot.pr.ready) {
+    return 'ready_pr';
+  }
+
+  return 'record_outcome';
+}
 
 export type PublicationDisposition =
   | { kind: 'complete' }
