@@ -12,6 +12,39 @@ import type { SchedulingUnitRef } from './scheduling-unit.js';
 
 export type RecoveryOption = 'retry' | 'interactive' | 'back' | 'skip' | 'quit';
 
+/** Closed, credential-safe FINISH publication observability vocabulary. */
+export type FinishPublicationTransition =
+  | 'establish_pr'
+  | 'verify_release_readiness'
+  | 'write_shipped_record'
+  | 'judge_pr_prose'
+  | 'ready_pr'
+  | 'record_outcome';
+
+/** Exact deterministic blockers; messages, URLs, and adapter diagnostics stay outside telemetry. */
+export type FinishPublicationBlocker =
+  | 'publication_snapshot_incoherent'
+  | 'publication_snapshot_indeterminate'
+  | 'implementation_evidence_invalid'
+  | 'implementation_evidence_indeterminate'
+  | 'ship_evidence_invalid'
+  | 'ship_evidence_indeterminate'
+  | 'release_readiness_missing'
+  | 'release_readiness_invalid'
+  | 'release_readiness_indeterminate';
+
+export type FinishPublicationEvent =
+  | {
+      type: 'finish_publication_transition';
+      phase: 'started' | 'completed';
+      transition: FinishPublicationTransition;
+    }
+  | { type: 'finish_publication_blocked'; condition: FinishPublicationBlocker }
+  | {
+      type: 'finish_publication_disposition';
+      disposition: 'retry_finish' | 'retry_build' | 'human_required' | 'complete';
+    };
+
 /** Closed, non-diagnostic context for credential-park progress telemetry. */
 export type CredentialParkProgressDegradation =
   | 'credential-failure'
@@ -206,6 +239,7 @@ export type ConductorEvent =
     }
   /** A sanitized recovery update; `credentials_park` remains the lifecycle start. */
   | CredentialParkProgressEvent
+  | FinishPublicationEvent
   | { type: 'feature_complete'; prUrl?: string; featureDesc?: string; sessionStartedAt?: number }
   | { type: 'dashboard_refresh' }
   | {

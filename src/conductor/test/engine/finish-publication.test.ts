@@ -34,6 +34,7 @@ type PublicationCondition =
 
 interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
+  emit?(event: unknown): void | Promise<void>;
   effects: {
     dispatchJudgment(...args: unknown[]): Promise<unknown>;
     /**
@@ -1504,5 +1505,66 @@ describe('advanceFinishPublication accepted PR presentation', () => {
     });
 
     expect(repairPresentation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('FINISH publication observability', () => {
+  it('emits a closed exact blocker without observed credential or URL content', async () => {
+    const events: unknown[] = [];
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          releaseReadiness: 'missing',
+          pr: {
+            identity: 'one',
+            url: 'https://secret.example.test/token=not-for-telemetry',
+            prose: 'accepted',
+            ready: true,
+          },
+        }),
+        emit: (event) => { events.push(event); },
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({
+      kind: 'publication_retry',
+      condition: { code: 'release_readiness_missing' },
+    });
+
+    expect(events).toEqual([{
+      type: 'finish_publication_blocked',
+      condition: 'release_readiness_missing',
+    }]);
+    expect(JSON.stringify(events)).not.toContain('secret');
+  });
+
+  it('emits a transition start and completion around one verified publication effect', async () => {
+    const events: unknown[] = [];
+    let shippedRecord: 'missing' | 'valid' = 'missing';
+    const observe = async () => readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://example.test/pull/1172',
+        prose: 'accepted',
+        ready: true,
+      },
+      shippedRecord,
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        emit: (event) => { events.push(event); },
+        effects: {
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+          createShippedRecord: async () => { shippedRecord = 'valid'; },
+        },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
+
+    expect(events).toEqual([
+      { type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record' },
+      { type: 'finish_publication_transition', phase: 'completed', transition: 'write_shipped_record' },
+    ]);
   });
 });

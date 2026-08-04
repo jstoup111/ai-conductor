@@ -2,6 +2,10 @@ import {
   openShipDraftPr,
   type OpenShipDraftPrDeps,
 } from './ship-draft-pr.js';
+import type {
+  FinishPublicationEvent,
+  FinishPublicationTransition,
+} from '../types/events.js';
 
 /**
  * Closed domain vocabulary for resumable FINISH publication.  The coordinator
@@ -331,13 +335,9 @@ export function validatePublicationSnapshot(
   return { kind: 'valid' };
 }
 
-export type PublicationTransition =
-  | 'establish_pr'
-  | 'verify_release_readiness'
-  | 'write_shipped_record'
-  | 'judge_pr_prose'
-  | 'ready_pr'
-  | 'record_outcome';
+export type PublicationTransition = FinishPublicationTransition;
+
+type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
 
 /**
  * Selects the first publication effect still required by a closed snapshot.
@@ -784,6 +784,8 @@ function prProseJudgmentRequest(pr: PrWithJudgmentNeeded): PrProseJudgmentReques
 
 export interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
+  /** Best-effort, closed publication progress telemetry supplied by the composition root. */
+  emit?: PublicationEventEmitter;
   effects: {
     dispatchJudgment(request: PrProseJudgmentRequest): Promise<PrProseJudgmentResult>;
     /**
@@ -914,6 +916,27 @@ function mapPrProseJudgmentResult(
   }
 }
 
+async function emitPublicationEvent(
+  emit: PublicationEventEmitter | undefined,
+  event: FinishPublicationEvent,
+): Promise<void> {
+  try {
+    await emit?.(event);
+  } catch {
+    // Observability must not alter a verified publication disposition.
+  }
+}
+
+async function advancedPublicationTransition(
+  emit: PublicationEventEmitter | undefined,
+  transition: PublicationTransition,
+): Promise<Extract<AdvanceFinishPublicationResult, { kind: 'advanced' }>> {
+  await emitPublicationEvent(emit, {
+    type: 'finish_publication_transition', phase: 'completed', transition,
+  });
+  return { kind: 'advanced', transition };
+}
+
 /**
  * The narrow Task 7 coordinator seam: observe first, stop on deterministic
  * blockers, and only then cross the injected judgment boundary.
@@ -924,6 +947,10 @@ export async function advanceFinishPublication(
   const snapshot = await input.observe();
   const preflight = preflightFinishPublication(snapshot);
   if (preflight.kind === 'blocked') {
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_blocked',
+      condition: preflight.condition.code,
+    });
     if (preflight.condition.code === 'implementation_evidence_invalid') {
       return {
         kind: 'implementation_invalid',
@@ -947,13 +974,17 @@ export async function advanceFinishPublication(
         };
       }
 
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'establish_pr',
+      });
+
       const draftPr = await openShipDraftPr(input.effects.establishPr);
       const observedAfterEstablish = await input.observe();
       if (
         observedAfterEstablish.pr.identity === 'one' &&
         observedAfterEstablish.branchPushed === 'valid'
       ) {
-        return { kind: 'advanced', transition: 'establish_pr' };
+        return advancedPublicationTransition(input.emit, 'establish_pr');
       }
       if (observedAfterEstablish.pr.identity === 'ambiguous') {
         return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
@@ -986,6 +1017,9 @@ export async function advanceFinishPublication(
       };
     }
 
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record',
+    });
     return coalescePublicationEffect(input.effects, 'write_shipped_record', async () => {
       let writeFailure: unknown;
       try {
@@ -998,7 +1032,7 @@ export async function advanceFinishPublication(
 
       const observedAfterWrite = await input.observe();
       if (observedAfterWrite.shippedRecord === 'valid') {
-        return { kind: 'advanced', transition: 'write_shipped_record' };
+        return advancedPublicationTransition(input.emit, 'write_shipped_record');
       }
       if (observedAfterWrite.shippedRecord === 'invalid') {
         return { kind: 'human_required', reason: 'invalid_shipped_record' };
@@ -1015,11 +1049,17 @@ export async function advanceFinishPublication(
 
   if (isPrProseJudgmentNeeded(snapshot.pr)) {
     const pr = snapshot.pr;
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
+    });
     return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
       try {
-        return mapPrProseJudgmentResult(
+        const result = mapPrProseJudgmentResult(
           await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
         );
+        return result.kind === 'advanced'
+          ? advancedPublicationTransition(input.emit, 'judge_pr_prose')
+          : result;
       } catch {
         // The dispatcher can lose its response after the provider has returned.
         // Re-observation on the next FINISH pass is authoritative, so retain the
@@ -1042,6 +1082,9 @@ export async function advanceFinishPublication(
       };
     }
 
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'ready_pr',
+    });
     return coalescePublicationEffect(input.effects, 'ready_pr', async () => {
       try {
         await input.effects.repairPresentation!();
@@ -1062,7 +1105,7 @@ export async function advanceFinishPublication(
         observedAfterPresentationRepair.pr.prose === 'accepted' &&
         observedAfterPresentationRepair.pr.ready
       ) {
-        return { kind: 'advanced', transition: 'ready_pr' };
+        return advancedPublicationTransition(input.emit, 'ready_pr');
       }
 
       return {
@@ -1105,6 +1148,9 @@ export async function advanceFinishPublication(
       recordRequest = { choice: 'keep' };
     }
 
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'record_outcome',
+    });
     return coalescePublicationEffect(input.effects, 'record_outcome', async () => {
       let writeFailure = false;
       try {
@@ -1122,6 +1168,9 @@ export async function advanceFinishPublication(
         nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
         observedAfterRecord.outcomeRecord === 'valid'
       ) {
+        await emitPublicationEvent(input.emit, {
+          type: 'finish_publication_transition', phase: 'completed', transition: 'record_outcome',
+        });
         return { kind: 'complete' };
       }
 

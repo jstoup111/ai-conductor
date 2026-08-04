@@ -2154,6 +2154,30 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
         ),
       );
       break;
+    case 'finish_publication_transition':
+      log(
+        event.phase === 'started'
+          ? `${dot} ${chalk.cyan('▶')} ${chalk.cyan(`FINISH publication: ${event.transition}`)}`
+          : `${dot}   ${chalk.green(`FINISH publication: ${event.transition} ✓`)}`,
+      );
+      break;
+    case 'finish_publication_blocked':
+      log(`${dot} ${chalk.red('✋')} ${chalk.red(`FINISH publication blocked: ${event.condition}`)}`);
+      break;
+    case 'finish_publication_disposition': {
+      const line =
+        event.disposition === 'complete'
+          ? 'FINISH publication: complete'
+          : event.disposition === 'retry_finish'
+            ? 'FINISH publication: retry FINISH'
+            : event.disposition === 'retry_build'
+              ? 'FINISH publication: route to BUILD'
+              : 'FINISH publication: human action required';
+      const glyph = event.disposition === 'complete' ? chalk.green('✓') :
+        event.disposition === 'human_required' ? chalk.red('✋') : chalk.yellow('↩');
+      log(`${dot} ${glyph} ${event.disposition === 'complete' ? chalk.green(line) : chalk.yellow(line)}`);
+      break;
+    }
     case 'operator_park_boundary': {
       const boundary =
         event.boundary.kind === 'pre-first-unit'

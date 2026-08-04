@@ -27,7 +27,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ConductState } from '../types/index.js';
+import type { ConductState, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -708,6 +708,7 @@ export interface FinishPublicationCoordinator {
     mode: RunMode;
     daemon: boolean;
     dispatchJudgment(request: PrProseJudgmentRequest): Promise<StepRunResult>;
+    emit(event: FinishPublicationEvent): Promise<void>;
   }): Promise<PublicationDisposition>;
 }
 
@@ -1540,6 +1541,7 @@ export class Conductor {
       mode: this.mode,
       daemon: this.daemon,
       dispatchJudgment: async (_request) => this.stepRunner.run('finish', state, options),
+      emit: async (event) => this.events.emit(event),
     });
     return {
       success: publicationDisposition.kind === 'complete',
@@ -5225,9 +5227,11 @@ export class Conductor {
           if (step.name === 'finish' && result.publicationDisposition !== undefined) {
             const route = routeFinishPublicationDisposition(result.publicationDisposition);
             if (route.kind === 'complete') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'complete' });
               result.success = true;
             }
             if (route.kind === 'retry_finish') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
               lastError = `FINISH publication retry: ${route.reason}`;
               retryHint = `${lastError}. Retry only the incomplete publication transition.`;
               if (attempt < stepMaxRetries) {
@@ -5251,6 +5255,7 @@ export class Conductor {
               return;
             }
             if (route.kind === 'retry_build') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_build' });
               const kickback = await consumeKickbackBudget('finish', route.evidence);
               if (!kickback.exhausted) {
                 await emitTracked({
@@ -5288,6 +5293,7 @@ export class Conductor {
               return;
             }
             if (route.kind === 'halt') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
               state.finish = 'failed';
               await saveStepStatus(this.stateFilePath, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, route.reason + '\n', 'needs-human');

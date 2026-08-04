@@ -59,6 +59,9 @@ const PRE_SETTLE_DECISION_PERSISTED_EVENT_TYPES = [
   // DECIDE-artifact violations) has to outlive the run that made it.
   'protected_artifact_rebaseline',
   'protected_artifact_rebaseline_refused',
+  'finish_publication_transition',
+  'finish_publication_blocked',
+  'finish_publication_disposition',
 ] satisfies Array<ConductorEvent['type']>;
 
 const buildMemberSettleDecisionEventTypes = new Set<ConductorEvent['type']>(
@@ -107,6 +110,9 @@ const DAEMON_SWITCH_HANDLED_EVENT_TYPES = [
   'parallel_completed',
   'rebase_mergeable_skip',
   'operator_park_boundary',
+  'finish_publication_transition',
+  'finish_publication_blocked',
+  'finish_publication_disposition',
 ] satisfies Array<ConductorEvent['type']>;
 
 const { verdict_freshness: _omitted, ...missingVerdictFreshness } = EVENT_SINKS;
@@ -198,8 +204,8 @@ describe('event sink subscriptions', () => {
     });
   });
 
-  it('is total over all 65 ConductorEvent types', () => {
-    expect(Object.keys(EVENT_SINKS)).toHaveLength(65);
+  it('is total over all 68 ConductorEvent types', () => {
+    expect(Object.keys(EVENT_SINKS)).toHaveLength(68);
   });
 
   it('routes verdict_freshness to every sink', () => {

@@ -49,6 +49,11 @@ describe('Conductor FINISH publication routing', () => {
     { name: 'daemon', mode: 'auto' as const, daemon: true },
   ])('starts at FINISH and lets the coordinator bound %s judgment dispatches', async ({ mode, daemon }) => {
     const calls: StepName[] = [];
+    const dispositions: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         calls.push(step);
@@ -70,7 +75,7 @@ describe('Conductor FINISH publication routing', () => {
       stateFilePath: statePath,
       stepRunner: runner,
       finishPublication: coordinator,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot: dir,
       fromStep: 'finish',
       mode,
@@ -84,6 +89,7 @@ describe('Conductor FINISH publication routing', () => {
 
     expect(coordinator.advance).toHaveBeenCalledOnce();
     expect(calls).toEqual(mode === 'default' ? [] : ['finish']);
+    expect(dispositions).toEqual(['complete']);
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
       code: 'ENOENT',
     });
@@ -91,6 +97,11 @@ describe('Conductor FINISH publication routing', () => {
 
   it('retries a publication-only result at FINISH without dispatching BUILD or remediation', async () => {
     const calls: Array<{ step: StepName; retryReason?: string }> = [];
+    const dispositions: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step, _state, options) => {
         calls.push({ step, retryReason: options?.retryReason });
@@ -108,7 +119,7 @@ describe('Conductor FINISH publication routing', () => {
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot: dir,
       fromStep: 'finish',
       mode: 'auto',
@@ -124,6 +135,7 @@ describe('Conductor FINISH publication routing', () => {
     expect(calls.map(({ step }) => step)).toEqual(['finish', 'finish']);
     expect(calls.map(({ step }) => step)).not.toContain('build');
     expect(calls.map(({ step }) => step)).not.toContain('remediate');
+    expect(dispositions).toEqual(['retry_finish']);
     expect(calls[1]?.retryReason).toContain('Retry only the incomplete publication transition.');
     expect(calls[1]?.retryReason).toContain('presentation_repair_failed');
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
@@ -143,9 +155,13 @@ describe('Conductor FINISH publication routing', () => {
   ])('routes %s back to BUILD with its evidence', async (_caseName, evidence) => {
     const calls: Array<{ step: StepName; retryReason?: string }> = [];
     const kickbacks: Array<{ from: StepName; to: StepName; evidence?: string }> = [];
+    const dispositions: string[] = [];
     const events = new ConductorEventEmitter();
     events.on('kickback', (event) => {
       if (event.type === 'kickback') kickbacks.push(event);
+    });
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
     });
     const runner: StepRunner = {
       run: vi.fn(async (step, _state, options) => {
@@ -179,6 +195,7 @@ describe('Conductor FINISH publication routing', () => {
       from: 'finish', to: 'build', evidence,
     }));
     expect(calls.map(({ step }) => step)).not.toContain('remediate');
+    expect(dispositions).toEqual(['retry_build']);
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       ROUTED_SENTINEL.message,
     );
@@ -225,6 +242,11 @@ describe('Conductor FINISH publication routing', () => {
     { kind: 'unknown' },
   ])('halts unknown publication disposition without broad remediation', async (publicationDisposition) => {
     const calls: StepName[] = [];
+    const dispositions: string[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
     const runner: StepRunner = {
       run: vi.fn(async (step) => {
         calls.push(step);
@@ -234,7 +256,7 @@ describe('Conductor FINISH publication routing', () => {
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: runner,
-      events: new ConductorEventEmitter(),
+      events,
       projectRoot: dir,
       fromStep: 'finish',
       mode: 'auto',
@@ -250,6 +272,7 @@ describe('Conductor FINISH publication routing', () => {
     expect(calls).toEqual(['finish']);
     expect(calls).not.toContain('build');
     expect(calls).not.toContain('remediate');
+    expect(dispositions).toEqual(['human_required']);
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       'publication disposition',
     );
