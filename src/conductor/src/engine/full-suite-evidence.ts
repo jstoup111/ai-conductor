@@ -32,6 +32,7 @@ export interface FullSuitePassEvidence {
   fingerprint: string;
   categoryFingerprints: FullSuiteCategoryFingerprints;
   provenanceHeadSha: string;
+  worktreeClean?: boolean;
   command: string | null;
   workingDirectory: string | null;
   startedAt: string;
@@ -47,6 +48,7 @@ interface FullSuiteFailEvidenceBase {
   outcome: 'FAIL';
   fingerprint: string | null;
   provenanceHeadSha: string | null;
+  worktreeClean?: boolean;
   command: string | null;
   workingDirectory: string | null;
   startedAt: string;
@@ -192,6 +194,10 @@ function isNullableBoundedNonEmptyString(value: unknown): value is string | null
   );
 }
 
+function isOptionalBoolean(value: unknown): value is boolean | undefined {
+  return value === undefined || typeof value === 'boolean';
+}
+
 function isCategoryFingerprints(value: unknown): value is FullSuiteCategoryFingerprints {
   if (!isRecord(value)) return false;
   const keys = Object.keys(value);
@@ -210,6 +216,7 @@ function isPassEvidence(
     isNonEmptyString(value.fingerprint) &&
     isCategoryFingerprints(value.categoryFingerprints) &&
     isNonEmptyString(value.provenanceHeadSha) &&
+    isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&
     value.exitCode === 0 &&
@@ -235,6 +242,7 @@ function isFailEvidence(
     FAILURE_REASONS.has(reason as FullSuiteFailureReason) &&
     isNullableNonEmptyString(value.fingerprint) &&
     isNullableNonEmptyString(value.provenanceHeadSha) &&
+    isOptionalBoolean(value.worktreeClean) &&
     isNullableBoundedNonEmptyString(value.command) &&
     isNullableBoundedNonEmptyString(value.workingDirectory) &&
     hasValidTermination &&

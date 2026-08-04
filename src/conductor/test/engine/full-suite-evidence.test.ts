@@ -86,6 +86,53 @@ afterEach(async () => {
 });
 
 describe('full-suite evidence', () => {
+  it('round-trips optional worktree cleanliness on PASS and FAIL evidence', async () => {
+    const projectRoot = await makeProject();
+    const passEvidence: FullSuitePassEvidence = {
+      ...PASS_EVIDENCE,
+      worktreeClean: true,
+    };
+    const failEvidence: FullSuiteFailEvidence = {
+      ...FAIL_EVIDENCE,
+      worktreeClean: false,
+    };
+
+    await writeFullSuiteEvidence(projectRoot, passEvidence);
+    const pass = await readFullSuiteEvidence(projectRoot);
+    await writeFullSuiteEvidence(projectRoot, failEvidence);
+    const fail = await readFullSuiteEvidence(projectRoot);
+
+    expect({ pass, fail }).toEqual({
+      pass: { usable: true, evidence: passEvidence },
+      fail: { usable: false, reason: 'not_pass', evidence: failEvidence },
+    });
+  });
+
+  it('keeps legacy evidence without worktree cleanliness usable without fabricating it', async () => {
+    const projectRoot = await makeProject();
+
+    await writeFullSuiteEvidence(projectRoot, PASS_EVIDENCE);
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: true,
+      evidence: PASS_EVIDENCE,
+    });
+  });
+
+  it('rejects non-boolean worktree cleanliness', async () => {
+    const projectRoot = await makeProject();
+
+    await writePersisted(projectRoot, {
+      ...PASS_EVIDENCE,
+      worktreeClean: 'unknown',
+    });
+
+    await expect(readFullSuiteEvidence(projectRoot)).resolves.toEqual({
+      usable: false,
+      reason: 'corrupt',
+    });
+  });
+
   it('writes the complete versioned PASS contract', async () => {
     const projectRoot = await makeProject();
 
