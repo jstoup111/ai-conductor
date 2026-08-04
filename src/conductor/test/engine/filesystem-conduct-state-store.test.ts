@@ -201,4 +201,84 @@ describe('filesystem conduct state store', () => {
       pr_url: 'https://github.com/acme/repo/pull/102',
     });
   });
+
+  it('applies a named step-status and last_step invariant batch as one persisted snapshot', async () => {
+    const statePath = await createStatePath();
+    const initialState: ConductState = {
+      explore: 'done',
+      plan: 'pending',
+      last_step: 'explore',
+      pr_url: 'https://github.com/acme/repo/pull/101',
+    };
+    await writeState(statePath, initialState);
+    const writes: ConductState[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistenceWritesToDisk(writes),
+    );
+
+    await expect(store.applyBatch({
+      name: 'complete plan transition',
+      mutations: [
+        {
+          field: 'plan',
+          expected: 'pending',
+          intent: 'complete plan step',
+          next: 'done',
+        },
+        {
+          field: 'last_step',
+          expected: 'explore',
+          intent: 'record completed plan step',
+          next: 'plan',
+        },
+      ],
+    })).resolves.toEqual({ kind: 'applied' });
+
+    const expectedState: ConductState = {
+      ...initialState,
+      plan: 'done',
+      last_step: 'plan',
+    };
+    expect(writes).toEqual([expectedState]);
+    expect(JSON.parse(await readFile(statePath, 'utf-8'))).toEqual(expectedState);
+  });
+
+  it('persists none of a named batch when its second operation conflicts', async () => {
+    const statePath = await createStatePath();
+    const initialState: ConductState = {
+      explore: 'done',
+      plan: 'pending',
+      last_step: 'explore',
+      pr_url: 'https://github.com/acme/repo/pull/101',
+    };
+    await writeState(statePath, initialState);
+    const originalBytes = await readFile(statePath, 'utf-8');
+    const writes: ConductState[] = [];
+    const store = createFilesystemConductStateStore(
+      statePath,
+      persistenceWritesToDisk(writes),
+    );
+
+    await expect(store.applyBatch({
+      name: 'complete plan transition',
+      mutations: [
+        {
+          field: 'plan',
+          expected: 'pending',
+          intent: 'complete plan step',
+          next: 'done',
+        },
+        {
+          field: 'last_step',
+          expected: 'memory',
+          intent: 'record completed plan step',
+          next: 'plan',
+        },
+      ],
+    })).resolves.toMatchObject({ kind: 'conflict' });
+
+    expect(writes).toEqual([]);
+    await expect(readFile(statePath, 'utf-8')).resolves.toBe(originalBytes);
+  });
 });

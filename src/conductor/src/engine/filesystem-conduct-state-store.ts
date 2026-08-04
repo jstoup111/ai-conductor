@@ -1,6 +1,10 @@
 import { readState, writeState } from './state.js';
 import type { ConductState, StateResult } from '../types/state.js';
-import type { StateMutation, StateMutationResult } from './conduct-state-store.js';
+import type {
+  NamedAtomicStateMutationBatch,
+  StateMutation,
+  StateMutationResult,
+} from './conduct-state-store.js';
 
 /**
  * Persistence seam for the adapter's accepted state snapshots. Later tasks
@@ -13,6 +17,7 @@ export interface ConductStatePersistence {
 export interface FilesystemConductStateStore {
   read(): Promise<StateResult<ConductState>>;
   apply(mutation: StateMutation<ConductState>): Promise<StateMutationResult>;
+  applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult>;
 }
 
 const defaultPersistence: ConductStatePersistence = {
@@ -53,6 +58,35 @@ export function createFilesystemConductStateStore(
         ...state,
         [mutation.field]: mutation.next,
       };
+      try {
+        await persistence.write(path, nextState);
+      } catch (error) {
+        return { kind: 'persistence', message: `Failed to persist state: ${error}` };
+      }
+      return { kind: 'applied' };
+    },
+
+    async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
+      const current = await readState(path);
+      if (!current.ok) {
+        return { kind: 'persistence', message: current.error.message };
+      }
+
+      const state = current.value;
+      for (const mutation of batch.mutations) {
+        const currentValue = (state as Record<string, unknown>)[mutation.field];
+        if (!Object.is(currentValue, mutation.expected)) {
+          return {
+            kind: 'conflict',
+            message: `Expected ${mutation.field} to match before ${mutation.intent}`,
+          };
+        }
+      }
+
+      const nextState = batch.mutations.reduce<ConductState>((updated, mutation) => ({
+        ...updated,
+        [mutation.field]: mutation.next,
+      }), state);
       try {
         await persistence.write(path, nextState);
       } catch (error) {
