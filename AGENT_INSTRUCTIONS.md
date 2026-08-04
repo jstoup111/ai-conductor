@@ -66,10 +66,54 @@ happened and corrupted daemon state:
    and `daemon-backlog.ts` dedups it. If you complete work manually, you MUST also land its
    shipped-record.
 
+5. **Do not create or rewrite files in the LIVE root checkout while a self-host build is
+   running.** The self-host live boundary fingerprints the root checkout before a build and
+   re-verifies it at the next dispatch boundary. Git can tell the guard that a path is
+   tracked, never *who* wrote it — so it fails closed on any change it cannot attribute and
+   halts the run, discarding the whole step's work. This has already happened: on
+   2026-08-04 the `mechanically-verify-llm-rebase-conflict-resolution` build halted
+   immediately after `build_review` passed (18 turns, 2m19s, $2.29, all wasted) because an
+   interactive operator session granted a Bash permission, writing the root checkout's
+   untracked `.claude/settings.local.json`:
+
+   ```text
+   ✋ loop halted: live checkout changed during self-host execution —
+     0 added, 0 removed, 1 changed: changed .claude/settings.local.json.
+   ```
+
+   **Safe while a build runs.** Read-only commands (`git status`/`log`/`diff`, `conduct
+   daemon status`, tailing `.daemon/daemon.log`) — the guard only sees writes. Anything
+   under an excluded path: `.git/`, `.daemon/`, `.worktrees/`, `.pipeline/`,
+   `.claude/worktrees/`, `src/conductor/dist-versions/`, or any `node_modules/` tree.
+   Editing or deleting a file that is **already tracked** — Git reports `M`/`D` and the
+   guard classifies it as concurrent operator work rather than halting.
+
+   **Unsafe.** Anything that leaves an *unattributable* difference in the root checkout:
+   an untracked path appearing, changing, or disappearing (a permission or approval grant —
+   Claude Code writes the checkout's untracked `.claude/settings.local.json`, while Codex's
+   operator config lives in `$CODEX_HOME` and trips the provider-state surface instead — a
+   scratch file, a generated artifact, a new doc you have not committed); `git add` of a new
+   file, which reports `A` and is not in the allow-list; and any git operation that rewrites
+   tracked working-tree content without leaving it modified (`git pull`, `git checkout`,
+   `git stash`), because the file's bytes change while `git status` comes back clean.
+   Batch that work between dispatches, or do it inside a worktree.
+
+   Do NOT "fix" this by widening the exclusion list.
+   `src/conductor/src/engine/self-host/live-boundary.ts` keeps operator config fingerprinted
+   deliberately: a self-host process reaching back and rewriting operator config is exactly
+   what this surface exists to catch, and the false halt is the accepted cost. **Recovery:**
+   revert or keep whatever changed, then clear the halt with `rm -f
+   .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class` and let the
+   daemon re-dispatch — see
+   [stalled or stuck feature](docs/runbooks/stalled-or-stuck-feature.md#live-boundary-violation-self-host-only).
+   The completed step keeps its own verdict, so the re-kick resumes after it rather than
+   repeating it. Issue #1301 tracks the durable fix — attribution machinery that can tell an
+   operator edit from a self-host write instead of failing closed on both.
+
 Per this repo's own Design Principle, the durable fix for each of these is machinery
 (a guarded delete wrapper, a park-state check, an evidence-backfill on worktree recreate,
-a merge→shipped-record reconciler) — these prose rules are the interim guard until that
-machinery exists.
+a merge→shipped-record reconciler, live-checkout change attribution) — these prose rules are
+the interim guard until that machinery exists.
 
 ## Harness Architecture
 

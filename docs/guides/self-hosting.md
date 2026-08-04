@@ -249,6 +249,15 @@ every differing live-checkout path. A modification or deletion that Git reports 
 already-tracked file is treated as concurrent operator work and does not halt the build. Any
 untracked path, unexpected Git status, or failed Git classification still halts the build.
 
+**Operator consequence.** Because the guard cannot attribute a change, ordinary interactive work in
+the live root checkout can halt a running build — the 2026-08-04 halt of
+`mechanically-verify-llm-rebase-conflict-resolution` cost a passing `build_review` when a session
+granted a Bash permission and wrote the checkout's untracked `.claude/settings.local.json`.
+Read-only commands and edits to already-tracked files are safe; anything that creates, stages, or
+rewrites an untracked path is not. The full safe/unsafe list and the recovery steps are the
+live-checkout rule in `AGENT_INSTRUCTIONS.md`'s **Daemon Operations Safety** section; issue #1301
+tracks the attribution machinery that would remove the false-halt class.
+
 Git identifies tracked state, not the process that wrote the file. The accepted residual gap is
 that a sandbox escape which modifies an already-tracked file is indistinguishable from an operator
 edit and is therefore not detected by this guard. Untracked-file and provider-state detection
