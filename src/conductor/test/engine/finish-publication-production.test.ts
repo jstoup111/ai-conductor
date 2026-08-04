@@ -25,15 +25,15 @@ describe('production FINISH publication composition', () => {
       const pipeline = join(root, '.pipeline');
       await mkdir(pipeline);
       const marker = join(pipeline, 'release-disposition-pass');
-      const runStartedAt = Date.now();
+      const runStartedAt = Date.UTC(2026, 7, 1, 12, 0, 0);
       if (fixture === 'stale' || fixture === 'present') {
         await writeFile(marker, 'PASS\n');
+        const markerDate = new Date(
+          runStartedAt + (fixture === 'present' ? 60_000 : -60_000),
+        );
+        await utimes(marker, markerDate, markerDate);
       } else if (fixture === 'malformed') {
         await mkdir(marker);
-      }
-      if (fixture === 'stale') {
-        const staleDate = new Date(runStartedAt - 60_000);
-        await utimes(marker, staleDate, staleDate);
       }
       const observer = createProductionReleaseReadinessObserver({
         projectRoot: root,
