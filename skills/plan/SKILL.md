@@ -153,6 +153,10 @@ Compliance Gate later checks against real `file:line` callers after implementati
    e.g. `none (inert until src/engine/loop.ts)`) or a tracked issue
    (issue-form, e.g. `none (inert until #431)`) naming where/when it will be wired.
 
+**Inline code is accepted:** a declared `path#symbol` site or a deferred `<ref>` may be
+wrapped in Markdown inline code (`` `src/engine/loop.ts` ``); the delimiters are treated
+as formatting and stripped before the path or issue ref is resolved.
+
 **Repo-relative paths only:** as with `**Files:**`, every path used in a
 `Wired-into:` line must be repo-relative and must not escape the repo via `../`.
 Paths that climb outside the repo root are malformed and must be rejected.

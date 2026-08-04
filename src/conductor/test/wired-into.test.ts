@@ -68,6 +68,37 @@ describe('parseWiredIntoLine', () => {
     });
   });
 
+  it('strips Markdown inline-code delimiters from an inert path ref', () => {
+    expect(
+      parseWiredIntoLine(
+        '**Wired-into:** none (inert until `path/to/some-file.ts`)',
+      ),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'path', path: 'path/to/some-file.ts' },
+    });
+  });
+
+  it('strips Markdown inline-code delimiters from an inert issue ref', () => {
+    expect(
+      parseWiredIntoLine(
+        '**Wired-into:** none (inert until ``jstoup111/ai-conductor#999``)',
+      ),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'issue', owner: 'jstoup111', repo: 'ai-conductor', number: 999 },
+    });
+  });
+
+  it('leaves an inert path ref that contains a stray backtick untouched', () => {
+    expect(
+      parseWiredIntoLine('**Wired-into:** none (inert until `path/to/some-file.ts)'),
+    ).toEqual({
+      kind: 'inert',
+      ref: { form: 'path', path: '`path/to/some-file.ts' },
+    });
+  });
+
   it('parses free text that matches none of the accepted forms as malformed', () => {
     const result = parseWiredIntoLine('**Wired-into:** fix it later');
     expect(result.kind).toBe('malformed');
