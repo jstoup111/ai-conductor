@@ -245,6 +245,19 @@ decisions. The deterministic BUILD group appears as start/completion lines namin
 remains valid. `invalidated` means the judged surface changed and the stale verdict was rejected;
 the gate must run again. `rewritten` means the current judging attempt produced the artifact.
 
+After a BUILD repair, the group still dispatches every non-skipped `wiring_check` and `test_suite`
+member; a prior gate verdict on disk does not skip either one. Each successful member logs its own
+settle decision after the join evaluates current evidence:
+
+```text
+· BUILD member test_suite settled: reuse (fingerprint-match)
+· BUILD member wiring_check settled: recompute (recorded-head-versus-current-head)
+```
+
+`reuse` means the member's existing evidence remains valid; `recompute` means that member derived
+fresh evidence. The basis is a closed diagnostic classification, never command output, credentials,
+or an absolute host path. The group join remains the authority that marks a member satisfied.
+
 Before a provider process is spawned, its candidate resolution, session setup, and self-host
 preparation are bounded by `provider_preparation_timeout_minutes` (default 5; see
 [configuration](../reference/configuration.md#provider_preparation_timeout_minutes)). The first
@@ -673,6 +686,11 @@ on a base-branch advance.
 Read the marker and fix the reported gate failure before resuming. Use the recovery procedure in
 [stalled or stuck feature](../runbooks/stalled-or-stuck-feature.md#clear-a-halt-and-let-the-feature-resume);
 do not clear the marker merely to retry the same unchanged loop.
+
+The former terminal-less park caused by a passing stale BUILD-member verdict is retired. A repaired
+BUILD round re-verifies all non-skipped members, so it proceeds to its join or records an explicit
+halt for a real unresolved condition; operators should not park a feature merely to work around a
+missing terminal verdict.
 
 ## Troubleshooting
 

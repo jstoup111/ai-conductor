@@ -96,6 +96,46 @@ describe('EventPersister', () => {
     expect(line.waitSeconds).toBe(30);
   });
 
+  it('persists BUILD member settle decisions declared for operator observability', async () => {
+    const persister = new EventPersister(eventsPath, emitter);
+    persister.start();
+
+    await emitter.emit({
+      type: 'build_member_evidence_reused',
+      member: 'test_suite',
+      decision: 'reuse',
+      basis: 'fingerprint-match',
+    });
+    await emitter.emit({
+      type: 'build_member_evidence_recomputed',
+      member: 'wiring_check',
+      decision: 'recompute',
+      basis: 'recorded-head-versus-current-head',
+    });
+
+    persister.stop();
+
+    expect(
+      (await readFile(eventsPath, 'utf-8'))
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line)),
+    ).toMatchObject([
+      {
+        type: 'build_member_evidence_reused',
+        member: 'test_suite',
+        decision: 'reuse',
+        basis: 'fingerprint-match',
+      },
+      {
+        type: 'build_member_evidence_recomputed',
+        member: 'wiring_check',
+        decision: 'recompute',
+        basis: 'recorded-head-versus-current-head',
+      },
+    ]);
+  });
+
   it('persists typed credential-park progress as JSONL', async () => {
     const persister = new EventPersister(eventsPath, emitter);
     persister.start();

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -224,5 +225,71 @@ describe('Deterministic BUILD verification flow', () => {
       'test_suite',
       'build_review',
     ]);
+  });
+
+  it('allows a one-member BUILD round while review waits for the dispatched member', async () => {
+    // A satisfied persisted sibling verdict is normal resume state, not a
+    // BUILD repair. The already-done sibling retains its shortcut while the
+    // pending wiring member is the only branch that needs dispatch.
+    await writeState(stateFilePath, {
+      ...BUILD_COMPLETE,
+      test_suite: 'done',
+    });
+    await writeVerdict(projectRoot, 'test_suite', {
+      satisfied: true,
+      checkedAt: 1,
+    });
+    const timeline: string[] = [];
+    const parallelStarted: Array<{ step: StepName; branches: StepName[] }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_started', (event) => {
+      if (event.type === 'parallel_started') {
+        parallelStarted.push({
+          step: event.step,
+          branches: event.branches as StepName[],
+        });
+      }
+    });
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        timeline.push(step);
+        if (step === 'manual_test') {
+          return { success: false, output: 'stop after width-one exclusion proof' };
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'wiring_check',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: {
+        ensure: async () => {
+          timeline.push('test_suite');
+          return {
+            status: 'REUSED',
+            freshness: { status: 'CURRENT', evidence: PASS_EVIDENCE },
+            evidence: PASS_EVIDENCE,
+          };
+        },
+        inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE }),
+      },
+    });
+
+    await conductor.run();
+
+    expect(timeline.slice(0, 2)).toEqual(['wiring_check', 'build_review']);
+    expect(timeline).not.toContain('test_suite');
+    // A one-member round keeps the serial event shape. The declared
+    // wiring-then-suite ordering remains covered above when both dispatch;
+    // here review follows only after the sole dispatched member settles.
+    expect(parallelStarted.filter((event) => event.step === 'wiring_check')).toEqual([]);
+    expect(parallelStarted.every((event) => !event.branches.includes('test_suite'))).toBe(true);
   });
 });

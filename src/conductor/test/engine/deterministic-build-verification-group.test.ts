@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { Conductor } from '../test-conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
-import { readKickbackLedger } from '../../src/engine/kickback-ledger.js';
+import { checkGate } from '../../src/engine/gates.js';
+import { bumpKickbackGate, readKickbackLedger } from '../../src/engine/kickback-ledger.js';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -21,6 +22,41 @@ describe('deterministic BUILD verification group', () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+  });
+
+  it('accepts reconciled stale BUILD prerequisites at build review', () => {
+    expect(checkGate('build_review', {
+      wiring_check: 'stale',
+      test_suite: 'stale',
+    })).toEqual({ passed: true });
+  });
+
+  it('preserves the deterministic kickback cap at two unchanged attempts', () => {
+    const initial = bumpKickbackGate(undefined, {
+      treeHash: 'unchanged-tree',
+      resolvedCount: 1,
+      reason: 'first failure',
+    });
+    const second = bumpKickbackGate(initial.entry, {
+      treeHash: 'unchanged-tree',
+      resolvedCount: 1,
+      reason: 'second failure',
+    });
+    const exhausted = bumpKickbackGate(second.entry, {
+      treeHash: 'unchanged-tree',
+      resolvedCount: 1,
+      reason: 'third failure',
+    });
+
+    expect({
+      first: [initial.entry.count, initial.exhausted],
+      second: [second.entry.count, second.exhausted],
+      exhausted: [exhausted.entry.count, exhausted.exhausted],
+    }).toEqual({
+      first: [1, false],
+      second: [2, false],
+      exhausted: [2, true],
+    });
   });
 
   it('starts both native checks before release, joins in declaration order, and only then reviews', async () => {
@@ -219,6 +255,68 @@ describe('deterministic BUILD verification group', () => {
       }]);
     },
   );
+
+  it('reconciles a passing suite sibling to stale when wiring fails its objective verdict', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-passing-sibling-'));
+    dirs.push(projectRoot);
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({
+      plan: 'done',
+      build: 'done',
+      wiring_check: 'pending',
+      test_suite: 'pending',
+    }));
+    await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+    await writeFile(join(projectRoot, '.pipeline', 'wiring-evidence.json'), JSON.stringify({
+      schema: 1,
+      base: 'base',
+      head: 'current-head',
+      layer2: { applicable: false },
+      waivers: [],
+      tasks: [{
+        id: 't1',
+        contract: 'src/feature.ts#orphanedExport',
+        gaps: [{ kind: 'orphan-export', message: 'orphaned export' }],
+      }],
+    }));
+
+    const stepRunner: StepRunner = {
+      run: vi.fn(async (step) => {
+        if (step === 'wiring_check') return { success: true };
+        if (step === 'build') return { success: false, output: 'stop after BUILD rewind' };
+        throw new Error(`unexpected model or SHIP dispatch: ${step}`);
+      }),
+    };
+    const verifier = {
+      inspect: vi.fn(async () => ({ status: 'CURRENT' as const, evidence: {} as never })),
+      ensure: vi.fn(async () => ({ status: 'REUSED' as const, evidence: {} as never })),
+    };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      fromStep: 'wiring_check',
+      mode: 'auto',
+      verifyArtifacts: true,
+      maxRetries: 1,
+      config: { validation_concurrency: 2 },
+      git: async () => ({ stdout: 'current-head\n' }),
+      fullSuiteVerifier: verifier,
+      onRecovery: async () => 'quit',
+    });
+
+    await conductor.run();
+    const state = JSON.parse(await readFile(stateFilePath, 'utf8')) as Record<string, string>;
+
+    expect({
+      wiring_check: state.wiring_check,
+      test_suite: state.test_suite,
+    }).toEqual({
+      wiring_check: 'stale',
+      test_suite: 'stale',
+    });
+  });
 
   it('does not persist a native suite as done when interrupted before its failed objective verdict joins', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'build-verification-repair-'));
@@ -506,8 +604,8 @@ describe('deterministic BUILD verification group', () => {
         count: 1,
       }],
       gates: {
-        wiring_check: 'pending',
-        test_suite: 'pending',
+        wiring_check: 'stale',
+        test_suite: 'stale',
         build_review: undefined,
       },
     });

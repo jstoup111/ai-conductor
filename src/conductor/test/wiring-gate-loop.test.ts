@@ -77,7 +77,7 @@ describe('selector — the deterministic BUILD verification group gates build_re
   it.each([
     { staleGate: 'wiring_check' as const },
     { staleGate: 'test_suite' as const },
-  ])('an unsatisfied $staleGate verdict blocks build_review', ({ staleGate }) => {
+  ])('an unsatisfied $staleGate verdict dispatches that prerequisite before review', ({ staleGate }) => {
     const state: ConductState = {
       ...frontDone(),
       build: 'done',
@@ -98,6 +98,7 @@ describe('selector — the deterministic BUILD verification group gates build_re
     if (d.kind === 'run') {
       expect(d.step).toBe(staleGate);
       expect(d.step).not.toBe('build_review');
+      expect(d.step).not.toBe('manual_test');
     }
   });
 
@@ -294,7 +295,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     expect(manualIdx).toBeGreaterThan(reviewIdx);
   });
 
-  it('clears prior unsatisfied selection debt after wiring_check satisfies before later invalidation', async () => {
+  it('dispatches a later-invalidated wiring_check prerequisite without entering review', async () => {
     await writeState(statePath, {
       ...frontDone(),
       complexity_tier: 'M',
@@ -348,7 +349,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
 
     expect({ next, debt: [...stuckGate.entries()] }).toEqual({
       next: indexOf('wiring_check'),
-      debt: [['build_review', 1], ['wiring_check', 1]],
+      debt: [['wiring_check', 2]],
     });
   });
 

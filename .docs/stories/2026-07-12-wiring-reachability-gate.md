@@ -176,6 +176,10 @@ unwired feature can never spend build-review tokens or advance to manual test.
 - [ ] `steps.ts` keeps the `wiring_check` StepDefinition in the deterministic BUILD group.
 - [ ] Selector/advanceTail integration test: unsatisfied wiring_check blocks build review and
       manual test; both deterministic gates passing unblock build review.
+      **Amended 2026-08-04 (Task 14):** In the selector-divergence case, the
+      unmet deterministic prerequisite is dispatched rather than returning a
+      block decision; `build_review` is still not entered until the
+      prerequisite is satisfied.
 - [ ] Kickback path test proves no `.pipeline/HALT` on a plain wiring gap.
 
 ---

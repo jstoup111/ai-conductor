@@ -47,6 +47,8 @@ export const EVENT_SINKS: Record<ConductorEvent['type'], SinkDeclaration> = {
   group_member_step: { render: false, persist: false, audit: false },
   gate_verdict: { render: true, persist: false, audit: true },
   test_suite_verification: { render: false, persist: false, audit: false },
+  build_member_evidence_reused: { render: true, persist: true, audit: false },
+  build_member_evidence_recomputed: { render: true, persist: true, audit: false },
   kickback: { render: true, persist: false, audit: true },
   loop_halt: { render: true, persist: false, audit: true },
   loop_converged: { render: true, persist: false, audit: false },

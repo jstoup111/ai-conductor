@@ -609,6 +609,44 @@ describe('FullSuiteVerifier', () => {
         }));
   });
 
+  it('reuses a matching fingerprint without rerunning or rewriting its evidence', async () => {
+    const projectRoot = await makeFingerprintProject();
+    let executions = 0;
+    const createVerifier = () => new FullSuiteVerifier({
+      projectRoot,
+      environment: { SUITE_MODE: 'unchanged' },
+      execute: async () => {
+        executions += 1;
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: projectRoot,
+          startedAt: '2026-08-03T00:00:00.000Z',
+          endedAt: '2026-08-03T00:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: 'all suites passed\n',
+          stderr: '',
+        };
+      },
+    });
+
+    const first = await createVerifier().ensure();
+    const evidencePath = join(projectRoot, '.pipeline', 'test-suite-evidence.json');
+    const bytesBeforeReuse = await readFile(evidencePath);
+    const reused = await createVerifier().ensure();
+
+    expect({
+      statuses: [first.status, reused.status],
+      executions,
+      evidenceBytesUnchanged: (await readFile(evidencePath)).equals(bytesBeforeReuse),
+    }).toEqual({
+      statuses: ['EXECUTED', 'REUSED'],
+      executions: 1,
+      evidenceBytesUnchanged: true,
+    });
+  });
+
   it('reuses proof when suite execution writes only git-ignored coverage output', async () => {
     const projectRoot = await makeFingerprintProject();
     const sourcePath = join(projectRoot, 'src/app.ts');

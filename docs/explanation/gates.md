@@ -98,6 +98,15 @@ verdict layer, so they can be strict without disturbing the linear walk.
 
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 
+### BUILD-verification round authority
+
+`wiring_check` and `test_suite` run as the BUILD-verification group. After BUILD is repaired, the
+next round re-dispatches every non-skipped member; a satisfied gate verdict on disk never skips a
+member by itself. The member's evidence rule decides whether its dispatch reuses valid evidence or
+recomputes it, while the group's current join is the sole authority that marks the member satisfied
+for that round. This keeps the selection and gate checks aligned without creating a second evidence
+validity rule.
+
 ### Land-time gates
 
 These run when the engineer loop lands a spec branch, outside the step loop. They protect the base branch

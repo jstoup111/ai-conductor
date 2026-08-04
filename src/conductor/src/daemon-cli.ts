@@ -2181,6 +2181,33 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       }
       break;
     }
+    case 'build_member_evidence_reused':
+    case 'build_member_evidence_recomputed': {
+      // These values are closed event classifications, not evidence payloads.
+      // Keep the daemon log equally closed so a malformed forwarded event
+      // cannot echo a host path, command output, or credential-like value.
+      const member = event.member === 'wiring_check'
+        ? 'wiring_check'
+        : event.member === 'test_suite'
+          ? 'test_suite'
+          : 'unknown-member';
+      const decision = event.decision === 'reuse'
+        ? 'reuse'
+        : event.decision === 'recompute'
+          ? 'recompute'
+          : 'unknown-decision';
+      const basis = event.basis === 'fingerprint-match'
+        ? 'fingerprint-match'
+        : event.basis === 'recorded-head-versus-current-head'
+          ? 'recorded-head-versus-current-head'
+          : event.basis === 'fingerprint-mismatch'
+            ? 'fingerprint-mismatch'
+            : event.basis === 'fresh-evidence-required'
+              ? 'fresh-evidence-required'
+              : 'unknown-basis';
+      log(`${dot} ${chalk.dim(`BUILD member ${member} settled: ${decision} (${basis})`)}`);
+      break;
+    }
     case 'build_review_base': {
       // Task 4: dim one-liner summarizing base-freshness evidence for this
       // grading — routine telemetry, not a warning, so it stays dim

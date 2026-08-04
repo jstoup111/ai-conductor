@@ -2827,6 +2827,11 @@ export class Conductor {
     // partial join on a HALT/failed round" invariant), since those paths
     // run only after this is cleared and never consult it themselves.
     let inFlightGroupCompletions: Record<string, StepStatus> | undefined;
+    // A deterministic BUILD-verification failure routed this invocation back
+    // through build. Its next verification round must establish every
+    // non-skipped member afresh; old member state/gate verdicts cannot stand
+    // in for that round's join.
+    let buildRepairVerificationPending = false;
     let signalExitRequested = false;
 
     // Save state on SIGINT/SIGTERM/SIGHUP before exit
@@ -3411,12 +3416,16 @@ export class Conductor {
           // dispatches — real fan-out of the still-dispatchable members lands
           // in later tasks (17+).
           const groupTrack = await this.resolveTrack(state);
+          const reverifyDoneBuildMembers =
+            builtinGroup.name === BUILD_VERIFICATION_GROUP.name &&
+            buildRepairVerificationPending;
           const membership = resolveGroupMembership(
             builtinGroup,
             state,
             groupTrack,
             this.modelPolicyForStep(step.name),
             this.config,
+            reverifyDoneBuildMembers,
           );
           // Engagement is keyed to the first member that still needs work,
           // rather than blindly to members[0]. A nominal entry that was
@@ -3485,6 +3494,10 @@ export class Conductor {
               1,
               Math.min(this.validationConcurrency, membership.dispatchable.length),
             );
+            // Native BUILD members report their evidence decision through
+            // their own StepRunResult. The join only observes that result;
+            // it does not add another validity predicate.
+            const nativeBranchResults = new Map<string, StepRunResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
@@ -3496,10 +3509,14 @@ export class Conductor {
                   if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
                     return runNativeGroupBranch(
                       member,
-                      () =>
-                        member.name === 'wiring_check'
+                      async () => {
+                        const result = member.name === 'wiring_check'
                           ? this.runWiringCheckStep(state)
-                          : this.runTestSuiteStep(),
+                          : this.runTestSuiteStep();
+                        const settled = await result;
+                        nativeBranchResults.set(member.name, settled);
+                        return settled;
+                      },
                       {
                         onMemberEvent: (event) => {
                           if (event.phase === 'result' && event.outcome === 'verdict:pass') {
@@ -3719,6 +3736,46 @@ export class Conductor {
               }
             }
 
+            // Task 11: once the BUILD join has accepted a member's own
+            // evidence result, make that reuse/recompute decision observable.
+            // The event is derived exclusively from the native branch result
+            // already used by this round; it grants no new validity authority.
+            if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
+              for (let idx = 0; idx < membership.dispatchable.length; idx += 1) {
+                const member = membership.dispatchable[idx]!;
+                const outcome = outcomes[idx];
+                if (
+                  (member.name !== 'wiring_check' && member.name !== 'test_suite') ||
+                  outcome?.kind !== 'verdict' ||
+                  outcome.verdict !== 'pass' ||
+                  !gateVerdicts.get(member.name)?.satisfied
+                ) {
+                  continue;
+                }
+                const verification = nativeBranchResults.get(member.name)?.fullSuiteVerification;
+                if (member.name === 'test_suite' && verification?.status === 'REUSED') {
+                  await emitTracked({
+                    type: 'build_member_evidence_reused',
+                    member: 'test_suite',
+                    decision: 'reuse',
+                    basis: 'fingerprint-match',
+                  });
+                  continue;
+                }
+                await emitTracked({
+                  type: 'build_member_evidence_recomputed',
+                  member: member.name,
+                  decision: 'recompute',
+                  basis: member.name === 'wiring_check'
+                    ? 'recorded-head-versus-current-head'
+                    : verification?.status === 'EXECUTED' &&
+                        verification.freshness.reason === 'fingerprint_mismatch'
+                      ? 'fingerprint-mismatch'
+                      : 'fresh-evidence-required',
+                });
+              }
+            }
+
             const deterministicFailureIdxs =
               builtinGroup.name === BUILD_VERIFICATION_GROUP.name
                 ? outcomes
@@ -3810,14 +3867,15 @@ export class Conductor {
                 }
                 const nav = navigateBack(state, 'build', steps);
                 state = nav.state;
+                buildRepairVerificationPending = true;
                 if (hasNoVerdict) {
                   for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'pending';
+                    (state as Record<string, unknown>)[member.name] = 'stale';
                   }
                   if (fullSuiteFailure?.status === 'FAILED') state.test_suite = 'failed';
                 } else {
-                  for (const failure of deterministicFailures) {
-                    (state as Record<string, unknown>)[failure.member.name] = 'stale';
+                  for (const member of membership.dispatchable) {
+                    (state as Record<string, unknown>)[member.name] = 'stale';
                   }
                 }
                 await writeState(this.stateFilePath, state);
@@ -7453,13 +7511,26 @@ export class Conductor {
       return steps.length;
     }
 
+    // The selector's verdict-based satisfaction predicate can disagree with
+    // the state-based predicate that the selected step's entry gate uses.
+    // Apply the same backward-only, bounded reconciliation as resume entry so
+    // the tail never selects a step whose own gate immediately rejects an
+    // earlier prerequisite.
+    const selectedIndex = clampToRunnablePrerequisite(
+      steps,
+      state,
+      indexOf(decision.step),
+    );
+    const selectedStep = steps[selectedIndex];
+    if (!selectedStep) return indexOf(decision.step);
+
     // Oscillation / stuck guard: cap how many times any single gate may be
     // selected before it satisfies. Catches a gate whose verdict never improves
     // and a build↔plan kickback oscillation.
-    const sel = (stuckGate.get(decision.step) ?? 0) + 1;
-    stuckGate.set(decision.step, sel);
+    const sel = (stuckGate.get(selectedStep.name) ?? 0) + 1;
+    stuckGate.set(selectedStep.name, sel);
     if (sel > MAX_GATE_SELECTIONS) {
-      const reason = `gate '${decision.step}' selected ${sel} times without satisfying: ${decision.reason}`;
+      const reason = `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`;
       await writeState(this.stateFilePath, state).catch(() => {});
       await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
@@ -7470,11 +7541,11 @@ export class Conductor {
     // The selector only returns UNSATISFIED gates; if such a gate is still
     // marked 'done' (its verdict went false via kickback/recompute), reset it to
     // 'pending' so the loop re-runs it instead of skipping it as already-resolved.
-    if (getStepStatus(state, decision.step) === 'done') {
-      (state as Record<string, unknown>)[decision.step] = 'pending';
+    if (getStepStatus(state, selectedStep.name) === 'done') {
+      (state as Record<string, unknown>)[selectedStep.name] = 'pending';
       await writeState(this.stateFilePath, state);
     }
-    return indexOf(decision.step);
+    return selectedIndex;
   }
 
   /**
@@ -8031,6 +8102,7 @@ export function resolveGroupMembership(
   track: Track,
   modelPolicy: ProviderModelPolicy,
   config?: HarnessConfig,
+  reverifyDoneMembers = false,
 ): { members: GroupMember[]; dispatchable: GroupMember[]; allSkipped: boolean } {
   const tier = state.complexity_tier ?? 'L';
   const members: GroupMember[] = group.members.map((name) => {
@@ -8052,10 +8124,13 @@ export function resolveGroupMembership(
     // Task 27: resume-awareness — a member already marked 'done' in state
     // (e.g. persisted mid-group, when a SIGINT landed after this member
     // settled but before its siblings/the join did) is already satisfied.
-    // It gets a VerdictOutcome (not skipped — it genuinely ran and passed,
-    // unlike a skip cascade) and is excluded from `dispatchable` below so a
-    // resumed run never re-dispatches work already done.
-    const alreadyDone = !skip && getStepStatus(state, name) === 'done';
+    // A BUILD repair invalidates the prior verification round. Its next
+    // group join is the only satisfaction authority, so every non-skipped
+    // member must dispatch rather than reuse a prior state/verdict.
+    const alreadyDone =
+      !skip &&
+      !reverifyDoneMembers &&
+      getStepStatus(state, name) === 'done';
     return {
       name,
       skill: stepDef.skillName ?? '',

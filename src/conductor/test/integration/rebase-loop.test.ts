@@ -1409,15 +1409,15 @@ describe('integration/rebase-loop', () => {
         await emitGateInvalidationEvents(events, outcome, true);
 
         // Full legacy invalidation set (fail-closed fallback), no preservations.
-        expect(result.kickedBack).toEqual(
-          expect.arrayContaining([
-            'build_review',
-            'wiring_check',
-            'manual_test',
-            'prd_audit',
-            'architecture_review_as_built',
-          ]),
-        );
+        expect(result.kickedBack).toEqual([
+          'build',
+          'wiring_check',
+          'test_suite',
+          'build_review',
+          'manual_test',
+          'prd_audit',
+          'architecture_review_as_built',
+        ]);
         expect(preserved).toEqual([]);
         // A fail-closed reason recorded in the rebase gate's own verdict —
         // this is the NEW artifact this story requires; today's verdict

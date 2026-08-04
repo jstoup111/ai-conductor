@@ -307,7 +307,7 @@ accepted assertions whose wording this changes.
 - `src/conductor/src/engine/conductor.ts`
 - `src/conductor/test/engine/event-persister.test.ts`
 
-**Wired-into:** `src/conductor/src/engine/event-persister.ts#EventPersister, src/conductor/src/cli/daemon-cli.ts#renderDaemonEventUnsafe`
+**Wired-into:** `src/conductor/src/engine/event-persister.ts#EventPersister, src/conductor/src/daemon-cli.ts#renderDaemonEventUnsafe`
 
 **Dependencies:** Task 7
 
@@ -325,7 +325,7 @@ accepted assertions whose wording this changes.
 5. Commit with message: `feat(daemon): render build member settle decisions`.
 
 **Files:**
-- `src/conductor/src/cli/daemon-cli.ts`
+- `src/conductor/src/daemon-cli.ts`
 - `src/conductor/test/acceptance/staleness-decisions-invisible-in-daemon-log.acceptance.test.ts`
 
 **Wired-into:** same as Task 11
@@ -354,25 +354,36 @@ accepted assertions whose wording this changes.
 
 **Dependencies:** Task 11
 
-### Task 14: Amend the two accepted assertions whose wording this changes
+### Task 14: Verify the two accepted-assertion amendments already delivered
 
 **Story:** none (infrastructure: keep the accepted story corpus truthful in the same change set that changes the behavior it pins, per this repository's precedent for refining a pinned assertion)
 **Type:** infrastructure
 
+**Already delivered — do not re-edit.** Both story amendments and their test updates landed in
+commit `98b021789`, and the operator rotated the protected-artifact seal for both story files on
+2026-08-04 after reviewing the diff. Amending an accepted `.docs/` artifact is DECIDE's
+responsibility, not a BUILD task's (#1293); this task is now verification only. Do NOT edit
+anything under `.docs/` here, and do NOT treat the `.docs/` entries below as work to perform —
+they are listed so build review can match them to the commit that already contains them.
+
 **Steps:**
-1. Add a dated amendment note to the width-1 ordering assertion so it reflects that a round may run a
-   single member, while declared member order and the wait-for-all-dispatched rule are unchanged.
-2. Add a dated amendment note to the selector integration assertion so its divergence case reads as
-   dispatch-the-prerequisite rather than block-and-return, with review still not entered.
-3. Update the corresponding test assertions to the amended shapes.
-4. Verify the amended tests pass and no other pinned assertion was edited.
-5. Commit with message: `docs(stories): amend pinned assertions for member re-verification`.
+1. Verify `.docs/stories/deterministic-test-suite-step.md` carries the dated width-1 ordering
+   amendment (a round may run a single member; declared member order and the
+   wait-for-all-dispatched rule unchanged).
+2. Verify `.docs/stories/2026-07-12-wiring-reachability-gate.md` carries the dated
+   selector-divergence amendment (dispatch-the-prerequisite rather than block-and-return, with
+   review still not entered).
+3. Verify the corresponding test assertions match the amended shapes and pass.
+4. Verify no other pinned assertion was edited.
+5. No commit required — this task's work is already committed as `98b021789`.
 
 **Files:**
 - `.docs/stories/deterministic-test-suite-step.md`
 - `.docs/stories/2026-07-12-wiring-reachability-gate.md`
 - `src/conductor/test/acceptance/deterministic-build-verification-flow.acceptance.test.ts`
 - `src/conductor/test/wiring-gate-loop.test.ts`
+
+**Verify-only:** yes
 
 **Wired-into:** none (no new production surface)
 

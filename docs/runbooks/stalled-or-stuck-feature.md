@@ -265,6 +265,32 @@ The record is `{ satisfied, reason, checkedAt, kickback }`. `reason` is the exac
 gate computed. The concepts behind gate verdicts are in [gates](../explanation/gates.md); the
 per-step evidence files are listed in [artifacts](../reference/artifacts.md).
 
+#### BUILD verification after a repair
+
+**Symptom:** a repair returned to BUILD and you need to determine whether `wiring_check` or
+`test_suite` reused evidence or derived it again.
+
+**Diagnosis:** read the feature narrative, not merely the old gate files:
+
+```bash
+conduct-ts daemon logs | grep 'BUILD member .* settled:'
+```
+
+The daemon writes `BUILD member <member> settled: reuse (<basis>)` or `... recompute (<basis>)`.
+`reuse (fingerprint-match)` reports still-valid full-suite evidence. A recompute line reports a
+closed reason such as `recorded-head-versus-current-head`, `fingerprint-mismatch`, or
+`fresh-evidence-required`. A prior passing verdict on disk is not a reason to skip a member: every
+non-skipped BUILD-verification member is dispatched after repair, and the round join decides
+satisfaction.
+
+**Recovery:** do not create an operator park for the historical terminal-less stale-verdict path;
+it is retired. Let the re-verification round settle. If it halts, use the marker's explicit reason
+and [clear a halt and let the feature resume](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** the log contains one settle line for each successful non-skipped member, followed
+by the normal group join or an explicit HALT. It must not stop after only a sibling dispatch with no
+terminal result.
+
 #### Setup failures
 
 If the project's `bin/setup` failed inside the worktree, the feature may be quarantined:
@@ -305,7 +331,7 @@ and Token Spend — then exits 0. An unreadable events log exits 1. Run it from 
 worktree; it reads `.pipeline/` relative to the current directory.
 
 > **Known limitation.** `--report` cannot show halts or kickbacks. `loop_halt` and `kickback`
-> are among the 28 of 57 event types the engine emits but never registers as readable, so they
+> are among the 28 of 62 event types the engine emits but never registers as readable, so they
 > never reach `events.jsonl` and no report can surface them. Use `.pipeline/HALT` and
 > `.pipeline/gates/<step>.json` instead. Tracked in [#1023](https://github.com/jstoup111/ai-conductor/issues/1023) and [#1008](https://github.com/jstoup111/ai-conductor/issues/1008).
 

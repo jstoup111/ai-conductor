@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { mkdtemp, rm } from 'fs/promises';
+import { mkdtemp, readFile, rm } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -36,9 +36,11 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
-import { Conductor } from '../../src/engine/conductor.js';
+import { clampToRunnablePrerequisite, Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { checkGate } from '../../src/engine/gates.js';
+import { gateSatisfied } from '../../src/engine/selector.js';
 import { writeFile, mkdir } from 'fs/promises';
 
 function trackingRunner(projectRoot?: string): { runner: StepRunner; log: string[] } {
@@ -531,6 +533,122 @@ describe('acceptance: verdict-aware resume entry (#532)', () => {
       expect(started.length).toBeGreaterThan(0);
       expect(started[0]).toBe('build');
       expect(blocked).not.toContain('build_review');
+    });
+  });
+
+  // ── Story 5: tail selection is clamped by the entry-gate predicate ──────
+  describe('Story 5: tail selection cannot enter a gate its prerequisite rejects', () => {
+    async function selectTailWithBuildStatus(
+      buildStatus: 'done' | 'failed',
+      buildVerdictSatisfied = true,
+    ): Promise<number | null | 'halt'> {
+      const seed = seedDoneThrough('finish');
+      seed.build = buildStatus;
+      seed.wiring_check = 'pending';
+      await writeState(statePath, seed as ConductState);
+
+      for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
+        if (name !== 'wiring_check' && (name !== 'build' || buildVerdictSatisfied)) {
+          await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
+        }
+      }
+
+      const { runner } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        verifyArtifacts: true,
+      });
+      return (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail(
+        ALL_STEPS.find((step) => step.name === 'finish')!,
+        seed as ConductState,
+        new Map(),
+        ALL_STEPS,
+        (name) => ALL_STEPS.findIndex((step) => step.name === name),
+      );
+    }
+
+    it('selects the failed prerequisite when the selector considers its verdict satisfied', async () => {
+      const selectedIndex = await selectTailWithBuildStatus('failed');
+
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+    });
+
+    it('selects the originally-unsatisfied gate once its prerequisite is fresh', async () => {
+      const selectedIndex = await selectTailWithBuildStatus('done');
+
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'wiring_check'));
+    });
+
+    it('leaves an agreed-unsatisfied prerequisite as the ordinary bounded selection', async () => {
+      const selectedIndex = await selectTailWithBuildStatus('failed', false);
+
+      // With no satisfied verdict for build, both the selector and the entry
+      // gate consider it unsatisfied. The clamp must not manufacture a new
+      // outcome or choose another step.
+      expect(selectedIndex).toBe(ALL_STEPS.findIndex((step) => step.name === 'build'));
+    });
+
+    it('halts with an explicit named verdict when repeated prerequisite dispatch cannot resolve', async () => {
+      const seed = seedDoneThrough('finish');
+      seed.build = 'failed';
+      seed.wiring_check = 'pending';
+      await writeState(statePath, seed as ConductState);
+      for (const name of ALL_STEPS.filter((step) => step.loopGate).map((step) => step.name)) {
+        if (name !== 'build') await writeVerdict(dir, name, { satisfied: true, checkedAt: 1 });
+      }
+
+      const { runner } = trackingRunner(dir);
+      const conductor = new Conductor({
+        projectRoot: dir, stateFilePath: statePath, stepRunner: runner, events,
+        verifyArtifacts: true,
+      });
+      const advanceTail = (conductor as unknown as {
+        advanceTail: (
+          step: typeof ALL_STEPS[number],
+          state: ConductState,
+          stuckGate: Map<StepName, number>,
+          steps: typeof ALL_STEPS,
+          indexOf: (name: StepName) => number,
+        ) => Promise<number | null | 'halt'>;
+      }).advanceTail.bind(conductor);
+      const finish = ALL_STEPS.find((step) => step.name === 'finish')!;
+      const indexOf = (name: StepName) => ALL_STEPS.findIndex((step) => step.name === name);
+      const stuckGate = new Map<StepName, number>();
+
+      for (let selection = 1; selection <= 6; selection++) {
+        await expect(advanceTail(finish, seed as ConductState, stuckGate, ALL_STEPS, indexOf))
+          .resolves.toBe(indexOf('build'));
+      }
+      await expect(advanceTail(finish, seed as ConductState, stuckGate, ALL_STEPS, indexOf))
+        .resolves.toBe('halt');
+
+      expect(await readFile(join(dir, '.pipeline', 'HALT'), 'utf-8'))
+        .toMatch(/gate 'build' selected 7 times without satisfying/i);
+    });
+
+    it('uses only the existing selector and entry-gate predicates for a stale prerequisite', () => {
+      const state = {
+        ...seedDoneThrough('finish'),
+        build: 'stale',
+        wiring_check: 'pending',
+      } as ConductState;
+      const wiringIndex = ALL_STEPS.findIndex((step) => step.name === 'wiring_check');
+      const wiring = ALL_STEPS[wiringIndex];
+
+      // The existing predicates intentionally disagree for stale: selector
+      // re-dispatches it while the entry gate admits its dependent step. The
+      // clamp consumes checkGate only; it must not add a third authority.
+      expect(gateSatisfied('build', state, { build: { satisfied: true, checkedAt: 1 } })).toBe(false);
+      expect(checkGate(wiring, state)).toEqual({ passed: true });
+      expect(clampToRunnablePrerequisite(ALL_STEPS, state, wiringIndex)).toBe(wiringIndex);
     });
   });
 });
