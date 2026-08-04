@@ -11,6 +11,7 @@ import type { ConductState, StateResult } from '../types/state.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
+  PrivilegedStateCorrection,
   PrivilegedStateReplacement,
   StateMutation,
   StateMutationResult,
@@ -203,6 +204,43 @@ export function createFilesystemConductStateStore(
       });
     },
 
+    async applyCorrection(
+      correction: PrivilegedStateCorrection<ConductState>,
+    ): Promise<StateMutationResult> {
+      return whileHoldingLease(async () => {
+        const current = await readState(path);
+        if (!current.ok) return { kind: 'persistence', message: current.error.message };
+
+        const state = current.value;
+        for (const deletion of correction.deletions) {
+          const value = (state as Record<string, unknown>)[deletion.field];
+          if (!Object.is(value, deletion.expected) && value !== undefined) {
+            return { kind: 'conflict', message: `Expected ${deletion.field} to match before ${deletion.intent}` };
+          }
+        }
+        for (const mutation of correction.mutations) {
+          const value = (state as Record<string, unknown>)[mutation.field];
+          if (!Object.is(value, mutation.expected) && !Object.is(value, mutation.next)) {
+            return { kind: 'conflict', message: `Expected ${mutation.field} to match before ${mutation.intent}` };
+          }
+        }
+
+        const nextState: ConductState = { ...state };
+        for (const deletion of correction.deletions) {
+          delete (nextState as Record<string, unknown>)[deletion.field];
+        }
+        for (const mutation of correction.mutations) {
+          (nextState as Record<string, unknown>)[mutation.field] = mutation.next;
+        }
+        try {
+          await resolvedPersistence.write(path, nextState);
+        } catch (error) {
+          return { kind: 'persistence', message: `Failed to persist state: ${error}` };
+        }
+        return { kind: 'applied' };
+      });
+    },
+
     async replace(
       replacement: PrivilegedStateReplacement<ConductState>,
     ): Promise<StateMutationResult> {
@@ -214,7 +252,6 @@ export function createFilesystemConductStateStore(
         if (!current.ok) {
           return { kind: 'persistence', message: current.error.message };
         }
-
         try {
           await resolvedPersistence.write(path, replacement.next);
         } catch (error) {

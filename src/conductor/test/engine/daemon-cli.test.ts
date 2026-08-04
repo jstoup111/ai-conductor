@@ -22,6 +22,61 @@ import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daem
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
+import { persistDaemonBaseState } from '../../src/daemon-cli.js';
+import type {
+  ConductStateStore,
+  NamedAtomicStateMutationBatch,
+  PrivilegedStateReplacement,
+  StateMutation,
+  StateMutationResult,
+} from '../../src/engine/conduct-state-store.js';
+
+class RecordingConductStateStore implements ConductStateStore<ConductState> {
+  readonly calls: Array<{ kind: 'batch'; batch: NamedAtomicStateMutationBatch<ConductState> }> = [];
+
+  constructor(private readonly result: StateMutationResult = { kind: 'applied' }) {}
+
+  async apply(_mutation: StateMutation<ConductState>): Promise<StateMutationResult> {
+    return this.result;
+  }
+
+  async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'batch', batch });
+    return this.result;
+  }
+
+  async replace(_replacement: PrivilegedStateReplacement<ConductState>): Promise<StateMutationResult> {
+    return this.result;
+  }
+}
+
+describe('daemon state-store command boundary (Task 17)', () => {
+  it('records daemon base-state updates through the shared mutation port', async () => {
+    const store = new RecordingConductStateStore();
+    await persistDaemonBaseState(
+      '/tmp/conduct-state.json',
+      { build: 'done', pr_url: 'https://github.com/acme/repo/pull/42' },
+      { complexity_tier: 'M', track: 'technical', prd: 'skipped', feature_desc: 'demo' },
+      store,
+    );
+
+    expect(store.calls[0]?.batch.mutations).toEqual([
+      { field: 'complexity_tier', expected: undefined, intent: 'seed daemon feature state', next: 'M' },
+      { field: 'track', expected: undefined, intent: 'seed daemon feature state', next: 'technical' },
+      { field: 'prd', expected: undefined, intent: 'seed daemon feature state', next: 'skipped' },
+      { field: 'feature_desc', expected: undefined, intent: 'seed daemon feature state', next: 'demo' },
+    ]);
+  });
+
+  it('surfaces an actionable typed store failure', async () => {
+    await expect(persistDaemonBaseState(
+      '/tmp/conduct-state.json',
+      {},
+      { complexity_tier: 'M' },
+      new RecordingConductStateStore({ kind: 'lease', message: 'lease held by another daemon' }),
+    )).rejects.toThrow('Daemon base-state update failed (lease): lease held by another daemon');
+  });
+});
 
 let daemonDir: string;
 let root: string;

@@ -110,6 +110,23 @@ export interface PrivilegedStateReplacement<State extends object> {
   privileged: true;
 }
 
+/** Explicit deletion authority for a named, bounded corrective batch. */
+export type StateFieldDeletion<State extends object> = {
+  [Field in Extract<keyof State, string>]: {
+    field: Field;
+    expected: State[Field];
+    intent: string;
+  };
+}[Extract<keyof State, string>];
+
+/** Atomically combines explicit field deletion with normal field mutations. */
+export interface PrivilegedStateCorrection<State extends object> {
+  name: string;
+  deletions: readonly StateFieldDeletion<State>[];
+  mutations: readonly StateMutation<State>[];
+  privileged: true;
+}
+
 export type StateMutationOutcome =
   | { kind: 'applied' }
   | { kind: 'idempotent' }

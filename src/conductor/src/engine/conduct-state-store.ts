@@ -1,5 +1,6 @@
 import type {
   NamedAtomicStateMutationBatch,
+  PrivilegedStateCorrection,
   PrivilegedStateReplacement,
   StateMutation,
   StateMutationResult,
@@ -8,7 +9,9 @@ import type {
 export type {
   ConductStateStoreError,
   NamedAtomicStateMutationBatch,
+  PrivilegedStateCorrection,
   PrivilegedStateReplacement,
+  StateFieldDeletion,
   StateMutation,
   StateMutationOutcome,
   StateMutationResult,
@@ -21,5 +24,7 @@ export type {
 export interface ConductStateStore<State extends object> {
   apply(mutation: StateMutation<State>): Promise<StateMutationResult>;
   applyBatch(batch: NamedAtomicStateMutationBatch<State>): Promise<StateMutationResult>;
+  /** Optional until every adapter supports recovery's explicit field deletion. */
+  applyCorrection?(batch: PrivilegedStateCorrection<State>): Promise<StateMutationResult>;
   replace(replacement: PrivilegedStateReplacement<State>): Promise<StateMutationResult>;
 }

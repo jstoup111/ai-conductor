@@ -17,6 +17,47 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
   return opts.auto ? 'auto' : opts.interactive ? 'interactive' : 'default';
 }
 
+/** Clear every feature-state field only for an explicit reset/start-over choice. */
+export async function replaceCommandState(
+  stateFilePath: string,
+  intent: 'reset conductor state' | 'start over conductor state',
+  store: ConductStateStore<ConductState> = createFilesystemConductStateStore(stateFilePath),
+): Promise<void> {
+  requireStateMutation(await replaceState(stateFilePath, {}, intent, store), intent);
+}
+
+/** Atomically clear a verified-incomplete completion marker and restage failed steps. */
+export async function recoverCommandState(
+  stateFilePath: string,
+  observedState: ConductState,
+  failedSteps: readonly StepName[],
+  store: ConductStateStore<ConductState> = createFilesystemConductStateStore(stateFilePath),
+): Promise<void> {
+  const corrections = failedSteps.map((step) => ({
+    field: step,
+    expected: observedState[step],
+    intent: 'restage failed verification step',
+    next: 'pending',
+  } as StateMutation<ConductState>));
+  requireStateMutation(
+    await applyStateCorrection(
+      stateFilePath,
+      {
+        name: 'recover incomplete feature state',
+        deletions: [{
+          field: 'feature_status',
+          expected: observedState.feature_status,
+          intent: 'clear incomplete feature completion',
+        }],
+        mutations: corrections,
+        privileged: true,
+      },
+      store,
+    ),
+    'Feature recovery state update',
+  );
+}
+
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
@@ -42,7 +83,14 @@ import {
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
-import { readState, writeState } from './engine/state.js';
+import {
+  applyStateCorrection,
+  readState,
+  replaceState,
+  requireStateMutation,
+} from './engine/state.js';
+import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
+import type { ConductStateStore, StateMutation } from './engine/conduct-state-store.js';
 import {
   parseArgs,
   renderFullHelp,
@@ -52,7 +100,7 @@ import {
   planProtectedTargetsCommand,
   type CLIOptions,
 } from './cli.js';
-import type { StepName } from './types/index.js';
+import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -813,7 +861,7 @@ async function main(): Promise<void> {
   // Handle --reset: clear state and exit
   if (opts.reset) {
     // Deliberate full clear — the one place a recorded pr_url is meant to go.
-    await writeState(stateFilePath, {}, { allowPrUrlClear: true });
+    await replaceCommandState(stateFilePath, 'reset conductor state');
     console.log('State cleared.');
     return;
   }
@@ -912,12 +960,10 @@ async function main(): Promise<void> {
         stateFilePath = join(pipelineDir, 'conduct-state.json');
         await mkdir(pipelineDir, { recursive: true });
         const r = await readState(stateFilePath);
-        const fixed = r.ok ? { ...r.value } : {};
-        delete fixed.feature_status;
-        for (const step of verification.failedSteps) {
-          (fixed as Record<string, unknown>)[step] = 'pending';
+        if (!r.ok) {
+          throw new Error(`Feature recovery state read failed: ${r.error.message}`);
         }
-        await writeState(stateFilePath, fixed);
+        await recoverCommandState(stateFilePath, r.value, verification.failedSteps);
         opts.resume = true;
         console.log(
           `\nRolled back. Resuming "${opts.featureDesc}" at ${verification.failedSteps[0]}.\n`,
@@ -936,7 +982,7 @@ async function main(): Promise<void> {
         stateFilePath = join(pipelineDir, 'conduct-state.json');
         await mkdir(pipelineDir, { recursive: true });
         // Explicit start-over — the prior run's pr_url is intentionally dropped.
-        await writeState(stateFilePath, {}, { allowPrUrlClear: true });
+        await replaceCommandState(stateFilePath, 'start over conductor state');
       }
     } else if (detection.kind === 'orphaned-state') {
       // Root-level state says we're past the worktree step, but no worktree

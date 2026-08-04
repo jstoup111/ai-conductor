@@ -112,7 +112,14 @@ import {
 } from './engine/daemon-deps.js';
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
-import { readState, writeState, getStepStatus } from './engine/state.js';
+import {
+  applyStateChanges,
+  getStepStatus,
+  readState,
+  requireStateMutation,
+} from './engine/state.js';
+import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
+import type { ConductStateStore } from './engine/conduct-state-store.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
 import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
@@ -375,6 +382,23 @@ export function preseedStepStatuses(
       getStepDefinition(name).skippableForTiers.includes(resolvedTier) ? 'skipped' : 'done',
     ]),
   );
+}
+
+/** Persist only the daemon-owned base fields derived from its observed state. */
+export async function persistDaemonBaseState(
+  stateFilePath: string,
+  observedState: ConductState,
+  baseState: ConductState,
+  store: ConductStateStore<ConductState> = createFilesystemConductStateStore(stateFilePath),
+): Promise<void> {
+  const result = await applyStateChanges(
+    stateFilePath,
+    observedState,
+    baseState as Record<string, unknown>,
+    'seed daemon feature state',
+    store,
+  );
+  requireStateMutation(result, 'Daemon base-state update');
 }
 
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
@@ -971,6 +995,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // file so the resume picks up from the real next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const existingResult = await readState(stateFilePath);
+    const observedState = existingResult.ok ? existingResult.value : {};
     // Seed the complexity tier from the engineer-assessed value carried on the
     // backlog item (parsed from `.docs/complexity/<slug>.md`). Fall back to 'M'
     // for legacy/non-engineer specs that have no marker — that preserves the
@@ -995,7 +1020,8 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     }
     if (!baseState.feature_desc) baseState.feature_desc = item.slug;
 
-    await writeState(stateFilePath, baseState);
+    const stateStore = createFilesystemConductStateStore(stateFilePath);
+    await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);
 
     const stepRunner = new DefaultStepRunner(
       selectedRuntime.provider,
@@ -1023,6 +1049,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     const conductor = new Conductor({
       stateFilePath,
+      stateStore,
       stepRunner,
       events: featureEvents,
       mode: 'auto',
