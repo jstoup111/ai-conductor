@@ -384,6 +384,32 @@ export function preseedStepStatuses(
   );
 }
 
+/**
+ * Copy the observed snapshot before deriving daemon-owned defaults and
+ * front-half statuses. The copy is also the mutation payload, so the store
+ * can compare it with the unmodified observed snapshot field by field.
+ */
+export function deriveDaemonBaseState(
+  observedState: ConductState,
+  item: Pick<BacklogItem, 'slug' | 'tier' | 'track'>,
+): ConductState {
+  const baseState: ConductState = Object.keys(observedState).length > 0
+    ? { ...observedState }
+    : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
+
+  if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
+  for (const [name, status] of Object.entries(preseedStepStatuses(baseState.complexity_tier))) {
+    (baseState as Record<string, unknown>)[name] = status;
+  }
+  if (!baseState.track) baseState.track = item.track ?? 'product';
+  if (baseState.track === 'technical') {
+    (baseState as Record<string, unknown>)['prd'] = 'skipped';
+  }
+  if (!baseState.feature_desc) baseState.feature_desc = item.slug;
+
+  return baseState;
+}
+
 /** Persist only the daemon-owned base fields derived from its observed state. */
 export async function persistDaemonBaseState(
   stateFilePath: string,
@@ -1000,25 +1026,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // backlog item (parsed from `.docs/complexity/<slug>.md`). Fall back to 'M'
     // for legacy/non-engineer specs that have no marker — that preserves the
     // exact prior behavior (M and L are BUILD-identical; only Small skips steps).
-    const baseState: ConductState =
-      existingResult.ok && Object.keys(existingResult.value).length > 0
-        ? existingResult.value
-        : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
-
-    if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
-    // Stamp all daemon-owned front-half steps before resume. A tier-skipped
-    // step has no authored artifact, so it must not be recorded as done.
-    for (const [name, status] of Object.entries(preseedStepStatuses(baseState.complexity_tier))) {
-      (baseState as Record<string, unknown>)[name] = status;
-    }
-    // Seed the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) so the conductor's track-skip applies
-    // (prd + prd-audit skipped on technical). Default product (back-compat).
-    if (!baseState.track) baseState.track = item.track ?? 'product';
-    // On the technical track there is no PRD — record it as skipped, not done.
-    if (baseState.track === 'technical') {
-      (baseState as Record<string, unknown>)['prd'] = 'skipped';
-    }
-    if (!baseState.feature_desc) baseState.feature_desc = item.slug;
+    const baseState = deriveDaemonBaseState(observedState, item);
 
     const stateStore = createFilesystemConductStateStore(stateFilePath);
     await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);

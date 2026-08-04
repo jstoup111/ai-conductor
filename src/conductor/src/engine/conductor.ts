@@ -93,6 +93,7 @@ import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
   saveStepStatus,
+  requireStateMutation,
   getStepStatus,
   stepSatisfied,
   markDownstreamStale,
@@ -1650,7 +1651,8 @@ export class Conductor {
     step: StepName,
     status: StepStatus,
   ): Promise<void> {
-    await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
+    const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
+    requireStateMutation(result, `Conductor step-status update for ${step}`);
     state[step] = status;
     state.last_step = step;
     this.persistedStateSnapshot = { ...state };

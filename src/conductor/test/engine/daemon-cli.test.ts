@@ -22,7 +22,7 @@ import { localWorkSource, type LocalWorkSourceDeps } from '../../src/engine/daem
 import { writeGatedSnapshot } from '../../src/engine/gated-snapshot.js';
 import type { ConductState } from '../../src/types/index.js';
 import { writeState } from '../../src/engine/state.js';
-import { persistDaemonBaseState } from '../../src/daemon-cli.js';
+import { deriveDaemonBaseState, persistDaemonBaseState } from '../../src/daemon-cli.js';
 import type {
   ConductStateStore,
   NamedAtomicStateMutationBatch,
@@ -66,6 +66,27 @@ describe('daemon state-store command boundary (Task 17)', () => {
       { field: 'prd', expected: undefined, intent: 'seed daemon feature state', next: 'skipped' },
       { field: 'feature_desc', expected: undefined, intent: 'seed daemon feature state', next: 'demo' },
     ]);
+  });
+
+  it('derives existing-state preseed mutations without changing the observed snapshot', async () => {
+    const observed: ConductState = { build: 'done', feature_desc: 'legacy-feature' };
+    const baseState = deriveDaemonBaseState(observed, {
+      slug: 'demo',
+      tier: 'M',
+      track: 'technical',
+    });
+    const store = new RecordingConductStateStore();
+
+    await persistDaemonBaseState('/tmp/conduct-state.json', observed, baseState, store);
+
+    expect({ observed, mutations: store.calls[0]?.batch.mutations }).toEqual({
+      observed: { build: 'done', feature_desc: 'legacy-feature' },
+      mutations: expect.arrayContaining([
+        expect.objectContaining({ field: 'complexity_tier', expected: undefined, next: 'M' }),
+        expect.objectContaining({ field: 'track', expected: undefined, next: 'technical' }),
+        expect.objectContaining({ field: 'prd', expected: undefined, next: 'skipped' }),
+      ]),
+    });
   });
 
   it('surfaces an actionable typed store failure', async () => {

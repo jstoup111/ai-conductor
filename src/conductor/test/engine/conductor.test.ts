@@ -178,6 +178,28 @@ describe('engine/conductor', () => {
     });
   });
 
+  it('does not advance an in-memory step when its state mutation is refused', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'lease', message: 'lease held elsewhere' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+    const state: ConductState = {};
+
+    await expect((conductor as unknown as {
+      saveConductorStepStatus(state: ConductState, step: StepName, status: StepStatus): Promise<void>;
+    }).saveConductorStepStatus(state, 'build', 'in_progress')).rejects.toThrow('lease held elsewhere');
+
+    expect(state).toEqual({});
+  });
+
   it('commits terminal completion through the injected store before reporting success', async () => {
     const stateStore: ConductStateStore<ConductState> = {
       apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
