@@ -74,6 +74,7 @@ import {
 import { currentCommitSha } from '../../src/engine/project-prelude.js';
 import { AuditTrailWriter, type AuditRecord } from '../../src/engine/audit-trail.js';
 import { EventPersister } from '../../src/engine/event-persister.js';
+import { renderedEventTypes } from '../../src/engine/event-sinks.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { renderDaemonEvent } from '../../src/daemon-cli.js';
 import type { ConductorEvent } from '../../src/types/index.js';
@@ -677,5 +678,57 @@ describe('Stories 1 & 2: the daemon log distinguishes the two staleness classes'
     expect(beginFeatureRunSource).toMatch(
       /renderableEvents(?:\s*:\s*ConductorEvent\['type'\]\[\])?\s*=\s*renderedEventTypes\(\)/,
     );
+  });
+});
+
+describe('Story 5: the daemon log renders BUILD member settle decisions', () => {
+  const originalLevel = chalk.level;
+  beforeEach(() => {
+    chalk.level = 0;
+  });
+  afterEach(() => {
+    chalk.level = originalLevel;
+  });
+
+  function lines(event: ConductorEvent): string[] {
+    const out: string[] = [];
+    renderDaemonEvent(event, (message) => out.push(message));
+    return out;
+  }
+
+  it('renders both settle decisions with safe member, decision, and basis labels', () => {
+    const hostile = '/Users/operator/.ssh/id_ed25519 token=super-secret-password';
+    const reused = lines({
+      type: 'build_member_evidence_reused',
+      member: 'wiring_check',
+      decision: 'reuse',
+      basis: 'fingerprint-match',
+      hostile,
+    } as unknown as ConductorEvent);
+    const recomputed = lines({
+      type: 'build_member_evidence_recomputed',
+      member: 'test_suite',
+      decision: 'recompute',
+      basis: 'fingerprint-mismatch',
+      hostile,
+    } as unknown as ConductorEvent);
+    const malformed = lines({
+      type: 'build_member_evidence_reused',
+      member: hostile,
+      decision: hostile,
+      basis: hostile,
+    } as unknown as ConductorEvent);
+
+    expect(reused).toEqual([
+      expect.stringMatching(/wiring_check.*reuse.*fingerprint-match/i),
+    ]);
+    expect(recomputed).toEqual([
+      expect.stringMatching(/test_suite.*recompute.*fingerprint-mismatch/i),
+    ]);
+    expect([...reused, ...recomputed, ...malformed].join('\n')).not.toContain(hostile);
+    expect(renderedEventTypes()).toEqual(expect.arrayContaining([
+      'build_member_evidence_reused',
+      'build_member_evidence_recomputed',
+    ]));
   });
 });
