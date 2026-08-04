@@ -1,0 +1,107 @@
+/**
+ * RED acceptance specs for
+ * `.docs/stories/daemon-e2e-smoke-step-has-no-real-agent-live-llm-t.md`.
+ *
+ * These specs verify the repository-level contract joining the opt-in smoke
+ * test, its shared diagnostics, and its workflow. They do not launch a real
+ * provider: that third-party boundary belongs exclusively to the smoke file.
+ *
+ * PRE-IMPLEMENTATION RED: the live smoke file and workflow do not exist, and
+ * the deterministic fixture's diagnostics helper is private and omits the two
+ * task-evidence artifacts.
+ */
+
+import { readFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { describe, expect, it } from 'vitest';
+
+const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
+const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+const LIVE_SMOKE_PATH = join(
+  CONDUCTOR_ROOT,
+  'test/engine/daemon-e2e-live.smoke.test.ts',
+);
+const FIXTURE_PATH = join(
+  CONDUCTOR_ROOT,
+  'test/engine/daemon-e2e-fixture.test.ts',
+);
+const WORKFLOW_PATH = join(REPO_ROOT, '.github/workflows/live-daemon-e2e.yml');
+
+async function requiredSource(path: string): Promise<string> {
+  return readFile(path, 'utf8').catch((error: unknown) => {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`required live-tier artifact is not implemented: ${path}: ${detail}`);
+  });
+}
+
+describe('live-agent daemon E2E tier (#1124)', () => {
+  it('wires the real Claude provider through the daemon fixture and asserts outcomes, not agent choices', async () => {
+    const source = await requiredSource(LIVE_SMOKE_PATH);
+
+    expect(source).toMatch(/new\s+ClaudeProvider\s*\(/);
+    expect(source).toMatch(/new\s+DefaultStepRunner\s*\(/);
+    expect(source).toMatch(/runDaemon\s*\(/);
+    expect(source).toMatch(/\.pipeline[/'"`]+DONE|join\([^)]*pipeline[^)]*['"]DONE['"]/);
+    expect(source).toMatch(/\.pipeline[/'"`]+HALT|join\([^)]*pipeline[^)]*['"]HALT['"]/);
+    expect(source).toMatch(/\.daemon[/'"`]+parked|join\([^)]*\.daemon[^)]*['"]parked['"]/);
+    expect(source).toContain('test/fixtures/daemon-e2e/touched.txt');
+    expect(source).toMatch(/Task:/);
+
+    expect(source).not.toMatch(/providerCalls\s*[:),]/);
+    expect(source).not.toContain('test: complete fixture task');
+    expect(source).not.toMatch(/retry(?:Count|Attempts?)\s*[:=]/i);
+  });
+
+  it('combines an accumulated token cap with an independent workflow wall-clock timeout', async () => {
+    const [smoke, workflow] = await Promise.all([
+      requiredSource(LIVE_SMOKE_PATH),
+      requiredSource(WORKFLOW_PATH),
+    ]);
+
+    expect(smoke).toMatch(/tokenUsage/);
+    expect(smoke).toMatch(/process\.env\.[A-Z0-9_]*TOKEN[A-Z0-9_]*CAP/);
+    expect(smoke).toMatch(/console\.(?:log|info)\([^)]*(?:token|cost)/i);
+    expect(smoke).toMatch(/(?:cap|limit)[^\n]*(?:observed|total)|(?:observed|total)[^\n]*(?:cap|limit)/i);
+    expect(workflow).toMatch(/timeout-minutes:\s*[1-9][0-9]*/);
+  });
+
+  it('shares one diagnostics implementation that reports terminal and task-evidence state', async () => {
+    const [fixture, smoke] = await Promise.all([
+      requiredSource(FIXTURE_PATH),
+      requiredSource(LIVE_SMOKE_PATH),
+    ]);
+
+    expect(fixture).toMatch(/export\s+async\s+function\s+dumpPipelineDiagnostics/);
+    expect(fixture).toContain('task-status.json');
+    expect(fixture).toContain('task-evidence.json');
+    expect(smoke).toMatch(/import\s*\{[^}]*dumpPipelineDiagnostics[^}]*\}\s*from/);
+    expect(smoke).not.toMatch(/function\s+dumpPipelineDiagnostics/);
+  });
+
+  it('keeps the live workflow advisory to merges and fail-closed for reusable gating callers', async () => {
+    const [workflow, ci, smoke] = await Promise.all([
+      requiredSource(WORKFLOW_PATH),
+      requiredSource(join(REPO_ROOT, '.github/workflows/ci.yml')),
+      requiredSource(LIVE_SMOKE_PATH),
+    ]);
+
+    expect(workflow).toMatch(/workflow_dispatch\s*:/);
+    expect(workflow).toMatch(/workflow_call\s*:/);
+    expect(workflow).toMatch(/require_credentials:[\s\S]*?type:\s*boolean[\s\S]*?default:\s*false/);
+    expect(workflow).not.toMatch(/^\s*(?:pull_request|schedule)\s*:/m);
+    expect(workflow).toMatch(/fail-fast:\s*false/);
+    expect(workflow).toMatch(/provider:\s*\[\s*claude\s*\]/);
+    expect(workflow).toMatch(/inputs\.require_credentials/);
+    expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(workflow).toMatch(/npx\s+vitest\s+run[^\n]*daemon-e2e-live\.smoke\.test\.ts/);
+
+    const ciGate = ci.slice(ci.indexOf('ci-gate:'));
+    expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
+
+    expect(smoke).toMatch(/describe\.skipIf\s*\(/);
+    expect(smoke).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
+    expect(smoke).toMatch(/delete\s+process\.env\.AI_CONDUCTOR_NO_REAL_EXEC/);
+    expect(smoke).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
+  });
+});
