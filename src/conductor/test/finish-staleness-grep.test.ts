@@ -1,5 +1,5 @@
 /**
- * Regression test for jstoup111/ai-conductor#587 — the finish/pr skills'
+ * Regression test for jstoup111/ai-conductor#587 — the pr skill's
  * fallback staleness-proof grep (`git reflog | grep "rebase: finish"`) never
  * matched real git output, because git actually writes the reflog entry as
  * `rebase (finish): returning to refs/heads/<branch>` (parenthesized, no
@@ -14,8 +14,8 @@
  *   1. Runs a real `git rebase` in a scratch repo so git itself writes the
  *      `rebase (finish):` reflog entry (mirrors the manual reproduction
  *      performed while diagnosing #587).
- *   2. Extracts the fallback grep pattern directly out of both SKILL.md
- *      files' `git reflog | grep -E "..."` code fences.
+ *   2. Extracts the fallback grep pattern directly out of the pr SKILL.md
+ *      file's `git reflog | grep -E "..."` code fence.
  *   3. Asserts the extracted pattern matches the real reflog output, the old
  *      wrong literal ("rebase: finish") does not appear in real git output,
  *      and the corrected pattern does not over-match an unrelated line that
@@ -35,7 +35,6 @@ const execFileAsync = promisify(execFile);
 const __dirname = dirname(fileURLToPath(import.meta.url));
 // test/ -> conductor/ -> src/ -> repo root
 const REPO_ROOT = resolve(__dirname, '../../..');
-const FINISH_SKILL_PATH = join(REPO_ROOT, 'skills/finish/SKILL.md');
 const PR_SKILL_PATH = join(REPO_ROOT, 'skills/pr/SKILL.md');
 
 const OLD_WRONG_LITERAL = 'rebase: finish';
@@ -57,7 +56,7 @@ function extractFallbackGrepPattern(skillMdText: string): string {
   return match[1];
 }
 
-describe('finish/pr staleness-proof fallback grep (#587 regression)', () => {
+describe('pr staleness-proof fallback grep (#587 regression)', () => {
   let dir: string;
 
   async function git(...args: string[]): Promise<string> {
@@ -102,19 +101,6 @@ describe('finish/pr staleness-proof fallback grep (#587 regression)', () => {
     return git('reflog');
   }
 
-  it('the corrected pattern (extracted from skills/finish/SKILL.md) matches a real "rebase (finish):" reflog entry', async () => {
-    const reflog = await repoWithCompletedRebase();
-    expect(reflog).toContain('rebase (finish): returning to refs/heads/feature');
-
-    const skillMd = await readFile(FINISH_SKILL_PATH, 'utf-8');
-    const pattern = extractFallbackGrepPattern(skillMd);
-    const re = new RegExp(pattern);
-
-    const matchingLine = reflog.split('\n').find((line) => re.test(line));
-    expect(matchingLine).toBeDefined();
-    expect(matchingLine).toContain('rebase (finish)');
-  });
-
   it('the corrected pattern (extracted from skills/pr/SKILL.md) matches a real "rebase (finish):" reflog entry', async () => {
     const reflog = await repoWithCompletedRebase();
 
@@ -135,16 +121,14 @@ describe('finish/pr staleness-proof fallback grep (#587 regression)', () => {
     expect(reflog).not.toContain(OLD_WRONG_LITERAL);
   });
 
-  it('neither skill still contains the old wrong grep literal as its fallback pattern', async () => {
-    const finishSkillMd = await readFile(FINISH_SKILL_PATH, 'utf-8');
+  it('the pr skill no longer contains the old wrong grep literal as its fallback pattern', async () => {
     const prSkillMd = await readFile(PR_SKILL_PATH, 'utf-8');
 
-    expect(extractFallbackGrepPattern(finishSkillMd)).not.toBe(OLD_WRONG_LITERAL);
     expect(extractFallbackGrepPattern(prSkillMd)).not.toBe(OLD_WRONG_LITERAL);
   });
 
   it('the corrected pattern does not over-match an unrelated reflog line that merely contains the bare word "finish"', async () => {
-    const skillMd = await readFile(FINISH_SKILL_PATH, 'utf-8');
+    const skillMd = await readFile(PR_SKILL_PATH, 'utf-8');
     const pattern = extractFallbackGrepPattern(skillMd);
     const re = new RegExp(pattern);
 
