@@ -470,6 +470,38 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('does not spend a second provider judgment on unchanged deficient prose', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-judgment-cache-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: draft', body: `${PR_BODY_FLOOR_MARKER}\n\nDraft`, isDraft: true }) };
+        throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root, stateFilePath: join(pipeline, 'conduct-state.json'), baseBranch: 'main', gh,
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        observeReleaseReadiness: async () => 'present',
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true, publicationDisposition: { kind: 'revision_required', reason: 'placeholder' } }));
+      const input = {
+        state: { feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl, build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done' } as ConductState,
+        mode: 'auto' as const, daemon: true, dispatchJudgment, emit: async () => {},
+      };
+      await expect(coordinator.advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'judgment_placeholder_prose' });
+      await expect(coordinator.advance(input)).resolves.toEqual({ kind: 'human_required', reason: 'judgment_placeholder_prose' });
+      expect(dispatchJudgment).toHaveBeenCalledOnce();
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     { mode: 'interactive' as const, daemon: false },
     { mode: 'default' as const, daemon: false },

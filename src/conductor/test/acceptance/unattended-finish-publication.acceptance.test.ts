@@ -562,6 +562,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
       },
     });
     const transitions: string[] = [];
+    let judgmentDispatches = 0;
     let terminal: Awaited<ReturnType<typeof coordinator.advance>> | undefined;
 
     for (let attempt = 0; attempt < 8; attempt++) {
@@ -569,11 +570,21 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
         state,
         mode: 'auto',
         daemon: true,
-        dispatchJudgment: async () => {
+        dispatchJudgment: async (request) => {
           if (!pullRequest) throw new Error('judgment requires a PR');
+          // Faithful provider fake: it sees only the coordinator's bounded
+          // title/body contract, repairs those two fields, and returns the
+          // structured result the production adapter decodes.
+          expect(request).toEqual({
+            kind: 'finish_pr_prose_quality',
+            pullRequestUrl: prUrl,
+            qualityScope: ['title', 'body'],
+            maximumPasses: 1,
+          });
+          judgmentDispatches++;
           pullRequest.title = 'feat: publish coherent finish';
           pullRequest.body = 'A reader-facing summary of the completed change.';
-          return { success: true };
+          return { success: true, publicationDisposition: { kind: 'accepted' } };
         },
         emit: async (event) => {
           if (event.type === 'finish_publication_transition' && event.phase === 'completed') {
@@ -594,6 +605,7 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     ]);
     expect(githubCalls.some((args) => args[0] === 'pr' && args[1] === 'merge')).toBe(false);
     expect(githubCalls.some((args) => /auto-merge|enablepullrequestautomerge|--auto/i.test(args.join(' ')))).toBe(false);
+    expect(judgmentDispatches).toBe(1);
   });
 
   it('retains prior verified state when GitHub is unavailable during a load-bearing write', async () => {

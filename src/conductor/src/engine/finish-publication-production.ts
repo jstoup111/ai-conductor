@@ -153,6 +153,11 @@ export function createProductionFinishPublicationCoordinator(
   const pipelineDir = dirname(deps.stateFilePath);
   const writeShippedRecord = deps.writeShippedRecord ?? dispatchShippedRecord;
   const recordFinish = deps.recordFinish ?? dispatchFinishRecord;
+  // A real provider session is expensive. Retain terminal prose verdicts for
+  // the exact observed title/body revision; a changed revision earns one new
+  // session, while an unchanged deficient one cannot burn retries.
+  const proseRevisionByPr = new Map<string, string>();
+  const judgmentByRevision = new Map<string, PrProseJudgmentResult>();
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, emit }) {
@@ -219,14 +224,16 @@ export function createProductionFinishPublicationCoordinator(
                   { cwd: deps.projectRoot },
                 );
                 const pr = JSON.parse(stdout) as { url?: unknown; title?: unknown; body?: unknown; isDraft?: unknown };
-                return typeof pr.url === 'string'
-                  ? {
+                if (typeof pr.url === 'string') {
+                  proseRevisionByPr.set(pr.url, `${pr.url}\u0000${JSON.stringify([pr.title ?? '', pr.body ?? ''])}`);
+                  return {
                       state: 'one' as const,
                       url: pr.url,
                       prose: prProse(pr.title, pr.body),
                       ready: !pr.isDraft,
-                    }
-                  : { state: 'malformed' as const };
+                    };
+                }
+                return { state: 'malformed' as const };
               } catch {
                 return { state: 'unavailable' as const };
               }
@@ -257,7 +264,14 @@ export function createProductionFinishPublicationCoordinator(
         emit,
         effects: {
           dispatchJudgment: async (request) => {
-            return decodePrProseJudgment(await dispatchJudgment(request));
+            const revision = proseRevisionByPr.get(request.pullRequestUrl);
+            const cached = revision === undefined ? undefined : judgmentByRevision.get(revision);
+            if (cached) return cached;
+            const result = decodePrProseJudgment(await dispatchJudgment(request));
+            if (revision !== undefined && (result.kind === 'accepted' || result.kind === 'revision_required' || result.kind === 'refused')) {
+              judgmentByRevision.set(revision, result);
+            }
+            return result;
           },
           establishPr: {
             git: deps.git,
