@@ -1,10 +1,38 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { validatePublicationSnapshot } from '../../src/engine/finish-publication.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
 
 type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
 type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
+type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+
+type PublicationCondition =
+  | {
+      code: 'release_readiness_invalid';
+      message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.';
+      nextAction: 'restore_release_readiness';
+    }
+  | {
+      code: 'ship_evidence_invalid';
+      message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.';
+      nextAction: 'rerun_ship_validators';
+    };
+
+interface AdvanceFinishPublicationInput {
+  observe(): Promise<PublicationSnapshot>;
+  effects: {
+    dispatchJudgment(): Promise<void>;
+  };
+}
+
+type AdvanceFinishPublicationResult =
+  | { kind: 'advanced'; transition: 'judge_pr_prose' }
+  | { kind: 'publication_retry'; condition: PublicationCondition };
+
+type AdvanceFinishPublication = (
+  input: AdvanceFinishPublicationInput,
+) => Promise<AdvanceFinishPublicationResult>;
 
 interface PublicationObservationPorts {
   filesystem: {
@@ -67,6 +95,47 @@ async function resolveUnattendedPublicationIntent(input: unknown) {
     );
   }
   return resolver(input);
+}
+
+async function advanceFinishPublication(input: AdvanceFinishPublicationInput) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const coordinator = mod.advanceFinishPublication;
+  if (typeof coordinator !== 'function') {
+    throw new Error(
+      'expected export "advanceFinishPublication" to be a function (not yet implemented)',
+    );
+  }
+  return (coordinator as AdvanceFinishPublication)(input);
+}
+
+function readyPublicationSnapshot(
+  overrides: Partial<PublicationSnapshot> = {},
+): PublicationSnapshot {
+  const base = {
+    mode: 'daemon',
+    intent: {
+      outcome: 'pr',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    },
+    implementationEvidence: 'valid',
+    shipEvidence: 'valid',
+    releaseReadiness: 'valid',
+    branchPushed: 'valid',
+    pr: {
+      identity: 'one',
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'placeholder',
+      ready: false,
+    },
+    shippedRecord: 'valid',
+    outcomeRecord: 'missing',
+  } as const satisfies PublicationSnapshot;
+
+  return {
+    ...base,
+    ...overrides,
+    pr: overrides.pr ?? base.pr,
+  } as PublicationSnapshot;
 }
 
 function observerPorts(overrides: Partial<{
@@ -389,4 +458,60 @@ describe('resolveUnattendedPublicationIntent', () => {
       });
     },
   );
+});
+
+describe('advanceFinishPublication preflight', () => {
+  it('reaches the judgment boundary once when observed publication, SHIP, and release readiness are valid', async () => {
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the exact release-readiness blocker before dispatching judgment', async () => {
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({ releaseReadiness: 'invalid' }),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      condition: {
+        code: 'release_readiness_invalid',
+        message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+        nextAction: 'restore_release_readiness',
+      },
+    });
+
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('selects the stable SHIP blocker before an indeterminate release-readiness result without dispatching judgment', async () => {
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({ shipEvidence: 'invalid', releaseReadiness: 'indeterminate' }),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      condition: {
+        code: 'ship_evidence_invalid',
+        message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+        nextAction: 'rerun_ship_validators',
+      },
+    });
+
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
 });

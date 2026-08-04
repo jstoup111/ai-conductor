@@ -364,6 +364,190 @@ export type PublicationDisposition =
   | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'human_required'; reason: string };
 
+/** A deterministic FINISH condition with the only permitted operator action. */
+export type PublicationCondition =
+  | {
+      code: 'publication_snapshot_incoherent';
+      message: 'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.';
+      nextAction: 'resolve_publication_state';
+    }
+  | {
+      code: 'publication_snapshot_indeterminate';
+      message: 'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.';
+      nextAction: 'restore_publication_observation';
+    }
+  | {
+      code: 'implementation_evidence_invalid';
+      message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.';
+      nextAction: 'rerun_build_verification';
+    }
+  | {
+      code: 'implementation_evidence_indeterminate';
+      message: 'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.';
+      nextAction: 'restore_implementation_observation';
+    }
+  | {
+      code: 'ship_evidence_invalid';
+      message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.';
+      nextAction: 'rerun_ship_validators';
+    }
+  | {
+      code: 'ship_evidence_indeterminate';
+      message: 'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.';
+      nextAction: 'restore_ship_observation';
+    }
+  | {
+      code: 'release_readiness_missing';
+      message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.';
+      nextAction: 'publish_release_readiness';
+    }
+  | {
+      code: 'release_readiness_invalid';
+      message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.';
+      nextAction: 'restore_release_readiness';
+    }
+  | {
+      code: 'release_readiness_indeterminate';
+      message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.';
+      nextAction: 'restore_release_readiness_observation';
+    };
+
+export type PublicationPreflightResult =
+  | { kind: 'ready_for_judgment' }
+  | { kind: 'blocked'; condition: PublicationCondition };
+
+/**
+ * Checks only evidence that can block a judgment call without making any
+ * publication effect. The order is intentional: it gives multi-gap state one
+ * stable, actionable condition and never asks a judgment provider to infer
+ * deterministic repository or release state.
+ */
+export function preflightFinishPublication(
+  snapshot: PublicationSnapshot,
+): PublicationPreflightResult {
+  const validation = validatePublicationSnapshot(snapshot);
+  if (validation.kind === 'incoherent') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'publication_snapshot_incoherent',
+        message: 'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
+        nextAction: 'resolve_publication_state',
+      },
+    };
+  }
+  if (validation.kind === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'publication_snapshot_indeterminate',
+        message: 'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.',
+        nextAction: 'restore_publication_observation',
+      },
+    };
+  }
+
+  if (snapshot.implementationEvidence === 'invalid') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'implementation_evidence_invalid',
+        message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+        nextAction: 'rerun_build_verification',
+      },
+    };
+  }
+  if (snapshot.implementationEvidence === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'implementation_evidence_indeterminate',
+        message: 'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
+        nextAction: 'restore_implementation_observation',
+      },
+    };
+  }
+  if (snapshot.shipEvidence === 'invalid') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'ship_evidence_invalid',
+        message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+        nextAction: 'rerun_ship_validators',
+      },
+    };
+  }
+  if (snapshot.shipEvidence === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'ship_evidence_indeterminate',
+        message: 'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
+        nextAction: 'restore_ship_observation',
+      },
+    };
+  }
+  if (snapshot.releaseReadiness === 'missing') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'release_readiness_missing',
+        message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+        nextAction: 'publish_release_readiness',
+      },
+    };
+  }
+  if (snapshot.releaseReadiness === 'invalid') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'release_readiness_invalid',
+        message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+        nextAction: 'restore_release_readiness',
+      },
+    };
+  }
+  if (snapshot.releaseReadiness === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'release_readiness_indeterminate',
+        message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+        nextAction: 'restore_release_readiness_observation',
+      },
+    };
+  }
+
+  return { kind: 'ready_for_judgment' };
+}
+
+export interface AdvanceFinishPublicationInput {
+  observe(): Promise<PublicationSnapshot>;
+  effects: {
+    dispatchJudgment(): Promise<void>;
+  };
+}
+
+export type AdvanceFinishPublicationResult =
+  | { kind: 'advanced'; transition: 'judge_pr_prose' }
+  | { kind: 'publication_retry'; condition: PublicationCondition };
+
+/**
+ * The narrow Task 7 coordinator seam: observe first, stop on deterministic
+ * blockers, and only then cross the injected judgment boundary.
+ */
+export async function advanceFinishPublication(
+  input: AdvanceFinishPublicationInput,
+): Promise<AdvanceFinishPublicationResult> {
+  const preflight = preflightFinishPublication(await input.observe());
+  if (preflight.kind === 'blocked') {
+    return { kind: 'publication_retry', condition: preflight.condition };
+  }
+
+  await input.effects.dispatchJudgment();
+  return { kind: 'advanced', transition: 'judge_pr_prose' };
+}
+
 /**
  * Parses the interactive host's raw choice without advancing publication.
  * Only PR and keep are representable as coordinator intents; deferred,
