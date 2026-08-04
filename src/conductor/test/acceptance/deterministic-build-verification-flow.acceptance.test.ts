@@ -226,7 +226,7 @@ describe('Deterministic BUILD verification flow', () => {
     ]);
   });
 
-  it('keeps a one-member BUILD round serial and out of observer branches', async () => {
+  it('allows a one-member BUILD round while review waits for the dispatched member', async () => {
     // No persisted satisfied BUILD verdict or repair is present, so the
     // already-done sibling retains its normal resume shortcut. The pending
     // wiring member is the only branch that needs dispatch.
@@ -281,9 +281,9 @@ describe('Deterministic BUILD verification flow', () => {
 
     expect(timeline.slice(0, 2)).toEqual(['wiring_check', 'build_review']);
     expect(timeline).not.toContain('test_suite');
-    // Width one keeps the serial event shape. Later SHIP groups may fan out,
-    // but BUILD observers never receive a branch list that includes the
-    // already-done, non-dispatched test_suite member.
+    // A one-member round keeps the serial event shape. The declared
+    // wiring-then-suite ordering remains covered above when both dispatch;
+    // here review follows only after the sole dispatched member settles.
     expect(parallelStarted.filter((event) => event.step === 'wiring_check')).toEqual([]);
     expect(parallelStarted.every((event) => !event.branches.includes('test_suite'))).toBe(true);
   });

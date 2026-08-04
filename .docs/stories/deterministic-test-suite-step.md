@@ -27,6 +27,10 @@ after BUILD so a deterministic failure does not spend build-review tokens.
 - Given `validation_concurrency` is one, when the deterministic group runs,
   then it executes `wiring_check` before `test_suite` and still waits for both
   passing outcomes before starting `build_review`.
+  **Amended 2026-08-04 (Task 14):** A BUILD-verification round may dispatch a
+  single member. When both members dispatch under the cap, their declared
+  `wiring_check`, then `test_suite` order is unchanged; in either shape,
+  `build_review` waits for every dispatched member to pass.
 
 #### Negative Paths
 
