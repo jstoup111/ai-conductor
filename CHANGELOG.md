@@ -20,6 +20,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - A self-host build no longer halts when the ship-start push fails but its draft PR is already open — the release gate resolves the retained PR from the feature branch, and still halts fail-closed when no open PR exists. ([implementation PR #1290](https://github.com/jstoup111/ai-conductor/pull/1290)).
 - The remediation planner no longer falsely halts for a human architecture decision when a gap is conforming implementation, test, or documentation drift that preserves already-approved architecture — it now routes that work straight to build, and the daemon halts with a clear reason instead of silently dispatching a taskless build route. ([implementation PR #1283](https://github.com/jstoup111/ai-conductor/pull/1283)).
 - Build repair now re-verifies every non-skipped BUILD member after a kickback instead of trusting a stale on-disk verdict, so a passing member the gate check reads as unsatisfied no longer blocks the run in a terminal-less park. ([implementation PR #1291](https://github.com/jstoup111/ai-conductor/pull/1291)).
+- A SHIP step that runs before finish now reads a presentable implementation PR instead of a reused needs-remediation halt placeholder, so a feature that halted earlier no longer stalls its pre-finish ship gates. ([implementation PR #1304](https://github.com/jstoup111/ai-conductor/pull/1304)).
 
 ## [0.99.20] - 2026-08-03
 
