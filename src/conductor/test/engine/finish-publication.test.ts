@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from 'vitest';
-import { validatePublicationSnapshot } from '../../src/engine/finish-publication.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
 import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
 
@@ -342,7 +341,7 @@ describe('finish-publication domain types', () => {
     expect(nextFinishPublicationTransition(snapshot)).toBe('verify_release_readiness');
   });
 
-  it('rejects a valid local outcome record without an external PR identity', () => {
+  it('rejects a PR outcome record without an external PR identity', async () => {
     type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
 
     const snapshot = {
@@ -360,9 +359,14 @@ describe('finish-publication domain types', () => {
       outcomeRecord: 'valid',
     } as PublicationSnapshot;
 
-    expect(validatePublicationSnapshot(snapshot)).toEqual({
-      kind: 'incoherent',
-      reason: 'valid_outcome_record_requires_external_pr',
+    await expect(
+      advanceFinishPublication({
+        observe: async () => snapshot,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({
+      kind: 'publication_retry',
+      condition: { code: 'publication_snapshot_incoherent' },
     });
   });
 });

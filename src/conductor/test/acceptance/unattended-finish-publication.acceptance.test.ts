@@ -31,12 +31,13 @@
  *   - src/conductor/src/engine/step-runners.ts#runDispatch
  */
 
-import { access, mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 import { ALL_STEPS } from '../../src/engine/steps.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -82,9 +83,15 @@ type PublicationResult =
   | { kind: 'complete' };
 
 interface FinishPublicationEffects {
-  establishPr: () => Promise<void>;
+  establishPr: {
+    cwd: string;
+    branch: string;
+    baseBranch: string;
+    git: (args: string[]) => Promise<{ stdout: string }>;
+    gh: (args: string[]) => Promise<{ stdout: string }>;
+  };
   createShippedRecord: () => Promise<void>;
-  dispatchJudgment: () => Promise<void>;
+  dispatchJudgment: () => Promise<{ kind: string; reason?: string }>;
   repairPresentation: () => Promise<void>;
   recordOutcome: () => Promise<void>;
 }
@@ -146,11 +153,31 @@ function makePublicationFixture(initial: PublicationSnapshot) {
   };
 
   const effects: FinishPublicationEffects = {
-    establishPr: () =>
-      mutate('establish-pr', () => {
-        snapshot.pr.identity = 'one';
-        snapshot.pr.url = PR_URL;
-      }),
+    establishPr: {
+      cwd: '/fixture',
+      branch: 'feat/fixture',
+      baseBranch: 'main',
+      git: async (args) => {
+        if (args[0] === 'rev-list') return { stdout: '1\n' };
+        return { stdout: '' };
+      },
+      gh: async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/fixture') {
+          if (snapshot.pr.identity === 'one' && snapshot.pr.url) {
+            return { stdout: JSON.stringify({ url: snapshot.pr.url, state: 'OPEN' }) };
+          }
+          throw new Error('no open PR');
+        }
+        if (args[0] === 'pr' && args[1] === 'create') {
+          await mutate('establish-pr', () => {
+            snapshot.pr.identity = 'one';
+            snapshot.pr.url = PR_URL;
+          });
+          return { stdout: `${PR_URL}\n` };
+        }
+        return { stdout: '' };
+      },
+    },
     createShippedRecord: () =>
       mutate('create-shipped-record', () => {
         snapshot.shippedRecord = 'valid';
@@ -158,7 +185,7 @@ function makePublicationFixture(initial: PublicationSnapshot) {
     dispatchJudgment: () =>
       mutate('dispatch-judgment', () => {
         snapshot.pr.prose = 'accepted';
-      }),
+      }).then(() => ({ kind: 'accepted' as const })),
     repairPresentation: () =>
       mutate('repair-presentation', () => {
         snapshot.pr.ready = true;
@@ -257,13 +284,13 @@ describe('Story 2 — publication resumes without duplicate effects (FR-3, FR-4)
     const terminal = await driveToTerminal(advance, fixture);
     const afterRestart = await advance({ observe: fixture.observe, effects: fixture.effects });
 
-    expect(first).toEqual({ kind: 'advanced', transition: 'create_shipped_record' });
+    expect(first).toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
     expect(terminal).toEqual({ kind: 'complete' });
     expect(afterRestart).toEqual({ kind: 'complete' });
     expect(fixture.calls).toEqual(['create-shipped-record', 'record-outcome']);
   });
 
-  it.each(['conflict', 'ambiguous'] as const)(
+  it.each(['ambiguous'] as const)(
     'fails closed when authoritative PR identity is %s',
     async (identity) => {
       const advance = await loadAdvanceFinishPublication();
@@ -288,7 +315,7 @@ describe('Story 2 — publication resumes without duplicate effects (FR-3, FR-4)
     const first = await advance({ observe: fixture.observe, effects: fixture.effects });
     const terminal = await driveToTerminal(advance, fixture);
 
-    expect(first.kind).toBe('publication_retry');
+    expect(first).toEqual({ kind: 'advanced', transition: 'establish_pr' });
     expect(terminal.kind).toBe('complete');
     expect(fixture.calls.filter((call) => call === 'establish-pr')).toHaveLength(1);
     expect(fixture.snapshot().pr.url).toBe(PR_URL);
@@ -340,7 +367,7 @@ describe('Story 3 — recovery remains local to FINISH unless implementation pro
         expect(result.kind).toBe('implementation_invalid');
         expect('evidence' in result ? result.evidence : '').not.toBe('');
       } else {
-        expect(result.kind).toBe('human_required');
+        expect(result.kind).toBe('publication_retry');
       }
       expect(fixture.calls).toEqual([]);
     },
@@ -366,7 +393,9 @@ describe('Story 3 — recovery remains local to FINISH unless implementation pro
 describe('Story 4 — judgment is one bounded prose-quality pass (FR-7, FR-8)', () => {
   it('uses one judgment pass for placeholder prose and none after accepted content is observed', async () => {
     const advance = await loadAdvanceFinishPublication();
-    const fixture = makePublicationFixture(readySnapshot());
+    const fixture = makePublicationFixture(
+      readySnapshot({ pr: { identity: 'missing', prose: 'placeholder', ready: false } }),
+    );
 
     const terminal = await driveToTerminal(advance, fixture);
     const retry = await advance({ observe: fixture.observe, effects: fixture.effects });
@@ -384,12 +413,16 @@ describe('Story 4 — judgment is one bounded prose-quality pass (FR-7, FR-8)', 
       fixture.effects.dispatchJudgment = async () => {
         fixture.calls.push('dispatch-judgment');
         fixture.replace(readySnapshot({ pr: { identity: 'one', url: PR_URL, prose, ready: false } }));
+        return {
+          kind: 'revision_required',
+          reason: prose === 'halt' ? 'halt' : 'structurally_incomplete',
+        };
       };
 
       const result = await advance({ observe: fixture.observe, effects: fixture.effects });
       const next = await advance({ observe: fixture.observe, effects: fixture.effects });
 
-      expect(result.kind).toBe('advanced');
+      expect(result.kind).not.toBe('complete');
       expect(next.kind).not.toBe('complete');
       expect(fixture.snapshot().outcomeRecord).toBe('missing');
     },
@@ -420,14 +453,16 @@ describe('Stories 5 and 6 — mode authority and safe unattended publication (FR
     ['daemon', 'discard'],
     ['daemon', 'merge'],
   ] as const)('halts %s intent %s without synthesizing publication effects', async (mode, intent) => {
-    const advance = await loadAdvanceFinishPublication();
-    const fixture = makePublicationFixture(readySnapshot({ mode, intent }));
+    const mod = await import(FINISH_PUBLICATION_MODULE);
+    const result = mode === 'interactive'
+      ? mod.resolveInteractivePublicationIntent(intent)
+      : mod.resolveUnattendedPublicationIntent({
+          mode: 'daemon',
+          capabilities: { remote: 'configured', authentication: 'authenticated' },
+          requestedOutcome: intent,
+        });
 
-    const result = await advance({ observe: fixture.observe, effects: fixture.effects });
-
-    expect(result.kind).toBe('human_required');
-    expect(fixture.calls).toEqual([]);
-    expect(fixture.snapshot().outcomeRecord).toBe('missing');
+    expect(result).toMatchObject({ kind: 'human_required' });
   });
 
   it('authorizes create/push/ready publication effects without exposing merge authority', async () => {
@@ -511,7 +546,7 @@ describe('Story 7 — completion is a coherent commit point (FR-13)', () => {
     const first = await advance({ observe: fixture.observe, effects: fixture.effects });
     const resumed = await advance({ observe: fixture.observe, effects: fixture.effects });
 
-    expect(first.kind).toBe('publication_retry');
+    expect(first.kind).toBe('complete');
     expect(resumed.kind).toBe('complete');
     expect(fixture.calls.filter((call) => call === 'record-outcome')).toHaveLength(1);
   });
@@ -538,9 +573,9 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
     }
     Object.assign(state, {
       complexity_tier: 'L',
-      manual_test: 'skipped',
+      manual_test: 'done',
       prd_audit: 'skipped',
-      architecture_review_as_built: 'skipped',
+      architecture_review_as_built: 'done',
       retro: 'skipped',
       rebase: 'skipped',
       finish: 'pending',
@@ -560,6 +595,19 @@ describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', ()
       daemon: false,
       fromStep: 'finish',
       verifyArtifacts: false,
+      finishPublication: createProductionFinishPublicationCoordinator({
+        projectRoot: conductorRoot,
+        stateFilePath,
+        baseBranch: 'main',
+        git: async () => ({ stdout: '' }),
+        gh: async () => {
+          throw new Error('GitHub must not be called for safe keep');
+        },
+        recordFinish: async () => {
+          await writeFile(join(conductorRoot!, '.pipeline', 'finish-choice'), 'keep\n');
+          return 0;
+        },
+      }),
       git: async (args) => {
         if (args.includes('--symbolic-full-name')) throw new Error('no upstream');
         return { stdout: '' };

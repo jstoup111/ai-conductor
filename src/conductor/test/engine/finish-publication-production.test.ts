@@ -104,7 +104,9 @@ describe('production FINISH publication composition', () => {
         emit: async () => {},
       });
 
-      expect(disposition).toMatchObject({ kind: 'publication_retry' });
+      expect(disposition).toMatchObject({
+        kind: daemon ? 'publication_retry' : 'implementation_invalid',
+      });
       expect(dispatchJudgment).not.toHaveBeenCalled();
       // The fake boundaries are the only allowed process/network seam in this
       // integration test; no real provider or GitHub executable is reachable.

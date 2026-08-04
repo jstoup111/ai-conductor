@@ -311,10 +311,14 @@ export type PublicationSnapshotValidation =
  * Validates whether the repository and external observations can describe the
  * same publication state. This is deliberately not a completion decision.
  */
-export function validatePublicationSnapshot(
+function validatePublicationSnapshot(
   snapshot: PublicationSnapshot,
 ): PublicationSnapshotValidation {
-  if (snapshot.outcomeRecord === 'valid' && snapshot.pr.identity === 'none') {
+  if (
+    snapshot.intent.outcome !== 'keep' &&
+    snapshot.outcomeRecord === 'valid' &&
+    snapshot.pr.identity === 'none'
+  ) {
     return {
       kind: 'incoherent',
       reason: 'valid_outcome_record_requires_external_pr',
@@ -347,6 +351,13 @@ type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise
 export function nextFinishPublicationTransition(
   snapshot: PublicationSnapshot,
 ): PublicationTransition {
+  // An authorized keep outcome deliberately has no GitHub identity. Its
+  // durable finish record is the only remaining publication transition; do
+  // not manufacture a PR merely to satisfy the PR publication ordering.
+  if (snapshot.intent.outcome === 'keep') {
+    return 'record_outcome';
+  }
+
   if (snapshot.pr.identity !== 'one' || snapshot.branchPushed !== 'valid') {
     return 'establish_pr';
   }
@@ -631,7 +642,7 @@ export type PublicationPreflightResult =
  * stable, actionable condition and never asks a judgment provider to infer
  * deterministic repository or release state.
  */
-export function preflightFinishPublication(
+function preflightFinishPublication(
   snapshot: PublicationSnapshot,
 ): PublicationPreflightResult {
   const validation = validatePublicationSnapshot(snapshot);
@@ -767,7 +778,7 @@ type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }>
  * is final for this pass, while a stale or incomplete observation earns one
  * request. The predicate performs no provider work itself.
  */
-export function isPrProseJudgmentNeeded(
+function isPrProseJudgmentNeeded(
   pr: PublicationPullRequest,
 ): pr is PrWithJudgmentNeeded {
   return pr.identity === 'one' && pr.prose !== 'accepted';
