@@ -6960,6 +6960,46 @@ describe('engine/conductor', () => {
       }
     });
 
+    it('Task 6: re-verification preserves tier, track, upstream, and configuration exclusions', () => {
+      // These are the four existing skip authorities. The Task 5
+      // re-verification flag changes only the already-done shortcut; it must
+      // never convert an excluded member into a BUILD round branch.
+      const exclusionGroup: StepGroup = {
+        name: 'reverification-exclusion-fixture',
+        members: [
+          'acceptance_specs',
+          'prd_audit',
+          'architecture_review_as_built',
+          'manual_test',
+        ],
+      };
+      const state = {
+        complexity_tier: 'S',
+        architecture_review: 'skipped',
+      } as ConductState;
+      const config = {
+        steps: { manual_test: { disable: true } },
+      } as HarnessConfig;
+
+      const result = resolveGroupMembership(
+        exclusionGroup,
+        state,
+        'technical',
+        CLAUDE_MODEL_POLICY,
+        config,
+        true,
+      );
+
+      expect(result.allSkipped).toBe(true);
+      expect(result.dispatchable).toEqual([]);
+      expect(result.members.map((member) => [member.name, member.outcome])).toEqual([
+        ['acceptance_specs', { kind: 'skipped' }],
+        ['prd_audit', { kind: 'skipped' }],
+        ['architecture_review_as_built', { kind: 'skipped' }],
+        ['manual_test', { kind: 'skipped' }],
+      ]);
+    });
+
     it('a skipped member never contributes a verdict and can never fail the group', () => {
       const state = { complexity_tier: 'L' } as ConductState;
       const result = resolveGroupMembership(

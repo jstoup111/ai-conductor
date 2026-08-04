@@ -225,4 +225,66 @@ describe('Deterministic BUILD verification flow', () => {
       'build_review',
     ]);
   });
+
+  it('keeps a one-member BUILD round serial and out of observer branches', async () => {
+    // No persisted satisfied BUILD verdict or repair is present, so the
+    // already-done sibling retains its normal resume shortcut. The pending
+    // wiring member is the only branch that needs dispatch.
+    await writeState(stateFilePath, {
+      ...BUILD_COMPLETE,
+      test_suite: 'done',
+    });
+    const timeline: string[] = [];
+    const parallelStarted: Array<{ step: StepName; branches: StepName[] }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('parallel_started', (event) => {
+      if (event.type === 'parallel_started') {
+        parallelStarted.push({
+          step: event.step,
+          branches: event.branches as StepName[],
+        });
+      }
+    });
+    const runner: StepRunner = {
+      run: async (step: StepName) => {
+        timeline.push(step);
+        if (step === 'manual_test') {
+          return { success: false, output: 'stop after width-one exclusion proof' };
+        }
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      projectRoot,
+      mode: 'auto',
+      fromStep: 'wiring_check',
+      maxRetries: 1,
+      verifyArtifacts: false,
+      config: { validation_concurrency: 2 },
+      fullSuiteVerifier: {
+        ensure: async () => {
+          timeline.push('test_suite');
+          return {
+            status: 'REUSED',
+            freshness: { status: 'CURRENT', evidence: PASS_EVIDENCE },
+            evidence: PASS_EVIDENCE,
+          };
+        },
+        inspect: async () => ({ status: 'CURRENT', evidence: PASS_EVIDENCE }),
+      },
+    });
+
+    await conductor.run();
+
+    expect(timeline.slice(0, 2)).toEqual(['wiring_check', 'build_review']);
+    expect(timeline).not.toContain('test_suite');
+    // Width one keeps the serial event shape. Later SHIP groups may fan out,
+    // but BUILD observers never receive a branch list that includes the
+    // already-done, non-dispatched test_suite member.
+    expect(parallelStarted.filter((event) => event.step === 'wiring_check')).toEqual([]);
+    expect(parallelStarted.every((event) => !event.branches.includes('test_suite'))).toBe(true);
+  });
 });
