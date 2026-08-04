@@ -1,4 +1,5 @@
 import type { ConductState } from '../types/state.js';
+import { isDeepStrictEqual } from 'node:util';
 import type { StateMutation, StateMutationResult } from './conduct-state-store.js';
 
 const MAX_DIAGNOSTIC_STRING_LENGTH = 256;
@@ -29,6 +30,11 @@ export interface StateMutationDiagnostic {
 export interface StateMutationDiagnostics {
   writer: string;
   emit(diagnostic: StateMutationDiagnostic): void;
+}
+
+/** Persisted object fields are re-parsed on every store read, so identity alone is not a stable expectation. */
+export function stateMutationValuesEqual(left: unknown, right: unknown): boolean {
+  return Object.is(left, right) || isDeepStrictEqual(left, right);
 }
 
 /** Produces metadata-only value descriptions suitable for diagnostics. */
@@ -95,11 +101,11 @@ export function evaluateConductStateMutation(
   mutation: StateMutation<ConductState>,
   diagnostics?: StateMutationDiagnostics,
 ): StateMutationResult {
-  if (Object.is(currentValue, mutation.expected)) {
+  if (stateMutationValuesEqual(currentValue, mutation.expected)) {
     return { kind: 'applied' };
   }
 
-  if (Object.is(currentValue, mutation.next)) {
+  if (stateMutationValuesEqual(currentValue, mutation.next)) {
     return { kind: 'idempotent' };
   }
 

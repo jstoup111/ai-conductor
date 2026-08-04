@@ -5,6 +5,7 @@ import { createConductStateLease, type ConductStateLease } from './conduct-state
 import { readState } from './state.js';
 import {
   evaluateConductStateMutation,
+  stateMutationValuesEqual,
   type StateMutationDiagnostics,
 } from './conduct-state-conflicts.js';
 import type { ConductState, StateResult } from '../types/state.js';
@@ -116,6 +117,18 @@ function createAtomicPersistence(filesystem: AtomicStateFilesystem): ConductStat
 }
 
 /**
+ * Test-fixture seeding only. It deliberately bypasses the lease so injected
+ * persistence fakes can materialize their accepted snapshot while the store
+ * under test owns that lease; production mutations use the store below.
+ */
+export async function writeFilesystemConductStateFixture(
+  path: string,
+  state: ConductState,
+): Promise<void> {
+  await createAtomicPersistence(defaultAtomicFilesystem).write(path, state);
+}
+
+/**
  * Creates the local persistent adapter for the backwards-compatible flat
  * conduct-state JSON file. Every mutation reads the current state immediately
  * before applying its one owned field, so a stale caller snapshot cannot be
@@ -183,7 +196,7 @@ export function createFilesystemConductStateStore(
         const state = current.value;
         for (const mutation of batch.mutations) {
           const currentValue = (state as Record<string, unknown>)[mutation.field];
-          if (!Object.is(currentValue, mutation.expected)) {
+          if (!stateMutationValuesEqual(currentValue, mutation.expected)) {
             return {
               kind: 'conflict',
               message: `Expected ${mutation.field} to match before ${mutation.intent}`,
@@ -214,13 +227,13 @@ export function createFilesystemConductStateStore(
         const state = current.value;
         for (const deletion of correction.deletions) {
           const value = (state as Record<string, unknown>)[deletion.field];
-          if (!Object.is(value, deletion.expected) && value !== undefined) {
+          if (!stateMutationValuesEqual(value, deletion.expected) && value !== undefined) {
             return { kind: 'conflict', message: `Expected ${deletion.field} to match before ${deletion.intent}` };
           }
         }
         for (const mutation of correction.mutations) {
           const value = (state as Record<string, unknown>)[mutation.field];
-          if (!Object.is(value, mutation.expected) && !Object.is(value, mutation.next)) {
+          if (!stateMutationValuesEqual(value, mutation.expected) && !stateMutationValuesEqual(value, mutation.next)) {
             return { kind: 'conflict', message: `Expected ${mutation.field} to match before ${mutation.intent}` };
           }
         }

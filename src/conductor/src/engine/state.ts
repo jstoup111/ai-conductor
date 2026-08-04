@@ -1,8 +1,10 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { readFile } from 'fs/promises';
 import type { ConductState, StateResult } from '../types/index.js';
 import type { StepName, StepStatus, ComplexityTier } from '../types/index.js';
-import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import {
+  createFilesystemConductStateStore,
+  writeFilesystemConductStateFixture,
+} from './filesystem-conduct-state-store.js';
 import type {
   ConductStateStore,
   PrivilegedStateCorrection,
@@ -77,16 +79,14 @@ function migrateState(state: ConductState): ConductState {
 }
 
 /**
- * Write conduct-state.json with 2-space indent and trailing newline
- * (matches bash format for backward compatibility). This is retained only as
- * a test/legacy fixture helper; production code must use the state store.
+ * Seed a test fixture through the adapter's atomic persistence seam. Production
+ * callers use field mutations instead.
  */
 export async function writeState(
   path: string,
   state: ConductState,
 ): Promise<void> {
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(state, null, 2) + '\n', 'utf-8');
+  await writeFilesystemConductStateFixture(path, state);
 }
 
 /** Submit an explicit bounded update batch derived from one observed snapshot. */
