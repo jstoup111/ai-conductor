@@ -11,6 +11,13 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.99.21] - 2026-08-04
+
+### Fixed
+
+- The wiring gate now accepts inert waiver refs wrapped in Markdown inline code, instead of failing with "inert waiver ref not found" for a file that exists. ([implementation PR #1276](https://github.com/jstoup111/ai-conductor/pull/1276)).
+- The bot-owned release PR now opens on repositories that squash- or rebase-merge; its candidate range no longer required merge commits. ([implementation PR #1278](https://github.com/jstoup111/ai-conductor/pull/1278)).
+
 ## [0.99.20] - 2026-08-03
 
 Two months of work between `v0.99.17` (2026-05-02) and the move to bot-owned release
