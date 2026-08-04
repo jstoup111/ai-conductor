@@ -17,6 +17,8 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 - The wiring gate now accepts inert waiver refs wrapped in Markdown inline code, instead of failing with "inert waiver ref not found" for a file that exists. ([implementation PR #1276](https://github.com/jstoup111/ai-conductor/pull/1276)).
 - The bot-owned release PR now opens on repositories that squash- or rebase-merge; its candidate range no longer required merge commits. ([implementation PR #1278](https://github.com/jstoup111/ai-conductor/pull/1278)).
+- A self-host build no longer halts when the ship-start push fails but its draft PR is already open — the release gate resolves the retained PR from the feature branch, and still halts fail-closed when no open PR exists. ([implementation PR #1290](https://github.com/jstoup111/ai-conductor/pull/1290)).
+- The remediation planner no longer falsely halts for a human architecture decision when a gap is conforming implementation, test, or documentation drift that preserves already-approved architecture — it now routes that work straight to build, and the daemon halts with a clear reason instead of silently dispatching a taskless build route. ([implementation PR #1283](https://github.com/jstoup111/ai-conductor/pull/1283)).
 
 ## [0.99.20] - 2026-08-03
 
