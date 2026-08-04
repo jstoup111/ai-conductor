@@ -3296,6 +3296,8 @@ export interface RemediationGap {
 
 export interface RemediationPlan {
   gaps: RemediationGap[];
+  /** Ordinary BUILD dispositions rejected for lacking concrete work. */
+  invalidTasklessBuild: boolean;
 }
 
 /**
@@ -3308,6 +3310,7 @@ export interface RemediationPlan {
 export async function readRemediationPlan(
   dir: string,
   sessionStartedAt: number | undefined,
+  source?: string,
 ): Promise<RemediationPlan | null> {
   const path = join(dir, '.pipeline/remediation.json');
   if (!(await fileIsFreshSinceSession(path, sessionStartedAt))) return null;
@@ -3322,6 +3325,7 @@ export async function readRemediationPlan(
 
   const valid: RemediationDisposition[] = [...REMEDIATION_TARGET_STEPS, 'halt'];
   const gaps: RemediationGap[] = [];
+  let invalidTasklessBuild = false;
   for (const g of rawGaps) {
     if (!g || typeof g !== 'object') continue;
     const o = g as Record<string, unknown>;
@@ -3344,6 +3348,13 @@ export async function readRemediationPlan(
             title: String((t as { title: unknown }).title),
           }))
       : [];
+    // A taskless BUILD disposition is only a usable answer to a build-stall
+    // question. Every ordinary autonomous BUILD disposition must carry the
+    // concrete work that makes the route dispatchable.
+    if (disposition === 'build' && tasks.length === 0 && source !== 'build_stall') {
+      invalidTasklessBuild = true;
+      continue;
+    }
     gaps.push({
       id: typeof o.id === 'string' ? o.id : '?',
       disposition,
@@ -3352,7 +3363,7 @@ export async function readRemediationPlan(
       tasks,
     });
   }
-  return gaps.length > 0 ? { gaps } : null;
+  return gaps.length > 0 || invalidTasklessBuild ? { gaps, invalidTasklessBuild } : null;
 }
 
 // --- Story / plan structure parsing (shared by stories + plan predicates) ---

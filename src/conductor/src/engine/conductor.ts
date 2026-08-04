@@ -1945,8 +1945,20 @@ export class Conductor {
     | { kind: 'none' }
   > {
     await this.stepRunner.run('remediate', state, { retryReason: dispatchContext });
-    const plan = await readRemediationPlan(this.projectRoot, state.session_started_at);
+    const plan = await readRemediationPlan(
+      this.projectRoot,
+      state.session_started_at,
+      hintSource.source,
+    );
     if (!plan) return { kind: 'none' };
+    if (plan.invalidTasklessBuild) {
+      return {
+        kind: 'halt',
+        detail:
+          'remediation produced no dispatchable build work: rejected an ordinary BUILD disposition with no concrete task; ' +
+          'human needed to provide dispatchable work',
+      };
+    }
 
     // Extract tasks from gaps and append them to the plan if present.
     // Remediation tasks are plan-modification tasks that close blocking gaps.

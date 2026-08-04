@@ -116,6 +116,119 @@ describe('planRemediation implementation-only authority routing', () => {
     });
   });
 
+  it('does not route an ordinary taskless BUILD disposition', async () => {
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'adr-2026-07-27-provider-lifecycle',
+                disposition: 'build',
+                category: null,
+                rationale: 'Implementation drift needs a concrete correction.',
+                tasks: [],
+              },
+            ],
+          }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<{ kind: string; target?: string; detail?: string }>;
+    }).planRemediation(
+      {
+        session_started_at: Date.now() - 1_000,
+        feature_desc: 'feature',
+      } as ConductState,
+      ALL_STEPS,
+      'as-built architecture review blocked',
+      {
+        source: 'architecture-review-as-built',
+        evidenceFile: '.pipeline/architecture-review-as-built.md',
+      },
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'halt',
+      detail: expect.stringContaining('ordinary BUILD disposition with no concrete task'),
+    });
+  });
+
+  it('preserves a taskless BUILD answer to a build-stall question', async () => {
+    const runner: StepRunner = {
+      run: async () => {
+        await writeFile(
+          join(projectRoot, '.pipeline/remediation.json'),
+          JSON.stringify({
+            dispositions: [
+              {
+                id: 'stall:validation-layer',
+                disposition: 'build',
+                category: null,
+                rationale: 'The committed boundary contract answers the stall question.',
+                tasks: [],
+              },
+            ],
+          }),
+          'utf8',
+        );
+        return { success: true };
+      },
+    };
+    const conductor = new Conductor({
+      stateFilePath: join(projectRoot, '.pipeline/conduct-state.json'),
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot,
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: false,
+      maxRetries: 1,
+    });
+
+    const outcome = await (conductor as unknown as {
+      planRemediation: (
+        state: ConductState,
+        steps: typeof ALL_STEPS,
+        dispatchContext: string,
+        hintSource: { source: string; evidenceFile: string },
+      ) => Promise<{ kind: string; target?: string }>;
+    }).planRemediation(
+      {
+        session_started_at: Date.now() - 1_000,
+        feature_desc: 'feature',
+      } as ConductState,
+      ALL_STEPS,
+      'Remediate build stall: which validation boundary applies?',
+      {
+        source: 'build_stall',
+        evidenceFile: '.pipeline/build-stall-question.md',
+      },
+    );
+
+    expect(outcome).toMatchObject({ kind: 'route', target: 'build' });
+  });
+
   it.each([
     {
       id: 'adr-2026-07-27-provider-lifecycle',
