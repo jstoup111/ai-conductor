@@ -314,31 +314,54 @@ describe('finish-publication domain types', () => {
     await expect(import('../../src/engine/finish-publication.js')).resolves.toBeTypeOf('object');
   });
 
-  it('selects release readiness as the first incomplete daemon PR transition', async () => {
-    type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
-    type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
-    type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
-
-    const snapshot: PublicationSnapshot = {
-      mode: 'daemon',
+  it.each([
+    ['an authorized keep outcome', {
+      ...readyPublicationSnapshot(),
+      mode: 'foreground-auto',
       intent: {
-        outcome: 'pr',
-        authority: { kind: 'unattended_policy', mode: 'daemon' },
-      } satisfies PublicationIntent,
-      implementationEvidence: 'valid',
-      shipEvidence: 'valid',
-      releaseReadiness: 'missing',
-      branchPushed: 'valid',
+        outcome: 'keep',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+      branchPushed: 'missing',
+      pr: { identity: 'none' },
+    } as PublicationSnapshot, 'record_outcome'],
+    ['a missing PR identity', readyPublicationSnapshot({ pr: { identity: 'none' } }), 'establish_pr'],
+    ['an ambiguous PR identity', readyPublicationSnapshot({ pr: { identity: 'ambiguous', urls: [] } }), 'establish_pr'],
+    ['an indeterminate PR identity', readyPublicationSnapshot({ pr: { identity: 'indeterminate' } }), 'establish_pr'],
+    ['missing push evidence', readyPublicationSnapshot({ branchPushed: 'missing' }), 'establish_pr'],
+    ['invalid push evidence', readyPublicationSnapshot({ branchPushed: 'invalid' }), 'establish_pr'],
+    ['indeterminate push evidence', readyPublicationSnapshot({ branchPushed: 'indeterminate' }), 'establish_pr'],
+    ['missing release readiness', readyPublicationSnapshot({ releaseReadiness: 'missing' }), 'verify_release_readiness'],
+    ['invalid release readiness', readyPublicationSnapshot({ releaseReadiness: 'invalid' }), 'verify_release_readiness'],
+    ['indeterminate release readiness', readyPublicationSnapshot({ releaseReadiness: 'indeterminate' }), 'verify_release_readiness'],
+    ['a missing shipped record', readyPublicationSnapshot({ shippedRecord: 'missing' }), 'write_shipped_record'],
+    ['an invalid shipped record', readyPublicationSnapshot({ shippedRecord: 'invalid' }), 'write_shipped_record'],
+    ['an indeterminate shipped record', readyPublicationSnapshot({ shippedRecord: 'indeterminate' }), 'write_shipped_record'],
+    ['stale PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: true },
+    }), 'judge_pr_prose'],
+    ['placeholder PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: true },
+    }), 'judge_pr_prose'],
+    ['halt PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'halt', ready: true },
+    }), 'judge_pr_prose'],
+    ['indeterminate PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: true },
+    }), 'judge_pr_prose'],
+    ['a draft PR with accepted prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+    }), 'ready_pr'],
+    ['all preceding PR publication progress complete', readyPublicationSnapshot({
       pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
-      shippedRecord: 'valid',
-      outcomeRecord: 'valid',
-    };
+    }), 'record_outcome'],
+  ] as const)('selects %s as the next deterministic publication transition', async (_state, snapshot, expected) => {
     const module = await import('../../src/engine/finish-publication.js');
     const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
       snapshot: PublicationSnapshot,
-    ) => PublicationTransition;
+    ) => typeof expected;
 
-    expect(nextFinishPublicationTransition(snapshot)).toBe('verify_release_readiness');
+    expect(nextFinishPublicationTransition(snapshot)).toBe(expected);
   });
 
   it('rejects a PR outcome record without an external PR identity', async () => {

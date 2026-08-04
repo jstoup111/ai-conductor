@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
@@ -35,7 +35,6 @@ describe('production FINISH publication composition', () => {
           throw new Error('no open PR');
         }
         if (args[0] === 'pr' && args[1] === 'create') {
-          state.pr_url = prUrl;
           return { stdout: `${prUrl}\n` };
         }
         if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
@@ -62,11 +61,95 @@ describe('production FINISH publication composition', () => {
         }),
       ).resolves.toMatchObject({ kind: 'publication_retry', transition: 'establish_pr' });
 
+      await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(`"pr_url": "${prUrl}"`);
+      const reobservedState = JSON.parse(
+        await readFile(join(pipeline, 'conduct-state.json'), 'utf8'),
+      ) as ConductState;
+      await expect(
+        coordinator.advance({
+          state: reobservedState,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toMatchObject({ kind: 'publication_retry', transition: 'write_shipped_record' });
       expect(git).toHaveBeenCalledWith(['rev-list', '--count', 'trunk..HEAD'], { cwd: root });
       expect(gh).toHaveBeenCalledWith(expect.arrayContaining(['--base', 'trunk']), { cwd: root });
+      expect(gh).toHaveBeenCalledWith(['pr', 'view', prUrl, '--json', 'url,title,body,isDraft'], { cwd: root });
       expect(events).toContainEqual(expect.objectContaining({
         type: 'finish_publication_transition', phase: 'completed', transition: 'establish_pr',
       }));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps accepted prose containing ordinary "required" language on the same transition after restart', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-restart-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      const shipped = join(root, '.docs', 'shipped');
+      await mkdir(pipeline);
+      await mkdir(shipped, { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(shipped, 'feature.md'), 'shipped\n');
+
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const state = {
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        pr_url: prUrl,
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
+      } as ConductState;
+      const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        return { stdout: '' };
+      });
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return { stdout: '' };
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
+          return {
+            stdout: JSON.stringify({
+              url: prUrl,
+              title: 'docs: add required configuration context',
+              body: 'The migration is required for operators upgrading from the prior release.',
+              isDraft: true,
+            }),
+          };
+        }
+        return { stdout: '' };
+      });
+      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const makeCoordinator = () => createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git,
+        gh,
+      });
+      const input = {
+        state,
+        mode: 'auto' as const,
+        daemon: true,
+        dispatchJudgment,
+        emit: async () => {},
+      };
+
+      const beforeRestart = await makeCoordinator().advance(input);
+      const afterRestart = await makeCoordinator().advance(input);
+
+      expect(beforeRestart).toEqual({
+        kind: 'publication_retry',
+        transition: 'ready_pr',
+        reason: 'presentation_not_verified_after_repair',
+      });
+      expect(afterRestart).toEqual(beforeRestart);
+      expect(dispatchJudgment).not.toHaveBeenCalled();
     } finally {
       await rm(root, { recursive: true, force: true });
     }

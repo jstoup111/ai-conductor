@@ -10,9 +10,11 @@ import { access, readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { ConductState, FinishPublicationEvent, RunMode } from '../types/index.js';
 import type { StepRunResult } from './conductor.js';
-import type { GhRunner, GitRunner } from './pr-labels.js';
+import { HALT_PR_BANNER_SENTINEL, type GhRunner, type GitRunner } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
 import { dispatchShippedRecord } from './shipped-record-cli.js';
+import { NEEDS_REMEDIATION_TITLE_PREFIX } from './halt-pr-rehabilitation.js';
+import { savePrUrl, writeState } from './state.js';
 import {
   dispatchFinishRecord,
   type FinishRecordRunners,
@@ -57,9 +59,14 @@ async function exists(path: string): Promise<boolean> {
 }
 
 function prProse(title: unknown, body: unknown): 'accepted' | 'stale' | 'placeholder' | 'halt' {
-  const text = `${typeof title === 'string' ? title : ''}\n${typeof body === 'string' ? body : ''}`.trim();
+  const prTitle = typeof title === 'string' ? title : '';
+  const prBody = typeof body === 'string' ? body : '';
+  const text = `${prTitle}\n${prBody}`.trim();
   if (!text) return 'placeholder';
-  if (/needs-remediation|halt-user-input|required/i.test(text)) return 'halt';
+  if (
+    prTitle.toLowerCase().startsWith(NEEDS_REMEDIATION_TITLE_PREFIX) ||
+    prBody.includes(HALT_PR_BANNER_SENTINEL)
+  ) return 'halt';
   if (/AI_CONDUCTOR_PR_BODY_FLOOR|Draft opened automatically/i.test(text)) return 'placeholder';
   return 'accepted';
 }
@@ -75,11 +82,6 @@ export function createProductionFinishPublicationCoordinator(
   const pipelineDir = dirname(deps.stateFilePath);
   const writeShippedRecord = deps.writeShippedRecord ?? dispatchShippedRecord;
   const recordFinish = deps.recordFinish ?? dispatchFinishRecord;
-  // A successful prose judgment is an authoritative judgment result, not a
-  // GitHub mutation. Retain it for this coordinator instance so the next
-  // deterministic transition does not spend a second provider call merely
-  // because the PR body itself is intentionally unchanged.
-  let acceptedProseForPr: string | undefined;
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, emit }) {
@@ -147,7 +149,7 @@ export function createProductionFinishPublicationCoordinator(
                   ? {
                       state: 'one' as const,
                       url: pr.url,
-                      prose: acceptedProseForPr === pr.url ? 'accepted' : prProse(pr.title, pr.body),
+                      prose: prProse(pr.title, pr.body),
                       ready: !pr.isDraft,
                     }
                   : { state: 'malformed' as const };
@@ -179,7 +181,6 @@ export function createProductionFinishPublicationCoordinator(
         effects: {
           dispatchJudgment: async (request) => {
             const result = await dispatchJudgment(request);
-            if (result.success) acceptedProseForPr = request.pullRequestUrl;
             return result.success ? { kind: 'accepted' } : { kind: 'provider_unavailable' };
           },
           establishPr: {
@@ -189,6 +190,16 @@ export function createProductionFinishPublicationCoordinator(
             branch: state.worktree_branch,
             baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
+          },
+          persistEstablishedPrUrl: async (prUrl) => {
+            // A production run normally has a state file already. Preserve
+            // the supplied current state if an isolated coordinator reaches
+            // FINISH before that file has been materialized.
+            if (!await exists(deps.stateFilePath)) {
+              await writeState(deps.stateFilePath, state);
+            }
+            await savePrUrl(deps.stateFilePath, prUrl);
+            state.pr_url = prUrl;
           },
           createShippedRecord: async () => {
             if (!state.feature_desc || !state.pr_url) throw new Error('missing shipment identity');

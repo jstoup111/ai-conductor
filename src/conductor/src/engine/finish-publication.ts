@@ -441,6 +441,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'draft_pr_no-commits',
     'draft_pr_push-failed',
     'draft_pr_failed',
+    'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',
   ],
   verify_release_readiness: [],
@@ -812,6 +813,12 @@ export interface AdvanceFinishPublicationInput {
      */
     establishPr?: OpenShipDraftPrDeps;
     /**
+     * Persist the authoritative URL returned by a successful draft-PR
+     * establishment before the coordinator re-observes PR identity. The
+     * composition root owns its durable feature-state representation.
+     */
+    persistEstablishedPrUrl?: (prUrl: string) => Promise<void>;
+    /**
      * Existing order-gated PR presentation repair. The composition root owns
      * the GitHub mechanics (halt rehabilitation, title/body floors, and the
      * draft-to-ready flip); this coordinator invokes it only after accepted
@@ -990,6 +997,17 @@ export async function advanceFinishPublication(
       });
 
       const draftPr = await openShipDraftPr(input.effects.establishPr);
+      if (draftPr.outcome === 'published' && input.effects.persistEstablishedPrUrl) {
+        try {
+          await input.effects.persistEstablishedPrUrl(draftPr.prUrl);
+        } catch {
+          return {
+            kind: 'publication_retry',
+            transition: 'establish_pr',
+            reason: 'pr_url_persistence_failed',
+          };
+        }
+      }
       const observedAfterEstablish = await input.observe();
       if (
         observedAfterEstablish.pr.identity === 'one' &&
