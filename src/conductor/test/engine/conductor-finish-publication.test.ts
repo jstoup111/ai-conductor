@@ -42,6 +42,53 @@ describe('Conductor FINISH publication routing', () => {
     await rm(dir, { recursive: true, force: true });
   });
 
+  it.each([
+    { name: 'interactive', mode: 'interactive' as const, daemon: false },
+    { name: 'default foreground', mode: 'default' as const, daemon: false },
+    { name: 'foreground auto', mode: 'auto' as const, daemon: false },
+    { name: 'daemon', mode: 'auto' as const, daemon: true },
+  ])('starts at FINISH and lets the coordinator bound %s judgment dispatches', async ({ mode, daemon }) => {
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        calls.push(step);
+        return { success: true };
+      }),
+    };
+    const coordinator = {
+      advance: vi.fn(async ({ dispatchJudgment }) => {
+        if (mode !== 'default') await dispatchJudgment({
+          kind: 'finish_pr_prose_quality',
+          pullRequestUrl: 'https://example.test/pr/17',
+          qualityScope: ['title', 'body'],
+          maximumPasses: 1,
+        });
+        return { kind: 'complete' } as const;
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      finishPublication: coordinator,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode,
+      daemon,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(coordinator.advance).toHaveBeenCalledOnce();
+    expect(calls).toEqual(mode === 'default' ? [] : ['finish']);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
   it('retries a publication-only result at FINISH without dispatching BUILD or remediation', async () => {
     const calls: Array<{ step: StepName; retryReason?: string }> = [];
     const runner: StepRunner = {

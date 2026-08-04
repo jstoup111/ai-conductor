@@ -1980,54 +1980,24 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
-    // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
-    // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
-    // print-mode Claude would emit prose and exit without writing
-    // `.pipeline/finish-choice` — leaving the gate permanently unsatisfied and
-    // the loop stuck (the validation failure this addresses). Tell it to decide
-    // deterministically and ACT, ending by writing the marker file.
+    // FINISH publication mechanics are engine-owned. The provider crosses this
+    // boundary only for one reader-facing PR prose judgment; it must never
+    // create/push/merge a PR or write completion state itself.
     if (step === 'finish' && this.mode === 'auto') {
-      // Use the ABSOLUTE worktree pipeline dir for the `finish-record` command.
-      // In daemon mode the finish skill performs branch/PR/worktree cleanup
-      // that `cd`s into the main repo (see agents/worktree-manager.md), so a
-      // relative `.pipeline` dir would resolve against the WRONG repo after
-      // cleanup while the completion gate reads the worktree's `.pipeline` —
-      // leaving it unsatisfied and HALTing a feature whose PR was genuinely
-      // created. `this.pipelineDir` is the worktree's `.pipeline` (daemon-cli
-      // passes it); fall back to the relative `.pipeline` when unset.
-      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
       prompt +=
-        '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
-        'Decide deterministically and ACT (do not merely describe):\n' +
-        '- If the repo has a configured git remote and `gh` is authenticated: push the branch and open a ' +
-        'PR with `gh pr create` (NEVER merge). If a PR for this branch already exists, reuse it instead ' +
-        'of failing (`gh pr view --json url -q .url`). Before recording, verify the STOP gate in §5 ' +
-        'Option 2 of the finish skill: (1) the PR URL is non-empty (`gh pr view --json url`), and (2) the ' +
-        'branch was pushed (`git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>`). If EITHER ' +
-        'check fails, do NOT run the command below — HALT for human review. If BOTH pass, run:\n' +
-        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
-        '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
-        'branch and run:\n' +
-        `  conduct-ts finish-record --choice keep --pipeline-dir ${pipelineDirArg}\n` +
-        'IMPORTANT: `finish-record` performs its own verification (PR existence, push evidence) and is ' +
-        'the ONLY way to record the finish choice — do not write the marker or state files by hand. Do ' +
-        'NOT `cd` elsewhere before running it; the command above must use this exact `--pipeline-dir` ' +
-        'value regardless of the current working directory, since branch/PR/worktree cleanup may change ' +
-        'it. The step is NOT complete until `finish-record` exits 0.';
+        '\n\nUNATTENDED FINISH JUDGMENT — evaluate only the existing PR title and body for reader-facing quality. ' +
+        'Report accepted prose or the concrete title/body deficiency. Do not create, edit, push, merge, ' +
+        'or ready a PR; do not write shipment or completion files. The publication coordinator owns every ' +
+        'mechanical transition and records the final outcome.';
     }
 
-    // Interactive/default Finish preserves the human's outcome choice. A PR
-    // choice still has to go through the canonical verified recorder so the
-    // engine creates its terminal marker rather than leaving the daemon to
-    // rediscover this worktree as unfinished.
+    // Interactive/default Finish preserves operator authority. The coordinator
+    // consumes the resulting intent and owns all mechanics.
     if (step === 'finish' && this.mode !== 'auto') {
-      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
       prompt +=
-        '\n\nFINISH RECORDING — the human chooses the finish outcome. If they choose a PR, after creating or ' +
-        'reusing the PR and verifying it, you MUST run:\n' +
-        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
-        'This verified command records the PR outcome and writes the terminal completion marker. Do not write ' +
-        'the marker or state files by hand.';
+        '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
+        'discuss only its title and body quality. Do not perform publication mechanics, merge/discard work, ' +
+        'or write shipment/completion files; the publication coordinator performs only authorized transitions.';
     }
 
     if (retryReason) {

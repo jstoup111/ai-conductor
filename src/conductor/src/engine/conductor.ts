@@ -157,7 +157,11 @@ import {
   resetRegradeCounter,
   type Disposition,
 } from './build-review-disposition.js';
-import { routeFinishPublicationDisposition } from './finish-publication.js';
+import {
+  routeFinishPublicationDisposition,
+  type PublicationDisposition,
+  type PrProseJudgmentRequest,
+} from './finish-publication.js';
 import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
@@ -693,6 +697,20 @@ export interface StepRunner {
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
 
+/**
+ * Engine-owned FINISH publication composition. The coordinator owns every
+ * deterministic publication effect and invokes `dispatchJudgment` only when
+ * observed PR title/body prose needs a single quality pass.
+ */
+export interface FinishPublicationCoordinator {
+  advance(input: {
+    state: ConductState;
+    mode: RunMode;
+    daemon: boolean;
+    dispatchJudgment(request: PrProseJudgmentRequest): Promise<StepRunResult>;
+  }): Promise<PublicationDisposition>;
+}
+
 export interface ConductorOptions {
   stateFilePath: string;
   stepRunner: StepRunner;
@@ -702,6 +720,8 @@ export interface ConductorOptions {
   resume?: boolean;
   fromStep?: StepName;
   mode?: RunMode;
+  /** Optional engine-owned FINISH publication coordinator. */
+  finishPublication?: FinishPublicationCoordinator;
   config?: HarnessConfig;
   /**
    * Provider-specific retry escalation ladder. Optional while callers migrate;
@@ -1068,6 +1088,7 @@ export class Conductor {
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
+  private readonly finishPublication?: FinishPublicationCoordinator;
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
   private readonly providerExecution?: ProviderExecutionContext;
@@ -1469,7 +1490,7 @@ export class Conductor {
     // focused unit tests. Its success authority is the runner result, so the
     // publication fence must not reintroduce artifact-only validation and
     // invalidate an otherwise green SHIP round indefinitely.
-    if (!this.verifyArtifacts && !this.daemon) return [];
+    if (this.finishPublication || (!this.verifyArtifacts && !this.daemon)) return [];
 
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(
@@ -1500,6 +1521,30 @@ export class Conductor {
     }
 
     return nonGreen;
+  }
+
+  /**
+   * Cross the provider boundary only when the coordinator asks for its one
+   * bounded PR-prose judgment. All other FINISH work remains coordinator-owned.
+   */
+  private async runFinishPublication(
+    state: ConductState,
+    options: StepRunOptions,
+  ): Promise<StepRunResult> {
+    if (!this.finishPublication) {
+      return this.stepRunner.run('finish', state, options);
+    }
+
+    const publicationDisposition = await this.finishPublication.advance({
+      state,
+      mode: this.mode,
+      daemon: this.daemon,
+      dispatchJudgment: async (_request) => this.stepRunner.run('finish', state, options),
+    });
+    return {
+      success: publicationDisposition.kind === 'complete',
+      publicationDisposition,
+    };
   }
 
   /**
@@ -1538,6 +1583,7 @@ export class Conductor {
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
+    this.finishPublication = opts.finishPublication;
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
     this.providerExecution = opts.providerExecution;
@@ -4954,12 +5000,20 @@ export class Conductor {
                 : step.name === 'worktree'
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
-                    ? await this.runRebaseStep(state)
-                    : step.name === 'test_suite'
-                      ? await this.runTestSuiteStep()
-                      : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
-                        ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                        : await this.stepRunner.run(step.name, state, {
+                      ? await this.runRebaseStep(state)
+                      : step.name === 'test_suite'
+                        ? await this.runTestSuiteStep()
+                        : step.name === 'finish' && this.finishPublication
+                          ? await this.runFinishPublication(state, {
+                              retryReason: retryHint,
+                              attempt,
+                              escalate: resolved.escalate,
+                              modelOverride: esc.model,
+                              effortOverride: esc.effort,
+                            })
+                        : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
+                          ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                          : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
                             attempt,
                             escalate: resolved.escalate,
@@ -5170,6 +5224,9 @@ export class Conductor {
           // the broad remediation planner.
           if (step.name === 'finish' && result.publicationDisposition !== undefined) {
             const route = routeFinishPublicationDisposition(result.publicationDisposition);
+            if (route.kind === 'complete') {
+              result.success = true;
+            }
             if (route.kind === 'retry_finish') {
               lastError = `FINISH publication retry: ${route.reason}`;
               retryHint = `${lastError}. Retry only the incomplete publication transition.`;
