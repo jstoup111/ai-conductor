@@ -2,6 +2,15 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { dirname } from 'path';
 import type { ConductState, StateResult } from '../types/index.js';
 import type { StepName, StepStatus, ComplexityTier } from '../types/index.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import type { ConductStateStore, StateMutation, StateMutationResult } from './conduct-state-store.js';
+
+function resolveStateStore(
+  path: string,
+  store: ConductStateStore<ConductState> | undefined,
+): ConductStateStore<ConductState> {
+  return store ?? createFilesystemConductStateStore(path);
+}
 
 /**
  * Read conduct-state.json. Returns default empty state if file missing.
@@ -111,12 +120,28 @@ export async function saveStepStatus(
   path: string,
   step: StepName,
   status: StepStatus,
-): Promise<void> {
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state[step] = status;
-  state.last_step = step;
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).applyBatch({
+    name: 'save step status',
+    mutations: [
+      {
+        field: step,
+        expected: result.value[step],
+        intent: `save ${step} step status`,
+        next: status,
+      } as StateMutation<ConductState>,
+      {
+        field: 'last_step',
+        expected: result.value.last_step,
+        intent: 'record last completed step',
+        next: step,
+      },
+    ],
+  });
 }
 
 /**
@@ -148,21 +173,36 @@ export function stepSatisfied(state: ConductState, step: StepName): boolean {
 export async function setComplexityTier(
   path: string,
   tier: ComplexityTier,
-): Promise<void> {
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state.complexity_tier = tier;
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).apply({
+    field: 'complexity_tier',
+    expected: result.value.complexity_tier,
+    intent: 'store complexity tier',
+    next: tier,
+  });
 }
 
 /**
  * Store the pull request URL returned by the finish step.
  */
-export async function savePrUrl(path: string, url: string): Promise<void> {
+export async function savePrUrl(
+  path: string,
+  url: string,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state.pr_url = url;
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).apply({
+    field: 'pr_url',
+    expected: result.value.pr_url,
+    intent: 'store pull request URL',
+    next: url,
+  });
 }
 
 /**
@@ -185,11 +225,19 @@ export function extractPrUrl(output: string): string | null {
 /**
  * Mark feature as complete.
  */
-export async function markFeatureComplete(path: string): Promise<void> {
+export async function markFeatureComplete(
+  path: string,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state.feature_status = 'complete';
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).apply({
+    field: 'feature_status',
+    expected: result.value.feature_status,
+    intent: 'mark feature complete',
+    next: 'complete',
+  });
 }
 
 /**

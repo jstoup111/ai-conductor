@@ -3,6 +3,13 @@ import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { ConductState } from '../../src/types/index.js';
+import type {
+  ConductStateStore,
+  NamedAtomicStateMutationBatch,
+  PrivilegedStateReplacement,
+  StateMutation,
+  StateMutationResult,
+} from '../../src/engine/conduct-state-store.js';
 import {
   readState,
   writeState,
@@ -11,9 +18,35 @@ import {
   stepDone,
   stepSatisfied,
   setComplexityTier,
+  savePrUrl,
   markFeatureComplete,
   markDownstreamStale,
 } from '../../src/engine/state.js';
+
+class RecordingConductStateStore implements ConductStateStore<ConductState> {
+  readonly calls: Array<
+    | { kind: 'mutation'; mutation: StateMutation<ConductState> }
+    | { kind: 'batch'; batch: NamedAtomicStateMutationBatch<ConductState> }
+    | { kind: 'replacement'; replacement: PrivilegedStateReplacement<ConductState> }
+  > = [];
+
+  constructor(private readonly result: StateMutationResult = { kind: 'applied' }) {}
+
+  async apply(mutation: StateMutation<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'mutation', mutation });
+    return this.result;
+  }
+
+  async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'batch', batch });
+    return this.result;
+  }
+
+  async replace(replacement: PrivilegedStateReplacement<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'replacement', replacement });
+    return this.result;
+  }
+}
 
 describe('engine/state', () => {
   let dir: string;
@@ -145,6 +178,46 @@ describe('engine/state', () => {
   // --- saveStepStatus ---
 
   describe('saveStepStatus', () => {
+    it('submits a named atomic status and last-step batch with the observed prior values', async () => {
+      await writeState(statePath, { worktree: 'done', last_step: 'worktree' });
+      const store = new RecordingConductStateStore();
+
+      await saveStepStatus(statePath, 'memory', 'done', store);
+
+      expect(store.calls).toEqual([
+        {
+          kind: 'batch',
+          batch: {
+            name: 'save step status',
+            mutations: [
+              {
+                field: 'memory',
+                expected: undefined,
+                intent: 'save memory step status',
+                next: 'done',
+              },
+              {
+                field: 'last_step',
+                expected: 'worktree',
+                intent: 'record last completed step',
+                next: 'memory',
+              },
+            ],
+          },
+        },
+      ]);
+    });
+
+    it('returns a typed store failure without reporting a successful status update', async () => {
+      const failure: StateMutationResult = {
+        kind: 'lease',
+        message: 'state lease was not acquired',
+      };
+      const store = new RecordingConductStateStore(failure);
+
+      await expect(saveStepStatus(statePath, 'worktree', 'done', store)).resolves.toEqual(failure);
+    });
+
     it('creates file and saves step status', async () => {
       await saveStepStatus(statePath, 'worktree', 'done');
       const result = await readState(statePath);
@@ -247,6 +320,44 @@ describe('engine/state', () => {
   // --- setComplexityTier ---
 
   describe('setComplexityTier', () => {
+    it('submits individual mutations for complexity, PR URL, and feature completion', async () => {
+      const store = new RecordingConductStateStore();
+
+      await setComplexityTier(statePath, 'M', store);
+      await savePrUrl(statePath, 'https://github.com/org/repo/pull/42', store);
+      await markFeatureComplete(statePath, store);
+
+      expect(store.calls).toEqual([
+        {
+          kind: 'mutation',
+          mutation: {
+            field: 'complexity_tier',
+            expected: undefined,
+            intent: 'store complexity tier',
+            next: 'M',
+          },
+        },
+        {
+          kind: 'mutation',
+          mutation: {
+            field: 'pr_url',
+            expected: undefined,
+            intent: 'store pull request URL',
+            next: 'https://github.com/org/repo/pull/42',
+          },
+        },
+        {
+          kind: 'mutation',
+          mutation: {
+            field: 'feature_status',
+            expected: undefined,
+            intent: 'mark feature complete',
+            next: 'complete',
+          },
+        },
+      ]);
+    });
+
     it('stores tier in state', async () => {
       await writeState(statePath, { worktree: 'done' });
       await setComplexityTier(statePath, 'M');
