@@ -183,7 +183,14 @@ describe('acceptance: mid-loop .pipeline wipe / kickback crash fix (#549)', () =
                 disposition: 'build',
                 category: null,
                 rationale: 'Route back to build for re-run',
-                tasks: [],
+                tasks: [
+                  {
+                    id: 'rem-pipeline-durability-1',
+                    title:
+                      'src/conductor/src/engine/conductor.ts — restore .pipeline run-state after a remediation kickback',
+                    status: 'pending',
+                  },
+                ],
               },
             ],
           };
