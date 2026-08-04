@@ -1378,6 +1378,10 @@ export class DefaultStepRunner implements StepRunner {
       `Conflicted files: ${conflictList}\n\n` +
       'Resolve the conflicts, stage the fixes, and run `git rebase --continue` ' +
       'until the rebase completes or you reach an unsafe hunk.\n' +
+      'Follow the canonical rebase skill workflow: validate the full replay against the ' +
+      'captured source intent and upstream intent before continuing. At the first semantic ' +
+      'ambiguity, HALT this attempt and return a false result with the missing decision; ' +
+      'do not replace that workflow with a condensed procedure.\n' +
       'Your FINAL output line MUST be exactly one of:\n' +
       '{"resolved": true}\n' +
       '{"resolved": false, "reason": "<explanation>"}';
