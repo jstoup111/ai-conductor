@@ -314,6 +314,74 @@ describe('engine/conductor', () => {
     }).runComplexityStep({})).rejects.toThrow('state write failed');
   });
 
+  it('records a BUILD group join as one expected-value batch', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+    const state: ConductState = { build: 'in_progress' };
+
+    await (conductor as unknown as {
+      commitStateChanges(
+        state: ConductState,
+        name: string,
+        changes: Record<string, unknown>,
+      ): Promise<void>;
+    }).commitStateChanges(state, 'join BUILD verification group', {
+      build: 'done',
+      build__wiring_check: 'done',
+      build__test_suite: 'done',
+    });
+
+    expect(stateStore.applyBatch).toHaveBeenCalledWith({
+      name: 'join BUILD verification group',
+      mutations: expect.arrayContaining([
+        expect.objectContaining({ field: 'build', expected: 'in_progress', next: 'done' }),
+        expect.objectContaining({ field: 'build__wiring_check', expected: undefined, next: 'done' }),
+        expect.objectContaining({ field: 'build__test_suite', expected: undefined, next: 'done' }),
+      ]),
+    });
+    expect(state).toMatchObject({ build: 'done' });
+  });
+
+  it('uses explicit expected values for navigation invalidation and rejects a refused batch', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'conflict', message: 'state changed elsewhere' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+    const state: ConductState = { build: 'done', build_review: 'done', manual_test: 'done' };
+
+    await expect((conductor as unknown as {
+      navigateStateBack(state: ConductState, target: StepName, steps: typeof ALL_STEPS): Promise<number>;
+    }).navigateStateBack(state, 'build', ALL_STEPS)).rejects.toThrow('state changed elsewhere');
+
+    expect(stateStore.applyBatch).toHaveBeenCalledWith(expect.objectContaining({
+      name: 'navigate back to build',
+      mutations: expect.arrayContaining([
+        expect.objectContaining({ field: 'build', expected: 'done', next: 'pending' }),
+        expect.objectContaining({ field: 'build_review', expected: 'done', next: 'stale' }),
+        expect.objectContaining({ field: 'manual_test', expected: 'done', next: 'stale' }),
+      ]),
+    }));
+    expect(state).toMatchObject({ build: 'done', build_review: 'done', manual_test: 'done' });
+  });
+
   it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
     const module = await import('../../src/engine/conductor.js') as {
       toSpotAuditVerifierResult?: (result: unknown) => unknown;

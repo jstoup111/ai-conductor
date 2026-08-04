@@ -1587,6 +1587,54 @@ export class Conductor {
     if ('message' in result) throw new Error(result.message);
   }
 
+  /**
+   * Commit a bounded conductor-owned transition without re-serializing the
+   * caller's complete state snapshot. Every change carries the in-memory value
+   * it was derived from as its expected value, so a concurrent same-field
+   * update is a typed failure rather than a lost update.
+   */
+  private async commitStateChanges(
+    state: ConductState,
+    name: string,
+    changes: Record<string, unknown>,
+  ): Promise<void> {
+    const current = state as Record<string, unknown>;
+    const mutations = Object.entries(changes)
+      .filter(([field, next]) => !Object.is(current[field], next))
+      .map(([field, next]) => {
+        if (next === undefined) {
+          throw new Error(`Ordinary conductor transition cannot clear ${field}`);
+        }
+        return {
+          field,
+          expected: current[field],
+          intent: name,
+          next,
+        } as StateMutation<ConductState>;
+      });
+    if (mutations.length === 0) return;
+
+    await this.applyStateBatch({ name, mutations });
+    Object.assign(current, changes);
+  }
+
+  /** Apply the explicit pending/stale navigation batch only after store acceptance. */
+  private async navigateStateBack(
+    state: ConductState,
+    target: StepName,
+    steps: StepDefinition[],
+    preserve: readonly StepName[] = [],
+  ): Promise<number> {
+    const navigation = navigateBack(state, target, steps, preserve);
+    const before = state as Record<string, unknown>;
+    const changes = Object.fromEntries(
+      Object.entries(navigation.state as Record<string, unknown>)
+        .filter(([field, next]) => !Object.is(before[field], next)),
+    );
+    await this.commitStateChanges(state, `navigate back to ${target}`, changes);
+    return navigation.index;
+  }
+
   /** Read expectations immediately before constructing a guarded mutation. */
   private async currentStateForMutation(): Promise<ConductState> {
     const result = await readState(this.stateFilePath);
@@ -3300,13 +3348,11 @@ export class Conductor {
           return { action: 'return' };
         }
         await captureKickbackToBuildContext('manual_test');
-        const nav = navigateBack(state, 'build', steps);
-        state = nav.state;
+        const navigationIndex = await this.navigateStateBack(state, 'build', steps);
         // markDownstreamStale only restages `done` steps; manual_test
         // is `failed` here, so restage it explicitly for the tail.
-        (state as Record<string, unknown>).manual_test = 'stale';
-        await writeState(this.stateFilePath, state);
-        return { action: 'continue', nextIndex: nav.index - 1 }; // for-loop i++ lands on build
+        await this.commitStateChanges(state, 'restage manual_test after BUILD kickback', { manual_test: 'stale' });
+        return { action: 'continue', nextIndex: navigationIndex - 1 }; // for-loop i++ lands on build
       }
       const reason =
         `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
@@ -3727,11 +3773,16 @@ export class Conductor {
             // it does not add another validity predicate.
             const nativeBranchResults = new Map<string, StepRunResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+              const roundChanges: Record<string, unknown> = {};
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
-                (state as Record<string, unknown>)[syntheticKey] = 'stale';
+                roundChanges[syntheticKey] = 'stale';
               }
-              await writeState(this.stateFilePath, state);
+              await this.commitStateChanges(
+                state,
+                `start ${builtinGroup.name} verification group`,
+                roundChanges,
+              );
               return runWithConcurrency(
                 members.map((member) => () => {
                   if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
@@ -4093,21 +4144,21 @@ export class Conductor {
                 for (const failure of deterministicFailures) {
                   await captureKickbackToBuildContext(failure.member.name as StepName);
                 }
-                const nav = navigateBack(state, 'build', steps);
-                state = nav.state;
+                const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                 buildRepairVerificationPending = true;
+                const staleChanges: Record<string, unknown> = {};
                 if (hasNoVerdict) {
                   for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'stale';
+                    staleChanges[member.name] = 'stale';
                   }
-                  if (fullSuiteFailure?.status === 'FAILED') state.test_suite = 'failed';
+                  if (fullSuiteFailure?.status === 'FAILED') staleChanges.test_suite = 'failed';
                 } else {
                   for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'stale';
+                    staleChanges[member.name] = 'stale';
                   }
                 }
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1;
+                await this.commitStateChanges(state, 'restage BUILD verification members', staleChanges);
+                i = navigationIndex - 1;
                 continue;
               }
               const exhausted = deterministicFailures.find(
@@ -4172,9 +4223,10 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
-              state[step.name] = 'failed';
-              await saveStepStatus(this.stateFilePath, step.name, 'failed', this.stateStore);
-              await writeState(this.stateFilePath, state);
+              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                [step.name]: 'failed',
+                last_step: step.name,
+              });
               await emitTracked({ type: 'loop_halt', reason: haltReason });
               await emitTracked({
                 type: 'step_failed',
@@ -4195,14 +4247,18 @@ export class Conductor {
             if (allGreen) {
               // JOIN — single writer: one consistent state snapshot,
               // regardless of the order branches actually completed in.
+              const joinChanges: Record<string, unknown> = {};
               for (const member of membership.dispatchable) {
                 const memberName = member.name as StepName;
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
-                (state as Record<string, unknown>)[syntheticKey] = 'done';
-                state[memberName] = 'done';
-                await saveStepStatus(this.stateFilePath, memberName, 'done', this.stateStore);
+                joinChanges[syntheticKey] = 'done';
+                joinChanges[memberName] = 'done';
               }
-              await writeState(this.stateFilePath, state);
+              await this.commitStateChanges(
+                state,
+                `join ${builtinGroup.name} verification group`,
+                joinChanges,
+              );
               await emitTracked({
                 type: 'parallel_completed',
                 step: step.name,
@@ -4345,17 +4401,16 @@ export class Conductor {
                   }
 
                   await captureKickbackToBuildContext('manual_test');
-                  const nav = navigateBack(state, mergedTarget, steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(state, mergedTarget, steps);
                   // manual_test is `failed` (deterministic FAIL rows), not
                   // `done` — restage it explicitly for the tail, same as
                   // handleManualTestFailKickback does.
-                  (state as Record<string, unknown>).manual_test = 'stale';
+                  const staleChanges: Record<string, unknown> = { manual_test: 'stale' };
                   for (const name of gapMemberNamesForMerge) {
-                    (state as Record<string, unknown>)[name] = 'stale';
+                    staleChanges[name] = 'stale';
                   }
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on the merged target
+                  await this.commitStateChanges(state, 'restage validation group after kickback', staleChanges);
+                  i = navigationIndex - 1; // for-loop i++ lands on the merged target
                   continue;
                 }
 
@@ -4490,13 +4545,15 @@ export class Conductor {
                       await captureKickbackToBuildContext(gapName);
                     }
                   }
-                  const nav = navigateBack(state, remediationOutcome.target, steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(
+                    state, remediationOutcome.target, steps,
+                  );
+                  const staleChanges: Record<string, unknown> = {};
                   for (const name of gapMemberNames) {
-                    (state as Record<string, unknown>)[name] = 'stale';
+                    staleChanges[name] = 'stale';
                   }
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on the target step
+                  await this.commitStateChanges(state, 'restage validation gaps after kickback', staleChanges);
+                  i = navigationIndex - 1; // for-loop i++ lands on the target step
                   continue;
                 }
 
@@ -6255,13 +6312,11 @@ export class Conductor {
                     'Fix and commit the failure before the suite is re-run.',
                 );
                 if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
-                const nav = navigateBack(state, 'build', steps);
-                state = nav.state;
+                const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                 // The failed native gate is not covered by the done-only stale
                 // cascade; restage it explicitly for the next BUILD lap.
-                (state as Record<string, unknown>).test_suite = 'stale';
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1; // for-loop i++ lands on build
+                await this.commitStateChanges(state, 'restage test_suite after BUILD kickback', { test_suite: 'stale' });
+                i = navigationIndex - 1; // for-loop i++ lands on build
                 continue;
               }
               const reason =
@@ -6453,15 +6508,14 @@ export class Conductor {
                     return;
                   }
                   await captureKickbackToBuildContext('build_review');
-                  const nav = navigateBack(state, reworkTarget, steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(state, reworkTarget, steps);
                   // markDownstreamStale only restages `done` steps; build_review
                   // is `failed` here, so restage it (and manual_test) explicitly
                   // for the tail.
-                  (state as Record<string, unknown>).build_review = 'stale';
-                  (state as Record<string, unknown>).manual_test = 'stale';
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on the rework target
+                  await this.commitStateChanges(state, 'restage BUILD review after kickback', {
+                    build_review: 'stale', manual_test: 'stale',
+                  });
+                  i = navigationIndex - 1; // for-loop i++ lands on the rework target
                   continue;
                 }
                 const reason =
@@ -6567,15 +6621,14 @@ export class Conductor {
                     return;
                   }
                   await captureKickbackToBuildContext('wiring_check');
-                  const nav = navigateBack(state, 'build', steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                   // markDownstreamStale only restages `done` steps; wiring_check
                   // is `failed` here, so restage it (and manual_test) explicitly
                   // for the tail.
-                  (state as Record<string, unknown>).wiring_check = 'stale';
-                  (state as Record<string, unknown>).manual_test = 'stale';
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on build
+                  await this.commitStateChanges(state, 'restage wiring_check after BUILD kickback', {
+                    wiring_check: 'stale', manual_test: 'stale',
+                  });
+                  i = navigationIndex - 1; // for-loop i++ lands on build
                   continue;
                 }
                 const reason =
@@ -7010,11 +7063,9 @@ export class Conductor {
               const navigable = getNavigableSteps(state, steps);
               const target = await this.onNavigate(navigable);
               if (target) {
-                const nav = navigateBack(state, target, steps);
+                const navigationIndex = await this.navigateStateBack(state, target, steps);
                 await emitTracked({ type: 'navigation_back', from: step.name, to: target });
-                state = nav.state;
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1;
+                i = navigationIndex - 1;
                 continue;
               }
             }
@@ -7281,11 +7332,9 @@ export class Conductor {
               const navigable = getNavigableSteps(state, steps);
               const target = await this.onNavigate(navigable);
               if (target) {
-                const nav = navigateBack(state, target, steps);
+                const navigationIndex = await this.navigateStateBack(state, target, steps);
                 await emitTracked({ type: 'navigation_back', from: step.name, to: target });
-                state = nav.state;
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1; // for loop will i++
+                i = navigationIndex - 1; // for loop will i++
                 continue;
               }
             }
@@ -7534,9 +7583,7 @@ export class Conductor {
           return 'halt';
         }
         if (navigate) {
-          const nav = navigateBack(state, target, steps);
-          Object.assign(state, nav.state);
-          await writeState(this.stateFilePath, state);
+          await this.navigateStateBack(state, target, steps);
         }
         result = 'kicked';
       }
@@ -7913,7 +7960,9 @@ export class Conductor {
     let groupFailed = false;
 
     // JOIN: single-writer — the core, on the loop's thread of control,
-    // writes the synthetic keys once every branch has resolved.
+    // commits the synthetic keys and group status as one invariant once every
+    // branch has resolved.
+    const changes: Record<string, unknown> = {};
     for (let i = 0; i < branches.length; i += 1) {
       const branch = branches[i]!;
       const outcome = outcomes[i];
@@ -7921,11 +7970,11 @@ export class Conductor {
       const success = outcome?.kind === 'verdict' && outcome.verdict === 'pass';
 
       if (success) {
-        (state as Record<string, unknown>)[syntheticKey] = 'done';
+        changes[syntheticKey] = 'done';
         continue;
       }
 
-      (state as Record<string, unknown>)[syntheticKey] = 'failed';
+      changes[syntheticKey] = 'failed';
       const error =
         outcome?.kind === 'no-verdict' ? outcome.reason : `branch ${branch.name} failed`;
       await this.events.emit({
@@ -7939,14 +7988,10 @@ export class Conductor {
       }
     }
 
-    await writeState(this.stateFilePath, state);
+    changes[groupName] = groupFailed ? 'failed' : 'done';
+    await this.commitStateChanges(state, `join ${groupName} parallel group`, changes);
 
-    if (groupFailed) {
-      await saveStepStatus(this.stateFilePath, groupName, 'failed', this.stateStore);
-      state[groupName] = 'failed';
-    } else {
-      await saveStepStatus(this.stateFilePath, groupName, 'done', this.stateStore);
-      state[groupName] = 'done';
+    if (!groupFailed) {
       await this.events.emit({
         type: 'parallel_completed',
         step: groupName,
