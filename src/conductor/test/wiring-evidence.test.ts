@@ -492,6 +492,7 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
       tasks: [{ id: '1', contract: 'src/x.ts#foo', gaps: [] }],
     };
     await writeEvidence(freshEvidence);
+    const bytesBefore = await readFile(join(dir, WIRING_EVIDENCE));
 
     let calls = 0;
     const wiringProbe = async (): Promise<WiringEvidence> => {
@@ -507,6 +508,9 @@ describe('CUSTOM_COMPLETION_PREDICATES.wiring_check — wiring_check step comple
 
     expect(result.done).toBe(true);
     expect(calls).toBe(0);
+    // A reuse decision is owned by the recorded-head predicate.  It must not
+    // normalize, restamp, or otherwise rewrite the evidence it accepted.
+    expect(await readFile(join(dir, WIRING_EVIDENCE))).toEqual(bytesBefore);
   });
 
   it('stale evidence with no wiringProbe injected fails closed with the plain staleness reason', async () => {

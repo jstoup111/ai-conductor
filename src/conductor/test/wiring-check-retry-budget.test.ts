@@ -52,6 +52,15 @@ describe('isEngineComputedStep — which steps get a budget of one (#982)', () =
     expect(isEngineComputedStep('test_suite')).toBe(true);
   });
 
+  it('keeps both BUILD verification members on their one-attempt budget when their own evidence reuses', () => {
+    // A matching wiring HEAD and a matching suite fingerprint are distinct
+    // member-owned reuse rules.  The retry budget must not introduce a third
+    // validity decision (or charge either member a second attempt).
+    const buildVerificationMembers: StepName[] = ['wiring_check', 'test_suite'];
+
+    expect(buildVerificationMembers.every(isEngineComputedStep)).toBe(true);
+  });
+
   it('does NOT classify engine-native steps that dispatch a one-shot LLM', () => {
     expect(isEngineComputedStep('build_review')).toBe(false);
     expect(isEngineComputedStep('attribution_verify')).toBe(false);
