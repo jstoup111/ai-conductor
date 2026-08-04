@@ -821,6 +821,33 @@ describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', (
   });
 });
 
+describe('Task 7: landing rejects plans that target another feature\'s sealed artifact', () => {
+  it('refuses the plan, names the offending task and path, and retains the uncommitted worktree', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    const protectedPath = '.docs/stories/other-feature.md';
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      `${PLAN_WITH_DEPS}\n### Task 14: Amend another feature's accepted story\n\n**Files:**\n- ${protectedPath}\n`,
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('Task 14');
+    expect(caught!.message).toContain(protectedPath);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(dir)).toBe(true);
+  });
+});
+
 describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
   it('rejects a plan whose Stories link does not resolve to the selected stories artifact', async () => {
     const dir = await seedValidWorktree();
