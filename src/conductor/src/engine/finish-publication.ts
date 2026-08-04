@@ -552,6 +552,15 @@ export type PrProseJudgmentResult =
   | { kind: 'provider_unavailable' }
   | { kind: 'refused' };
 
+/**
+ * The coordinator passes only an already-authorized outcome to the existing
+ * fail-closed recorder. Path validation and marker-last persistence remain
+ * inside that boundary; this domain layer never writes completion files.
+ */
+export type FinishOutcomeRecordRequest =
+  | { choice: 'pr'; prUrl: string }
+  | { choice: 'keep' };
+
 type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
   prose: 'stale' | 'placeholder' | 'halt' | 'indeterminate';
 };
@@ -599,16 +608,31 @@ export interface AdvanceFinishPublicationInput {
      * prose has been observed and verifies its result by re-observation.
      */
     repairPresentation?: () => Promise<void>;
+    /**
+     * Adapter for the existing finish-record primitive. It owns durable writes
+     * and refuses unsafe paths; the coordinator owns observe-before-record and
+     * re-observation after any interrupted response.
+     */
+    recordOutcome?: (request: FinishOutcomeRecordRequest) => Promise<void>;
   };
 }
 
 export type AdvanceFinishPublicationResult =
+  | { kind: 'complete' }
   | { kind: 'advanced'; transition: PublicationTransition }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | {
       kind: 'publication_retry';
       transition: PublicationTransition;
       reason: string;
+    }
+  | {
+      kind: 'publication_retry';
+      transition: 'record_outcome';
+      reason:
+        | 'outcome_record_effect_unavailable'
+        | 'outcome_record_write_failed'
+        | 'outcome_record_not_verified_after_write';
     }
   | {
       kind: 'human_required';
@@ -794,6 +818,66 @@ export async function advanceFinishPublication(
       kind: 'publication_retry',
       transition: 'ready_pr',
       reason: 'presentation_not_verified_after_repair',
+    };
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'record_outcome') {
+    // A previously observed terminal marker is already the durable commit
+    // point. Repeating the recorder would be unnecessary and could obscure a
+    // completed prior attempt.
+    if (snapshot.outcomeRecord === 'valid') {
+      return { kind: 'complete' };
+    }
+    if (!input.effects.recordOutcome) {
+      return {
+        kind: 'publication_retry',
+        transition: 'record_outcome',
+        reason: 'outcome_record_effect_unavailable',
+      };
+    }
+
+    let recordRequest: FinishOutcomeRecordRequest;
+    if (snapshot.intent.outcome === 'pr') {
+      // `record_outcome` is reachable only after a single PR identity was
+      // observed, but retain the check at the adapter boundary so a future
+      // transition-order refactor cannot manufacture a PR URL.
+      if (snapshot.pr.identity !== 'one') {
+        return {
+          kind: 'publication_retry',
+          transition: 'record_outcome',
+          reason: 'outcome_record_not_verified_after_write',
+        };
+      }
+      recordRequest = { choice: 'pr', prUrl: snapshot.pr.url };
+    } else {
+      recordRequest = { choice: 'keep' };
+    }
+
+    let writeFailure = false;
+    try {
+      await input.effects.recordOutcome(recordRequest);
+    } catch {
+      // The recorder can complete its marker write before its caller loses the
+      // response. The observation below is authoritative in either case.
+      writeFailure = true;
+    }
+
+    const observedAfterRecord = await input.observe();
+    const observedPreflight = preflightFinishPublication(observedAfterRecord);
+    if (
+      observedPreflight.kind === 'ready_for_judgment' &&
+      nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
+      observedAfterRecord.outcomeRecord === 'valid'
+    ) {
+      return { kind: 'complete' };
+    }
+
+    return {
+      kind: 'publication_retry',
+      transition: 'record_outcome',
+      reason: writeFailure
+        ? 'outcome_record_write_failed'
+        : 'outcome_record_not_verified_after_write',
     };
   }
 

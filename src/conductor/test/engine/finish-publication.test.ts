@@ -25,6 +25,12 @@ interface AdvanceFinishPublicationInput {
   observe(): Promise<PublicationSnapshot>;
   effects: {
     dispatchJudgment(...args: unknown[]): Promise<unknown>;
+    /**
+     * The final recorder owns its existing absolute-path guard and marker-last
+     * write order. The coordinator supplies only the authorized outcome after
+     * it has observed a coherent final publication row.
+     */
+    recordOutcome?: (request: FinishOutcomeRecordRequest) => Promise<void>;
     createShippedRecord?: () => Promise<void>;
     repairPresentation?: () => Promise<void>;
     establishPr?: {
@@ -38,7 +44,12 @@ interface AdvanceFinishPublicationInput {
   };
 }
 
+type FinishOutcomeRecordRequest =
+  | { choice: 'pr'; prUrl: string }
+  | { choice: 'keep' };
+
 type AdvanceFinishPublicationResult =
+  | { kind: 'complete' }
   | {
       kind: 'advanced';
       transition: 'judge_pr_prose' | 'establish_pr' | 'write_shipped_record' | 'ready_pr' | 'record_outcome';
@@ -756,16 +767,17 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       advanceFinishPublication({
         observe: async () =>
           readyPublicationSnapshot({
-            pr: {
-              identity: 'one',
-              url: 'https://github.com/acme/widget/pull/1172',
-              prose: 'accepted',
-              ready: true,
-            },
-          }),
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: true,
+          },
+          outcomeRecord: 'valid',
+        }),
         effects: { dispatchJudgment },
       }),
-    ).resolves.toEqual({ kind: 'advanced', transition: 'record_outcome' });
+    ).resolves.toEqual({ kind: 'complete' });
 
     expect(dispatchJudgment).not.toHaveBeenCalled();
   });
@@ -943,6 +955,121 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
   });
 });
 
+describe('advanceFinishPublication final outcome commit point', () => {
+  it.each([
+    [
+      'PR',
+      readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+      }),
+      { choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/1172' },
+    ],
+    [
+      'authorized foreground-auto keep',
+      readyPublicationSnapshot({
+        mode: 'foreground-auto',
+        intent: { outcome: 'keep', authority: { kind: 'unattended_policy', mode: 'foreground-auto' } },
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+      }),
+      { choice: 'keep' },
+    ],
+  ] as const)('records the %s outcome only after a final coherent observation', async (_outcome, initial, request) => {
+    const calls: string[] = [];
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockImplementationOnce(async () => {
+        calls.push('observe-final-coherent-row');
+        return initial;
+      })
+      .mockImplementationOnce(async () => {
+        calls.push('observe-recorded-marker');
+        return { ...initial, outcomeRecord: 'valid' } as PublicationSnapshot;
+      });
+    const recordOutcome = vi.fn(async (received: FinishOutcomeRecordRequest) => {
+      calls.push('record-outcome');
+      expect(received).toEqual(request);
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), recordOutcome },
+      }),
+    ).resolves.toEqual({ kind: 'complete' });
+
+    expect(calls).toEqual([
+      'observe-final-coherent-row',
+      'record-outcome',
+      'observe-recorded-marker',
+    ]);
+  });
+
+  it('does not invoke the recorder until the final row is coherent and presentation-complete', async () => {
+    const recordOutcome = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({
+            shipEvidence: 'invalid',
+            pr: {
+              identity: 'one',
+              url: 'https://github.com/acme/widget/pull/1172',
+              prose: 'accepted',
+              ready: true,
+            },
+          }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), recordOutcome },
+      }),
+    ).resolves.toMatchObject({ kind: 'publication_retry' });
+
+    expect(recordOutcome).not.toHaveBeenCalled();
+  });
+
+  it('keeps FINISH retryable when the injected recorder is interrupted after its state write and before its marker', async () => {
+    const writes: string[] = [];
+    const recordOutcome = vi.fn(async () => {
+      writes.push('state-write');
+      throw new Error('marker-write interrupted');
+    });
+    const observe = vi.fn(async () =>
+      readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+      }),
+    );
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), recordOutcome },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'record_outcome',
+      reason: 'outcome_record_write_failed',
+    });
+
+    expect(writes).toEqual(['state-write']);
+    expect(recordOutcome).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('advanceFinishPublication accepted PR presentation', () => {
   function hasMergeAuthorityArg(calls: readonly string[][]): boolean {
     return calls.some((args) =>
@@ -993,10 +1120,11 @@ describe('advanceFinishPublication accepted PR presentation', () => {
       advanceFinishPublication({
         observe: async () => readyPublicationSnapshot({
           pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+          outcomeRecord: 'valid',
         }),
         effects: { dispatchJudgment, repairPresentation },
       }),
-    ).resolves.toEqual({ kind: 'advanced', transition: 'record_outcome' });
+    ).resolves.toEqual({ kind: 'complete' });
 
     expect(repairPresentation).not.toHaveBeenCalled();
     expect(dispatchJudgment).not.toHaveBeenCalled();
