@@ -149,6 +149,7 @@ import {
   type CompletionContext,
   ACCEPTANCE_SPECS_RED_EVIDENCE,
   removeBuildReviewVerdict,
+  uncommittedPathsOrNull,
 } from './artifacts.js';
 import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
@@ -6331,7 +6332,11 @@ export class Conductor {
               // code path) so the run proceeds to `build_review`, and record
               // which plan task ids were left unresolved so an operator can
               // still see the gap in `conduct-state.json`.
-              if (step.name === 'build' && anyAttemptMovedHead) {
+              if (
+                step.name === 'build' &&
+                anyAttemptMovedHead &&
+                (await uncommittedPathsOrNull(await this.completionCtx(state))) === null
+              ) {
                 let routedReason: string | undefined;
                 try {
                   const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
@@ -8938,7 +8943,7 @@ export function buildRemediationHint(
 export function buildRetryHint(
   step: StepName,
   reason: string | undefined,
-  missing?: 'recording' | 'presentation' | 'other',
+  missing?: 'recording' | 'presentation' | 'uncommitted' | 'other',
   pipelineDirArg?: string,
 ): string {
   const r = reason ?? 'unknown';

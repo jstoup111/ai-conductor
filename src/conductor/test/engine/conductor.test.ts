@@ -27,6 +27,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 import { execa } from 'execa';
+import * as projectPrelude from '../../src/engine/project-prelude.js';
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -11814,6 +11815,87 @@ describe('build-step stall circuit breaker', () => {
       expect(stallEvents).toHaveLength(0);
       expect(runner.runInteractive).not.toHaveBeenCalled();
     } finally {
+      vi.mocked(execa).mockImplementation(() =>
+        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      );
+    }
+  });
+
+  it('does not route the exhausted commit-movement escape when the final worktree probe is dirty', async () => {
+    // This is deliberately the narrow owning seam for the escape: an earlier
+    // retry moves HEAD (setting anyAttemptMovedHead), while the final retry
+    // leaves a tracked file dirty and exhausts the fixed retry budget.
+    const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+    vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
+    const git: GitRunner = async (args, { cwd }) => {
+      const result = await execa('git', args, { cwd });
+      return { stdout: result.stdout };
+    };
+    let headSha = 'base-head';
+    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
+      async () => headSha,
+    );
+    try {
+      await seedAllArtifactsExceptTaskStatus();
+      await writeTaskStatus(0, 1);
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'test: seed build retry fixture'], { cwd: dir });
+      headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+      let buildAttempts = 0;
+      const stepsRun: StepName[] = [];
+      const completedBuilds: unknown[] = [];
+      events.on('step_completed', (event) => {
+        if (event.type === 'step_completed' && event.step === 'build' && event.status === 'done') {
+          completedBuilds.push(event);
+        }
+      });
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          stepsRun.push(step);
+          if (step === 'build') {
+            buildAttempts++;
+            if (buildAttempts === 1) {
+              await mkdir(join(dir, 'src'), { recursive: true });
+              await writeFile(join(dir, 'src/landed.ts'), 'export const landed = true;\n');
+              await execa('git', ['add', 'src/landed.ts'], { cwd: dir });
+              await execa('git', ['commit', '-m', 'feat: land unattributed work'], { cwd: dir });
+              headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+            } else {
+              await writeFile(join(dir, 'src/final-attempt.ts'), 'export const finalAttempt = true;\n');
+              await execa('git', ['add', 'src/final-attempt.ts'], { cwd: dir });
+              await execa('git', ['commit', '-m', 'feat: land final unattributed work'], { cwd: dir });
+              headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+              await writeFile(join(dir, 'src/landed.ts'), 'export const landed = false;\n');
+            }
+          }
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        onRecovery,
+        escalateBuildFailure: async () => ({}),
+        git,
+      });
+
+      await conductor.run();
+
+      expect(buildAttempts).toBe(2);
+      expect(completedBuilds).toHaveLength(0);
+      expect(stepsRun).not.toContain('build_review');
+      expect(onRecovery).toHaveBeenCalledWith('build', false, expect.any(Object));
+    } finally {
+      currentCommitSha.mockRestore();
       vi.mocked(execa).mockImplementation(() =>
         Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
       );
