@@ -18,6 +18,7 @@ const PERSISTENCE_CALLS = new Set([
   'writeFile',
   'writeFileSync',
 ]);
+const FILE_HANDLE_PERSISTENCE_CALLS = new Set(['appendFile', 'write', 'writeFile']);
 const FILESYSTEM_MODULES = new Set(['fs', 'fs/promises', 'node:fs', 'node:fs/promises']);
 
 async function sourceFiles(directory: string): Promise<string[]> {
@@ -55,33 +56,58 @@ function rootIdentifier(expression: ts.Expression): string | undefined {
   return undefined;
 }
 
+function unwrappedExpression(expression: ts.Expression): ts.Expression {
+  return ts.isAwaitExpression(expression) ? unwrappedExpression(expression.expression) : expression;
+}
+
 function collectWriterImports(source: ts.SourceFile): {
   persistenceAliases: ReadonlySet<string>;
   filesystemNamespaces: ReadonlySet<string>;
+  filesystemDefaultImports: ReadonlySet<string>;
+  openAliases: ReadonlySet<string>;
   writeStateAliases: ReadonlySet<string>;
+  stateNamespaces: ReadonlySet<string>;
 } {
   const persistenceAliases = new Set<string>();
   const filesystemNamespaces = new Set<string>();
+  const filesystemDefaultImports = new Set<string>();
+  const openAliases = new Set<string>();
   const writeStateAliases = new Set<string>();
+  const stateNamespaces = new Set<string>();
 
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    const moduleName = statement.moduleSpecifier.text;
+    const isFilesystemModule = FILESYSTEM_MODULES.has(moduleName);
+    const isStateHelperModule = moduleName === './state.js';
+    if (isFilesystemModule && statement.importClause?.name) {
+      filesystemDefaultImports.add(statement.importClause.name.text);
+    }
     const bindings = statement.importClause?.namedBindings;
     if (!bindings) continue;
-    if (ts.isNamespaceImport(bindings) && FILESYSTEM_MODULES.has(statement.moduleSpecifier.text)) {
-      filesystemNamespaces.add(bindings.name.text);
+    if (ts.isNamespaceImport(bindings)) {
+      if (isFilesystemModule) filesystemNamespaces.add(bindings.name.text);
+      if (isStateHelperModule) stateNamespaces.add(bindings.name.text);
     }
     if (!ts.isNamedImports(bindings)) continue;
     for (const specifier of bindings.elements) {
       const imported = (specifier.propertyName ?? specifier.name).text;
-      if (FILESYSTEM_MODULES.has(statement.moduleSpecifier.text) && PERSISTENCE_CALLS.has(imported)) {
+      if (isFilesystemModule && PERSISTENCE_CALLS.has(imported)) {
         persistenceAliases.add(specifier.name.text);
       }
-      if (imported === 'writeState') writeStateAliases.add(specifier.name.text);
+      if (isFilesystemModule && imported === 'open') openAliases.add(specifier.name.text);
+      if (isStateHelperModule && imported === 'writeState') writeStateAliases.add(specifier.name.text);
     }
   }
 
-  return { persistenceAliases, filesystemNamespaces, writeStateAliases };
+  return {
+    persistenceAliases,
+    filesystemNamespaces,
+    filesystemDefaultImports,
+    openAliases,
+    writeStateAliases,
+    stateNamespaces,
+  };
 }
 
 function isPersistenceCall(
@@ -91,18 +117,58 @@ function isPersistenceCall(
   if (ts.isIdentifier(node.expression)) return imports.persistenceAliases.has(node.expression.text);
   if (!ts.isPropertyAccessExpression(node.expression)) return false;
   return PERSISTENCE_CALLS.has(node.expression.name.text) &&
-    imports.filesystemNamespaces.has(rootIdentifier(node.expression.expression) ?? '');
+    (imports.filesystemNamespaces.has(rootIdentifier(node.expression.expression) ?? '') ||
+      imports.filesystemDefaultImports.has(rootIdentifier(node.expression.expression) ?? ''));
+}
+
+function isWritableStateOpen(
+  node: ts.CallExpression,
+  imports: ReturnType<typeof collectWriterImports>,
+  bindings: ReadonlyMap<string, ts.Expression>,
+): boolean {
+  const opensStateFile = node.arguments[0] && ts.isExpression(node.arguments[0]) &&
+    staticPath(node.arguments[0], bindings)?.includes(STATE_FILE);
+  const mode = node.arguments[1] && ts.isExpression(node.arguments[1])
+    ? staticPath(node.arguments[1], bindings)
+    : undefined;
+  if (!opensStateFile || !mode || !/[wa+]/.test(mode)) return false;
+
+  if (ts.isIdentifier(node.expression)) return imports.openAliases.has(node.expression.text);
+  if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'open') return false;
+  const root = rootIdentifier(node.expression.expression) ?? '';
+  return imports.filesystemNamespaces.has(root) || imports.filesystemDefaultImports.has(root);
+}
+
+function isFileHandlePersistenceCall(
+  node: ts.CallExpression,
+  writableStateHandles: ReadonlySet<string>,
+): boolean {
+  if (!ts.isPropertyAccessExpression(node.expression) ||
+      !FILE_HANDLE_PERSISTENCE_CALLS.has(node.expression.name.text)) return false;
+  return writableStateHandles.has(rootIdentifier(node.expression.expression) ?? '');
 }
 
 function auditSource(path: string, text: string): string[] {
   const source = ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
   const bindings = new Map<string, ts.Expression>();
   const imports = collectWriterImports(source);
+  const writableStateHandles = new Set<string>();
   const violations: string[] = [];
 
   const visit = (node: ts.Node): void => {
     if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       bindings.set(node.name.text, node.initializer);
+      const initializer = unwrappedExpression(node.initializer);
+      if (ts.isCallExpression(initializer) && isWritableStateOpen(initializer, imports, bindings)) {
+        writableStateHandles.add(node.name.text);
+      }
+    }
+    if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken &&
+        ts.isIdentifier(node.left)) {
+      const right = unwrappedExpression(node.right);
+      if (ts.isCallExpression(right) && isWritableStateOpen(right, imports, bindings)) {
+        writableStateHandles.add(node.left.text);
+      }
     }
     if (ts.isImportSpecifier(node) && imports.writeStateAliases.has(node.name.text)) {
       violations.push(`${path}: imports test-only whole-state fixture helper`);
@@ -110,11 +176,19 @@ function auditSource(path: string, text: string): string[] {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && imports.writeStateAliases.has(node.expression.text)) {
       violations.push(`${path}: calls test-only whole-state fixture helper`);
     }
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.name.text === 'writeState' &&
+        imports.stateNamespaces.has(rootIdentifier(node.expression.expression) ?? '')) {
+      violations.push(`${path}: calls test-only whole-state fixture helper`);
+    }
     if (ts.isCallExpression(node) && isPersistenceCall(node, imports)) {
       const target = node.arguments[0] && ts.isExpression(node.arguments[0])
         ? staticPath(node.arguments[0], bindings)
         : undefined;
       if (target?.includes(STATE_FILE)) violations.push(`${path}: raw persistence to ${STATE_FILE}`);
+    }
+    if (ts.isCallExpression(node) && isFileHandlePersistenceCall(node, writableStateHandles)) {
+      violations.push(`${path}: raw persistence to ${STATE_FILE}`);
     }
     ts.forEachChild(node, visit);
   };
@@ -194,5 +268,67 @@ describe('conduct-state writer boundary', () => {
       'engine/aliased-whole-state-bypass.ts: imports test-only whole-state fixture helper',
       'engine/aliased-whole-state-bypass.ts: calls test-only whole-state fixture helper',
     ]);
+  });
+
+  it('rejects default filesystem writers while allowing default filesystem readers', () => {
+    const writers = [
+      ['engine/default-fs-writer.ts', "import fs from 'fs'; fs.writeFileSync('/tmp/conduct-state.json', '{}');"],
+      ['engine/default-fs-promises-writer.ts', "import fs from 'fs/promises'; await fs.writeFile('/tmp/conduct-state.json', '{}');"],
+      ['engine/default-node-fs-writer.ts', "import fs from 'node:fs'; fs.writeFileSync('/tmp/conduct-state.json', '{}');"],
+      ['engine/default-node-fs-promises-writer.ts', "import fs from 'node:fs/promises'; await fs.writeFile('/tmp/conduct-state.json', '{}');"],
+    ] as const;
+    const reader = auditSource(
+      'engine/default-reader.ts',
+      "import fs from 'node:fs/promises'; await fs.readFile('/tmp/conduct-state.json', 'utf8');",
+    );
+
+    expect({
+      writers: writers.map(([path, fixture]) => auditSource(path, fixture)),
+      reader,
+    }).toEqual({
+      writers: writers.map(([path]) => [`${path}: raw persistence to conduct-state.json`]),
+      reader: [],
+    });
+  });
+
+  it('rejects namespace whole-state helper writers while allowing namespace readers', () => {
+    const writer = auditSource(
+      'engine/namespace-state-writer.ts',
+      "import * as state from './state.js'; await state.writeState('/tmp/conduct-state.json', {});",
+    );
+    const reader = auditSource(
+      'engine/namespace-state-reader.ts',
+      "import * as state from './state.js'; await state.readState('/tmp/conduct-state.json');",
+    );
+    const unrelatedHelper = auditSource(
+      'engine/unrelated-helper.ts',
+      "import { writeState } from './fixture-state.js'; await writeState('/tmp/conduct-state.json', {});",
+    );
+
+    expect({ writer, reader, unrelatedHelper }).toEqual({
+      writer: ['engine/namespace-state-writer.ts: calls test-only whole-state fixture helper'],
+      reader: [],
+      unrelatedHelper: [],
+    });
+  });
+
+  it('rejects writable file handles for a state target while allowing read-only handles', () => {
+    const writers = [
+      ['engine/file-handle-write-file.ts', "import { open } from 'node:fs/promises'; const handle = await open('/tmp/conduct-state.json', 'w'); await handle.writeFile('{}');"],
+      ['engine/file-handle-append-file.ts', "import * as fs from 'node:fs/promises'; const handle = await fs.open('/tmp/conduct-state.json', 'a'); await handle.appendFile('{}');"],
+      ['engine/file-handle-write.ts', "import fs from 'fs/promises'; const handle = await fs.open('/tmp/conduct-state.json', 'r+'); await handle.write('{}');"],
+    ] as const;
+    const reader = auditSource(
+      'engine/file-handle-reader.ts',
+      "import { open } from 'node:fs/promises'; const statePath = '/tmp/conduct-state.json'; const handle = await open(statePath, 'r'); await handle.readFile('utf8');",
+    );
+
+    expect({
+      writers: writers.map(([path, fixture]) => auditSource(path, fixture)),
+      reader,
+    }).toEqual({
+      writers: writers.map(([path]) => [`${path}: raw persistence to conduct-state.json`]),
+      reader: [],
+    });
   });
 });
