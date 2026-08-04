@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { mkdir, open, rename, rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
+import { createConductStateLease, type ConductStateLease } from './conduct-state-lease.js';
 import { readState } from './state.js';
 import {
   evaluateConductStateMutation,
@@ -124,8 +125,20 @@ export function createFilesystemConductStateStore(
   persistence?: ConductStatePersistence,
   diagnostics?: StateMutationDiagnostics,
   filesystem: AtomicStateFilesystem = defaultAtomicFilesystem,
+  lease: ConductStateLease = createConductStateLease(path),
 ): FilesystemConductStateStore {
   const resolvedPersistence = persistence ?? createAtomicPersistence(filesystem);
+
+  async function whileHoldingLease(
+    mutation: () => Promise<StateMutationResult>,
+  ): Promise<StateMutationResult> {
+    const acquired = await lease.acquire();
+    if (!acquired.ok) return { kind: 'lease', message: acquired.message };
+
+    const result = await mutation();
+    const released = await acquired.handle.release();
+    return released.ok ? result : { kind: 'lease', message: released.message };
+  }
 
   return {
     read(): Promise<StateResult<ConductState>> {
@@ -133,57 +146,61 @@ export function createFilesystemConductStateStore(
     },
 
     async apply(mutation: StateMutation<ConductState>): Promise<StateMutationResult> {
-      const current = await readState(path);
-      if (!current.ok) {
-        return { kind: 'persistence', message: current.error.message };
-      }
+      return whileHoldingLease(async () => {
+        const current = await readState(path);
+        if (!current.ok) {
+          return { kind: 'persistence', message: current.error.message };
+        }
 
-      const state = current.value;
-      const currentValue = (state as Record<string, unknown>)[mutation.field];
-      const result = evaluateConductStateMutation(currentValue, mutation, diagnostics);
-      if (result.kind !== 'applied') {
-        return result;
-      }
+        const state = current.value;
+        const currentValue = (state as Record<string, unknown>)[mutation.field];
+        const result = evaluateConductStateMutation(currentValue, mutation, diagnostics);
+        if (result.kind !== 'applied') {
+          return result;
+        }
 
-      const nextState: ConductState = {
-        ...state,
-        [mutation.field]: mutation.next,
-      };
-      try {
-        await resolvedPersistence.write(path, nextState);
-      } catch (error) {
-        return { kind: 'persistence', message: `Failed to persist state: ${error}` };
-      }
-      return { kind: 'applied' };
+        const nextState: ConductState = {
+          ...state,
+          [mutation.field]: mutation.next,
+        };
+        try {
+          await resolvedPersistence.write(path, nextState);
+        } catch (error) {
+          return { kind: 'persistence', message: `Failed to persist state: ${error}` };
+        }
+        return { kind: 'applied' };
+      });
     },
 
     async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
-      const current = await readState(path);
-      if (!current.ok) {
-        return { kind: 'persistence', message: current.error.message };
-      }
-
-      const state = current.value;
-      for (const mutation of batch.mutations) {
-        const currentValue = (state as Record<string, unknown>)[mutation.field];
-        if (!Object.is(currentValue, mutation.expected)) {
-          return {
-            kind: 'conflict',
-            message: `Expected ${mutation.field} to match before ${mutation.intent}`,
-          };
+      return whileHoldingLease(async () => {
+        const current = await readState(path);
+        if (!current.ok) {
+          return { kind: 'persistence', message: current.error.message };
         }
-      }
 
-      const nextState = batch.mutations.reduce<ConductState>((updated, mutation) => ({
-        ...updated,
-        [mutation.field]: mutation.next,
-      }), state);
-      try {
-        await resolvedPersistence.write(path, nextState);
-      } catch (error) {
-        return { kind: 'persistence', message: `Failed to persist state: ${error}` };
-      }
-      return { kind: 'applied' };
+        const state = current.value;
+        for (const mutation of batch.mutations) {
+          const currentValue = (state as Record<string, unknown>)[mutation.field];
+          if (!Object.is(currentValue, mutation.expected)) {
+            return {
+              kind: 'conflict',
+              message: `Expected ${mutation.field} to match before ${mutation.intent}`,
+            };
+          }
+        }
+
+        const nextState = batch.mutations.reduce<ConductState>((updated, mutation) => ({
+          ...updated,
+          [mutation.field]: mutation.next,
+        }), state);
+        try {
+          await resolvedPersistence.write(path, nextState);
+        } catch (error) {
+          return { kind: 'persistence', message: `Failed to persist state: ${error}` };
+        }
+        return { kind: 'applied' };
+      });
     },
   };
 }
