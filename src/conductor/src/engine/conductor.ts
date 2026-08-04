@@ -3332,12 +3332,7 @@ export class Conductor {
           const groupTrack = await this.resolveTrack(state);
           const reverifyDoneBuildMembers =
             builtinGroup.name === BUILD_VERIFICATION_GROUP.name &&
-            (
-              buildRepairVerificationPending ||
-              (await Promise.all(
-                builtinGroup.members.map((member) => readVerdict(this.projectRoot, member)),
-              )).some((verdict) => verdict?.satisfied === true)
-            );
+            buildRepairVerificationPending;
           const membership = resolveGroupMembership(
             builtinGroup,
             state,

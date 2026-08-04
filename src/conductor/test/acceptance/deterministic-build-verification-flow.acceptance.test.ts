@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { Conductor } from '../../src/engine/conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import type { FullSuitePassEvidence } from '../../src/engine/full-suite-evidence.js';
+import { writeVerdict } from '../../src/engine/gate-verdicts.js';
 import { writeState } from '../../src/engine/state.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -227,12 +228,16 @@ describe('Deterministic BUILD verification flow', () => {
   });
 
   it('allows a one-member BUILD round while review waits for the dispatched member', async () => {
-    // No persisted satisfied BUILD verdict or repair is present, so the
-    // already-done sibling retains its normal resume shortcut. The pending
-    // wiring member is the only branch that needs dispatch.
+    // A satisfied persisted sibling verdict is normal resume state, not a
+    // BUILD repair. The already-done sibling retains its shortcut while the
+    // pending wiring member is the only branch that needs dispatch.
     await writeState(stateFilePath, {
       ...BUILD_COMPLETE,
       test_suite: 'done',
+    });
+    await writeVerdict(projectRoot, 'test_suite', {
+      satisfied: true,
+      checkedAt: 1,
     });
     const timeline: string[] = [];
     const parallelStarted: Array<{ step: StepName; branches: StepName[] }> = [];
