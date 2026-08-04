@@ -119,6 +119,18 @@ After user selects:
 2. Note what changed and why in the story file
 3. Save the conflict report to `.docs/conflicts/YYYY-MM-DD-<description>.md`
 
+**Accepted-artifact amendment:** When the resolution falsifies an assertion in an accepted
+DECIDE artifact, perform the amendment in that artifact during this DECIDE pass — never defer it
+as a later BUILD task. Add this note beside the original assertion:
+
+```markdown
+> **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
+```
+
+The amendment is additive: retain the original assertion, do not rewrite or delete it, and create
+no separate amendment record. This makes the correction part of the spec-branch baseline before
+BUILD starts.
+
 **Conflict reports are overwritten on re-run.** If a re-check after resolution finds new or
 changed conflicts, overwrite the existing conflict report file. The report reflects the CURRENT
 state — git has the history.

@@ -88,6 +88,11 @@ gap must be turned into concrete work:
 | `halt` + `category: unanswerable` | **stall-question only:** the question is ambiguous or cannot be answered from committed artifacts alone; need more evidence | **HALT** — flag the question as unanswerable and preserve it verbatim |
 
 Judgment rules:
+- **Sealed-artifact amendments return to DECIDE.** When a gap requires amending another feature's
+  artifact under `.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/`, do
+  not assign `build` or `acceptance_specs`. Route it to the owning DECIDE step through the existing
+  DECIDE kickback path; do not create a request artifact, ledger, or new disposition to bypass that
+  ownership.
 - **Prefer autonomous.** If the daemon can produce concrete tasks that close the gap, it must — even
   for `DIVERGED`/ADR-drift gaps, as long as the *correct* fix is determinable from the evidence.
   The audit origin or finding id alone does not determine the route: an as-built architecture-review
@@ -196,5 +201,7 @@ Headers re-parse via the Task 18 grammar and must include:
 - [ ] Every `build` disposition (gap) has ≥1 concrete, file-scoped task drawn from the evidence; stall-question answers have `tasks: []` and the answer in `rationale`
 - [ ] `category` set iff `disposition == "halt"`; `tasks` empty iff `disposition == "halt"` OR (stall-question answer with `disposition == "build"`)
 - [ ] For a stall-question answer (`build_stall` disposition `build`), the `rationale` clearly answers the original question and cites the artifacts that support it
+- [ ] A gap requiring another feature's sealed-artifact amendment routes to its owning DECIDE step,
+      never to `build` or `acceptance_specs`
 - [ ] `id` format correct: `FR-N`, `test:<stem>`, `adr-<stem>`, or `stall:<slug>`
 - [ ] Valid JSON written to `.pipeline/remediation.json` matching the contract exactly

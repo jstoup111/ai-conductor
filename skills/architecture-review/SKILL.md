@@ -45,6 +45,18 @@ provider policy, without translating Claude model names.
 Only a genuine structural gap (a missing component/seam/boundary) may re-open architecture — never a
 story-phrasing nit or a coverage gap. The conductor caps re-openings and HALTs for a human on excess.
 
+**Accepted-artifact amendment:** When this review concludes that an accepted DECIDE assertion is
+falsified, amend that artifact during this DECIDE pass; do not instruct a later phase to make the
+change. Add this note beside the original assertion:
+
+```markdown
+> **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
+```
+
+The note is additive: preserve the original assertion, never rewrite or delete it, and create no
+separate amendment record. The amended artifact is then part of the spec-branch baseline before
+BUILD begins.
+
 ### Lightweight Mode (Medium Complexity Tier)
 
 When the feature is classified as **Medium** by `/conduct`'s complexity assessment, run only:
