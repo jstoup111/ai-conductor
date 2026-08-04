@@ -30,6 +30,7 @@ import {
   resolveUnattendedPublicationIntent,
   type PublicationDisposition,
   type PrProseJudgmentRequest,
+  type PrProseJudgmentResult,
 } from './finish-publication.js';
 
 export interface ProductionFinishPublicationCoordinator {
@@ -60,6 +61,31 @@ export interface ProductionFinishPublicationDeps {
   ) => Promise<'present' | 'missing' | 'stale' | 'malformed' | 'unavailable'>;
   /** Interactive intent comes from the host conversation, never finish-record output. */
   acquireInteractiveIntent?: () => Promise<unknown>;
+  /**
+   * Production composition owns the ordered presentation repair.  Callers
+   * inject the existing halt-rehabilitation/floor/ready composition so this
+   * coordinator never silently reduces it to a `gh pr ready` flip.
+   */
+  repairPresentation?: (input: { prUrl: string; state: ConductState }) => Promise<void>;
+}
+
+function isPrProseJudgmentResult(value: unknown): value is PrProseJudgmentResult {
+  if (typeof value !== 'object' || value === null || !('kind' in value)) return false;
+  const result = value as { kind?: unknown; reason?: unknown };
+  return result.kind === 'accepted' ||
+    result.kind === 'timed_out' ||
+    result.kind === 'provider_unavailable' ||
+    result.kind === 'refused' ||
+    (result.kind === 'revision_required' &&
+      (result.reason === 'placeholder' || result.reason === 'halt' || result.reason === 'structurally_incomplete'));
+}
+
+/** Decode the bounded provider contract; any successful unstructured reply is fail-closed prose. */
+export function decodePrProseJudgment(result: StepRunResult): PrProseJudgmentResult {
+  const structured = result.publicationDisposition;
+  if (isPrProseJudgmentResult(structured)) return structured;
+  if (!result.success) return { kind: 'provider_unavailable' };
+  return { kind: 'revision_required', reason: 'structurally_incomplete' };
 }
 
 export interface ProductionReleaseReadinessObserverInput {
@@ -130,13 +156,14 @@ export function createProductionFinishPublicationCoordinator(
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, emit }) {
-      const requestedOutcome = mode === 'interactive'
+      const attended = !daemon && (mode === 'default' || mode === 'interactive');
+      const requestedOutcome = attended
         ? await deps.acquireInteractiveIntent?.()
         : await readFile(join(pipelineDir, 'finish-choice'), 'utf8')
           .then((value) => value.trim())
           .catch(() => undefined);
       const intent =
-        mode === 'interactive'
+        attended
           ? resolveInteractivePublicationIntent(requestedOutcome)
           : await (async () => {
               let remote: 'configured' | 'missing' = 'missing';
@@ -230,8 +257,7 @@ export function createProductionFinishPublicationCoordinator(
         emit,
         effects: {
           dispatchJudgment: async (request) => {
-            const result = await dispatchJudgment(request);
-            return result.success ? { kind: 'accepted' } : { kind: 'provider_unavailable' };
+            return decodePrProseJudgment(await dispatchJudgment(request));
           },
           establishPr: {
             git: deps.git,
@@ -257,6 +283,10 @@ export function createProductionFinishPublicationCoordinator(
           },
           repairPresentation: async () => {
             if (!state.pr_url) throw new Error('missing PR identity');
+            if (deps.repairPresentation) {
+              await deps.repairPresentation({ prUrl: state.pr_url, state });
+              return;
+            }
             await deps.gh(['pr', 'ready', state.pr_url], { cwd: deps.projectRoot });
           },
           recordOutcome: async (request) => {
@@ -284,7 +314,7 @@ export function createProductionFinishPublicationCoordinator(
               : result.transition === 'write_shipped_record'
                 ? 'shipped_record_not_verified_after_write'
                 : result.transition === 'judge_pr_prose'
-                  ? 'judgment_provider_unavailable'
+                  ? 'judgment_completed_reobserve'
                   : result.transition === 'ready_pr'
                     ? 'presentation_not_verified_after_repair'
                     : 'outcome_record_not_verified_after_write',

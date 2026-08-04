@@ -288,6 +288,55 @@ export interface OperatorParkedTermination {
 }
 
 /**
+ * Production-facing form of the existing FINISH presentation sequence.  The
+ * coordinator calls this only after accepted prose is re-observed; the order
+ * deliberately rehabilitates halt state and applies title/body floors before
+ * making a draft mergeable.
+ */
+export function createFinishPresentationRepair(input: {
+  projectRoot: string;
+  gh: GhRunner;
+  log?: (message: string) => void;
+  restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
+}): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
+  return async ({ prUrl, state, mode = 'full' }) => {
+    const { projectRoot: cwd, gh } = input;
+    const repairLog = input.log ?? console.warn;
+    let sourceRef: string | undefined;
+    try {
+      const planPath = await resolveFeaturePlanPath(cwd, state.feature_desc);
+      if (planPath && state.feature_desc) {
+        sourceRef = parseIntakeSourceRef(await readFile(join(cwd, `.docs/intake/${planStem(planPath)}.md`), 'utf8').catch(() => null));
+      }
+    } catch { /* floors remain valid without an intake source reference */ }
+    let testEvidenceLine: string | undefined;
+    try {
+      const tasks = normalizeTasks(JSON.parse(await readFile(join(cwd, '.pipeline/task-status.json'), 'utf8')));
+      const completed = tasks.filter((task) => task.status === 'completed' || task.status === 'skipped').length;
+      if (completed > 0) testEvidenceLine = `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`;
+    } catch { /* optional body evidence */ }
+    try {
+      const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
+      await postHaltHistoryComment({ gh, cwd, prUrl, haltReason, log: repairLog });
+    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
+    if (mode === 'capture-only') return;
+    try {
+      await rehabilitateHaltPr({ gh, cwd, prUrl, sourceRef, log: repairLog });
+    } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
+    try {
+      await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch }, repairLog);
+    } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
+    try {
+      await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine }, repairLog);
+    } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
+    await input.restoreReleaseMetadata?.(prUrl);
+    try {
+      await ensureShipReady(gh, cwd, prUrl, repairLog);
+    } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
+  };
+}
+
+/**
  * How many times a user may pick `retry` from the recovery menu for a single
  * step in one conductor session before the UI drops the option. After this,
  * the step has clearly entered a loop the auto-retry couldn't escape — the

@@ -24,7 +24,7 @@ import { realpathSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
-import { Conductor } from './engine/conductor.js';
+import { Conductor, createFinishPresentationRepair } from './engine/conductor.js';
 import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
@@ -1196,6 +1196,10 @@ async function main(): Promise<void> {
       baseBranch: finishPublicationBaseBranch,
       git: makeProductionGit(),
       gh: makeProductionGh(),
+      repairPresentation: createFinishPresentationRepair({
+        projectRoot,
+        gh: makeProductionGh(),
+      }),
       observeReleaseReadiness: createProductionReleaseReadinessObserver({
         projectRoot,
         config,

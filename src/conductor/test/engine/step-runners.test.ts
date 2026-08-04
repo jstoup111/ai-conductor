@@ -9,6 +9,7 @@ import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepRunnerOptions } from '../../src/engine/step-runners.js';
 import {
   DefaultStepRunner,
+  parseFinishPrProseJudgment,
   parseTierFromOutput,
   parseSignalCountsFromOutput,
   scoreComplexityFromCounts,
@@ -34,6 +35,14 @@ function createMockProvider(): LLMProvider {
     invokeInteractive: vi.fn().mockResolvedValue(undefined),
   };
 }
+
+describe('parseFinishPrProseJudgment', () => {
+  it('extracts only the bounded typed JSON verdict and leaves prose unstructured', () => {
+    expect(parseFinishPrProseJudgment('Repaired.\n{"kind":"revision_required","reason":"placeholder"}'))
+      .toEqual({ kind: 'revision_required', reason: 'placeholder' });
+    expect(parseFinishPrProseJudgment('The prose looks good.')).toBeUndefined();
+  });
+});
 
 function interactiveRuntime(
   key: 'claude' | 'codex',
@@ -2032,6 +2041,8 @@ describe('DefaultStepRunner', () => {
     expect(finishOpts.systemPrompt).toContain('operator publication intent');
     expect(finishOpts.systemPrompt).not.toContain('finish-record');
     expect(finishOpts.systemPrompt).not.toContain('gh pr create');
+    expect(finishOpts.systemPrompt).toContain('repair only that retained PR title/body once');
+    expect(finishOpts.systemPrompt).toContain('exactly one JSON object');
 
     vi.clearAllMocks();
 
@@ -2042,6 +2053,19 @@ describe('DefaultStepRunner', () => {
     await autoRunner.run('build', emptyState);
     const buildOpts = (provider.invoke as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
     expect(buildOpts.systemPrompt).not.toContain('operator publication intent');
+  });
+
+  it('limits auto FINISH judgment authority to retained title/body repair with a typed result', async () => {
+    const provider = createMockProvider();
+    const runner = new DefaultStepRunner(provider, 'session-1', '/wt/feature-x', { mode: 'auto' });
+
+    await runner.run('finish', emptyState);
+
+    const opts = (provider.invokeInteractive as ReturnType<typeof vi.fn>).mock.calls[0][0] as InvokeOptions;
+    expect(opts.systemPrompt).toContain('may repair only that title/body');
+    expect(opts.systemPrompt).toContain('"revision_required"');
+    expect(opts.systemPrompt).toContain('Do not create, push, merge, or ready a PR');
+    expect(opts.systemPrompt).toContain('do not alter labels, shipment evidence, or completion files');
   });
 
   // --- Feature 2: Session creation marker ---

@@ -43,6 +43,7 @@ import {
 import { ensureInstallFresh, relinkSkillsForSelfBuild } from './engine/install-freshness.js';
 import {
   Conductor,
+  createFinishPresentationRepair,
   type OperatorParkedTermination,
 } from './engine/conductor.js';
 import {
@@ -1037,6 +1038,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
         baseBranch,
         git: makeFinishPublicationGit(),
         gh: makeProductionGh(),
+        repairPresentation: createFinishPresentationRepair({
+          projectRoot: wt.path,
+          gh: makeProductionGh(),
+          log: featureLog,
+        }),
         observeReleaseReadiness: createProductionReleaseReadinessObserver({
           projectRoot: wt.path,
           config,

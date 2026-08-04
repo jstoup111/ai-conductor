@@ -368,10 +368,52 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('uses the injected presentation repair rather than reducing repair to a ready flip', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-repair-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      await mkdir(join(root, '.docs', 'shipped'), { recursive: true });
+      await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+      await writeFile(join(root, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+      const prUrl = 'https://github.com/acme/widget/pull/1172';
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return commandResult;
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify({ url: prUrl, title: 'feat: publish', body: 'Reader-facing summary.', isDraft: true }) };
+        throw new Error(`unexpected direct mutation: ${args.join(' ')}`);
+      });
+      const repairPresentation = vi.fn(async () => undefined);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: async (args) => args[0] === 'remote' ? { stdout: 'origin\n' } : { stdout: 'refs/remotes/origin/feat/feature\n' },
+        gh,
+        observeReleaseReadiness: async () => 'present',
+        repairPresentation,
+      });
+      const state = {
+        feature_desc: 'feature', worktree_branch: 'feat/feature', pr_url: prUrl,
+        build_review: 'done', test_suite: 'done', manual_test: 'done', architecture_review_as_built: 'done',
+      } as ConductState;
+      await expect(coordinator.advance({ state, mode: 'auto', daemon: true, dispatchJudgment: async () => ({ success: true }), emit: async () => {} }))
+        .resolves.toEqual({ kind: 'publication_retry', transition: 'ready_pr', reason: 'presentation_not_verified_after_repair' });
+      expect(repairPresentation).toHaveBeenCalledWith({ prUrl, state });
+      expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it.each([
-    ['placeholder floor', `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\nDraft publication`, 'feat: draft publication'],
-    ['halt banner', `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, 'Needs remediation: publication'],
-  ])('keeps judgment required for %s prose without recording completion', async (_label, body, title) => {
+    ['placeholder floor', `${PR_BODY_FLOOR_MARKER}\n\n## Summary\n\nDraft publication`, 'feat: draft publication', { kind: 'revision_required', reason: 'placeholder' }, { kind: 'human_required', reason: 'judgment_placeholder_prose' }],
+    ['halt banner', `${HALT_PR_BANNER_SENTINEL}\n\nHuman remediation required.`, 'Needs remediation: publication', { kind: 'revision_required', reason: 'halt' }, { kind: 'human_required', reason: 'judgment_halt_prose' }],
+    ['structurally incomplete prose', `${PR_BODY_FLOOR_MARKER}\n\nIncomplete`, 'feat: publication', { kind: 'revision_required', reason: 'structurally_incomplete' }, { kind: 'human_required', reason: 'judgment_malformed_prose' }],
+    ['refused prose judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'refused' }, { kind: 'human_required', reason: 'judgment_refused' }],
+    ['timed out prose judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'timed_out' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_timed_out' }],
+    ['unavailable judgment provider', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'provider_unavailable' }, { kind: 'publication_retry', transition: 'judge_pr_prose', reason: 'judgment_provider_unavailable' }],
+    ['malformed structured judgment', `${PR_BODY_FLOOR_MARKER}\n\nDraft publication`, 'feat: draft publication', { kind: 'not_a_judgment' }, { kind: 'human_required', reason: 'judgment_malformed_prose' }],
+  ] as const)('carries the exact bounded judgment outcome for %s without recording completion', async (_label, body, title, publicationDisposition, expected) => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-prose-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -389,7 +431,7 @@ describe('production FINISH publication composition', () => {
         }
         throw new Error(`unexpected GitHub mutation: ${args.join(' ')}`);
       });
-      const dispatchJudgment = vi.fn(async () => ({ success: true }));
+      const dispatchJudgment = vi.fn(async () => ({ success: true, publicationDisposition }));
       const recordFinish = vi.fn(async () => 0);
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
@@ -419,7 +461,7 @@ describe('production FINISH publication composition', () => {
         emit: async () => {},
       });
 
-      expect(result).toMatchObject({ kind: 'publication_retry', transition: 'judge_pr_prose' });
+      expect(result).toEqual(expected);
       expect(dispatchJudgment).toHaveBeenCalledOnce();
       expect(gh.mock.calls.some(([args]) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
       expect(recordFinish).not.toHaveBeenCalled();
@@ -576,6 +618,42 @@ describe('production FINISH publication composition', () => {
         expect(readiness).not.toHaveBeenCalled();
         expect(writeShippedRecord).not.toHaveBeenCalled();
         expect(recordFinish).not.toHaveBeenCalled();
+      } finally {
+        await rm(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.each(['default', 'interactive'] as const)(
+    'keeps attended %s defer inert before any publication observation',
+    async (mode) => {
+      const root = await mkdtemp(join(tmpdir(), 'finish-production-attended-inert-'));
+      try {
+        const pipeline = join(root, '.pipeline');
+        await mkdir(pipeline);
+        const git = vi.fn(async () => commandResult);
+        const gh = vi.fn(async () => commandResult);
+        const acquireInteractiveIntent = vi.fn(async () => 'defer');
+        const coordinator = createProductionFinishPublicationCoordinator({
+          projectRoot: root,
+          stateFilePath: join(pipeline, 'conduct-state.json'),
+          baseBranch: 'main',
+          git,
+          gh,
+          acquireInteractiveIntent,
+          observeReleaseReadiness: async () => 'present',
+        });
+
+        await expect(coordinator.advance({
+          state: { feature_desc: 'feature' } as ConductState,
+          mode,
+          daemon: false,
+          dispatchJudgment: vi.fn(async () => ({ success: true })),
+          emit: async () => {},
+        })).resolves.toEqual({ kind: 'human_required', reason: 'interactive_intent_deferred' });
+        expect(acquireInteractiveIntent).toHaveBeenCalledOnce();
+        expect(git).not.toHaveBeenCalled();
+        expect(gh).not.toHaveBeenCalled();
       } finally {
         await rm(root, { recursive: true, force: true });
       }

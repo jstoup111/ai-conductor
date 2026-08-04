@@ -149,6 +149,22 @@ export function parseTierFromOutput(output: string): ComplexityTier | null {
 }
 
 /**
+ * FINISH's sole provider response is a bounded PR-prose verdict.  Keep the
+ * parser deliberately narrow: non-JSON prose is left undefined so the
+ * production coordinator fails closed rather than inventing acceptance.
+ */
+export function parseFinishPrProseJudgment(output: string | undefined): unknown {
+  if (!output) return undefined;
+  const json = output.match(/\{\s*"kind"[\s\S]*?\}/)?.[0];
+  if (!json) return undefined;
+  try {
+    return JSON.parse(json) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Extract per-signal counts from Claude's complexity-assessment output.
  * Expected lines (case-insensitive, in any order):
  *   MODELS: <n>
@@ -609,7 +625,7 @@ export class DefaultStepRunner implements StepRunner {
             );
             if (result) {
               this.callCount++;
-              return this.toStepRunResult(result);
+              return this.toStepRunResult(step, result);
             }
           } catch (error) {
             this.callCount++;
@@ -785,7 +801,7 @@ export class DefaultStepRunner implements StepRunner {
       if (!opts?.providerSessions) {
         await this.persistProviderAwareSuccess(verifiedResult);
       }
-      return this.toStepRunResult(verifiedResult);
+      return this.toStepRunResult(step, verifiedResult);
     } catch (error) {
       this.callCount++;
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1027,11 +1043,16 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private toStepRunResult(
+    step: StepName,
     result: ProviderExecutionResult,
   ): StepRunResult {
+    const publicationDisposition = step === 'finish' && result.success
+      ? parseFinishPrProseJudgment(result.output)
+      : undefined;
     return {
       success: result.success,
       ...(result.output ? { output: result.output } : {}),
+      ...(publicationDisposition !== undefined ? { publicationDisposition } : {}),
       ...(result.authFailure ? { authFailure: true } : {}),
       ...(result.permissionDenied ? { permissionDenied: true } : {}),
       ...(result.rateLimited
@@ -1981,14 +2002,17 @@ export class DefaultStepRunner implements StepRunner {
     }
 
     // FINISH publication mechanics are engine-owned. The provider crosses this
-    // boundary only for one reader-facing PR prose judgment; it must never
-    // create/push/merge a PR or write completion state itself.
+    // boundary only for one reader-facing PR-prose judgment and may repair
+    // only that retained PR's title/body; it must never create/push/merge/ready
+    // a PR or write completion state itself.
     if (step === 'finish' && this.mode === 'auto') {
       prompt +=
-        '\n\nUNATTENDED FINISH JUDGMENT — evaluate only the existing PR title and body for reader-facing quality. ' +
-        'Report accepted prose or the concrete title/body deficiency. Do not create, edit, push, merge, ' +
-        'or ready a PR; do not write shipment or completion files. The publication coordinator owns every ' +
-        'mechanical transition and records the final outcome.';
+        '\n\nUNATTENDED FINISH JUDGMENT — inspect only the retained PR title and body for reader-facing quality. ' +
+        'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
+        '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
+        '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, or completion files. ' +
+        'The publication coordinator owns every other mechanical transition and records the final outcome.';
     }
 
     // Interactive/default Finish preserves operator authority. The coordinator
@@ -1996,8 +2020,10 @@ export class DefaultStepRunner implements StepRunner {
     if (step === 'finish' && this.mode !== 'auto') {
       prompt +=
         '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
-        'discuss only its title and body quality. Do not perform publication mechanics, merge/discard work, ' +
-        'or write shipment/completion files; the publication coordinator performs only authorized transitions.';
+        'inspect only its title/body quality. For the bounded prose judgment you may repair only that retained PR title/body once, ' +
+        'then return exactly one JSON object using accepted, revision_required (placeholder|halt|structurally_incomplete), timed_out, ' +
+        'provider_unavailable, or refused. Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, ' +
+        'or completion files; the publication coordinator performs every other authorized transition.';
     }
 
     if (retryReason) {
