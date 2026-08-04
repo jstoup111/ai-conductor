@@ -33,31 +33,158 @@ function alreadyExists(): NodeJS.ErrnoException {
 }
 
 function sharedLeaseFilesystem(): ConductStateLeaseFilesystem & { owner: string | undefined } {
-  let acquired = false;
-  let owner: string | undefined;
+  const directories = new Set<string>();
+  const files = new Map<string, string>();
+
+  function missing(path: string): NodeJS.ErrnoException {
+    return Object.assign(new Error(`missing ${path}`), { code: 'ENOENT' });
+  }
+
   return {
     get owner(): string | undefined {
+      return [...files.entries()].find(([path]) => path.endsWith('/owner.json'))?.[1];
+    },
+    async acquireDirectory(path): Promise<void> {
+      if (directories.has(path)) throw alreadyExists();
+      directories.add(path);
+    },
+    async writeOwner(path, contents): Promise<void> {
+      if (files.has(path)) throw alreadyExists();
+      files.set(path, contents);
+    },
+    async readOwner(path): Promise<string> {
+      const owner = files.get(path);
+      if (owner === undefined) throw missing(path);
       return owner;
     },
-    async acquireDirectory(): Promise<void> {
-      if (acquired) throw alreadyExists();
-      acquired = true;
+    async writeRecoveryClaim(path, contents): Promise<void> {
+      if (files.has(path)) throw alreadyExists();
+      files.set(path, contents);
     },
-    async writeOwner(_path, contents): Promise<void> {
-      owner = contents;
+    async readRecoveryClaim(path): Promise<string | null> {
+      return files.get(path) ?? null;
     },
-    async readOwner(): Promise<string> {
-      if (owner === undefined) throw new Error('owner is absent');
-      return owner;
+    async moveDirectory(path, destination): Promise<void> {
+      if (!directories.delete(path)) throw missing(path);
+      directories.add(destination);
+      for (const [filePath, contents] of [...files]) {
+        if (filePath.startsWith(`${path}/`)) {
+          files.delete(filePath);
+          files.set(`${destination}${filePath.slice(path.length)}`, contents);
+        }
+      }
     },
-    async releaseDirectory(): Promise<void> {
-      acquired = false;
-      owner = undefined;
+    async releaseDirectory(path): Promise<void> {
+      directories.delete(path);
+      for (const filePath of [...files.keys()]) {
+        if (filePath.startsWith(`${path}/`)) files.delete(filePath);
+      }
     },
   };
 }
 
 describe('conduct-state lease', () => {
+  it('returns a typed timeout without stealing from a live owner', async () => {
+    const statePath = '/worktree/live/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'live-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+
+    let now = 0;
+    const attempted = createConductStateLease(statePath, {
+      filesystem,
+      now: () => now,
+      wait: async () => { now += 10; },
+      processIsLive: (pid) => pid === 101,
+      pid: 202,
+      newToken: () => 'waiting-writer',
+      waitTimeoutMs: 10,
+      retryDelayMs: 10,
+    });
+
+    await expect(attempted.acquire()).resolves.toMatchObject({
+      ok: false,
+      kind: 'timeout',
+      message: 'Unable to acquire conduct-state lease within 10ms; owner pid 101 is live',
+    });
+    expect(filesystem.owner).toContain('live-owner');
+    await held.handle.release();
+  });
+
+  it('recovers a lease only after injected liveness proves its owner dead', async () => {
+    const statePath = '/worktree/dead/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    const held = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 101,
+      newToken: () => 'dead-owner',
+    }).acquire();
+    if (!held.ok) throw new Error(held.message);
+    const diagnostics: unknown[] = [];
+
+    const recovered = await createConductStateLease(statePath, {
+      filesystem,
+      pid: 202,
+      newToken: () => 'recovered-owner',
+      processIsLive: () => false,
+      onRecoveryDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }).acquire();
+
+    expect(recovered).toMatchObject({ ok: true });
+    expect(filesystem.owner).toContain('recovered-owner');
+    expect(diagnostics).toEqual([{
+      kind: 'recovered',
+      statePath,
+      ownerPid: 101,
+    }]);
+    if (recovered.ok) await expect(recovered.handle.release()).resolves.toEqual({ ok: true });
+  });
+
+  it.each([
+    ['corrupt', '{not json', 'invalid_owner_metadata'],
+    ['ambiguous', JSON.stringify({ version: 1, pid: 101, token: 'owner', acquiredAt: 'not-a-date' }), 'invalid_owner_metadata'],
+  ])('refuses %s owner metadata instead of stealing the lease', async (_case, owner, reason) => {
+    const statePath = '/worktree/ambiguous/.pipeline/conduct-state.json';
+    const filesystem = sharedLeaseFilesystem();
+    await filesystem.acquireDirectory(`${statePath}.lease`);
+    await filesystem.writeOwner(`${statePath}.lease/owner.json`, owner);
+    const diagnostics: unknown[] = [];
+
+    await expect(createConductStateLease(statePath, {
+      filesystem,
+      processIsLive: () => false,
+      onRecoveryDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    }).acquire()).resolves.toMatchObject({
+      ok: false,
+      kind: 'recovery_refused',
+      message: 'Unable to recover conduct-state lease: owner metadata is invalid or ambiguous',
+    });
+    expect(diagnostics).toEqual([{ kind: 'refused', statePath, reason }]);
+    expect(filesystem.owner).toBe(owner);
+  });
+
+  it('keeps leases for independent worktree state paths isolated', async () => {
+    const filesystem = sharedLeaseFilesystem();
+    const first = createConductStateLease('/worktree/one/.pipeline/conduct-state.json', {
+      filesystem,
+      newToken: () => 'one',
+    });
+    const second = createConductStateLease('/worktree/two/.pipeline/conduct-state.json', {
+      filesystem,
+      newToken: () => 'two',
+    });
+
+    const [firstAcquired, secondAcquired] = await Promise.all([first.acquire(), second.acquire()]);
+    expect(firstAcquired).toMatchObject({ ok: true });
+    expect(secondAcquired).toMatchObject({ ok: true });
+    if (firstAcquired.ok) await firstAcquired.handle.release();
+    if (secondAcquired.ok) await secondAcquired.handle.release();
+  });
+
   it('holds the first writer, waits the second, then re-evaluates from the first committed state', async () => {
     const statePath = await createStatePath();
     await writeState(statePath, { complexity_tier: 'S', pr_url: 'https://example.test/pr/1' });
@@ -83,6 +210,7 @@ describe('conduct-state lease', () => {
       wait,
       pid,
       newToken: () => `writer-${pid}`,
+      processIsLive: (ownerPid) => ownerPid === 101,
       waitTimeoutMs: 10,
       retryDelayMs: 1,
     });
