@@ -19,6 +19,25 @@ describe('engine/plan-protected-targets', () => {
     ]);
   });
 
+  it('reports the inheriting task for another feature’s sealed path', () => {
+    const plan = `# Implementation Plan
+
+### Task 14: Amend another feature’s accepted story
+
+**Files:**
+- .docs/stories/another-feature.md
+
+### Task 15: Add related coverage
+
+**Files:** same as Task 14
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([
+      { taskId: '14', path: '.docs/stories/another-feature.md' },
+      { taskId: '15', path: '.docs/stories/another-feature.md' },
+    ]);
+  });
+
   it('allows a sealed artifact that names the plan feature', () => {
     const plan = `# Implementation Plan
 
