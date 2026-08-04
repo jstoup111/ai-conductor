@@ -11,7 +11,11 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.99.21] - 2026-08-04
+## [0.100.0] - 2026-08-04
+
+### Changed
+
+- The rebase skill now verifies replay intent against source and upstream commits, halts on the first semantic ambiguity, and reconciles every rebased commit against that captured intent before reporting success. ([implementation PR #1292](https://github.com/jstoup111/ai-conductor/pull/1292)).
 
 ### Fixed
 
