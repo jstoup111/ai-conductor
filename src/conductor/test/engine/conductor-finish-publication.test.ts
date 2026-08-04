@@ -85,6 +85,95 @@ describe('Conductor FINISH publication routing', () => {
   });
 
   it.each([
+    [
+      'a cited implementation defect',
+      'build-review FAIL: src/engine/finish-publication.ts:497 returns an invalid implementation proof',
+    ],
+    [
+      'a stale BUILD proof',
+      'stale BUILD proof: .pipeline/gates/build.json predates the current HEAD',
+    ],
+  ])('routes %s back to BUILD with its evidence', async (_caseName, evidence) => {
+    const calls: Array<{ step: StepName; retryReason?: string }> = [];
+    const kickbacks: Array<{ from: StepName; to: StepName; evidence?: string }> = [];
+    const events = new ConductorEventEmitter();
+    events.on('kickback', (event) => {
+      if (event.type === 'kickback') kickbacks.push(event);
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step, _state, options) => {
+        calls.push({ step, retryReason: options?.retryReason });
+        if (step === 'build') throw ROUTED_SENTINEL;
+        return {
+          success: false,
+          publicationDisposition: { kind: 'implementation_invalid', evidence },
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 2,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await conductor.run();
+
+    expect(calls.map(({ step }) => step)).toEqual(['finish', 'build']);
+    expect(calls[1]?.retryReason).toContain(evidence);
+    expect(kickbacks).toContainEqual(expect.objectContaining({
+      from: 'finish', to: 'build', evidence,
+    }));
+    expect(calls.map(({ step }) => step)).not.toContain('remediate');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      ROUTED_SENTINEL.message,
+    );
+  });
+
+  it('does not route a publication error without implementation evidence to BUILD', async () => {
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        calls.push(step);
+        return {
+          success: false,
+          publicationDisposition: {
+            kind: 'publication_retry',
+            transition: 'ready_pr',
+            reason: 'presentation_repair_failed',
+          },
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 1,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await conductor.run();
+
+    expect(calls).toEqual(['finish']);
+    expect(calls).not.toContain('build');
+    expect(calls).not.toContain('remediate');
+  });
+
+  it.each([
     { kind: 'complete', reason: 'contradictory' },
     { kind: 'unknown' },
   ])('halts unknown publication disposition without broad remediation', async (publicationDisposition) => {

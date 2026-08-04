@@ -3254,7 +3254,7 @@ export class Conductor {
         return { kind: 'operator-parked', boundary };
       };
     try {
-      for (let i = startIndex; i < steps.length; i++) {
+      stepLoop: for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
         // Clear any stale phase-active marker (e.g. left behind by a crash
         // mid-BUILD) unconditionally on every loop iteration, before any
@@ -5184,6 +5184,43 @@ export class Conductor {
                 continue;
               }
               const reason = `FINISH publication retry exhausted: ${route.reason}`;
+              state.finish = 'failed';
+              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              await emitTracked({ type: 'loop_halt', reason });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            if (route.kind === 'retry_build') {
+              const kickback = await consumeKickbackBudget('finish', route.evidence);
+              if (!kickback.exhausted) {
+                await emitTracked({
+                  type: 'kickback',
+                  from: 'finish',
+                  to: 'build',
+                  evidence: route.evidence,
+                  count: kickback.entry.count,
+                });
+                pendingRetryHints.set(
+                  'build',
+                  `FINISH found invalid implementation evidence:\n${route.evidence}\n` +
+                    'Fix and commit the cited implementation defect, then re-run BUILD verification.',
+                );
+                await captureKickbackToBuildContext('finish');
+                const nav = navigateBack(state, 'build', steps);
+                state = nav.state;
+                // The failing FINISH step is not part of the done-only stale
+                // cascade, so explicitly restage it for the post-BUILD tail.
+                (state as Record<string, unknown>).finish = 'stale';
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1; // for-loop i++ lands on build
+                continue stepLoop;
+              }
+              const reason =
+                `FINISH implementation evidence remains invalid after ${kickback.entry.count} ` +
+                `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${route.evidence}`;
               state.finish = 'failed';
               await saveStepStatus(this.stateFilePath, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');

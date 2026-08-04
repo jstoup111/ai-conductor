@@ -461,6 +461,17 @@ describe('FINISH publication disposition routing', () => {
     ).resolves.toMatchObject({ kind: 'halt', reason: expect.stringContaining(code) });
   });
 
+  it('permits only cited implementation-invalid evidence to route BUILD', async () => {
+    const evidence = 'build-review FAIL: src/engine/finish-publication.ts:497';
+
+    await expect(
+      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence }),
+    ).resolves.toEqual({ kind: 'retry_build', evidence });
+    await expect(
+      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence: '   ' }),
+    ).resolves.toMatchObject({ kind: 'halt' });
+  });
+
   it.each([
     undefined,
     { kind: 'complete', reason: 'contradictory' },

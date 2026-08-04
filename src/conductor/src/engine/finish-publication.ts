@@ -381,6 +381,7 @@ export type PublicationDisposition =
 export type FinishPublicationRoute =
   | { kind: 'complete' }
   | { kind: 'retry_finish'; reason: string }
+  | { kind: 'retry_build'; evidence: string }
   | { kind: 'halt'; reason: string };
 
 const PUBLICATION_CONDITIONS = {
@@ -496,10 +497,8 @@ export function routeFinishPublicationDisposition(
       };
     case 'implementation_invalid':
       return {
-        kind: 'halt',
-        reason:
-          'FINISH implementation-invalid disposition requires its dedicated BUILD routing rule: ' +
-          disposition.evidence,
+        kind: 'retry_build',
+        evidence: disposition.evidence,
       };
     case 'human_required':
       return { kind: 'halt', reason: disposition.reason };
@@ -534,7 +533,7 @@ function isExactDisposition(
       return (
         hasOnly('kind', 'evidence') &&
         typeof value.evidence === 'string' &&
-        value.evidence.length > 0
+        value.evidence.trim().length > 0
       );
     case 'human_required':
       return (
@@ -818,6 +817,7 @@ export interface AdvanceFinishPublicationInput {
 export type AdvanceFinishPublicationResult =
   | { kind: 'complete' }
   | { kind: 'advanced'; transition: PublicationTransition }
+  | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | {
       kind: 'publication_retry';
@@ -924,6 +924,12 @@ export async function advanceFinishPublication(
   const snapshot = await input.observe();
   const preflight = preflightFinishPublication(snapshot);
   if (preflight.kind === 'blocked') {
+    if (preflight.condition.code === 'implementation_evidence_invalid') {
+      return {
+        kind: 'implementation_invalid',
+        evidence: `${preflight.condition.code}: ${preflight.condition.message}`,
+      };
+    }
     return { kind: 'publication_retry', condition: preflight.condition };
   }
 
