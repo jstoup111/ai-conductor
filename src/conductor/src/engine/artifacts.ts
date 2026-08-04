@@ -760,10 +760,11 @@ export interface CompletionResult {
    * body). That distinction is load-bearing: a publication defect is fixed by
    * rewriting the PR body, so the loop re-dispatches `finish` rather than
    * spending an LLM remediation turn that can only launder it into a rebuild.
-   * 'other' covers everything else. Undefined for backward compat (done:true,
-   * or predicates that don't classify).
+   * 'uncommitted' marks a build blocked by dirty worktree paths; 'other'
+   * covers everything else. Undefined for backward compat (done:true, or
+   * predicates that don't classify).
    */
-  missing?: 'recording' | 'presentation' | 'other';
+  missing?: 'recording' | 'presentation' | 'uncommitted' | 'other';
   /**
    * Trace of the per-attempt verdict-freshness check (Task 1,
    * session-fresh-verdict-artifacts). Populated by the three dispatched-judge
@@ -1949,6 +1950,7 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         return {
           done: false,
           reason: `${uncommittedPaths.length} uncommitted paths: ${names}${more}`,
+          missing: 'uncommitted',
         };
       }
       return { done: true };
