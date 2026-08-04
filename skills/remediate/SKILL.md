@@ -79,10 +79,10 @@ gap must be turned into concrete work:
 
 | Disposition | When | Daemon effect |
 |---|---|---|
-| `build` | impl / test / wiring bug with clear evidence (the fix is obvious from the gap); OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
+| `build` | impl / test / wiring bug with clear evidence (the fix is obvious from the gap); **implementation/test/documentation drift that preserves the approved architecture**; OR **stall-question is answerable from committed artifacts** | inject the emitted tasks → kick to **build**; for stall-questions, answer lives in `rationale`, `tasks: []` |
 | `acceptance_specs` | the gap exists because acceptance coverage is missing or too weak to pin the behavior | kick to **acceptance_specs** (regenerate failing specs), then build |
-| `architecture_review` | **fixable** ADR drift — the shipped code violates an APPROVED ADR but the correct fix is clear and needs no decision | kick to **architecture_review** |
-| `plan` | functionality that **is in scope** but the plan simply missed (a planning omission, not a design gap) | kick to **plan** (re-plan), then build |
+| `architecture_review` | changing or clarifying **approved architecture** is required before the gap can be closed | kick to **architecture_review** |
+| `plan` | functionality that **is in scope** but the plan simply omitted or missed (a planning omission, not an architecture or design decision) | kick to **plan** (re-plan), then build |
 | `halt` + `category: architectural-clarity` | an architectural gap that needs a human *decision* before any code can be right; OR **stall-question requires architectural judgement beyond the committed spec** | **HALT** for human |
 | `halt` + `category: product-scope` | functionality the **initial design never covered**; OR **stall-question hinges on product-level decision not in the PRD** | **HALT** for human DECIDE |
 | `halt` + `category: unanswerable` | **stall-question only:** the question is ambiguous or cannot be answered from committed artifacts alone; need more evidence | **HALT** — flag the question as unanswerable and preserve it verbatim |
@@ -90,6 +90,9 @@ gap must be turned into concrete work:
 Judgment rules:
 - **Prefer autonomous.** If the daemon can produce concrete tasks that close the gap, it must — even
   for `DIVERGED`/ADR-drift gaps, as long as the *correct* fix is determinable from the evidence.
+  The audit origin or finding id alone does not determine the route: an as-built architecture-review
+  finding whose approved architecture remains applicable and authoritative routes to `build` when
+  it is conforming implementation/test/documentation drift.
 - **HALT is the exception, not the default.** Only the two human categories above HALT. "I'm not sure
   how to fix it" is not a HALT category — if the gap is an impl bug you can describe as a task, it is
   `build`.
@@ -101,8 +104,18 @@ Judgment rules:
   test. A test that reveals a real implementation bug gets impl-fix tasks. Reserve `halt` for a
   failure that evidences a genuine design ambiguity, not mere uncertainty about the fix.
 - An `intended-drift` is `halt: product-scope` **only** if it reflects unplanned product
-  functionality; if it's a fixable code/ADR mismatch with a clear correct answer, it is `build` or
-  `architecture_review`.
+  functionality; if it preserves approved architecture, it is `build`. Route to
+  `architecture_review` only when the approved architecture itself must change or be clarified.
+- **Keep omissions distinct from decisions.** An in-scope planning omission is a plan miss, not an
+  architecture or design decision, so it routes to `plan`; it does not make `architecture_review`
+  appropriate.
+- **Reject contradictory dispositions.** It is forbidden and invalid to select
+  `architecture_review` when no architectural decision is needed; that architecture_review
+  disposition is invalid. Route that clear conforming implementation/test/documentation work to
+  `build` instead. Conversely, it
+  is forbidden and invalid to select `build` when an unresolved or ambiguous architectural decision
+  remains; that build disposition is invalid. Use `architecture_review` when approved architecture must change or be clarified, or
+  `halt: architectural-clarity` when a human decision is required.
 
 ### 4. Output Contract
 
