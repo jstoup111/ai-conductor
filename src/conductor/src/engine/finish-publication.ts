@@ -69,6 +69,47 @@ export type PublicationSnapshot =
   | (PublicationEvidence & { mode: 'foreground-auto'; intent: ForegroundAutoPublicationIntent })
   | (PublicationEvidence & { mode: 'interactive'; intent: InteractivePublicationIntent });
 
+export type PublicationSnapshotValidation =
+  | { kind: 'valid' }
+  | {
+      kind: 'incoherent';
+      reason: 'valid_outcome_record_requires_external_pr';
+    }
+  | {
+      kind: 'indeterminate';
+      reason:
+        | 'outcome_record_indeterminate'
+        | 'external_pr_identity_indeterminate';
+    };
+
+/**
+ * Validates whether the repository and external observations can describe the
+ * same publication state. This is deliberately not a completion decision.
+ */
+export function validatePublicationSnapshot(
+  snapshot: PublicationSnapshot,
+): PublicationSnapshotValidation {
+  if (snapshot.outcomeRecord === 'valid' && snapshot.pr.identity === 'none') {
+    return {
+      kind: 'incoherent',
+      reason: 'valid_outcome_record_requires_external_pr',
+    };
+  }
+
+  if (snapshot.outcomeRecord === 'indeterminate') {
+    return { kind: 'indeterminate', reason: 'outcome_record_indeterminate' };
+  }
+
+  if (snapshot.pr.identity === 'indeterminate') {
+    return {
+      kind: 'indeterminate',
+      reason: 'external_pr_identity_indeterminate',
+    };
+  }
+
+  return { kind: 'valid' };
+}
+
 export type PublicationTransition =
   | 'establish_pr'
   | 'verify_release_readiness'

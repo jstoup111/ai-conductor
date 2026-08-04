@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { validatePublicationSnapshot } from '../../src/engine/finish-publication.js';
 
 describe('finish-publication domain types', () => {
   it('exports the semantic unions for the publication lifecycle', async () => {
@@ -71,5 +72,29 @@ describe('finish-publication domain types', () => {
     ) => PublicationTransition;
 
     expect(nextFinishPublicationTransition(snapshot)).toBe('verify_release_readiness');
+  });
+
+  it('rejects a valid local outcome record without an external PR identity', () => {
+    type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+
+    const snapshot = {
+      mode: 'daemon',
+      intent: {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'daemon' },
+      },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      pr: { identity: 'none' },
+      shippedRecord: 'valid',
+      outcomeRecord: 'valid',
+    } as PublicationSnapshot;
+
+    expect(validatePublicationSnapshot(snapshot)).toEqual({
+      kind: 'incoherent',
+      reason: 'valid_outcome_record_requires_external_pr',
+    });
   });
 });
