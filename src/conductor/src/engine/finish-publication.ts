@@ -645,6 +645,45 @@ export type AdvanceFinishPublicationResult =
         | 'judgment_refused';
     };
 
+/**
+ * The effects object is the composition root's stable identity for one
+ * publication attempt. Coalescing by that identity prevents two resumptions
+ * in the same process from crossing the same mutation boundary concurrently.
+ * Each winner still verify-after-writes; followers receive that authoritative
+ * reconciliation rather than repeating a create, record, presentation, or
+ * marker effect.
+ */
+const activePublicationEffects = new WeakMap<
+  AdvanceFinishPublicationInput['effects'],
+  Map<PublicationTransition, Promise<AdvanceFinishPublicationResult>>
+>();
+
+async function coalescePublicationEffect(
+  effects: AdvanceFinishPublicationInput['effects'],
+  transition: PublicationTransition,
+  advance: () => Promise<AdvanceFinishPublicationResult>,
+): Promise<AdvanceFinishPublicationResult> {
+  let activeForPublication = activePublicationEffects.get(effects);
+  if (!activeForPublication) {
+    activeForPublication = new Map();
+    activePublicationEffects.set(effects, activeForPublication);
+  }
+
+  const active = activeForPublication.get(transition);
+  if (active) return active;
+
+  const winner = advance();
+  activeForPublication.set(transition, winner);
+  try {
+    return await winner;
+  } finally {
+    if (activeForPublication.get(transition) === winner) {
+      activeForPublication.delete(transition);
+    }
+    if (activeForPublication.size === 0) activePublicationEffects.delete(effects);
+  }
+}
+
 function mapPrProseJudgmentResult(
   result: PrProseJudgmentResult,
 ): AdvanceFinishPublicationResult {
@@ -695,34 +734,36 @@ export async function advanceFinishPublication(
   }
 
   if (nextFinishPublicationTransition(snapshot) === 'establish_pr') {
-    if (!input.effects.establishPr) {
+    return coalescePublicationEffect(input.effects, 'establish_pr', async () => {
+      if (!input.effects.establishPr) {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_pr',
+          reason: 'draft_pr_effect_unavailable',
+        };
+      }
+
+      const draftPr = await openShipDraftPr(input.effects.establishPr);
+      const observedAfterEstablish = await input.observe();
+      if (
+        observedAfterEstablish.pr.identity === 'one' &&
+        observedAfterEstablish.branchPushed === 'valid'
+      ) {
+        return { kind: 'advanced', transition: 'establish_pr' };
+      }
+      if (observedAfterEstablish.pr.identity === 'ambiguous') {
+        return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+
       return {
         kind: 'publication_retry',
         transition: 'establish_pr',
-        reason: 'draft_pr_effect_unavailable',
+        reason:
+          draftPr.outcome === 'published'
+            ? 'pr_identity_not_verified_after_establish'
+            : `draft_pr_${draftPr.outcome}`,
       };
-    }
-
-    const draftPr = await openShipDraftPr(input.effects.establishPr);
-    const observedAfterEstablish = await input.observe();
-    if (
-      observedAfterEstablish.pr.identity === 'one' &&
-      observedAfterEstablish.branchPushed === 'valid'
-    ) {
-      return { kind: 'advanced', transition: 'establish_pr' };
-    }
-    if (observedAfterEstablish.pr.identity === 'ambiguous') {
-      return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
-    }
-
-    return {
-      kind: 'publication_retry',
-      transition: 'establish_pr',
-      reason:
-        draftPr.outcome === 'published'
-          ? 'pr_identity_not_verified_after_establish'
-          : `draft_pr_${draftPr.outcome}`,
-    };
+    });
   }
 
   if (nextFinishPublicationTransition(snapshot) === 'write_shipped_record') {
@@ -741,46 +782,51 @@ export async function advanceFinishPublication(
       };
     }
 
-    let writeFailure: unknown;
-    try {
-      await input.effects.createShippedRecord();
-    } catch (error) {
-      // A response can be lost after a successful push. The mandatory
-      // re-observation below distinguishes that case from an actual failure.
-      writeFailure = error;
-    }
+    return coalescePublicationEffect(input.effects, 'write_shipped_record', async () => {
+      let writeFailure: unknown;
+      try {
+        await input.effects.createShippedRecord!();
+      } catch (error) {
+        // A response can be lost after a successful push. The mandatory
+        // re-observation below distinguishes that case from an actual failure.
+        writeFailure = error;
+      }
 
-    const observedAfterWrite = await input.observe();
-    if (observedAfterWrite.shippedRecord === 'valid') {
-      return { kind: 'advanced', transition: 'write_shipped_record' };
-    }
-    if (observedAfterWrite.shippedRecord === 'invalid') {
-      return { kind: 'human_required', reason: 'invalid_shipped_record' };
-    }
-    return {
-      kind: 'publication_retry',
-      transition: 'write_shipped_record',
-      reason: writeFailure
-        ? 'shipped_record_write_failed'
-        : 'shipped_record_not_verified_after_write',
-    };
+      const observedAfterWrite = await input.observe();
+      if (observedAfterWrite.shippedRecord === 'valid') {
+        return { kind: 'advanced', transition: 'write_shipped_record' };
+      }
+      if (observedAfterWrite.shippedRecord === 'invalid') {
+        return { kind: 'human_required', reason: 'invalid_shipped_record' };
+      }
+      return {
+        kind: 'publication_retry',
+        transition: 'write_shipped_record',
+        reason: writeFailure
+          ? 'shipped_record_write_failed'
+          : 'shipped_record_not_verified_after_write',
+      };
+    });
   }
 
   if (isPrProseJudgmentNeeded(snapshot.pr)) {
-    try {
-      return mapPrProseJudgmentResult(
-        await input.effects.dispatchJudgment(prProseJudgmentRequest(snapshot.pr)),
-      );
-    } catch {
-      // The dispatcher can lose its response after the provider has returned.
-      // Re-observation on the next FINISH pass is authoritative, so retain the
-      // already verified PR and shipped-record effects and retry only judgment.
-      return {
-        kind: 'publication_retry',
-        transition: 'judge_pr_prose',
-        reason: 'judgment_dispatch_failed',
-      };
-    }
+    const pr = snapshot.pr;
+    return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
+      try {
+        return mapPrProseJudgmentResult(
+          await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
+        );
+      } catch {
+        // The dispatcher can lose its response after the provider has returned.
+        // Re-observation on the next FINISH pass is authoritative, so retain the
+        // already verified PR and shipped-record effects and retry only judgment.
+        return {
+          kind: 'publication_retry',
+          transition: 'judge_pr_prose',
+          reason: 'judgment_dispatch_failed',
+        };
+      }
+    });
   }
 
   if (nextFinishPublicationTransition(snapshot) === 'ready_pr') {
@@ -792,33 +838,35 @@ export async function advanceFinishPublication(
       };
     }
 
-    try {
-      await input.effects.repairPresentation();
-    } catch {
+    return coalescePublicationEffect(input.effects, 'ready_pr', async () => {
+      try {
+        await input.effects.repairPresentation!();
+      } catch {
+        return {
+          kind: 'publication_retry',
+          transition: 'ready_pr',
+          reason: 'presentation_repair_failed',
+        };
+      }
+
+      const observedAfterPresentationRepair = await input.observe();
+      if (observedAfterPresentationRepair.pr.identity === 'ambiguous') {
+        return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+      if (
+        observedAfterPresentationRepair.pr.identity === 'one' &&
+        observedAfterPresentationRepair.pr.prose === 'accepted' &&
+        observedAfterPresentationRepair.pr.ready
+      ) {
+        return { kind: 'advanced', transition: 'ready_pr' };
+      }
+
       return {
         kind: 'publication_retry',
         transition: 'ready_pr',
-        reason: 'presentation_repair_failed',
+        reason: 'presentation_not_verified_after_repair',
       };
-    }
-
-    const observedAfterPresentationRepair = await input.observe();
-    if (observedAfterPresentationRepair.pr.identity === 'ambiguous') {
-      return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
-    }
-    if (
-      observedAfterPresentationRepair.pr.identity === 'one' &&
-      observedAfterPresentationRepair.pr.prose === 'accepted' &&
-      observedAfterPresentationRepair.pr.ready
-    ) {
-      return { kind: 'advanced', transition: 'ready_pr' };
-    }
-
-    return {
-      kind: 'publication_retry',
-      transition: 'ready_pr',
-      reason: 'presentation_not_verified_after_repair',
-    };
+    });
   }
 
   if (nextFinishPublicationTransition(snapshot) === 'record_outcome') {
@@ -853,32 +901,34 @@ export async function advanceFinishPublication(
       recordRequest = { choice: 'keep' };
     }
 
-    let writeFailure = false;
-    try {
-      await input.effects.recordOutcome(recordRequest);
-    } catch {
-      // The recorder can complete its marker write before its caller loses the
-      // response. The observation below is authoritative in either case.
-      writeFailure = true;
-    }
+    return coalescePublicationEffect(input.effects, 'record_outcome', async () => {
+      let writeFailure = false;
+      try {
+        await input.effects.recordOutcome!(recordRequest);
+      } catch {
+        // The recorder can complete its marker write before its caller loses the
+        // response. The observation below is authoritative in either case.
+        writeFailure = true;
+      }
 
-    const observedAfterRecord = await input.observe();
-    const observedPreflight = preflightFinishPublication(observedAfterRecord);
-    if (
-      observedPreflight.kind === 'ready_for_judgment' &&
-      nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
-      observedAfterRecord.outcomeRecord === 'valid'
-    ) {
-      return { kind: 'complete' };
-    }
+      const observedAfterRecord = await input.observe();
+      const observedPreflight = preflightFinishPublication(observedAfterRecord);
+      if (
+        observedPreflight.kind === 'ready_for_judgment' &&
+        nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
+        observedAfterRecord.outcomeRecord === 'valid'
+      ) {
+        return { kind: 'complete' };
+      }
 
-    return {
-      kind: 'publication_retry',
-      transition: 'record_outcome',
-      reason: writeFailure
-        ? 'outcome_record_write_failed'
-        : 'outcome_record_not_verified_after_write',
-    };
+      return {
+        kind: 'publication_retry',
+        transition: 'record_outcome',
+        reason: writeFailure
+          ? 'outcome_record_write_failed'
+          : 'outcome_record_not_verified_after_write',
+      };
+    });
   }
 
   return { kind: 'advanced', transition: nextFinishPublicationTransition(snapshot) };

@@ -249,6 +249,14 @@ function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error)
   };
 }
 
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 describe('finish-publication domain types', () => {
   it('exports the semantic unions for the publication lifecycle', async () => {
     type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
@@ -756,6 +764,125 @@ describe('advanceFinishPublication durable shipped evidence', () => {
       observations: 2,
     });
     expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+});
+
+describe('advanceFinishPublication concurrent mutation reconciliation', () => {
+  it.each([
+    ['PR', 'establish_pr'],
+    ['shipped record', 'write_shipped_record'],
+    ['presentation', 'ready_pr'],
+    ['final marker', 'record_outcome'],
+  ] as const)('coalesces two callers at the same incomplete %s transition', async (_name, transition) => {
+    const entered = deferred<void>();
+    const secondObserved = deferred<void>();
+    const release = deferred<void>();
+    let effectCalls = 0;
+    let observations = 0;
+    let snapshot = readyPublicationSnapshot();
+
+    const mutate = async (apply: () => void) => {
+      effectCalls += 1;
+      entered.resolve();
+      await secondObserved.promise;
+      await release.promise;
+      apply();
+    };
+
+    const effects: AdvanceFinishPublicationInput['effects'] = {
+      dispatchJudgment: async () => ({ kind: 'accepted' }),
+    };
+
+    switch (transition) {
+      case 'establish_pr': {
+        snapshot = readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' });
+        effects.establishPr = {
+          cwd: '/repo',
+          branch: 'feat/widget',
+          baseBranch: 'main',
+          git: async (args) => {
+            if (args[0] === 'rev-list') return { stdout: '1\n' };
+            return { stdout: '' };
+          },
+          gh: async (args) => {
+            if (args[1] === 'view') throw new Error('not found');
+            if (args[1] === 'create') {
+              await mutate(() => {
+                snapshot = readyPublicationSnapshot();
+              });
+              return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+            }
+            return { stdout: '' };
+          },
+        };
+        break;
+      }
+      case 'write_shipped_record':
+        snapshot = readyPublicationSnapshot({ shippedRecord: 'missing' });
+        effects.createShippedRecord = () => mutate(() => {
+          snapshot = readyPublicationSnapshot();
+        });
+        break;
+      case 'ready_pr':
+        snapshot = readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: false,
+          },
+        });
+        effects.repairPresentation = () => mutate(() => {
+          snapshot = readyPublicationSnapshot({
+            pr: {
+              identity: 'one',
+              url: 'https://github.com/acme/widget/pull/1172',
+              prose: 'accepted',
+              ready: true,
+            },
+          });
+        });
+        break;
+      case 'record_outcome':
+        snapshot = readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: true,
+          },
+        });
+        effects.recordOutcome = () => mutate(() => {
+          snapshot = readyPublicationSnapshot({
+            pr: {
+              identity: 'one',
+              url: 'https://github.com/acme/widget/pull/1172',
+              prose: 'accepted',
+              ready: true,
+            },
+            outcomeRecord: 'valid',
+          });
+        });
+        break;
+    }
+
+    const observe = async () => {
+      observations += 1;
+      if (observations === 2) secondObserved.resolve();
+      return structuredClone(snapshot);
+    };
+    const first = advanceFinishPublication({ observe, effects });
+    await entered.promise;
+    const second = advanceFinishPublication({ observe, effects });
+    await secondObserved.promise;
+    release.resolve();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(effectCalls).toBe(1);
+    const expected = transition === 'record_outcome'
+      ? { kind: 'complete' }
+      : { kind: 'advanced', transition };
+    expect([firstResult, secondResult]).toEqual([expected, expected]);
   });
 });
 
