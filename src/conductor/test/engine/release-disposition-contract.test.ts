@@ -39,7 +39,11 @@ describe('repository-local release-disposition contract', () => {
       claudeTarget: canonicalDir,
       byteIdentical: true,
       config: {
-        llm_provider: ['codex', 'claude'],
+        // Pinned to Claude so the run-level `[codex, claude]` sequence does not
+        // put the codex candidate first, and to the cheap `sonnet` tier: this
+        // step judges a diff and writes a short structured disposition.
+        llm_provider: 'claude',
+        model: 'sonnet',
         after: 'maintain-documentation',
         skill: '.agents/skills/release-disposition/SKILL.md',
         enforcement: 'gating',
