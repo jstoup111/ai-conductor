@@ -18,4 +18,57 @@ describe('engine/plan-protected-targets', () => {
       { taskId: '14', path: '.docs/stories/yet-another-feature.md' },
     ]);
   });
+
+  it('allows a sealed artifact that names the plan feature', () => {
+    const plan = `# Implementation Plan
+
+### Task 15: Amend this feature's accepted story
+
+**Files:**
+- .docs/stories/build-tasks-can-amend-protected-docs-artifacts-ame.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
+  });
+
+  it('allows a .docs path outside the sealed artifact directories', () => {
+    const plan = `# Implementation Plan
+
+### Task 16: Write build evidence
+
+**Files:**
+- .docs/decisions/build-tasks-can-amend-protected-docs-artifacts-ame.md
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
+  });
+
+  it('allows a task naming only ordinary source paths', () => {
+    const plan = `# Implementation Plan
+
+### Task 17: Implement the scanner
+
+**Files:**
+- src/conductor/src/engine/plan-protected-targets.ts
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
+  });
+
+  it('does not produce violations for a clean in-memory plan', () => {
+    const plan = `# Implementation Plan
+
+### Task 18: Update this feature's plan
+
+**Files:**
+- .docs/plans/build-tasks-can-amend-protected-docs-artifacts-ame.md
+
+### Task 19: Add scanner coverage
+
+**Files:**
+- src/conductor/test/engine/plan-protected-targets.test.ts
+`;
+
+    expect(scanPlanProtectedTargets(plan, 'build-tasks-can-amend-protected-docs-artifacts-ame')).toEqual([]);
+  });
 });
