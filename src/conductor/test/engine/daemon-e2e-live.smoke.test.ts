@@ -15,6 +15,8 @@ import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { assertTokenCap, TokenMeter } from '../fixtures/token-meter.js';
 
+// TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
+
 const fixturePlanPath = fileURLToPath(
   new URL('../fixtures/daemon-e2e/plan.md', import.meta.url),
 );
