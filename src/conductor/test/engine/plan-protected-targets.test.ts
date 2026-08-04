@@ -7,7 +7,7 @@ import { scanPlanProtectedTargets } from '../../src/engine/plan-protected-target
 import {
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
-} from '../../src/index.js';
+} from '../../src/cli.js';
 
 describe('engine/plan-protected-targets', () => {
   it('reports every other-feature story artifact named by Task 14', () => {
