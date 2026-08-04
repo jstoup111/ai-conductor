@@ -1,6 +1,99 @@
 import { describe, expect, it } from 'vitest';
 import { validatePublicationSnapshot } from '../../src/engine/finish-publication.js';
 
+const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
+
+type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
+type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
+
+interface PublicationObservationPorts {
+  filesystem: {
+    observeImplementationEvidence(): Promise<ObservationState>;
+    observeShipEvidence(): Promise<ObservationState>;
+    observeOutcomeRecord(): Promise<ObservationState>;
+  };
+  git: {
+    observePushEvidence(): Promise<PushObservationState>;
+  };
+  github: {
+    observePullRequest(): Promise<
+      | { state: 'one'; url: string; prose: 'accepted' | 'stale' | 'placeholder'; ready: boolean }
+      | { state: 'missing' | 'ambiguous' | 'malformed' | 'unavailable'; urls?: readonly string[] }
+    >;
+  };
+  shippedRecord: {
+    observeShippedRecord(): Promise<ObservationState>;
+  };
+  releaseReadiness: {
+    observeReleaseReadiness(): Promise<ObservationState>;
+  };
+}
+
+interface ObservePublicationSnapshotInput {
+  mode: 'daemon';
+  intent: {
+    outcome: 'pr';
+    authority: { kind: 'unattended_policy'; mode: 'daemon' };
+  };
+  ports: PublicationObservationPorts;
+}
+
+async function observePublicationSnapshot(input: ObservePublicationSnapshotInput) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const observer = mod.observePublicationSnapshot;
+  if (typeof observer !== 'function') {
+    throw new Error('expected export "observePublicationSnapshot" to be a function (not yet implemented)');
+  }
+  return observer(input);
+}
+
+function observerPorts(overrides: Partial<{
+  implementationEvidence: ObservationState;
+  shipEvidence: ObservationState;
+  outcomeRecord: ObservationState;
+  branchPushed: PushObservationState;
+  pr: Awaited<ReturnType<PublicationObservationPorts['github']['observePullRequest']>>;
+  shippedRecord: ObservationState;
+  releaseReadiness: ObservationState;
+}> = {}): PublicationObservationPorts {
+  return {
+    filesystem: {
+      observeImplementationEvidence: async () => overrides.implementationEvidence ?? 'present',
+      observeShipEvidence: async () => overrides.shipEvidence ?? 'present',
+      observeOutcomeRecord: async () => overrides.outcomeRecord ?? 'present',
+    },
+    git: {
+      observePushEvidence: async () => overrides.branchPushed ?? 'pushed',
+    },
+    github: {
+      observePullRequest: async () =>
+        overrides.pr ?? {
+          state: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+    },
+    shippedRecord: {
+      observeShippedRecord: async () => overrides.shippedRecord ?? 'present',
+    },
+    releaseReadiness: {
+      observeReleaseReadiness: async () => overrides.releaseReadiness ?? 'present',
+    },
+  };
+}
+
+function observationInput(ports: PublicationObservationPorts): ObservePublicationSnapshotInput {
+  return {
+    mode: 'daemon',
+    intent: {
+      outcome: 'pr',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    },
+    ports,
+  };
+}
+
 describe('finish-publication domain types', () => {
   it('exports the semantic unions for the publication lifecycle', async () => {
     type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
@@ -96,5 +189,63 @@ describe('finish-publication domain types', () => {
       kind: 'incoherent',
       reason: 'valid_outcome_record_requires_external_pr',
     });
+  });
+});
+
+describe('observePublicationSnapshot', () => {
+  it('composes authoritative present evidence from injected filesystem, Git, GitHub, record, push, and readiness ports', async () => {
+    const calls: string[] = [];
+    const ports = observerPorts();
+    for (const source of Object.values(ports)) {
+      for (const [name, observe] of Object.entries(source)) {
+        const original = observe as () => Promise<unknown>;
+        Object.assign(source, { [name]: async () => {
+          calls.push(name);
+          return original();
+        } });
+      }
+    }
+
+    await expect(observePublicationSnapshot(observationInput(ports))).resolves.toMatchObject({
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      pr: { identity: 'one', prose: 'accepted', ready: true },
+      shippedRecord: 'valid',
+      outcomeRecord: 'valid',
+    });
+    expect(calls).toEqual([
+      'observeImplementationEvidence',
+      'observeShipEvidence',
+      'observeOutcomeRecord',
+      'observePushEvidence',
+      'observePullRequest',
+      'observeShippedRecord',
+      'observeReleaseReadiness',
+    ]);
+  });
+
+  it.each([
+    ['missing', { implementationEvidence: 'missing' }, { implementationEvidence: 'invalid' }],
+    ['stale', { releaseReadiness: 'stale' }, { releaseReadiness: 'invalid' }],
+    ['malformed', { shippedRecord: 'malformed' }, { shippedRecord: 'invalid' }],
+    ['unpushed', { branchPushed: 'unpushed' }, { branchPushed: 'missing' }],
+    ['unavailable', { outcomeRecord: 'unavailable' }, { outcomeRecord: 'indeterminate' }],
+  ] as const)('maps %s evidence into the closed snapshot without inferring success', async (_row, overrides, expected) => {
+    await expect(
+      observePublicationSnapshot(observationInput(observerPorts(overrides))),
+    ).resolves.toMatchObject(expected);
+  });
+
+  it.each([
+    ['missing', { state: 'missing' as const }, { identity: 'none' }],
+    ['ambiguous', { state: 'ambiguous' as const, urls: ['https://github.com/acme/widget/pull/1', 'https://github.com/acme/widget/pull/2'] }, { identity: 'ambiguous' }],
+    ['malformed', { state: 'malformed' as const }, { identity: 'indeterminate' }],
+    ['unavailable', { state: 'unavailable' as const }, { identity: 'indeterminate' }],
+  ])('maps a %s GitHub observation without manufacturing a PR identity', async (_row, pr, expected) => {
+    await expect(
+      observePublicationSnapshot(observationInput(observerPorts({ pr }))),
+    ).resolves.toMatchObject({ pr: expected });
   });
 });
