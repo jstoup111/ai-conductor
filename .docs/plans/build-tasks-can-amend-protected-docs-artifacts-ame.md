@@ -84,7 +84,7 @@ feature's" is set membership with an authoritative answer already in the engine.
 - `src/conductor/src/engine/protected-artifact-seal.ts`
 - `src/conductor/test/engine/protected-artifact-seal.test.ts`
 
-**Wired-into:** none (no new production surface)
+**Wired-into:** `src/conductor/src/engine/plan-protected-targets.ts#scanPlanProtectedTargets`
 
 **Dependencies:** none
 
