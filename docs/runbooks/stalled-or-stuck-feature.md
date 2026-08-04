@@ -152,6 +152,32 @@ This is a `mechanical`-class HALT, so the daemon's ordinary re-kick sweep clears
 base-branch advance. The step that was running keeps its own real verdict, so the re-kick resumes
 after it rather than repeating it.
 
+#### Retained draft PR identity is unavailable (self-host only)
+
+**Symptom:** `.pipeline/HALT` begins `Self-host release gate HALT: retained draft PR identity is
+unavailable — no OPEN pull request exists for <branch> into <base>.`
+
+**Diagnosis:** the release gate reads its release metadata from the draft PR opened at SHIP-phase
+entry. When the in-memory URL is absent — the ship-start `git push` failed, for instance — the engine
+looks the PR up by branch instead, and only an **OPEN** PR whose head is that branch and whose base is
+the build's base branch satisfies it. Reproduce the same lookup:
+
+```bash
+gh pr list --head <branch> --base <base> --state open --json url,state
+```
+
+- **Rows come back.** The gate should have resolved it; capture the daemon log line
+  `[ship-draft-pr] branch lookup for <branch> …` and treat it as a bug.
+- **Empty, but a PR exists in `--state all`.** It is closed or merged. That is not a draft the finish
+  step may flip or rewrite — open a fresh PR for the branch, or land the work as already-shipped via
+  `conduct shipped-record`.
+- **Empty entirely.** No PR was ever opened; check whether the branch reached origin (`git push`
+  failures are logged as `[ship-draft-pr] push of <branch> failed`) and push it.
+
+**Recovery:** ensure an OPEN PR exists for the branch into the base with valid release metadata in its
+body, then clear the HALT using [the resume
+procedure](#clear-a-halt-and-let-the-feature-resume).
+
 #### `halt_marker`
 
 The `pipeline` skill wrote `.pipeline/halt-user-input-required` — a genuine question that no

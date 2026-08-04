@@ -103,6 +103,28 @@ self-build must clear at finish, **before a PR opens**. `runReleaseArtifactGate`
 failure with that gate's distinct reason and does not consult later gates; the caller must not open a PR
 when the verdict is not ok. Each failure writes `.pipeline/HALT`.
 
+### Where the gate reads release metadata from
+
+The metadata input is the **retained SHIP draft PR** — the draft the conductor opens at SHIP-phase
+entry and `release-disposition` writes into. The engine remembers that PR's URL in memory, but the
+publisher that sets it is advisory and runs at most once per run, so a transient `git push` failure on
+a run whose PR is already open used to leave the identity unset and HALT the feature with *"retained
+draft PR identity is unavailable"* while its draft sat open on origin.
+
+The identity is therefore resolved from durable state instead: when no URL was retained, the engine
+asks GitHub (through the injected `gh` seam) for the PR whose head is the feature branch and whose base
+is the build's base branch. The lookup stays fail-closed and deliberately narrow:
+
+| Situation | Outcome |
+| --- | --- |
+| An **OPEN** PR for this head and base | Resolved and reused, draft or already ready-for-review |
+| Only **CLOSED** or **MERGED** PRs for the branch | No match — the gate still HALTs |
+| A PR on another head or into another base | No match — the gate still HALTs |
+| No base branch resolved, or `gh` fails | No match — the gate still HALTs |
+
+A closed or merged PR is never adopted: `finish` flips and rewrites the PR it is handed, and neither is
+a live draft. The HALT reason names the branch and base that found nothing.
+
 ### Sub-gate 1: the integrity suite
 
 Runs `test/test_harness_integrity.sh` with a 120-second default budget. All three failure modes HALT and
