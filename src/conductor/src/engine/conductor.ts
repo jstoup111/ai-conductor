@@ -100,6 +100,8 @@ import {
   savePrUrl,
   extractPrUrl,
 } from './state.js';
+import type { ConductStateStore } from './conduct-state-store.js';
+import { resolveConductorStateStore } from './conductor-deps.js';
 import {
   ALL_STEPS,
   buildStepRegistry,
@@ -763,6 +765,12 @@ export interface FinishPublicationCoordinator {
 
 export interface ConductorOptions {
   stateFilePath: string;
+  /**
+   * Persistent state authority for conductor-owned mutations. Production
+   * defaults to the filesystem adapter; tests and future hosted composition
+   * may supply another implementation of the same port.
+   */
+  stateStore?: ConductStateStore<ConductState>;
   stepRunner: StepRunner;
   events: ConductorEventEmitter;
   featureSlug?: string;
@@ -1131,6 +1139,7 @@ async function refreshPostFinishShippedRecord({
 
 export class Conductor {
   private stateFilePath: string;
+  private readonly stateStore: ConductStateStore<ConductState>;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
   private featureSlug?: string;
@@ -1547,7 +1556,7 @@ export class Conductor {
     step: StepDefinition,
     cause: string,
   ): Promise<void> {
-    await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+    await saveStepStatus(this.stateFilePath, step.name, 'skipped', this.stateStore);
     (state as Record<string, unknown>)[step.name] = 'skipped';
     if (step.loopGate === true || step.kickbackTarget === true) {
       await recordSkipVerdict(this.projectRoot, step.name, cause);
@@ -1556,6 +1565,7 @@ export class Conductor {
 
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
+    this.stateStore = resolveConductorStateStore(this.stateFilePath, opts.stateStore);
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.featureSlug = opts.featureSlug;
@@ -3596,7 +3606,7 @@ export class Conductor {
             membership.members.find((m) => m.outcome.kind !== 'skipped')?.name;
           if (membership.allSkipped && builtinGroup.members[0] === step.name) {
             for (const member of membership.members) {
-              await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
+              await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped', this.stateStore);
               state[member.name as StepName] = 'skipped';
               await emitTracked({ type: 'config_skip', step: member.name as StepName });
             }
@@ -4100,7 +4110,7 @@ export class Conductor {
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               state[step.name] = 'failed';
-              await saveStepStatus(this.stateFilePath, step.name, 'failed');
+              await saveStepStatus(this.stateFilePath, step.name, 'failed', this.stateStore);
               await writeState(this.stateFilePath, state);
               await emitTracked({ type: 'loop_halt', reason: haltReason });
               await emitTracked({
@@ -4127,7 +4137,7 @@ export class Conductor {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
                 (state as Record<string, unknown>)[syntheticKey] = 'done';
                 state[memberName] = 'done';
-                await saveStepStatus(this.stateFilePath, memberName, 'done');
+                await saveStepStatus(this.stateFilePath, memberName, 'done', this.stateStore);
               }
               await writeState(this.stateFilePath, state);
               await emitTracked({
@@ -4485,7 +4495,7 @@ export class Conductor {
                     ? failedMemberReasons.join('; ')
                     : 'non-green branch outcome');
             state[step.name] = 'failed';
-            await saveStepStatus(this.stateFilePath, step.name, 'failed');
+            await saveStepStatus(this.stateFilePath, step.name, 'failed', this.stateStore);
             await writeState(this.stateFilePath, state);
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, groupHaltReason + '\n', 'needs-human');
@@ -4533,7 +4543,7 @@ export class Conductor {
           if (nonGreen.length > 0) {
             for (const member of nonGreen) {
               state[member.name] = 'stale';
-              await saveStepStatus(this.stateFilePath, member.name, 'stale');
+              await saveStepStatus(this.stateFilePath, member.name, 'stale', this.stateStore);
               await emitTracked({
                 type: 'gate_verdict',
                 step: member.name,
@@ -4580,7 +4590,7 @@ export class Conductor {
         }
 
         // Mark in_progress before running
-        await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
+        await saveStepStatus(this.stateFilePath, step.name, 'in_progress', this.stateStore);
         state[step.name] = 'in_progress';
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
@@ -6094,7 +6104,7 @@ export class Conductor {
 
         if (!succeeded) {
           // Exhausted retries — route through the recovery menu.
-          await saveStepStatus(this.stateFilePath, step.name, 'failed');
+          await saveStepStatus(this.stateFilePath, step.name, 'failed', this.stateStore);
           state[step.name] = 'failed';
           await emitTracked({
             type: 'step_failed',
@@ -6289,7 +6299,7 @@ export class Conductor {
                     mergeBase: lastBuildReviewMergeBase ?? '',
                     regradeCount,
                   });
-                  await saveStepStatus(this.stateFilePath, step.name, 'failed');
+                  await saveStepStatus(this.stateFilePath, step.name, 'failed', this.stateStore);
                   state[step.name] = 'failed';
                   await writeState(this.stateFilePath, state);
                   i = i - 1; // for-loop i++ re-lands on build_review
@@ -6929,7 +6939,7 @@ export class Conductor {
               continue;
             }
             if (action === 'skip' && !gating) {
-              await saveStepStatus(this.stateFilePath, step.name, 'skipped');
+              await saveStepStatus(this.stateFilePath, step.name, 'skipped', this.stateStore);
               state[step.name] = 'skipped';
               continue;
             }
@@ -7130,7 +7140,7 @@ export class Conductor {
           // (#436) — gated on the rebase outcome, so a conflict_halt is never
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
-            await saveStepStatus(this.stateFilePath, step.name, 'done');
+            await saveStepStatus(this.stateFilePath, step.name, 'done', this.stateStore);
           }
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
@@ -7178,7 +7188,7 @@ export class Conductor {
               const scraped = extractPrUrl(successOutput);
               if (scraped) {
                 state.pr_url = scraped;
-                await savePrUrl(this.stateFilePath, scraped);
+                await savePrUrl(this.stateFilePath, scraped, this.stateStore);
               }
             }
           }
@@ -7187,7 +7197,7 @@ export class Conductor {
           // artifact, implementation, and test phases.
           if (documentationDelivery) {
             state.pr_url = documentationDelivery.prUrl;
-            await savePrUrl(this.stateFilePath, documentationDelivery.prUrl);
+            await savePrUrl(this.stateFilePath, documentationDelivery.prUrl, this.stateStore);
             await this.completeRun(state, 'documentation delivery complete\n');
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
@@ -7869,10 +7879,10 @@ export class Conductor {
     await writeState(this.stateFilePath, state);
 
     if (groupFailed) {
-      await saveStepStatus(this.stateFilePath, groupName, 'failed');
+      await saveStepStatus(this.stateFilePath, groupName, 'failed', this.stateStore);
       state[groupName] = 'failed';
     } else {
-      await saveStepStatus(this.stateFilePath, groupName, 'done');
+      await saveStepStatus(this.stateFilePath, groupName, 'done', this.stateStore);
       state[groupName] = 'done';
       await this.events.emit({
         type: 'parallel_completed',

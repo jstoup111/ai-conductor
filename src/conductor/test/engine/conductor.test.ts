@@ -28,6 +28,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
 });
 import { execa } from 'execa';
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
+import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
 import type { StepName, RecoveryOption, RecoveryContext } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
@@ -125,6 +126,56 @@ describe('engine/conductor', () => {
 
     expect(constructor).toBeDefined();
     expect(constructor).not.toMatch(/operatorParkBoundary|featureSlug/);
+  });
+
+  it('constructs the persistent filesystem state store by default', () => {
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+    });
+
+    expect((conductor as unknown as { stateStore?: unknown }).stateStore).toEqual(
+      expect.objectContaining({
+        read: expect.any(Function),
+        apply: expect.any(Function),
+        applyBatch: expect.any(Function),
+        replace: expect.any(Function),
+      }),
+    );
+  });
+
+  it('routes conductor state mutations through a supplied store', async () => {
+    const stateStore: ConductStateStore<ConductState> = {
+      apply: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      applyBatch: vi.fn().mockResolvedValue({ kind: 'applied' }),
+      replace: vi.fn().mockResolvedValue({ kind: 'applied' }),
+    };
+    const conductor = new Conductor({
+      projectRoot: dir,
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      stateStore,
+    });
+
+    const step = ALL_STEPS[0];
+    await (conductor as unknown as {
+      recordStepSkip(
+        state: ConductState,
+        step: (typeof ALL_STEPS)[number],
+        cause: string,
+      ): Promise<void>;
+    }).recordStepSkip({}, step, 'composition test');
+
+    expect(stateStore.applyBatch).toHaveBeenCalledWith({
+      name: 'save step status',
+      mutations: [
+        expect.objectContaining({ field: step.name, next: 'skipped' }),
+        expect.objectContaining({ field: 'last_step', next: step.name }),
+      ],
+    });
   });
 
   it('preserves Codex authentication failure metadata for the spot-audit dispatcher', async () => {
