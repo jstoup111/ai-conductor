@@ -1445,6 +1445,17 @@ export class Conductor {
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
+      worktreeStatus: async () => {
+        try {
+          const { stdout } = await this.git(
+            ['status', '--porcelain', '--untracked-files=all'],
+            { cwd: this.projectRoot },
+          );
+          return stdout;
+        } catch {
+          return null;
+        }
+      },
       shipmentEvidence: this.shipmentEvidence,
       daemon: this.daemon,
       isHeadPushed: async () => {

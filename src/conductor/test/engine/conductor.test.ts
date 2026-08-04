@@ -12363,6 +12363,65 @@ describe('projectRoot is required', () => {
       // In a non-git directory, it should return null (indeterminate)
       expect(result).toBeNull();
     });
+
+    it('reports porcelain status from a dirty local git worktree', async () => {
+      const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+      await actualExeca('git', ['init', '-b', 'main'], { cwd: dir });
+      await actualExeca('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await actualExeca('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await writeFile(join(dir, 'tracked.txt'), 'initial\n');
+      await actualExeca('git', ['add', 'tracked.txt'], { cwd: dir });
+      await actualExeca('git', ['commit', '-m', 'test: initial tracked file'], { cwd: dir });
+      await writeFile(join(dir, 'tracked.txt'), 'modified\n');
+      await writeFile(join(dir, 'new.txt'), 'untracked\n');
+
+      const git: GitRunner = async (args, { cwd }) => {
+        const result = await actualExeca('git', args, { cwd });
+        return { stdout: result.stdout };
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        git,
+      });
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = await (conductor as any)['completionCtx'](state);
+
+      expect(await ctx.worktreeStatus?.()).toBe(' M tracked.txt\n?? new.txt');
+
+      await writeFile(join(dir, 'tracked.txt'), 'initial\n');
+      await rm(join(dir, 'new.txt'));
+      await writeFile(join(dir, '.gitignore'), 'ignored.txt\n');
+      await actualExeca('git', ['add', '.gitignore'], { cwd: dir });
+      await actualExeca('git', ['commit', '-m', 'test: ignore generated file'], { cwd: dir });
+      await writeFile(join(dir, 'ignored.txt'), 'ignored\n');
+
+      expect(await ctx.worktreeStatus?.()).toBe('');
+    });
+
+    it('returns null when the worktree status probe rejects', async () => {
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        git: async () => {
+          throw new Error('git unavailable');
+        },
+      });
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = await (conductor as any)['completionCtx'](state);
+
+      expect(await ctx.worktreeStatus?.()).toBeNull();
+    });
   });
 });
 
