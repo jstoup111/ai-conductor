@@ -40,7 +40,40 @@ rebase is in progress.)
 
 If no rebase is in progress, emit `{"resolved": false, "reason": "no rebase in progress"}` and stop.
 
-### 2. Identify Conflicted Files
+### 2. Capture Replay Intent Before Editing
+
+Before touching a conflicted file, capture an evidence ledger for the **replay
+source commit** currently being applied. `REBASE_HEAD` identifies the commit
+being replayed during a paused rebase; record its object ID and its parent
+commit before making edits:
+
+```bash
+git rev-parse REBASE_HEAD
+git rev-parse REBASE_HEAD^
+git show --format=fuller --stat REBASE_HEAD
+git diff --find-renames REBASE_HEAD^ REBASE_HEAD
+```
+
+Read the source commit and its parent context/diff to establish what behavior
+the replay source commit intended to introduce or change. Then read the
+upstream context that is currently checked out and caused the conflict:
+
+```bash
+git show --format=fuller --stat HEAD
+git log --oneline --decorate -n 20 HEAD
+git diff --find-renames REBASE_HEAD^ HEAD
+```
+
+Record, for the current replay source commit, its ID, parent ID, source intent,
+and relevant upstream change/intent. If the source or upstream context is
+unavailable or leaves the intended behavior ambiguous, do not guess: emit
+`{"resolved": false, "reason": "..."}` and stop.
+
+Removing conflict markers or reaching a clean index is **not** evidence that
+the replay is correct. Do not infer correctness from conflict-marker removal
+alone; the captured source and upstream intent must support the resolution.
+
+### 3. Identify Conflicted Files
 
 ```bash
 git diff --name-only --diff-filter=U
@@ -50,7 +83,7 @@ List every file with conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`). Read
 each file fully before touching it — you need to understand both sides
 (ours = the branch being rebased onto, theirs = the commit being applied).
 
-### 3. Resolve Each Conflict
+### 4. Resolve Each Conflict
 
 For each conflicted file:
 
@@ -68,7 +101,7 @@ business logic, missing context, overlapping semantic changes — **do not guess
 Emit `{"resolved": false, "reason": "<specific description of what makes this
 unsafe>"}` immediately. A wrong guess is worse than a HALT.
 
-### 4. Stage and Continue
+### 5. Stage and Continue
 
 After resolving all conflicted files in this round:
 
@@ -82,7 +115,7 @@ another conflict hunk. If another conflict hunk appears, return to step 2 and
 resolve it (still within this single invocation). Continue until the rebase
 completes or an unsafe hunk is reached.
 
-### 5. Safety Rules (Non-Negotiable)
+### 6. Safety Rules (Non-Negotiable)
 
 - **NEVER run `git rebase --abort`** — this drops the in-progress commit work.
   The conductor's engine guards (FR-8 not-current / FR-9 dropped-commit) will
@@ -96,7 +129,7 @@ completes or an unsafe hunk is reached.
   running during BUILD must not call this skill; doing so violates the
   harness "no ad-hoc rebase mid-build" rule.
 
-### 6. Result Contract
+### 7. Result Contract
 
 The conductor's `DefaultStepRunner` parses the last JSON object emitted to
 stdout. This contract is **load-bearing** — the conductor decides whether to
@@ -123,6 +156,9 @@ output; the runner takes the **last** JSON line.
 ## Verification
 
 - [ ] `git status` confirmed an in-progress rebase before proceeding
+- [ ] Replay source commit and parent captured before edits
+- [ ] Source parent/diff and relevant upstream context read before resolving
+- [ ] Conflict-marker removal was not treated as correctness evidence
 - [ ] All conflicted files identified via `git diff --name-only --diff-filter=U`
 - [ ] Both sides of every conflict hunk read and understood before editing
 - [ ] No conflict markers (`<<<<<<<`, `=======`, `>>>>>>>`) remain in any file

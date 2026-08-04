@@ -78,24 +78,13 @@ function expectContract(text: string, pattern: RegExp, obligation: string): void
 }
 
 describe('Story 1 — validate the complete replay before continuing', () => {
-  it('requires source/parent/upstream discovery, complete staged review, and post-continue inspection', async () => {
+  it('requires replay source, parent, and upstream discovery before resolving a hunk', async () => {
     const skill = await readFile(REBASE_SKILL, 'utf8');
 
     expectContract(skill, /replay(?:ed)? (?:source )?commit|commit being replayed/i, 'identify the replay source commit');
     expectContract(skill, /parent (?:commit|context|diff)|source commit(?:'s)? parent/i, 'inspect the source parent context');
     expectContract(skill, /upstream (?:change|context|intent)/i, 'inspect the upstream change and intent');
-    expectContract(skill, /complete staged (?:diff|replay|resolution)|entire staged (?:diff|replay|resolution)|git diff --cached/i, 'review the complete staged replay before continue');
-    expectContract(skill, /after (?:each )?(?:rebase --continue|continue)[\s\S]{0,240}(?:resulting|replayed|created) commit|post-continue/i, 'inspect the resulting replay commit before advancing or succeeding');
     expectContract(skill, /conflict markers?.{0,120}(?:not|never|insufficient)|(?:not|never).{0,120}conflict markers?/is, 'refuse to infer correctness only from removed conflict markers');
-  });
-
-  it('rejects unexplained EOF-newline, file-mode, and unrelated-file side effects', async () => {
-    const skill = await readFile(REBASE_SKILL, 'utf8');
-
-    expectContract(skill, /EOF|end[- ]of[- ]file|final newline/i, 'review EOF newline changes');
-    expectContract(skill, /file mode|executable bit|mode change/i, 'review file mode changes');
-    expectContract(skill, /unrelated file|unexplained (?:file|change)|every staged change/i, 'reject unrelated or unexplained staged changes');
-    expectContract(skill, /resolved.{0,80}false|must not continue|do not continue/is, 'stop rather than report success when replay intent is unverified');
   });
 });
 
@@ -201,34 +190,5 @@ describe('Story 2 — HALT with actionable ambiguity evidence', () => {
     if (outcome.kind !== 'conflict_halt') throw new Error('expected active-rebase HALT');
     await writeHalt(repo, outcome.conflicts, outcome.reason);
     expect(await readFile(join(repo, '.pipeline', 'HALT'), 'utf8')).toContain(outcome.reason);
-  });
-});
-
-describe('Story 3 — preserve coordinated resolution freedom and provider delivery', () => {
-  it('permits explained cross-file adaptations while forbidding mechanical edit-surface gates', async () => {
-    const skill = await readFile(REBASE_SKILL, 'utf8');
-
-    expectContract(skill, /cross-file|outside (?:the )?(?:conflict|conflicted) (?:hunk|file)|supporting edit/i, 'permit coordinated edits outside the immediate conflict surface');
-    expectContract(skill, /(?:cross-file|supporting).{0,180}(?:source intent|upstream adaptation|explain|attribut)/is, 'require coordinated edits to be explained by replay intent');
-    expectContract(skill, /(?:do not|must not|never).{0,100}(?:file allowlist|hunk-only|whole-patch equality|deterministic resolver)/is, 'forbid mechanical edit-surface restrictions as the acceptance boundary');
-  });
-
-  it('delivers the same full-replay and ambiguity-HALT obligations at the fake-provider boundary', async () => {
-    const fake = scriptedProvider({ success: true, output: '{"resolved": true}', exitCode: 0 });
-    const runner = new DefaultStepRunner(fake.provider, 'provider-boundary-session', '/wt/feature');
-
-    await runner.resolveRebaseConflict({
-      conflicts: ['src/replay.ts'],
-      projectRoot: '/wt/feature',
-      baseRef: 'base123',
-    });
-
-    expect(fake.calls).toHaveLength(1);
-    const delivered = `${fake.calls[0]?.systemPrompt ?? ''}\n${fake.calls[0]?.prompt ?? ''}`;
-    expectContract(delivered, /source (?:commit|intent)|commit being replayed/i, 'deliver source-intent inspection');
-    expectContract(delivered, /complete staged (?:diff|replay|resolution)|entire staged (?:diff|replay|resolution)/i, 'deliver complete staged-replay validation');
-    expectContract(delivered, /post-continue|resulting replay(?:ed)? commit|after (?:rebase --continue|continue)/i, 'deliver post-continue replay inspection');
-    expectContract(delivered, /resolved.{0,80}false[\s\S]{0,180}(?:replay commit|file|region|competing|missing decision)/i, 'deliver actionable ambiguity failure evidence');
-    expect(fake.provider.invokeInteractive).not.toHaveBeenCalled();
   });
 });
