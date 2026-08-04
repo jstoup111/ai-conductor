@@ -31,9 +31,9 @@ exception — reserved for two human categories only.
 
 | Disposition | Use when | Routes to |
 |---|---|---|
-| **build** | impl / test / wiring bug; the correct fix is determinable from the evidence | re-open BUILD with your tasks |
+| **build** | impl / test / wiring bug with clear evidence; **implementation/test/documentation drift that preserves the approved architecture** | re-open BUILD with your tasks |
 | **acceptance_specs** | the real miss is acceptance coverage — behavior isn't pinned by a failing spec | regenerate specs, then BUILD |
-| **architecture_review** | the code violates an APPROVED ADR but the **correct fix is clear** (no decision needed) | re-run the architecture review |
+| **architecture_review** | changing or clarifying **approved architecture** is required before the gap can be closed | re-run the architecture review |
 | **plan** | functionality that **is in scope** but the plan omitted it (a planning miss, not a design gap) | re-plan, then BUILD |
 | **halt** · `architectural-clarity` | an architectural gap needing a human **decision** (ambiguous trade-off, missing/conflicting ADR) | human |
 | **halt** · `product-scope` | functionality the **initial design never accounted for** — new product scope | human DECIDE |
@@ -45,9 +45,28 @@ exception — reserved for two human categories only.
 - **Only two things HALT:** a genuine architectural *decision* (`architectural-clarity`), or genuine
   unplanned product *functionality* (`product-scope`). Everything else routes to a step.
 - **`impl-gap` → `build`** almost always (or `acceptance_specs` when the miss is really coverage).
-- **`intended-drift` is not automatically a HALT.** A fixable code/ADR mismatch with a clear correct
-  answer is `build` / `architecture_review`. It is `halt: product-scope` ONLY when the divergence
-  reflects real unplanned product functionality.
+- **Approved architecture remains authoritative.** The audit origin or ADR-shaped finding id alone
+  does not determine the route: conforming implementation/test/documentation drift that preserves
+  approved architecture routes to `build`, including when reported by an as-built architecture audit.
+  Positive example: `src/provider-home.ts:42` and its tests drift from an approved lifecycle — task
+  those files to conform, then route `build`. Negative example: do not select `architecture_review`
+  merely because the finding came from an architecture audit or its id begins with `adr-`.
+- **`intended-drift` is not automatically a HALT.** It is `halt: product-scope` ONLY when the
+  divergence reflects real unplanned product functionality. If it preserves approved architecture,
+  route it to `build`; route to `architecture_review` only when the approved architecture itself
+  must change or be clarified.
+- **Keep omissions distinct from decisions.** An in-scope planning omission is a plan miss, not an
+  architecture or design decision, so it routes to `plan`; it does not make `architecture_review`
+  appropriate. Positive example: a plan omitted an approved validation task, so re-plan it.
+  Negative example: do not reopen architecture review when no approved architectural change or
+  clarification is required.
+- **Reject contradictory dispositions.** It is forbidden and invalid to select
+  `architecture_review` when no architectural or product decision is needed; that
+  `architecture_review` disposition is invalid. Route that clear conforming
+  implementation/test/documentation work to `build` instead. Conversely, it is forbidden and
+  invalid to select `build` when an unresolved or ambiguous architectural decision remains; that
+  `build` disposition is invalid. Use `architecture_review` when approved architecture must change
+  or be clarified, or `halt: architectural-clarity` when a human decision is required.
 - **Finish test failures → `build`, with direction.** Decide what each failure means: a test lagging
   an **intentional contract change** on this branch gets tasks updating the TEST to the new contract
   — never a task weakening the production code back to the old behavior. A test exposing a real impl
