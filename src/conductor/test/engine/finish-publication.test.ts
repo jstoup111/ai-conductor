@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { validatePublicationSnapshot } from '../../src/engine/finish-publication.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
 
@@ -25,6 +26,7 @@ interface AdvanceFinishPublicationInput {
   effects: {
     dispatchJudgment(...args: unknown[]): Promise<unknown>;
     createShippedRecord?: () => Promise<void>;
+    repairPresentation?: () => Promise<void>;
     establishPr?: {
       gh: GhRunner;
       git: GitRunner;
@@ -37,10 +39,21 @@ interface AdvanceFinishPublicationInput {
 }
 
 type AdvanceFinishPublicationResult =
-  | { kind: 'advanced'; transition: 'judge_pr_prose' | 'establish_pr' | 'write_shipped_record' }
+  | {
+      kind: 'advanced';
+      transition: 'judge_pr_prose' | 'establish_pr' | 'write_shipped_record' | 'ready_pr' | 'record_outcome';
+    }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'publication_retry'; transition: 'establish_pr' | 'write_shipped_record'; reason: string }
-  | { kind: 'human_required'; reason: 'ambiguous_pr_identity' | 'invalid_shipped_record' };
+  | {
+      kind: 'publication_retry';
+      transition: 'ready_pr';
+      reason: 'presentation_repair_effect_unavailable' | 'presentation_repair_failed' | 'presentation_not_verified_after_repair';
+    }
+  | {
+      kind: 'human_required';
+      reason: 'ambiguous_pr_identity' | 'invalid_shipped_record';
+    };
 
 type AdvanceFinishPublication = (
   input: AdvanceFinishPublicationInput,
@@ -810,6 +823,16 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
           pr: {
             identity: 'one',
             url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: true,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
             prose: 'stale',
             ready: false,
           },
@@ -817,7 +840,7 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
       );
 
     await expect(
-      advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, repairPresentation: async () => undefined } }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
     expect(dispatchJudgment).not.toHaveBeenCalled();
 
@@ -885,28 +908,190 @@ describe('advanceFinishPublication PR prose judgment boundary', () => {
 
   it('does not repeat judgment after a successful pass is re-observed as accepted', async () => {
     let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'placeholder';
+    let ready = false;
     const dispatchJudgment = vi.fn(async () => {
       prose = 'accepted';
       return { kind: 'accepted' };
     });
     const observe = vi.fn(async () =>
       readyPublicationSnapshot({
-        pr: {
-          identity: 'one',
-          url: 'https://github.com/acme/widget/pull/1172',
-          prose,
-          ready: false,
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose,
+            ready,
         },
       }),
     );
 
     await expect(
-      advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, repairPresentation: async () => undefined } }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
     await expect(
-      advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
+      advanceFinishPublication({
+        observe,
+        effects: {
+          dispatchJudgment,
+          repairPresentation: async () => {
+            ready = true;
+          },
+        },
+      }),
     ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
 
     expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('advanceFinishPublication accepted PR presentation', () => {
+  function hasMergeAuthorityArg(calls: readonly string[][]): boolean {
+    return calls.some((args) =>
+      args.some((arg) => arg === 'merge' || arg === '--auto' || arg === '--auto-merge'),
+    );
+  }
+
+  function fakePresentationGh(initial: {
+    isDraft: boolean;
+    labels?: string[];
+    title?: string;
+    body?: string;
+  }) {
+    const calls: string[][] = [];
+    let isDraft = initial.isDraft;
+    let labels = [...(initial.labels ?? [])];
+    let title = initial.title ?? 'feat: widget';
+    let body = initial.body ?? '## Summary\n\nAccepted presentation';
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ isDraft, labels: labels.map((name) => ({ name })), title, body }) };
+      }
+      if (args[0] === 'api' && args.includes('--method') && args.includes('DELETE')) {
+        labels = labels.filter((name) => name !== 'needs-remediation');
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready') {
+        isDraft = false;
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--title')) {
+        title = args[args.indexOf('--title') + 1] ?? title;
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1] ?? body;
+      }
+      return { stdout: '' };
+    };
+    return { gh, calls, isReady: () => !isDraft };
+  }
+
+  it('leaves a clean accepted ready PR untouched', async () => {
+    const repairPresentation = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+        }),
+        effects: { dispatchJudgment, repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'record_outcome' });
+
+    expect(repairPresentation).not.toHaveBeenCalled();
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('repairs a reused halt PR only after accepted prose and re-observes it ready', async () => {
+    const github = fakePresentationGh({ isDraft: true, labels: ['needs-remediation'] });
+    let ready = false;
+    const observe = vi.fn(async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready },
+    }));
+    const repairPresentation = vi.fn(async () => {
+      await rehabilitateHaltPr({
+        gh: github.gh,
+        cwd: '/repo',
+        prUrl: 'https://github.com/acme/widget/pull/1172',
+        sourceRef: null,
+      });
+      ready = github.isReady();
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+
+    expect(repairPresentation).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(github.calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(true);
+    expect(hasMergeAuthorityArg(github.calls)).toBe(false);
+  });
+
+  it('flips an accepted draft PR ready and verifies the resulting observation', async () => {
+    const github = fakePresentationGh({ isDraft: true });
+    let ready = false;
+    const observe = vi.fn(async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready },
+    }));
+    const repairPresentation = vi.fn(async () => {
+      await ensureShipReady(github.gh, '/repo', 'https://github.com/acme/widget/pull/1172', undefined, async () => {});
+      ready = github.isReady();
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(github.calls.filter((args) => args[0] === 'pr' && args[1] === 'ready')).toHaveLength(1);
+    expect(hasMergeAuthorityArg(github.calls)).toBe(false);
+  });
+
+  it('refuses stale prose before it can invoke presentation repair', async () => {
+    const repairPresentation = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({
+      kind: 'revision_required' as const,
+      reason: 'structurally_incomplete' as const,
+    }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        }),
+        effects: { dispatchJudgment, repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_malformed_prose' });
+
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+    expect(repairPresentation).not.toHaveBeenCalled();
+  });
+
+  it('keeps accepted draft publication retryable when GitHub presentation repair is unavailable', async () => {
+    const repairPresentation = vi.fn(async () => {
+      throw new Error('GitHub unavailable');
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+        }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), repairPresentation },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'ready_pr',
+      reason: 'presentation_repair_failed',
+    });
+
+    expect(repairPresentation).toHaveBeenCalledTimes(1);
   });
 });

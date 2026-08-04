@@ -592,6 +592,13 @@ export interface AdvanceFinishPublicationInput {
      * that already observed a stable identity never need this transition.
      */
     establishPr?: OpenShipDraftPrDeps;
+    /**
+     * Existing order-gated PR presentation repair. The composition root owns
+     * the GitHub mechanics (halt rehabilitation, title/body floors, and the
+     * draft-to-ready flip); this coordinator invokes it only after accepted
+     * prose has been observed and verifies its result by re-observation.
+     */
+    repairPresentation?: () => Promise<void>;
   };
 }
 
@@ -750,6 +757,44 @@ export async function advanceFinishPublication(
         reason: 'judgment_dispatch_failed',
       };
     }
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'ready_pr') {
+    if (!input.effects.repairPresentation) {
+      return {
+        kind: 'publication_retry',
+        transition: 'ready_pr',
+        reason: 'presentation_repair_effect_unavailable',
+      };
+    }
+
+    try {
+      await input.effects.repairPresentation();
+    } catch {
+      return {
+        kind: 'publication_retry',
+        transition: 'ready_pr',
+        reason: 'presentation_repair_failed',
+      };
+    }
+
+    const observedAfterPresentationRepair = await input.observe();
+    if (observedAfterPresentationRepair.pr.identity === 'ambiguous') {
+      return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+    }
+    if (
+      observedAfterPresentationRepair.pr.identity === 'one' &&
+      observedAfterPresentationRepair.pr.prose === 'accepted' &&
+      observedAfterPresentationRepair.pr.ready
+    ) {
+      return { kind: 'advanced', transition: 'ready_pr' };
+    }
+
+    return {
+      kind: 'publication_retry',
+      transition: 'ready_pr',
+      reason: 'presentation_not_verified_after_repair',
+    };
   }
 
   return { kind: 'advanced', transition: nextFinishPublicationTransition(snapshot) };
