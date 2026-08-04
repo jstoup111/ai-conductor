@@ -1,0 +1,274 @@
+/**
+ * RED acceptance specs for #1293.
+ *
+ * Stories: `.docs/stories/build-tasks-can-amend-protected-docs-artifacts-ame.md`
+ * ADR: `.docs/decisions/adr-2026-08-04-decide-owned-amendment-of-accepted-artifacts.md`
+ *
+ * Story-level seams:
+ * - TS-1 is an authoring contract, so the observable boundary is the three DECIDE
+ *   skill surfaces that can falsify an accepted assertion. Their shared contract
+ *   must require the mutation now, preserve the original assertion, and forbid a
+ *   parallel record.
+ * - TS-2's pure scan and inheritance matrix are lower-layer plan-task tests. This
+ *   suite proves its public authoring surface exists and exercises the path guard
+ *   through the land flow, including the mandatory trailing-root-empty-sibling
+ *   boundary cases from writing-system-tests section 3c.
+ * - TS-3 drives the real land-time entry point, `landSpec`, against real local Git.
+ *   It observes refusal, diagnostics, no commit, and retained worktree state.
+ * - TS-4's new behavior is a remediation-authority contract composing with the
+ *   already-covered real daemon DECIDE operator gate. The latter remains covered by
+ *   `daemon-decide-kickback-halt.acceptance.test.ts`; this file pins the new routing
+ *   obligation without duplicating that broad Conductor fixture.
+ *
+ * Planned production call sites for the critical protected-target judgement:
+ * - `src/conductor/src/index.ts` — authoring command dispatch (Task 6)
+ * - `src/conductor/src/engine/engineer/land-spec.ts` — land gate (Task 7)
+ * - `skills/plan/SKILL.md` — required authoring invocation (Task 11)
+ *
+ * No third party is called. Git is real because land/commit semantics are the
+ * boundary under test; owner lookup and diagram rendering are injected fakes.
+ */
+
+import { afterEach, describe, expect, it } from 'vitest';
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { execFile as execFileCb } from 'node:child_process';
+import { promisify } from 'node:util';
+import { fileURLToPath } from 'node:url';
+
+import { createProgram } from '../../src/index.js';
+import { landSpec } from '../../src/engine/engineer/land-spec.js';
+import { createEngineerWorktree } from '../../src/engine/engineer/worktree-authoring.js';
+import type { GhRunner } from '../../src/engine/owner-gate/identity.js';
+
+const execFile = promisify(execFileCb);
+const CONDUCTOR_ROOT = fileURLToPath(new URL('../..', import.meta.url));
+const REPO_ROOT = join(CONDUCTOR_ROOT, '..', '..');
+const roots: string[] = [];
+
+const okGh: GhRunner = async () => ({ stdout: 'acceptance-owner\n' });
+const renderDeps = {
+  hasTool: async () => true,
+  writeTemp: async () => join(tmpdir(), 'unused-protected-target.mmd'),
+  runMmdc: async () => ({ ok: true }),
+};
+
+afterEach(async () => {
+  while (roots.length > 0) {
+    await rm(roots.pop()!, { recursive: true, force: true });
+  }
+});
+
+async function git(cwd: string, args: string[]): Promise<string> {
+  return (await execFile('git', args, { cwd })).stdout.trim();
+}
+
+async function exists(path: string): Promise<boolean> {
+  return access(path).then(
+    () => true,
+    () => false,
+  );
+}
+
+async function readContract(relativePath: string): Promise<string> {
+  return readFile(join(REPO_ROOT, relativePath), 'utf8');
+}
+
+interface LandFixture {
+  repo: string;
+  worktree: string;
+  idea: string;
+  slug: string;
+  headBefore: string;
+}
+
+function renderPlan(slug: string, files: string, inherited = false): string {
+  const inheritedTask = inherited
+    ? [
+        '',
+        '### Task 2: inherit the protected target',
+        '',
+        '**Files:** same as Task 1',
+        '',
+        '**Wired-into:** same as Task 1',
+      ].join('\n')
+    : '';
+  return [
+    `# Implementation Plan: ${slug}`,
+    '',
+    `**Stories:** .docs/stories/${slug}.md`,
+    '',
+    '### Task 1: implement the change',
+    '',
+    `**Files:** ${files}`,
+    '',
+    '**Wired-into:** none (test fixture)',
+    inheritedTask,
+    '',
+    '## Task Dependency Graph',
+    '',
+    '```text',
+    inherited ? '1 → 2' : '1',
+    '```',
+    '',
+  ].join('\n');
+}
+
+async function makeLandFixture(
+  files: string,
+  { inherited = false, tier = 'S' }: { inherited?: boolean; tier?: 'S' | 'M' } = {},
+): Promise<LandFixture> {
+  const repo = await mkdtemp(join(tmpdir(), 'protected-target-land-'));
+  roots.push(repo);
+  await git(repo, ['init', '-q', '-b', 'main']);
+  await git(repo, ['config', 'user.email', 'acceptance@example.com']);
+  await git(repo, ['config', 'user.name', 'Acceptance']);
+  await writeFile(join(repo, 'README.md'), '# fixture\n');
+  await git(repo, ['add', 'README.md']);
+  await git(repo, ['commit', '-q', '-m', 'fixture base']);
+
+  const idea = `protected target ${Math.random().toString(36).slice(2)}`;
+  const authored = await createEngineerWorktree(repo, idea);
+  const { worktree, slug } = { worktree: authored.worktreePath, slug: authored.slug };
+
+  // This acceptance flow is about the new land gate. Removing the coherence
+  // signal deliberately selects landSpec's documented legacy disengage, so the
+  // fixture does not author an unrelated traceability artifact.
+  await rm(join(worktree, '.docs', 'coherence'), { recursive: true, force: true });
+  for (const directory of ['track', 'complexity', 'stories', 'plans']) {
+    await mkdir(join(worktree, '.docs', directory), { recursive: true });
+  }
+  await writeFile(join(worktree, '.docs', 'track', `${slug}.md`), 'Track: technical\n');
+  await writeFile(join(worktree, '.docs', 'complexity', `${slug}.md`), `Tier: ${tier}\n`);
+  await writeFile(
+    join(worktree, '.docs', 'stories', `${slug}.md`),
+    ['**Status:** Accepted', '', `# Stories: ${slug}`, '', '## Story', 'Given X, when Y, then Z.', ''].join('\n'),
+  );
+  await writeFile(join(worktree, '.docs', 'plans', `${slug}.md`), renderPlan(slug, files, inherited));
+
+  if (tier === 'M') {
+    for (const directory of ['conflicts', 'architecture', 'decisions']) {
+      await mkdir(join(worktree, '.docs', directory), { recursive: true });
+    }
+    await writeFile(join(worktree, '.docs', 'conflicts', `${slug}.md`), '# Conflict check\n\nVerdict: PASS\n');
+    await writeFile(join(worktree, '.docs', 'architecture', `${slug}.md`), '# Architecture\n');
+    await writeFile(join(worktree, '.docs', 'decisions', `${slug}.md`), '# Architecture review\n\nVerdict: APPROVED\n');
+  }
+
+  return { repo, worktree, idea, slug, headBefore: await git(worktree, ['rev-parse', 'HEAD']) };
+}
+
+async function land(fixture: LandFixture) {
+  return landSpec(
+    { name: 'fixture', canonicalPath: fixture.repo },
+    fixture.idea,
+    fixture.worktree,
+    undefined,
+    { ownerConfig: {}, gh: okGh, renderDeps },
+  );
+}
+
+describe('TS-1: accepted-artifact amendments are performed during DECIDE', () => {
+  it.each([
+    ['conflict-check', 'skills/conflict-check/SKILL.md'],
+    ['architecture-review', 'skills/architecture-review/SKILL.md'],
+    ['stories', 'skills/stories/SKILL.md'],
+  ])('%s requires the additive dated mutation now, never a later task or parallel record', async (_name, path) => {
+    const text = await readContract(path);
+
+    expect(text).toMatch(/Amended\s+YYYY-MM-DD\s+by\s+#NNN/i);
+    expect(text).toMatch(/(?:write|perform|mutate|amend)[\s\S]{0,220}(?:during|in|same)\s+(?:the\s+)?(?:DECIDE|pass|review)/i);
+    expect(text).toMatch(/original[\s\S]{0,160}(?:remain|preserv|never (?:rewrite|delete))/i);
+    expect(text).toMatch(/no (?:separate|parallel) (?:record|ledger|artifact)/i);
+    expect(text).toMatch(/never[\s\S]{0,180}(?:later phase|BUILD|plan task|defer)/i);
+  });
+});
+
+describe('TS-2: the authoring boundary exposes a blocking protected-target check', () => {
+  it('registers a public command whose name or description identifies both plan and protected targets', () => {
+    const command = createProgram().commands.find((candidate) =>
+      /plan/i.test(`${candidate.name()} ${candidate.description()}`) &&
+      /protect/i.test(`${candidate.name()} ${candidate.description()}`),
+    );
+
+    expect(command).toBeDefined();
+  });
+
+  it('requires plan authoring to run the blocking conduct-ts command', async () => {
+    const text = await readContract('skills/plan/SKILL.md');
+
+    expect(text).toMatch(/conduct-ts\s+[^\n]*protect/i);
+    expect(text).toMatch(/(?:block|fail|reject)[\s\S]{0,220}(?:task id|task)[\s\S]{0,160}(?:protected path|path)/i);
+  });
+});
+
+describe('TS-3: landSpec refuses a plan that targets another feature\'s sealed artifact', () => {
+  it.each(['S', 'M'] as const)('rejects at tier %s, names every offending task/path, commits nothing, and retains the worktree', async (tier) => {
+    const fixture = await makeLandFixture('`.docs/stories/other-feature.md`', { inherited: true, tier });
+
+    let caught: Error | null = null;
+    try {
+      await land(fixture);
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('Task 1');
+    expect(caught!.message).toContain('Task 2');
+    expect(caught!.message).toContain('.docs/stories/other-feature.md');
+    expect(await git(fixture.worktree, ['rev-parse', 'HEAD'])).toBe(fixture.headBefore);
+    expect(await exists(fixture.worktree)).toBe(true);
+  });
+
+  it('allows an own-feature sealed path and lands normally', async () => {
+    const fixture = await makeLandFixture('OWN_FEATURE_PATH');
+    const planPath = join(fixture.worktree, '.docs', 'plans', `${fixture.slug}.md`);
+    const plan = (await readFile(planPath, 'utf8')).replace(
+      'OWN_FEATURE_PATH',
+      `\`.docs/stories/${fixture.slug}.md\``,
+    );
+    await writeFile(planPath, plan);
+
+    await expect(land(fixture)).resolves.toMatchObject({ slug: fixture.slug });
+  });
+
+  it('allows a non-sealed .docs path and lands normally', async () => {
+    const fixture = await makeLandFixture('`.docs/conflicts/other-feature.md`');
+
+    await expect(land(fixture)).resolves.toMatchObject({ slug: fixture.slug });
+  });
+
+  describe('path-boundary matrix', () => {
+    it.each([
+      ['trailing slash', '`.docs/stories/other-feature.md/`'],
+      ['sealed directory root', '`.docs/stories/`'],
+    ])('rejects the %s form without treating it as a wildcard', async (_case, files) => {
+      const fixture = await makeLandFixture(files);
+
+      await expect(land(fixture)).rejects.toThrow(/protected|sealed/i);
+    });
+
+    it.each([
+      ['empty file set', 'none (no files; contract-only task)'],
+      ['sibling prefix', '`.docs/stories-evil/other-feature.md`'],
+    ])('allows the non-matching %s boundary', async (_case, files) => {
+      const fixture = await makeLandFixture(files);
+
+      await expect(land(fixture)).resolves.toMatchObject({ slug: fixture.slug });
+    });
+  });
+});
+
+describe('TS-4: remediation never sends a sealed-artifact amendment to BUILD', () => {
+  it('routes the gap to its owning DECIDE step and preserves the existing operator gate', async () => {
+    const text = await readContract('skills/remediate/SKILL.md');
+
+    expect(text).toMatch(/sealed|protected artifact/i);
+    expect(text).toMatch(/(?:owning|owner)[\s\S]{0,160}DECIDE/i);
+    expect(text).toMatch(/never[\s\S]{0,180}(?:build|acceptance_specs)[\s\S]{0,80}(?:build|acceptance_specs)/i);
+    expect(text).toMatch(/existing[\s\S]{0,160}(?:operator|human)[ -]?gate/i);
+    expect(text).toMatch(/no (?:request|ledger|record|new artifact)/i);
+  });
+});
