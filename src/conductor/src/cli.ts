@@ -1,6 +1,9 @@
 import { Command } from 'commander';
+import { readFile } from 'node:fs/promises';
+import { basename } from 'node:path';
 import type { ViewMode } from './ui/types.js';
 import type { EffortLevel } from './types/config.js';
+import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
 
 const VALID_EFFORT_LEVELS: readonly EffortLevel[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 
@@ -100,6 +103,48 @@ export function detectInline(argv: string[]): { isInline: boolean; rest: string[
     return { isInline: true, rest: [argv[0], argv[1], ...argv.slice(3)] };
   }
   return { isInline: false, rest: argv };
+}
+
+export interface PlanProtectedTargetsDispatch {
+  kind: 'plan-protected-targets';
+  path: string;
+}
+
+/** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
+export function detectPlanProtectedTargetsCommand(
+  argv: string[],
+): PlanProtectedTargetsDispatch | null {
+  if (argv[2] !== 'plan-protected-targets' || !argv[3]) return null;
+  return { kind: 'plan-protected-targets', path: argv[3] };
+}
+
+/**
+ * Read and scan exactly the named plan. The command is intentionally blocking:
+ * violations are printed in full and produce a non-zero exit code, while a
+ * clean plan exits zero. It never writes to the repository.
+ */
+export async function planProtectedTargetsCommand(
+  cmd: PlanProtectedTargetsDispatch,
+  deps: {
+    print?: (message: string) => void;
+    readFile?: typeof readFile;
+  } = {},
+): Promise<number> {
+  const print = deps.print ?? console.log;
+  const readPlan = deps.readFile ?? readFile;
+  const planText = await readPlan(cmd.path, 'utf8');
+  const planStem = basename(cmd.path, '.md');
+  const violations = scanPlanProtectedTargets(planText, planStem);
+
+  if (violations.length === 0) {
+    print('No protected-target violations found.');
+    return 0;
+  }
+
+  for (const { taskId, path } of violations) {
+    print(`Task ${taskId}: ${path}`);
+  }
+  return 1;
 }
 
 export function createProgram(): Command {
@@ -235,6 +280,13 @@ export function createProgram(): Command {
     .option('--source-ref <ref>', 'Linked issue ref (owner/repo#N) to sweep for open blockers')
     .option('--base <ref>', 'Base branch to diff sibling branches against (default: origin default branch)')
     .option('--cwd <dir>', 'Repository directory to run the scan in (default: process.cwd())');
+
+  // Plan protected-target scan (Task 6). NON-INTERACTIVE: dispatched in
+  // index.ts before the pipeline boots. It reads the named plan only, reports
+  // every task/path violation, and exits non-zero when one is found.
+  program
+    .command('plan-protected-targets <path>')
+    .description('Blocking scan for plan tasks that target another feature’s protected artifact');
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the

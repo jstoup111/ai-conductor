@@ -821,6 +821,103 @@ describe('Task 6: legacy-only plans dir yields missing-plan rejection (#488)', (
   });
 });
 
+describe('Task 7: landing rejects plans that target another feature\'s sealed artifact', () => {
+  it('refuses the plan, names the offending task and path, and retains the uncommitted worktree', async () => {
+    const dir = await seedValidWorktree();
+    const headBefore = await git(['rev-parse', 'HEAD'], dir);
+    const protectedPath = '.docs/stories/other-feature.md';
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      `${PLAN_WITH_DEPS}\n### Task 14: Amend another feature's accepted story\n\n**Files:**\n- ${protectedPath}\n`,
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    let caught: Error | null = null;
+    try {
+      await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+    } catch (error) {
+      caught = error instanceof Error ? error : new Error(String(error));
+    }
+
+    expect(caught).not.toBeNull();
+    expect(caught!.message).toContain('Task 14');
+    expect(caught!.message).toContain(protectedPath);
+    expect(await git(['rev-parse', 'HEAD'], dir)).toBe(headBefore);
+    const { existsSync } = await import('node:fs');
+    expect(existsSync(dir)).toBe(true);
+  });
+});
+
+describe('Task 8: protected-target land gate blast radius', () => {
+  const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+  const protectedPath = '.docs/stories/other-feature.md';
+  const planWithProtectedTarget = (base = PLAN_WITH_DEPS) =>
+    `${base}\n### Task 14: Amend another feature's accepted story\n\n**Files:**\n- ${protectedPath}\n`;
+
+  async function seedTierWorktree(tier: 'S' | 'M' | 'L'): Promise<string> {
+    const dir = await seedValidWorktree();
+    await mkdir(join(dir, '.docs', 'complexity'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'complexity', 'dep-bump.md'), `# Complexity\n\nTier: ${tier}\n`);
+
+    if (tier !== 'S') {
+      await mkdir(join(dir, '.docs', 'conflicts'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'architecture'), { recursive: true });
+      await mkdir(join(dir, '.docs', 'decisions'), { recursive: true });
+      await writeFile(join(dir, '.docs', 'conflicts', 'dep-bump.md'), '# Conflicts\n\nNone.\n');
+      await writeFile(join(dir, '.docs', 'architecture', 'dep-bump.md'), '# Architecture\n\nApproved.\n');
+      await writeFile(join(dir, '.docs', 'decisions', 'dep-bump.md'), '# Review\n\nApproved.\n');
+    }
+
+    return dir;
+  }
+
+  for (const tier of ['S', 'M', 'L'] as const) {
+    it(`rejects another feature's protected target for tier ${tier}`, async () => {
+      const dir = await seedTierWorktree(tier);
+      await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), planWithProtectedTarget());
+
+      await expect(
+        landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+      ).rejects.toThrow(new RegExp(`Task 14: ${protectedPath}`));
+    });
+  }
+
+  it('lands the current clean plan without consulting an inherited historical violating plan', async () => {
+    await mkdir(join(repoPath, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'plans', 'historical-violation.md'), planWithProtectedTarget());
+    await git(['add', '.docs']);
+    await git(['commit', '-m', 'historical violating plan on main']);
+
+    const dir = await seedValidWorktree();
+    const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('keeps the existing plan-content gate ahead of the protected-target gate', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      `${planWithProtectedTarget()}\n**Status:** DRAFT\n`,
+    );
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/plan artifact contains "Status: DRAFT"/);
+  });
+
+  it('keeps the existing dirty-worktree gate ahead of the protected-target gate', async () => {
+    const dir = await seedValidWorktree();
+    await git(['add', '.docs'], dir);
+    await git(['commit', '-m', 'seed tracked decide artifacts'], dir);
+    await writeFile(join(dir, '.docs', 'plans', 'dep-bump.md'), planWithProtectedTarget());
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/dirty|uncommitted/i);
+  });
+});
+
 describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
   it('rejects a plan whose Stories link does not resolve to the selected stories artifact', async () => {
     const dir = await seedValidWorktree();

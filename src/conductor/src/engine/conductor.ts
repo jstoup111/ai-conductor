@@ -164,6 +164,7 @@ import {
   writeKickbackLedger,
 } from './kickback-ledger.js';
 import { decideKickbackDisposition } from './kickback-policy.js';
+import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -2045,13 +2046,28 @@ export class Conductor {
       };
     }
 
+    const planPath = await this.getActivePlanPath();
+    const sealedArtifactGapIds = new Set(
+      planPath
+        ? plan.gaps
+            .filter((gap) => remediationGapTargetsAnotherFeatureSealedArtifact(gap, planStem(planPath)))
+            .map((gap) => gap.id)
+        : [],
+    );
+    const gaps = plan.gaps.map((gap) =>
+      sealedArtifactGapIds.has(gap.id) &&
+      (gap.disposition === 'build' || gap.disposition === 'acceptance_specs')
+        ? { ...gap, disposition: 'plan' as const }
+        : gap,
+    );
+
     // Extract tasks from gaps and append them to the plan if present.
     // Remediation tasks are plan-modification tasks that close blocking gaps.
     // If gaps contain tasks, append them to the plan and re-seed task-status.json
     // so they show as pending and can be tracked for completion.
     const allTasks: Array<{ id: string; title: string }> = [];
-    for (const gap of plan.gaps) {
-      if (gap.tasks && gap.tasks.length > 0) {
+    for (const gap of gaps) {
+      if (!sealedArtifactGapIds.has(gap.id) && gap.tasks && gap.tasks.length > 0) {
         allTasks.push(...gap.tasks);
       }
     }
@@ -2068,7 +2084,6 @@ export class Conductor {
 
     if (allTasks.length > 0) {
       // Append remediation tasks to the plan
-      const planPath = await this.getActivePlanPath();
       if (planPath) {
         const appendResult = await appendRemediationTasks(this.projectRoot, planPath, allTasks);
         if (appendResult.success) {
@@ -2083,8 +2098,8 @@ export class Conductor {
       }
     }
 
-    const fixes = plan.gaps.filter((g) => g.disposition !== 'halt');
-    const halts = plan.gaps.filter((g) => g.disposition === 'halt');
+    const fixes = gaps.filter((g) => g.disposition !== 'halt');
+    const halts = gaps.filter((g) => g.disposition === 'halt');
     // Task 23: a 'halt' disposition must never be silently dropped in favor
     // of a sibling 'route' disposition. Even when the SAME plan also names
     // routable fixes for other gaps, a halt gap means at least one blocking
@@ -8269,6 +8284,23 @@ export function earliestRemediationTarget(
     }
   }
   return best;
+}
+
+/**
+ * Remediation tasks carry their concrete file scopes in titles rather than in
+ * plan `**Files:**` blocks. Present those scopes to the shared plan scanner so
+ * this route inherits the seal's directory and own-feature judgement.
+ */
+function remediationGapTargetsAnotherFeatureSealedArtifact(
+  gap: RemediationGap,
+  activePlanStem: string,
+): boolean {
+  const taskScopes = gap.tasks
+    .map(
+      (task) => `### Task ${task.id}: remediation\n\n**Files:** ${task.title}`,
+    )
+    .join('\n\n');
+  return scanPlanProtectedTargets(taskScopes, activePlanStem).length > 0;
 }
 
 /**

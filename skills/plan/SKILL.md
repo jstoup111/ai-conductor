@@ -113,6 +113,12 @@ N's, and `none` means the task's commit trailer alone corroborates. Backticked
 file names elsewhere in the task (Steps prose) are only used when no Files
 line exists.
 
+**Sealed-artifact prohibition:** A task MUST NOT name another feature's artifact under
+`.docs/architecture/`, `.docs/plans/`, `.docs/specs/`, or `.docs/stories/` in its `**Files:**`
+set (including an inherited `same` set). DECIDE performs any required amendment before this plan is
+authored; BUILD must never receive that mutation as a task. A path naming this plan's own feature is
+not prohibited.
+
 ### 3a. No Terminal Catch-All Validation Task
 
 A plan MUST NOT end with a catch-all validation task whose purpose is to prove, validate, confirm,
@@ -306,6 +312,18 @@ This check is **advisory only — it never blocks plan authoring.** Unmerged ove
 is a heads-up for sequencing/coordination, not a precondition; proceed to save the
 plan regardless of what the scan reports.
 
+### 8a2. Blocking Protected-Target Scan
+
+Before committing the plan, run:
+
+```bash
+conduct-ts plan-protected-targets .docs/plans/<feature>.md
+```
+
+This check is **blocking**. It must report no task/path violations before the plan is saved or
+committed. If it reports another feature's sealed artifact, perform the needed amendment in DECIDE
+and rewrite the task; do not waive the result or defer the mutation to BUILD.
+
 ### 8b. Update Architecture Diagrams
 
 After saving the plan, run `/architecture-diagram` in plan-update mode to update existing
@@ -337,5 +355,7 @@ any code is written. The full flow from here is:
 - [ ] Every task that touches new production-surface files carries a `**Wired-into:**`
       line (declared call site(s), `same as Task N`, or a `none (...)` form) — BLOCKS
       the plan's own verification if missing
+- [ ] `conduct-ts plan-protected-targets .docs/plans/<feature>.md` passes with no task/path
+      violations; no task targets another feature's sealed artifact
 - [ ] Plan saved to `.docs/plans/`
 - [ ] Coverage mapping presented to user

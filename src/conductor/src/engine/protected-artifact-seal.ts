@@ -14,7 +14,7 @@ function undatedStem(stem: string): string {
   return stem.replace(/^\d{4}-\d{2}-\d{2}-(?=.)/, '');
 }
 
-const PROTECTED_ARTIFACT_DIRECTORIES = [
+export const PROTECTED_ARTIFACT_DIRECTORIES = [
   '.docs/architecture',
   '.docs/plans',
   '.docs/specs',
@@ -505,7 +505,7 @@ async function workspaceProtectedPaths(projectRoot: string, directory: string): 
  * self-amendment reporting below — it never affects whether a path is
  * discovered/protected in the first place.
  */
-function namesOwnFeature(path: string, featureDesc: string): boolean {
+export function namesOwnFeature(path: string, featureDesc: string): boolean {
   const pathStem = basename(path, '.md');
   return pathStem === featureDesc || undatedStem(pathStem) === undatedStem(featureDesc);
 }

@@ -38,7 +38,15 @@ import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
 import { readState, writeState } from './engine/state.js';
-import { parseArgs, renderFullHelp, renderDaemonHelp, detectInline, type CLIOptions } from './cli.js';
+import {
+  parseArgs,
+  renderFullHelp,
+  renderDaemonHelp,
+  detectInline,
+  detectPlanProtectedTargetsCommand,
+  planProtectedTargetsCommand,
+  type CLIOptions,
+} from './cli.js';
 import type { StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
@@ -591,6 +599,12 @@ async function main(): Promise<void> {
   const overlapScanCmd = detectOverlapScanCommand(process.argv);
   if (overlapScanCmd) {
     const code = await overlapScanCommand(overlapScanCmd, { cwd: process.cwd() });
+    process.exit(code);
+  }
+
+  const planProtectedTargetsCmd = detectPlanProtectedTargetsCommand(process.argv);
+  if (planProtectedTargetsCmd) {
+    const code = await planProtectedTargetsCommand(planProtectedTargetsCmd);
     process.exit(code);
   }
 

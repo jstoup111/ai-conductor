@@ -6,11 +6,13 @@ import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  PROTECTED_ARTIFACT_DIRECTORIES,
   createProtectedArtifactSeal,
   classifyMutationTarget,
   evaluateProtectedArtifactSealRotation,
   evaluateProtectedArtifactSealRotationInRepository,
   isActiveStepArtifactException,
+  namesOwnFeature,
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
@@ -45,6 +47,13 @@ async function makeRepo(files: Record<string, string>): Promise<string> {
 
 afterEach(async () => {
   while (scratches.length > 0) await rm(scratches.pop()!, { recursive: true, force: true });
+});
+
+it('exports protected artifact directory and feature-name helpers', () => {
+  expect({ PROTECTED_ARTIFACT_DIRECTORIES, namesOwnFeature }).toEqual({
+    PROTECTED_ARTIFACT_DIRECTORIES: ['.docs/architecture', '.docs/plans', '.docs/specs', '.docs/stories'],
+    namesOwnFeature: expect.any(Function),
+  });
 });
 
 describe('createProtectedArtifactSeal', () => {
@@ -365,6 +374,20 @@ describe('verifyProtectedArtifactSeal', () => {
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/feature.md',
+    });
+  });
+
+  it('keeps the BUILD halt backstop for a task that edits a sealed artifact', async () => {
+    const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' })).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/another-feature.md',
     });
   });
 

@@ -398,6 +398,20 @@ Do not delete or edit `.pipeline/protected-artifact-seal.json`. The engine rebas
 automatically after a clean engine rebase, or during verification when it proves that every changed
 artifact is byte-identical to the base-branch tip.
 
+**First, identify an amendment request.** If the halt arose because BUILD discovered that an accepted
+DECIDE assertion must change, do not amend or reseal it in BUILD. Route the feature back to its owning
+DECIDE step (the daemon reaches the existing operator gate). There, add the correction beside the
+original assertion before BUILD starts again:
+
+```markdown
+> **Amended YYYY-MM-DD by #NNN:** <what the assertion now says, and why>
+```
+
+The note is additive: retain the original text and create no separate record. Re-author the plan
+without a task targeting the other feature's sealed artifact, then run
+`conduct-ts plan-protected-targets .docs/plans/<feature>.md` before landing. A clean result is
+`No protected-target violations found.`; each violation is reported as `Task <id>: <path>`.
+
 1. Read the refusal in `.daemon/daemon.log`:
    ```bash
    conduct-ts daemon logs | grep 'Protected artifact rotation refused'

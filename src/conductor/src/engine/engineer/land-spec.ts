@@ -52,6 +52,7 @@ import { runCoherenceGate } from './coherence-validator.js';
 import { resolveDaemonOwner, type OwnerConfig, type GhRunner } from '../owner-gate/identity.js';
 import { checkDiagramsForFile, defaultRenderDeps, type RenderDeps } from '../mermaid-renderer.js';
 import { resolvePlanStoriesPath } from '../plan-stories-reference.js';
+import { scanPlanProtectedTargets } from '../plan-protected-targets.js';
 
 const execFile = promisify(execFileCb);
 
@@ -237,6 +238,17 @@ export async function landSpec(
   }
   validateArtifactContent('stories', storiesContent, idea);
   validateArtifactContent('plan', planContent, idea);
+
+  const protectedTargetViolations = scanPlanProtectedTargets(planContent, planStem(planFile));
+  if (protectedTargetViolations.length > 0) {
+    const targets = protectedTargetViolations
+      .map(({ taskId, path }) => `Task ${taskId}: ${path}`)
+      .join(', ');
+    throw new Error(
+      `landSpec: plan targets sealed artifacts owned by another feature: ${targets}. ` +
+        'Amend accepted artifacts during DECIDE, then re-author the plan.',
+    );
+  }
 
   // Land and daemon discovery must agree on the exact stories artifact. Resolve
   // the plan's reference with the same machinery backlog discovery uses, then
