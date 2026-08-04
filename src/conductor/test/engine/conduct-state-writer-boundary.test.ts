@@ -20,6 +20,7 @@ const PERSISTENCE_CALLS = new Set([
 ]);
 const FILE_HANDLE_PERSISTENCE_CALLS = new Set(['appendFile', 'write', 'writeFile']);
 const FILESYSTEM_MODULES = new Set(['fs', 'fs/promises', 'node:fs', 'node:fs/promises']);
+const PATH_MODULES = new Set(['path', 'node:path']);
 
 async function sourceFiles(directory: string): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -31,19 +32,23 @@ async function sourceFiles(directory: string): Promise<string[]> {
   return nested.flat();
 }
 
-function staticPath(expression: ts.Expression, bindings: ReadonlyMap<string, ts.Expression>): string | undefined {
+function staticPath(
+  expression: ts.Expression,
+  bindings: ReadonlyMap<string, ts.Expression>,
+  imports: ReturnType<typeof collectWriterImports>,
+): string | undefined {
   if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return expression.text;
   if (ts.isTemplateExpression(expression)) {
     return expression.head.text + expression.templateSpans.map((span) =>
-      `${staticPath(span.expression, bindings) ?? ''}${span.literal.text}`,
+      `${staticPath(span.expression, bindings, imports) ?? ''}${span.literal.text}`,
     ).join('');
   }
   if (ts.isIdentifier(expression)) {
     const bound = bindings.get(expression.text);
-    return bound ? staticPath(bound, bindings) : undefined;
+    return bound ? staticPath(bound, bindings, imports) : undefined;
   }
-  if (ts.isCallExpression(expression) && ts.isIdentifier(expression.expression) && expression.expression.text === 'join') {
-    const parts = expression.arguments.map((argument) => staticPath(argument, bindings));
+  if (ts.isCallExpression(expression) && isPathJoinCall(expression, imports)) {
+    const parts = expression.arguments.map((argument) => staticPath(argument, bindings, imports));
     const knownParts = parts.filter((part): part is string => part !== undefined);
     return knownParts.length > 0 ? knownParts.join('/') : undefined;
   }
@@ -65,6 +70,10 @@ function collectWriterImports(source: ts.SourceFile): {
   filesystemNamespaces: ReadonlySet<string>;
   filesystemDefaultImports: ReadonlySet<string>;
   openAliases: ReadonlySet<string>;
+  pathDefaultImports: ReadonlySet<string>;
+  pathJoinAliases: ReadonlySet<string>;
+  pathNamespaces: ReadonlySet<string>;
+  renameAliases: ReadonlySet<string>;
   writeStateAliases: ReadonlySet<string>;
   stateNamespaces: ReadonlySet<string>;
 } {
@@ -72,6 +81,10 @@ function collectWriterImports(source: ts.SourceFile): {
   const filesystemNamespaces = new Set<string>();
   const filesystemDefaultImports = new Set<string>();
   const openAliases = new Set<string>();
+  const pathDefaultImports = new Set<string>();
+  const pathJoinAliases = new Set<string>();
+  const pathNamespaces = new Set<string>();
+  const renameAliases = new Set<string>();
   const writeStateAliases = new Set<string>();
   const stateNamespaces = new Set<string>();
 
@@ -79,14 +92,17 @@ function collectWriterImports(source: ts.SourceFile): {
     if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) continue;
     const moduleName = statement.moduleSpecifier.text;
     const isFilesystemModule = FILESYSTEM_MODULES.has(moduleName);
+    const isPathModule = PATH_MODULES.has(moduleName);
     const isStateHelperModule = moduleName === './state.js';
     if (isFilesystemModule && statement.importClause?.name) {
       filesystemDefaultImports.add(statement.importClause.name.text);
     }
+    if (isPathModule && statement.importClause?.name) pathDefaultImports.add(statement.importClause.name.text);
     const bindings = statement.importClause?.namedBindings;
     if (!bindings) continue;
     if (ts.isNamespaceImport(bindings)) {
       if (isFilesystemModule) filesystemNamespaces.add(bindings.name.text);
+      if (isPathModule) pathNamespaces.add(bindings.name.text);
       if (isStateHelperModule) stateNamespaces.add(bindings.name.text);
     }
     if (!ts.isNamedImports(bindings)) continue;
@@ -96,6 +112,10 @@ function collectWriterImports(source: ts.SourceFile): {
         persistenceAliases.add(specifier.name.text);
       }
       if (isFilesystemModule && imported === 'open') openAliases.add(specifier.name.text);
+      if (isFilesystemModule && (imported === 'rename' || imported === 'renameSync')) {
+        renameAliases.add(specifier.name.text);
+      }
+      if (isPathModule && imported === 'join') pathJoinAliases.add(specifier.name.text);
       if (isStateHelperModule && imported === 'writeState') writeStateAliases.add(specifier.name.text);
     }
   }
@@ -105,9 +125,23 @@ function collectWriterImports(source: ts.SourceFile): {
     filesystemNamespaces,
     filesystemDefaultImports,
     openAliases,
+    pathDefaultImports,
+    pathJoinAliases,
+    pathNamespaces,
+    renameAliases,
     writeStateAliases,
     stateNamespaces,
   };
+}
+
+function isPathJoinCall(
+  node: ts.CallExpression,
+  imports: ReturnType<typeof collectWriterImports>,
+): boolean {
+  if (ts.isIdentifier(node.expression)) return imports.pathJoinAliases.has(node.expression.text);
+  if (!ts.isPropertyAccessExpression(node.expression) || node.expression.name.text !== 'join') return false;
+  const root = rootIdentifier(node.expression.expression) ?? '';
+  return imports.pathNamespaces.has(root) || imports.pathDefaultImports.has(root);
 }
 
 function isPersistenceCall(
@@ -127,9 +161,9 @@ function isWritableStateOpen(
   bindings: ReadonlyMap<string, ts.Expression>,
 ): boolean {
   const opensStateFile = node.arguments[0] && ts.isExpression(node.arguments[0]) &&
-    staticPath(node.arguments[0], bindings)?.includes(STATE_FILE);
+    staticPath(node.arguments[0], bindings, imports)?.includes(STATE_FILE);
   const mode = node.arguments[1] && ts.isExpression(node.arguments[1])
-    ? staticPath(node.arguments[1], bindings)
+    ? staticPath(node.arguments[1], bindings, imports)
     : undefined;
   if (!opensStateFile || !mode || !/[wa+]/.test(mode)) return false;
 
@@ -146,6 +180,18 @@ function isFileHandlePersistenceCall(
   if (!ts.isPropertyAccessExpression(node.expression) ||
       !FILE_HANDLE_PERSISTENCE_CALLS.has(node.expression.name.text)) return false;
   return writableStateHandles.has(rootIdentifier(node.expression.expression) ?? '');
+}
+
+function persistenceTarget(
+  node: ts.CallExpression,
+  imports: ReturnType<typeof collectWriterImports>,
+): ts.Expression | undefined {
+  const isRename = ts.isIdentifier(node.expression)
+    ? imports.renameAliases.has(node.expression.text)
+    : ts.isPropertyAccessExpression(node.expression) &&
+      (node.expression.name.text === 'rename' || node.expression.name.text === 'renameSync');
+  const target = node.arguments[isRename ? 1 : 0];
+  return target && ts.isExpression(target) ? target : undefined;
 }
 
 function auditSource(path: string, text: string): string[] {
@@ -182,10 +228,10 @@ function auditSource(path: string, text: string): string[] {
       violations.push(`${path}: calls test-only whole-state fixture helper`);
     }
     if (ts.isCallExpression(node) && isPersistenceCall(node, imports)) {
-      const target = node.arguments[0] && ts.isExpression(node.arguments[0])
-        ? staticPath(node.arguments[0], bindings)
-        : undefined;
-      if (target?.includes(STATE_FILE)) violations.push(`${path}: raw persistence to ${STATE_FILE}`);
+      const target = persistenceTarget(node, imports);
+      if (target && staticPath(target, bindings, imports)?.includes(STATE_FILE)) {
+        violations.push(`${path}: raw persistence to ${STATE_FILE}`);
+      }
     }
     if (ts.isCallExpression(node) && isFileHandlePersistenceCall(node, writableStateHandles)) {
       violations.push(`${path}: raw persistence to ${STATE_FILE}`);
@@ -231,6 +277,22 @@ describe('conduct-state writer boundary', () => {
     );
 
     expect(bypass).toEqual(['engine/aliased-bypass.ts: raw persistence to conduct-state.json']);
+  });
+
+  it('rejects path.join rename destinations while allowing path-based readers', () => {
+    const bypass = auditSource(
+      'engine/path-join-rename-bypass.ts',
+      "import { rename } from 'node:fs/promises'; import path from 'node:path'; const temporary = '/tmp/state.tmp'; await rename(temporary, path.join(root, '.pipeline', 'conduct-state.json'));",
+    );
+    const reader = auditSource(
+      'engine/path-join-reader.ts',
+      "import { readFile } from 'node:fs/promises'; import path from 'node:path'; await readFile(path.join(root, '.pipeline', 'conduct-state.json'), 'utf8');",
+    );
+
+    expect({ bypass, reader }).toEqual({
+      bypass: ['engine/path-join-rename-bypass.ts: raw persistence to conduct-state.json'],
+      reader: [],
+    });
   });
 
   it('rejects an alias through a template-derived state path', () => {
