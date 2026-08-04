@@ -71,7 +71,10 @@ jobs:
 
             const git = {
               latestTag: () => gitOutput(['describe', '--tags', '--abbrev=0']),
-              mergeRange: async (tag) => (await gitOutput(['rev-list', '--merges', `${tag}..HEAD`])).split('\n').filter(Boolean),
+              // Merge commits are disabled on this repository: every PR lands as a
+              // single-parent squash or rebase commit, so the candidate range is
+              // every commit since the tag, not just merge commits.
+              mergeRange: async (tag) => (await gitOutput(['rev-list', `${tag}..HEAD`])).split('\n').filter(Boolean),
               readMainHead: async () => {
                 await exec.exec('git', ['fetch', 'origin', base], { silent: true });
                 return gitOutput(['rev-parse', 'FETCH_HEAD']);
@@ -124,6 +127,15 @@ jobs:
                   hasNextPage: false,
                   totalCount: pullRequests.length,
                 }),
+                // Consulted only for a range commit that is no PR's merge sha —
+                // a rebase merge replays every branch commit onto main and
+                // reports only the last one as merge_commit_sha.
+                pullRequestNumbersForCommit: async (commitSha) => {
+                  const { data } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+                    owner, repo, commit_sha: commitSha,
+                  });
+                  return data.filter((pullRequest) => pullRequest.merged_at !== null).map((pullRequest) => pullRequest.number);
+                },
               },
             });
             if (candidates.completeness.status !== 'complete') {

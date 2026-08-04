@@ -7,7 +7,8 @@ WORKFLOW="$ROOT_DIR/.github/workflows/release-pr.yml"
 PUBLISHER_WORKFLOW="$ROOT_DIR/.github/workflows/release.yml"
 TEMPLATE="$ROOT_DIR/.github/pull_request_template.md"
 
-grep -q 'types: \[opened, reopened, synchronize, edited\]' "$METADATA_WORKFLOW"
+# Additional trigger types are allowed; these four must always be present.
+grep -q 'types: \[opened, reopened, synchronize, edited' "$METADATA_WORKFLOW"
 grep -q 'actions/github-script@v9' "$METADATA_WORKFLOW"
 grep -q 'runReleaseMetadataCheckAction' "$METADATA_WORKFLOW"
 # The bot-generated release PR has an audit body rather than implementation PR
@@ -54,6 +55,19 @@ fi
 grep -Fq "readBranchHead: async () => (await gitOutput(['ls-remote', 'origin', \`refs/heads/\${branch}\`])).split(/\\s+/)[0]," "$WORKFLOW"
 grep -Fq "['fetch', 'origin', \`refs/heads/\${branch}:refs/remotes/origin/\${branch}\`]" "$WORKFLOW"
 grep -Fq "\`refs/remotes/origin/\${branch}:\${path}\`" "$WORKFLOW"
+
+# Merge commits are disabled on this repository, so every PR lands on main as a
+# single-parent squash or rebase commit. A `--merges` candidate range is always
+# empty and no release PR would ever open: the range must be every commit since
+# the latest tag.
+grep -Fq "mergeRange: async (tag) => (await gitOutput(['rev-list', \`\${tag}..HEAD\`])).split('\n').filter(Boolean)," "$WORKFLOW"
+if grep -Fq "'rev-list', '--merges'" "$WORKFLOW"; then
+  exit 1
+fi
+# Broadening the range makes every non-head commit of a rebase-merged PR a
+# candidate sha, so the workflow must supply the commit->PR association reader
+# the collector uses to attribute them.
+grep -Fq 'listPullRequestsAssociatedWithCommit' "$WORKFLOW"
 
 # Inspect the exact GitHub adapter and action input blocks, rather than finding
 # disconnected check-related text elsewhere in the workflow.

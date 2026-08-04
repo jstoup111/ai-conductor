@@ -34,9 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Installed explicitly so integrity check 1b enforces here rather than
-      # degrading to its "tool absent" WARN path on a runner image change.
-      - run: sudo apt-get update && sudo apt-get install -y shellcheck
+      # Installed explicitly so integrity checks 1b and 9d enforce here rather
+      # than degrading to their "tool absent" paths on a runner image change.
+      - run: sudo apt-get update && sudo apt-get install -y shellcheck ripgrep
       - run: bash test/test_harness_integrity.sh
 
   shellcheck:

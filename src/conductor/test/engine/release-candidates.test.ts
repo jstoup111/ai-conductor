@@ -147,6 +147,69 @@ describe('engine/release-candidates — merged pull requests after the latest ta
     });
   });
 
+  it('attributes a rebase-merged PR’s non-head commits to that PR without duplicating its candidate', async () => {
+    // A rebase merge replays every branch commit onto main; only the last one
+    // is the PR's mergeSha. The earlier commits are explained by the same PR.
+    const pullRequestNumbersForCommit = vi.fn(async (sha: string) => (sha === 'rebased-101a' ? [101] : []));
+    const collected = await collectReleaseCandidates({
+      git: { latestTag: vi.fn(async () => 'v1.2.3'), mergeRange: vi.fn(async () => ['rebased-101a', 'merge-101']) },
+      github: {
+        listMergedPullRequests: vi.fn(async () => ({
+          items: [pullRequest(101, 'merge-101')],
+          hasNextPage: false,
+          totalCount: 1,
+        })),
+        pullRequestNumbersForCommit,
+      },
+    });
+
+    expect(collected.completeness).toEqual({ status: 'complete' });
+    expect(collected.audit).toEqual([{ number: 101, mergeSha: 'merge-101', disposition: 'no-note' }]);
+    expect(collected.candidates).toHaveLength(1);
+    expect(pullRequestNumbersForCommit).toHaveBeenCalledWith('rebased-101a');
+    expect(pullRequestNumbersForCommit).not.toHaveBeenCalledWith('merge-101');
+  });
+
+  it('keeps a commit whose associated PR is outside the candidate range unexplained', async () => {
+    const collected = await collectReleaseCandidates({
+      git: { latestTag: vi.fn(async () => 'v1.2.3'), mergeRange: vi.fn(async () => ['merge-101', 'pushed-direct']) },
+      github: {
+        listMergedPullRequests: vi.fn(async () => ({
+          items: [pullRequest(101, 'merge-101')],
+          hasNextPage: false,
+          totalCount: 1,
+        })),
+        pullRequestNumbersForCommit: vi.fn(async () => [77]),
+      },
+    });
+
+    expect(collected.completeness).toEqual({
+      status: 'incomplete',
+      reasons: [{ kind: 'unexplained-merge', mergeSha: 'pushed-direct' }],
+    });
+  });
+
+  it('keeps a commit unexplained when the association lookup fails', async () => {
+    const collected = await collectReleaseCandidates({
+      git: { latestTag: vi.fn(async () => 'v1.2.3'), mergeRange: vi.fn(async () => ['merge-101', 'pushed-direct']) },
+      github: {
+        listMergedPullRequests: vi.fn(async () => ({
+          items: [pullRequest(101, 'merge-101')],
+          hasNextPage: false,
+          totalCount: 1,
+        })),
+        pullRequestNumbersForCommit: vi.fn(async () => {
+          throw new Error('GitHub unavailable');
+        }),
+      },
+    });
+
+    expect(collected.completeness).toEqual({
+      status: 'incomplete',
+      reasons: [{ kind: 'unexplained-merge', mergeSha: 'pushed-direct' }],
+    });
+  });
+
   it('keeps identical note text from distinct PRs as separate complete audit dispositions', async () => {
     const note = 'Shared reader-facing wording';
     const collected = await collectReleaseCandidates({

@@ -709,6 +709,28 @@ if [ -d "${HARNESS_DIR}/.git" ] && [ -f "$changelog" ]; then
   fi
 fi
 
+# 9d. The release-PR/publisher workflow contracts. Previously unwired, so the
+# workflows drifted from their assertions unnoticed — run them here.
+# It needs ripgrep for its multiline assertions, so it skips cleanly without it.
+release_pr_workflow_test="${HARNESS_DIR}/test/test_release_pr_workflow.sh"
+if [ ! -f "$release_pr_workflow_test" ]; then
+  assert "test/test_release_pr_workflow.sh exists" 1
+elif ! command -v rg >/dev/null 2>&1; then
+  assert "test/test_release_pr_workflow.sh — skipped (ripgrep not installed)" 0
+else
+  set +e
+  release_pr_workflow_output=$(bash "$release_pr_workflow_test" 2>&1)
+  release_pr_workflow_exit=$?
+  set -e
+
+  if [ "$release_pr_workflow_exit" -eq 0 ]; then
+    assert "test/test_release_pr_workflow.sh — release workflow contracts pass" 0
+  else
+    echo "$release_pr_workflow_output" | sed 's/^/    /'
+    assert "test/test_release_pr_workflow.sh — release workflow contracts pass" 1
+  fi
+fi
+
 # ── 10. Writer-audit for task-status.json single authority ──────────────────
 # Task #302 enforces that ONLY the engine (src/conductor/src/engine/) writes to
 # `.pipeline/task-status.json`. This is the single source of truth for task

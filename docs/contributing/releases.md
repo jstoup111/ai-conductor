@@ -67,6 +67,19 @@ App and carrying successful, head-bound release-candidate audit evidence.
 The release gate does **not** require `[Unreleased]` to be non-empty. Integrity owns the changelog's
 structure; the gate reads release metadata only for migration-block validation.
 
+### How candidates are found
+
+The maintainer collects every commit in `<latest tag>..HEAD` on `main` and attributes each one to a
+merged PR. Merge commits are disabled on this repository, so a PR lands on `main` as a single-parent
+squash or rebase commit — the candidate range is deliberately **not** restricted to merge commits.
+
+Attribution is by `merge_commit_sha`, which GitHub sets to the squashed commit for a squash merge and
+to the replayed head for a rebase merge. A rebase merge also replays the PR's earlier commits onto
+`main`; those are attributed through GitHub's commit-to-PR association and contribute no second
+candidate for the same PR. Anything left over — a direct push to `main`, or a commit whose PR is
+outside the range — is an unexplained commit, and the collection is incomplete: the maintainer fails
+the run rather than proposing a release that under-reports what shipped.
+
 ## What CI does on merge to main
 
 `.github/workflows/release.yml` triggers on every `push` to `main`, serializes publication, then obtains a
