@@ -13,6 +13,10 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [0.100.0] - 2026-08-04
 
+### Added
+
+- Plan authoring and land now block a task that would hand BUILD a mutation to another feature's sealed DECIDE artifact, routing that amendment back to its owning DECIDE step instead. ([implementation PR #1303](https://github.com/jstoup111/ai-conductor/pull/1303)).
+
 ### Changed
 
 - The rebase skill now verifies replay intent against source and upstream commits, halts on the first semantic ambiguity, and reconciles every rebased commit against that captured intent before reporting success. ([implementation PR #1292](https://github.com/jstoup111/ai-conductor/pull/1292)).
