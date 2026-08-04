@@ -108,6 +108,9 @@ function collectWriterImports(source: ts.SourceFile): {
     if (!ts.isNamedImports(bindings)) continue;
     for (const specifier of bindings.elements) {
       const imported = (specifier.propertyName ?? specifier.name).text;
+      if (isFilesystemModule && imported === 'promises') {
+        filesystemNamespaces.add(specifier.name.text);
+      }
       if (isFilesystemModule && PERSISTENCE_CALLS.has(imported)) {
         persistenceAliases.add(specifier.name.text);
       }
@@ -311,17 +314,17 @@ describe('conduct-state writer boundary', () => {
   });
 
   it('rejects namespace persistence while permitting namespace readers', () => {
-    const writer = auditSource(
-      'engine/namespace-writer.ts',
-      "import * as fs from 'node:fs/promises'; await fs.writeFile('/tmp/conduct-state.json', '{}');",
-    );
+    const writers = [
+      ['engine/namespace-writer.ts', "import * as fs from 'node:fs/promises'; await fs.writeFile('/tmp/conduct-state.json', '{}');"],
+      ['engine/promises-named-import-writer.ts', "import { promises as fs } from 'node:fs'; await fs.writeFile('/tmp/conduct-state.json', '{}');"],
+    ] as const;
     const reader = auditSource(
       'engine/namespace-reader.ts',
       "import * as fs from 'node:fs/promises'; await fs.readFile('/tmp/conduct-state.json', 'utf8');",
     );
 
-    expect({ writer, reader }).toEqual({
-      writer: ['engine/namespace-writer.ts: raw persistence to conduct-state.json'],
+    expect({ writers: writers.map(([path, fixture]) => auditSource(path, fixture)), reader }).toEqual({
+      writers: writers.map(([path]) => [`${path}: raw persistence to conduct-state.json`]),
       reader: [],
     });
   });
@@ -385,6 +388,7 @@ describe('conduct-state writer boundary', () => {
       ['engine/file-handle-write-file.ts', "import { open } from 'node:fs/promises'; const handle = await open('/tmp/conduct-state.json', 'w'); await handle.writeFile('{}');"],
       ['engine/file-handle-append-file.ts', "import * as fs from 'node:fs/promises'; const handle = await fs.open('/tmp/conduct-state.json', 'a'); await handle.appendFile('{}');"],
       ['engine/file-handle-write.ts', "import fs from 'fs/promises'; const handle = await fs.open('/tmp/conduct-state.json', 'r+'); await handle.write('{}');"],
+      ['engine/promises-named-import-file-handle-writer.ts', "import { promises as fs } from 'node:fs'; const handle = await fs.open('/tmp/conduct-state.json', 'w'); await handle.writeFile('{}');"],
     ] as const;
     const reader = auditSource(
       'engine/file-handle-reader.ts',
