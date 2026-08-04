@@ -373,8 +373,206 @@ export function nextFinishPublicationTransition(
 export type PublicationDisposition =
   | { kind: 'complete' }
   | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
+  | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
   | { kind: 'human_required'; reason: string };
+
+/** The only actions the conductor may take for a typed FINISH result. */
+export type FinishPublicationRoute =
+  | { kind: 'complete' }
+  | { kind: 'retry_finish'; reason: string }
+  | { kind: 'halt'; reason: string };
+
+const PUBLICATION_CONDITIONS = {
+  publication_snapshot_incoherent: {
+    message: 'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
+    nextAction: 'resolve_publication_state',
+  },
+  publication_snapshot_indeterminate: {
+    message: 'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.',
+    nextAction: 'restore_publication_observation',
+  },
+  implementation_evidence_invalid: {
+    message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+    nextAction: 'rerun_build_verification',
+  },
+  implementation_evidence_indeterminate: {
+    message: 'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
+    nextAction: 'restore_implementation_observation',
+  },
+  ship_evidence_invalid: {
+    message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+    nextAction: 'rerun_ship_validators',
+  },
+  ship_evidence_indeterminate: {
+    message: 'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
+    nextAction: 'restore_ship_observation',
+  },
+  release_readiness_missing: {
+    message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+    nextAction: 'publish_release_readiness',
+  },
+  release_readiness_invalid: {
+    message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+    nextAction: 'restore_release_readiness',
+  },
+  release_readiness_indeterminate: {
+    message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+    nextAction: 'restore_release_readiness_observation',
+  },
+} as const;
+
+const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
+  establish_pr: [
+    'draft_pr_effect_unavailable',
+    'draft_pr_skipped',
+    'draft_pr_no-commits',
+    'draft_pr_push-failed',
+    'draft_pr_failed',
+    'pr_identity_not_verified_after_establish',
+  ],
+  verify_release_readiness: [],
+  write_shipped_record: [
+    'shipped_record_effect_unavailable',
+    'shipped_record_write_failed',
+    'shipped_record_not_verified_after_write',
+  ],
+  judge_pr_prose: [
+    'judgment_timed_out',
+    'judgment_provider_unavailable',
+    'judgment_dispatch_failed',
+  ],
+  ready_pr: [
+    'presentation_repair_effect_unavailable',
+    'presentation_repair_failed',
+    'presentation_not_verified_after_repair',
+  ],
+  record_outcome: [
+    'outcome_record_effect_unavailable',
+    'outcome_record_write_failed',
+    'outcome_record_not_verified_after_write',
+  ],
+};
+
+/**
+ * Fail-closed boundary between the publication coordinator and conductor.
+ * Publication-only work may retry FINISH, while every other currently-known
+ * outcome remains local to FINISH until its dedicated routing rule exists.
+ *
+ * `unknown` is intentional: the boundary can receive a malformed result from
+ * a future adapter, so compile-time exhaustiveness alone is insufficient.
+ */
+export function routeFinishPublicationDisposition(
+  disposition: unknown,
+): FinishPublicationRoute {
+  if (!isExactDisposition(disposition)) {
+    return {
+      kind: 'halt',
+      reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+    };
+  }
+
+  switch (disposition.kind) {
+    case 'complete':
+      return { kind: 'complete' };
+    case 'publication_retry':
+      if (
+        'condition' in disposition &&
+        (disposition.condition.code === 'implementation_evidence_invalid' ||
+          disposition.condition.code === 'implementation_evidence_indeterminate' ||
+          disposition.condition.code === 'ship_evidence_invalid' ||
+          disposition.condition.code === 'ship_evidence_indeterminate')
+      ) {
+        return {
+          kind: 'halt',
+          reason:
+            'FINISH evidence-invalid disposition requires its dedicated BUILD routing rule: ' +
+            disposition.condition.code,
+        };
+      }
+      return {
+        kind: 'retry_finish',
+        reason: 'reason' in disposition ? disposition.reason : disposition.condition.code,
+      };
+    case 'implementation_invalid':
+      return {
+        kind: 'halt',
+        reason:
+          'FINISH implementation-invalid disposition requires its dedicated BUILD routing rule: ' +
+          disposition.evidence,
+      };
+    case 'human_required':
+      return { kind: 'halt', reason: disposition.reason };
+  }
+}
+
+function isExactDisposition(
+  disposition: unknown,
+): disposition is PublicationDisposition {
+  if (!disposition || typeof disposition !== 'object' || Array.isArray(disposition)) return false;
+  const value = disposition as Record<string, unknown>;
+  const keys = Object.keys(value).sort();
+  const hasOnly = (...expected: string[]) =>
+    keys.length === expected.length && keys.every((key, index) => key === expected.sort()[index]);
+
+  switch (value.kind) {
+    case 'complete':
+      return hasOnly('kind');
+    case 'publication_retry':
+      if (hasOnly('kind', 'transition', 'reason')) {
+        return (
+          isPublicationTransition(value.transition) &&
+          typeof value.reason === 'string' &&
+          PUBLICATION_RETRY_REASONS[value.transition].includes(value.reason)
+        );
+      }
+      return (
+        hasOnly('kind', 'condition') &&
+        isPublicationCondition(value.condition)
+      );
+    case 'implementation_invalid':
+      return (
+        hasOnly('kind', 'evidence') &&
+        typeof value.evidence === 'string' &&
+        value.evidence.length > 0
+      );
+    case 'human_required':
+      return (
+        hasOnly('kind', 'reason') &&
+        typeof value.reason === 'string' &&
+        value.reason.length > 0
+      );
+    default:
+      return false;
+  }
+}
+
+function isPublicationTransition(value: unknown): value is PublicationTransition {
+  return (
+    value === 'establish_pr' ||
+    value === 'verify_release_readiness' ||
+    value === 'write_shipped_record' ||
+    value === 'judge_pr_prose' ||
+    value === 'ready_pr' ||
+    value === 'record_outcome'
+  );
+}
+
+function isPublicationCondition(value: unknown): value is PublicationCondition {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  const expected =
+    typeof condition.code === 'string'
+      ? PUBLICATION_CONDITIONS[condition.code as keyof typeof PUBLICATION_CONDITIONS]
+      : undefined;
+  return (
+    typeof condition.message === 'string' &&
+    typeof condition.nextAction === 'string' &&
+    expected?.message === condition.message &&
+    expected.nextAction === condition.nextAction &&
+    Object.keys(condition).length === 3
+  );
+}
 
 /** A deterministic FINISH condition with the only permitted operator action. */
 export type PublicationCondition =

@@ -157,6 +157,7 @@ import {
   resetRegradeCounter,
   type Disposition,
 } from './build-review-disposition.js';
+import { routeFinishPublicationDisposition } from './finish-publication.js';
 import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
@@ -410,6 +411,11 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /**
+   * Typed only by the FINISH composition boundary. Kept unknown at this edge
+   * so malformed adapter results fail closed instead of reaching remediation.
+   */
+  publicationDisposition?: unknown;
   /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
   observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
@@ -5156,6 +5162,48 @@ export class Conductor {
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
+          }
+
+          // Publication outcomes have a closed, FINISH-local recovery path.
+          // Do this before generic step failure handling so a transient
+          // GitHub/recording failure cannot be reinterpreted as BUILD work by
+          // the broad remediation planner.
+          if (step.name === 'finish' && result.publicationDisposition !== undefined) {
+            const route = routeFinishPublicationDisposition(result.publicationDisposition);
+            if (route.kind === 'retry_finish') {
+              lastError = `FINISH publication retry: ${route.reason}`;
+              retryHint = `${lastError}. Retry only the incomplete publication transition.`;
+              if (attempt < stepMaxRetries) {
+                await emitTracked({
+                  type: 'step_retry',
+                  step: 'finish',
+                  attempt: attempt + 1,
+                  maxAttempts: stepMaxRetries,
+                  reason: lastError,
+                });
+                continue;
+              }
+              const reason = `FINISH publication retry exhausted: ${route.reason}`;
+              state.finish = 'failed';
+              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              await emitTracked({ type: 'loop_halt', reason });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            if (route.kind === 'halt') {
+              state.finish = 'failed';
+              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await writeHaltMarker(this.projectRoot, route.reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              await emitTracked({ type: 'loop_halt', reason: route.reason });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            result = { ...result, success: true };
           }
 
           if (!result.success) {

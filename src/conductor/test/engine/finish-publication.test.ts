@@ -5,6 +5,17 @@ import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-re
 
 const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
 
+async function routeFinishPublicationDisposition(disposition: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const route = mod.routeFinishPublicationDisposition;
+  if (typeof route !== 'function') {
+    throw new Error(
+      'expected export "routeFinishPublicationDisposition" to be a function (not yet implemented)',
+    );
+  }
+  return route(disposition);
+}
+
 type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
 type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
 type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
@@ -351,6 +362,140 @@ describe('finish-publication domain types', () => {
     expect(validatePublicationSnapshot(snapshot)).toEqual({
       kind: 'incoherent',
       reason: 'valid_outcome_record_requires_external_pr',
+    });
+  });
+});
+
+describe('FINISH publication disposition routing', () => {
+  it.each([
+    ['establish_pr', 'draft_pr_effect_unavailable'],
+    ['establish_pr', 'draft_pr_skipped'],
+    ['establish_pr', 'draft_pr_no-commits'],
+    ['establish_pr', 'draft_pr_push-failed'],
+    ['establish_pr', 'draft_pr_failed'],
+    ['establish_pr', 'pr_identity_not_verified_after_establish'],
+    ['write_shipped_record', 'shipped_record_effect_unavailable'],
+    ['write_shipped_record', 'shipped_record_write_failed'],
+    ['write_shipped_record', 'shipped_record_not_verified_after_write'],
+    ['judge_pr_prose', 'judgment_timed_out'],
+    ['judge_pr_prose', 'judgment_provider_unavailable'],
+    ['judge_pr_prose', 'judgment_dispatch_failed'],
+    ['ready_pr', 'presentation_repair_effect_unavailable'],
+    ['ready_pr', 'presentation_repair_failed'],
+    ['ready_pr', 'presentation_not_verified_after_repair'],
+    ['record_outcome', 'outcome_record_effect_unavailable'],
+    ['record_outcome', 'outcome_record_write_failed'],
+    ['record_outcome', 'outcome_record_not_verified_after_write'],
+  ] as const)('keeps publication retry %s/%s in FINISH', async (transition, reason) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        transition,
+        reason,
+      }),
+    ).resolves.toEqual({ kind: 'retry_finish', reason });
+  });
+
+  it.each([
+    [
+      'publication_snapshot_incoherent',
+      'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
+      'resolve_publication_state',
+    ],
+    [
+      'publication_snapshot_indeterminate',
+      'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.',
+      'restore_publication_observation',
+    ],
+    [
+      'release_readiness_missing',
+      'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+      'publish_release_readiness',
+    ],
+    [
+      'release_readiness_invalid',
+      'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+      'restore_release_readiness',
+    ],
+    [
+      'release_readiness_indeterminate',
+      'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+      'restore_release_readiness_observation',
+    ],
+  ] as const)('keeps publication condition %s in FINISH', async (code, message, nextAction) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        condition: { code, message, nextAction },
+      }),
+    ).resolves.toEqual({ kind: 'retry_finish', reason: code });
+  });
+
+  it.each([
+    [
+      'implementation_evidence_invalid',
+      'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+      'rerun_build_verification',
+    ],
+    [
+      'implementation_evidence_indeterminate',
+      'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
+      'restore_implementation_observation',
+    ],
+    [
+      'ship_evidence_invalid',
+      'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+      'rerun_ship_validators',
+    ],
+    [
+      'ship_evidence_indeterminate',
+      'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
+      'restore_ship_observation',
+    ],
+  ] as const)('halts evidence-invalid condition %s pending dedicated BUILD routing', async (code, message, nextAction) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        condition: { code, message, nextAction },
+      }),
+    ).resolves.toMatchObject({ kind: 'halt', reason: expect.stringContaining(code) });
+  });
+
+  it.each([
+    undefined,
+    { kind: 'complete', reason: 'contradictory' },
+    { kind: 'publication_retry', transition: 'record_outcome' },
+    { kind: 'publication_retry', transition: 'record_outcome', reason: 7 },
+    { kind: 'publication_retry', transition: 'unknown_transition', reason: 'bad' },
+    { kind: 'publication_retry', transition: 'record_outcome', reason: 'draft_pr_no-commits' },
+    {
+      kind: 'publication_retry',
+      condition: {
+        code: 'release_readiness_missing',
+        message: 'not the canonical message',
+        nextAction: 'publish_release_readiness',
+      },
+    },
+    {
+      kind: 'publication_retry',
+      transition: 'record_outcome',
+      reason: 'contradictory',
+      condition: { code: 'release_readiness_missing', message: 'bad', nextAction: 'bad' },
+    },
+    {
+      kind: 'implementation_invalid',
+      evidence: 'invalid proof',
+      reason: 'contradictory publication retry',
+    },
+    {
+      kind: 'publication_retry',
+      condition: { code: 'unknown_condition', message: 'bad', nextAction: 'bad' },
+    },
+    { kind: 'unknown' },
+  ])('halts unknown or contradictory disposition %#', async (disposition) => {
+    await expect(routeFinishPublicationDisposition(disposition)).resolves.toMatchObject({
+      kind: 'halt',
+      reason: expect.stringContaining('publication disposition'),
     });
   });
 });
