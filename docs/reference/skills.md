@@ -534,7 +534,9 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 - **Gate role** — advisory; it is the unblocker rather than a blocker. HALT is reserved for exactly
   three categories: architectural clarity, product scope, and unanswerable. Every other gap must route
   to `build`, `acceptance_specs`, `architecture_review`, or `plan`. On absent, stale, or malformed
-  input the engine falls back to deterministic gap classification.
+  input the engine falls back to deterministic gap classification. The engine also HALTs, independent
+  of category, when a `build` gap carries no concrete task outside a build-stall question — a taskless
+  `build` disposition is not dispatchable work.
 - **Dispatches** — `agents/remediation-planner.md`.
 
 ### retro
