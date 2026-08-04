@@ -3730,8 +3730,8 @@ export class Conductor {
                   }
                   if (fullSuiteFailure?.status === 'FAILED') state.test_suite = 'failed';
                 } else {
-                  for (const failure of deterministicFailures) {
-                    (state as Record<string, unknown>)[failure.member.name] = 'stale';
+                  for (const member of membership.dispatchable) {
+                    (state as Record<string, unknown>)[member.name] = 'stale';
                   }
                 }
                 await writeState(this.stateFilePath, state);
