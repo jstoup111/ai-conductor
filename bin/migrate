@@ -393,6 +393,11 @@ select_migration_candidates() {
   printf '%s' "$candidates"
 }
 
+execute_migration_block() {
+  local script=$1
+  HARNESS_DIR="$HARNESS_DIR" bash -c 'set -euo pipefail; eval "$1"' migration-block "$script"
+}
+
 run_project_migrations() {
   if in_harness_repo; then
     info "Running inside the harness repo — skipping project-level migrations"
@@ -444,7 +449,7 @@ run_project_migrations() {
     if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
       if [ -n "$current_script" ]; then
         info "Executing migration for $current_version"
-        if ! bash -c "$current_script"; then
+        if ! execute_migration_block "$current_script"; then
           fail "Migration for $current_version failed"
           return 1
         fi
@@ -458,7 +463,7 @@ run_project_migrations() {
   done <<< "$blocks"
   if [ -n "$current_script" ]; then
     info "Executing migration for $current_version"
-    if ! bash -c "$current_script"; then
+    if ! execute_migration_block "$current_script"; then
       fail "Migration for $current_version failed"
       return 1
     fi
