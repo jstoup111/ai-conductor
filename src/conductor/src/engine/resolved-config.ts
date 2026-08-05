@@ -50,7 +50,9 @@ export const DEFAULT_STEP_RETRIES: Record<StepName, number> = {
   architecture_review_as_built: 3,
   retro: 3,
   rebase: 1,
-  finish: 1,
+  // FINISH makes one verified publication transition per attempt, then
+  // re-observes authoritatively before declaring completion.
+  finish: 6,
   remediate: 3,
   attribution_verify: 3,
 };

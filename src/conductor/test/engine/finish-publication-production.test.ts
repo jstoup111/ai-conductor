@@ -549,7 +549,7 @@ describe('production FINISH publication composition', () => {
     }
   });
 
-  it('acquires fresh interactive PR intent before every publication observation or effect', async () => {
+  it('acquires interactive PR intent once and reuses it across deterministic publication retries', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-interactive-pr-'));
     try {
       const pipeline = join(root, '.pipeline');
@@ -605,6 +605,22 @@ describe('production FINISH publication composition', () => {
       expect(writeShippedRecord).not.toHaveBeenCalled();
       expect(recordFinish).not.toHaveBeenCalled();
       await expect(readFile(join(pipeline, 'finish-choice'), 'utf8')).rejects.toThrow();
+
+      await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        emit: async () => {},
+      });
+      expect(trace.filter((entry) => entry === 'operator-choice')).toHaveLength(1);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

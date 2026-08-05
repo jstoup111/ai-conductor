@@ -687,6 +687,102 @@ afterEach(async () => {
 });
 
 describe('real entry point — Conductor.run mode convergence (FR-9, FR-11)', () => {
+  it.each([
+    { label: 'interactive with an existing PR', mode: 'interactive' as const, daemon: false, prPresent: true },
+    { label: 'interactive without a PR', mode: 'interactive' as const, daemon: false, prPresent: false },
+    { label: 'default foreground with an existing PR', mode: 'default' as const, daemon: false, prPresent: true },
+    { label: 'default foreground without a PR', mode: 'default' as const, daemon: false, prPresent: false },
+    { label: 'foreground-auto with an existing PR', mode: 'auto' as const, daemon: false, prPresent: true },
+    { label: 'foreground-auto without a PR', mode: 'auto' as const, daemon: false, prPresent: false },
+    { label: 'daemon with an existing PR', mode: 'auto' as const, daemon: true, prPresent: true },
+    { label: 'daemon without a PR', mode: 'auto' as const, daemon: true, prPresent: false },
+  ])('converges %s through the production coordinator with one prose judgment', async ({ mode, daemon, prPresent }) => {
+    conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-pr-convergence-'));
+    const pipeline = join(conductorRoot, '.pipeline');
+    await mkdir(pipeline, { recursive: true });
+    const stateFilePath = join(pipeline, 'conduct-state.json');
+    const prUrl = 'https://github.com/acme/widget/pull/1172';
+    let pullRequest: { url: string; title: string; body: string; isDraft: boolean } | undefined = prPresent
+      ? { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true }
+      : undefined;
+    const state: Record<string, unknown> = {
+      feature_desc: 'feature', worktree_branch: 'feat/feature', complexity_tier: 'S',
+      ...(prPresent ? { pr_url: prUrl } : {}),
+    };
+    for (const step of ALL_STEPS) {
+      if (step.name === 'finish') break;
+      state[step.name] = 'done';
+    }
+    await writeState(stateFilePath, state as ConductState);
+    await mkdir(join(conductorRoot, '.docs', 'shipped'), { recursive: true });
+    await writeFile(join(conductorRoot, '.docs', 'shipped', 'feature.md'), 'shipped\n');
+    let judgmentDispatches = 0;
+    const gh = vi.fn(async (args: string[]) => {
+      if (args[0] === 'auth' && args[1] === 'status') return { stdout: '' };
+      if (args[0] === 'pr' && args[1] === 'view') {
+        if (!pullRequest) throw new Error('no open PR');
+        return { stdout: JSON.stringify(pullRequest) };
+      }
+      if (args[0] === 'pr' && args[1] === 'create') {
+        pullRequest = { url: prUrl, title: 'feat: draft publication', body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.', isDraft: true };
+        return { stdout: `${prUrl}\n` };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready' && pullRequest) {
+        pullRequest.isDraft = false;
+        return { stdout: '' };
+      }
+      throw new Error(`unexpected GitHub command: ${args.join(' ')}`);
+    });
+    const git = vi.fn(async (args: string[]) => {
+      if (args[0] === 'remote') return { stdout: 'origin\n' };
+      if (args[0] === 'rev-list') return { stdout: '1\n' };
+      if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+      if (args[0] === 'merge-base' || args[0] === 'push') return { stdout: '' };
+      throw new Error(`unexpected git command: ${args.join(' ')}`);
+    });
+    const conductor = new Conductor({
+      stateFilePath,
+      stepRunner: {
+        run: vi.fn(async () => {
+          judgmentDispatches++;
+          if (!pullRequest) throw new Error('judgment requires a PR');
+          pullRequest.title = 'feat: publish coherent finish';
+          pullRequest.body = 'Reader-facing summary of the completed change.';
+          return { success: true, publicationDisposition: { kind: 'accepted' } };
+        }),
+      },
+      projectRoot: conductorRoot,
+      events: new ConductorEventEmitter(),
+      mode,
+      daemon,
+      fromStep: 'finish',
+      verifyArtifacts: false,
+      finishPublication: createProductionFinishPublicationCoordinator({
+        projectRoot: conductorRoot,
+        stateFilePath,
+        baseBranch: 'main',
+        git,
+        gh,
+        acquireInteractiveIntent: async () => 'pr',
+        observeReleaseReadiness: async () => 'present',
+        writeShippedRecord: async () => 0,
+        recordFinish: async () => {
+          await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+          return 0;
+        },
+      }),
+      git,
+      gh,
+    });
+
+    await conductor.run();
+
+    const finalState = await readState(stateFilePath);
+    expect(finalState.ok && finalState.value.finish).toBe('done');
+    expect(judgmentDispatches).toBe(1);
+    await expect(access(join(pipeline, 'HALT'))).rejects.toThrow();
+  });
+
   it('foreground-auto with no publishable remote records keep without legacy FINISH judgment', async () => {
     conductorRoot = await mkdtemp(join(tmpdir(), 'finish-publication-conductor-'));
     await mkdir(join(conductorRoot, '.pipeline'), { recursive: true });

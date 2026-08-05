@@ -140,12 +140,18 @@ export function createProductionFinishPublicationCoordinator(
   // session, while an unchanged deficient one cannot burn retries.
   const proseRevisionByPr = new Map<string, string>();
   const judgmentByRevision = new Map<string, PrProseJudgmentResult>();
+  // Interactive authority is acquired once per coordinator lifetime. A retry
+  // must re-observe publication state, not ask the operator to re-authorize
+  // the same requested outcome.
+  let attendedRequestedOutcome: Promise<unknown> | undefined;
 
   return {
     async advance({ state, mode, daemon, dispatchJudgment, emit }) {
       const attended = !daemon && (mode === 'default' || mode === 'interactive');
       const requestedOutcome = attended
-        ? await deps.acquireInteractiveIntent?.()
+        ? await (attendedRequestedOutcome ??= Promise.resolve().then(
+            () => deps.acquireInteractiveIntent?.(),
+          ))
         : await readFile(join(pipelineDir, 'finish-choice'), 'utf8')
           .then((value) => value.trim())
           .catch(() => undefined);

@@ -454,6 +454,7 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'judgment_timed_out',
     'judgment_provider_unavailable',
     'judgment_dispatch_failed',
+    'judgment_completed_reobserve',
   ],
   ready_pr: [
     'presentation_repair_effect_unavailable',

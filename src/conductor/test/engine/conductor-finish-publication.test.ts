@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -7,6 +7,7 @@ import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { writeState } from '../../src/engine/state.js';
+import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -141,6 +142,84 @@ describe('Conductor FINISH publication routing', () => {
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       ROUTED_SENTINEL.message,
     );
+  });
+
+  it('routes a production accepted judgment through FINISH retry without a needs-human HALT', async () => {
+    const pipeline = join(dir, '.pipeline');
+    const productionStatePath = join(pipeline, 'conduct-state.json');
+    const prUrl = 'https://example.test/pr/17';
+    let pullRequest = {
+      url: prUrl,
+      title: 'feat: draft publication',
+      body: '<!-- conductor:pr-body-floor -->\n\nDraft opened automatically.',
+      isDraft: true,
+    };
+    await mkdir(pipeline);
+    await mkdir(join(dir, '.docs', 'shipped'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'shipped', 'finish-publication.md'), 'shipped\n');
+    const state: Record<string, unknown> = {
+      complexity_tier: 'S',
+      feature_desc: 'finish-publication',
+      worktree_branch: 'feat/finish-publication',
+      pr_url: prUrl,
+    };
+    for (const step of [
+      'bootstrap', 'memory', 'assess', 'explore', 'prd', 'complexity', 'stories',
+      'conflict_check', 'plan', 'coherence_check', 'architecture_diagram',
+      'architecture_review', 'worktree', 'acceptance_specs', 'build', 'build_review',
+      'wiring_check', 'test_suite', 'manual_test', 'prd_audit',
+      'architecture_review_as_built', 'retro', 'rebase',
+    ] satisfies StepName[]) state[step] = 'done';
+    await writeState(productionStatePath, state as ConductState);
+    const runner: StepRunner = {
+      run: vi.fn(async () => {
+        pullRequest = {
+          ...pullRequest,
+          title: 'feat: publish coherent finish',
+          body: 'Reader-facing summary of the completed change.',
+        };
+        return { success: true, publicationDisposition: { kind: 'accepted' } };
+      }),
+    };
+    const events = new ConductorEventEmitter();
+    const dispositions: string[] = [];
+    events.on('finish_publication_disposition', (event) => {
+      if (event.type === 'finish_publication_disposition') dispositions.push(event.disposition);
+    });
+    const coordinator = createProductionFinishPublicationCoordinator({
+      projectRoot: dir,
+      stateFilePath: productionStatePath,
+      baseBranch: 'main',
+      git: async (args) => args[0] === 'rev-parse'
+        ? { stdout: 'refs/remotes/origin/feat/finish-publication\n' }
+        : { stdout: '' },
+      gh: async (args) => {
+        if (args[0] === 'pr' && args[1] === 'view') return { stdout: JSON.stringify(pullRequest) };
+        if (args[0] === 'pr' && args[1] === 'ready') {
+          pullRequest.isDraft = false;
+          return { stdout: '' };
+        }
+        throw new Error(`unexpected gh command: ${args.join(' ')}`);
+      },
+      observeReleaseReadiness: async () => 'present',
+      recordFinish: async () => {
+        await writeFile(join(pipeline, 'finish-choice'), 'pr\n');
+        return 0;
+      },
+    });
+    const conductor = new Conductor({
+      stateFilePath: productionStatePath, stepRunner: runner, finishPublication: coordinator,
+      events, projectRoot: dir, fromStep: 'finish', mode: 'auto', daemon: true,
+      verifyArtifacts: false,
+      git: async () => ({ stdout: '' }), gh: async () => ({ stdout: '' }), runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(runner.run).toHaveBeenCalledOnce();
+    expect(dispositions).toContain('retry_finish');
+    expect(dispositions).not.toContain('human_required');
+    await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
   it.each([

@@ -408,6 +408,7 @@ describe('FINISH publication disposition routing', () => {
     ['judge_pr_prose', 'judgment_timed_out'],
     ['judge_pr_prose', 'judgment_provider_unavailable'],
     ['judge_pr_prose', 'judgment_dispatch_failed'],
+    ['judge_pr_prose', 'judgment_completed_reobserve'],
     ['ready_pr', 'presentation_repair_effect_unavailable'],
     ['ready_pr', 'presentation_repair_failed'],
     ['ready_pr', 'presentation_not_verified_after_repair'],
