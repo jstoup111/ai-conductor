@@ -4,10 +4,16 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { createVitest } from 'vitest/node';
 
+import { assertSmokeDiscovery } from '../smoke-capability.js';
+
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
 
 describe('structural: smoke test entry point', () => {
+  it('rejects an empty smoke discovery instead of allowing a vacuous pass', () => {
+    expect(() => assertSmokeDiscovery([])).toThrow('Smoke discovery found no test files');
+  });
+
   it('discovers every known smoke file through the resolved smoke config', async () => {
     const vitest = await createVitest('test', {
       config: join(conductorRoot, 'vitest.smoke.config.ts'),
