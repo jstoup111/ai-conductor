@@ -852,6 +852,31 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
+    it('names the absent merge-base and rebase recovery for unrelated branch histories', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await rm(join(repo, '.pipeline/protected-artifact-seal.json'));
+
+      await git(repo, ['checkout', '-q', '--orphan', 'unrelated-feature']);
+      await git(repo, ['rm', '-q', '-rf', '.']);
+      await writeProjectFile(repo, '.docs/plans/other-feature.md', 'unrelated plan\n');
+      await git(repo, ['add', '.docs/plans/other-feature.md']);
+      await git(repo, ['commit', '-q', '-m', 'unrelated feature history']);
+
+      await expect(
+        verifyProtectedArtifactSeal({
+          projectRoot: repo,
+          baselineCommit,
+          featureDesc: 'mine',
+          baseBranch: 'main',
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nNo merge-base exists between HEAD and main.\nRebase onto main to establish shared history.',
+      });
+    });
+
     it('still HALTS on a deletion even when the base branch tip also lacks the file', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
