@@ -52,6 +52,15 @@ export function resolveGateSmokeCapabilities(
   };
 }
 
+/** Rejects a gate-mode smoke run that never executed a credentialed test file. */
+export function assertGateCredentialedExecution(
+  executedCapabilities: readonly SmokeCapability[],
+): void {
+  if (!executedCapabilities.includes('credentialed')) {
+    throw new Error('Gate-mode smoke run executed no credentialed test files');
+  }
+}
+
 /** Rejects a smoke run that did not discover any test files. */
 export function assertSmokeDiscovery(discovered: { readonly length: number }): void {
   if (discovered.length === 0) {

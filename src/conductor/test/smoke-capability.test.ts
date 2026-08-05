@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   SMOKE_CAPABILITIES,
+  assertGateCredentialedExecution,
   declareSmokeCapability,
   getDeclaredSmokeCapability,
   resolveAdvisorySmokeCapabilities,
@@ -65,5 +66,11 @@ describe('smoke capability declarations', () => {
       outcome: 'failed',
       unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
     });
+  });
+
+  it('fails gate mode when no credentialed case executed', () => {
+    expect(() => assertGateCredentialedExecution(['hermetic', 'toolchain'])).toThrow(
+      'Gate-mode smoke run executed no credentialed test files',
+    );
   });
 });
