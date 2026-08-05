@@ -180,6 +180,10 @@ print(json.dumps(ledger, sort_keys=True))
 PY
 }
 
+ledger_exists() {
+  [ -f "$(ledger_path)" ]
+}
+
 ledger_record_applied() {
   local release=$1 body=$2 path identity
   path=$(ledger_path)
@@ -330,9 +334,21 @@ PY
 # The ledger is the authority after its first record.  Parse every release so
 # an older pending block remains reachable even after currentVersion advances.
 select_migration_candidates() {
-  local blocks ledger current_version="" current_script="" identity candidates=""
-  blocks=$(extract_migration_blocks "" "")
+  local blocks ledger current_version="" current_script="" identity candidates="" first_run_from
+  if ledger_exists; then
+    blocks=$(extract_migration_blocks "" "")
+  else
+    # Preserve the old range boundary when creating a ledger for an existing
+    # consumer.  A channel identity such as main@<sha> has no sortable lower
+    # bound, so its equivalent tagged baseline is the target version.
+    first_run_from=$FROM_VERSION
+    if [ -n "$first_run_from" ] && ! [[ "$first_run_from" =~ ^v?[0-9]+(\.[0-9]+)+$ ]]; then
+      first_run_from=$TO_VERSION
+    fi
+    blocks=$(extract_migration_blocks "$first_run_from" "$TO_VERSION")
+  fi
   ledger=$(ledger_read) || return 1
+  [ -z "$blocks" ] && return 0
 
   while IFS= read -r line; do
     if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then

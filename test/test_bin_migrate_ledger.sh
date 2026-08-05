@@ -123,5 +123,19 @@ PARTIAL_CANDIDATES=$(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" select_migratio
 assert 'a partial ledger leaves exactly the unapplied migration block' \
   "$( [ "$PARTIAL_CANDIDATES" = $'---MIGRATION-BLOCK--- version=1.1.0\nprintf \'second\\n\'' ] && echo 0 || echo 1)"
 
+FIRST_RUN_CONSUMER="$TMP_ROOT/first-run-consumer"
+mkdir -p "$FIRST_RUN_CONSUMER"
+FIRST_RUN_CANDIDATES=$(cd "$FIRST_RUN_CONSUMER" && HOME="$TEST_HOME" && FROM_VERSION='1.0.0' && TO_VERSION='1.1.0' && select_migration_candidates)
+assert 'an absent ledger bounds its first run to the installed-version range' \
+  "$( [ "$FIRST_RUN_CANDIDATES" = $'---MIGRATION-BLOCK--- version=1.1.0\nprintf \'second\\n\'' ] && echo 0 || echo 1)"
+
+MAIN_CONSUMER="$TMP_ROOT/main-consumer"
+TAGGED_CONSUMER="$TMP_ROOT/tagged-consumer"
+mkdir -p "$MAIN_CONSUMER" "$TAGGED_CONSUMER"
+MAIN_CANDIDATES=$(cd "$MAIN_CONSUMER" && HOME="$TEST_HOME" && FROM_VERSION='main@deadbeef' && TO_VERSION='1.1.0' && select_migration_candidates)
+TAGGED_CANDIDATES=$(cd "$TAGGED_CONSUMER" && HOME="$TEST_HOME" && FROM_VERSION='1.1.0' && TO_VERSION='1.1.0' && select_migration_candidates)
+assert 'a main@sha installed version offers the same candidates as its tagged baseline' \
+  "$( [ -z "$TAGGED_CANDIDATES" ] && [ "$MAIN_CANDIDATES" = "$TAGGED_CANDIDATES" ] && echo 0 || echo 1)"
+
 printf 'Summary: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
