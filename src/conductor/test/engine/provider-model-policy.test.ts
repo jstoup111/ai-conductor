@@ -53,27 +53,27 @@ const EXPECTED_POLICIES = {
       memory: 'haiku',
       assess: 'sonnet',
       explore: 'opus',
-      prd: 'fable',
+      prd: 'opus',
       complexity: 'sonnet',
       stories: 'sonnet',
       conflict_check: 'opus',
       plan: 'opus',
       coherence_check: 'sonnet',
       architecture_diagram: 'sonnet',
-      architecture_review: 'fable',
+      architecture_review: 'opus',
       worktree: 'haiku',
       acceptance_specs: 'opus',
       build: 'sonnet',
-      build_review: 'fable',
+      build_review: 'opus',
       wiring_check: 'sonnet',
       test_suite: 'sonnet',
       manual_test: 'sonnet',
-      prd_audit: 'fable',
-      architecture_review_as_built: 'fable',
+      prd_audit: 'opus',
+      architecture_review_as_built: 'opus',
       retro: 'sonnet',
       rebase: 'opus',
       finish: 'sonnet',
-      remediate: 'fable',
+      remediate: 'opus',
       attribution_verify: 'opus',
     } satisfies Record<StepName, string>,
     stepEfforts: STEP_EFFORTS,
@@ -90,14 +90,14 @@ const EXPECTED_POLICIES = {
       },
       plan: {
         S: { effort: 'medium', max_retries: 3 },
-        L: { effort: 'xhigh', model: 'fable' },
+        L: { effort: 'xhigh', model: 'opus' },
       },
       build: {
         S: { max_retries: 3 },
         L: { effort: 'high' },
       },
       conflict_check: {
-        L: { model: 'fable' },
+        L: { model: 'opus' },
       },
     },
     effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -182,6 +182,19 @@ function isDeeplyFrozen(value: unknown, seen = new Set<object>()): boolean {
     )
   );
 }
+
+it('never selects fable from Claude autonomous model defaults', () => {
+  const defaultModels = [
+    ...Object.values(CLAUDE_MODEL_POLICY.stepModels),
+    ...Object.values(CLAUDE_MODEL_POLICY.stepTierOverrides).flatMap((tiers) =>
+      Object.values(tiers).flatMap((override) =>
+        override.model === undefined ? [] : [override.model],
+      ),
+    ),
+  ];
+
+  expect(defaultModels).not.toContain('fable');
+});
 
 it('defines exhaustive, provider-native, deeply frozen built-in model policies', () => {
   const claude = CLAUDE_MODEL_POLICY;

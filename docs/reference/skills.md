@@ -75,13 +75,13 @@ The repository integrity suite checks that every `skills/*/SKILL.md` has `name`,
 | `plan` | gating | decide | — | `plan` (9) | Blocking |
 | `coherence-check` | gating | decide | — | `coherence_check` (10) | Blocking |
 | `intake` | gating | decide | — | none — operator-invoked | Neither |
-| `engineer` | advisory | decide | fable | none — operator-invoked | Neither as a step; the land gate blocks |
+| `engineer` | advisory | decide | opus | none — operator-invoked | Neither as a step; the land gate blocks |
 | `writing-system-tests` | gating | build | — | `acceptance_specs` (11) | Blocking |
 | `pipeline` | structural | build | — | `build` (12) | Blocking; cannot be disabled |
 | `tdd` | structural | build | — | none — runs inside `build` | Neither |
 | `code-review` | gating | build | opus | none — pipeline batch boundary | Blocking in place |
 | `simplify` | gating | build | sonnet | none — pipeline batch boundary | Blocking in place |
-| `debugging` | gating | build | fable | none — on demand | Neither |
+| `debugging` | gating | build | opus | none — on demand | Neither |
 | `manual-test` | gating | ship | — | `manual_test` (16) | Blocking |
 | `prd-audit` | gating | ship | opus | `prd_audit` (17) | Blocking |
 | `remediate` | gating | ship | — | `remediate` (out-of-band) | Advisory — it is the unblocker |
@@ -353,7 +353,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 > Interactive, phone-drivable idea→spec loop. The operator hands the host agent a raw idea; the agent routes it to the right repo, runs the FULL DECIDE phase (explore [track] → complexity → prd [product track] → architecture-diagram → architecture-review → stories → conflict-check → plan, tier-aware) in that repo, opens a spec PR there, and nudges that repo's daemon. Runs independently of any build/execution loop. Use when capturing and routing new work, NOT when building inside one repo (that's plain conduct).
 
 - **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`, `requires: []`,
-  `model: fable`.
+  `model: opus`.
 - **Engine step** — none. It is a separate control plane with its own CLI subcommands.
 - **Inputs** — a claimed GitHub intake issue, or a launch argument or chat idea; the project registry.
 - **Outputs** — in a per-idea worktree on a `spec/<slug>` branch: the track marker, the complexity
@@ -462,7 +462,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 > Use when encountering any bug, test failure, or unexpected behavior. Four-phase systematic investigation: root cause before fix. No fixes without evidence.
 
 - **Frontmatter** — `enforcement: gating`, `phase: build`, `standalone: true`,
-  `requires: [verify-claims]`, `model: fable`.
+  `requires: [verify-claims]`, `model: opus`.
 - **Engine step** — none. Invoked on demand, and by `manual-test` in a fresh sub-session when a failure's
   cause is not self-evident.
 - **Inputs** — the full error and stack trace and logs; `.memory/gotchas/` and `.memory/patterns/`;
