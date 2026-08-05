@@ -18,6 +18,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import { assertStepCommandsResolve } from '../fixtures/step-command-preflight.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
@@ -71,6 +72,7 @@ class ProvisionedHome implements LLMProvider {
   readonly readiness: LLMProvider['readiness'];
   readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
   readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
+  dispatches = 0;
 
   constructor(
     private readonly provider: LLMProvider,
@@ -84,12 +86,26 @@ class ProvisionedHome implements LLMProvider {
   }
 
   invoke(options: InvokeOptions): Promise<InvokeResult> {
+    this.dispatches += 1;
     return this.provider.invoke({ ...options, selfHost: this.selfHost });
   }
 
   invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
+    this.dispatches += 1;
     return this.provider.invokeInteractive({ ...options, selfHost: this.selfHost });
   }
+}
+
+type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<void>;
+
+/** Run the dispatch continuation only after every live-smoke command resolves. */
+async function dispatchAfterLivePreflight(
+  home: Pick<ProviderHome, 'homeDir'>,
+  dispatch: () => Promise<void>,
+  preflight: LiveProviderPreflight = assertStepCommandsResolve,
+): Promise<void> {
+  await preflight(home.homeDir, 'claude');
+  await dispatch();
 }
 
 function assertTokenCap(totalTokens: number, cap: number): void {
@@ -290,6 +306,37 @@ describe('daemon E2E live terminal guard', () => {
     });
   });
 
+  it('reports a failed command preflight before dispatching the live provider', async () => {
+    const provider: LLMProvider = {
+      invoke: vi.fn<LLMProvider['invoke']>(),
+      invokeInteractive: vi.fn<LLMProvider['invokeInteractive']>(),
+    };
+    const provisioned = new ProvisionedHome(provider, {
+      executable: 'claude', env: {}, args: [], teardown: async () => {},
+    });
+    const preflight = vi.fn().mockRejectedValue(new Error('Unable to resolve skills /build in /tmp/home/skills.'));
+
+    const dispatch = vi.fn(async () => {
+      await provisioned.invoke({ prompt: 'must not be dispatched' } as InvokeOptions);
+    });
+    const preflightFailure = await dispatchAfterLivePreflight(
+      { homeDir: '/tmp/home' }, dispatch, preflight,
+    )
+      .then(() => undefined, (error: unknown) => error);
+
+    expect({
+      preflight: preflightFailure instanceof Error ? preflightFailure.message : String(preflightFailure),
+      preflightCall: vi.mocked(preflight).mock.calls[0],
+      continued: vi.mocked(dispatch).mock.calls.length,
+      dispatches: provisioned.dispatches,
+    }).toEqual({
+      preflight: 'Unable to resolve skills /build in /tmp/home/skills.',
+      preflightCall: ['/tmp/home', 'claude'],
+      continued: 0,
+      dispatches: 0,
+    });
+  });
+
   it('does not dispatch a pre-halted fixture', async () => {
     const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-halted-'));
     const slug = 'daemon-e2e-live';
@@ -330,6 +377,8 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
     const provider = new ClaudeProvider();
     let meter = new TokenMeter(provider);
     let providerHome: ProviderHome | undefined;
+    let provisioned: ProvisionedHome | undefined;
+    let baselineSha: string | undefined;
 
     try {
       // test/setup.ts enables this guard for the ordinary suite. This opt-in
@@ -349,19 +398,22 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         fileURLToPath(new URL('../../../../', import.meta.url)),
         hostToken,
       );
-      meter = new TokenMeter(new ProvisionedHome(provider, {
+      provisioned = new ProvisionedHome(provider, {
         executable: 'claude',
         env: providerHome.childEnv(),
         args: providerHome.childArgs(),
         teardown: () => providerHome?.teardown() ?? Promise.resolve(),
-      }));
+      });
+      meter = new TokenMeter(provisioned);
+      await dispatchAfterLivePreflight(providerHome, async () => {
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], {
         cwd: worktreeDir,
       });
-      const { stdout: baselineSha } = await execa('git', ['rev-parse', 'HEAD'], {
+      const { stdout: seededBaselineSha } = await execa('git', ['rev-parse', 'HEAD'], {
         cwd: worktreeDir,
       });
+      baselineSha = seededBaselineSha;
       await execa('git', ['checkout', '-b', `feature/${slug}`], { cwd: worktreeDir });
 
       await mkdir(pipelineDir, { recursive: true });
@@ -407,6 +459,7 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         },
         { concurrency: 1, once: true },
       );
+      });
 
       const { stdout: commitSha } = await execa('git', ['rev-parse', 'HEAD'], {
         cwd: worktreeDir,
@@ -420,7 +473,7 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
 
       expect({
         terminal: await hasSuccessfulTerminalState(worktreeDir, slug),
-        madeCommit: commitSha.trim() !== baselineSha.trim(),
+        madeCommit: commitSha.trim() !== baselineSha?.trim(),
         touchedFixture: changedFiles.split('\n').includes('test/fixtures/daemon-e2e/touched.txt'),
         taskTrailer: /(?:^|\n)Task:\s*1\s*$/m.test(commitBody),
       }).toEqual({ terminal: true, madeCommit: true, touchedFixture: true, taskTrailer: true });
@@ -428,7 +481,10 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
       await dumpPipelineDiagnostics(worktreeDir);
       throw error;
     } finally {
-      console.info(`daemon E2E live smoke total tokens: ${meter.totalTokens}; cap: ${tokenCap}`);
+      console.info(
+        `daemon E2E live smoke total tokens: ${meter.totalTokens}; ` +
+        `dispatches: ${provisioned?.dispatches ?? 0}; cap: ${tokenCap}`,
+      );
       assertTokenCap(meter.totalTokens, tokenCap);
       await providerHome?.teardown();
       await rm(worktreeDir, { recursive: true, force: true });
