@@ -109,6 +109,134 @@ in_harness_repo() {
   [ "$(cd "$HARNESS_DIR" && pwd)" = "$(pwd)" ]
 }
 
+# ─── Applied-block ledger ────────────────────────────────────────────────────
+
+# One ledger belongs to one consumer project.  It lives outside that project at
+# ~/.ai-conductor/migrations/<sha256 of absolute project path>.json so changing
+# harness checkouts cannot lose completed migration state.
+ledger_path() {
+  local project
+  project=$(pwd -P)
+  python3 - "$HOME" "$project" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+home, project = sys.argv[1:]
+project_hash = hashlib.sha256(project.encode()).hexdigest()
+print(Path(home) / ".ai-conductor" / "migrations" / f"{project_hash}.json")
+PY
+}
+
+# A block's durable identity deliberately excludes its fence position: release
+# label plus the exact body hash survives changelog prose re-rendering.
+block_identity() {
+  python3 - "$1" "$2" <<'PY'
+import hashlib
+import sys
+
+release, body = sys.argv[1:]
+print(f"{release}:{hashlib.sha256(body.encode()).hexdigest()}")
+PY
+}
+
+ledger_read() {
+  local path
+  path=$(ledger_path)
+  python3 - "$path" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print(json.dumps({"schemaVersion": 1, "appliedBlocks": []}, sort_keys=True))
+    raise SystemExit(0)
+
+try:
+    ledger = json.loads(path.read_text())
+except (OSError, json.JSONDecodeError) as error:
+    print(f"Invalid migration ledger {path}: {error}", file=sys.stderr)
+    raise SystemExit(1)
+
+blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
+valid = (
+    isinstance(ledger, dict)
+    and ledger.get("schemaVersion") == 1
+    and isinstance(blocks, list)
+    and all(
+        isinstance(block, dict)
+        and isinstance(block.get("identity"), str)
+        and isinstance(block.get("release"), str)
+        and isinstance(block.get("bodyHash"), str)
+        for block in blocks
+    )
+)
+if not valid:
+    print(f"Invalid migration ledger schema in {path}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(json.dumps(ledger, sort_keys=True))
+PY
+}
+
+ledger_record_applied() {
+  local release=$1 body=$2 path identity
+  path=$(ledger_path)
+  identity=$(block_identity "$release" "$body")
+  python3 - "$path" "$identity" "$release" "$body" <<'PY'
+import hashlib
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+identity, release, body = sys.argv[2:]
+path.parent.mkdir(parents=True, exist_ok=True)
+if path.exists():
+    try:
+        ledger = json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        print(f"Invalid migration ledger {path}: {error}", file=sys.stderr)
+        raise SystemExit(1)
+else:
+    ledger = {"schemaVersion": 1, "appliedBlocks": []}
+
+blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
+valid = (
+    isinstance(ledger, dict)
+    and ledger.get("schemaVersion") == 1
+    and isinstance(blocks, list)
+    and all(
+        isinstance(block, dict)
+        and isinstance(block.get("identity"), str)
+        and isinstance(block.get("release"), str)
+        and isinstance(block.get("bodyHash"), str)
+        for block in blocks
+    )
+)
+if not valid:
+    print(f"Invalid migration ledger schema in {path}", file=sys.stderr)
+    raise SystemExit(1)
+
+record = {
+    "identity": identity,
+    "release": release,
+    "bodyHash": hashlib.sha256(body.encode()).hexdigest(),
+}
+if not any(block.get("identity") == identity for block in blocks if isinstance(block, dict)):
+    blocks.append(record)
+
+with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as output:
+    json.dump(ledger, output, sort_keys=True)
+    output.write("\n")
+    temporary = output.name
+os.replace(temporary, path)
+PY
+}
+
 # Extract ## Migration bash blocks from CHANGELOG.md entries strictly between
 # from_version (exclusive) and to_version (inclusive). Emit one bash block
 # per line-group, separated by `---MIGRATION-BLOCK---` markers.
