@@ -239,16 +239,24 @@ kill-switches:
   without the inherited env. Fix the call site; widening `IGNORED_TMPDIR_PREFIXES` is only for a genuine
   false positive from a new concurrent tool.
 
-The tmpdir check runs last, so a `.pipeline`, tmux, or signals failure — the more specific diagnosis —
-still throws first. The run root is removed in a `finally`, so a failing run still frees the disk.
+The parked-marker leak guard (#1251) runs last of all, after the tmpdir check, so any more specific
+guard failure still throws first. It resolves the real repository's `.daemon/parked` directory (via
+`git rev-parse --git-common-dir`, so it finds the main checkout's ledger from any worktree), snapshots
+the marker files there before the run, and diffs them after. Any slug added, removed, or modified in the
+real ledger throws `` `park-leak-guard: parked marker ledger changed during test run: …` `` — a fixture
+that resolved the real ledger instead of a redirected one and parked or unparked a slug in it. It never
+repairs the ledger it detects a change in. An unexpected error while checking it is fail-safe, not
+fail-closed: it is logged as `park-leak-guard: NOT enforced (fail-safe): …` rather than failing the run,
+because the guard's own resolution logic (a `git` subprocess) can legitimately fail outside the ledger
+itself.
 
 It also sweeps stale tmpdir-rooted daemon sessions before the run and installs a best-effort SIGINT and
 SIGTERM reap, because Vitest's global teardown only fires on a normal exit.
 
 ### Leak guards
 
-`test/pipeline-leak-guard.ts`, `test/signals-leak-guard.ts`, `test/tmux-leak-guard.ts`, and
-`test/tmpdir-leak-guard.ts` hold the snapshot and diff logic. The tmux guard is fail-closed by design: killing a session requires both that
+`test/pipeline-leak-guard.ts`, `test/signals-leak-guard.ts`, `test/tmux-leak-guard.ts`,
+`test/tmpdir-leak-guard.ts`, and `test/park-leak-guard.ts` hold the snapshot and diff logic. The tmux guard is fail-closed by design: killing a session requires both that
 the baseline snapshot succeeded and that the pane cwd resolves and is tmpdir-rooted. Missing either
 signal leaves the session running and logs `tmux-leak-guard: NOT killed (fail-closed): …`.
 
