@@ -6,6 +6,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution/claude-provider.js';
+import { declareSmokeCapability } from '../smoke-capability.js';
+
+declareSmokeCapability('test/execution/claude-provider.smoke.test.ts', 'credentialed');
 
 /**
  * Real-binary smoke test for TS-1 Done-When 3: prove the real Claude CLI's
@@ -14,8 +17,7 @@ import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution
  * against hand-authored strings; they cannot catch drift between the CLI's
  * actual wording and what we assume it says. This runs the real binary.
  *
- * Guarded: skipped when the `claude` binary isn't on PATH, or when the
- * MODEL_UNAVAILABLE_SMOKE=0 kill-switch is set (e.g. CI/offline).
+ * Guarded: skipped when the `claude` binary isn't on PATH.
  */
 function claudeBinaryAvailable(): boolean {
   try {
@@ -26,11 +28,9 @@ function claudeBinaryAvailable(): boolean {
   }
 }
 
-const modelUnavailableKillSwitch = process.env.MODEL_UNAVAILABLE_SMOKE === '0';
-const authFailureKillSwitch = process.env.AUTH_FAILURE_SMOKE === '0';
 const binaryAvailable = claudeBinaryAvailable();
-const shouldRunModelTest = binaryAvailable && !modelUnavailableKillSwitch;
-const shouldRunAuthTest = binaryAvailable && !authFailureKillSwitch;
+const shouldRunModelTest = binaryAvailable;
+const shouldRunAuthTest = binaryAvailable;
 
 describe.skipIf(!shouldRunModelTest)('claude CLI model-unavailable signature (real binary)', () => {
   afterEach(() => {

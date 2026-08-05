@@ -35,6 +35,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { checkStepCompletion, FINISH_CHOICE_MARKER } from '../../src/engine/artifacts.js';
 import { buildRetryHint } from '../../src/engine/conductor.js';
+import { declareSmokeCapability } from '../smoke-capability.js';
+
+declareSmokeCapability('test/smoke/surgical-finish-retry.smoke.test.ts', 'hermetic');
 
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');

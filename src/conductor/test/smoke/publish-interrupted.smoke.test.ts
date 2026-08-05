@@ -3,6 +3,9 @@ import { mkdtemp, rm, lstat, access } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+import { declareSmokeCapability } from '../smoke-capability.js';
+
+declareSmokeCapability('test/smoke/publish-interrupted.smoke.test.ts', 'toolchain');
 
 const REPO_ROOT = resolve(join(process.cwd(), '..', '..'));
 

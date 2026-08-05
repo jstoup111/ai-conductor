@@ -5,13 +5,15 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { CODEX_AUTH_FAILURE_RE } from '../../src/execution/codex-provider.js';
+import { declareSmokeCapability } from '../smoke-capability.js';
+
+declareSmokeCapability('test/execution/codex-provider.smoke.test.ts', 'toolchain');
 
 /**
  * Opt-in real Codex CLI compatibility checks. These commands never invoke
  * `exec` with a prompt: doctor is read-only and --help exits before a run.
  *
- * Run manually when a local Codex binary is available:
- *   CODEX_CLI_SMOKE_TEST=1 npx vitest run test/execution/codex-provider.smoke.test.ts
+ * Run when a local Codex binary is available.
  */
 function codexBinaryAvailable(): boolean {
   try {
@@ -22,7 +24,7 @@ function codexBinaryAvailable(): boolean {
   }
 }
 
-const shouldRun = process.env.CODEX_CLI_SMOKE_TEST === '1' && codexBinaryAvailable();
+const shouldRun = codexBinaryAvailable();
 const policyArgs = [
   '--config', 'sandbox_mode="workspace-write"',
   '--config', 'approval_policy="on-request"',

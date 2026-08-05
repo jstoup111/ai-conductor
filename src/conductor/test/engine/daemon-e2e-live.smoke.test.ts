@@ -20,6 +20,9 @@ import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { dispatchableStepCommands } from '../fixtures/step-command-preflight.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
+import { declareSmokeCapability } from '../smoke-capability.js';
+
+declareSmokeCapability('test/engine/daemon-e2e-live.smoke.test.ts', 'credentialed');
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
 //
@@ -165,8 +168,7 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
 }
 
 const hostToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-const killSwitch = process.env.DAEMON_E2E_LIVE_SMOKE === '0';
-const shouldRun = claudeBinaryAvailable() && !killSwitch && !!hostToken;
+const shouldRun = claudeBinaryAvailable() && !!hostToken;
 const advisoryProbe = process.env.DAEMON_E2E_LIVE_ADVISORY_PROBE === '1';
 
 describe('daemon E2E live terminal guard', () => {
@@ -176,7 +178,6 @@ describe('daemon E2E live terminal guard', () => {
       ...process.env,
       AI_CONDUCTOR_NO_REAL_EXEC: '1',
       CLAUDE_CODE_OAUTH_TOKEN: '',
-      DAEMON_E2E_LIVE_SMOKE: '0',
       DAEMON_E2E_LIVE_ADVISORY_PROBE: '1',
       TMPDIR: homesRoot,
       NO_COLOR: '1',

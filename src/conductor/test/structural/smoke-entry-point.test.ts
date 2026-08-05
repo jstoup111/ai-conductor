@@ -1,13 +1,26 @@
+import { readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it, vi } from 'vitest';
 import { createVitest } from 'vitest/node';
 
+import type { SmokeCapability } from '../smoke-capability.js';
 import { runSmoke } from '../smoke-runner.js';
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
+const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
+  'test/backlog-priority.smoke.test.ts': 'toolchain',
+  'test/engine/build-token-auth.smoke.test.ts': 'credentialed',
+  'test/engine/daemon-e2e-live.smoke.test.ts': 'credentialed',
+  'test/engine/daemon-tmux.smoke.test.ts': 'toolchain',
+  'test/execution/claude-provider.smoke.test.ts': 'credentialed',
+  'test/execution/codex-provider.smoke.test.ts': 'toolchain',
+  'test/smoke/finish-record.smoke.test.ts': 'hermetic',
+  'test/smoke/publish-interrupted.smoke.test.ts': 'toolchain',
+  'test/smoke/surgical-finish-retry.smoke.test.ts': 'hermetic',
+};
 
 describe('structural: smoke test entry point', () => {
   it('fails before running Vitest when smoke discovery is empty', async () => {
@@ -45,6 +58,45 @@ describe('structural: smoke test entry point', () => {
         'test/smoke/publish-interrupted.smoke.test.ts',
         'test/smoke/surgical-finish-retry.smoke.test.ts',
       ]);
+    } finally {
+      await vitest.close();
+    }
+  });
+
+  it('requires every discovered smoke file to declare a capability without a retired execution gate', async () => {
+    const vitest = await createVitest('test', {
+      config: join(conductorRoot, 'vitest.smoke.config.ts'),
+      root: conductorRoot,
+    });
+
+    try {
+      const discovered = (await vitest.globTestFiles())
+        .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/'))
+        .sort();
+      const retiredVariables = [
+        'AUTORESOLVE_SMOKE_TEST',
+        'CODEX_CLI_SMOKE_TEST',
+        'PRIORITY_GH_SMOKE',
+        'MODEL_UNAVAILABLE_SMOKE',
+        'AUTH_FAILURE_SMOKE',
+        'BUILD_TOKEN_AUTH_SMOKE',
+        'DAEMON_E2E_LIVE_SMOKE',
+      ];
+      const sources = await Promise.all(
+        discovered.map(async (file) => [file, await readFile(join(conductorRoot, file), 'utf8')] as const),
+      );
+
+      expect(discovered).toEqual(Object.keys(smokeCapabilities).sort());
+      expect(sources.filter(([file, source]) => {
+        const declaration = new RegExp(
+          `declareSmokeCapability\\(\\s*['\"]${file}['\"]\\s*,\\s*['\"]${smokeCapabilities[file]}['\"]\\s*\\)`,
+        );
+        return !declaration.test(source);
+      }).map(([file]) => file)).toEqual([]);
+      expect(sources.flatMap(([file, source]) => retiredVariables
+        .filter((variable) => source.includes(variable))
+        .map((variable) => `${file}: ${variable}`)))
+        .toEqual([]);
     } finally {
       await vitest.close();
     }

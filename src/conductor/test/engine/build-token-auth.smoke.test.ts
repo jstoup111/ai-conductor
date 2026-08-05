@@ -6,6 +6,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AUTH_FAILURE_RE } from '../../src/execution/claude-provider.js';
+import { declareSmokeCapability } from '../smoke-capability.js';
+
+declareSmokeCapability('test/engine/build-token-auth.smoke.test.ts', 'credentialed');
 
 /**
  * Real-binary smoke test for TR-5: prove that `CLAUDE_CODE_OAUTH_TOKEN` auth
@@ -19,8 +22,7 @@ import { AUTH_FAILURE_RE } from '../../src/execution/claude-provider.js';
  * (c) Corrupted token value + same dir → exit non-zero, matches AUTH_FAILURE_RE
  *
  * Guarded: skipped when no CLAUDE_CODE_OAUTH_TOKEN is available in the
- * environment (e.g., CI without setup-token), or when the kill-switch
- * BUILD_TOKEN_AUTH_SMOKE=0 is set (e.g., production-spawn disabled).
+ * environment (e.g., CI without setup-token).
  */
 
 function claudeBinaryAvailable(): boolean {
@@ -33,9 +35,8 @@ function claudeBinaryAvailable(): boolean {
 }
 
 const hostToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
-const killSwitch = process.env.BUILD_TOKEN_AUTH_SMOKE === '0';
 const binaryAvailable = claudeBinaryAvailable();
-const shouldRun = binaryAvailable && !killSwitch && !!hostToken;
+const shouldRun = binaryAvailable && !!hostToken;
 
 describe.skipIf(!shouldRun)(
   'claude CLI CLAUDE_CODE_OAUTH_TOKEN auth (real binary)',
