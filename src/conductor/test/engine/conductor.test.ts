@@ -11831,9 +11831,9 @@ describe('build-step stall circuit breaker', () => {
   });
 
   it('does not route the exhausted commit-movement escape when the final worktree probe is dirty', async () => {
-    // This is deliberately the narrow owning seam for the escape: an earlier
-    // retry moves HEAD (setting anyAttemptMovedHead), while the final retry
-    // leaves a tracked file dirty and exhausts the fixed retry budget.
+    // This is deliberately the narrow owning seam for the escape: the final
+    // retry moves HEAD (setting anyAttemptMovedHead), then leaves a tracked
+    // file dirty and exhausts the fixed retry budget.
     const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
     vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
     const git: GitRunner = async (args, { cwd }) => {
@@ -11857,11 +11857,16 @@ describe('build-step stall circuit breaker', () => {
       let buildAttempts = 0;
       const stepsRun: StepName[] = [];
       const completedBuilds: unknown[] = [];
+      const unattributedProgress: Array<{ attempt: number }> = [];
       events.on('step_completed', (event) => {
         if (event.type === 'step_completed' && event.step === 'build' && event.status === 'done') {
           completedBuilds.push(event);
         }
       });
+      events.on('unattributed_progress', ((event: unknown) => {
+        const progress = event as { type: string; attempt: number };
+        if (progress.type === 'unattributed_progress') unattributedProgress.push(progress);
+      }) as never);
       const runner: StepRunner = {
         run: vi.fn(async (step) => {
           stepsRun.push(step);
@@ -11874,9 +11879,14 @@ describe('build-step stall circuit breaker', () => {
               await execa('git', ['commit', '-m', 'feat: land unattributed work'], { cwd: dir });
               headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
             } else {
-              // The original #1270 shape: only an earlier attempt moved
-              // HEAD; the exhausted final attempt leaves tracked residue.
+              // The exhaustion escape only becomes eligible when this final
+              // attempt moves HEAD. Commit work without a Task: trailer,
+              // refresh the mocked HEAD, then leave tracked residue behind.
               await writeFile(join(dir, 'src/landed.ts'), 'export const landed = false;\n');
+              await execa('git', ['add', 'src/landed.ts'], { cwd: dir });
+              await execa('git', ['commit', '-m', 'feat: final unattributed work'], { cwd: dir });
+              headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+              await writeFile(join(dir, 'src/landed.ts'), 'export const landed = true;\n');
             }
           }
           return { success: true };
@@ -11898,6 +11908,7 @@ describe('build-step stall circuit breaker', () => {
       await conductor.run();
 
       expect(buildAttempts).toBe(2);
+      expect(unattributedProgress.map(({ attempt }) => ({ attempt }))).toEqual([{ attempt: 2 }]);
       expect(completedBuilds).toHaveLength(0);
       expect(stepsRun).not.toContain('build_review');
       expect(onRecovery).toHaveBeenCalledWith('build', false, expect.any(Object));

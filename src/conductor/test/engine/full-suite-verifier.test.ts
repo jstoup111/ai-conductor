@@ -96,6 +96,94 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('persists fingerprint-time worktree cleanliness on PASS and FAIL evidence', async () => {
+    const passRoot = await makeFingerprintProject();
+    const pass = await new FullSuiteVerifier({
+      projectRoot: passRoot,
+      execute: async () => {
+        // This runs after the fingerprint-time probe. The persisted value
+        // must keep the clean snapshot rather than reflect this later edit.
+        await writeProjectFile(passRoot, 'src/app.ts', 'export const value = 2;\n');
+        return {
+          ok: true,
+          command: 'node suite.mjs --all',
+          cwd: passRoot,
+          startedAt: '2026-08-04T12:00:00.000Z',
+          endedAt: '2026-08-04T12:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 0,
+          stdout: '',
+          stderr: '',
+        };
+      },
+    }).ensure();
+
+    const failRoot = await makeFingerprintProject();
+    await writeProjectFile(failRoot, 'src/app.ts', 'export const value = 2;\n');
+    const failed = await new FullSuiteVerifier({
+      projectRoot: failRoot,
+      execute: async () => {
+        // Likewise, cleanup after the probe cannot rewrite the dirty
+        // fingerprint-time observation carried by FAIL evidence.
+        await writeProjectFile(failRoot, 'src/app.ts', 'export const value = 1;\n');
+        return {
+          ok: false,
+          reason: 'nonzero_exit',
+          command: 'node suite.mjs --all',
+          cwd: failRoot,
+          startedAt: '2026-08-04T12:00:00.000Z',
+          endedAt: '2026-08-04T12:00:01.000Z',
+          durationMs: 1_000,
+          exitCode: 1,
+          signal: null,
+          stdout: '',
+          stderr: 'failed',
+        };
+      },
+    }).ensure();
+
+    expect({
+      pass: pass.status === 'EXECUTED' ? pass.evidence.worktreeClean : undefined,
+      fail: failed.status === 'FAILED' ? failed.evidence?.worktreeClean : undefined,
+    }).toEqual({ pass: true, fail: false });
+  });
+
+  it('omits worktreeClean when the fingerprint-time worktree probe is undeterminable', async () => {
+    const projectRoot = await makeConfiguredProject('full-suite-verifier-no-git-');
+    const result = await new FullSuiteVerifier({
+      projectRoot,
+      fingerprint: async () => ({
+        ok: true,
+        fingerprint: {
+          digest: 'sha256:no-git',
+          headSha: 'head-no-git',
+          categoryFingerprints: CATEGORY_FINGERPRINTS,
+        },
+      }),
+      execute: async () => ({
+        ok: true,
+        command: 'node suite.mjs --all',
+        cwd: projectRoot,
+        startedAt: '2026-08-04T12:00:00.000Z',
+        endedAt: '2026-08-04T12:00:01.000Z',
+        durationMs: 1_000,
+        exitCode: 0,
+        stdout: '',
+        stderr: '',
+      }),
+    }).ensure();
+
+    expect(result).toEqual(expect.objectContaining({
+      status: 'EXECUTED',
+      evidence: expect.not.objectContaining({ worktreeClean: expect.anything() }),
+    }));
+    const persisted = await readFullSuiteEvidence(projectRoot);
+    expect(persisted).toEqual(expect.objectContaining({
+      usable: true,
+      evidence: expect.not.objectContaining({ worktreeClean: expect.anything() }),
+    }));
+  });
+
   it('keeps raw secret-bearing config in memory while returning only sanitized PASS evidence', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-secret-metadata-pass-'));
     scratches.push(projectRoot);
