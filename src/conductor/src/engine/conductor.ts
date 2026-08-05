@@ -7054,7 +7054,7 @@ export class Conductor {
                 // of finish exists to invalidate, and the implementation work
                 // this defect sits on top of must stay untouched.
                 (state as Record<string, unknown>).finish = 'stale';
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 i--; // for-loop i++ lands back on finish
                 continue;
               }
@@ -7062,7 +7062,7 @@ export class Conductor {
                 `finish halted on a PR publication defect after ` +
                 `${publicationRedispatches} body-rewrite re-dispatch(es): ${finishPresentationDefect}`;
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
