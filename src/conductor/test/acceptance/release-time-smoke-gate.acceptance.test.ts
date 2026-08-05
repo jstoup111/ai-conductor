@@ -74,7 +74,7 @@ describe('Story 1: one command discovers the complete smoke tier', () => {
     );
     const scripts = record(packageJson.scripts, 'package.json scripts');
 
-    expect(scripts.smoke).toBe('vitest run --config vitest.smoke.config.ts');
+    expect(scripts.smoke).toBe('node --import tsx test/smoke-runner.ts vitest.smoke.config.ts');
 
     const config = await readFile(resolve(CONDUCTOR_ROOT, 'vitest.smoke.config.ts'), 'utf8');
     expect(config).toMatch(/include\s*:\s*\[[^\]]*['"]test\/smoke\/\*\*['"][^\]]*['"]\*\*\/\*\.smoke\.test\.ts['"][^\]]*\]/s);

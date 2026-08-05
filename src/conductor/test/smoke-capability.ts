@@ -10,7 +10,7 @@ export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
 const declarations = new Map<string, SmokeCapability>();
 
 /** Rejects a smoke run that did not discover any test files. */
-export function assertSmokeDiscovery(discovered: readonly string[]): void {
+export function assertSmokeDiscovery(discovered: { readonly length: number }): void {
   if (discovered.length === 0) {
     throw new Error('Smoke discovery found no test files');
   }

@@ -1,17 +1,26 @@
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createVitest } from 'vitest/node';
 
-import { assertSmokeDiscovery } from '../smoke-capability.js';
+import { runSmoke } from '../smoke-runner.js';
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
 
 describe('structural: smoke test entry point', () => {
-  it('rejects an empty smoke discovery instead of allowing a vacuous pass', () => {
-    expect(() => assertSmokeDiscovery([])).toThrow('Smoke discovery found no test files');
+  it('fails before running Vitest when smoke discovery is empty', async () => {
+    const runVitest = vi.fn();
+    const outcome = await runSmoke({
+      discover: async () => [],
+      runVitest,
+    }).then(
+      () => 'resolved',
+      (error: unknown) => `${(error as Error).message}:${runVitest.mock.calls.length}`,
+    );
+
+    expect(outcome).toBe('Smoke discovery found no test files:0');
   });
 
   it('discovers every known smoke file through the resolved smoke config', async () => {
