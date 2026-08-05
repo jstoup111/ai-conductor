@@ -9007,6 +9007,12 @@ export function buildRetryHint(
     return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
   }
   if (step === 'build') {
+    if (missing === 'uncommitted') {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        'Commit the uncommitted paths, then re-run the build step.'
+      );
+    }
     if (/tasks? not completed/i.test(r)) {
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +

@@ -11250,6 +11250,13 @@ describe('buildRetryHint', () => {
     expect(hint).toContain('.docs/plans');
   });
 
+  it('names and tells the next BUILD dispatch to commit uncommitted paths', () => {
+    const reason = 'uncommitted paths: src/engine/conductor.ts, src/engine/artifacts.ts';
+    const hint = buildRetryHint('build', reason, 'uncommitted');
+
+    expect(hint).toMatch(/^(?=[\s\S]*src\/engine\/conductor\.ts)(?=[\s\S]*src\/engine\/artifacts\.ts)(?=[\s\S]*\bcommit (the )?uncommitted paths\b)(?![\s\S]*Finish the work now)[\s\S]*$/i);
+  });
+
   it('cites manual-test-record for a missing manual_test marker', () => {
     const hint = buildRetryHint(
       'manual_test',
