@@ -292,6 +292,25 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
     expect(github.createRelease).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['body', { tag: 'v1.2.4', title: 'v1.2.4', body: 'Different notes.\n', target: 'merged-release-head' }],
+    ['target', { tag: 'v1.2.4', title: 'v1.2.4', body: 'Approved.\n', target: 'another-commit' }],
+  ])('rejects a conflicting existing release %s without mutation', async (_field, existingRelease) => {
+    const { git, github } = dependencies();
+    git.readAnnotatedTag.mockResolvedValue({ commit: 'merged-release-head' });
+    github.findReleaseByTag.mockResolvedValue(existingRelease);
+
+    await expect(runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    })).resolves.toMatchObject({ state: 'rejected', reason: expect.stringMatching(/GitHub Release/i) });
+
+    expect(git.createAnnotatedTag).not.toHaveBeenCalled();
+    expect(github.createRelease).not.toHaveBeenCalled();
+  });
+
   it('rejects invalid audit provenance before reading or mutating release artifacts', async () => {
     const { git, github } = dependencies();
     github.readReleaseAudit.mockResolvedValue({ head: 'unrelated-release-head', complete: true });
