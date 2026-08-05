@@ -10,6 +10,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   openShipDraftPr,
+  shipDraftPrBody,
   SHIP_DRAFT_PR_NOTE,
 } from '../../src/engine/ship-draft-pr.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
@@ -109,6 +110,49 @@ describe('openShipDraftPr', () => {
     // Never a halt PR: no halt banner, no needs-remediation title prefix.
     expect(body).not.toContain('irrecoverable daemon HALT');
     expect(create[create.indexOf('--title') + 1]).not.toContain('needs-remediation');
+  });
+
+  it('seeds the draft with the /pr body template shape, never a bare `## Summary`', async () => {
+    const { git } = aheadGit();
+    const { gh, calls: ghCalls } = createsGh();
+
+    await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'widget import flow',
+    });
+
+    const create = ghCalls.find((c) => c[1] === 'create')!;
+    const body = create[create.indexOf('--body') + 1];
+
+    // The finish gate refuses any body that is not the `/pr` template shape,
+    // so the placeholder a reader (and the finish agent) sees must already be
+    // that shape — headings in the documented order.
+    expect(body).toMatch(/^## Why$/m);
+    expect(body).toMatch(/^## What Changed$/m);
+    expect(body).toMatch(/^## Testing$/m);
+    expect(body.indexOf('## Why')).toBeLessThan(body.indexOf('## What Changed'));
+    expect(body.indexOf('## What Changed')).toBeLessThan(body.indexOf('## Testing'));
+    expect(body).not.toContain('## Summary');
+
+    // The issue linkage the template requires is named in the skeleton (as an
+    // invisible reminder, so it never renders as a broken `Closes` line and
+    // never satisfies injectIssueRef's idempotency probe).
+    expect(body).toContain('Closes');
+    expect(body).not.toMatch(/^Closes\b/m);
+
+    // Still mechanically recognisable as a placeholder.
+    expect(body).toContain(PR_BODY_FLOOR_MARKER);
+    expect(body).toContain(SHIP_DRAFT_PR_NOTE);
+  });
+
+  it('shipDraftPrBody carries the feature description under ## Why', () => {
+    const body = shipDraftPrBody('widget import flow');
+    const why = body.slice(body.indexOf('## Why'), body.indexOf('## What Changed'));
+    expect(why).toContain('widget import flow');
   });
 
   it('reuses an already-open PR without preserving or choosing a release disposition', async () => {

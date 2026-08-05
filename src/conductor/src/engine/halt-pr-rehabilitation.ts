@@ -631,7 +631,11 @@ export async function bodyFloor(
   const remainingBody = collapsed.slice(start, end).join('\n');
 
   let newBody = remainingBody;
-  if (!remainingBody.includes('## Summary')) {
+  // An engine-authored placeholder already carries the floor marker (the
+  // SHIP-entry draft body does, and it has no `## Summary` heading), so keying
+  // "already floored" on the heading alone would stack a SECOND floor block on
+  // top of it.
+  if (!remainingBody.includes('## Summary') && !remainingBody.includes(PR_BODY_FLOOR_MARKER)) {
     const featureDesc = opts.featureDesc?.trim() || 'rehabilitated PR';
     // The floor never narrates remediation into the body: a shipped PR body
     // must read exactly like a clean first-pass finish produced it. Halt

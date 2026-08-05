@@ -215,9 +215,15 @@ What the draft window does and does not mean:
   bounded title/body judgment only while the prose is incomplete, writes and pushes the shipped
   record, and then marks the PR ready for review. It re-enters FINISH after each verified transition,
   so a retry resumes instead of replaying publication effects.
+- **The placeholder body already has the right shape.** It is the `/pr` body template — `## Why`,
+  `## What Changed`, `## Testing`, and the `Closes` reference — with each section explicitly marked
+  "not yet authored", so a reader landing on the PR mid-build, and the bounded prose judgment reading
+  it back, both see the section shape FINISH will demand. It carries no release metadata: choosing a
+  release disposition is the pre-finish `release-disposition` step's job.
 - **The placeholder body is deliberately marked as one.** It carries the engine's body-floor marker,
   so FINISH keeps the prose judgment required and never records completion from placeholder or halt
-  content.
+  content. If the completion gate still observes that marker on the recorded PR, it re-dispatches
+  `finish` for a body rewrite — never `/remediate`, and never a re-opened `build`.
 - **It is advisory.** If the push is rejected or `gh` is unauthenticated, the engine logs one loud
   `[ship-draft-pr]` line and the build continues; only the finish-time publish is load-bearing.
 - **It is idempotent.** Re-entering SHIP after a kickback, resume, or rework reuses the open PR — it
