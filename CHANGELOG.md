@@ -89,7 +89,7 @@ done
 
 ```bash migration
 # Reconcile the installed harness catalogs; foreign links and files are preserved.
-./bin/install --update
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 
 # Find shell scripts/aliases/CI configs in the current directory tree that still pass the
 # removed --output or --step flags to conduct-ts, so they can be edited by hand (nothing here
@@ -101,7 +101,7 @@ grep -rEn '\bconduct-ts\b.*(--output\b|--step\b)' \
 
 ```bash migration
 # Install the user-scoped HARNESS.md links consumed by generated CLAUDE.md and AGENTS.md.
-./bin/install --update
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 ```
 
 ```bash migration
@@ -124,37 +124,23 @@ echo "  rm -rf <project>/.serena/            # per-project semantic-index caches
 # ~/.claude/settings.json. Safe to re-run: bin/install's settings merge is
 # idempotent (matches on hook command path, does not duplicate entries).
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-./bin/install --update
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 echo "docs-guard.sh is now wired as a PreToolUse hook in ~/.claude/settings.json."
 echo "Daemon-provisioned worktrees pick this up automatically on next"
-echo "worktree-prepare (no action needed there); restart any running daemon"
-echo "to have it re-provision worktrees created going forward."
+echo "worktree-prepare handles newly provisioned worktrees automatically."
+echo "If a running daemon needs new provisioning behavior, restart it yourself after this update."
 ```
 
 ```bash migration
-# Edit your project config to add the cutover instant:
-cd .ai-conductor
-# Add attribution_judge_cutover and optionally attribution_audit_sample_pct
-# to config.yml, then restart the daemon or conductor:
-conduct-ts daemon restart
-```
-
-```bash migration
-# Optional: force old worktrees to re-provision the new session hooks now,
-# instead of waiting for their natural lifecycle to recycle them.
-cd src/conductor && npm run build   # or: bin/install, to refresh the engine build
-git worktree list | awk '/\.worktrees\// {print $1}' | while read -r wt; do
-  git worktree remove --force "$wt" 2>/dev/null || true
-done
-git worktree prune
-# The daemon re-provisions worktrees on its next dispatch, installing the new
-# .pipeline/session-hooks/{pre,post}-dispatch.sh and wiring
-# .claude/settings.local.json automatically. No further action needed.
+# To use the attribution cutover, add attribution_judge_cutover and optionally
+# attribution_audit_sample_pct to .ai-conductor/config.yml. Restart a daemon
+# or conductor yourself after editing if it needs to read the new configuration.
+echo "Configure attribution_judge_cutover in .ai-conductor/config.yml when ready."
 ```
 
 ```bash migration
 # Link the new intake skill into ~/.claude/skills.
-./bin/install
+"${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install"
 ```
 
 ```bash migration
@@ -190,35 +176,18 @@ echo "      token_path: $BUILD_AUTH_TOKEN_PATH"
 ```
 
 ```bash migration
-# Restart a running daemon so subsequently-created worktrees get the updated
-# session-hook / git-hook provisioning code (no-op if no daemon is running).
-if [ -f .daemon/daemon.pid ]; then
-  pid=$(jq -r '.pid // empty' .daemon/daemon.pid 2>/dev/null || true)
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    echo "Stopped daemon (pid $pid) so it picks up updated worktree hook provisioning on restart."
-    echo "Restart with: conduct-ts daemon start"
-  else
-    echo "No live daemon detected. Existing worktrees keep their current hooks until re-provisioned."
-  fi
-else
-  echo "No daemon pidfile found. Existing worktrees keep their current hooks until re-provisioned."
-fi
+# Existing worktrees keep their current hooks until they are re-provisioned.
+# If you run a daemon, use your normal operator procedure to restart it after
+# this update so future worktrees pick up the new provisioning code.
+echo "Existing worktrees retain their hooks until re-provisioned."
 echo "Enforcement stays OFF until attribution_enforcement_cutover is set in .ai-conductor/config.yml."
 ```
 
 ```bash migration
-# Stop a currently-detached daemon for this repo (no-op if none / already stale).
-if [ -f .daemon/daemon.pid ]; then
-  pid=$(jq -r '.pid // empty' .daemon/daemon.pid 2>/dev/null || true)
-  if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-    kill "$pid" 2>/dev/null || true
-    echo "Stopped detached daemon (pid $pid). Start the tmux-hosted daemon with: conduct-ts daemon start"
-  else
-    echo "No live detached daemon (stale lock self-reclaims). Use: conduct-ts daemon start"
-  fi
-fi
-# Requires tmux on the host for the management verbs: e.g. `sudo apt-get install tmux`.
+# Daemon lifecycle remains operator-controlled. If this project has an old
+# detached daemon, stop it with your normal operator procedure before adopting
+# the tmux-hosted daemon management workflow.
+echo "Review any running daemon and choose its lifecycle action yourself."
 ```
 
 ```bash migration
@@ -294,8 +263,8 @@ CONFIG_FILE=".ai-conductor/config.yml"
 if [ ! -f "$CONFIG_FILE" ]; then
   echo "No $CONFIG_FILE found — nothing to migrate. Create one and add" \
        "attribution_judge_cutover to opt in when ready."
-elif grep -q '^attribution_judge_cutover:' "$CONFIG_FILE" 2>/dev/null; then
-  echo "$CONFIG_FILE already sets attribution_judge_cutover — no migration needed."
+elif grep -qF '# attribution_judge_cutover: "2026-07-11T08:30:00Z"' "$CONFIG_FILE" 2>/dev/null; then
+  echo "$CONFIG_FILE already contains the attribution configuration template — no migration needed."
 else
   cat <<'EOF' >> "$CONFIG_FILE"
 
@@ -307,7 +276,7 @@ else
 EOF
   echo "Appended commented-out attribution_judge_cutover / attribution_audit_sample_pct" \
        "template to $CONFIG_FILE. Uncomment and set a cutover instant to opt in;" \
-       "restart the daemon after editing."
+       "restart your daemon after editing if it needs to reload configuration."
 fi
 ```
 
