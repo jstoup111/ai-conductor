@@ -731,9 +731,15 @@ function rotationRefusalVerdict(
     return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}` };
   }
   if (!('path' in rotation)) return inspection;
+  if (rotation.condition === 'workspace-differs-from-head') {
+    return {
+      ok: false,
+      reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.`,
+    };
+  }
   return {
     ok: false,
-    reason: `Feature-authored protected artifact change cannot rotate seal: ${rotation.path}`,
+    reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
   };
 }
 

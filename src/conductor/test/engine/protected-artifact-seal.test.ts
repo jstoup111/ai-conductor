@@ -1096,7 +1096,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: `Feature-authored protected artifact change cannot rotate seal: ${path}`,
+          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
         },
         sealUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -1135,7 +1135,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: expect.stringMatching(/feature-authored.*\.docs\/plans\/other-feature\.md/i),
+          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
         },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
