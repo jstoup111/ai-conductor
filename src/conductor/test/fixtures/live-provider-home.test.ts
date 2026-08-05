@@ -1,10 +1,35 @@
-import { lstat, readdir } from 'node:fs/promises';
+import { access, lstat, readdir } from 'node:fs/promises';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-home.js';
-import { provisionLiveProviderHome } from './live-provider-home.js';
+import {
+  provisionLiveProviderHome,
+  withLiveProviderHome,
+} from './live-provider-home.js';
+
+const execFileAsync = promisify(execFile);
+
+async function git(sourceRoot: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, { cwd: sourceRoot });
+  return stdout;
+}
+
+async function createSourceCheckout(): Promise<string> {
+  const sourceRoot = await mkdtemp(join(tmpdir(), 'live-provider-home-source-'));
+  await git(sourceRoot, ['init', '--initial-branch=main']);
+  await git(sourceRoot, ['config', 'user.email', 'fixture@example.test']);
+  await git(sourceRoot, ['config', 'user.name', 'Fixture']);
+  await mkdir(join(sourceRoot, 'skills', 'pipeline'), { recursive: true });
+  await writeFile(join(sourceRoot, 'skills', 'pipeline', 'SKILL.md'), '# Pipeline\n');
+  await writeFile(join(sourceRoot, 'untracked-source-state.txt'), 'must remain untouched\n');
+  await git(sourceRoot, ['add', 'skills']);
+  await git(sourceRoot, ['commit', '-m', 'fixture']);
+  return sourceRoot;
+}
 
 describe('provisionLiveProviderHome', () => {
   it('copies skills from the explicit source root into a Claude provider home', async () => {
@@ -51,6 +76,29 @@ describe('provisionLiveProviderHome', () => {
     } finally {
       await rm(sourceRoot, { recursive: true, force: true });
       await rm(homesRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('removes its home after normal and throwing use without changing the source checkout', async () => {
+    const sourceRoot = await createSourceCheckout();
+
+    try {
+      const statusBefore = await git(sourceRoot, ['status', '--porcelain', '--untracked-files=all']);
+      const normalHomeDir = await withLiveProviderHome(sourceRoot, async (home) => home.homeDir);
+      await expect(access(normalHomeDir)).rejects.toThrow();
+
+      const thrownHomeDir = await withLiveProviderHome(sourceRoot, async (home) => {
+        throw Object.assign(new Error('caller failed'), { homeDir: home.homeDir });
+      }).catch((error: unknown) => (error as { homeDir: string }).homeDir);
+      await expect(access(thrownHomeDir)).rejects.toThrow();
+
+      const home = await provisionLiveProviderHome(sourceRoot);
+      await home.teardown();
+      await home.teardown();
+      await expect(access(home.homeDir)).rejects.toThrow();
+      expect(await git(sourceRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe(statusBefore);
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
     }
   });
 });
