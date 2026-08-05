@@ -166,11 +166,24 @@ Verification also tolerates these cases without halting:
   is byte-identical to that path as committed at the base branch tip (`origin/<base>`, falling back
   to the local `<base>`). This is the content the feature's own rebase brought in, and the base
   branch already vouches for it.
+- **Branch-untouched inheritance** — the artifact no longer matches the base-branch tip (the base has
+  moved again since this feature's last rebase), but this feature never changed the path relative to
+  the base (`git diff <base>...HEAD -- <path>` is empty) and the workspace copy still exactly equals
+  `HEAD`'s blob. The feature is simply behind an older revision it already carried forward untouched;
+  this is neither a local amendment nor an uncommitted edit, so it is tolerated the same as base-branch
+  inheritance.
 
 Everything else still halts BUILD/SHIP before dispatch: any content the base branch does not vouch
 for, any addition the base branch does not contain, and any deletion the base branch still retains.
 Tolerance requires the base branch name and seal baseline to be resolvable — when either is not,
-the seal remains fully protected. Do not delete or hand-edit the seal to recover from a halt; follow the
+the seal remains fully protected, and the halt reason is `Protected artifact provenance
+undeterminable: <path>` followed by the specific cause (`Missing base ref`, `No merge-base exists
+between HEAD and <base>`, or `Inheritance probe failed: git diff`) and the recovery step (supply the
+base ref, or rebase onto the base branch to establish shared history). A genuine violation instead
+reports either `Uncommitted protected artifact changed: <path>` (the workspace differs from `HEAD`;
+restore from `HEAD`) or `Protected artifact changed: <path>` with a `Feature-authored committed
+change` cause (revert to the committed DECIDE content and route any actual amendment to DECIDE). Do
+not delete or hand-edit the seal to recover from a halt; follow the
 [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md).
 
 A seal rejection raised before a re-kick rebase is reported as `protected-artifact seal error`.
