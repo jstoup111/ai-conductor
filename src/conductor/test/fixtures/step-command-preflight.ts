@@ -13,6 +13,11 @@ export interface DispatchableStepCommand {
   readonly rendered: string;
 }
 
+/** The preflight's only external capability is filesystem access. */
+export interface StepCommandPreflightDependencies {
+  readonly access?: typeof access;
+}
+
 /**
  * Derive the complete dispatchable command set from the engine's semantic
  * registry. Project-configuration custom steps and parallel branches are not
@@ -34,11 +39,13 @@ export function dispatchableStepCommands(providerKey: string): readonly Dispatch
 export async function assertStepCommandsResolve(
   homeDir: string,
   providerKey = 'claude',
+  dependencies: StepCommandPreflightDependencies = {},
 ): Promise<void> {
   const skillsDir = join(homeDir, 'skills');
+  const accessFile = dependencies.access ?? access;
   const unresolved = (await Promise.all(dispatchableStepCommands(providerKey).map(async (command) => {
     try {
-      await access(join(skillsDir, command.skillName, 'SKILL.md'));
+      await accessFile(join(skillsDir, command.skillName, 'SKILL.md'));
       return undefined;
     } catch {
       return command;

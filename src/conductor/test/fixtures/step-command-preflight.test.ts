@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -10,6 +10,21 @@ import {
   assertStepCommandsResolve,
   dispatchableStepCommands,
 } from './step-command-preflight.js';
+
+/**
+ * Task 12's test-only view of the preflight seam.  The production fixture
+ * will accept this optional capability in GREEN; casting here keeps RED from
+ * weakening the public helper's current type before that work lands.
+ */
+type PreflightWithFilesystemAccess = (
+  homeDir: string,
+  providerKey?: string,
+  dependencies?: {
+    readonly access: (path: string) => Promise<void>;
+  },
+) => Promise<void>;
+
+const assertWithInjectedFilesystemAccess = assertStepCommandsResolve as unknown as PreflightWithFilesystemAccess;
 
 describe('dispatchableStepCommands', () => {
   it('derives every skill command from the registry and excludes engine-native steps', () => {
@@ -107,5 +122,26 @@ describe('dispatchableStepCommands', () => {
     } finally {
       await Promise.all(homes.map((homeDir) => rm(homeDir, { recursive: true, force: true })));
     }
+  });
+
+  it('uses only its injected filesystem capability to resolve commands', async () => {
+    const accessedPaths: string[] = [];
+    const filesystemOnlyAccess = async (path: string): Promise<void> => {
+      accessedPaths.push(path);
+    };
+    const syntheticHome = join(tmpdir(), 'step-command-preflight-no-external-calls');
+
+    await expect(assertWithInjectedFilesystemAccess(syntheticHome, 'claude', {
+      access: filesystemOnlyAccess,
+    })).resolves.toBeUndefined();
+
+    expect(accessedPaths).toEqual(dispatchableStepCommands('claude').map(
+      ({ skillName }) => join(syntheticHome, 'skills', skillName, 'SKILL.md'),
+    ));
+
+    const source = await readFile(new URL('./step-command-preflight.ts', import.meta.url), 'utf8');
+    expect(source).not.toMatch(
+      /(?:child_process|node:(?:http|https|net|tls)|\/providers\/|\b(?:exec|execFile|spawn|fork|fetch|request|get|invoke|invokeInteractive)\s*\()/,
+    );
   });
 });
