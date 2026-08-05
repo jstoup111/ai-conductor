@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-home.js';
+import type { ResolvedSelfHostProvider } from '../../src/engine/self-host/provider-home.js';
 import {
   provisionLiveProviderHome,
   withLiveProviderHome,
@@ -97,6 +98,39 @@ describe('provisionLiveProviderHome', () => {
       await home.teardown();
       await expect(access(home.homeDir)).rejects.toThrow();
       expect(await git(sourceRoot, ['status', '--porcelain', '--untracked-files=all'])).toBe(statusBefore);
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the Claude credential off a non-Claude provider leg', async () => {
+    const sourceRoot = await createSourceCheckout();
+    const authContexts: Array<{ provider: string; homeDir: string }> = [];
+    const codexProvider: ResolvedSelfHostProvider = {
+      id: 'codex',
+      prepareSelfHostAuth: async (context) => {
+        authContexts.push(context);
+        return { env: { CODEX_API_KEY: 'codex-fixture-token' } };
+      },
+    };
+
+    try {
+      const home = await provisionLiveProviderHome(
+        sourceRoot,
+        'claude-fixture-token',
+        undefined,
+        codexProvider,
+      );
+      try {
+        const env = home.childEnv();
+        expect(home.provider).toBe('codex');
+        expect(env.CODEX_HOME).toBe(home.homeDir);
+        expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+        expect(env.CODEX_API_KEY).toBe('codex-fixture-token');
+        expect(authContexts).toEqual([{ provider: 'codex', homeDir: home.homeDir }]);
+      } finally {
+        await home.teardown();
+      }
     } finally {
       await rm(sourceRoot, { recursive: true, force: true });
     }

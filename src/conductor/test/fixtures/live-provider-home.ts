@@ -1,6 +1,7 @@
 import {
   provisionProviderHome,
   type ProviderHome,
+  type ResolvedSelfHostProvider,
 } from '../../src/engine/self-host/provider-home.js';
 
 /**
@@ -11,16 +12,17 @@ export async function provisionLiveProviderHome(
   sourceRoot: string,
   claudeCodeOauthToken?: string,
   baseDir?: string,
+  provider: ResolvedSelfHostProvider = {
+    id: 'claude',
+    prepareSelfHostAuth: async () => ({
+      env: claudeCodeOauthToken
+        ? { CLAUDE_CODE_OAUTH_TOKEN: claudeCodeOauthToken }
+        : {},
+    }),
+  },
 ): Promise<ProviderHome> {
   return provisionProviderHome({
-    provider: {
-      id: 'claude',
-      prepareSelfHostAuth: async () => ({
-        env: claudeCodeOauthToken
-          ? { CLAUDE_CODE_OAUTH_TOKEN: claudeCodeOauthToken }
-          : {},
-      }),
-    },
+    provider,
     worktreeRoot: sourceRoot,
     baseDir,
   });
