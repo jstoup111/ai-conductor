@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import {
   recordTestSuiteRemediation,
 } from './test-suite-remediation.js';
-import { relative, join } from 'node:path';
+import { dirname, relative, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import {
   HALT_MARKER,
@@ -92,14 +92,19 @@ import { SafetyAttemptCache, evaluateSafetyBoundary } from './safety-boundary.js
 import { runSpotAudit } from './attribution-audit.js';
 import {
   readState,
-  writeState,
   saveStepStatus,
+  requireStateMutation,
   getStepStatus,
   stepSatisfied,
   markDownstreamStale,
-  savePrUrl,
   extractPrUrl,
 } from './state.js';
+import type {
+  ConductStateStore,
+  NamedAtomicStateMutationBatch,
+  StateMutation,
+} from './conduct-state-store.js';
+import { resolveConductorStateStore } from './conductor-deps.js';
 import {
   ALL_STEPS,
   buildStepRegistry,
@@ -779,6 +784,12 @@ export interface FinishPublicationCoordinator {
 
 export interface ConductorOptions {
   stateFilePath: string;
+  /**
+   * Persistent state authority for conductor-owned mutations. Production
+   * defaults to the filesystem adapter; tests and future hosted composition
+   * may supply another implementation of the same port.
+   */
+  stateStore?: ConductStateStore<ConductState>;
   stepRunner: StepRunner;
   events: ConductorEventEmitter;
   featureSlug?: string;
@@ -1147,6 +1158,9 @@ async function refreshPostFinishShippedRecord({
 
 export class Conductor {
   private stateFilePath: string;
+  private readonly stateStore: ConductStateStore<ConductState>;
+  /** Last state snapshot whose mutations this conductor has durably accepted. */
+  private persistedStateSnapshot: ConductState | undefined;
   private stepRunner: StepRunner;
   private events: ConductorEventEmitter;
   private featureSlug?: string;
@@ -1563,15 +1577,236 @@ export class Conductor {
     step: StepDefinition,
     cause: string,
   ): Promise<void> {
-    await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-    (state as Record<string, unknown>)[step.name] = 'skipped';
+    await this.saveConductorStepStatus(state, step.name, 'skipped');
     if (step.loopGate === true || step.kickbackTarget === true) {
       await recordSkipVerdict(this.projectRoot, step.name, cause);
     }
   }
 
+  /**
+   * Apply a conductor-owned invariant through the state-store authority.
+   *
+   * The legacy whole-file write rejected on persistence failures. Store
+   * failures are result values, so translate them back to a rejected control
+   * flow at this composition boundary rather than letting a transition report
+   * success after its durable state was refused.
+   */
+  private async applyStateBatch(
+    batch: NamedAtomicStateMutationBatch<ConductState>,
+  ): Promise<void> {
+    const result = await this.stateStore.applyBatch(batch);
+    if ('message' in result) throw new Error(result.message);
+  }
+
+  private async applyStateMutation(mutation: StateMutation<ConductState>): Promise<void> {
+    const result = await this.stateStore.apply(mutation);
+    if ('message' in result) throw new Error(result.message);
+  }
+
+  /**
+   * Commit a bounded conductor-owned transition without re-serializing the
+   * caller's complete state snapshot. Every change carries the in-memory value
+   * it was derived from as its expected value, so a concurrent same-field
+   * update is a typed failure rather than a lost update.
+   */
+  private async commitStateChanges(
+    state: ConductState,
+    name: string,
+    changes: Record<string, unknown>,
+  ): Promise<void> {
+    await this.restoreMissingStateFile(state);
+    const current = state as Record<string, unknown>;
+    const mutations = Object.entries(changes)
+      .filter(([field, next]) => !Object.is(current[field], next))
+      .map(([field, next]) => {
+        if (next === undefined) {
+          throw new Error(`Ordinary conductor transition cannot clear ${field}`);
+        }
+        return {
+          field,
+          expected: current[field],
+          intent: name,
+          next,
+        } as StateMutation<ConductState>;
+      });
+    if (mutations.length === 0) return;
+
+    await this.applyStateBatch({ name, mutations });
+    Object.assign(current, changes);
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /**
+   * Preserve legacy in-memory transition sites without restoring whole-object
+   * persistence. The baseline carries the values actually observed when each
+   * local field changed, so a peer's same-field update becomes a store
+   * conflict rather than a lost update; untouched fields are never submitted.
+   */
+  private async persistPendingStateChanges(state: ConductState, name: string): Promise<void> {
+    await this.restoreMissingStateFile(state);
+    const baseline = this.persistedStateSnapshot;
+    if (!baseline) throw new Error('Conductor state baseline is unavailable');
+
+    const before = baseline as Record<string, unknown>;
+    const after = state as Record<string, unknown>;
+    const mutations: StateMutation<ConductState>[] = [];
+    for (const field of new Set([...Object.keys(before), ...Object.keys(after)])) {
+      if (Object.is(before[field], after[field])) continue;
+      if (!(field in after) || after[field] === undefined) {
+        throw new Error(`Ordinary conductor transition cannot clear ${field}`);
+      }
+      mutations.push({ field, expected: before[field], intent: name, next: after[field] } as StateMutation<ConductState>);
+    }
+    if (mutations.length === 0) return;
+
+    await this.applyStateBatch({ name, mutations });
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /** Keep the in-memory state and mutation baseline aligned with helper batches. */
+  private async saveConductorStepStatus(
+    state: ConductState,
+    step: StepName,
+    status: StepStatus,
+  ): Promise<void> {
+    await this.restoreMissingStateFile(state);
+    const result = await saveStepStatus(this.stateFilePath, step, status, this.stateStore);
+    requireStateMutation(result, `Conductor step-status update for ${step}`);
+    state[step] = status;
+    state.last_step = step;
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /**
+   * Recreate a state file only when a mid-run `.pipeline` deletion removed it.
+   * Every restored field expects `undefined`, so a concurrent writer that has
+   * already recreated state produces a conflict rather than being overwritten.
+   */
+  private async restoreMissingStateFile(state: ConductState): Promise<void> {
+    if (!this.persistedStateSnapshot) return;
+    try {
+      await accessFile(this.stateFilePath);
+      return;
+    } catch {
+      // The parent directory and state file may have been removed mid-run.
+    }
+
+    const mutations = Object.entries(state)
+      .filter(([, value]) => value !== undefined)
+      .map(([field, next]) => ({
+        field,
+        expected: undefined,
+        intent: 'restore state after missing pipeline root',
+        next,
+      } as StateMutation<ConductState>));
+    if (mutations.length === 0) return;
+
+    await mkdir(dirname(this.stateFilePath), { recursive: true });
+    const result = await this.stateStore.applyBatch({
+      name: 'restore state after missing pipeline root',
+      mutations,
+    });
+    if ('message' in result) {
+      throw new Error(`State recovery after missing pipeline root failed: ${result.message}`);
+    }
+    this.persistedStateSnapshot = { ...state };
+  }
+
+  /** Record only members that settled before a terminating signal. */
+  private async commitSignalCompletions(
+    state: ConductState,
+    signal: NodeJS.Signals,
+    completions: Record<string, StepStatus> | undefined,
+  ): Promise<void> {
+    if (!completions || Object.keys(completions).length === 0) return;
+    await this.commitStateChanges(state, `record ${signal} partial group completion`, completions);
+  }
+
+  /**
+   * Signal delivery has an explicit best-effort persistence contract: preserve
+   * already-settled group members when possible, but never turn a failed
+   * diagnostic write into an unhandled signal-handler rejection.
+   */
+  private async persistSignalCompletionsBestEffort(
+    state: ConductState,
+    signal: NodeJS.Signals,
+    completions: Record<string, StepStatus> | undefined,
+  ): Promise<void> {
+    try {
+      await this.commitSignalCompletions(state, signal, completions);
+    } catch (err) {
+      (this.log ?? console.warn)(
+        `[conductor] ${signal} could not persist partial group completion: ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  /** Apply the explicit pending/stale navigation batch only after store acceptance. */
+  private async navigateStateBack(
+    state: ConductState,
+    target: StepName,
+    steps: StepDefinition[],
+    preserve: readonly StepName[] = [],
+  ): Promise<number> {
+    const navigation = navigateBack(state, target, steps, preserve);
+    const before = state as Record<string, unknown>;
+    const changes = Object.fromEntries(
+      Object.entries(navigation.state as Record<string, unknown>)
+        .filter(([field, next]) => !Object.is(before[field], next)),
+    );
+    await this.commitStateChanges(state, `navigate back to ${target}`, changes);
+    return navigation.index;
+  }
+
+  /** Read expectations immediately before constructing a guarded mutation. */
+  private async currentStateForMutation(): Promise<ConductState> {
+    const result = await readState(this.stateFilePath);
+    if (!result.ok) throw new Error(result.error.message);
+    return result.value;
+  }
+
+  private async initializeRunState(state: ConductState): Promise<boolean> {
+    const sessionStartedAt = Date.now();
+    const isFreshFeatureSession = !state.run_started_at;
+    const mutations: StateMutation<ConductState>[] = [
+      {
+        field: 'session_started_at',
+        expected: state.session_started_at,
+        intent: 'stamp conductor session start',
+        next: sessionStartedAt,
+      },
+    ];
+
+    if (this.worktreeBranch !== undefined) {
+      mutations.push({
+        field: 'worktree_branch',
+        expected: state.worktree_branch,
+        intent: 'record conductor worktree branch',
+        next: this.worktreeBranch,
+      });
+    }
+    if (isFreshFeatureSession) {
+      mutations.push({
+        field: 'run_started_at',
+        expected: state.run_started_at,
+        intent: 'stamp feature run start',
+        next: sessionStartedAt,
+      });
+    }
+
+    await this.applyStateBatch({ name: 'initialize conductor run', mutations });
+
+    state.session_started_at = sessionStartedAt;
+    if (this.worktreeBranch !== undefined) state.worktree_branch = this.worktreeBranch;
+    if (isFreshFeatureSession) state.run_started_at = sessionStartedAt;
+    this.persistedStateSnapshot = { ...state };
+    return isFreshFeatureSession;
+  }
+
   constructor(opts: ConductorOptions) {
     this.stateFilePath = opts.stateFilePath;
+    this.stateStore = resolveConductorStateStore(this.stateFilePath, opts.stateStore);
     this.stepRunner = opts.stepRunner;
     this.events = opts.events;
     this.featureSlug = opts.featureSlug;
@@ -2253,15 +2488,15 @@ export class Conductor {
 
   /** Complete a verified terminal run and leave the daemon's success marker. */
   private async completeRun(state: ConductState, doneMarkerBody: string): Promise<void> {
+    await this.commitStateChanges(state, 'complete verified feature run', {
+      feature_status: 'complete',
+    });
     await this.events.emit({
       type: 'feature_complete',
       prUrl: state.pr_url,
       featureDesc: state.feature_desc,
       sessionStartedAt: state.session_started_at,
     });
-    state.feature_status = 'complete';
-    await writeState(this.stateFilePath, state);
-
     // The daemon classifies a run solely by .pipeline/DONE vs .pipeline/HALT.
     // Interactive runs intentionally leave no daemon marker.
     if (this.daemon && !(await this.markerExists(DONE_MARKER))) {
@@ -2312,7 +2547,6 @@ export class Conductor {
 
     const reason = `durable shipment evidence: ${mergedShipment.reason}`;
     await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
-    await writeState(this.stateFilePath, state);
     const prUrl = await this.surfaceRemediationPr(reason);
     await this.events.emit({ type: 'loop_halt', reason, prUrl });
 
@@ -2875,18 +3109,14 @@ export class Conductor {
 
     const stateResult = await readState(this.stateFilePath);
     let state: ConductState = stateResult.ok ? stateResult.value : {};
-    if (this.worktreeBranch !== undefined) state.worktree_branch = this.worktreeBranch;
+    this.persistedStateSnapshot = { ...state };
 
     // Stamp this conductor invocation. SHIP-phase completion predicates
     // compare artifact mtimes against this timestamp so a stale file left
     // over from a prior session can't satisfy a gate. Old state files
     // without this field are tolerated — predicates fail open when it's
     // missing.
-    const sessionStartedAt = Date.now();
-    state.session_started_at = sessionStartedAt;
-    const isFreshFeatureSession = !state.run_started_at;
-    if (isFreshFeatureSession) state.run_started_at = sessionStartedAt;
-    await writeState(this.stateFilePath, state);
+    const isFreshFeatureSession = await this.initializeRunState(state);
 
     // Task 8 (build-review-grades-plan-vs-diff-against-a-stale-o): a fresh
     // feature-session must not inherit a prior session's stale-mirage regrade
@@ -3000,12 +3230,7 @@ export class Conductor {
     // Exit codes follow Unix convention: 128 + signal number
     const signalHandlerBase = async (signal: NodeJS.Signals) => {
       signalExitRequested = true;
-      if (inFlightGroupCompletions) {
-        for (const [key, status] of Object.entries(inFlightGroupCompletions)) {
-          (state as Record<string, unknown>)[key] = status;
-        }
-      }
-      await writeState(this.stateFilePath, state);
+      await this.persistSignalCompletionsBestEffort(state, signal, inFlightGroupCompletions);
       const exitCodes: Record<string, number> = {
         SIGINT: 130,   // 128 + 2
         SIGTERM: 143,  // 128 + 15
@@ -3036,16 +3261,7 @@ export class Conductor {
       if (currentWaitController) {
         currentWaitController.abort();
       }
-      try {
-        if (inFlightGroupCompletions) {
-          for (const [key, status] of Object.entries(inFlightGroupCompletions)) {
-            (state as Record<string, unknown>)[key] = status;
-          }
-        }
-        await writeState(this.stateFilePath, state);
-      } catch {
-        // A signal handler must never reject; best-effort state save only.
-      }
+      await this.persistSignalCompletionsBestEffort(state, 'SIGTERM', inFlightGroupCompletions);
       process.exit(1);
     };
     if (!this.daemon) {
@@ -3226,7 +3442,7 @@ export class Conductor {
       if (manualTestEscalation.halt) {
         const reason = `manual_test kickback-to-build no-op: ${manualTestEscalation.reason}`;
         await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-        await writeState(this.stateFilePath, state);
+        await this.persistPendingStateChanges(state, 'persist conductor transition');
         const prUrl = await this.surfaceRemediationPr(reason);
         await this.events.emit({ type: 'loop_halt', reason, prUrl });
         process.off('SIGINT', sigintHandler);
@@ -3264,20 +3480,18 @@ export class Conductor {
           return { action: 'return' };
         }
         await captureKickbackToBuildContext('manual_test');
-        const nav = navigateBack(state, 'build', steps);
-        state = nav.state;
+        const navigationIndex = await this.navigateStateBack(state, 'build', steps);
         // markDownstreamStale only restages `done` steps; manual_test
         // is `failed` here, so restage it explicitly for the tail.
-        (state as Record<string, unknown>).manual_test = 'stale';
-        await writeState(this.stateFilePath, state);
-        return { action: 'continue', nextIndex: nav.index - 1 }; // for-loop i++ lands on build
+        await this.commitStateChanges(state, 'restage manual_test after BUILD kickback', { manual_test: 'stale' });
+        return { action: 'continue', nextIndex: navigationIndex - 1 }; // for-loop i++ lands on build
       }
       const reason =
         `manual-test FAIL unresolved after ${manualTestSelfHeals} build ` +
         `kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${failRows[0]}` +
         (failRows.length > 1 ? ` (+${failRows.length - 1} more FAIL row(s))` : '');
       await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
-      await writeState(this.stateFilePath, state);
+      await this.persistPendingStateChanges(state, 'persist conductor transition');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
       process.off('SIGINT', sigintHandler);
@@ -3464,7 +3678,7 @@ export class Conductor {
                 const syntheticKey = `${step.name}__${branch.name}`;
                 (state as Record<string, unknown>)[syntheticKey] = 'skipped';
               }
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
             }
             continue;
           }
@@ -3480,7 +3694,7 @@ export class Conductor {
         {
           const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
           if (boundaryHalt) {
-            await writeState(this.stateFilePath, state);
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(boundaryHalt);
             await emitTracked({ type: 'loop_halt', reason: boundaryHalt, prUrl });
             process.off('SIGINT', sigintHandler);
@@ -3523,8 +3737,9 @@ export class Conductor {
             // process-local SHIP latch. Persist the already-created draft so a
             // resumed coordinator can verify and advance it without issuing a
             // second create-capable operation.
-            state.pr_url = draftPr.prUrl;
-            await savePrUrl(this.stateFilePath, draftPr.prUrl);
+            await this.commitStateChanges(state, 'store ship draft pull request URL', {
+              pr_url: draftPr.prUrl,
+            });
 
             // `findOrCreatePr` adopts any OPEN PR for the branch UNTOUCHED, so a
             // `needs-remediation` placeholder left by an earlier HALT becomes the
@@ -3561,7 +3776,7 @@ export class Conductor {
               error: `Parallel group "${step.name}" had a gating branch failure`,
               retryCount: 0,
             });
-            await writeState(this.stateFilePath, state);
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);
@@ -3633,8 +3848,7 @@ export class Conductor {
             membership.members.find((m) => m.outcome.kind !== 'skipped')?.name;
           if (membership.allSkipped && builtinGroup.members[0] === step.name) {
             for (const member of membership.members) {
-              await saveStepStatus(this.stateFilePath, member.name as StepName, 'skipped');
-              state[member.name as StepName] = 'skipped';
+              await this.saveConductorStepStatus(state, member.name as StepName, 'skipped');
               await emitTracked({ type: 'config_skip', step: member.name as StepName });
             }
             continue;
@@ -3691,11 +3905,16 @@ export class Conductor {
             // it does not add another validity predicate.
             const nativeBranchResults = new Map<string, StepRunResult>();
             const dispatchGroupRound = async (members: typeof membership.dispatchable) => {
+              const roundChanges: Record<string, unknown> = {};
               for (const member of members) {
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
-                (state as Record<string, unknown>)[syntheticKey] = 'stale';
+                roundChanges[syntheticKey] = 'stale';
               }
-              await writeState(this.stateFilePath, state);
+              await this.commitStateChanges(
+                state,
+                `start ${builtinGroup.name} verification group`,
+                roundChanges,
+              );
               return runWithConcurrency(
                 members.map((member) => () => {
                   if (builtinGroup.name === BUILD_VERIFICATION_GROUP.name) {
@@ -3817,7 +4036,7 @@ export class Conductor {
               );
               if (park.disposition === 'halt') {
                 await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(park.haltReason);
                 await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -3859,7 +4078,7 @@ export class Conductor {
                     `failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(park.probeFailure)}).\n` +
                     'Refresh the Codex login, then re-queue this feature.';
                   await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(haltReason);
                   await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -3890,7 +4109,7 @@ export class Conductor {
                 'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
                 `\nProvider detail: ${outcome.reason}`;
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
               await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
@@ -4017,7 +4236,7 @@ export class Conductor {
                 if (escalation.halt) {
                   const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -4057,21 +4276,21 @@ export class Conductor {
                 for (const failure of deterministicFailures) {
                   await captureKickbackToBuildContext(failure.member.name as StepName);
                 }
-                const nav = navigateBack(state, 'build', steps);
-                state = nav.state;
+                const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                 buildRepairVerificationPending = true;
+                const staleChanges: Record<string, unknown> = {};
                 if (hasNoVerdict) {
                   for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'stale';
+                    staleChanges[member.name] = 'stale';
                   }
-                  if (fullSuiteFailure?.status === 'FAILED') state.test_suite = 'failed';
+                  if (fullSuiteFailure?.status === 'FAILED') staleChanges.test_suite = 'failed';
                 } else {
                   for (const member of membership.dispatchable) {
-                    (state as Record<string, unknown>)[member.name] = 'stale';
+                    staleChanges[member.name] = 'stale';
                   }
                 }
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1;
+                await this.commitStateChanges(state, 'restage BUILD verification members', staleChanges);
+                i = navigationIndex - 1;
                 continue;
               }
               const exhausted = deterministicFailures.find(
@@ -4089,7 +4308,7 @@ export class Conductor {
                 reason + '\n',
                 mechanical ? 'mechanical' : 'needs-human',
               );
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
@@ -4136,9 +4355,10 @@ export class Conductor {
                 `Validation group "${step.name}" halted: branch "${noVerdictMember.name}" produced ` +
                 `no-verdict after exhausting its retries (${noVerdictOutcome.reason}).`;
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
-              state[step.name] = 'failed';
-              await saveStepStatus(this.stateFilePath, step.name, 'failed');
-              await writeState(this.stateFilePath, state);
+              await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+                [step.name]: 'failed',
+                last_step: step.name,
+              });
               await emitTracked({ type: 'loop_halt', reason: haltReason });
               await emitTracked({
                 type: 'step_failed',
@@ -4159,14 +4379,18 @@ export class Conductor {
             if (allGreen) {
               // JOIN — single writer: one consistent state snapshot,
               // regardless of the order branches actually completed in.
+              const joinChanges: Record<string, unknown> = {};
               for (const member of membership.dispatchable) {
                 const memberName = member.name as StepName;
                 const syntheticKey = `${builtinGroup.name}__${member.name}`;
-                (state as Record<string, unknown>)[syntheticKey] = 'done';
-                state[memberName] = 'done';
-                await saveStepStatus(this.stateFilePath, memberName, 'done');
+                joinChanges[syntheticKey] = 'done';
+                joinChanges[memberName] = 'done';
               }
-              await writeState(this.stateFilePath, state);
+              await this.commitStateChanges(
+                state,
+                `join ${builtinGroup.name} verification group`,
+                joinChanges,
+              );
               await emitTracked({
                 type: 'parallel_completed',
                 step: step.name,
@@ -4309,17 +4533,16 @@ export class Conductor {
                   }
 
                   await captureKickbackToBuildContext('manual_test');
-                  const nav = navigateBack(state, mergedTarget, steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(state, mergedTarget, steps);
                   // manual_test is `failed` (deterministic FAIL rows), not
                   // `done` — restage it explicitly for the tail, same as
                   // handleManualTestFailKickback does.
-                  (state as Record<string, unknown>).manual_test = 'stale';
+                  const staleChanges: Record<string, unknown> = { manual_test: 'stale' };
                   for (const name of gapMemberNamesForMerge) {
-                    (state as Record<string, unknown>)[name] = 'stale';
+                    staleChanges[name] = 'stale';
                   }
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on the merged target
+                  await this.commitStateChanges(state, 'restage validation group after kickback', staleChanges);
+                  i = navigationIndex - 1; // for-loop i++ lands on the merged target
                   continue;
                 }
 
@@ -4328,7 +4551,6 @@ export class Conductor {
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -4402,7 +4624,6 @@ export class Conductor {
                   if (gapEscalation.halt) {
                     const reason = `${gapName} kickback-to-build no-op: ${gapEscalation.reason}`;
                     await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                    await writeState(this.stateFilePath, state);
                     const prUrl = await this.surfaceRemediationPr(reason);
                     await emitTracked({ type: 'loop_halt', reason, prUrl });
                     process.off('SIGINT', sigintHandler);
@@ -4454,13 +4675,15 @@ export class Conductor {
                       await captureKickbackToBuildContext(gapName);
                     }
                   }
-                  const nav = navigateBack(state, remediationOutcome.target, steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(
+                    state, remediationOutcome.target, steps,
+                  );
+                  const staleChanges: Record<string, unknown> = {};
                   for (const name of gapMemberNames) {
-                    (state as Record<string, unknown>)[name] = 'stale';
+                    staleChanges[name] = 'stale';
                   }
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on the target step
+                  await this.commitStateChanges(state, 'restage validation gaps after kickback', staleChanges);
+                  i = navigationIndex - 1; // for-loop i++ lands on the target step
                   continue;
                 }
 
@@ -4469,7 +4692,6 @@ export class Conductor {
                     `Validation group "${step.name}" halted: needs human DECIDE — ` +
                     remediationOutcome.detail;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -4521,9 +4743,10 @@ export class Conductor {
                   (failedMemberReasons.length > 0
                     ? failedMemberReasons.join('; ')
                     : 'non-green branch outcome');
-            state[step.name] = 'failed';
-            await saveStepStatus(this.stateFilePath, step.name, 'failed');
-            await writeState(this.stateFilePath, state);
+            await this.commitStateChanges(state, `fail ${step.name} validation group`, {
+              [step.name]: 'failed',
+              last_step: step.name,
+            });
             if (!existingGroupHalt || existingGroupHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, groupHaltReason + '\n', 'needs-human');
             }
@@ -4556,7 +4779,6 @@ export class Conductor {
         const gate = checkGate(step, state);
         if (!gate.passed) {
           await emitTracked({ type: 'gate_blocked', step: step.name, reason: gate.reason });
-          await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
@@ -4569,8 +4791,7 @@ export class Conductor {
           const nonGreen = await this.nonGreenFinishValidators(state);
           if (nonGreen.length > 0) {
             for (const member of nonGreen) {
-              state[member.name] = 'stale';
-              await saveStepStatus(this.stateFilePath, member.name, 'stale');
+              await this.saveConductorStepStatus(state, member.name, 'stale');
               await emitTracked({
                 type: 'gate_verdict',
                 step: member.name,
@@ -4578,7 +4799,6 @@ export class Conductor {
                 reason: member.reason,
               });
             }
-            await writeState(this.stateFilePath, state);
             const target = nonGreen[0]!;
             await emitTracked({
               type: 'kickback',
@@ -4602,8 +4822,9 @@ export class Conductor {
         if (this.isSelfBuild() && step.name === 'finish') {
           const verdict = await this.runSelfHostFinishGates(state.worktree_branch);
           if (!verdict.ok) {
-            state[step.name] = 'stale';
-            await writeState(this.stateFilePath, state);
+            await this.commitStateChanges(state, 'restage failed self-host finish gate', {
+              [step.name]: 'stale',
+            });
             await emitTracked({ type: 'loop_halt', reason: verdict.reason });
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
@@ -4617,8 +4838,7 @@ export class Conductor {
         }
 
         // Mark in_progress before running
-        await saveStepStatus(this.stateFilePath, step.name, 'in_progress');
-        state[step.name] = 'in_progress';
+        await this.saveConductorStepStatus(state, step.name, 'in_progress');
 
         await emitTracked({ type: 'step_started', step: step.name, index: i });
 
@@ -4844,7 +5064,6 @@ export class Conductor {
           {
             const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
             if (boundaryHalt) {
-              await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(boundaryHalt);
               await emitTracked({ type: 'loop_halt', reason: boundaryHalt, prUrl });
               process.off('SIGINT', sigintHandler);
@@ -5175,7 +5394,7 @@ export class Conductor {
                 `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
                 'Refresh the Codex login, then re-queue this feature.';
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
               await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
               process.off('SIGINT', sigintHandler);
@@ -5188,7 +5407,7 @@ export class Conductor {
               await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
               // Durable signals (HALT marker + state) are written BEFORE escalation
               // so the daemon can classify the outcome even if escalation throws (C1).
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               // Escalate with the credentials-specific reason (not generic "retries exhausted").
               const prUrl = await this.surfaceRemediationPr(park.haltReason);
               await emitTracked({ type: 'loop_halt', reason: park.haltReason, prUrl });
@@ -5240,7 +5459,7 @@ export class Conductor {
               'Review the denied action and re-scope the work to an approved boundary before re-queueing this feature.' +
               (detail ? `\nProvider detail: ${detail}` : '');
             await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
-            await writeState(this.stateFilePath, state);
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
             const prUrl = await this.surfaceRemediationPr(haltReason);
             await emitTracked({ type: 'loop_halt', reason: haltReason, prUrl });
             process.off('SIGINT', sigintHandler);
@@ -5273,10 +5492,9 @@ export class Conductor {
                 continue;
               }
               const reason = `FINISH publication retry exhausted: ${route.reason}`;
-              state.finish = 'failed';
-              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               await emitTracked({ type: 'loop_halt', reason });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
@@ -5304,17 +5522,16 @@ export class Conductor {
                 // The failing FINISH step is not part of the done-only stale
                 // cascade, so explicitly restage it for the post-BUILD tail.
                 (state as Record<string, unknown>).finish = 'stale';
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 i = nav.index - 1; // for-loop i++ lands on build
                 continue stepLoop;
               }
               const reason =
                 `FINISH implementation evidence remains invalid after ${kickback.entry.count} ` +
                 `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${route.evidence}`;
-              state.finish = 'failed';
-              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               await emitTracked({ type: 'loop_halt', reason });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
@@ -5322,10 +5539,9 @@ export class Conductor {
             }
             if (route.kind === 'halt') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
-              state.finish = 'failed';
-              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await this.saveConductorStepStatus(state, 'finish', 'failed');
               await writeHaltMarker(this.projectRoot, route.reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               await emitTracked({ type: 'loop_halt', reason: route.reason });
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
@@ -5675,7 +5891,7 @@ export class Conductor {
                   const reason = `build progressing but hit absolute attempt ceiling ${bpCeilingValue}`;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                   state[step.name] = 'failed';
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   await emitTracked({ type: 'loop_halt', reason });
                   process.off('SIGINT', sigintHandler);
                   return;
@@ -5758,7 +5974,7 @@ export class Conductor {
                       ` — unpark with \`conduct daemon unpark ${slug}\``;
                     await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
                     state[step.name] = 'failed';
-                    await writeState(this.stateFilePath, state);
+                    await this.persistPendingStateChanges(state, 'persist conductor transition');
                     await emitTracked({ type: 'loop_halt', reason });
                     process.off('SIGINT', sigintHandler);
                     return;
@@ -5830,7 +6046,7 @@ export class Conductor {
                         effectiveQuestion +
                         '\n\nRemediation budget exhausted (max ' + MAX_KICKBACKS_PER_GATE + ' kickbacks per gate).';
                       await writeHaltMarker(this.projectRoot, haltContent + '\n', 'mechanical');
-                      await writeState(this.stateFilePath, state);
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
                       const prUrl = await this.surfaceRemediationPr(haltContent);
                       await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                       process.off('SIGINT', sigintHandler);
@@ -5875,7 +6091,7 @@ export class Conductor {
                         await writeStallHalt(this.projectRoot, effectiveQuestion, detail).catch(() => {
                           /* best-effort marker */
                         });
-                        await writeState(this.stateFilePath, state);
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
                         await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
@@ -5923,7 +6139,7 @@ export class Conductor {
                         await writeStallHalt(this.projectRoot, effectiveQuestion, detail).catch(() => {
                           /* best-effort marker */
                         });
-                        await writeState(this.stateFilePath, state);
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
                         await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
@@ -5949,7 +6165,7 @@ export class Conductor {
                         ).catch(() => {
                           /* best-effort marker */
                         });
-                        await writeState(this.stateFilePath, state);
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
                         await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
@@ -5972,7 +6188,7 @@ export class Conductor {
                         await writeStallHalt(this.projectRoot, effectiveQuestion, detail).catch(() => {
                           /* best-effort marker */
                         });
-                        await writeState(this.stateFilePath, state);
+                        await this.persistPendingStateChanges(state, 'persist conductor transition');
                         const prUrl = await this.surfaceRemediationPr(haltContent);
                         await emitTracked({ type: 'loop_halt', reason: effectiveQuestion, prUrl });
                         process.off('SIGINT', sigintHandler);
@@ -6107,7 +6323,7 @@ export class Conductor {
                 // otherwise, since saveStepStatus's read-modify-write starts
                 // from whatever is already persisted, not from this `state`
                 // object.
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 if (this.taskEvidence) {
                   const freshEvidence = await createTaskEvidence(this.projectRoot);
                   freshEvidence.lastResolvedCount = await countResolvedTasks(this.projectRoot);
@@ -6142,8 +6358,7 @@ export class Conductor {
 
         if (!succeeded) {
           // Exhausted retries — route through the recovery menu.
-          await saveStepStatus(this.stateFilePath, step.name, 'failed');
-          state[step.name] = 'failed';
+          await this.saveConductorStepStatus(state, step.name, 'failed');
           await emitTracked({
             type: 'step_failed',
             step: step.name,
@@ -6230,20 +6445,18 @@ export class Conductor {
                     'Fix and commit the failure before the suite is re-run.',
                 );
                 if (await this.stopIfPrMerged(state, sigintHandler, sigterm)) return;
-                const nav = navigateBack(state, 'build', steps);
-                state = nav.state;
+                const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                 // The failed native gate is not covered by the done-only stale
                 // cascade; restage it explicitly for the next BUILD lap.
-                (state as Record<string, unknown>).test_suite = 'stale';
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1; // for-loop i++ lands on build
+                await this.commitStateChanges(state, 'restage test_suite after BUILD kickback', { test_suite: 'stale' });
+                i = navigationIndex - 1; // for-loop i++ lands on build
                 continue;
               }
               const reason =
                 `test_suite failure unresolved after ${count} build kickback(s) ` +
                 `(cap ${MAX_KICKBACKS_PER_GATE}): ${evidence}`;
               await writeHaltMarker(this.projectRoot, reason + '\n', 'mechanical');
-              await writeState(this.stateFilePath, state);
+              await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
@@ -6316,7 +6529,7 @@ export class Conductor {
                     `flaggedPaths: ${scopeFailDisposition.flaggedPaths.join(', ')}\n` +
                     `regradeCount: ${scopeFailDisposition.regradeCount}\n`;
                   await writeHaltMarker(this.projectRoot, haltBody, 'needs-human');
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const reason =
                     'build_review scope-FAIL disposition HALT: second stale-mirage ' +
                     'detection this feature-session';
@@ -6337,9 +6550,8 @@ export class Conductor {
                     mergeBase: lastBuildReviewMergeBase ?? '',
                     regradeCount,
                   });
-                  await saveStepStatus(this.stateFilePath, step.name, 'failed');
-                  state[step.name] = 'failed';
-                  await writeState(this.stateFilePath, state);
+                  await this.saveConductorStepStatus(state, step.name, 'failed');
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = i - 1; // for-loop i++ re-lands on build_review
                   continue;
                 }
@@ -6352,7 +6564,7 @@ export class Conductor {
                 if (escalation.halt) {
                   const reason = `build_review kickback-to-build no-op: ${escalation.reason}`;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -6395,7 +6607,7 @@ export class Conductor {
                       const reason =
                         `build_review completeness FAIL needs a human: ${outcome.detail}`;
                       await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                      await writeState(this.stateFilePath, state);
+                      await this.persistPendingStateChanges(state, 'persist conductor transition');
                       const prUrl = await this.surfaceRemediationPr(reason);
                       await emitTracked({ type: 'loop_halt', reason, prUrl });
                       process.off('SIGINT', sigintHandler);
@@ -6428,22 +6640,21 @@ export class Conductor {
                     return;
                   }
                   await captureKickbackToBuildContext('build_review');
-                  const nav = navigateBack(state, reworkTarget, steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(state, reworkTarget, steps);
                   // markDownstreamStale only restages `done` steps; build_review
                   // is `failed` here, so restage it (and manual_test) explicitly
                   // for the tail.
-                  (state as Record<string, unknown>).build_review = 'stale';
-                  (state as Record<string, unknown>).manual_test = 'stale';
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on the rework target
+                  await this.commitStateChanges(state, 'restage BUILD review after kickback', {
+                    build_review: 'stale', manual_test: 'stale',
+                  });
+                  i = navigationIndex - 1; // for-loop i++ lands on the rework target
                   continue;
                 }
                 const reason =
                   `build_review FAIL unresolved after ${count} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6514,7 +6725,7 @@ export class Conductor {
                 if (escalation.halt) {
                   const reason = `wiring_check kickback-to-build no-op: ${escalation.reason}`;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -6542,22 +6753,21 @@ export class Conductor {
                     return;
                   }
                   await captureKickbackToBuildContext('wiring_check');
-                  const nav = navigateBack(state, 'build', steps);
-                  state = nav.state;
+                  const navigationIndex = await this.navigateStateBack(state, 'build', steps);
                   // markDownstreamStale only restages `done` steps; wiring_check
                   // is `failed` here, so restage it (and manual_test) explicitly
                   // for the tail.
-                  (state as Record<string, unknown>).wiring_check = 'stale';
-                  (state as Record<string, unknown>).manual_test = 'stale';
-                  await writeState(this.stateFilePath, state);
-                  i = nav.index - 1; // for-loop i++ lands on build
+                  await this.commitStateChanges(state, 'restage wiring_check after BUILD kickback', {
+                    wiring_check: 'stale', manual_test: 'stale',
+                  });
+                  i = navigationIndex - 1; // for-loop i++ lands on build
                   continue;
                 }
                 const reason =
                   `wiring_check gap unresolved after ${count} build kickback(s) ` +
                   `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6578,7 +6788,7 @@ export class Conductor {
               if (remediationRounds >= MAX_KICKBACKS_PER_GATE) {
                 const detail = `Remediation budget exhausted (${remediationRounds} stalls attempted, cap ${MAX_KICKBACKS_PER_GATE})`;
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
                 await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6616,7 +6826,7 @@ export class Conductor {
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
                   (state as Record<string, unknown>).build = 'stale';
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = nav.index - 1; // for-loop i++ lands on the target step
                   continue;
                 }
@@ -6624,7 +6834,7 @@ export class Conductor {
                 if (outcome.kind === 'halt') {
                   const reason = stallQuestion + '\n\n' + outcome.detail;
                   await writeStallHalt(this.projectRoot, stallQuestion, outcome.detail);
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -6636,7 +6846,7 @@ export class Conductor {
                 // malformed JSON, or stale file) — fall through to fail-safe HALT below.
                 const detail = 'Remediation plan missing or invalid (no routable dispositions found)';
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
                 await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6646,7 +6856,7 @@ export class Conductor {
                 // Remediation dispatch threw an error — fail-safe HALT with the question
                 const detail = `Remediation dispatch failed: ${err instanceof Error ? err.message : String(err)}`;
                 await writeStallHalt(this.projectRoot, stallQuestion, detail);
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(stallQuestion + '\n\n' + detail);
                 await emitTracked({ type: 'loop_halt', reason: stallQuestion + '\n\n' + detail, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6664,7 +6874,7 @@ export class Conductor {
               if (prdAuditEscalation.halt) {
                 const reason = `prd_audit kickback-to-build no-op: ${prdAuditEscalation.reason}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6713,14 +6923,14 @@ export class Conductor {
                   const nav = navigateBack(state, outcome.target, steps);
                   state = nav.state;
                   (state as Record<string, unknown>).prd_audit = 'stale';
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   i = nav.index - 1; // for-loop i++ lands on the target step
                   continue;
                 }
                 if (outcome.kind === 'halt') {
                   const reason = 'prd-audit halted: needs human DECIDE — ' + outcome.detail;
                   await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                  await writeState(this.stateFilePath, state);
+                  await this.persistPendingStateChanges(state, 'persist conductor transition');
                   const prUrl = await this.surfaceRemediationPr(reason);
                   await emitTracked({ type: 'loop_halt', reason, prUrl });
                   process.off('SIGINT', sigintHandler);
@@ -6773,7 +6983,7 @@ export class Conductor {
                 // markDownstreamStale only restages `done` steps; prd_audit is
                 // `failed` here, so restage it explicitly to re-run on the tail.
                 (state as Record<string, unknown>).prd_audit = 'stale';
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
                 i = nav.index - 1; // for-loop i++ lands on build
                 continue;
               }
@@ -6785,7 +6995,6 @@ export class Conductor {
               // gaps need DECIDE input, while an implementation gap reaches
               // this writer only after autonomous self-healing is exhausted.
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-              await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(reason);
               await emitTracked({ type: 'loop_halt', reason, prUrl });
               process.off('SIGINT', sigintHandler);
@@ -6883,7 +7092,6 @@ export class Conductor {
                   `${finishGate ? 'finish' : 'as-built architecture review'} ` +
                   `kickback-to-build no-op: ${gateEscalation.reason}`;
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -6936,13 +7144,13 @@ export class Conductor {
                 if (outcome.target === 'build') {
                   await captureKickbackToBuildContext(step.name);
                 }
-                const nav = navigateBack(state, outcome.target, steps);
-                state = nav.state;
+                const navigationIndex = await this.navigateStateBack(state, outcome.target, steps);
                 // markDownstreamStale only restages `done` steps; this gate is
                 // `failed` here, so restage it explicitly to re-run on the tail.
-                (state as Record<string, unknown>)[step.name] = 'stale';
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1; // for-loop i++ lands on the target step
+                await this.commitStateChanges(state, `restage ${step.name} after remediation`, {
+                  [step.name]: 'stale',
+                });
+                i = navigationIndex - 1; // for-loop i++ lands on the target step
                 continue;
               }
               if (outcome.kind === 'halt') {
@@ -6966,7 +7174,6 @@ export class Conductor {
                   });
                 }
                 await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-                await writeState(this.stateFilePath, state);
                 const prUrl = await this.surfaceRemediationPr(reason);
                 await emitTracked({ type: 'loop_halt', reason, prUrl });
                 process.off('SIGINT', sigintHandler);
@@ -7007,9 +7214,9 @@ export class Conductor {
             if (!existingHalt || existingHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
             }
-            // Durable signals (HALT marker + state) are written BEFORE escalation
+            // The HALT marker is written before escalation. All state transitions
+            // have already crossed the state-store boundary.
             // so the daemon can classify the outcome even if escalation throws (C1).
-            await writeState(this.stateFilePath, state);
             // Escalate for all gating/structural steps (not just build): open a
             // needs-remediation draft PR so a human can see the failure without
             // hunting through daemon logs. surfaceRemediationPr is best-effort and
@@ -7045,19 +7252,16 @@ export class Conductor {
               continue;
             }
             if (action === 'skip' && !gating) {
-              await saveStepStatus(this.stateFilePath, step.name, 'skipped');
-              state[step.name] = 'skipped';
+              await this.saveConductorStepStatus(state, step.name, 'skipped');
               continue;
             }
             if (action === 'back') {
               const navigable = getNavigableSteps(state, steps);
               const target = await this.onNavigate(navigable);
               if (target) {
-                const nav = navigateBack(state, target, steps);
+                const navigationIndex = await this.navigateStateBack(state, target, steps);
                 await emitTracked({ type: 'navigation_back', from: step.name, to: target });
-                state = nav.state;
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1;
+                i = navigationIndex - 1;
                 continue;
               }
             }
@@ -7072,7 +7276,6 @@ export class Conductor {
             }
           }
 
-          await writeState(this.stateFilePath, state);
           process.off('SIGINT', sigintHandler);
           process.off('SIGTERM', sigterm);
           return;
@@ -7146,7 +7349,7 @@ export class Conductor {
                   unapproved,
                   this.projectRoot,
                 );
-                await writeState(this.stateFilePath, state);
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
 
                 // Clean up the conditional marker, if any, so next run starts fresh.
                 if (resolved.review === 'conditional') {
@@ -7246,7 +7449,7 @@ export class Conductor {
           // (#436) — gated on the rebase outcome, so a conflict_halt is never
           // stamped 'done' here. For all other steps, here.
           if (step.name !== 'complexity' && step.name !== 'worktree' && step.name !== 'rebase') {
-            await saveStepStatus(this.stateFilePath, step.name, 'done');
+            await this.saveConductorStepStatus(state, step.name, 'done');
           }
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
@@ -7293,8 +7496,9 @@ export class Conductor {
             } else if (successOutput) {
               const scraped = extractPrUrl(successOutput);
               if (scraped) {
-                state.pr_url = scraped;
-                await savePrUrl(this.stateFilePath, scraped);
+                await this.commitStateChanges(state, 'adopt finish pull request URL', {
+                  pr_url: scraped,
+                });
               }
             }
           }
@@ -7302,8 +7506,9 @@ export class Conductor {
           // A verified documentation delivery intentionally bypasses the
           // artifact, implementation, and test phases.
           if (documentationDelivery) {
-            state.pr_url = documentationDelivery.prUrl;
-            await savePrUrl(this.stateFilePath, documentationDelivery.prUrl);
+            await this.commitStateChanges(state, 'adopt documentation delivery pull request URL', {
+              pr_url: documentationDelivery.prUrl,
+            });
             await this.completeRun(state, 'documentation delivery complete\n');
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
@@ -7315,7 +7520,6 @@ export class Conductor {
             await emitTracked({ type: 'checkpoint_reached', step: step.name });
             const response = await this.onCheckpoint(step.name);
             if (response === 'quit') {
-              await writeState(this.stateFilePath, state);
               process.off('SIGINT', sigintHandler);
               process.off('SIGTERM', sigterm);
               return;
@@ -7324,11 +7528,9 @@ export class Conductor {
               const navigable = getNavigableSteps(state, steps);
               const target = await this.onNavigate(navigable);
               if (target) {
-                const nav = navigateBack(state, target, steps);
+                const navigationIndex = await this.navigateStateBack(state, target, steps);
                 await emitTracked({ type: 'navigation_back', from: step.name, to: target });
-                state = nav.state;
-                await writeState(this.stateFilePath, state);
-                i = nav.index - 1; // for loop will i++
+                i = navigationIndex - 1; // for loop will i++
                 continue;
               }
             }
@@ -7361,7 +7563,6 @@ export class Conductor {
             throw transitionErr;
           }
           if (advance === 'halt') {
-            await writeState(this.stateFilePath, state);
             process.off('SIGINT', sigintHandler);
             if (!this.daemon) {
               process.off('SIGTERM', sigterm);
@@ -7387,7 +7588,6 @@ export class Conductor {
       {
         const boundaryHalt = await this.consumePendingLiveBoundaryHalt();
         if (boundaryHalt) {
-          await writeState(this.stateFilePath, state);
           const prUrl = await this.surfaceRemediationPr(boundaryHalt);
           await this.events.emit({ type: 'loop_halt', reason: boundaryHalt, prUrl });
           return;
@@ -7407,12 +7607,20 @@ export class Conductor {
     } catch (err) {
       // Any unexpected throw inside the loop (e.g. a verdict-I/O failure in
       // the SHIP tail) must leave the feature recoverable, never silently
-      // lost. Flush the latest in-memory state and write a HALT marker so a
+      // lost. State transitions are persisted at their mutation boundary; do
+      // not re-serialize this stale in-memory snapshot while handling an error.
+      // Write a HALT marker so a
       // supervising daemon classifies this as `halted` (worktree kept, parked,
       // retryable) instead of "loop ended without DONE or HALT marker" (error
       // + lost SHIP state). Mirrors the auto-mode hard-failure handler above.
       const reason = `conductor error: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`;
-      await writeState(this.stateFilePath, state).catch(() => {});
+      await this.restoreMissingStateFile(state).catch((restoreError: unknown) => {
+        (this.log ?? console.warn)(
+          `conductor could not restore missing state after error: ${
+            restoreError instanceof Error ? restoreError.message : String(restoreError)
+          }`,
+        );
+      });
       if (!(await this.markerExists(LOOP_HALT_MARKER))) {
         await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       }
@@ -7556,7 +7764,6 @@ export class Conductor {
             `kickback ping-pong: ${target} re-opened ${count + 1} times ` +
             `(cap ${MAX_KICKBACKS_PER_GATE}): ${kickback.entry.lastReason || 'no reasons recorded'}`;
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-          await writeState(this.stateFilePath, state).catch(() => {});
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
@@ -7571,15 +7778,12 @@ export class Conductor {
             `${disposition.reason}\n\nKickback evidence: ` +
             `${v.kickback?.evidence ?? 'none provided'}`;
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
-          await writeState(this.stateFilePath, state).catch(() => {});
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
         }
         if (navigate) {
-          const nav = navigateBack(state, target, steps);
-          Object.assign(state, nav.state);
-          await writeState(this.stateFilePath, state);
+          await this.navigateStateBack(state, target, steps);
         }
         result = 'kicked';
       }
@@ -7687,9 +7891,7 @@ export class Conductor {
             });
             // Re-open the staled gate so the selector re-runs it, without
             // sweeping any preserved judged gate stale in the process.
-            const nav = navigateBack(state, target, steps, preserved);
-            Object.assign(state, nav.state);
-            await writeState(this.stateFilePath, state);
+            await this.navigateStateBack(state, target, steps, preserved);
           }
         }
       }
@@ -7800,7 +8002,8 @@ export class Conductor {
     // selector skips them AND downstream prerequisite gates (checkGate) pass —
     // the selector-driven tail can jump over a step without the linear body
     // ever marking it.
-    let markedSkip = false;
+    const stateBeforeSkips = { ...state } as Record<string, unknown>;
+    const skippedChanges: Record<string, StepStatus> = {};
     const tier = state.complexity_tier ?? 'L';
     // Resolve the track once (state-seeded, or the committed marker in the
     // interactive flow) so a technical feature skips prd_audit in the SHIP loop.
@@ -7822,7 +8025,7 @@ export class Conductor {
           (s.name === 'build_review' && !buildReviewEnabled))
       ) {
         (state as Record<string, unknown>)[s.name] = 'skipped';
-        markedSkip = true;
+        skippedChanges[s.name] = 'skipped';
         // Same honesty rule as the linear body's skips: a verdict-bearing gate
         // the selector jumps over must still leave a verdict behind, or it ends
         // the run resolved with nothing on disk to read.
@@ -7840,7 +8043,15 @@ export class Conductor {
         }
       }
     }
-    if (markedSkip) await writeState(this.stateFilePath, state);
+    if (Object.keys(skippedChanges).length > 0) {
+      const mutations = Object.entries(skippedChanges).map(([field, next]) => ({
+        field: field as keyof ConductState & string,
+        expected: stateBeforeSkips[field],
+        intent: 'record selector tail skips',
+        next,
+      })) as StateMutation<ConductState>[];
+      await this.applyStateBatch({ name: 'record selector tail skips', mutations });
+    }
 
     const verdicts = await readAllVerdicts(this.projectRoot);
 
@@ -7896,7 +8107,6 @@ export class Conductor {
     stuckGate.set(selectedStep.name, sel);
     if (sel > MAX_GATE_SELECTIONS) {
       const reason = `gate '${selectedStep.name}' selected ${sel} times without satisfying: ${decision.reason}`;
-      await writeState(this.stateFilePath, state).catch(() => {});
       await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
       const prUrl = await this.surfaceRemediationPr(reason);
       await this.events.emit({ type: 'loop_halt', reason, prUrl });
@@ -7907,8 +8117,9 @@ export class Conductor {
     // marked 'done' (its verdict went false via kickback/recompute), reset it to
     // 'pending' so the loop re-runs it instead of skipping it as already-resolved.
     if (getStepStatus(state, selectedStep.name) === 'done') {
-      (state as Record<string, unknown>)[selectedStep.name] = 'pending';
-      await writeState(this.stateFilePath, state);
+      await this.commitStateChanges(state, `reopen ${selectedStep.name} selected gate`, {
+        [selectedStep.name]: 'pending',
+      });
     }
     return selectedIndex;
   }
@@ -7956,7 +8167,9 @@ export class Conductor {
     let groupFailed = false;
 
     // JOIN: single-writer — the core, on the loop's thread of control,
-    // writes the synthetic keys once every branch has resolved.
+    // commits the synthetic keys and group status as one invariant once every
+    // branch has resolved.
+    const changes: Record<string, unknown> = {};
     for (let i = 0; i < branches.length; i += 1) {
       const branch = branches[i]!;
       const outcome = outcomes[i];
@@ -7964,11 +8177,11 @@ export class Conductor {
       const success = outcome?.kind === 'verdict' && outcome.verdict === 'pass';
 
       if (success) {
-        (state as Record<string, unknown>)[syntheticKey] = 'done';
+        changes[syntheticKey] = 'done';
         continue;
       }
 
-      (state as Record<string, unknown>)[syntheticKey] = 'failed';
+      changes[syntheticKey] = 'failed';
       const error =
         outcome?.kind === 'no-verdict' ? outcome.reason : `branch ${branch.name} failed`;
       await this.events.emit({
@@ -7982,14 +8195,10 @@ export class Conductor {
       }
     }
 
-    await writeState(this.stateFilePath, state);
+    changes[groupName] = groupFailed ? 'failed' : 'done';
+    await this.commitStateChanges(state, `join ${groupName} parallel group`, changes);
 
-    if (groupFailed) {
-      await saveStepStatus(this.stateFilePath, groupName, 'failed');
-      state[groupName] = 'failed';
-    } else {
-      await saveStepStatus(this.stateFilePath, groupName, 'done');
-      state[groupName] = 'done';
+    if (!groupFailed) {
       await this.events.emit({
         type: 'parallel_completed',
         step: groupName,
@@ -8012,14 +8221,46 @@ export class Conductor {
   private async runWorktreeStep(state: ConductState): Promise<StepRunResult> {
     const featureDesc = this.featureDesc ?? state.feature_desc;
     if (!featureDesc) {
+      const persisted = await this.currentStateForMutation();
+      await this.applyStateBatch({
+        name: 'record worktree step completion',
+        mutations: [
+          {
+            field: 'worktree',
+            expected: persisted.worktree,
+            intent: 'record worktree step completion',
+            next: 'done',
+          },
+          {
+            field: 'last_step',
+            expected: persisted.last_step,
+            intent: 'record last completed step',
+            next: 'worktree',
+          },
+        ],
+      });
       state.worktree = 'done';
       state.last_step = 'worktree';
-      await writeState(this.stateFilePath, state);
       return { success: true };
     }
+    const persisted = await this.currentStateForMutation();
+    const mutations: StateMutation<ConductState>[] = [];
     try {
       const { path, branch } = await new WorktreeManager(this.projectRoot).create(featureDesc);
-      state.feature_desc = featureDesc;
+      mutations.push(
+        {
+          field: 'worktree_dir',
+          expected: persisted.worktree_dir,
+          intent: 'record isolated worktree directory',
+          next: path,
+        },
+        {
+          field: 'worktree_branch',
+          expected: persisted.worktree_branch,
+          intent: 'record isolated worktree branch',
+          next: branch,
+        },
+      );
       state.worktree_dir = path;
       state.worktree_branch = branch;
     } catch (err) {
@@ -8029,11 +8270,31 @@ export class Conductor {
       console.warn(
         `[worktree] could not create an isolated worktree (${err instanceof Error ? err.message : String(err)}); continuing in-place.`,
       );
-      state.feature_desc = featureDesc;
     }
+    mutations.push(
+      {
+        field: 'feature_desc',
+        expected: persisted.feature_desc,
+        intent: 'record worktree feature description',
+        next: featureDesc,
+      },
+      {
+        field: 'worktree',
+        expected: persisted.worktree,
+        intent: 'record worktree step completion',
+        next: 'done',
+      },
+      {
+        field: 'last_step',
+        expected: persisted.last_step,
+        intent: 'record last completed step',
+        next: 'worktree',
+      },
+    );
+    await this.applyStateBatch({ name: 'record worktree step completion', mutations });
+    state.feature_desc = featureDesc;
     state.worktree = 'done';
     state.last_step = 'worktree';
-    await writeState(this.stateFilePath, state);
     return { success: true };
   }
 
@@ -8262,8 +8523,14 @@ export class Conductor {
         const content = await readFile(join(dir, entries[entries.length - 1]), 'utf-8');
         const parsed = parseTrack(content);
         if (parsed) {
+          const persisted = await this.currentStateForMutation();
+          await this.applyStateMutation({
+            field: 'track',
+            expected: persisted.track,
+            intent: 'cache resolved work track',
+            next: parsed,
+          });
           state.track = parsed;
-          await writeState(this.stateFilePath, state);
           return parsed;
         }
       }
@@ -8274,12 +8541,39 @@ export class Conductor {
   }
 
   private async runComplexityStep(state: ConductState): Promise<StepRunResult> {
-    // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
-    if (this.mode === 'auto') {
-      state.complexity_tier = state.complexity_tier ?? 'L';
+    const recordComplexity = async (tier: ComplexityTier): Promise<void> => {
+      const persisted = await this.currentStateForMutation();
+      await this.applyStateBatch({
+        name: 'record complexity decision',
+        mutations: [
+          {
+            field: 'complexity_tier',
+            expected: persisted.complexity_tier,
+            intent: 'record complexity tier',
+            next: tier,
+          },
+          {
+            field: 'complexity',
+            expected: persisted.complexity,
+            intent: 'record complexity step completion',
+            next: 'done',
+          },
+          {
+            field: 'last_step',
+            expected: persisted.last_step,
+            intent: 'record last completed step',
+            next: 'complexity',
+          },
+        ],
+      });
+      state.complexity_tier = tier;
       state.complexity = 'done';
       state.last_step = 'complexity';
-      await writeState(this.stateFilePath, state);
+    };
+
+    // Auto mode: take any existing tier, else default to L. No prompt, no Claude call.
+    if (this.mode === 'auto') {
+      await recordComplexity(state.complexity_tier ?? 'L');
       return { success: true };
     }
 
@@ -8300,10 +8594,7 @@ export class Conductor {
 
     if (!this.onComplexityAssessment) {
       // No UI callback — accept the recommendation or default to L.
-      state.complexity_tier = recommended ?? state.complexity_tier ?? 'L';
-      state.complexity = 'done';
-      state.last_step = 'complexity';
-      await writeState(this.stateFilePath, state);
+      await recordComplexity(recommended ?? state.complexity_tier ?? 'L');
       return { success: true };
     }
 
@@ -8320,10 +8611,7 @@ export class Conductor {
       };
     }
 
-    state.complexity_tier = tier;
-    state.complexity = 'done';
-    state.last_step = 'complexity';
-    await writeState(this.stateFilePath, state);
+    await recordComplexity(tier);
     return { success: true };
   }
 

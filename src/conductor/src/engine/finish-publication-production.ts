@@ -18,7 +18,7 @@ import {
   NEEDS_REMEDIATION_TITLE_PREFIX,
   PR_BODY_FLOOR_MARKER,
 } from './halt-pr-rehabilitation.js';
-import { savePrUrl, writeState } from './state.js';
+import { replaceState, requireStateMutation, savePrUrl } from './state.js';
 import {
   dispatchFinishRecord,
   type FinishRecordRunners,
@@ -274,7 +274,14 @@ export function createProductionFinishPublicationCoordinator(
             // the supplied current state if an isolated coordinator reaches
             // FINISH before that file has been materialized.
             if (!await exists(deps.stateFilePath)) {
-              await writeState(deps.stateFilePath, state);
+              requireStateMutation(
+                await replaceState(
+                  deps.stateFilePath,
+                  state,
+                  'materialize missing finish publication state',
+                ),
+                'Finish publication state materialization',
+              );
             }
             await savePrUrl(deps.stateFilePath, prUrl);
             state.pr_url = prUrl;

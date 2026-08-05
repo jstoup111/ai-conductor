@@ -1,7 +1,20 @@
-import { readFile, writeFile, mkdir } from 'fs/promises';
-import { dirname } from 'path';
+import { readFile } from 'fs/promises';
 import type { ConductState, StateResult } from '../types/index.js';
 import type { StepName, StepStatus, ComplexityTier } from '../types/index.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import type {
+  ConductStateStore,
+  PrivilegedStateCorrection,
+  StateMutation,
+  StateMutationResult,
+} from './conduct-state-store.js';
+
+function resolveStateStore(
+  path: string,
+  store: ConductStateStore<ConductState> | undefined,
+): ConductStateStore<ConductState> {
+  return store ?? createFilesystemConductStateStore(path);
+}
 
 /**
  * Read conduct-state.json. Returns default empty state if file missing.
@@ -62,46 +75,79 @@ function migrateState(state: ConductState): ConductState {
   return migrated;
 }
 
-export interface WriteStateOptions {
-  /**
-   * Permit a write that drops a previously-recorded `pr_url`. Only the
-   * deliberate "throw this feature's state away" paths (`conduct-ts --reset`,
-   * the interactive start-over prompt) set this. Every other caller keeps the
-   * default (false), which carries a recorded `pr_url` forward.
-   */
-  allowPrUrlClear?: boolean;
-}
-
 /**
- * Write conduct-state.json with 2-space indent and trailing newline
- * (matches bash format for backward compat).
- *
- * `pr_url` is sticky. conduct-state.json has more than one writer: the
- * conductor loads `state` once per run and rewrites the whole file from that
- * in-memory object on every transition, while `conduct-ts finish-record
- * --choice pr --pr-url ...` records the PR from a separate process mid-run.
- * The conductor only re-reads `pr_url` on the finish step's success path, so a
- * finish that creates the PR and then fails its completion check left the next
- * whole-object write to wipe the recorded URL — which in turn made the SHIP
- * freshness gates and the daemon's re-dispatch/resume decisions act as if no
- * PR existed. Merging the persisted value back in on write removes that lost
- * update at the seam, for every caller, with no network lookup: the value is
- * only ever dropped when a caller explicitly asks for it.
+ * Seed a test fixture through the adapter. Production callers use field
+ * mutations instead.
  */
 export async function writeState(
   path: string,
   state: ConductState,
-  options: WriteStateOptions = {},
 ): Promise<void> {
-  let toWrite = state;
-  if (!options.allowPrUrlClear && !state.pr_url) {
-    const existing = await readState(path);
-    if (existing.ok && existing.value.pr_url) {
-      toWrite = { ...state, pr_url: existing.value.pr_url };
-    }
+  requireStateMutation(
+    await createFilesystemConductStateStore(path).replace({
+      intent: 'seed test conduct state',
+      next: state,
+      privileged: true,
+    }),
+    'Test state fixture write',
+  );
+}
+
+/** Submit an explicit bounded update batch derived from one observed snapshot. */
+export async function applyStateChanges(
+  path: string,
+  previous: ConductState,
+  changes: Record<string, unknown>,
+  intent: string,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
+  const current = previous as Record<string, unknown>;
+  const mutations = Object.entries(changes)
+    .filter(([field, next]) => !Object.is(current[field], next))
+    .map(([field, next]) => {
+      if (next === undefined) {
+        throw new Error(`Ordinary state mutation cannot clear ${field}`);
+      }
+      return {
+        field,
+        expected: current[field],
+        intent,
+        next,
+      } as StateMutation<ConductState>;
+    });
+
+  if (mutations.length === 0) return { kind: 'idempotent' };
+  return resolveStateStore(path, store).applyBatch({ name: intent, mutations });
+}
+
+/** Perform a deliberately privileged full-state reset/start-over replacement. */
+export async function replaceState(
+  path: string,
+  next: ConductState,
+  intent: string,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
+  return resolveStateStore(path, store).replace({ intent, next, privileged: true });
+}
+
+/** Apply a named correction that needs explicit field-deletion authority. */
+export async function applyStateCorrection(
+  path: string,
+  correction: PrivilegedStateCorrection<ConductState>,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
+  const resolved = resolveStateStore(path, store);
+  if (!resolved.applyCorrection) {
+    return { kind: 'persistence', message: 'State store does not support corrective mutations' };
   }
-  await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(toWrite, null, 2) + '\n', 'utf-8');
+  return resolved.applyCorrection(correction);
+}
+
+/** Convert a typed store failure into an operator-actionable command error. */
+export function requireStateMutation(result: StateMutationResult, action: string): void {
+  if ('message' in result) {
+    throw new Error(`${action} failed (${result.kind}): ${result.message}`);
+  }
 }
 
 /**
@@ -111,12 +157,28 @@ export async function saveStepStatus(
   path: string,
   step: StepName,
   status: StepStatus,
-): Promise<void> {
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state[step] = status;
-  state.last_step = step;
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).applyBatch({
+    name: 'save step status',
+    mutations: [
+      {
+        field: step,
+        expected: result.value[step],
+        intent: `save ${step} step status`,
+        next: status,
+      } as StateMutation<ConductState>,
+      {
+        field: 'last_step',
+        expected: result.value.last_step,
+        intent: 'record last completed step',
+        next: step,
+      },
+    ],
+  });
 }
 
 /**
@@ -148,21 +210,36 @@ export function stepSatisfied(state: ConductState, step: StepName): boolean {
 export async function setComplexityTier(
   path: string,
   tier: ComplexityTier,
-): Promise<void> {
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state.complexity_tier = tier;
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).apply({
+    field: 'complexity_tier',
+    expected: result.value.complexity_tier,
+    intent: 'store complexity tier',
+    next: tier,
+  });
 }
 
 /**
  * Store the pull request URL returned by the finish step.
  */
-export async function savePrUrl(path: string, url: string): Promise<void> {
+export async function savePrUrl(
+  path: string,
+  url: string,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state.pr_url = url;
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).apply({
+    field: 'pr_url',
+    expected: result.value.pr_url,
+    intent: 'store pull request URL',
+    next: url,
+  });
 }
 
 /**
@@ -185,11 +262,19 @@ export function extractPrUrl(output: string): string | null {
 /**
  * Mark feature as complete.
  */
-export async function markFeatureComplete(path: string): Promise<void> {
+export async function markFeatureComplete(
+  path: string,
+  store?: ConductStateStore<ConductState>,
+): Promise<StateMutationResult> {
   const result = await readState(path);
-  const state: ConductState = result.ok ? result.value : {};
-  state.feature_status = 'complete';
-  await writeState(path, state);
+  if (!result.ok) return { kind: 'persistence', message: result.error.message };
+
+  return resolveStateStore(path, store).apply({
+    field: 'feature_status',
+    expected: result.value.feature_status,
+    intent: 'mark feature complete',
+    next: 'complete',
+  });
 }
 
 /**

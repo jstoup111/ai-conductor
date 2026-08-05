@@ -8,6 +8,7 @@ export { renderReleaseCandidate, renderReleaseCandidateAudit } from './engine/re
 export { runReleasePublisherAction } from './engine/release-publisher-action.js';
 
 import type { RunMode } from './types/index.js';
+import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
 
 export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMode {
   if (opts.auto && opts.interactive) {
@@ -42,7 +43,7 @@ import {
 import { ConductorEventEmitter } from './ui/events.js';
 import { loadConfig, loadMergedConfig } from './engine/config.js';
 import { renderDiagramsForFile, defaultRenderDeps } from './engine/mermaid-renderer.js';
-import { readState, writeState } from './engine/state.js';
+import { readState } from './engine/state.js';
 import {
   parseArgs,
   renderFullHelp,
@@ -52,7 +53,7 @@ import {
   planProtectedTargetsCommand,
   type CLIOptions,
 } from './cli.js';
-import type { StepName } from './types/index.js';
+import type { ConductState, StepName } from './types/index.js';
 import { createRenderer } from './ui/create-renderer.js';
 import { ALL_STEPS, validateFromStep } from './engine/steps.js';
 import { sendNotification } from './ui/notifications.js';
@@ -813,7 +814,7 @@ async function main(): Promise<void> {
   // Handle --reset: clear state and exit
   if (opts.reset) {
     // Deliberate full clear — the one place a recorded pr_url is meant to go.
-    await writeState(stateFilePath, {}, { allowPrUrlClear: true });
+    await replaceCommandState(stateFilePath, 'reset conductor state');
     console.log('State cleared.');
     return;
   }
@@ -912,12 +913,10 @@ async function main(): Promise<void> {
         stateFilePath = join(pipelineDir, 'conduct-state.json');
         await mkdir(pipelineDir, { recursive: true });
         const r = await readState(stateFilePath);
-        const fixed = r.ok ? { ...r.value } : {};
-        delete fixed.feature_status;
-        for (const step of verification.failedSteps) {
-          (fixed as Record<string, unknown>)[step] = 'pending';
+        if (!r.ok) {
+          throw new Error(`Feature recovery state read failed: ${r.error.message}`);
         }
-        await writeState(stateFilePath, fixed);
+        await recoverCommandState(stateFilePath, r.value, verification.failedSteps);
         opts.resume = true;
         console.log(
           `\nRolled back. Resuming "${opts.featureDesc}" at ${verification.failedSteps[0]}.\n`,
@@ -936,7 +935,7 @@ async function main(): Promise<void> {
         stateFilePath = join(pipelineDir, 'conduct-state.json');
         await mkdir(pipelineDir, { recursive: true });
         // Explicit start-over — the prior run's pr_url is intentionally dropped.
-        await writeState(stateFilePath, {}, { allowPrUrlClear: true });
+        await replaceCommandState(stateFilePath, 'start over conductor state');
       }
     } else if (detection.kind === 'orphaned-state') {
       // Root-level state says we're past the worktree step, but no worktree

@@ -3,17 +3,60 @@ import { mkdtemp, rm, writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import type { ConductState } from '../../src/types/index.js';
+import type {
+  ConductStateStore,
+  NamedAtomicStateMutationBatch,
+  PrivilegedStateCorrection,
+  PrivilegedStateReplacement,
+  StateMutation,
+  StateMutationResult,
+} from '../../src/engine/conduct-state-store.js';
 import {
   readState,
   writeState,
+  applyStateChanges,
+  applyStateCorrection,
+  replaceState,
   saveStepStatus,
   getStepStatus,
   stepDone,
   stepSatisfied,
   setComplexityTier,
+  savePrUrl,
   markFeatureComplete,
   markDownstreamStale,
 } from '../../src/engine/state.js';
+
+class RecordingConductStateStore implements ConductStateStore<ConductState> {
+  readonly calls: Array<
+    | { kind: 'mutation'; mutation: StateMutation<ConductState> }
+    | { kind: 'batch'; batch: NamedAtomicStateMutationBatch<ConductState> }
+    | { kind: 'correction'; correction: PrivilegedStateCorrection<ConductState> }
+    | { kind: 'replacement'; replacement: PrivilegedStateReplacement<ConductState> }
+  > = [];
+
+  constructor(private readonly result: StateMutationResult = { kind: 'applied' }) {}
+
+  async apply(mutation: StateMutation<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'mutation', mutation });
+    return this.result;
+  }
+
+  async applyBatch(batch: NamedAtomicStateMutationBatch<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'batch', batch });
+    return this.result;
+  }
+
+  async applyCorrection(correction: PrivilegedStateCorrection<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'correction', correction });
+    return this.result;
+  }
+
+  async replace(replacement: PrivilegedStateReplacement<ConductState>): Promise<StateMutationResult> {
+    this.calls.push({ kind: 'replacement', replacement });
+    return this.result;
+  }
+}
 
 describe('engine/state', () => {
   let dir: string;
@@ -108,33 +151,9 @@ describe('engine/state', () => {
       expect(JSON.parse(raw)).toEqual(state);
     });
 
-    // Regression: the conductor loads `state` once per run (conductor.ts) and
-    // rewrites the whole file from that in-memory object on every subsequent
-    // transition. An out-of-process writer — `conduct-ts finish-record
-    // --choice pr --pr-url ...` — records `pr_url` into the same file mid-run.
-    // If the finish step then fails its completion check, the conductor never
-    // re-reads it and the next whole-object write wipes the recorded PR.
-    it('preserves an already-persisted pr_url when the written state omits it', async () => {
-      await writeState(statePath, {
-        feature_desc: 'demo',
-        finish: 'done',
-        pr_url: 'https://github.com/acme/repo/pull/1164',
-      });
-
-      // A stale in-memory snapshot that predates the out-of-process pr_url write.
-      await writeState(statePath, { feature_desc: 'demo', finish: 'stale' });
-
-      const result = await readState(statePath);
-      expect(result.ok).toBe(true);
-      if (result.ok) {
-        expect(result.value.pr_url).toBe('https://github.com/acme/repo/pull/1164');
-        expect(result.value.finish).toBe('stale');
-      }
-    });
-
-    it('clears pr_url when the caller explicitly allows it (--reset / start-over)', async () => {
+    it('overwrites the supplied fixture state without a pr_url-specific exception', async () => {
       await writeState(statePath, { pr_url: 'https://github.com/acme/repo/pull/1164' });
-      await writeState(statePath, {}, { allowPrUrlClear: true });
+      await writeState(statePath, {});
 
       const result = await readState(statePath);
       expect(result.ok).toBe(true);
@@ -142,9 +161,126 @@ describe('engine/state', () => {
     });
   });
 
+  describe('command state mutations', () => {
+    it('submits only changed daemon-owned fields as one named mutation batch', async () => {
+      const store = new RecordingConductStateStore();
+      await applyStateChanges(
+        statePath,
+        { build: 'done', pr_url: 'https://github.com/acme/repo/pull/42' },
+        { complexity_tier: 'M', track: 'technical', prd: 'skipped', feature_desc: 'demo' },
+        'seed daemon feature state',
+        store,
+      );
+
+      expect(store.calls).toEqual([{
+        kind: 'batch',
+        batch: {
+          name: 'seed daemon feature state',
+          mutations: [
+            { field: 'complexity_tier', expected: undefined, intent: 'seed daemon feature state', next: 'M' },
+            { field: 'track', expected: undefined, intent: 'seed daemon feature state', next: 'technical' },
+            { field: 'prd', expected: undefined, intent: 'seed daemon feature state', next: 'skipped' },
+            { field: 'feature_desc', expected: undefined, intent: 'seed daemon feature state', next: 'demo' },
+          ],
+        },
+      }]);
+    });
+
+    it('returns the typed store failure instead of masking it as a state update', async () => {
+      const failure: StateMutationResult = { kind: 'persistence', message: 'disk is read-only' };
+      await expect(applyStateChanges(
+        statePath,
+        {},
+        { complexity_tier: 'M' },
+        'seed daemon feature state',
+        new RecordingConductStateStore(failure),
+      )).resolves.toEqual(failure);
+    });
+
+    it('uses the privileged replacement port for an explicit full clear', async () => {
+      const store = new RecordingConductStateStore();
+      await replaceState(statePath, {}, 'reset conductor state', store);
+      expect(store.calls).toEqual([{
+        kind: 'replacement',
+        replacement: { intent: 'reset conductor state', next: {}, privileged: true },
+      }]);
+    });
+
+    it('preserves a concurrent unrelated update while applying a corrective batch', async () => {
+      const observed: ConductState = { feature_status: 'complete', finish: 'done' };
+      await writeState(statePath, observed);
+      await writeState(statePath, { ...observed, pr_url: 'https://github.com/acme/repo/pull/42' });
+
+      await expect(applyStateCorrection(
+        statePath,
+        {
+          name: 'recover incomplete feature state',
+          deletions: [{
+            field: 'feature_status',
+            expected: 'complete',
+            intent: 'clear incomplete feature completion',
+          }],
+          mutations: [{
+            field: 'finish',
+            expected: 'done',
+            intent: 'restage failed verification step',
+            next: 'pending',
+          }],
+          privileged: true,
+        },
+        undefined,
+      )).resolves.toEqual({ kind: 'applied' });
+
+      await expect(readState(statePath)).resolves.toEqual({
+        ok: true,
+        value: { finish: 'pending', pr_url: 'https://github.com/acme/repo/pull/42' },
+      });
+    });
+  });
+
   // --- saveStepStatus ---
 
   describe('saveStepStatus', () => {
+    it('submits a named atomic status and last-step batch with the observed prior values', async () => {
+      await writeState(statePath, { worktree: 'done', last_step: 'worktree' });
+      const store = new RecordingConductStateStore();
+
+      await saveStepStatus(statePath, 'memory', 'done', store);
+
+      expect(store.calls).toEqual([
+        {
+          kind: 'batch',
+          batch: {
+            name: 'save step status',
+            mutations: [
+              {
+                field: 'memory',
+                expected: undefined,
+                intent: 'save memory step status',
+                next: 'done',
+              },
+              {
+                field: 'last_step',
+                expected: 'worktree',
+                intent: 'record last completed step',
+                next: 'memory',
+              },
+            ],
+          },
+        },
+      ]);
+    });
+
+    it('returns a typed store failure without reporting a successful status update', async () => {
+      const failure: StateMutationResult = {
+        kind: 'lease',
+        message: 'state lease was not acquired',
+      };
+      const store = new RecordingConductStateStore(failure);
+
+      await expect(saveStepStatus(statePath, 'worktree', 'done', store)).resolves.toEqual(failure);
+    });
+
     it('creates file and saves step status', async () => {
       await saveStepStatus(statePath, 'worktree', 'done');
       const result = await readState(statePath);
@@ -247,6 +383,44 @@ describe('engine/state', () => {
   // --- setComplexityTier ---
 
   describe('setComplexityTier', () => {
+    it('submits individual mutations for complexity, PR URL, and feature completion', async () => {
+      const store = new RecordingConductStateStore();
+
+      await setComplexityTier(statePath, 'M', store);
+      await savePrUrl(statePath, 'https://github.com/org/repo/pull/42', store);
+      await markFeatureComplete(statePath, store);
+
+      expect(store.calls).toEqual([
+        {
+          kind: 'mutation',
+          mutation: {
+            field: 'complexity_tier',
+            expected: undefined,
+            intent: 'store complexity tier',
+            next: 'M',
+          },
+        },
+        {
+          kind: 'mutation',
+          mutation: {
+            field: 'pr_url',
+            expected: undefined,
+            intent: 'store pull request URL',
+            next: 'https://github.com/org/repo/pull/42',
+          },
+        },
+        {
+          kind: 'mutation',
+          mutation: {
+            field: 'feature_status',
+            expected: undefined,
+            intent: 'mark feature complete',
+            next: 'complete',
+          },
+        },
+      ]);
+    });
+
     it('stores tier in state', async () => {
       await writeState(statePath, { worktree: 'done' });
       await setComplexityTier(statePath, 'M');

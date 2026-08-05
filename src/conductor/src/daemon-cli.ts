@@ -112,7 +112,13 @@ import {
 } from './engine/daemon-deps.js';
 import { isOperatorParked, reconcileStrandedParkMarkers } from './engine/park-marker.js';
 import { listOperatorParkedSlugs, getProvenanceType } from './engine/park-marker.js';
-import { readState, writeState, getStepStatus } from './engine/state.js';
+import { getStepStatus, readState } from './engine/state.js';
+import { createFilesystemConductStateStore } from './engine/filesystem-conduct-state-store.js';
+import {
+  deriveDaemonBaseState,
+  persistDaemonBaseState,
+  preseedDaemonStepStatuses,
+} from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
 import { preparePipelineForDaemonDispatch } from './engine/daemon-dispatch-preparation.js';
@@ -368,15 +374,18 @@ export const PRESEEDED_DONE: StepName[] = [
 export function preseedStepStatuses(
   tier: ComplexityTier | undefined,
 ): Record<string, StepStatus> {
-  const resolvedTier = tier ?? 'M';
-  return Object.fromEntries(
-    PRESEEDED_DONE.map((name) => [
-      name,
-      getStepDefinition(name).skippableForTiers.includes(resolvedTier) ? 'skipped' : 'done',
-    ]),
+  return preseedDaemonStepStatuses(
+    tier,
+    PRESEEDED_DONE,
+    (name, resolvedTier) => getStepDefinition(name).skippableForTiers.includes(resolvedTier),
   );
 }
 
+/**
+ * Copy the observed snapshot before deriving daemon-owned defaults and
+ * front-half statuses. The copy is also the mutation payload, so the store
+ * can compare it with the unmodified observed snapshot field by field.
+ */
 // Strip ANSI SGR color codes (chalk, #88) so the persistent daemon.log is always
 // plain text. When the daemon runs non-interactively (no attached TTY) chalk is already disabled, so
 // this is a no-op there; it only matters for a foreground/TTY `conduct daemon` run.
@@ -971,31 +980,15 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // file so the resume picks up from the real next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const existingResult = await readState(stateFilePath);
+    const observedState = existingResult.ok ? existingResult.value : {};
     // Seed the complexity tier from the engineer-assessed value carried on the
     // backlog item (parsed from `.docs/complexity/<slug>.md`). Fall back to 'M'
     // for legacy/non-engineer specs that have no marker — that preserves the
     // exact prior behavior (M and L are BUILD-identical; only Small skips steps).
-    const baseState: ConductState =
-      existingResult.ok && Object.keys(existingResult.value).length > 0
-        ? existingResult.value
-        : { complexity_tier: item.tier ?? 'M', track: item.track ?? 'product', feature_desc: item.slug };
+    const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
 
-    if (!baseState.complexity_tier) baseState.complexity_tier = item.tier ?? 'M';
-    // Stamp all daemon-owned front-half steps before resume. A tier-skipped
-    // step has no authored artifact, so it must not be recorded as done.
-    for (const [name, status] of Object.entries(preseedStepStatuses(baseState.complexity_tier))) {
-      (baseState as Record<string, unknown>)[name] = status;
-    }
-    // Seed the work track (adr-2026-06-29-explore-prd-split-track-in-explore/adr-2026-06-29-track-marker-location) so the conductor's track-skip applies
-    // (prd + prd-audit skipped on technical). Default product (back-compat).
-    if (!baseState.track) baseState.track = item.track ?? 'product';
-    // On the technical track there is no PRD — record it as skipped, not done.
-    if (baseState.track === 'technical') {
-      (baseState as Record<string, unknown>)['prd'] = 'skipped';
-    }
-    if (!baseState.feature_desc) baseState.feature_desc = item.slug;
-
-    await writeState(stateFilePath, baseState);
+    const stateStore = createFilesystemConductStateStore(stateFilePath);
+    await persistDaemonBaseState(stateFilePath, observedState, baseState, stateStore);
 
     const stepRunner = new DefaultStepRunner(
       selectedRuntime.provider,
@@ -1023,6 +1016,7 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
 
     const conductor = new Conductor({
       stateFilePath,
+      stateStore,
       stepRunner,
       events: featureEvents,
       mode: 'auto',

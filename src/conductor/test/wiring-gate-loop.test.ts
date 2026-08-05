@@ -468,7 +468,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
     const checkIndex = wiringBlock.indexOf("checkKickbackToBuildEscalation('wiring_check')");
     const budgetIndex = wiringBlock.indexOf("consumeKickbackBudget('wiring_check'");
     const captureIndex = wiringBlock.indexOf("captureKickbackToBuildContext('wiring_check')");
-    const navigateIndex = wiringBlock.indexOf("navigateBack(state, 'build', steps)");
+    const navigateIndex = wiringBlock.indexOf("this.navigateStateBack(state, 'build', steps)");
 
     expect({
       checkBeforeBudget: checkIndex >= 0 && checkIndex < budgetIndex,
@@ -511,7 +511,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       wiring_check: 'pending',
       test_suite: 'pending',
       build_review: 'pending',
-    }, { allowPrUrlClear: true });
+    });
 
     const secondEvents = new ConductorEventEmitter();
     const secondKickbackCounts: number[] = [];
@@ -587,7 +587,7 @@ describe('conductor — wiring_check kickback is kickback-only, never an uncondi
       run_started_at: 1,
       build: 'done',
       build_review: 'done',
-    }, { allowPrUrlClear: true });
+    });
 
     const secondEvents = new ConductorEventEmitter();
     const secondKickbackCounts: number[] = [];

@@ -6,7 +6,10 @@ import { isAbsolute, dirname, join } from 'node:path';
 import { stat, writeFile } from 'node:fs/promises';
 import { makeProductionGh, makeProductionGit } from './pr-labels.js';
 import { headPushedToUpstream } from './push-evidence.js';
-import { readState, writeState } from './state.js';
+import { createFilesystemConductStateStore } from './filesystem-conduct-state-store.js';
+import { readState } from './state.js';
+import type { ConductStateStore } from './conduct-state-store.js';
+import type { ConductState } from '../types/state.js';
 // Single source of truth for the daemon's own branch shape (`feat/daemon-<slug>`,
 // cut by `daemon-deps.ts` createWorktree). Reused rather than re-hardcoded here so
 // the prefix literal cannot drift between the halt-PR sweep and finish-record.
@@ -81,6 +84,11 @@ export function dispatchFinishRecordGuide(cmd: FinishRecordDispatch): number {
 export interface FinishRecordRunners {
   runGh: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string } | unknown>;
   runGit: (args: string[], opts?: { cwd: string }) => Promise<{ stdout: string }>;
+  /**
+   * Optional state authority for focused callers/tests. Production defaults to
+   * the filesystem-backed store for this command's state path.
+   */
+  stateStore?: ConductStateStore<ConductState>;
   evaluateEvidence?: (
     input: ShipmentEvidenceInput,
     dependencies: ShipmentEvidenceDependencies,
@@ -191,6 +199,9 @@ export async function dispatchFinishRecord(
     }
   }
 
+  const statePath = join(cmd.pipelineDir, 'conduct-state.json');
+  let expectedPrUrl: string | undefined;
+
   // choice='pr' verification: the PR named by --pr-url must actually exist on
   // GitHub before anything is written. Fail-closed on ANY error — empty
   // stdout, a thrown gh error (missing binary → ENOENT, non-zero exit, etc.)
@@ -239,7 +250,6 @@ export async function dispatchFinishRecord(
     // A PR URL and pushed HEAD only establish that a PR exists. The durable
     // shipment contract additionally requires the record committed on that
     // PR head to pass the shared strict evaluator before any terminal write.
-    const statePath = join(cmd.pipelineDir, 'conduct-state.json');
     const stateResult = await readState(statePath);
     if (!stateResult.ok) {
       console.error(
@@ -247,6 +257,7 @@ export async function dispatchFinishRecord(
       );
       return 1;
     }
+    expectedPrUrl = stateResult.value.pr_url;
     // Three sanctioned worktree-branch shapes, all recorded verbatim into
     // conduct-state.json at worktree-creation time:
     //   spec/<slug>, feature/<slug>  — interactive `WorktreeManager.create()`
@@ -330,36 +341,42 @@ export async function dispatchFinishRecord(
     }
   }
 
-  // Ordered writes — commit point last. For `pr`, read-modify-write
-  // conduct-state.json (preserving unknown fields, adding pr_url) BEFORE
-  // writing the finish-choice marker; `keep` skips state entirely and
-  // writes the marker only.
+  // Ordered writes — commit point last. For `pr`, submit the single pr_url
+  // intent to the state authority BEFORE writing the finish-choice marker;
+  // `keep` skips state entirely and writes the marker only. The store reads
+  // the current snapshot under its lease, so unrelated concurrent fields are
+  // retained and a concurrent pr_url change is a typed conflict rather than
+  // a whole-document lost update.
   //
   // Two guards protect against corrupting or partially committing state:
   //   1. Existing state JSON must parse before any write is attempted —
   //      corrupt JSON refuses immediately, leaving the file byte-identical
   //      (never silently coerced to `{}` and overwritten).
-  //   2. If the state write throws (permissions, disk full, etc.), the
-  //      finish-choice marker is never written — the marker is the commit
-  //      point, and a failed state write means the commit never happened.
-  const statePath = join(cmd.pipelineDir, 'conduct-state.json');
+  //   2. If the state authority throws or returns a failed result (conflict,
+  //      lease, permissions, disk full, etc.), the finish-choice marker is
+  //      never written — the marker is the commit point, and a failed state
+  //      mutation means the commit never happened.
   const markerPath = join(cmd.pipelineDir, 'finish-choice');
 
   if (cmd.choice === 'pr') {
-    const result = await readState(statePath);
-    if (!result.ok) {
+    const stateStore = deps.stateStore ?? createFilesystemConductStateStore(statePath);
+    let result;
+    try {
+      result = await stateStore.apply({
+        field: 'pr_url',
+        expected: expectedPrUrl,
+        intent: 'record finish pull request URL',
+        next: cmd.prUrl!,
+      });
+    } catch (err) {
       console.error(
-        `finish-record: existing state file "${statePath}" is corrupt (${result.error.message}) — refusing to record; file left untouched`,
+        `finish-record: state authority failed while recording PR ${cmd.prUrl} (${err instanceof Error ? err.message : String(err)}) — refusing to record; finish-choice marker not written`,
       );
       return 1;
     }
-    const state = result.value;
-    state.pr_url = cmd.prUrl;
-    try {
-      await writeState(statePath, state);
-    } catch (err) {
+    if (result.kind === 'conflict' || result.kind === 'lease' || result.kind === 'persistence') {
       console.error(
-        `finish-record: failed to write state file "${statePath}" (${err instanceof Error ? err.message : String(err)}) — refusing to record; finish-choice marker not written`,
+        `finish-record: state authority ${result.kind} while recording PR ${cmd.prUrl} (${result.message}) — refusing to record; finish-choice marker not written`,
       );
       return 1;
     }

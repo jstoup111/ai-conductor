@@ -3,44 +3,6 @@ import { mkdtemp, rm, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 
-// Toggled by the "state-write fails" test to simulate an fs.writeFile
-// failure for conduct-state.json specifically, without redefining the
-// (non-configurable) ESM export directly.
-let failStateWriteFor: string | null = null;
-
-// `finish-record-cli.ts` imports from 'node:fs/promises'; `state.ts` (its
-// writeState dependency) imports from the bare 'fs/promises' specifier. Both
-// resolve to the same module at runtime but vi.mock keys by specifier
-// string, so both must be mocked for the state-write-failure test to work
-// regardless of which import style a given module uses. Note: vi.mock
-// factories are hoisted above top-level variable declarations, so the
-// wrapper logic must be inlined in each factory rather than shared via a
-// helper function.
-vi.mock('node:fs/promises', async () => {
-  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-  return {
-    ...actual,
-    writeFile: async (path: unknown, ...rest: unknown[]) => {
-      if (typeof path === 'string' && failStateWriteFor && path.endsWith(failStateWriteFor)) {
-        throw new Error('EACCES: permission denied (simulated)');
-      }
-      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
-    },
-  };
-});
-vi.mock('fs/promises', async () => {
-  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
-  return {
-    ...actual,
-    writeFile: async (path: unknown, ...rest: unknown[]) => {
-      if (typeof path === 'string' && failStateWriteFor && path.endsWith(failStateWriteFor)) {
-        throw new Error('EACCES: permission denied (simulated)');
-      }
-      return (actual.writeFile as (...a: unknown[]) => Promise<void>)(path, ...rest);
-    },
-  };
-});
-
 import {
   detectFinishRecordCommand,
   dispatchFinishRecordGuide,
@@ -48,7 +10,10 @@ import {
   FINISH_RECORD_USAGE,
   type FinishRecordRunners,
 } from '../../src/engine/finish-record-cli.js';
+import { createFilesystemConductStateStore } from '../../src/engine/filesystem-conduct-state-store.js';
+import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { ShipmentEvidenceInput } from '../../src/engine/shipment-evidence.js';
+import type { ConductState } from '../../src/types/index.js';
 
 const validEvidence = {
   kind: 'valid' as const,
@@ -650,6 +615,55 @@ describe('engine/finish-record-cli', () => {
       });
     });
 
+    it('submits only pr_url through the store so a concurrent unrelated field is preserved', async () => {
+      const statePath = join(existingAbsDir, 'conduct-state.json');
+      const store: ConductStateStore<ConductState> = {
+        apply: vi.fn(async (mutation) => {
+          await writeFile(
+            statePath,
+            JSON.stringify({ feature_desc: 'feature', session_id: 'concurrent-writer' }),
+          );
+          return createFilesystemConductStateStore(statePath).apply(mutation);
+        }),
+        applyBatch: async () => {
+          throw new Error('finish-record must not use state batches');
+        },
+        replace: async () => {
+          throw new Error('finish-record must not replace state');
+        },
+      };
+
+      const code = await dispatchFinishRecord(
+        {
+          kind: 'record',
+          choice: 'pr',
+          prUrl: 'https://github.com/org/repo/pull/1',
+          pipelineDir: existingAbsDir,
+        },
+        scratchParent,
+        { ...passingRunners, stateStore: store },
+      );
+
+      expect({
+        code,
+        state: JSON.parse(await readFile(statePath, 'utf-8')),
+        mutation: (store.apply as ReturnType<typeof vi.fn>).mock.calls[0]?.[0],
+      }).toEqual({
+        code: 0,
+        state: {
+          feature_desc: 'feature',
+          session_id: 'concurrent-writer',
+          pr_url: 'https://github.com/org/repo/pull/1',
+        },
+        mutation: {
+          field: 'pr_url',
+          expected: undefined,
+          intent: 'record finish pull request URL',
+          next: 'https://github.com/org/repo/pull/1',
+        },
+      });
+    });
+
     it('choice=pr writes finish-choice containing exactly the bare choice string', async () => {
       const code = await dispatchFinishRecord(
         {
@@ -1036,13 +1050,23 @@ describe('engine/finish-record-cli', () => {
 
     afterEach(async () => {
       vi.restoreAllMocks();
-      failStateWriteFor = null;
       await rm(scratchParent, { recursive: true, force: true });
     });
 
-    it('refuses when state-write fails: exit !=0, finish-choice marker never written (commit-point protection)', async () => {
+    it.each([
+      { kind: 'conflict' as const, message: 'pr_url changed concurrently' },
+      { kind: 'persistence' as const, message: 'atomic replacement failed' },
+    ])('propagates a $kind state-store failure without terminal markers', async (failure) => {
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      failStateWriteFor = 'conduct-state.json';
+      const stateStore: ConductStateStore<ConductState> = {
+        apply: vi.fn(async () => failure),
+        applyBatch: async () => {
+          throw new Error('finish-record must not use state batches');
+        },
+        replace: async () => {
+          throw new Error('finish-record must not replace state');
+        },
+      };
 
       const code = await dispatchFinishRecord(
         {
@@ -1052,14 +1076,19 @@ describe('engine/finish-record-cli', () => {
           pipelineDir: existingAbsDir,
         },
         scratchParent,
-        passingRunners,
+        { ...passingRunners, stateStore },
       );
 
-      expect(code).not.toBe(0);
       const after = await readdir(existingAbsDir);
-      expect(after).not.toContain('finish-choice');
-      expect(errSpy.mock.calls.flat().join(' ')).toMatch(/state/i);
-      failStateWriteFor = null;
+      expect({
+        code,
+        entries: after,
+        message: errSpy.mock.calls.flat().join(' '),
+      }).toEqual({
+        code: 1,
+        entries: ['conduct-state.json'],
+        message: expect.stringContaining(failure.message),
+      });
     });
 
     it('refuses on corrupt JSON in existing state file: file left byte-identical, no marker written', async () => {
