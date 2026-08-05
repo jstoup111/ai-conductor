@@ -563,6 +563,41 @@ async function matchesBaseTip(
   return workspace !== undefined && workspace === committed.stdout;
 }
 
+/**
+ * True when this feature has not changed `path` since it diverged from the
+ * base branch, and its workspace still exactly reflects its own HEAD. This
+ * permits a feature that remains behind a newer base-tip artifact without
+ * accepting an in-worktree mutation or a change authored on the feature.
+ */
+async function branchUntouchedInheritance(
+  projectRoot: string,
+  baseRef: string,
+  path: string,
+): Promise<'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed'> {
+  const changed = await execa('git', ['diff', '--name-only', `${baseRef}...HEAD`, '--', path], {
+    cwd: projectRoot,
+    reject: false,
+  }).catch(() => undefined);
+  if (!changed || changed.exitCode !== 0) {
+    const mergeBase = await execa('git', ['merge-base', baseRef, 'HEAD'], {
+      cwd: projectRoot,
+      reject: false,
+    }).catch(() => undefined);
+    return mergeBase?.exitCode === 1 ? 'no-merge-base' : 'diff-probe-failed';
+  }
+  if (changed.stdout.length !== 0) return 'not-inherited';
+
+  const head = await execa('git', ['show', `HEAD:${path}`], {
+    cwd: projectRoot,
+    stripFinalNewline: false,
+    reject: false,
+  }).catch(() => undefined);
+  if (!head || head.exitCode !== 0) return 'not-inherited';
+
+  const workspace = await readContainedProtectedArtifact(projectRoot, path);
+  return workspace !== undefined && workspace === head.stdout ? 'inherited' : 'not-inherited';
+}
+
 async function inspectSeal(
   projectRoot: string,
   seal: ProtectedArtifactSeal,
@@ -577,9 +612,31 @@ async function inspectSeal(
     if (baseTipRef === null) baseTipRef = baseBranch ? await resolveBaseTipRef(projectRoot, baseBranch) : undefined;
     return baseTipRef;
   };
-  const inheritedFromBase = async (path: string): Promise<boolean> => {
+  const missingBaseRef = async (): Promise<string | undefined> => {
+    if (!baseBranch) return 'no base branch was supplied';
+    return (await baseRef()) === undefined
+      ? `neither origin/${baseBranch} nor ${baseBranch} resolves`
+      : undefined;
+  };
+  const undeterminableProvenance = (path: string, missingRef: string): ProtectedArtifactSealVerdict => ({
+    ok: false,
+    reason: `Protected artifact provenance undeterminable: ${path}\nMissing base ref: ${missingRef}.\nProvide the base ref, then rebase onto it.`,
+  });
+  const noMergeBase = (path: string, baseBranch: string): ProtectedArtifactSealVerdict => ({
+    ok: false,
+    reason: `Protected artifact provenance undeterminable: ${path}\nNo merge-base exists between HEAD and ${baseBranch}.\nRebase onto ${baseBranch} to establish shared history.`,
+  });
+  const failedInheritanceProbe = (path: string): ProtectedArtifactSealVerdict => ({
+    ok: false,
+    reason: `Protected artifact provenance undeterminable: ${path}\nInheritance probe failed: git diff.\nVerify Git access and retry.`,
+  });
+  const inheritedFromBase = async (path: string): Promise<
+    'inherited' | 'not-inherited' | 'no-merge-base' | 'diff-probe-failed'
+  > => {
     const ref = await baseRef();
-    return ref !== undefined && (await matchesBaseTip(projectRoot, ref, path));
+    if (ref === undefined) return 'diff-probe-failed';
+    if (await matchesBaseTip(projectRoot, ref, path)) return 'inherited';
+    return branchUntouchedInheritance(projectRoot, ref, path);
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));
@@ -607,7 +664,12 @@ async function inspectSeal(
       // onto a base branch that merged another feature's DECIDE artifacts after
       // this seal's baseline was taken. Tolerated only when the workspace copy
       // is byte-identical to the base tip's committed copy.
-      if (await inheritedFromBase(path)) continue;
+      const inheritance = await inheritedFromBase(path);
+      if (inheritance === 'inherited') continue;
+      const missingRef = await missingBaseRef();
+      if (missingRef) return undeterminableProvenance(path, missingRef);
+      if (inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
+      if (inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
       return { ok: false, reason: `Protected artifact added: ${path}` };
     }
     const content = await readContainedProtectedArtifact(projectRoot, path);
@@ -620,10 +682,15 @@ async function inspectSeal(
       // #1047 / ADR: verify inherited base content before treating drift as a
       // self-amendment. The base branch is an independent authority, so content
       // it already contains is neither a local amendment nor a seal violation.
-      if (await inheritedFromBase(path)) continue;
+      const inheritance = await inheritedFromBase(path);
+      if (inheritance === 'inherited') continue;
       if (featureDesc && namesOwnFeature(path, featureDesc)) {
         selfAmendments.push({ path, sealedFingerprint: sealedFingerprint!, currentFingerprint });
       } else {
+        const missingRef = await missingBaseRef();
+        if (missingRef) return undeterminableProvenance(path, missingRef);
+        if (inheritance === 'no-merge-base') return noMergeBase(path, baseBranch!);
+        if (inheritance === 'diff-probe-failed') return failedInheritanceProbe(path);
         // BASE-INHERITANCE TOLERANCE (#976). The mismatch is not this feature's
         // own amendment, and was not inherited from the base branch. The seal
         // therefore remains authoritative and the mutation must halt.
@@ -701,9 +768,15 @@ function rotationRefusalVerdict(
     return { ok: false, reason: `Protected artifact seal HEAD is unresolvable: ${headCommit}` };
   }
   if (!('path' in rotation)) return inspection;
+  if (rotation.condition === 'workspace-differs-from-head') {
+    return {
+      ok: false,
+      reason: `Uncommitted protected artifact changed: ${rotation.path}\nRestore from HEAD.`,
+    };
+  }
   return {
     ok: false,
-    reason: `Feature-authored protected artifact change cannot rotate seal: ${rotation.path}`,
+    reason: `Protected artifact changed: ${rotation.path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
   };
 }
 

@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
   createProtectedArtifactSeal,
@@ -16,6 +16,29 @@ import {
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
+
+const { gitInvocations, failGitDiff } = vi.hoisted(() => ({
+  gitInvocations: [] as string[][],
+  failGitDiff: { value: false },
+}));
+
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      if (args[0] === 'git' && Array.isArray(args[1])) gitInvocations.push(args[1]);
+      if (args[0] === 'git' && Array.isArray(args[1]) && args[1][0] === 'diff' && failGitDiff.value) {
+        return Promise.resolve({
+          exitCode: 2,
+          stdout: '',
+          stderr: 'forced git diff probe failure',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
+      return actual.execa(...args);
+    },
+  };
+});
 
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
@@ -46,6 +69,7 @@ async function makeRepo(files: Record<string, string>): Promise<string> {
 }
 
 afterEach(async () => {
+  failGitDiff.value = false;
   while (scratches.length > 0) await rm(scratches.pop()!, { recursive: true, force: true });
 });
 
@@ -363,6 +387,24 @@ describe('verifyProtectedArtifactSeal', () => {
     }));
   });
 
+  it('does not invoke git for a clean workspace before base inheritance needs resolving', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    gitInvocations.length = 0;
+
+    // No mismatch reaches inheritedFromBase, so inspectSeal must leave its
+    // baseRef thunk untouched. Supplying baseBranch would also invoke the
+    // separate stale-seal rotation flow, which this laziness guard excludes.
+    await expect(
+      verifyProtectedArtifactSeal({ projectRoot: repo }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(gitInvocations).toEqual([]);
+  });
+
   it('rejects a changed protected artifact against the durable original seal', async () => {
     const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
     await createProtectedArtifactSeal({
@@ -371,7 +413,7 @@ describe('verifyProtectedArtifactSeal', () => {
     });
     await writeProjectFile(repo, '.docs/plans/feature.md', 'dirty replacement\n');
 
-    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/feature.md',
     });
@@ -385,10 +427,67 @@ describe('verifyProtectedArtifactSeal', () => {
     });
     await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
 
-    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' })).resolves.toEqual({
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' })).resolves.toEqual({
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/another-feature.md',
     });
+  });
+
+  it('fails closed and names git diff when the inheritance probe exits non-zero', async () => {
+    const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+    failGitDiff.value = true;
+
+    await expect(
+      verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact provenance undeterminable: .docs/plans/another-feature.md\nInheritance probe failed: git diff.\nVerify Git access and retry.',
+    });
+  });
+
+  it('uses the normal changed-artifact halt, not undeterminable provenance, for a resolved-base modification', async () => {
+    const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot: repo,
+      featureDesc: 'feature',
+      baseBranch: 'main',
+    });
+
+    expect(verdict).toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/another-feature.md',
+    });
+    expect((verdict as { reason: string }).reason).not.toMatch(/undeterminable/i);
+  });
+
+  it('accepts base-tip content when the workspace differs from this branch HEAD', async () => {
+    const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+    await git(repo, ['checkout', '-q', '-b', 'feat']);
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await git(repo, ['checkout', '-q', 'main']);
+    await writeProjectFile(repo, '.docs/plans/other-feature.md', 'base-tip plan\n');
+    await git(repo, ['add', '.docs/plans/other-feature.md']);
+    await git(repo, ['commit', '-q', '-m', 'base updates plan']);
+    await git(repo, ['checkout', '-q', 'feat']);
+    await writeProjectFile(repo, '.docs/plans/other-feature.md', 'base-tip plan\n');
+
+    await expect(
+      verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+    ).resolves.toMatchObject({ ok: true });
   });
 
   it.each([
@@ -409,7 +508,31 @@ describe('verifyProtectedArtifactSeal', () => {
 
     await mutate(repo);
 
-    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({ ok: false, reason });
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({ ok: false, reason });
+  });
+
+  it('refuses a deleted expected artifact before attempting base-inheritance', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    await rm(join(repo, '.pipeline/protected-artifact-seal.json'));
+    await rm(join(repo, '.docs/plans/feature.md'));
+    gitInvocations.length = 0;
+
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit,
+      featureDesc: 'mine',
+      baseBranch: 'main',
+    });
+
+    expect({ verdict, gitInvocations }).toEqual({
+      verdict: { ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' },
+      gitInvocations: [
+        ['ls-tree', '-r', '-z', '--name-only', baselineCommit, '--', ...PROTECTED_ARTIFACT_DIRECTORIES],
+        ['show', `${baselineCommit}:.docs/plans/feature.md`],
+      ],
+    });
   });
 
   describe('own-feature self-amendment durable reporting behavior', () => {
@@ -506,7 +629,7 @@ describe('verifyProtectedArtifactSeal', () => {
       await writeProjectFile(repo, '.docs/architecture/feature.md', 'tampered by someone else\n');
 
       await expect(
-        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'unrelated-other-feature' }),
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'unrelated-other-feature', baseBranch: 'main' }),
       ).resolves.toEqual({ ok: false, reason: 'Protected artifact changed: .docs/architecture/feature.md' });
     });
 
@@ -519,7 +642,7 @@ describe('verifyProtectedArtifactSeal', () => {
       await writeProjectFile(repo, '.docs/architecture/feature.md', 'unexpected new architecture doc\n');
 
       await expect(
-        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
       ).resolves.toEqual({ ok: false, reason: 'Protected artifact added: .docs/architecture/feature.md' });
     });
 
@@ -542,6 +665,25 @@ describe('verifyProtectedArtifactSeal', () => {
   // rebases onto it. `advanceBase` models exactly that post-rebase state: the
   // base branch tip carries the new content, and the workspace matches it.
   describe('base-branch inheritance tolerance', () => {
+    async function advanceBaseWithoutMovingFeatureHead(
+      repo: string,
+      files: Record<string, string>,
+    ): Promise<void> {
+      const baseWorktree = await mkdtemp(join(tmpdir(), 'protected-artifact-seal-base-'));
+      try {
+        await git(repo, ['worktree', 'add', '--detach', '-q', baseWorktree, 'main']);
+        for (const [path, content] of Object.entries(files)) {
+          await writeProjectFile(baseWorktree, path, content);
+        }
+        await git(baseWorktree, ['add', '.']);
+        await git(baseWorktree, ['commit', '-q', '-m', "another feature's merged PR"]);
+        await git(repo, ['branch', '-f', 'main', await git(baseWorktree, ['rev-parse', 'HEAD'])]);
+      } finally {
+        await git(repo, ['worktree', 'remove', '--force', baseWorktree]).catch(() => undefined);
+        await rm(baseWorktree, { recursive: true, force: true });
+      }
+    }
+
     async function advanceBase(
       repo: string,
       files: Record<string, string>,
@@ -552,6 +694,49 @@ describe('verifyProtectedArtifactSeal', () => {
       await git(repo, ['add', '.']);
       await git(repo, ['commit', '-q', '-m', "another feature's merged PR"]);
     }
+
+    it('advances main without moving the feature branch HEAD', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      const featureHead = await git(repo, ['rev-parse', 'HEAD']);
+
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner\n',
+      });
+
+      const [head, mergeBase, baseTip] = await Promise.all([
+        git(repo, ['rev-parse', 'HEAD']),
+        git(repo, ['merge-base', 'HEAD', 'main']),
+        git(repo, ['rev-parse', 'main']),
+      ]);
+
+      expect([head, mergeBase, baseTip]).toEqual([
+        featureHead,
+        featureHead,
+        expect.not.stringMatching(new RegExp(`^${featureHead}$`)),
+      ]);
+    });
+
+    it("tolerates another feature's inherited artifact when the feature HEAD remains behind main", async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'setup']);
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner v1\n',
+      });
+      await git(repo, ['checkout', '-q', '-b', 'feature', 'main']);
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit,
+      });
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner v2\n',
+      });
+
+      const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' });
+
+      expect(verdict, verdict.ok ? undefined : verdict.reason).toMatchObject({ ok: true });
+    });
 
     it("tolerates ANOTHER feature's artifact changed to exactly the base branch tip", async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
@@ -577,6 +762,56 @@ describe('verifyProtectedArtifactSeal', () => {
       await expect(
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
       ).resolves.toMatchObject({ ok: true });
+    });
+
+    it('tolerates a newly inherited artifact when the feature HEAD remains behind main', async () => {
+      const repo = await makeRepo({ '.docs/plans/mine.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'setup']);
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'another feature plan v1\n',
+      });
+      await git(repo, ['checkout', '-q', '-b', 'feature', 'main']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'another feature plan v2\n',
+      });
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toMatchObject({ ok: true });
+    });
+
+    it("refuses a feature's committed edit to another artifact while its HEAD remains behind main", async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner\n',
+      });
+      await writeProjectFile(repo, '.docs/plans/other-feature.md', 'changed by this feature\n');
+      await git(repo, ['add', '.docs/plans/other-feature.md']);
+      await git(repo, ['commit', '-q', '-m', 'build: edit another feature plan']);
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toMatchObject({ ok: false });
+    });
+
+    it("refuses an uncommitted edit when the feature's commits never changed the inherited artifact", async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner\n',
+      });
+      await writeProjectFile(repo, '.docs/plans/other-feature.md', 'uncommitted build edit\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toMatchObject({ ok: false });
     });
 
     it('STILL HALTS when the content does not match the base branch tip', async () => {
@@ -614,7 +849,7 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
-    it('applies NO tolerance when no baseBranch is supplied (prior behavior)', async () => {
+    it('reports undeterminable provenance when no baseBranch is supplied', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
         projectRoot: repo,
@@ -626,11 +861,27 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.',
       });
     });
 
-    it('applies NO tolerance when the base branch ref does not exist', async () => {
+    it('reports undeterminable provenance for an added artifact when no baseBranch is supplied', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/plans/invented.md', 'new plan\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/invented.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.',
+      });
+    });
+
+    it('reports undeterminable provenance when the base branch ref does not exist', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
         projectRoot: repo,
@@ -646,7 +897,32 @@ describe('verifyProtectedArtifactSeal', () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-branch nor no-such-branch resolves.\nProvide the base ref, then rebase onto it.',
+      });
+    });
+
+    it('names the absent merge-base and rebase recovery for unrelated branch histories', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await rm(join(repo, '.pipeline/protected-artifact-seal.json'));
+
+      await git(repo, ['checkout', '-q', '--orphan', 'unrelated-feature']);
+      await git(repo, ['rm', '-q', '-rf', '.']);
+      await writeProjectFile(repo, '.docs/plans/other-feature.md', 'unrelated plan\n');
+      await git(repo, ['add', '.docs/plans/other-feature.md']);
+      await git(repo, ['commit', '-q', '-m', 'unrelated feature history']);
+
+      await expect(
+        verifyProtectedArtifactSeal({
+          projectRoot: repo,
+          baselineCommit,
+          featureDesc: 'mine',
+          baseBranch: 'main',
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nNo merge-base exists between HEAD and main.\nRebase onto main to establish shared history.',
       });
     });
 
@@ -885,6 +1161,38 @@ describe('verifyProtectedArtifactSeal', () => {
       ).toBe(before);
     });
 
+    it('REFUSES rotation when the feature reverts another artifact to a historical base revision', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const historicalRevision = 'approved plan\n';
+      const { repo, strandedBaseline } = await makeRewrittenRepo({
+        initial: { [path]: historicalRevision },
+        baseAdvance: { [path]: 'amended by its owner\n' },
+      });
+      await writeProjectFile(repo, path, historicalRevision);
+      await git(repo, ['add', path]);
+      await git(repo, ['commit', '-q', '-m', 'build: revert another feature plan to its historical revision']);
+      const sealBefore = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      });
+
+      expect({
+        verdict,
+        sealUnchanged: await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8') === sealBefore,
+        baselineCommit: (await readSeal(repo)).baselineCommit,
+      }).toEqual({
+        verdict: {
+          ok: false,
+          reason: `Protected artifact changed: ${path}\nFeature-authored committed change: revert to the committed DECIDE content and route any actual amendment to DECIDE.`,
+        },
+        sealUnchanged: true,
+        baselineCommit: strandedBaseline,
+      });
+    });
+
     it('REFUSES rotation when dirty sealed bytes conceal a feature-authored protected change at HEAD', async () => {
       const path = '.docs/plans/other-feature.md';
       const { repo, strandedBaseline } = await makeRewrittenRepo({
@@ -917,7 +1225,7 @@ describe('verifyProtectedArtifactSeal', () => {
       }).toEqual({
         verdict: {
           ok: false,
-          reason: expect.stringMatching(/feature-authored.*\.docs\/plans\/other-feature\.md/i),
+          reason: `Uncommitted protected artifact changed: ${path}\nRestore from HEAD.`,
         },
         sealBytesUnchanged: true,
         baselineCommit: strandedBaseline,
@@ -1014,7 +1322,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/main nor main resolves.\nProvide the base ref, then rebase onto it.',
       });
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
@@ -1037,7 +1345,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'no-such-base' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-base nor no-such-base resolves.\nProvide the base ref, then rebase onto it.',
       });
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),

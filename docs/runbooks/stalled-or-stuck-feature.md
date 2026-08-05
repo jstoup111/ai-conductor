@@ -467,9 +467,19 @@ without a task targeting the other feature's sealed artifact, then run
    ```bash
    conduct-ts daemon logs | grep 'Protected artifact rotation refused'
    ```
-2. Inspect the named path. Revert an unauthorized BUILD/SHIP edit to the committed DECIDE content,
-   or resolve the reported baseline/base-tip lookup failure. A safe inherited base-branch change
-   needs no manual seal repair; the next sanctioned rebase or verification rotates it.
+2. Inspect the named path and act on the specific reason:
+   - `Uncommitted protected artifact changed: <path>` — a workspace edit that was never committed.
+     Restore the file from `HEAD`.
+   - `Protected artifact changed: <path>` with a `Feature-authored committed change` cause — revert
+     to the committed DECIDE content and route any actual amendment to DECIDE.
+   - `Protected artifact provenance undeterminable: <path>` — the base ref could not be resolved, no
+     merge-base exists between `HEAD` and the base branch, or the inheritance probe (`git diff`)
+     failed. Supply the base ref, or rebase onto the base branch to establish shared history, then
+     retry.
+   - Anything else — resolve the reported baseline/base-tip lookup failure. A safe inherited
+     base-branch change (including one where the base has since moved past what this feature's last
+     rebase brought in, as long as this feature never touched the path) needs no manual seal repair;
+     the next sanctioned rebase or verification rotates it.
 3. Clear `HALT` and `HALT.class` using the next procedure. If the cause remains, verification
    refuses again before dispatch.
 

@@ -106,6 +106,8 @@ const FEATURE = '2026-07-26-rebased-features-stale-protected-artifact-seal-976';
 const CANARY_PATH = '.docs/architecture/2026-06-30-harness-self-host-guardrails.md';
 const OTHER_PLAN = '.docs/plans/other-feature.md';
 const OWN_STORIES = `.docs/stories/${FEATURE}.md`;
+const INHERITED_PLAN = '.docs/plans/build-tasks-can-amend-protected-docs-artifacts-ame.md';
+const INHERITED_REVISION_FEATURE = 'build-halts-when-a-branch-inherits-an-older-revisi';
 
 function sha256(content: string): string {
   return `sha256:${createHash('sha256').update(content).digest('hex')}`;
@@ -308,9 +310,13 @@ async function runRebaseStep(
  * Drives the BUILD-phase dispatch guard: a real `Conductor.run({ fromStep: 'build' })`.
  * This is the site that emitted the #254 canary refusal.
  */
-async function runBuildStep(repo: string, maxRetries = 1): Promise<RunResult> {
+async function runBuildStep(
+  repo: string,
+  maxRetries = 1,
+  featureDesc = FEATURE,
+): Promise<RunResult> {
   const statePath = join(repo, 'conduct-state.json');
-  await writeState(statePath, { plan: 'done', feature_desc: FEATURE } as ConductState);
+  await writeState(statePath, { plan: 'done', feature_desc: featureDesc } as ConductState);
   const events = new ConductorEventEmitter();
   const seen = captureEvents(events);
   const dispatched: string[] = [];
@@ -341,6 +347,88 @@ async function runBuildStep(repo: string, maxRetries = 1): Promise<RunResult> {
 // ─────────────────────────────────────────────────────────────────────────────
 // ST-976-1 — A clean engine rebase rebaselines the seal in the same operation
 // ─────────────────────────────────────────────────────────────────────────────
+
+// #1315 Story 1. Production call site: Conductor.run() BUILD dispatch guard.
+describe('#1315 Story 1: BUILD accepts an older protected artifact this branch never touched', () => {
+  async function makeInheritedRevisionFixture(): Promise<Scratch> {
+    const scratch = await makeFeatureRepo();
+    const baselineBeforePlanArrived = (await scratch.g(['rev-parse', 'main'])).stdout.trim();
+    await createProtectedArtifactSeal({
+      projectRoot: scratch.repo,
+      baselineCommit: baselineBeforePlanArrived,
+    });
+
+    await advanceMain(scratch, { [INHERITED_PLAN]: 'accepted revision A\n' }, 'main: add plan');
+    await scratch.g(['rebase', '-q', 'origin/main']);
+    const featureHeadAtMergeBase = await head(scratch);
+    const mergeBaseBeforeAmendment = (
+      await scratch.g(['merge-base', 'origin/main', 'HEAD'])
+    ).stdout.trim();
+    await advanceMain(scratch, { [INHERITED_PLAN]: 'amended revision B\n' }, 'main: amend plan');
+
+    // Pin the #1315 topology, rather than merely its final file contents:
+    // BUILD is still on the revision that was current at its merge-base while
+    // another feature has amended that same plan on the base branch.
+    expect(await head(scratch)).toBe(featureHeadAtMergeBase);
+    expect((await scratch.g(['merge-base', 'origin/main', 'HEAD'])).stdout.trim()).toBe(
+      mergeBaseBeforeAmendment,
+    );
+    expect((await scratch.g(['show', `${mergeBaseBeforeAmendment}:${INHERITED_PLAN}`])).stdout).toBe(
+      'accepted revision A\n',
+    );
+    expect(await readFile(join(scratch.repo, INHERITED_PLAN), 'utf8')).toBe(
+      'accepted revision A\n',
+    );
+    expect((await scratch.g(['show', `origin/main:${INHERITED_PLAN}`])).stdout).toBe(
+      'amended revision B\n',
+    );
+    expect(
+      (await scratch.g(['diff', '--name-only', 'origin/main...HEAD', '--', INHERITED_PLAN])).stdout,
+    ).toBe('');
+    return scratch;
+  }
+
+  it(
+    'happy: the BUILD step dispatches and writes no HALT when the base amends an inherited plan after the merge-base',
+    async () => {
+      const scratch = await makeInheritedRevisionFixture();
+
+      const { dispatched, events, logLines } = await runBuildStep(
+        scratch.repo,
+        1,
+        INHERITED_REVISION_FEATURE,
+      );
+
+      expect(logLines.join('\n')).not.toContain(`Protected artifact added: ${INHERITED_PLAN}`);
+      expect(JSON.stringify(events)).not.toContain(`Protected artifact added: ${INHERITED_PLAN}`);
+      expect(dispatched).toContain('build');
+      expect(await pathExists(join(scratch.repo, HALT_MARKER))).toBe(false);
+    },
+    30000,
+  );
+
+  it(
+    'negative: a committed edit to that inherited plan still halts with the protected-artifact class',
+    async () => {
+      const scratch = await makeInheritedRevisionFixture();
+      await writeRepoFile(scratch.repo, INHERITED_PLAN, 'tampered by this feature\n');
+      await scratch.g(['add', INHERITED_PLAN]);
+      await scratch.g(['commit', '-q', '-m', 'build: tamper with inherited plan']);
+
+      const { dispatched } = await runBuildStep(
+        scratch.repo,
+        2,
+        INHERITED_REVISION_FEATURE,
+      );
+
+      expect(dispatched).toEqual([]);
+      expect(await readFile(join(scratch.repo, HALT_CLASS_MARKER), 'utf8')).toBe(
+        PROTECTED_ARTIFACT_HALT_CLASS,
+      );
+    },
+    30000,
+  );
+});
 
 describe('ST-976-1: the SHIP rebase step rebaselines the seal in the same operation', () => {
   it(
@@ -649,7 +737,12 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
         baseBranch: 'main',
       });
 
-      expect(verdict).toEqual({ ok: false, reason: `Protected artifact changed: ${CANARY_PATH}` });
+      expect(verdict).toEqual({
+        ok: false,
+        reason: expect.stringMatching(
+          new RegExp(`^Protected artifact provenance undeterminable: ${CANARY_PATH.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`),
+        ),
+      });
       expect(await readSealRaw(repo)).toBe(before);
     },
     30000,
@@ -707,8 +800,17 @@ describe('ST-976-3: a feature-authored mutation still blocks across a rebase', (
       expect(await readSealRaw(repo)).toBe(before);
 
       const halt = await readFile(join(repo, HALT_MARKER), 'utf8');
-      expect(halt).toContain(OTHER_PLAN);
-      expect(halt).toMatch(/feature-authored/i);
+      expect({
+        firstLine: halt.split('\n')[0],
+        recovery: halt,
+        haltClass: await readHaltClass(repo),
+      }).toEqual({
+        firstLine: `Protected artifact changed: ${OTHER_PLAN}`,
+        recovery: expect.stringMatching(
+          /revert to the committed DECIDE content[\s\S]*route.*amendment.*DECIDE/i,
+        ),
+        haltClass: PROTECTED_ARTIFACT_HALT_CLASS,
+      });
 
       // ST-976-4: the refusal states WHICH condition failed and names the path.
       const refusals = rebaselineEvents(events);
@@ -756,7 +858,7 @@ describe('ST-976-3: a feature-authored mutation still blocks across a rebase', (
   );
 
   it(
-    'negative: an UNCOMMITTED protected-artifact edit refuses rotation (workspace bytes ≠ blob at HEAD) and the existing refusal stands',
+    'negative: an UNCOMMITTED protected-artifact edit names the workspace mutation, tells the operator to restore HEAD, and keeps the protected-artifact halt class',
     async () => {
       const scratch = await makeFeatureRepo();
       const { repo, g } = scratch;
@@ -769,15 +871,22 @@ describe('ST-976-3: a feature-authored mutation still blocks across a rebase', (
       await writeRepoFile(repo, OTHER_PLAN, 'uncommitted working-tree edit\n');
       const before = await readSealRaw(repo);
 
-      const verdict = await verifyProtectedArtifactSeal({
-        projectRoot: repo,
-        featureDesc: FEATURE,
-        baseBranch: 'main',
-      });
+      const { dispatched } = await runBuildStep(repo, 2);
+      const halt = await readFile(join(repo, HALT_MARKER), 'utf8');
 
-      expect(verdict.ok).toBe(false);
-      expect((verdict as { reason: string }).reason).toContain(OTHER_PLAN);
-      expect(await readSealRaw(repo)).toBe(before);
+      expect({
+        dispatched,
+        firstLine: halt.split('\n')[0],
+        recovery: halt,
+        haltClass: await readHaltClass(repo),
+        seal: await readSealRaw(repo),
+      }).toEqual({
+        dispatched: [],
+        firstLine: `Uncommitted protected artifact changed: ${OTHER_PLAN}`,
+        recovery: expect.stringMatching(/restore from HEAD/i),
+        haltClass: PROTECTED_ARTIFACT_HALT_CLASS,
+        seal: before,
+      });
     },
     30000,
   );
