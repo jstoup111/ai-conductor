@@ -191,6 +191,44 @@ PARSER_BLOCKS=$(printf '%s\n' "$OUT" | rg "printf '" || true)
 assert 'a release entry contributes fences from every Migration section at mixed heading depths' "$(
   [ "$PARSER_BLOCKS" = $'printf \'nested-heading\\n\' >> execution.log\nprintf \'release-heading\\n\' >> execution.log' ] && echo 0 || echo 1
 )"
+
+printf 'Parser — excluded unparsable release labels are reported\n'
+EXCLUSION_HARNESS=$(make_harness exclusion)
+EXCLUSION_CONSUMER=$(make_consumer exclusion)
+EXCLUSION_HOME=$(make_home exclusion v1.1.0)
+cat > "$EXCLUSION_HARNESS/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [Unversioned]
+
+## Migration
+
+```bash migration
+printf 'unversioned-first\n' >> execution.log
+```
+
+```bash migration
+printf 'unversioned-second\n' >> execution.log
+```
+
+## [preview-alpha]
+
+### Migration
+
+```bash migration
+printf 'preview-only\n' >> execution.log
+```
+EOF
+run_migrate "$EXCLUSION_HARNESS" "$EXCLUSION_CONSUMER" "$EXCLUSION_HOME" --dry-run
+assert 'Unversioned release exclusions name the label and withheld fence count' "$(
+  contains "$OUT" 'Excluded unparsable release [Unversioned]: withheld 2 runnable migration fences' && echo 0 || echo 1
+)"
+assert 'non-numeric release exclusions name the label and withheld fence count' "$(
+  contains "$OUT" 'Excluded unparsable release [preview-alpha]: withheld 1 runnable migration fence' && echo 0 || echo 1
+)"
+assert 'unparsable release fences are withheld from the dry-run block listing' "$(
+  ! contains "$OUT" 'unversioned-first' && ! contains "$OUT" 'unversioned-second' && ! contains "$OUT" 'preview-only' && echo 0 || echo 1
+)"
 if [ "${MIGRATE_TEST_SCOPE:-}" = parser ]; then
   printf 'Summary: %s passed, %s failed, %s executed\n' "$PASS" "$FAIL" "$TOTAL"
   [ "$FAIL" -eq 0 ]
