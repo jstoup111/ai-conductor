@@ -372,7 +372,7 @@ Agent-authored, engine-validated. Alphabetized.
 | `summary.json` | At least `{ tasks_completed: number }`; read tolerantly — missing or corrupt reads as 0 | `pipeline` skill |
 | `test-failures.md` | Failure detail consumed by the remediation flow | remediate flow |
 | `test-suite-environment.key` | Environment fingerprint for suite evidence | `full-suite-fingerprint.ts` |
-| `test-suite-evidence.json` | Version 3. PASS: `{ version, outcome: 'PASS', reason: 'exit_zero', fingerprint, categoryFingerprints, provenanceHeadSha, command, workingDirectory, startedAt, endedAt, durationMs, exitCode: 0, stdout, stderr }`. FAIL adds a `signal` discriminant and one of nine `reason` values. Diagnostics truncate at 16384 bytes | `full-suite-evidence.ts` |
+| `test-suite-evidence.json` | Version 3. PASS: `{ version, outcome: 'PASS', reason: 'exit_zero', fingerprint, categoryFingerprints, provenanceHeadSha, worktreeClean?: boolean, command, workingDirectory, startedAt, endedAt, durationMs, exitCode: 0, stdout, stderr }`. FAIL adds a `signal` discriminant and one of nine `reason` values. Diagnostics truncate at 16384 bytes | `full-suite-evidence.ts` |
 | `version-signal.json` | `{ verdict, level, files, classifiedAt }` — the PATCH auto-pass audit | `self-host/version-gate.ts` |
 | `wiring-evidence.json` | `{ schema, base, head, tasks: [{ id, contract, gaps: [{ kind, message }], proofs?: [{ kind: 'same-file-composition', export, caller, file, rootChain[] }] }], layer2: { applicable, reason? }, waivers[] }`; seven gap kinds; a `proofs` entry records an independently-verified same-file root-to-caller-to-export chain, corroborating context only — never authority on its own | `wiring-probe.ts` |
 

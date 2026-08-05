@@ -88,10 +88,24 @@ exactly as before: count alone can never kill a build.
 If the build step's retry budget then exhausts with at least one HEAD-moving attempt, the run
 does **not** take the generic "retries exhausted" HALT. It routes into `build_review` — the
 sole completion authority — through the same seam a normally-completed build uses, recording
-the unresolved plan task ids in `conduct-state.json` (`build_routed_reason`). That is not an
-always-pass: `build_review` re-grades the diff independently and can still FAIL the routed
-build, kicking it back to `build` under the same `MAX_KICKBACKS_PER_GATE` bound as any other
-`build_review` kickback. A build with zero commit movement across every attempt never routes.
+the unresolved plan task ids in `conduct-state.json` (`build_routed_reason`). This route requires
+a clean worktree. That is not an always-pass: `build_review` re-grades the diff independently and
+can still FAIL the routed build, kicking it back to `build` under the same
+`MAX_KICKBACKS_PER_GATE` bound as any other `build_review` kickback. A build with zero commit
+movement across every attempt never routes.
+
+#### Build halted with uncommitted paths
+
+**Symptom:** `.pipeline/HALT` names one or more uncommitted paths, for example
+`2 uncommitted paths: src/a.ts, test/a.test.ts`. The build cannot complete or use the exhausted-
+but-working route while those paths remain dirty.
+
+**Recovery:** inspect the named paths, then either commit the intended work or discard only the
+named paths when it is not intended. Do not clear the halt first or re-dispatch around the dirty
+tree. Once the worktree is clean, use [the resume procedure](#clear-a-halt-and-let-the-feature-resume).
+
+**Verification:** `git status --porcelain` in the feature worktree prints no output before the
+resumed build advances.
 
 In daemon mode the engine synthesizes a remediation prompt into
 `.pipeline/build-stall-question.md` and dispatches `/remediate`, bounded to 2 remediation

@@ -247,8 +247,10 @@ signals do three distinct jobs, and none substitutes for another: the attributed
 routing and telemetry, commit movement is the liveness authority, and `build_review` is the sole completion
 authority. So when the budget exhausts but at least one attempt moved HEAD — real work landed, just without
 a `Task:` trailer attributing it — the run routes through the same advance seam a completed build uses,
-straight into `build_review`, instead of the generic "retries exhausted" halt. Which plan task ids were left
-unresolved is recorded in `conduct-state.json` so the decision stays visible. This is not an always-pass:
+straight into `build_review`, instead of the generic "retries exhausted" halt, **but only when the
+worktree is clean**. Dirty paths keep the build halted so they can be committed or discarded; they never
+ride the commit-movement route. Which plan task ids were left unresolved is recorded in
+`conduct-state.json` so the decision stays visible. This is not an always-pass:
 `build_review` re-grades the diff against the plan on its own evidence and can still FAIL, kicking the build
 back under the same per-gate kickback cap as any other `build_review` kickback, so repeated route→FAIL
 cycles — including no-op commits offered as movement — are bounded exactly like everything else. A build
