@@ -36,6 +36,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Restored the engine build after a semantic merge conflict left two undefined `writeState` calls on the finish publication-defect path, which halted every newly dispatched feature at setup. ([implementation PR #1320](https://github.com/jstoup111/ai-conductor/pull/1320)).
 - FINISH no longer halts a feature that legitimately skipped a SHIP step; a skipped step now counts as resolved evidence rather than missing evidence. ([implementation PR #1322](https://github.com/jstoup111/ai-conductor/pull/1322)).
 - FINISH now records the publication outcome instead of exhausting its retry budget — the coordinator was handing finish-record a fail-closed no-op instead of the real gh/git runners. ([implementation PR #1323](https://github.com/jstoup111/ai-conductor/pull/1323)).
+- FINISH now publishes the rebased feature branch with a lease-protected push instead of halting on a rejected plain push, and halts immediately — with an explanation — on a publication reason no retry could ever satisfy, rather than spending the whole retry budget first. ([implementation PR #1326](https://github.com/jstoup111/ai-conductor/pull/1326)).
 
 ## [0.99.20] - 2026-08-03
 
