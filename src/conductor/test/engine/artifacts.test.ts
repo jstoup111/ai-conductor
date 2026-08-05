@@ -4,6 +4,8 @@ import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -2114,6 +2116,56 @@ describe('engine/artifacts', () => {
           });
           expect(result.reason).toContain('src/dirty.ts');
           expect(worktreeStatus).toHaveBeenCalledOnce();
+        });
+      });
+
+      describe('Task 5: probe-absent contexts preserve mocked-dispatch behavior', () => {
+        async function allTasksResolvedContext() {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+          return {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+          };
+        }
+
+        it.each([
+          ['has no probe', undefined, true],
+          ['has a throwing probe', async () => { throw new Error('unavailable'); }, true],
+          ['has a null-returning probe', async () => null, true],
+          ['reports a nonempty worktree', async () => ' M src/uncommitted.ts\n', false],
+        ])('completes only when the resolved-task context %s', async (_caseName, worktreeStatus, done) => {
+          const context = await allTasksResolvedContext();
+          const result = await checkStepCompletion(dir, 'build', {
+            ...context,
+            ...(worktreeStatus ? { worktreeStatus } : {}),
+          });
+
+          expect(result.done).toBe(done);
+        });
+
+        it('does not consult the worktree probe during a verifyArtifacts:false mocked dispatch', async () => {
+          const statusProbe = vi.fn(async () => ' M src/uncommitted.ts\n');
+          const runner: StepRunner = {
+            run: vi.fn(async () => ({ success: true })),
+          };
+          const conductor = new Conductor({
+            stateFilePath: join(dir, 'conduct-state.json'),
+            stepRunner: runner,
+            events: new ConductorEventEmitter(),
+            projectRoot: dir,
+            verifyArtifacts: false,
+            git: vi.fn(async (args: string[]) => {
+              if (args.join(' ') === 'status --porcelain --untracked-files=all') {
+                return { stdout: await statusProbe(), stderr: '', exitCode: 0 };
+              }
+              return { stdout: '', stderr: '', exitCode: 0 };
+            }),
+          });
+
+          await conductor.run();
+
+          expect(statusProbe).not.toHaveBeenCalled();
         });
       });
 
