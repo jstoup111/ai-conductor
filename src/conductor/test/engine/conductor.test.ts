@@ -65,6 +65,8 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -12962,6 +12964,106 @@ describe('rebase_gate_reverified event (Task 7: Conductor injects capability and
     // TODO: Implement a full test using the seedEvidenceCompleteBuild idiom from
     // test/integration/rebase-loop.test.ts:280-292, running the conductor from the
     // 'rebase' step in daemon mode to verify rebase_gate_reverified events are emitted.
+  });
+});
+
+describe('post-rebase build closure (Task 11)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'post-rebase-build-closure-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('blocks a reapplied autostash in the post-rebase build closure and preserves conflict halts', async () => {
+    // `rebase-autostash.test.ts` proves git reapplies this residue. This seam
+    // proves the daemon's post-rebase pre-verify does not certify BUILD around it.
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.docs/plans/feature.md'), '# Plan\n\n### Task 1: Commit it\n');
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+      tasks: [{ id: 1, status: 'completed' }],
+    }));
+    await writeFile(join(dir, '.pipeline/task-evidence.json'), JSON.stringify({
+      evidenceStamps: { '1': { sha: 'a'.repeat(40), form: 'trailer' } },
+      noEvidenceAttempts: 0,
+      migrationGrandfather: [],
+    }));
+
+    const state = { manual_test: 'skipped' } as ConductState;
+    const git: GitRunner = async (args) => ({
+      stdout: args[0] === 'status' ? ' M src/reapplied.ts\n' : '',
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      git,
+    });
+    const changed = {
+      kind: 'changed' as const,
+      changedCodePaths: ['src/base.ts'],
+      featureSurface: ['src/**'],
+    };
+    const performRebase = vi.mocked(rebaseModule.performRebase);
+    performRebase.mockResolvedValueOnce(changed);
+
+    try {
+      const closure = await checkStepCompletion(
+        dir,
+        'build',
+        await (conductor as any).completionCtx(state),
+      );
+      await (conductor as any).runRebaseStep(state);
+      const buildVerdict = JSON.parse(
+        await readFile(join(dir, '.pipeline/gates/build.json'), 'utf8'),
+      ) as GateVerdict;
+
+      expect({ closure, buildVerdict }).toMatchObject({
+        closure: {
+          done: false,
+          missing: 'uncommitted',
+          reason: expect.stringContaining('src/reapplied.ts'),
+        },
+        buildVerdict: { satisfied: false },
+      });
+    } finally {
+      performRebase.mockReset();
+      performRebase.mockResolvedValue({ kind: 'noop' });
+    }
+  });
+
+  it('keeps the conflict-halt path unchanged', async () => {
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+    });
+    const performRebase = vi.mocked(rebaseModule.performRebase);
+    performRebase.mockResolvedValueOnce({
+      kind: 'conflict_halt',
+      conflicts: ['src/base.ts'],
+      reason: 'conflict remains',
+    });
+
+    try {
+      await (conductor as any).runRebaseStep({ manual_test: 'skipped' } as ConductState);
+      expect(await readFile(join(dir, '.pipeline/HALT'), 'utf8')).toContain('conflict remains');
+    } finally {
+      performRebase.mockReset();
+      performRebase.mockResolvedValue({ kind: 'noop' });
+    }
   });
 });
 
