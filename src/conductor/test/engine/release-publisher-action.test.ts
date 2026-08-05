@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { classifyReleasePublication, runReleasePublisherAction } from '../../src/engine/release-publisher-action.js';
+import {
+  classifyReleasePublication,
+  type ReleasePublisherGit,
+  type ReleasePublisherGithub,
+  runReleasePublisherAction,
+} from '../../src/engine/release-publisher-action.js';
 
-describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14, 15)', () => {
+describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14–16)', () => {
   const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
 
   it('classifies a designated merged release PR as publishable with its resolved version without mutating', async () => {
@@ -31,6 +36,62 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
     });
 
     await expect(classifyReleasePublication({ git, github, config, event })).resolves.toEqual({ state: 'ignored' });
+
+    expect(git.createAnnotatedTag).not.toHaveBeenCalled();
+    expect(github.createRelease).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['publishable', () => undefined, { state: 'publishable' }],
+    ['ignored for a non-app author', ({ github }: ReturnType<typeof dependencies>) => {
+      github.findMergedPullRequestByMergeCommit.mockResolvedValue({
+        number: 42,
+        author: 'developer',
+        head: config.branch,
+        headCommit: 'release-head-42',
+        base: config.base,
+        mergeCommit: 'merged-release-head',
+      });
+    }, { state: 'ignored' }],
+    ['ignored for a non-release-pr head', ({ github }: ReturnType<typeof dependencies>) => {
+      github.findMergedPullRequestByMergeCommit.mockResolvedValue({
+        number: 42,
+        author: config.appLogin,
+        head: 'release/other',
+        headCommit: 'release-head-42',
+        base: config.base,
+        mergeCommit: 'merged-release-head',
+      });
+    }, { state: 'ignored' }],
+    ['rejected without audit evidence', ({ github }: ReturnType<typeof dependencies>) => {
+      github.readReleaseAudit.mockResolvedValue(undefined);
+    }, { state: 'rejected' }],
+    ['rejected for audit evidence bound to another head', ({ github }: ReturnType<typeof dependencies>) => {
+      github.readReleaseAudit.mockResolvedValue({ head: 'other-head', complete: true });
+    }, { state: 'rejected' }],
+    ['rejected without VERSION', ({ git }: ReturnType<typeof dependencies>) => {
+      git.readCommitFiles.mockResolvedValue({ 'CHANGELOG.md': '## [1.2.4] - 2026-08-02\n\nApproved.\n' });
+    }, { state: 'rejected' }],
+    ['rejected for a non-semver VERSION', ({ git }: ReturnType<typeof dependencies>) => {
+      git.readCommitFiles.mockResolvedValue({ VERSION: 'v1.2.4\n', 'CHANGELOG.md': '## [1.2.4] - 2026-08-02\n\nApproved.\n' });
+    }, { state: 'rejected' }],
+    ['rejected without CHANGELOG.md', ({ git }: ReturnType<typeof dependencies>) => {
+      git.readCommitFiles.mockResolvedValue({ VERSION: '1.2.4\n' });
+    }, { state: 'rejected' }],
+    ['rejected for an empty matching changelog section', ({ git }: ReturnType<typeof dependencies>) => {
+      git.readCommitFiles.mockResolvedValue({ VERSION: '1.2.4\n', 'CHANGELOG.md': '## [1.2.4] - 2026-08-02\n\n## [1.2.3] - 2026-08-01\n' });
+    }, { state: 'rejected' }],
+  ])('classifies %s without invoking either publication mutation seam', async (_name, arrange, expected) => {
+    const dependenciesForCase = dependencies();
+    arrange(dependenciesForCase);
+    const { git, github } = dependenciesForCase;
+
+    await expect(classifyReleasePublication({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    })).resolves.toMatchObject(expected);
 
     expect(git.createAnnotatedTag).not.toHaveBeenCalled();
     expect(github.createRelease).not.toHaveBeenCalled();
@@ -233,13 +294,13 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
   }) {
     return {
       git: {
-        readCommitFiles: vi.fn(async () => ({ VERSION: '1.2.4\n', 'CHANGELOG.md': '# Changelog\n\n## [1.2.4] - 2026-08-02\n\nApproved.\n' })),
+        readCommitFiles: vi.fn<ReleasePublisherGit['readCommitFiles']>(async () => ({ VERSION: '1.2.4\n', 'CHANGELOG.md': '# Changelog\n\n## [1.2.4] - 2026-08-02\n\nApproved.\n' })),
         readAnnotatedTag: vi.fn(async (): Promise<{ commit: string } | undefined> => undefined),
         createAnnotatedTag: vi.fn(async () => undefined),
       },
       github: {
         findMergedPullRequestByMergeCommit: vi.fn(async () => ({ number: 42, headCommit: 'release-head-42', ...pullRequest })),
-        readReleaseAudit: vi.fn(async () => ({ head: 'release-head-42', complete: true })),
+        readReleaseAudit: vi.fn<ReleasePublisherGithub['readReleaseAudit']>(async () => ({ head: 'release-head-42', complete: true })),
         findReleaseByTag: vi.fn(async (): Promise<{ tag: string; title: string; body: string; target: string } | undefined> => undefined),
         createRelease: vi.fn(async () => undefined),
       },
