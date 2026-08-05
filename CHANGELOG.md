@@ -21,6 +21,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Changed
 
 - The rebase skill now verifies replay intent against source and upstream commits, halts on the first semantic ambiguity, and reconciles every rebased commit against that captured intent before reporting success. ([implementation PR #1292](https://github.com/jstoup111/ai-conductor/pull/1292)).
+- Claude autonomous and interactive defaults now use Opus instead of Fable while retaining Fable for escalation and availability fallback. ([implementation PR #1327](https://github.com/jstoup111/ai-conductor/pull/1327)).
 
 ### Fixed
 
