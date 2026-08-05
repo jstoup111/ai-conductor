@@ -28,6 +28,31 @@ so the engine's exit code is the shim's.
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `conduct-ts` subcommands.
 
+## `bin/migrate`
+
+```bash
+bin/migrate [--yes|-y] [--dry-run]
+```
+
+Runs `bin/install --update`, then, from a consumer project, finds runnable `bash migration` fences in
+each release through the installed target version. On a project's first run, the lower bound is the
+recorded `currentVersion` (or the target version itself, if `currentVersion` is an unparsable channel
+identity such as `main@<sha>`); that bound is then pinned into the ledger as its `candidateBaseline`
+and used on every later run, so it stays fixed even as `currentVersion` advances. It exports
+`HARNESS_DIR` to every block. Blocks are ordered by release version and document position.
+
+`--dry-run` shows the install action and selected migrations without executing or recording them.
+Without `--yes`, an interactive run previews each block and accepts `yes`, `no`, `all`, or `stop`;
+skipped and stopped blocks remain pending. Without a TTY and without `--yes`, it executes no project
+migrations and leaves every block pending. `--yes` executes each selected block without prompts.
+
+After each successful block, the runner records its release and content digest in a per-project,
+human-readable ledger under `~/.ai-conductor/migrations/`. A recorded digest is already applied;
+changed content at the same release is a new candidate. A failed block stops the run immediately:
+earlier successful blocks remain recorded and later blocks remain pending. Unknown flags exit 2.
+Every run, including a failure, ends with `Migration summary: applied=<n> skipped=<n> failed=<n>
+already-applied=<n>`.
+
 ## Exit code conventions
 
 | Code | Meaning | Where it appears |

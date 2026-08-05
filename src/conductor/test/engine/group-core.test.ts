@@ -733,7 +733,7 @@ describe("group-core: runGroupBranch (per-branch skill dispatch + fresh sessions
             cwd: "/tmp/project",
             interactive: true,
             dangerouslySkipPermissions: false,
-            model: "fable",
+            model: "opus",
             effort: "high",
           },
         ],

@@ -1172,6 +1172,33 @@ else
   assert "skills/finish/SKILL.md — contains no legacy merge-local/discard outcome instructions" $?
 fi
 
+# ── 19. Migration block authoring contract ──────────────────────────────────
+# Migration blocks run in a consumer checkout. Validate the committed blocks
+# and the focused fixtures before a release can expose an unsafe block there.
+echo ""
+echo -e "${BOLD}19. Migration block authoring contract${NC}"
+
+migration_block_test="${HARNESS_DIR}/test/test_migration_block_authoring.sh"
+migration_block_checker="${HARNESS_DIR}/test/check_migration_block_authoring.sh"
+if [ ! -f "$migration_block_test" ] || [ ! -f "$migration_block_checker" ]; then
+  assert "migration block authoring checker and fixtures exist" 1
+else
+  set +e
+  migration_block_output=$(bash "$migration_block_test" 2>&1)
+  migration_block_exit=$?
+  migration_changelog_output=$(bash "$migration_block_checker" "${HARNESS_DIR}/CHANGELOG.md" 2>&1)
+  migration_changelog_exit=$?
+  set -e
+
+  if [ "$migration_block_exit" -eq 0 ] && [ "$migration_changelog_exit" -eq 0 ]; then
+    assert "migration blocks satisfy the authoring contract and its fixtures reject unsafe forms" 0
+  else
+    echo "$migration_block_output" | sed 's/^/    /'
+    echo "$migration_changelog_output" | sed 's/^/    /'
+    assert "migration blocks satisfy the authoring contract and its fixtures reject unsafe forms" 1
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

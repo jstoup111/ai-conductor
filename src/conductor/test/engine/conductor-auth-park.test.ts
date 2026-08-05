@@ -1230,8 +1230,8 @@ describe('conductor auth-park: daemon-token mode', () => {
       alternateProviderProbes: alternateReadiness.mock.calls.length,
       halts,
     }).toEqual({
-      // build_review's configured base is fable; no second escalation rung ran.
-      dispatches: [{ step: 'build_review', attempt: 1, model: 'fable' }],
+      // build_review's configured base is opus; no second escalation rung ran.
+      dispatches: [{ step: 'build_review', attempt: 1, model: 'opus' }],
       selectedProbes: 0,
       alternateProviderProbes: 0,
       halts: [expect.stringMatching(/Codex cached-login authentication did not become ready[\s\S]*re-queue/i)],

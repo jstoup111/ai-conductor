@@ -8,6 +8,7 @@ import {
 } from '../../src/engine/finish-publication-production.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
+import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
 import type { ConductState } from '../../src/types/index.js';
 
 const commandResult = { stdout: '' };
@@ -798,7 +799,7 @@ describe('production FINISH publication composition', () => {
     try {
       const pipeline = join(root, '.pipeline');
       await mkdir(pipeline);
-      const recordFinish = vi.fn(async () => 0);
+      const recordFinish = vi.fn<typeof dispatchFinishRecord>(async () => 0);
       const coordinator = createProductionFinishPublicationCoordinator({
         projectRoot: root,
         stateFilePath: join(pipeline, 'conduct-state.json'),

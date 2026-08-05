@@ -413,7 +413,7 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
       phase: 'BUILD',
       tier: 'M',
       config: undefined,
-      expected: { model: 'fable', effort: 'high' },
+      expected: { model: 'opus', effort: 'high' },
     },
     {
       name: 'specialized Claude plan at L',
@@ -427,7 +427,7 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
         defaults: { model: 'gpt-global-default', effort: 'low' },
         phases: { DECIDE: { model: 'gpt-phase-default', effort: 'low' } },
       },
-      expected: { model: 'fable', effort: 'xhigh' },
+      expected: { model: 'opus', effort: 'xhigh' },
     },
     {
       name: 'inherited Codex build review at M',
@@ -629,7 +629,7 @@ describe('ST-927-2 and ST-927-3 — per-step choice and native settings', () => 
         },
       }),
     ).toEqual({
-      model: 'fable',
+      model: 'opus',
       effort: 'xhigh',
       modelFallbackLadder: CLAUDE_MODEL_POLICY.modelFallbackLadder,
     });

@@ -35,6 +35,10 @@ log()  { echo "  $*"; }
 
 AUTO_YES=false
 DRY_RUN=false
+MIGRATION_APPLIED_COUNT=0
+MIGRATION_SKIPPED_COUNT=0
+MIGRATION_FAILED_COUNT=0
+MIGRATION_ALREADY_APPLIED_COUNT=0
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) AUTO_YES=true ;;
@@ -42,6 +46,14 @@ for arg in "$@"; do
     *) fail "Unknown flag: $arg"; exit 2 ;;
   esac
 done
+
+print_migration_summary() {
+  log "Migration summary: applied=${MIGRATION_APPLIED_COUNT} skipped=${MIGRATION_SKIPPED_COUNT} failed=${MIGRATION_FAILED_COUNT} already-applied=${MIGRATION_ALREADY_APPLIED_COUNT}"
+}
+
+# Keep the final disposition visible even when installation or a migration block
+# fails.  The counters only describe project-level migration blocks.
+trap print_migration_summary EXIT
 
 # ─── Read from_version from config ────────────────────────────────────────────
 
@@ -109,6 +121,232 @@ in_harness_repo() {
   [ "$(cd "$HARNESS_DIR" && pwd)" = "$(pwd)" ]
 }
 
+# ─── Applied-block ledger ────────────────────────────────────────────────────
+
+# One ledger belongs to one consumer project.  It lives outside that project at
+# ~/.ai-conductor/migrations/<sha256 of absolute project path>.json so changing
+# harness checkouts cannot lose completed migration state.
+ledger_path() {
+  local project
+  project=$(pwd -P)
+  python3 - "$HOME" "$project" <<'PY'
+import hashlib
+import sys
+from pathlib import Path
+
+home, project = sys.argv[1:]
+project_hash = hashlib.sha256(project.encode()).hexdigest()
+print(Path(home) / ".ai-conductor" / "migrations" / f"{project_hash}.json")
+PY
+}
+
+# A block's durable identity deliberately excludes its fence position: release
+# label plus the exact body hash survives changelog prose re-rendering.
+block_identity() {
+  python3 - "$1" "$2" <<'PY'
+import hashlib
+import sys
+
+release, body = sys.argv[1:]
+print(f"{release}:{hashlib.sha256(body.encode()).hexdigest()}")
+PY
+}
+
+ledger_read() {
+  local path
+  path=$(ledger_path)
+  python3 - "$path" <<'PY'
+import json
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if not path.exists():
+    print(json.dumps({"schemaVersion": 1, "appliedBlocks": []}, sort_keys=True))
+    raise SystemExit(0)
+
+try:
+    contents = path.read_text()
+except (OSError, json.JSONDecodeError) as error:
+    print(f"Cannot read migration ledger {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+if not contents.strip():
+    print(f"Migration ledger is empty at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    ledger = json.loads(contents)
+except json.JSONDecodeError as error:
+    print(f"Migration ledger contains invalid JSON at {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
+baseline = ledger.get("candidateBaseline") if isinstance(ledger, dict) else None
+valid = (
+    isinstance(ledger, dict)
+    and ledger.get("schemaVersion") == 1
+    and isinstance(baseline, str)
+    and re.fullmatch(r"v?\d+(?:\.\d+)+", baseline) is not None
+    and isinstance(blocks, list)
+    and all(
+        isinstance(block, dict)
+        and isinstance(block.get("identity"), str)
+        and isinstance(block.get("release"), str)
+        and isinstance(block.get("bodyHash"), str)
+        for block in blocks
+    )
+)
+if not valid:
+    print(f"Migration ledger has an unknown schema version or candidate baseline at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+print(json.dumps(ledger, sort_keys=True))
+PY
+}
+
+ledger_exists() {
+  [ -f "$(ledger_path)" ]
+}
+
+ledger_initialize() {
+  local baseline=$1 path
+  path=$(ledger_path)
+  python3 - "$path" "$baseline" <<'PY'
+import json
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+baseline = sys.argv[2]
+if path.exists():
+    raise SystemExit(0)
+if re.fullmatch(r"v?\d+(?:\.\d+)+", baseline) is None:
+    print(f"Migration ledger requires a valid candidate baseline at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as output:
+    json.dump({"schemaVersion": 1, "candidateBaseline": baseline, "appliedBlocks": []}, output, sort_keys=True)
+    output.write("\n")
+    temporary = output.name
+try:
+    os.link(temporary, path)
+except FileExistsError:
+    pass
+finally:
+    os.unlink(temporary)
+PY
+}
+
+ledger_record_applied() {
+  local release=$1 body=$2 path identity
+  path=$(ledger_path)
+  identity=$(block_identity "$release" "$body")
+  python3 - "$path" "$identity" "$release" "$body" <<'PY'
+import hashlib
+import json
+import os
+import re
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+identity, release, body = sys.argv[2:]
+path.parent.mkdir(parents=True, exist_ok=True)
+if not path.exists():
+    print(f"Migration ledger is missing at {path}. Resolve it before recording migrations.", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    contents = path.read_text()
+except OSError as error:
+    print(f"Cannot read migration ledger {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+if not contents.strip():
+    print(f"Migration ledger is empty at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    ledger = json.loads(contents)
+except json.JSONDecodeError as error:
+    print(f"Migration ledger contains invalid JSON at {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
+baseline = ledger.get("candidateBaseline") if isinstance(ledger, dict) else None
+valid = (
+    isinstance(ledger, dict)
+    and ledger.get("schemaVersion") == 1
+    and isinstance(baseline, str)
+    and re.fullmatch(r"v?\d+(?:\.\d+)+", baseline) is not None
+    and isinstance(blocks, list)
+    and all(
+        isinstance(block, dict)
+        and isinstance(block.get("identity"), str)
+        and isinstance(block.get("release"), str)
+        and isinstance(block.get("bodyHash"), str)
+        for block in blocks
+    )
+)
+if not valid:
+    print(f"Migration ledger has an unknown schema version or candidate baseline at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+record = {
+    "identity": identity,
+    "release": release,
+    "bodyHash": hashlib.sha256(body.encode()).hexdigest(),
+}
+if not any(block.get("identity") == identity for block in blocks if isinstance(block, dict)):
+    blocks.append(record)
+
+with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as output:
+    json.dump(ledger, output, sort_keys=True)
+    output.write("\n")
+    temporary = output.name
+os.replace(temporary, path)
+PY
+}
+
+ledger_has_identity() {
+  local ledger=$1 identity=$2
+  python3 - "$ledger" "$identity" <<'PY'
+import json
+import sys
+
+ledger = json.loads(sys.argv[1])
+identity = sys.argv[2]
+print(0 if any(block["identity"] == identity for block in ledger["appliedBlocks"]) else 1)
+PY
+}
+
+# The first-run range boundary becomes durable state.  Once that baseline is
+# stored, every future target is compared against it and the applied ledger,
+# rather than a currentVersion value that an updater may already have advanced.
+first_run_candidate_baseline() {
+  if [ -n "$FROM_VERSION" ] && [[ "$FROM_VERSION" =~ ^v?[0-9]+(\.[0-9]+)+$ ]]; then
+    printf '%s' "$FROM_VERSION"
+  else
+    # A channel identity such as main@<sha> has no sortable lower bound.  The
+    # current target is its safe baseline: it must not replay prior history.
+    printf '%s' "$TO_VERSION"
+  fi
+}
+
+ledger_candidate_baseline() {
+  local ledger=$1
+  python3 - "$ledger" <<'PY'
+import json
+import sys
+
+baseline = json.loads(sys.argv[1]).get("candidateBaseline")
+print(baseline if isinstance(baseline, str) else "")
+PY
+}
+
 # Extract ## Migration bash blocks from CHANGELOG.md entries strictly between
 # from_version (exclusive) and to_version (inclusive). Emit one bash block
 # per line-group, separated by `---MIGRATION-BLOCK---` markers.
@@ -137,6 +375,39 @@ from_ver = norm(os.environ.get("FROM_VER", ""))
 to_ver = norm(os.environ.get("TO_VER", ""))
 text = path.read_text()
 
+def migration_fences(body):
+    """Yield runnable Migration fences while respecting Markdown fence context."""
+    in_migration = False
+    fence = None
+    runnable_script = None
+
+    for line in body.splitlines(keepends=True):
+        if fence:
+            marker, width = fence
+            if re.match(rf"^{re.escape(marker)}{{{width},}}\s*$", line):
+                if runnable_script is not None:
+                    yield "".join(runnable_script)
+                    runnable_script = None
+                fence = None
+            elif runnable_script is not None:
+                runnable_script.append(line)
+            continue
+
+        if re.match(r"^#{2,3}\s+Migration\s*$", line):
+            in_migration = True
+            continue
+        if in_migration and re.match(r"^#{1,3}\s", line):
+            in_migration = False
+            continue
+
+        opening = re.match(r"^([`~])\1{2,}", line)
+        if opening:
+            marker = opening.group(1)
+            width = len(opening.group(0))
+            fence = (marker, width)
+            if in_migration and marker == "`" and width == 3 and line[width:].strip() == "bash migration":
+                runnable_script = []
+
 # Split into version sections: ## [X.Y.Z] - date ... until next ## [
 sections = re.split(r"(?m)^## \[", text)
 entries = []  # list of (version_tuple, version_str, body)
@@ -150,6 +421,13 @@ for sec in sections[1:]:
     body = sec[m.end():]
     nv = norm(ver_label)
     if not nv:
+        withheld = len(list(migration_fences(body)))
+        if withheld:
+            fence_label = "fence" if withheld == 1 else "fences"
+            print(
+                f"Excluded unparsable release [{ver_label}]: withheld {withheld} runnable migration {fence_label}",
+                file=sys.stderr,
+            )
         continue
     entries.append((nv, ver_label, body))
 
@@ -160,18 +438,95 @@ applicable = [
 ]
 applicable.sort(key=lambda e: e[0])
 
-# Inside each entry, find ## Migration section, then pull ```bash migration``` fences.
+# Inside each entry, collect every ##/### Migration section in document order,
+# then pull ```bash migration``` fences from each section.
 out = []
 for nv, label, body in applicable:
-    mig_match = re.search(r"(?ms)^###?\s+Migration\s*\n(.*?)(?=^##\s|\Z)", body)
-    if not mig_match:
-        continue
-    mig_body = mig_match.group(1)
-    for code in re.findall(r"```bash migration\s*\n(.*?)```", mig_body, re.DOTALL):
+    for code in migration_fences(body):
         out.append(f"---MIGRATION-BLOCK--- version={label}\n{code.rstrip()}\n")
 
 sys.stdout.write("".join(out))
 PY
+}
+
+# The ledger is the authority after its first record.  Parse every release so
+# an older pending block remains reachable even after currentVersion advances.
+select_migration_candidates() {
+  local blocks ledger baseline current_version="" current_script="" identity candidates=""
+  if ledger_exists; then
+    ledger=$(ledger_read) || return 1
+    baseline=$(ledger_candidate_baseline "$ledger")
+  else
+    baseline=$(first_run_candidate_baseline)
+    ledger=$(ledger_read) || return 1
+  fi
+  blocks=$(extract_migration_blocks "$baseline" "$TO_VERSION")
+  [ -z "$blocks" ] && return 0
+
+  while IFS= read -r line; do
+    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
+      if [ -n "$current_script" ]; then
+        identity=$(block_identity "$current_version" "$current_script")
+        if [ "$(ledger_has_identity "$ledger" "$identity")" -ne 0 ]; then
+          candidates+="---MIGRATION-BLOCK--- version=${current_version}"$'\n'"${current_script}"
+        fi
+      fi
+      current_version="${line#*version=}"
+      current_script=""
+    else
+      current_script+="$line"$'\n'
+    fi
+  done <<< "$blocks"
+
+  if [ -n "$current_script" ]; then
+    identity=$(block_identity "$current_version" "$current_script")
+    if [ "$(ledger_has_identity "$ledger" "$identity")" -ne 0 ]; then
+      candidates+="---MIGRATION-BLOCK--- version=${current_version}"$'\n'"${current_script}"
+    fi
+  fi
+
+  printf '%s' "$candidates"
+}
+
+count_already_applied_blocks() {
+  local blocks ledger baseline current_version="" current_script="" identity count=0
+  if ledger_exists; then
+    ledger=$(ledger_read) || return 1
+    baseline=$(ledger_candidate_baseline "$ledger")
+  else
+    baseline=$(first_run_candidate_baseline)
+    ledger=$(ledger_read) || return 1
+  fi
+  blocks=$(extract_migration_blocks "$baseline" "$TO_VERSION")
+  [ -z "$blocks" ] && { printf '0'; return 0; }
+
+  while IFS= read -r line; do
+    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
+      if [ -n "$current_script" ]; then
+        identity=$(block_identity "$current_version" "$current_script")
+        if [ "$(ledger_has_identity "$ledger" "$identity")" -eq 0 ]; then
+          count=$((count + 1))
+        fi
+      fi
+      current_version="${line#*version=}"
+      current_script=""
+    else
+      current_script+="$line"$'\n'
+    fi
+  done <<< "$blocks"
+
+  if [ -n "$current_script" ]; then
+    identity=$(block_identity "$current_version" "$current_script")
+    if [ "$(ledger_has_identity "$ledger" "$identity")" -eq 0 ]; then
+      count=$((count + 1))
+    fi
+  fi
+  printf '%s' "$count"
+}
+
+execute_migration_block() {
+  local script=$1
+  HARNESS_DIR="$HARNESS_DIR" bash -c 'set -euo pipefail; eval "$1"' migration-block "$script"
 }
 
 run_project_migrations() {
@@ -184,8 +539,35 @@ run_project_migrations() {
     return 0
   fi
 
-  local blocks
-  blocks=$(extract_migration_blocks "$FROM_VERSION" "$TO_VERSION" || true)
+  local blocks candidate_count
+  if ! blocks=$(select_migration_candidates); then
+    fail "Cannot select migration candidates until the ledger is resolved"
+    return 1
+  fi
+  if ! MIGRATION_ALREADY_APPLIED_COUNT=$(count_already_applied_blocks); then
+    fail "Cannot count already-applied migration blocks until the ledger is resolved"
+    return 1
+  fi
+  if [ "$DRY_RUN" = true ]; then
+    [ -z "$blocks" ] && { info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"; return 0; }
+    warn "Found migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}:"
+    echo ""
+    echo "$blocks"
+    echo ""
+    candidate_count=$(printf '%s\n' "$blocks" | grep -c '^---MIGRATION-BLOCK---')
+    MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
+    log "(dry-run) would execute the blocks above"
+    return 0
+  fi
+
+  # Once migrations have been discovered, make the ledger authoritative even
+  # if none are approved this run.  Pending blocks must survive a later
+  # currentVersion advance; dry-runs intentionally leave no trace.
+  if ! ledger_initialize "$(first_run_candidate_baseline)"; then
+    fail "Cannot initialize migration ledger for pending blocks"
+    return 1
+  fi
+
   if [ -z "$blocks" ]; then
     info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"
     return 0
@@ -196,52 +578,91 @@ run_project_migrations() {
   echo "$blocks"
   echo ""
 
-  if [ "$DRY_RUN" = true ]; then
-    log "(dry-run) would execute the blocks above"
-    return 0
-  fi
+  candidate_count=$(printf '%s\n' "$blocks" | grep -c '^---MIGRATION-BLOCK---')
 
-  if [ "$AUTO_YES" != true ]; then
-    if [ -t 0 ]; then
-      read -r -p "  Run these migration commands now? [y/N]: " choice
-      case "$choice" in
-        [yY]) ;;
-        *) warn "Skipping project migrations — you can run them manually later"; return 0 ;;
-      esac
-    else
-      warn "No TTY and --yes not set — skipping project migrations"
-      return 0
-    fi
+  if [ "$AUTO_YES" != true ] && [ ! -t 0 ]; then
+    MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
+    warn "No TTY and --yes not set — leaving project migrations pending; rerun with --yes or from a terminal"
+    return 0
   fi
 
   # Execute blocks one at a time so a failure stops the sequence.
   local current_version=""
   local current_script=""
-  local exec_block=""
+  local candidate_position=0
+  local current_position=0
+  local accept_all=false
+  local stopped=false
+
+  apply_current_block() {
+    if [ "$stopped" = true ]; then
+      return 0
+    fi
+
+    if [ "$AUTO_YES" != true ] && [ "$accept_all" != true ]; then
+      info "Previewing migration for $current_version (candidate block $current_position):"
+      echo ""
+      printf '%s\n' "$current_script"
+      echo ""
+      while true; do
+        local choice
+        if ! IFS= read -r -p "  Apply this migration? [y]es, [n]o, [a]ll, [s]top: " choice < /dev/tty; then
+          fail "Approval channel closed — leaving migration for $current_version at candidate block $current_position pending"
+          return 1
+        fi
+        case "$choice" in
+          [yY]|[yY][eE][sS]) break ;;
+          [nN]|[nN][oO])
+            MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + 1))
+            warn "Skipping migration for $current_version at candidate block $current_position"
+            return 0
+            ;;
+          [aA]|[aA][lL][lL])
+            accept_all=true
+            break
+            ;;
+          [sS]|[sS][tT][oO][pP])
+            stopped=true
+            warn "Stopping project migrations — remaining blocks stay pending"
+            return 0
+            ;;
+          *) warn "Unrecognized response. Choose yes, no, all, or stop." ;;
+        esac
+      done
+    fi
+
+    info "Executing migration for $current_version (candidate block $current_position)"
+    if ! execute_migration_block "$current_script"; then
+      MIGRATION_FAILED_COUNT=$((MIGRATION_FAILED_COUNT + 1))
+      fail "Migration for $current_version failed at candidate block $current_position"
+      return 1
+    fi
+    if ! ledger_record_applied "$current_version" "$current_script"; then
+      MIGRATION_FAILED_COUNT=$((MIGRATION_FAILED_COUNT + 1))
+      fail "Migration for $current_version succeeded but could not be recorded at candidate block $current_position"
+      return 1
+    fi
+    MIGRATION_APPLIED_COUNT=$((MIGRATION_APPLIED_COUNT + 1))
+    ok "Migration $current_version applied"
+  }
+
   while IFS= read -r line; do
     if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
       if [ -n "$current_script" ]; then
-        info "Executing migration for $current_version"
-        if ! bash -c "$current_script"; then
-          fail "Migration for $current_version failed"
-          return 1
-        fi
-        ok "Migration $current_version applied"
+        apply_current_block || return 1
       fi
       current_version="${line#*version=}"
       current_script=""
+      candidate_position=$((candidate_position + 1))
+      current_position=$candidate_position
     else
       current_script+="$line"$'\n'
     fi
   done <<< "$blocks"
   if [ -n "$current_script" ]; then
-    info "Executing migration for $current_version"
-    if ! bash -c "$current_script"; then
-      fail "Migration for $current_version failed"
-      return 1
-    fi
-    ok "Migration $current_version applied"
+    apply_current_block || return 1
   fi
+  MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count - MIGRATION_APPLIED_COUNT - MIGRATION_SKIPPED_COUNT))
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
