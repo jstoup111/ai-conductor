@@ -31,6 +31,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Build repair now re-verifies every non-skipped BUILD member after a kickback instead of trusting a stale on-disk verdict, so a passing member the gate check reads as unsatisfied no longer blocks the run in a terminal-less park. ([implementation PR #1291](https://github.com/jstoup111/ai-conductor/pull/1291)).
 - A SHIP step that runs before finish now reads a presentable implementation PR instead of a reused needs-remediation halt placeholder, so a feature that halted earlier no longer stalls its pre-finish ship gates. ([implementation PR #1304](https://github.com/jstoup111/ai-conductor/pull/1304)).
 - FINISH now converges deterministically through an engine-owned publication coordinator instead of spending minutes retrying non-deterministic provider judgment. ([implementation PR #1295](https://github.com/jstoup111/ai-conductor/pull/1295)).
+- The SHIP draft PR now opens with the real PR body template; a placeholder-body finish refusal re-dispatches finish for a body rewrite instead of re-running the build; /remediate gains a publication disposition that never amends the plan; and the rebase is no longer skipped on textual mergeability when the base has moved in code or was resolved from a degraded local fallback. ([implementation PR #1316](https://github.com/jstoup111/ai-conductor/pull/1316)).
 
 ## [0.99.20] - 2026-08-03
 
