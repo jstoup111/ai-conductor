@@ -428,17 +428,9 @@ run_project_migrations() {
     return 0
   fi
 
-  if [ "$AUTO_YES" != true ]; then
-    if [ -t 0 ]; then
-      read -r -p "  Run these migration commands now? [y/N]: " choice
-      case "$choice" in
-        [yY]) ;;
-        *) warn "Skipping project migrations — you can run them manually later"; return 0 ;;
-      esac
-    else
-      warn "No TTY and --yes not set — skipping project migrations"
-      return 0
-    fi
+  if [ "$AUTO_YES" != true ] && [ ! -t 0 ]; then
+    warn "No TTY and --yes not set — skipping project migrations"
+    return 0
   fi
 
   # Execute blocks one at a time so a failure stops the sequence.
@@ -446,29 +438,42 @@ run_project_migrations() {
   local current_script=""
   local candidate_position=0
   local current_position=0
-  while IFS= read -r line; do
-    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
-      if [ -n "$current_script" ]; then
-        info "Executing migration for $current_version (candidate block $current_position)"
-        if ! execute_migration_block "$current_script"; then
-          fail "Migration for $current_version failed at candidate block $current_position"
-          return 1
-        fi
-        if ! ledger_record_applied "$current_version" "$current_script"; then
-          fail "Migration for $current_version succeeded but could not be recorded at candidate block $current_position"
-          return 1
-        fi
-        ok "Migration $current_version applied"
-      fi
-      current_version="${line#*version=}"
-      current_script=""
-      candidate_position=$((candidate_position + 1))
-      current_position=$candidate_position
-    else
-      current_script+="$line"$'\n'
+  local accept_all=false
+  local stopped=false
+
+  apply_current_block() {
+    if [ "$stopped" = true ]; then
+      return 0
     fi
-  done <<< "$blocks"
-  if [ -n "$current_script" ]; then
+
+    if [ "$AUTO_YES" != true ] && [ "$accept_all" != true ]; then
+      info "Previewing migration for $current_version (candidate block $current_position):"
+      echo ""
+      printf '%s\n' "$current_script"
+      echo ""
+      while true; do
+        local choice
+        read -r -p "  Apply this migration? [y]es, [n]o, [a]ll, [s]top: " choice
+        case "$choice" in
+          [yY]|[yY][eE][sS]) break ;;
+          [nN]|[nN][oO])
+            warn "Skipping migration for $current_version at candidate block $current_position"
+            return 0
+            ;;
+          [aA]|[aA][lL][lL])
+            accept_all=true
+            break
+            ;;
+          [sS]|[sS][tT][oO][pP])
+            stopped=true
+            warn "Stopping project migrations — remaining blocks stay pending"
+            return 0
+            ;;
+          *) warn "Unrecognized response. Choose yes, no, all, or stop." ;;
+        esac
+      done
+    fi
+
     info "Executing migration for $current_version (candidate block $current_position)"
     if ! execute_migration_block "$current_script"; then
       fail "Migration for $current_version failed at candidate block $current_position"
@@ -479,6 +484,23 @@ run_project_migrations() {
       return 1
     fi
     ok "Migration $current_version applied"
+  }
+
+  while IFS= read -r line; do
+    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
+      if [ -n "$current_script" ]; then
+        apply_current_block || return 1
+      fi
+      current_version="${line#*version=}"
+      current_script=""
+      candidate_position=$((candidate_position + 1))
+      current_position=$candidate_position
+    else
+      current_script+="$line"$'\n'
+    fi
+  done <<< "$blocks"
+  if [ -n "$current_script" ]; then
+    apply_current_block || return 1
   fi
 }
 
