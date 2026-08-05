@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { execFile } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
 
 import { Conductor } from '../../src/engine/conductor.js';
@@ -41,7 +41,18 @@ describe('mergeability-first daemon finish', () => {
     return stdout.trim();
   }
 
-  async function initCleanBehindFeature(): Promise<{
+  /**
+   * `baseAdvance` is the path the base gains after the feature branched. It is
+   * the whole subject of the skip policy: a docs-only advance leaves every gate
+   * verdict on this branch valid, while a code advance means build_review,
+   * test_suite and manual_test were all graded against a base that has moved.
+   */
+  async function initCleanBehindFeature(
+    baseAdvance: { path: string; content: string } = {
+      path: 'docs/notes.md',
+      content: '# base notes\n',
+    },
+  ): Promise<{
     featureHead: string;
     featureCommits: string[];
   }> {
@@ -71,9 +82,9 @@ describe('mergeability-first daemon finish', () => {
     await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit: featureHead });
 
     await git('checkout', BASE);
-    await mkdir(join(repo, 'src'), { recursive: true });
-    await writeFile(join(repo, 'src', 'sibling.ts'), 'export const sibling = true;\n');
-    await git('add', 'src/sibling.ts');
+    await mkdir(join(repo, dirname(baseAdvance.path)), { recursive: true });
+    await writeFile(join(repo, baseAdvance.path), baseAdvance.content);
+    await git('add', baseAdvance.path);
     await git('commit', '-m', 'advance base without conflict');
     await git('checkout', 'feature/mergeable');
 
@@ -182,6 +193,57 @@ describe('mergeability-first daemon finish', () => {
         translationCalls: 0,
         rebaseState: 'done',
         hasExactMergeableSkipEvent: true,
+      });
+    },
+    30_000,
+  );
+
+  it(
+    'does NOT skip when the base advanced with code — the gates were graded against a base that moved',
+    async () => {
+      const { featureHead } = await initCleanBehindFeature({
+        path: 'src/sibling.ts',
+        content: 'export const sibling = true;\n',
+      });
+      const statePath = join(repo, '.pipeline', 'conduct-state.json');
+      const initialState = {
+        feature_desc: 'mergeability-first finish',
+        manual_test: 'done',
+        build: 'done',
+        build_review: 'done',
+        rebase: 'pending',
+      } as ConductState;
+      await writeState(statePath, initialState);
+
+      const events = new ConductorEventEmitter();
+      const emit = vi.spyOn(events, 'emit');
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: { run: async () => ({ success: true }) } as StepRunner,
+        events,
+        projectRoot: repo,
+        daemon: true,
+        mode: 'auto',
+        baseBranch: BASE,
+      });
+      const subject = conductor as unknown as RebaseStepSubject;
+
+      const result = await subject.runRebaseStep(initialState);
+      const eventTypes = emit.mock.calls.map(([event]) => String(event.type));
+
+      expect({
+        success: result.success,
+        outcome: subject.lastRebaseOutcome?.kind,
+        headMoved: (await git('rev-parse', 'HEAD')) !== featureHead,
+        skipped: eventTypes.includes('rebase_mergeable_skip'),
+      }).toEqual({
+        success: true,
+        // The branch is textually mergeable, so the real rebase runs cleanly and
+        // classifies as a code-changing rebase — which kicks the downstream
+        // gates back for re-verification instead of shipping stale verdicts.
+        outcome: 'changed',
+        headMoved: true,
+        skipped: false,
       });
     },
     30_000,

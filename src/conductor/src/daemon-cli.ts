@@ -2155,9 +2155,18 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'loop_converged':
       log(`${dot} ${chalk.green('✓')} ${chalk.green('gate loop converged')}`);
       break;
-    case 'rebase_mergeable_skip':
-      log(`${dot} ${chalk.green('✓')} ${chalk.green('rebase skipped — cleanly mergeable with base')}`);
+    case 'rebase_mergeable_skip': {
+      // Name the ref, its sha and where it came from: a skip line that says only
+      // "with base" cannot be audited, and diagnosing a wrong skip then costs a
+      // manual source read.
+      const against = event.baseRef
+        ? `${event.baseRef}@${(event.baseSha ?? 'unknown').slice(0, 12)} (${event.baseKind ?? 'unknown'})`
+        : 'base';
+      log(
+        `${dot} ${chalk.green('✓')} ${chalk.green(`rebase skipped — cleanly mergeable with ${against}, no code/test changes on it since the merge-base`)}`,
+      );
       break;
+    }
     case 'ci_failed':
       log(
         `${dot} ${chalk.red('✋')} ${chalk.red(`ci_failed[${event.slug}]: phase=${event.phase} attempts=${event.attempts} checks=[${event.checks.join(',')}]`)}`,

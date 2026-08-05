@@ -606,13 +606,35 @@ subcommand '<token>'.` followed by the daemon help, and exits 1.
 ## Finish-time mergeability
 
 At the daemon-only `rebase` step immediately before `finish`, the engine first checks whether the
-feature can merge cleanly with the current base. A clean result records `rebase_mergeable_skip` and
-continues to `finish` without rewriting the feature branch or reopening downstream gate evidence.
-This check uses the configured local base when no usable `origin` is available.
+feature can merge cleanly with the current base. Textual cleanliness alone is **not** enough to skip
+the rebase — `git merge-tree` proves only that the two trees do not collide, never that this
+branch's gates were graded against the base that will actually be merged into. A clean result is
+skippable only when both of these also hold:
 
-A conflicting or indeterminate result keeps the established rebase and recovery path: the engine
-attempts the real rebase, uses the bounded resolver when configured, and parks the feature if it
-cannot finish safely.
+- **The base has not moved in code.** No code or test path differs between the branch's merge-base
+  and the base ref. If the base gained code after `build_review` graded the diff, `test_suite`
+  proved a tree, or `manual_test` exercised behavior, those verdicts predate it — the engine rebases
+  and lets the existing delta-aware invalidation decide what to re-verify. A docs-only advance
+  changes nothing and still skips.
+- **The base is not a degraded fallback.** When an `origin` remote exists but its default-branch
+  discovery or `git fetch` failed, the engine compares against the LOCAL base branch, which in a
+  daemon worktree can be arbitrarily far behind origin — a "clean" verdict against it means nothing,
+  so the skip is refused. A repository with genuinely no `origin` is not degraded: its local base is
+  authoritative and remains skippable.
+
+An uncomputable merge-base or base delta is likewise not skippable — the justification for the skip
+could not be established.
+
+A skip records `rebase_mergeable_skip` and continues to `finish` without rewriting the feature
+branch or reopening downstream gate evidence. The skip line, the event and the gate verdict all name
+the exact ref, its sha, and whether it came from origin or a local branch — `rebase skipped —
+cleanly mergeable with origin/main@c6839018bf47 (remote), no code/test changes on it since the
+merge-base` — so a wrong skip is auditable from the log instead of requiring a source read.
+
+A refused skip, a conflicting result, or an indeterminate result all keep the established rebase and
+recovery path: the engine attempts the real rebase, uses the bounded resolver when configured, and
+parks the feature if it cannot finish safely. A refused skip is not a conflict path — a textually
+clean branch rebases cleanly; it just re-verifies afterwards instead of shipping stale verdicts.
 
 ## How a halted feature resumes
 

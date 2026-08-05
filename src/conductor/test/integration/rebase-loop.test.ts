@@ -510,7 +510,12 @@ describe('integration/rebase-loop', () => {
       finishMergeabilityCheck: true,
     });
 
-    expect(outcome).toEqual({ kind: 'mergeable_skip' });
+    expect(outcome).toEqual({
+      kind: 'mergeable_skip',
+      baseRef: BASE,
+      baseSha,
+      baseKind: 'local',
+    });
     expect(await branchContains(baseSha)).toBe(false);
     const gitArgv = gitCommandSpy.mock.calls
       .filter(([command]) => command === 'git')
@@ -579,19 +584,21 @@ describe('integration/rebase-loop', () => {
   });
 
   it('does not re-dispatch build for a clean mergeable finish (FR-6)', async () => {
-    // A code-changing rebase kicks back to build; build NEVER satisfies (the
-    // runner refuses to write task-status.json), so the loop must HALT through
-    // the EXISTING build-failure path — the rebase itself succeeded (it is NOT
-    // the thing that HALTs) and finish must never run.
+    // A clean mergeable finish must reach `finish` without re-entering build.
+    // The base advance here is deliberately DOCS-ONLY: a base that has gained
+    // code/test paths since this branch's merge-base is no longer skippable on
+    // textual cleanliness alone (its gate verdicts predate that code), so it
+    // rebases and re-verifies instead. FR-6 is about the case where nothing on
+    // the base could have invalidated anything.
     await initRepoOnFeatureBranch({
       path: 'src/feature.ts',
       content: 'export const foo = 1;\n',
     });
     await git('checkout', BASE);
-    await mkdir(join(dir, 'src'), { recursive: true });
-    await writeFile(join(dir, 'src/sibling.ts'), 'export const sib = 2;\n');
+    await mkdir(join(dir, 'docs'), { recursive: true });
+    await writeFile(join(dir, 'docs/sibling.md'), '# sibling notes\n');
     await git('add', '.');
-    await git('commit', '-m', 'sibling code merged to base');
+    await git('commit', '-m', 'sibling docs merged to base');
     await git('checkout', 'feature/foo');
 
     await writeState(statePath, { ...FRONT_DONE });

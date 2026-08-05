@@ -63,6 +63,11 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
           match: ['merge-tree', '--write-tree', '--quiet', 'main', 'HEAD'],
           result: { exitCode: 0 },
         },
+        // The skip is only justified when the base has NOT moved in code since
+        // the merge-base — supply that evidence explicitly.
+        { match: ['merge-base', 'HEAD', 'main'], result: { stdout: 'bbbb111\n' } },
+        { match: ['diff', '--name-only', 'bbbb111', 'main'], result: { stdout: 'docs/x.md\n' } },
+        { match: ['rev-parse', 'main'], result: { stdout: 'cccc222\n' } },
       ]);
 
       const outcome = await performRebase(git, root, 'main', {
@@ -73,7 +78,12 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         outcome,
         startedRebase: calls.some((args) => args[0] === 'rebase'),
       }).toEqual({
-        outcome: { kind: 'mergeable_skip' },
+        outcome: {
+          kind: 'mergeable_skip',
+          baseRef: 'main',
+          baseSha: 'cccc222',
+          baseKind: 'local',
+        },
         startedRebase: false,
       });
     } finally {
@@ -144,7 +154,12 @@ describe('engine/rebase — finish-only mergeability policy (Task 2)', () => {
         translationCalls: translateAfterRebase.mock.calls.length,
         sealAfter: await readFile(sealPath, 'utf8'),
       }).toEqual({
-        outcome: { kind: 'mergeable_skip' },
+        outcome: {
+          kind: 'mergeable_skip',
+          baseRef: 'main',
+          baseSha: expect.stringMatching(/^[0-9a-f]{40}$/),
+          baseKind: 'local',
+        },
         after: before,
         translationCalls: 0,
         sealAfter: sealBefore,
@@ -287,7 +302,7 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
       { match: ['remote'], result: { stdout: '' } },
     ]);
     const base = await resolveBase(git, 'main');
-    expect(base).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+    expect(base).toEqual({ ref: 'main', kind: 'local', branch: 'main', degraded: 'no-origin' });
     expect(calls.some((c) => c[0] === 'fetch')).toBe(false);
   });
 
@@ -330,7 +345,14 @@ describe('engine/rebase — resolveBase (FR-2/FR-3)', () => {
       { match: ['remote', 'show', 'origin'], result: { exitCode: 0, stdout: 'no HEAD branch line here' } },
     ]);
     const base = await resolveBase(git, 'main');
-    expect(base).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+    // origin EXISTS but could not be read — a degraded fallback, distinct from
+    // a repository that genuinely has no origin.
+    expect(base).toEqual({
+      ref: 'main',
+      kind: 'local',
+      branch: 'main',
+      degraded: 'discovery-failed',
+    });
   });
 });
 
@@ -353,7 +375,7 @@ describe('engine/rebase — resolveBaseCore (shared seam, Task 1)', () => {
   it('no origin → resolveBaseCore returns the local base directly (same as resolveBase)', async () => {
     const { git } = fakeGit([{ match: ['remote'], result: { stdout: '' } }]);
     const core = await resolveBaseCore(git, 'main');
-    expect(core).toEqual({ ref: 'main', kind: 'local', branch: 'main' });
+    expect(core).toEqual({ ref: 'main', kind: 'local', branch: 'main', degraded: 'no-origin' });
   });
 
   it('fetch failure → resolveBaseCore degrades to local base (same as resolveBase)', async () => {
@@ -661,7 +683,12 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
   });
 
   it('mergeable_skip → satisfied verdict and completed rebase with no downstream re-verification', async () => {
-    const outcome: RebaseOutcome = { kind: 'mergeable_skip' };
+    const outcome: RebaseOutcome = {
+      kind: 'mergeable_skip',
+      baseRef: 'origin/main',
+      baseSha: 'c6839018bf47',
+      baseKind: 'remote',
+    };
     const verdict = await applyRebaseVerdicts(dir, outcome, true);
     await recordRebaseStepCompletion(join(dir, '.pipeline', 'conduct-state.json'), outcome);
 
@@ -675,7 +702,10 @@ describe('engine/rebase — applyRebaseVerdicts (FR-4/FR-5)', () => {
       verdict: { satisfied: true, kickedBack: [], reverified: [] },
       rebase: expect.objectContaining({
         satisfied: true,
-        reason: 'branch is mergeable with base; rebase skipped',
+        // The verdict names the exact ref, sha and kind the skip rested on.
+        reason:
+          'branch is mergeable with origin/main@c6839018bf47 (remote), which has no ' +
+          'code/test changes since the merge-base; rebase skipped',
       }),
       state: { rebase: 'done', last_step: 'rebase' },
     });
@@ -1323,7 +1353,12 @@ describe('engine/rebase — emitRebaseEvent (FR-10)', () => {
       events.on(t, (e) => { seen.push(e.type); });
     }
     await emitRebaseEvent(events, { kind: 'noop' });
-    await emitRebaseEvent(events, { kind: 'mergeable_skip' });
+    await emitRebaseEvent(events, {
+      kind: 'mergeable_skip',
+      baseRef: 'origin/main',
+      baseSha: 'c6839018bf47',
+      baseKind: 'remote',
+    });
     await emitRebaseEvent(events, { kind: 'changed', changedCodePaths: ['src/a.ts'] });
     await emitRebaseEvent(events, { kind: 'conflict_halt', conflicts: ['x'], reason: 'r' });
     expect(seen).toEqual([

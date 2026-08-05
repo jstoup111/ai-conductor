@@ -97,7 +97,10 @@ async function buildCleanRepo(): Promise<{
   await g(['commit', '-q', '-m', 'feat: add b']);
 
   await g(['checkout', '-q', 'main']);
-  await writeFile(join(repo, 'c.ts'), 'unrelated\n');
+  // Docs-only base advance: this fixture's subject is the merged-PR guard, and
+  // it needs the branch to take the mergeable-SKIP path. A base that gains
+  // code/test paths is no longer skippable on textual cleanliness alone.
+  await writeFile(join(repo, 'c.md'), 'unrelated\n');
   await g(['add', '.']);
   await g(['commit', '-q', '-m', 'main: add c']);
 
