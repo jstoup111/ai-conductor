@@ -1758,6 +1758,31 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
+    it('withholds legacy fallback completion for a dirty worktree', async () => {
+      await writeAllCompleteTaskStatus();
+
+      const result = await checkStepCompletion(dir, 'build', {
+        worktreeStatus: async () => ' M src/legacy-dirty.ts\n',
+      });
+
+      expect(result).toMatchObject({ done: false, missing: 'uncommitted' });
+      expect(result.reason).toContain('src/legacy-dirty.ts');
+    });
+
+    it.each([
+      ['an absent probe', undefined],
+      ['a throwing probe', async () => { throw new Error('unavailable'); }],
+      ['a null probe', async () => null],
+    ])('keeps legacy fallback completion fail-open for %s', async (_caseName, worktreeStatus) => {
+      await writeAllCompleteTaskStatus();
+
+      const result = await checkStepCompletion(dir, 'build', {
+        ...(worktreeStatus ? { worktreeStatus } : {}),
+      });
+
+      expect(result).toEqual({ done: true });
+    });
+
     // NEW TESTS: build predicate recomputes from seeded state + evidence
     describe('reworked build predicate: seed + derive', () => {
       async function writePlan(content: string) {

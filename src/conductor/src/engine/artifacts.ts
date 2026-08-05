@@ -1013,6 +1013,21 @@ export async function uncommittedPathsOrNull(ctx: CompletionContext): Promise<st
   }
 }
 
+async function dirtyWorktreeCompletionOrNull(
+  ctx: CompletionContext,
+): Promise<CompletionResult | null> {
+  const uncommittedPaths = await uncommittedPathsOrNull(ctx);
+  if (!uncommittedPaths) return null;
+
+  const names = uncommittedPaths.slice(0, 3).join(', ');
+  const more = uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : '';
+  return {
+    done: false,
+    reason: `${uncommittedPaths.length} uncommitted paths: ${names}${more}`,
+    missing: 'uncommitted',
+  };
+}
+
 async function verifyDurableShipmentEvidence(
   dir: string,
   ctx: CompletionContext,
@@ -1943,16 +1958,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         };
       }
 
-      const uncommittedPaths = await uncommittedPathsOrNull(ctx);
-      if (uncommittedPaths) {
-        const names = uncommittedPaths.slice(0, 3).join(', ');
-        const more = uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : '';
-        return {
-          done: false,
-          reason: `${uncommittedPaths.length} uncommitted paths: ${names}${more}`,
-          missing: 'uncommitted',
-        };
-      }
+      const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
+      if (dirtyWorktree) return dirtyWorktree;
       return { done: true };
     }
 
@@ -1988,6 +1995,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${incomplete.length}/${tasks.length} tasks not completed: ${names}${more}`,
       };
     }
+    const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
+    if (dirtyWorktree) return dirtyWorktree;
     return { done: true };
   },
 
