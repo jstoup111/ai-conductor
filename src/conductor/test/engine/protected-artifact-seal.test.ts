@@ -709,6 +709,23 @@ describe('verifyProtectedArtifactSeal', () => {
       ).resolves.toMatchObject({ ok: true });
     });
 
+    it("refuses a feature's committed edit to another artifact while its HEAD remains behind main", async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner\n',
+      });
+      await writeProjectFile(repo, '.docs/plans/other-feature.md', 'changed by this feature\n');
+      await git(repo, ['add', '.docs/plans/other-feature.md']);
+      await git(repo, ['commit', '-q', '-m', 'build: edit another feature plan']);
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+      ).resolves.toMatchObject({ ok: false });
+    });
+
     it('STILL HALTS when the content does not match the base branch tip', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
