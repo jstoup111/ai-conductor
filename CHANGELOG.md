@@ -37,6 +37,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - FINISH no longer halts a feature that legitimately skipped a SHIP step; a skipped step now counts as resolved evidence rather than missing evidence. ([implementation PR #1322](https://github.com/jstoup111/ai-conductor/pull/1322)).
 - FINISH now records the publication outcome instead of exhausting its retry budget — the coordinator was handing finish-record a fail-closed no-op instead of the real gh/git runners. ([implementation PR #1323](https://github.com/jstoup111/ai-conductor/pull/1323)).
 - FINISH now publishes the rebased feature branch with a lease-protected push instead of halting on a rejected plain push, and halts immediately — with an explanation — on a publication reason no retry could ever satisfy, rather than spending the whole retry budget first. ([implementation PR #1326](https://github.com/jstoup111/ai-conductor/pull/1326)).
+- The daemon no longer halts a build when a branch has simply fallen behind a protected artifact it never touched, and halt reasons for protected-artifact violations now name the specific cause (uncommitted edit, feature-authored change, or undeterminable provenance) with a recovery step. ([implementation PR #1321](https://github.com/jstoup111/ai-conductor/pull/1321)).
 
 ## [0.99.20] - 2026-08-03
 
