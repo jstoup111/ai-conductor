@@ -1,17 +1,37 @@
-import { readFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
+import { createVitest } from 'vitest/node';
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
 
 describe('structural: smoke test entry point', () => {
-  it('selects only smoke tests without inheriting the default smoke exclusions', async () => {
-    const config = await readFile(join(conductorRoot, 'vitest.smoke.config.ts'), 'utf8');
+  it('discovers every known smoke file through the resolved smoke config', async () => {
+    const vitest = await createVitest('test', {
+      config: join(conductorRoot, 'vitest.smoke.config.ts'),
+      root: conductorRoot,
+    });
 
-    expect(config).toContain("include: ['test/smoke/**', '**/*.smoke.test.ts']");
-    expect(config).toContain('exclude: []');
+    try {
+      const discovered = (await vitest.globTestFiles())
+        .map(({ moduleId }) => relative(conductorRoot, moduleId).replaceAll('\\', '/'))
+        .sort();
+
+      expect(discovered).toEqual([
+        'test/backlog-priority.smoke.test.ts',
+        'test/engine/build-token-auth.smoke.test.ts',
+        'test/engine/daemon-e2e-live.smoke.test.ts',
+        'test/engine/daemon-tmux.smoke.test.ts',
+        'test/execution/claude-provider.smoke.test.ts',
+        'test/execution/codex-provider.smoke.test.ts',
+        'test/smoke/finish-record.smoke.test.ts',
+        'test/smoke/publish-interrupted.smoke.test.ts',
+        'test/smoke/surgical-finish-retry.smoke.test.ts',
+      ]);
+    } finally {
+      await vitest.close();
+    }
   });
 });
