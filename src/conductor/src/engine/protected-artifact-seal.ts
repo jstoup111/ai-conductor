@@ -605,6 +605,16 @@ async function inspectSeal(
     if (baseTipRef === null) baseTipRef = baseBranch ? await resolveBaseTipRef(projectRoot, baseBranch) : undefined;
     return baseTipRef;
   };
+  const missingBaseRef = async (): Promise<string | undefined> => {
+    if (!baseBranch) return 'no base branch was supplied';
+    return (await baseRef()) === undefined
+      ? `neither origin/${baseBranch} nor ${baseBranch} resolves`
+      : undefined;
+  };
+  const undeterminableProvenance = (path: string, missingRef: string): ProtectedArtifactSealVerdict => ({
+    ok: false,
+    reason: `Protected artifact provenance undeterminable: ${path}\nMissing base ref: ${missingRef}.\nProvide the base ref, then rebase onto it.`,
+  });
   const inheritedFromBase = async (path: string): Promise<boolean> => {
     const ref = await baseRef();
     if (ref === undefined) return false;
@@ -638,6 +648,8 @@ async function inspectSeal(
       // this seal's baseline was taken. Tolerated only when the workspace copy
       // is byte-identical to the base tip's committed copy.
       if (await inheritedFromBase(path)) continue;
+      const missingRef = await missingBaseRef();
+      if (missingRef) return undeterminableProvenance(path, missingRef);
       return { ok: false, reason: `Protected artifact added: ${path}` };
     }
     const content = await readContainedProtectedArtifact(projectRoot, path);
@@ -654,6 +666,8 @@ async function inspectSeal(
       if (featureDesc && namesOwnFeature(path, featureDesc)) {
         selfAmendments.push({ path, sealedFingerprint: sealedFingerprint!, currentFingerprint });
       } else {
+        const missingRef = await missingBaseRef();
+        if (missingRef) return undeterminableProvenance(path, missingRef);
         // BASE-INHERITANCE TOLERANCE (#976). The mismatch is not this feature's
         // own amendment, and was not inherited from the base branch. The seal
         // therefore remains authoritative and the mutation must halt.

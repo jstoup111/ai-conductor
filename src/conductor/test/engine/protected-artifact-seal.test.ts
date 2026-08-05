@@ -402,7 +402,7 @@ describe('verifyProtectedArtifactSeal', () => {
     });
     await writeProjectFile(repo, '.docs/plans/feature.md', 'dirty replacement\n');
 
-    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/feature.md',
     });
@@ -416,7 +416,7 @@ describe('verifyProtectedArtifactSeal', () => {
     });
     await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
 
-    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' })).resolves.toEqual({
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' })).resolves.toEqual({
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/another-feature.md',
     });
@@ -459,7 +459,7 @@ describe('verifyProtectedArtifactSeal', () => {
 
     await mutate(repo);
 
-    await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({ ok: false, reason });
+    await expect(verifyProtectedArtifactSeal({ projectRoot: repo, baseBranch: 'main' })).resolves.toEqual({ ok: false, reason });
   });
 
   it('refuses a deleted expected artifact before attempting base-inheritance', async () => {
@@ -580,7 +580,7 @@ describe('verifyProtectedArtifactSeal', () => {
       await writeProjectFile(repo, '.docs/architecture/feature.md', 'tampered by someone else\n');
 
       await expect(
-        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'unrelated-other-feature' }),
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'unrelated-other-feature', baseBranch: 'main' }),
       ).resolves.toEqual({ ok: false, reason: 'Protected artifact changed: .docs/architecture/feature.md' });
     });
 
@@ -593,7 +593,7 @@ describe('verifyProtectedArtifactSeal', () => {
       await writeProjectFile(repo, '.docs/architecture/feature.md', 'unexpected new architecture doc\n');
 
       await expect(
-        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature' }),
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
       ).resolves.toEqual({ ok: false, reason: 'Protected artifact added: .docs/architecture/feature.md' });
     });
 
@@ -800,7 +800,7 @@ describe('verifyProtectedArtifactSeal', () => {
       });
     });
 
-    it('applies NO tolerance when no baseBranch is supplied (prior behavior)', async () => {
+    it('reports undeterminable provenance when no baseBranch is supplied', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
         projectRoot: repo,
@@ -812,11 +812,27 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.',
       });
     });
 
-    it('applies NO tolerance when the base branch ref does not exist', async () => {
+    it('reports undeterminable provenance for an added artifact when no baseBranch is supplied', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+      });
+      await writeProjectFile(repo, '.docs/plans/invented.md', 'new plan\n');
+
+      await expect(
+        verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine' }),
+      ).resolves.toEqual({
+        ok: false,
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/invented.md\nMissing base ref: no base branch was supplied.\nProvide the base ref, then rebase onto it.',
+      });
+    });
+
+    it('reports undeterminable provenance when the base branch ref does not exist', async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
         projectRoot: repo,
@@ -832,7 +848,7 @@ describe('verifyProtectedArtifactSeal', () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-branch nor no-such-branch resolves.\nProvide the base ref, then rebase onto it.',
       });
     });
 
@@ -1232,7 +1248,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/main nor main resolves.\nProvide the base ref, then rebase onto it.',
       });
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
@@ -1255,7 +1271,7 @@ describe('verifyProtectedArtifactSeal', () => {
         verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'no-such-base' }),
       ).resolves.toEqual({
         ok: false,
-        reason: 'Protected artifact changed: .docs/plans/other-feature.md',
+        reason: 'Protected artifact provenance undeterminable: .docs/plans/other-feature.md\nMissing base ref: neither origin/no-such-base nor no-such-base resolves.\nProvide the base ref, then rebase onto it.',
       });
       expect(
         await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8'),
