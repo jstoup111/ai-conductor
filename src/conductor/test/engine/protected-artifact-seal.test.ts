@@ -1047,6 +1047,38 @@ describe('verifyProtectedArtifactSeal', () => {
       ).toBe(before);
     });
 
+    it('REFUSES rotation when the feature reverts another artifact to a historical base revision', async () => {
+      const path = '.docs/plans/other-feature.md';
+      const historicalRevision = 'approved plan\n';
+      const { repo, strandedBaseline } = await makeRewrittenRepo({
+        initial: { [path]: historicalRevision },
+        baseAdvance: { [path]: 'amended by its owner\n' },
+      });
+      await writeProjectFile(repo, path, historicalRevision);
+      await git(repo, ['add', path]);
+      await git(repo, ['commit', '-q', '-m', 'build: revert another feature plan to its historical revision']);
+      const sealBefore = await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8');
+
+      const verdict = await verifyProtectedArtifactSeal({
+        projectRoot: repo,
+        featureDesc: 'mine',
+        baseBranch: 'main',
+      });
+
+      expect({
+        verdict,
+        sealUnchanged: await readFile(join(repo, '.pipeline/protected-artifact-seal.json'), 'utf8') === sealBefore,
+        baselineCommit: (await readSeal(repo)).baselineCommit,
+      }).toEqual({
+        verdict: {
+          ok: false,
+          reason: `Feature-authored protected artifact change cannot rotate seal: ${path}`,
+        },
+        sealUnchanged: true,
+        baselineCommit: strandedBaseline,
+      });
+    });
+
     it('REFUSES rotation when dirty sealed bytes conceal a feature-authored protected change at HEAD', async () => {
       const path = '.docs/plans/other-feature.md';
       const { repo, strandedBaseline } = await makeRewrittenRepo({
