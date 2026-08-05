@@ -462,6 +462,30 @@ describe('verifyProtectedArtifactSeal', () => {
     await expect(verifyProtectedArtifactSeal({ projectRoot: repo })).resolves.toEqual({ ok: false, reason });
   });
 
+  it('refuses a deleted expected artifact before attempting base-inheritance', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+    await createProtectedArtifactSeal({ projectRoot: repo, baselineCommit });
+    await rm(join(repo, '.pipeline/protected-artifact-seal.json'));
+    await rm(join(repo, '.docs/plans/feature.md'));
+    gitInvocations.length = 0;
+
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit,
+      featureDesc: 'mine',
+      baseBranch: 'main',
+    });
+
+    expect({ verdict, gitInvocations }).toEqual({
+      verdict: { ok: false, reason: 'Protected artifact deleted: .docs/plans/feature.md' },
+      gitInvocations: [
+        ['ls-tree', '-r', '-z', '--name-only', baselineCommit, '--', ...PROTECTED_ARTIFACT_DIRECTORIES],
+        ['show', `${baselineCommit}:.docs/plans/feature.md`],
+      ],
+    });
+  });
+
   describe('own-feature self-amendment durable reporting behavior', () => {
     it('tolerates a feature changing its own protected artifact when featureDesc matches', async () => {
       const repo = await makeRepo({ '.docs/architecture/feature.md': 'approved architecture\n' });
