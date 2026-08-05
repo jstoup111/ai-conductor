@@ -165,6 +165,38 @@ printf 'too-old\n' >> execution.log
 EOF
 }
 
+printf 'Parser — every Migration section in document order\n'
+PARSER_HARNESS=$(make_harness parser)
+PARSER_CONSUMER=$(make_consumer parser)
+PARSER_HOME=$(make_home parser v1.1.0)
+cat > "$PARSER_HARNESS/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.2.0]
+
+### Migration
+
+```bash migration
+printf 'nested-heading\n' >> execution.log
+```
+
+## Migration
+
+```bash migration
+printf 'release-heading\n' >> execution.log
+```
+EOF
+run_migrate "$PARSER_HARNESS" "$PARSER_CONSUMER" "$PARSER_HOME" --dry-run
+PARSER_BLOCKS=$(printf '%s\n' "$OUT" | rg "printf '" || true)
+assert 'a release entry contributes fences from every Migration section at mixed heading depths' "$(
+  [ "$PARSER_BLOCKS" = $'printf \'nested-heading\\n\' >> execution.log\nprintf \'release-heading\\n\' >> execution.log' ] && echo 0 || echo 1
+)"
+if [ "${MIGRATE_TEST_SCOPE:-}" = parser ]; then
+  printf 'Summary: %s passed, %s failed, %s executed\n' "$PASS" "$FAIL" "$TOTAL"
+  [ "$FAIL" -eq 0 ]
+  exit
+fi
+
 printf 'Story 1/2/6 — ordered, durable multi-version jump\n'
 HARNESS=$(make_harness ordered)
 CONSUMER=$(make_consumer ordered)
