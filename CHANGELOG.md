@@ -35,6 +35,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon no longer silently discards an out-of-process edit to conduct-state.json when it writes state next; conflicting field writes are now detected and surfaced instead of one side winning silently. ([implementation PR #1305](https://github.com/jstoup111/ai-conductor/pull/1305)).
 - Restored the engine build after a semantic merge conflict left two undefined `writeState` calls on the finish publication-defect path, which halted every newly dispatched feature at setup. ([implementation PR #1320](https://github.com/jstoup111/ai-conductor/pull/1320)).
 - FINISH no longer halts a feature that legitimately skipped a SHIP step; a skipped step now counts as resolved evidence rather than missing evidence. ([implementation PR #1322](https://github.com/jstoup111/ai-conductor/pull/1322)).
+- FINISH now records the publication outcome instead of exhausting its retry budget — the coordinator was handing finish-record a fail-closed no-op instead of the real gh/git runners. ([implementation PR #1323](https://github.com/jstoup111/ai-conductor/pull/1323)).
 
 ## [0.99.20] - 2026-08-03
 
