@@ -18,6 +18,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
+import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
 //
@@ -326,7 +327,9 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
     const pipelineDir = join(worktreeDir, '.pipeline');
     const statePath = join(pipelineDir, 'conduct-state.json');
     const planPath = join(worktreeDir, `.docs/plans/${slug}.md`);
-    const meter = new TokenMeter(new ClaudeProvider());
+    const provider = new ClaudeProvider();
+    let meter = new TokenMeter(provider);
+    let providerHome: ProviderHome | undefined;
 
     try {
       // test/setup.ts enables this guard for the ordinary suite. This opt-in
@@ -341,6 +344,17 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
       await copyFile(fixturePlanPath, planPath);
       await copyFile(fixtureStoriesPath, join(worktreeDir, `.docs/stories/${slug}.md`));
       await copyFile(fixtureTouchedPath, join(worktreeDir, 'test/fixtures/daemon-e2e/touched.txt'));
+      const { provisionLiveProviderHome } = await import('../fixtures/live-provider-home.js');
+      providerHome = await provisionLiveProviderHome(
+        fileURLToPath(new URL('../../../../', import.meta.url)),
+        hostToken,
+      );
+      meter = new TokenMeter(new ProvisionedHome(provider, {
+        executable: 'claude',
+        env: providerHome.childEnv(),
+        args: providerHome.childArgs(),
+        teardown: () => providerHome?.teardown() ?? Promise.resolve(),
+      }));
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], {
         cwd: worktreeDir,
@@ -416,6 +430,7 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
     } finally {
       console.info(`daemon E2E live smoke total tokens: ${meter.totalTokens}; cap: ${tokenCap}`);
       assertTokenCap(meter.totalTokens, tokenCap);
+      await providerHome?.teardown();
       await rm(worktreeDir, { recursive: true, force: true });
     }
   }, 20 * 60_000);
