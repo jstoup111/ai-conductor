@@ -190,4 +190,13 @@ describe('dispatchableStepCommands', () => {
 
     expect(source).not.toMatch(new RegExp(`['\"](?:${skillNames.join('|')})['\"]`));
   });
+
+  it('states the registry-only boundary and its separation from daemon-entry freshness', async () => {
+    const source = await readFile(new URL('./step-command-preflight.ts', import.meta.url), 'utf8');
+
+    expect(source).toMatch(/custom steps/i);
+    expect(source).toMatch(/parallel\[\]\.skill overrides/i);
+    expect(source).toMatch(/daemon-entry install-freshness/i);
+    expect(source).toMatch(/global catalog/i);
+  });
 });

@@ -20,9 +20,10 @@ export interface StepCommandPreflightDependencies {
 
 /**
  * Derive the complete dispatchable command set from the engine's semantic
- * registry. Project-configuration custom steps and parallel branches are not
- * represented in that registry, so this helper intentionally covers only its
- * declared skill entries.
+ * registry. Project-configuration custom steps and parallel[].skill overrides
+ * are not represented in that registry, so this helper intentionally covers
+ * only its declared skill entries. Daemon-entry install-freshness owns the
+ * global catalog; this preflight owns only the isolated run home.
  */
 export function dispatchableStepCommands(providerKey: string): readonly DispatchableStepCommand[] {
   return Object.entries(STEP_SKILL_INVOCATIONS).flatMap(([step, descriptor]) => {
