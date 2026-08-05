@@ -187,6 +187,17 @@ A ```` ```bash migration ```` fence inside a `## Migration` (or `### Migration`)
 `bin/migrate`'s own regexes, so "runnable" means exactly what `bin/migrate` will execute when a consumer
 updates past this version.
 
+#### Block authoring contract
+
+Every runnable block must sit under a versioned `## [x.y.z]` release entry. `bin/migrate` runs it from
+the consumer project, with `HARNESS_DIR` exported; invoke harness files through
+`"${HARNESS_DIR}/bin/..."`, never `./bin/...`.
+
+Blocks must not force-remove a Git worktree or branch (`git worktree remove --force`, `git branch -D`),
+and must not start, stop, restart, or kill a daemon. Print an instruction for the operator to take a
+daemon lifecycle action instead. `test/test_harness_integrity.sh` rejects these forms before release and
+reports the offending line and contract clause.
+
 ## Waivers
 
 When the path-based classifier flags a breaking surface but the actual edit is internal-only — deleting a

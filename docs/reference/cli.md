@@ -28,6 +28,26 @@ so the engine's exit code is the shim's.
 `bin/intake-file`, `bin/intake-backfill`, and `bin/quarantine-engineer-signals` are separate entry
 points, not `conduct-ts` subcommands.
 
+## `bin/migrate`
+
+```bash
+bin/migrate [--yes|-y] [--dry-run]
+```
+
+Runs `bin/install --update`, then, from a consumer project, finds runnable `bash migration` fences in
+each release strictly after the recorded `currentVersion` and through the installed target version.
+It exports `HARNESS_DIR` to every block. Blocks are ordered by release version and document position.
+
+`--dry-run` shows the install action and selected migrations without executing or recording them.
+Without `--yes`, an interactive run previews each block and accepts `yes`, `no`, `all`, or `stop`;
+skipped and stopped blocks remain pending. Without a TTY and without `--yes`, it executes no project
+migrations and leaves every block pending. `--yes` executes each selected block without prompts.
+
+After each successful block, the runner records its release and content digest in a per-project,
+human-readable ledger under `~/.ai-conductor/migrations/`. A recorded digest is already applied;
+changed content at the same release is a new candidate. A failed block stops the run immediately:
+earlier successful blocks remain recorded and later blocks remain pending. Unknown flags exit 2.
+
 ## Exit code conventions
 
 | Code | Meaning | Where it appears |
