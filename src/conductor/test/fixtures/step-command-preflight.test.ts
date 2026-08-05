@@ -85,6 +85,41 @@ describe('dispatchableStepCommands', () => {
     }
   });
 
+  it('renders a missing pipeline command in the selected provider syntax', async () => {
+    const homes = await Promise.all(['claude', 'codex'].map(
+      () => mkdtemp(join(tmpdir(), 'step-command-preflight-')),
+    ));
+    const providers = ['claude', 'codex'] as const;
+
+    try {
+      await Promise.all(homes.map(async (homeDir) => {
+        await Promise.all(dispatchableStepCommands('claude')
+          .filter(({ skillName }) => skillName !== 'pipeline')
+          .map(async ({ skillName }) => {
+            const skillDir = join(homeDir, 'skills', skillName);
+            await mkdir(skillDir, { recursive: true });
+            await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
+          }));
+      }));
+
+      const diagnostics = await Promise.all(providers.map(async (provider, index) => {
+        try {
+          await assertStepCommandsResolve(homes[index], provider);
+          return '';
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      }));
+
+      const pipeline = STEP_SKILL_INVOCATIONS.build;
+      const rendered = providers.map((provider) => renderSkillInvocation(pipeline, provider));
+      expect(new Set(rendered)).toHaveLength(providers.length);
+      expect(diagnostics).toEqual(rendered.map((command) => expect.stringContaining(command)));
+    } finally {
+      await Promise.all(homes.map((homeDir) => rm(homeDir, { recursive: true, force: true })));
+    }
+  });
+
   it('reports every missing registry-derived command, including a non-pipeline command', async () => {
     const homes = await Promise.all([
       mkdtemp(join(tmpdir(), 'step-command-preflight-')),
