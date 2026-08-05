@@ -73,8 +73,10 @@ export async function runReleasePublisherAction(
   const classification = await classifyReleasePublication(input);
   if (classification.state !== 'publishable') return classification;
 
-  await publishRelease(input, classification);
-  return { state: 'published', version: classification.version };
+  const publicationAuthority = await publishRelease(input);
+  if (publicationAuthority.state !== 'publishable') return publicationAuthority;
+
+  return { state: 'published', version: publicationAuthority.version };
 }
 
 /**
@@ -130,8 +132,10 @@ export async function classifyReleasePublication(
 
 async function publishRelease(
   input: ReleasePublisherActionInput,
-  classification: Extract<ReleasePublicationClassification, { state: 'publishable' }>,
-): Promise<void> {
+): Promise<ReleasePublicationClassification> {
+  const classification = await classifyReleasePublication(input);
+  if (classification.state !== 'publishable') return classification;
+
   if (classification.existingTag === undefined) {
     await input.git.createAnnotatedTag({
       tag: classification.tag,
@@ -147,6 +151,7 @@ async function publishRelease(
       target: input.event.commit,
     });
   }
+  return classification;
 }
 
 function sameRelease(

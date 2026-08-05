@@ -6,6 +6,7 @@ import {
   type ReleasePublisherGithub,
   runReleasePublisherAction,
 } from '../../src/engine/release-publisher-action.js';
+import { classifyReleasePublication as classifyReleasePublicationFromIndex } from '../../src/index.js';
 
 describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14–16)', () => {
   const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
@@ -22,6 +23,10 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
 
     expect(git.createAnnotatedTag).not.toHaveBeenCalled();
     expect(github.createRelease).not.toHaveBeenCalled();
+  });
+
+  it('re-exports release classification from the public entry point', () => {
+    expect(classifyReleasePublicationFromIndex).toBe(classifyReleasePublication);
   });
 
   it.each([
@@ -151,6 +156,24 @@ describe('engine/release-publisher-action — release PR provenance and retry sa
       body: '### Fixed\n\n- Publish only approved releases.\n',
       target: 'merged-release-head',
     });
+  });
+
+  it('rejects a candidate that changes after classification instead of publishing from stale authority', async () => {
+    const { git, github } = dependencies();
+    git.readAnnotatedTag
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ commit: 'different-commit' });
+
+    await expect(runReleasePublisherAction({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    })).resolves.toMatchObject({ state: 'rejected', reason: expect.stringMatching(/tag.*different-commit/i) });
+
+    expect(git.readAnnotatedTag).toHaveBeenCalledTimes(2);
+    expect(git.createAnnotatedTag).not.toHaveBeenCalled();
+    expect(github.createRelease).not.toHaveBeenCalled();
   });
 
   it.each([

@@ -5,7 +5,7 @@ export { runReleaseMetadataCheckAction } from './engine/release-metadata-check-a
 export { runReleasePrAction } from './engine/release-pr-action.js';
 export { collectReleaseCandidates } from './engine/release-candidates.js';
 export { renderReleaseCandidate, renderReleaseCandidateAudit } from './engine/release-renderer.js';
-export { runReleasePublisherAction } from './engine/release-publisher-action.js';
+export { classifyReleasePublication, runReleasePublisherAction } from './engine/release-publisher-action.js';
 
 import type { RunMode } from './types/index.js';
 import { recoverCommandState, replaceCommandState } from './engine/command-state.js';
