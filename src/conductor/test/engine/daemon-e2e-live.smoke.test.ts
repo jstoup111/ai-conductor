@@ -39,6 +39,7 @@ class TokenMeter implements LLMProvider {
   readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
   readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
   totalTokens = 0;
+  unmetered = 0;
 
   constructor(private readonly provider: LLMProvider) {
     this.supportsSessionResume = provider.supportsSessionResume;
@@ -61,7 +62,11 @@ class TokenMeter implements LLMProvider {
   }
 
   private record(result: InvokeResult): void {
-    this.totalTokens += (result.tokenUsage?.input ?? 0) + (result.tokenUsage?.output ?? 0);
+    if (!result.tokenUsage) {
+      this.unmetered += 1;
+      return;
+    }
+    this.totalTokens += result.tokenUsage.input + result.tokenUsage.output;
   }
 }
 
@@ -108,9 +113,11 @@ async function dispatchAfterLivePreflight(
   await dispatch();
 }
 
-function assertTokenCap(totalTokens: number, cap: number): void {
+function assertTokenCap(totalTokens: number, unmetered: number, cap: number): void {
   if (totalTokens > cap) {
-    throw new Error(`Token cap ${cap} exceeded: observed ${totalTokens}`);
+    throw new Error(
+      `Token cap ${cap} exceeded: observed ${totalTokens}; unmetered results: ${unmetered}`,
+    );
   }
 }
 
@@ -199,12 +206,13 @@ describe('daemon E2E live terminal guard', () => {
 
     expect({
       total: meter.totalTokens,
+      unmetered: meter.unmetered,
       forwardedInvoke: vi.mocked(provider.invoke).mock.calls.every(([sent]) => sent === options),
       forwardedInteractive: vi.mocked(provider.invokeInteractive).mock.calls
         .every(([sent]) => sent === options),
       atCapThrows: (() => {
         try {
-          assertTokenCap(meter.totalTokens, 27);
+          assertTokenCap(meter.totalTokens, meter.unmetered, 27);
           return false;
         } catch {
           return true;
@@ -212,12 +220,13 @@ describe('daemon E2E live terminal guard', () => {
       })(),
     }).toEqual({
       total: 27,
+      unmetered: 1,
       forwardedInvoke: true,
       forwardedInteractive: true,
       atCapThrows: false,
     });
-    expect(() => assertTokenCap(meter.totalTokens, 26)).toThrow(
-      'Token cap 26 exceeded: observed 27',
+    expect(() => assertTokenCap(meter.totalTokens, meter.unmetered, 26)).toThrow(
+      'Token cap 26 exceeded: observed 27; unmetered results: 1',
     );
   });
 
@@ -485,7 +494,7 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         `daemon E2E live smoke total tokens: ${meter.totalTokens}; ` +
         `dispatches: ${provisioned?.dispatches ?? 0}; cap: ${tokenCap}`,
       );
-      assertTokenCap(meter.totalTokens, tokenCap);
+      assertTokenCap(meter.totalTokens, meter.unmetered, tokenCap);
       await providerHome?.teardown();
       await rm(worktreeDir, { recursive: true, force: true });
     }
