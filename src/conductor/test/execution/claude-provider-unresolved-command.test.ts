@@ -18,6 +18,16 @@ const successfulEnvelopePath = fileURLToPath(
   new URL('../fixtures/claude-envelopes/successful-command.json', import.meta.url),
 );
 
+async function invokeEnvelope(prompt: string, envelope: Record<string, unknown>) {
+  const provider = new ClaudeProvider(undefined, () => Promise.resolve({
+    stdout: JSON.stringify(envelope),
+    stderr: '',
+    exitCode: 0,
+    failed: false,
+  }) as never);
+  return provider.invoke({ prompt, sessionId: 'unresolved-command-fixture', resume: false });
+}
+
 describe('Claude custom-step command resolution evidence (#1311)', () => {
   it('reports the pinned zero-turn /pipeline envelope as an unresolved command failure', async () => {
     const unresolvedRaw = await readFile(unresolvedEnvelopePath, 'utf8');
@@ -38,6 +48,32 @@ describe('Claude custom-step command resolution evidence (#1311)', () => {
       commandUnresolved: true,
       commandUnresolvedName: 'pipeline',
     });
+  });
+
+  it('keeps prose, bare zero-turn, and mismatched-command results successful', async () => {
+    const [prose, bareZeroTurn, differentCommand] = await Promise.all([
+      invokeEnvelope('/pipeline', {
+        subtype: 'success', is_error: false, num_turns: 3,
+        result: 'I fixed an unknown command reported by the test.',
+        usage: { input_tokens: 12, output_tokens: 5 },
+      }),
+      invokeEnvelope('/pipeline', {
+        subtype: 'success', is_error: false, num_turns: 0,
+        result: 'No work was required.',
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }),
+      invokeEnvelope('/pipeline', {
+        subtype: 'success', is_error: false, num_turns: 0,
+        result: 'Unknown command: /stories',
+        usage: { input_tokens: 0, output_tokens: 0 },
+      }),
+    ]);
+
+    for (const result of [prose, bareZeroTurn, differentCommand]) {
+      expect(result.success).toBe(true);
+      expect(result.commandUnresolved).toBeUndefined();
+      expect(result.commandUnresolvedName).toBeUndefined();
+    }
   });
 
   it('pins the observed zero-turn unresolved-command envelope beside an ordinary success', async () => {
