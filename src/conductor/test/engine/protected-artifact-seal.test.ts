@@ -542,6 +542,25 @@ describe('verifyProtectedArtifactSeal', () => {
   // rebases onto it. `advanceBase` models exactly that post-rebase state: the
   // base branch tip carries the new content, and the workspace matches it.
   describe('base-branch inheritance tolerance', () => {
+    async function advanceBaseWithoutMovingFeatureHead(
+      repo: string,
+      files: Record<string, string>,
+    ): Promise<void> {
+      const baseWorktree = await mkdtemp(join(tmpdir(), 'protected-artifact-seal-base-'));
+      try {
+        await git(repo, ['worktree', 'add', '--detach', '-q', baseWorktree, 'main']);
+        for (const [path, content] of Object.entries(files)) {
+          await writeProjectFile(baseWorktree, path, content);
+        }
+        await git(baseWorktree, ['add', '.']);
+        await git(baseWorktree, ['commit', '-q', '-m', "another feature's merged PR"]);
+        await git(repo, ['branch', '-f', 'main', await git(baseWorktree, ['rev-parse', 'HEAD'])]);
+      } finally {
+        await git(repo, ['worktree', 'remove', '--force', baseWorktree]).catch(() => undefined);
+        await rm(baseWorktree, { recursive: true, force: true });
+      }
+    }
+
     async function advanceBase(
       repo: string,
       files: Record<string, string>,
@@ -552,6 +571,28 @@ describe('verifyProtectedArtifactSeal', () => {
       await git(repo, ['add', '.']);
       await git(repo, ['commit', '-q', '-m', "another feature's merged PR"]);
     }
+
+    it('advances main without moving the feature branch HEAD', async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      await git(repo, ['checkout', '-q', '-b', 'feature']);
+      const featureHead = await git(repo, ['rev-parse', 'HEAD']);
+
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner\n',
+      });
+
+      const [head, mergeBase, baseTip] = await Promise.all([
+        git(repo, ['rev-parse', 'HEAD']),
+        git(repo, ['merge-base', 'HEAD', 'main']),
+        git(repo, ['rev-parse', 'main']),
+      ]);
+
+      expect([head, mergeBase, baseTip]).toEqual([
+        featureHead,
+        featureHead,
+        expect.not.stringMatching(new RegExp(`^${featureHead}$`)),
+      ]);
+    });
 
     it("tolerates ANOTHER feature's artifact changed to exactly the base branch tip", async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
