@@ -426,7 +426,9 @@ function parseTokenUsage(stdout: string): TokenUsage | undefined {
  * handled by parseTokenUsage above). Falls back to raw stdout passthrough
  * on any parse failure — never fabricates a zero-cost tokenUsage.
  */
-export function parseJsonResult(stdout: string): { output: string; tokenUsage?: TokenUsage } {
+export function parseJsonResult(
+  stdout: string,
+): { output: string; tokenUsage?: TokenUsage; numTurns?: number } {
   try {
     const parsed = JSON.parse(stdout.trim()) as Record<string, unknown>;
     if (typeof parsed.result !== 'string') {
@@ -434,6 +436,7 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
     }
     const output = parsed.result;
     const usageRaw = parsed.usage as Record<string, unknown> | undefined;
+    const numTurns = typeof parsed.num_turns === 'number' ? parsed.num_turns : undefined;
     let tokenUsage: TokenUsage | undefined;
     if (
       usageRaw &&
@@ -453,17 +456,25 @@ export function parseJsonResult(stdout: string): { output: string; tokenUsage?: 
       if (typeof parsed.total_cost_usd === 'number') {
         tokenUsage.costUsd = parsed.total_cost_usd;
       }
-      if (typeof parsed.num_turns === 'number') {
-        tokenUsage.numTurns = parsed.num_turns;
+      if (numTurns !== undefined) {
+        tokenUsage.numTurns = numTurns;
       }
       if (typeof parsed.duration_ms === 'number') {
         tokenUsage.durationMs = parsed.duration_ms;
       }
     }
-    return { output, tokenUsage };
+    return { output, tokenUsage, ...(numTurns === undefined ? {} : { numTurns }) };
   } catch {
     return { output: stdout, tokenUsage: undefined };
   }
+}
+
+function unresolvedCommandName(output: string, prompt: string | undefined): string | undefined {
+  const command = prompt?.trim().split(/\s+/, 1)[0];
+  if (!command?.startsWith('/')) return undefined;
+  const escapedCommand = command.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const unknownCommand = new RegExp(`Unknown command:\\s*${escapedCommand}(?:\\s|$)`, 'i');
+  return unknownCommand.test(output) ? command.slice(1) : undefined;
 }
 
 type ClaudeSubprocessFactory = (
@@ -570,7 +581,7 @@ export class ClaudeProvider implements LLMProvider {
         }),
     );
 
-    return this.classifyCompletion(observed.value, true, observed.interval);
+    return this.classifyCompletion(observed.value, true, observed.interval, options.prompt);
   }
 
   /**
@@ -614,7 +625,7 @@ export class ClaudeProvider implements LLMProvider {
       }),
     );
 
-    return this.classifyCompletion(observed.value, false, observed.interval);
+    return this.classifyCompletion(observed.value, false, observed.interval, options.prompt);
   }
 
   private classifyCompletion(
@@ -626,6 +637,7 @@ export class ClaudeProvider implements LLMProvider {
     },
     jsonOutput: boolean,
     observedInterval: ObservedInterval,
+    prompt?: string,
   ): InvokeResult {
     const stdout = (result.stdout ?? '') as string;
     const stderr = (result.stderr ?? '') as string;
@@ -674,6 +686,9 @@ export class ClaudeProvider implements LLMProvider {
       !rateLimited && !modelUnavailable && exitCode !== 0 && AUTH_FAILURE_RE.test(output);
     const sessionExpired =
       STALE_SESSION_RE.test(output) || SESSION_IN_USE_RE.test(output);
+    const commandUnresolvedName = parsed.numTurns === 0
+      ? unresolvedCommandName(parsed.output, prompt)
+      : undefined;
     let deadline: number | undefined;
     let waitSeconds: number | undefined;
     if (rateLimited) {
@@ -686,13 +701,15 @@ export class ClaudeProvider implements LLMProvider {
       // Session-limit and out-of-credits notices ride exit 0 but are not real
       // successes — no work was done and no artifact written. Never report them
       // as success, or the step's completion check reads a confusing "no artifact" halt.
-      success: exitCode === 0 && !outOfCredits && !sessionLimit,
+      success: exitCode === 0 && !outOfCredits && !sessionLimit && !commandUnresolvedName,
       output,
       exitCode,
       authFailure: authFailure || undefined,
       rateLimited: rateLimited || undefined,
       sessionExpired: sessionExpired || undefined,
       modelUnavailable: modelUnavailable || undefined,
+      commandUnresolved: commandUnresolvedName !== undefined || undefined,
+      commandUnresolvedName,
       tokenUsage: parsed.tokenUsage,
       waitSeconds,
       deadline,

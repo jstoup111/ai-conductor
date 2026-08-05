@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { parseJsonResult } from '../../src/execution/claude-provider.js';
+import { ClaudeProvider, parseJsonResult } from '../../src/execution/claude-provider.js';
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 const worktreeRoot = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -19,6 +19,27 @@ const successfulEnvelopePath = fileURLToPath(
 );
 
 describe('Claude custom-step command resolution evidence (#1311)', () => {
+  it('reports the pinned zero-turn /pipeline envelope as an unresolved command failure', async () => {
+    const unresolvedRaw = await readFile(unresolvedEnvelopePath, 'utf8');
+    const provider = new ClaudeProvider(undefined, () => Promise.resolve({
+      stdout: unresolvedRaw,
+      stderr: '',
+      exitCode: 0,
+      failed: false,
+    }) as never);
+
+    await expect(provider.invoke({
+      prompt: '/pipeline',
+      sessionId: 'unresolved-command-fixture',
+      resume: false,
+    })).resolves.toMatchObject({
+      success: false,
+      exitCode: 0,
+      commandUnresolved: true,
+      commandUnresolvedName: 'pipeline',
+    });
+  });
+
   it('pins the observed zero-turn unresolved-command envelope beside an ordinary success', async () => {
     const [unresolvedRaw, successfulRaw] = await Promise.all([
       readFile(unresolvedEnvelopePath, 'utf8'),
@@ -38,6 +59,7 @@ describe('Claude custom-step command resolution evidence (#1311)', () => {
     expect(parseJsonResult(unresolvedRaw)).toEqual({
       output: 'Unknown command: /pipeline',
       tokenUsage: { input: 0, output: 0, costUsd: 0, numTurns: 0 },
+      numTurns: 0,
     });
     expect(successful).toMatchObject({
       subtype: 'success',
