@@ -339,20 +339,37 @@ to_ver = norm(os.environ.get("TO_VER", ""))
 text = path.read_text()
 
 def migration_fences(body):
-    """Yield runnable migration fences from every Migration section in document order."""
-    migration_sections = re.finditer(r"(?m)^#{2,3}\s+Migration\s*$", body)
-    for section in migration_sections:
-        remainder = body[section.end():]
-        in_fence = False
-        section_end = len(remainder)
-        for line in re.finditer(r"(?m)^.*$", remainder):
-            if line.group().startswith("```"):
-                in_fence = not in_fence
-            elif not in_fence and re.match(r"^#{1,3}\s", line.group()):
-                section_end = line.start()
-                break
-        mig_body = remainder[:section_end]
-        yield from re.findall(r"```bash migration\s*\n(.*?)```", mig_body, re.DOTALL)
+    """Yield runnable Migration fences while respecting Markdown fence context."""
+    in_migration = False
+    fence = None
+    runnable_script = None
+
+    for line in body.splitlines(keepends=True):
+        if fence:
+            marker, width = fence
+            if re.match(rf"^{re.escape(marker)}{{{width},}}\s*$", line):
+                if runnable_script is not None:
+                    yield "".join(runnable_script)
+                    runnable_script = None
+                fence = None
+            elif runnable_script is not None:
+                runnable_script.append(line)
+            continue
+
+        if re.match(r"^#{2,3}\s+Migration\s*$", line):
+            in_migration = True
+            continue
+        if in_migration and re.match(r"^#{1,3}\s", line):
+            in_migration = False
+            continue
+
+        opening = re.match(r"^([`~])\1{2,}", line)
+        if opening:
+            marker = opening.group(1)
+            width = len(opening.group(0))
+            fence = (marker, width)
+            if in_migration and marker == "`" and width == 3 and line[width:].strip() == "bash migration":
+                runnable_script = []
 
 # Split into version sections: ## [X.Y.Z] - date ... until next ## [
 sections = re.split(r"(?m)^## \[", text)

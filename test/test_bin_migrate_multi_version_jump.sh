@@ -226,6 +226,22 @@ cat > "$PARSER_HARNESS/CHANGELOG.md" <<'EOF'
 printf 'nested-heading\n' >> execution.log
 ```
 
+````markdown
+### Migration
+
+```bash migration
+printf 'nested-example-leak\n' >> execution.log
+```
+````
+
+````text
+## Migration
+
+```bash migration
+printf 'heading-in-fence-leak\n' >> execution.log
+```
+````
+
 ## Migration
 
 ```bash migration
@@ -236,6 +252,16 @@ run_migrate "$PARSER_HARNESS" "$PARSER_CONSUMER" "$PARSER_HOME" --dry-run
 PARSER_BLOCKS=$(printf '%s\n' "$OUT" | rg "printf '" || true)
 assert 'a release entry contributes fences from every Migration section at mixed heading depths' "$(
   [ "$PARSER_BLOCKS" = $'printf \'nested-heading\\n\' >> execution.log\nprintf \'release-heading\\n\' >> execution.log' ] && echo 0 || echo 1
+)"
+assert 'nested Migration examples inside fenced content are never offered' "$(
+  ! contains "$PARSER_BLOCKS" 'nested-example-leak' && echo 0 || echo 1
+)"
+assert 'Migration headings inside fenced content are never offered' "$(
+  ! contains "$PARSER_BLOCKS" 'heading-in-fence-leak' && echo 0 || echo 1
+)"
+run_migrate "$PARSER_HARNESS" "$PARSER_CONSUMER" "$PARSER_HOME" --yes
+assert 'nested fenced Migration examples are never executed' "$(
+  [ "$(cat "$PARSER_CONSUMER/execution.log" 2>/dev/null || true)" = $'nested-heading\nrelease-heading' ] && echo 0 || echo 1
 )"
 
 printf 'Parser — excluded unparsable release labels are reported\n'
