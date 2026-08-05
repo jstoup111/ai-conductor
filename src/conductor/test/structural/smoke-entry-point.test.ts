@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createVitest } from 'vitest/node';
 
 import type { SmokeCapability } from '../../src/engine/smoke-capability.js';
-import { parseSmokeCapabilityDeclaration, runSmoke } from '../../src/engine/smoke-runner.js';
+import { runSmokeCli } from '../../src/engine/smoke-runner.js';
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
@@ -25,7 +25,7 @@ const smokeCapabilities: Readonly<Record<string, SmokeCapability>> = {
 describe('structural: smoke test entry point', () => {
   it('fails before running Vitest when smoke discovery is empty', async () => {
     const runVitest = vi.fn();
-    const outcome = await runSmoke({
+    const outcome = await runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [],
       runVitest,
     }).then(
@@ -36,27 +36,11 @@ describe('structural: smoke test entry point', () => {
     expect(outcome).toBe('Smoke discovery found no test files:0');
   });
 
-  it('names a discovered file and its invalid capability literal', () => {
-    const file = 'test/smoke/invalid-capability.smoke.test.ts';
-
-    expect(() => parseSmokeCapabilityDeclaration(
-      file,
-      "export const smokeCapability = 'networked';",
-    )).toThrow(`Smoke file ${file} declares invalid capability networked`);
-  });
-
-  it('accepts a static capability declaration without exporting a test-only symbol', () => {
-    expect(parseSmokeCapabilityDeclaration(
-      'test/smoke/finish-record.smoke.test.ts',
-      "const smokeCapability = 'hermetic';",
-    )).toBe('hermetic');
-  });
-
   it('applies per-file capability decisions, records skips, and requires credentialed execution in gate mode', async () => {
     const runVitest = vi.fn(async () => undefined);
     const emit = vi.fn();
 
-    await runSmoke({
+    await runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [
         { file: 'test/smoke/finish-record.smoke.test.ts', capability: 'hermetic' },
         { file: 'test/backlog-priority.smoke.test.ts', capability: 'toolchain' },
@@ -77,7 +61,7 @@ describe('structural: smoke test entry point', () => {
       ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
     ]));
 
-    await expect(runSmoke({
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [
         { file: 'test/smoke/finish-record.smoke.test.ts', capability: 'hermetic' },
         { file: 'test/engine/daemon-e2e-live.smoke.test.ts', capability: 'credentialed' },

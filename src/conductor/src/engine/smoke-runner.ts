@@ -33,7 +33,7 @@ export interface SmokeRunDependencies {
 }
 
 /** Parses one discovered smoke file's declaration and enforces the closed capability set. */
-export function parseSmokeCapabilityDeclaration(
+function parseSmokeCapabilityDeclaration(
   file: string,
   source: string,
 ): SmokeCapability {
@@ -48,7 +48,7 @@ export function parseSmokeCapabilityDeclaration(
 }
 
 /** Runs each discovered smoke file according to its declared capability. */
-export async function runSmoke({
+async function runSmoke({
   discover,
   runVitest,
   mode = 'advisory',
@@ -124,10 +124,17 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
   }
 }
 
-export async function runSmokeCli(config = 'vitest.smoke.config.ts'): Promise<void> {
+export async function runSmokeCli(
+  config = 'vitest.smoke.config.ts',
+  dependencies: Partial<SmokeRunDependencies> = {},
+): Promise<void> {
   await runSmoke({
-    discover: () => discoverSmokeFiles(config),
-    runVitest: (file) => execa('vitest', ['run', '--config', config, file], { stdio: 'inherit' }),
-    mode: process.env.SMOKE_MODE === 'gate' ? 'gate' : 'advisory',
+    discover: dependencies.discover ?? (() => discoverSmokeFiles(config)),
+    runVitest: dependencies.runVitest
+      ?? ((file) => execa('vitest', ['run', '--config', config, file], { stdio: 'inherit' })),
+    mode: dependencies.mode ?? (process.env.SMOKE_MODE === 'gate' ? 'gate' : 'advisory'),
+    hasCommand: dependencies.hasCommand,
+    environment: dependencies.environment,
+    emit: dependencies.emit,
   });
 }
