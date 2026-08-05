@@ -237,6 +237,18 @@ os.replace(temporary, path)
 PY
 }
 
+ledger_has_identity() {
+  local ledger=$1 identity=$2
+  python3 - "$ledger" "$identity" <<'PY'
+import json
+import sys
+
+ledger = json.loads(sys.argv[1])
+identity = sys.argv[2]
+print(0 if any(block["identity"] == identity for block in ledger["appliedBlocks"]) else 1)
+PY
+}
+
 # Extract ## Migration bash blocks from CHANGELOG.md entries strictly between
 # from_version (exclusive) and to_version (inclusive). Emit one bash block
 # per line-group, separated by `---MIGRATION-BLOCK---` markers.
@@ -315,6 +327,38 @@ sys.stdout.write("".join(out))
 PY
 }
 
+# The ledger is the authority after its first record.  Parse every release so
+# an older pending block remains reachable even after currentVersion advances.
+select_migration_candidates() {
+  local blocks ledger current_version="" current_script="" identity candidates=""
+  blocks=$(extract_migration_blocks "" "")
+  ledger=$(ledger_read) || return 1
+
+  while IFS= read -r line; do
+    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
+      if [ -n "$current_script" ]; then
+        identity=$(block_identity "$current_version" "$current_script")
+        if [ "$(ledger_has_identity "$ledger" "$identity")" -ne 0 ]; then
+          candidates+="---MIGRATION-BLOCK--- version=${current_version}"$'\n'"${current_script}"
+        fi
+      fi
+      current_version="${line#*version=}"
+      current_script=""
+    else
+      current_script+="$line"$'\n'
+    fi
+  done <<< "$blocks"
+
+  if [ -n "$current_script" ]; then
+    identity=$(block_identity "$current_version" "$current_script")
+    if [ "$(ledger_has_identity "$ledger" "$identity")" -ne 0 ]; then
+      candidates+="---MIGRATION-BLOCK--- version=${current_version}"$'\n'"${current_script}"
+    fi
+  fi
+
+  printf '%s' "$candidates"
+}
+
 run_project_migrations() {
   if in_harness_repo; then
     info "Running inside the harness repo — skipping project-level migrations"
@@ -326,7 +370,7 @@ run_project_migrations() {
   fi
 
   local blocks
-  blocks=$(extract_migration_blocks "$FROM_VERSION" "$TO_VERSION" || true)
+  blocks=$(select_migration_candidates)
   if [ -z "$blocks" ]; then
     info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"
     return 0

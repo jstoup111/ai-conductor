@@ -85,5 +85,43 @@ print(0 if ok else 1)
 PY
 )"
 
+CHANGELOG="$TMP_ROOT/CHANGELOG.md"
+python3 - "$CHANGELOG" <<'PY'
+import sys
+from pathlib import Path
+
+Path(sys.argv[1]).write_text('''## [1.0.0] - 2026-01-01
+
+## Migration
+
+```bash migration
+printf 'first\\n'
+```
+
+## [1.1.0] - 2026-02-01
+
+## Migration
+
+```bash migration
+printf 'second\\n'
+```
+''')
+PY
+
+FIRST_BODY=$'printf \'first\\n\'\n'
+SECOND_BODY=$'printf \'second\\n\'\n'
+(cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.0.0' "$FIRST_BODY")
+(cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.1.0' "$SECOND_BODY")
+ALL_APPLIED_CANDIDATES=$(cd "$CONSUMER" && HOME="$TEST_HOME" select_migration_candidates)
+assert 'a pre-seeded ledger leaves no migration candidates' \
+  "$( [ -z "$ALL_APPLIED_CANDIDATES" ] && echo 0 || echo 1)"
+
+PARTIAL_CONSUMER="$TMP_ROOT/partial-consumer"
+mkdir -p "$PARTIAL_CONSUMER"
+(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.0.0' "$FIRST_BODY")
+PARTIAL_CANDIDATES=$(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" select_migration_candidates)
+assert 'a partial ledger leaves exactly the unapplied migration block' \
+  "$( [ "$PARTIAL_CANDIDATES" = $'---MIGRATION-BLOCK--- version=1.1.0\nprintf \'second\\n\'' ] && echo 0 || echo 1)"
+
 printf 'Summary: %s passed, %s failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
