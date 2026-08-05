@@ -37,7 +37,7 @@ export function parseSmokeCapabilityDeclaration(
   file: string,
   source: string,
 ): SmokeCapability {
-  const match = source.match(/export\s+const\s+smokeCapability\s*=\s*['\"]([^'\"]+)['\"]/);
+  const match = source.match(/(?:export\s+)?const\s+smokeCapability\s*=\s*['\"]([^'\"]+)['\"]/);
   if (match === null) {
     throw new Error(`Smoke file ${file} declares no capability`);
   }

@@ -45,6 +45,13 @@ describe('structural: smoke test entry point', () => {
     )).toThrow(`Smoke file ${file} declares invalid capability networked`);
   });
 
+  it('accepts a static capability declaration without exporting a test-only symbol', () => {
+    expect(parseSmokeCapabilityDeclaration(
+      'test/smoke/finish-record.smoke.test.ts',
+      "const smokeCapability = 'hermetic';",
+    )).toBe('hermetic');
+  });
+
   it('applies per-file capability decisions, records skips, and requires credentialed execution in gate mode', async () => {
     const runVitest = vi.fn(async () => undefined);
     const emit = vi.fn();
@@ -136,7 +143,7 @@ describe('structural: smoke test entry point', () => {
       expect(discovered).toEqual(Object.keys(smokeCapabilities).sort());
       expect(sources.filter(([file, source]) => {
         const declaration = new RegExp(
-          `export\\s+const\\s+smokeCapability\\s*=\\s*['\"]${smokeCapabilities[file]}['\"]`,
+          `(?:export\\s+)?const\\s+smokeCapability\\s*=\\s*['\"]${smokeCapabilities[file]}['\"]`,
         );
         return !declaration.test(source);
       }).map(([file]) => file)).toEqual([]);

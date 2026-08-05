@@ -3,7 +3,7 @@ import { mkdtemp, rm, lstat, access } from 'fs/promises';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
-export const smokeCapability = 'toolchain';
+const smokeCapability = 'toolchain';
 
 const REPO_ROOT = resolve(join(process.cwd(), '..', '..'));
 
