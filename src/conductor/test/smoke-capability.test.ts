@@ -2,13 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   SMOKE_CAPABILITIES,
   assertGateCredentialedExecution,
-  declareSmokeCapability,
   emitSmokeOutcomeLedger,
-  getDeclaredSmokeCapability,
   resolveAdvisorySmokeFile,
-  resolveAdvisorySmokeCapabilities,
-  resolveGateSmokeCapabilities,
-} from './smoke-capability.js';
+  resolveGateSmokeFile,
+} from '../src/engine/smoke-capability.js';
 
 describe('smoke capability declarations', () => {
   it('exposes exactly the closed smoke capability set', () => {
@@ -19,52 +16,20 @@ describe('smoke capability declarations', () => {
     ]);
   });
 
-  it('records a smoke file capability declaration', () => {
-    const file = 'test/smoke/example.smoke.test.ts';
-
-    declareSmokeCapability(file, 'toolchain');
-
-    expect(getDeclaredSmokeCapability(file)).toBe('toolchain');
-  });
-
-  it('rejects an out-of-set capability declaration', () => {
-    const file = 'test/smoke/invalid-capability.smoke.test.ts';
-    const capability = 'networked';
-
-    expect(() =>
-      declareSmokeCapability(file, capability as 'toolchain'),
-    ).toThrow(new Error(`Smoke file ${file} declares invalid capability ${capability}`));
-  });
-
-  it('rejects a discovered smoke file without a capability declaration', () => {
-    const file = 'test/smoke/undeclared.smoke.test.ts';
-
-    expect(() => getDeclaredSmokeCapability(file)).toThrow(file);
-  });
-
   it('runs hermetic files and skips unavailable toolchain and credentialed files in advisory mode', () => {
-    const resolutions = resolveAdvisorySmokeCapabilities({
+    expect(resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed', {
       hasCommand: () => false,
       environment: {},
-    });
-
-    expect(resolutions).toEqual({
-      hermetic: { outcome: 'ran' },
-      toolchain: { outcome: 'skipped', unmet: 'toolchain' },
-      credentialed: {
-        outcome: 'skipped',
-        unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
-      },
-    });
+    })).toEqual({ outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' });
   });
 
   it('fails rather than skipping or succeeding when a gate-mode credential is absent', () => {
-    const resolutions = resolveGateSmokeCapabilities({
+    const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed', {
       hasCommand: () => true,
       environment: {},
     });
 
-    expect(resolutions.credentialed).toEqual({
+    expect(resolution).toEqual({
       outcome: 'failed',
       unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
     });
@@ -77,7 +42,7 @@ describe('smoke capability declarations', () => {
   });
 
   it('reports a capability force-skip as an operator override in advisory mode', () => {
-    const resolutions = resolveAdvisorySmokeCapabilities({
+    const resolution = resolveAdvisorySmokeFile('test/example.smoke.test.ts', 'credentialed', {
       hasCommand: () => true,
       environment: {
         CLAUDE_CODE_OAUTH_TOKEN: 'token',
@@ -85,7 +50,7 @@ describe('smoke capability declarations', () => {
       },
     });
 
-    expect(resolutions.credentialed).toEqual({
+    expect(resolution).toEqual({
       outcome: 'skipped',
       unmet: 'operator override',
     });
@@ -111,7 +76,7 @@ describe('smoke capability declarations', () => {
   });
 
   it('fails gate mode when an operator force-skips the credentialed capability', () => {
-    const resolutions = resolveGateSmokeCapabilities({
+    const resolution = resolveGateSmokeFile('test/example.smoke.test.ts', 'credentialed', {
       hasCommand: () => true,
       environment: {
         CLAUDE_CODE_OAUTH_TOKEN: 'token',
@@ -119,7 +84,7 @@ describe('smoke capability declarations', () => {
       },
     });
 
-    expect(resolutions.credentialed).toEqual({
+    expect(resolution).toEqual({
       outcome: 'failed',
       unmet: 'operator override',
     });

@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
 import { createVitest } from 'vitest/node';
 
-import type { SmokeCapability } from '../smoke-capability.js';
-import { parseSmokeCapabilityDeclaration, runSmoke } from '../smoke-runner.js';
+import type { SmokeCapability } from '../../src/engine/smoke-capability.js';
+import { parseSmokeCapabilityDeclaration, runSmoke } from '../../src/engine/smoke-runner.js';
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
@@ -41,7 +41,7 @@ describe('structural: smoke test entry point', () => {
 
     expect(() => parseSmokeCapabilityDeclaration(
       file,
-      `declareSmokeCapability('${file}', 'networked');`,
+      "export const smokeCapability = 'networked';",
     )).toThrow(`Smoke file ${file} declares invalid capability networked`);
   });
 
@@ -136,7 +136,7 @@ describe('structural: smoke test entry point', () => {
       expect(discovered).toEqual(Object.keys(smokeCapabilities).sort());
       expect(sources.filter(([file, source]) => {
         const declaration = new RegExp(
-          `declareSmokeCapability\\(\\s*['\"]${file}['\"]\\s*,\\s*['\"]${smokeCapabilities[file]}['\"]\\s*\\)`,
+          `export\\s+const\\s+smokeCapability\\s*=\\s*['\"]${smokeCapabilities[file]}['\"]`,
         );
         return !declaration.test(source);
       }).map(([file]) => file)).toEqual([]);

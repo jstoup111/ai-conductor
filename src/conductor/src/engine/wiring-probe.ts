@@ -277,8 +277,24 @@ function escapeRegExp(text: string): string {
  * member-name match.
  */
 function findDeclaredSiteAnchor(content: string, symbol: string): string | undefined {
-  const symbolRe = new RegExp(`\\b${escapeRegExp(symbol)}\\b`);
   const lines = content.split('\n');
+  if (symbol === 'scripts.smoke') {
+    try {
+      const scripts = JSON.parse(content).scripts;
+      if (typeof scripts?.smoke === 'string') {
+        return lines.map((line) => line.trim()).find((line) => /["']smoke["']\s*:/.test(line));
+      }
+    } catch {
+      return undefined;
+    }
+    return undefined;
+  }
+
+  if (symbol === 'exports') {
+    return lines.map((line) => line.trim()).find((line) => /^export\s/.test(line));
+  }
+
+  const symbolRe = new RegExp(`\\b${escapeRegExp(symbol)}\\b`);
   const literal = lines.map((line) => line.trim()).find((line) => symbolRe.test(line));
   if (literal !== undefined) return literal;
 

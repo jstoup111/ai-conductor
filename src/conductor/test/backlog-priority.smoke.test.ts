@@ -2,9 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ghIssueLabelReader, parsePriorityLabels } from '../src/engine/backlog-priority.js';
 import type { GhRunner } from '../src/engine/tracker-client.js';
 import { execFileSync } from 'child_process';
-import { declareSmokeCapability } from './smoke-capability.js';
-
-declareSmokeCapability('test/backlog-priority.smoke.test.ts', 'toolchain');
+export const smokeCapability = 'toolchain';
 
 /**
  * Real-binary exec runner: executes the PRODUCTION argv verbatim against the

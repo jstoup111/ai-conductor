@@ -20,9 +20,8 @@ import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { dispatchableStepCommands } from '../fixtures/step-command-preflight.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
-import { declareSmokeCapability } from '../smoke-capability.js';
 
-declareSmokeCapability('test/engine/daemon-e2e-live.smoke.test.ts', 'credentialed');
+export const smokeCapability = 'credentialed';
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
 //

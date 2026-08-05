@@ -1,7 +1,6 @@
 import { existsSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
 
 import { execa } from 'execa';
 import { createVitest } from 'vitest/node';
@@ -38,14 +37,14 @@ export function parseSmokeCapabilityDeclaration(
   file: string,
   source: string,
 ): SmokeCapability {
-  const match = source.match(/declareSmokeCapability\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)/);
-  if (match === null || match[1] !== file) {
+  const match = source.match(/export\s+const\s+smokeCapability\s*=\s*['\"]([^'\"]+)['\"]/);
+  if (match === null) {
     throw new Error(`Smoke file ${file} declares no capability`);
   }
-  if (!SMOKE_CAPABILITIES.includes(match[2] as SmokeCapability)) {
-    throw new Error(`Smoke file ${file} declares invalid capability ${match[2]}`);
+  if (!SMOKE_CAPABILITIES.includes(match[1] as SmokeCapability)) {
+    throw new Error(`Smoke file ${file} declares invalid capability ${match[1]}`);
   }
-  return match[2] as SmokeCapability;
+  return match[1] as SmokeCapability;
 }
 
 /** Runs each discovered smoke file according to its declared capability. */
@@ -125,15 +124,10 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
   }
 }
 
-async function main(): Promise<void> {
-  const config = process.argv[2] ?? 'vitest.smoke.config.ts';
+export async function runSmokeCli(config = 'vitest.smoke.config.ts'): Promise<void> {
   await runSmoke({
     discover: () => discoverSmokeFiles(config),
     runVitest: (file) => execa('vitest', ['run', '--config', config, file], { stdio: 'inherit' }),
     mode: process.env.SMOKE_MODE === 'gate' ? 'gate' : 'advisory',
   });
-}
-
-if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  await main();
 }

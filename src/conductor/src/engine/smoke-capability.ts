@@ -39,10 +39,8 @@ export type GateSmokeCapabilityResolution =
   | { outcome: 'ran' }
   | { outcome: 'failed'; unmet: string };
 
-const declarations = new Map<string, SmokeCapability>();
-
 /** The executable required by each smoke file that needs the toolchain capability. */
-export const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
+const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
   'test/backlog-priority.smoke.test.ts': 'gh',
   'test/engine/daemon-tmux.smoke.test.ts': 'tmux',
   'test/execution/codex-provider.smoke.test.ts': 'codex',
@@ -85,7 +83,7 @@ function forceSkipsFile(
 }
 
 /** Resolves each smoke capability's advisory outcome once for a smoke run. */
-export function resolveAdvisorySmokeCapabilities(
+function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
   return {
@@ -150,7 +148,7 @@ export function resolveGateSmokeFile(
 }
 
 /** Resolves each smoke capability's fail-closed outcome for a release gate. */
-export function resolveGateSmokeCapabilities(
+function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
   return {
@@ -184,26 +182,4 @@ export function assertSmokeDiscovery(discovered: { readonly length: number }): v
   if (discovered.length === 0) {
     throw new Error('Smoke discovery found no test files');
   }
-}
-
-/** Records the capability required by a smoke test file. */
-export function declareSmokeCapability(
-  file: string,
-  capability: SmokeCapability,
-): void {
-  if (!SMOKE_CAPABILITIES.includes(capability)) {
-    throw new Error(`Smoke file ${file} declares invalid capability ${capability}`);
-  }
-  declarations.set(file, capability);
-}
-
-/** Returns a smoke test file's declared capability. */
-export function getDeclaredSmokeCapability(
-  file: string,
-): SmokeCapability {
-  const capability = declarations.get(file);
-  if (capability === undefined) {
-    throw new Error(`Smoke file ${file} declares no capability`);
-  }
-  return capability;
 }

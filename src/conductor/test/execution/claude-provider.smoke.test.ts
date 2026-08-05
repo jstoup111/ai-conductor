@@ -6,10 +6,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution/claude-provider.js';
-import { declareSmokeCapability } from '../smoke-capability.js';
 import { unauthenticatedClaudeEnvironment } from './claude-provider-smoke-env.js';
 
-declareSmokeCapability('test/execution/claude-provider.smoke.test.ts', 'credentialed');
+export const smokeCapability = 'credentialed';
 
 /**
  * Real-binary smoke test for TS-1 Done-When 3: prove the real Claude CLI's

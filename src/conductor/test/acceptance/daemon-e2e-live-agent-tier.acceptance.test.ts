@@ -118,7 +118,7 @@ describe('live-agent daemon E2E tier (#1124)', () => {
 
     expect(workflow).toMatch(/run:\s*npm\s+run\s+smoke/);
     expect(JSON.parse(packageJson).scripts.smoke)
-      .toBe('node --import tsx test/smoke-runner.ts vitest.smoke.config.ts');
+      .toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
     expect(smokeConfig).toMatch(/environment:\s*['"]node['"]/);
     expect(smokeConfig).toMatch(/setupFiles:\s*\[\s*['"]\.\/test\/setup\.ts['"]\s*\]/);
     expect(smokeConfig).toMatch(/globalSetup:\s*\[\s*['"]\.\/test\/global-setup\.ts['"]\s*\]/);
