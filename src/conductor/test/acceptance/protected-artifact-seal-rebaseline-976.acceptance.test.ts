@@ -360,10 +360,27 @@ describe('#1315 Story 1: BUILD accepts an older protected artifact this branch n
 
     await advanceMain(scratch, { [INHERITED_PLAN]: 'accepted revision A\n' }, 'main: add plan');
     await scratch.g(['rebase', '-q', 'origin/main']);
+    const featureHeadAtMergeBase = await head(scratch);
+    const mergeBaseBeforeAmendment = (
+      await scratch.g(['merge-base', 'origin/main', 'HEAD'])
+    ).stdout.trim();
     await advanceMain(scratch, { [INHERITED_PLAN]: 'amended revision B\n' }, 'main: amend plan');
 
+    // Pin the #1315 topology, rather than merely its final file contents:
+    // BUILD is still on the revision that was current at its merge-base while
+    // another feature has amended that same plan on the base branch.
+    expect(await head(scratch)).toBe(featureHeadAtMergeBase);
+    expect((await scratch.g(['merge-base', 'origin/main', 'HEAD'])).stdout.trim()).toBe(
+      mergeBaseBeforeAmendment,
+    );
+    expect((await scratch.g(['show', `${mergeBaseBeforeAmendment}:${INHERITED_PLAN}`])).stdout).toBe(
+      'accepted revision A\n',
+    );
     expect(await readFile(join(scratch.repo, INHERITED_PLAN), 'utf8')).toBe(
       'accepted revision A\n',
+    );
+    expect((await scratch.g(['show', `origin/main:${INHERITED_PLAN}`])).stdout).toBe(
+      'amended revision B\n',
     );
     expect(
       (await scratch.g(['diff', '--name-only', 'origin/main...HEAD', '--', INHERITED_PLAN])).stdout,
@@ -720,7 +737,12 @@ describe('ST-976-2: verification recovers a seal stranded by a history rewrite',
         baseBranch: 'main',
       });
 
-      expect(verdict).toEqual({ ok: false, reason: `Protected artifact changed: ${CANARY_PATH}` });
+      expect(verdict).toEqual({
+        ok: false,
+        reason: expect.stringMatching(
+          new RegExp(`^Protected artifact provenance undeterminable: ${CANARY_PATH.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')}`),
+        ),
+      });
       expect(await readSealRaw(repo)).toBe(before);
     },
     30000,
