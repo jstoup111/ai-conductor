@@ -714,10 +714,10 @@ any omitted field, yields auto-detection with every gate enabled.
 | `sandbox_build_env` | boolean | — | `true` | Runs the self-build under a throwaway `CLAUDE_CONFIG_DIR` |
 | `version_approval_gate` | boolean | — | `true` | Halts for operator VERSION-bump approval before `finish` |
 | `release_artifact_gate` | boolean | — | `true` | Halts on an integrity, CHANGELOG, or migration-block failure |
-| `version_freeze` | string | Non-empty after trim, else hard error (`config.ts:985-993`) | `null` | While it equals the repo `VERSION`, the approval gate self-satisfies. Blank or whitespace normalizes to `null` |
-| `auth_park_timeout_minutes` | number | Must be a number, else hard error (`config.ts:1008-1013`) | `60` | OAuth park-and-poll timeout. `0` means an immediate credentials-specific halt |
-| `build_auth.mode` | string | `daemon-token`, `api-key`; empty string rejected (`config.ts:1035-1049`) | `daemon-token` | Selects the self-build auth source |
-| `build_auth.token_path` | string | Must be a string (`config.ts:1050-1055`) | `~/.ai-conductor/build-auth` | `~` is expanded; blank or whitespace falls back to the default |
+| `version_freeze` | string | Non-empty after trim, else hard error (`config.ts:1056-1064`) | `null` | While it resolves to the repo `VERSION`, the approval gate self-satisfies. Blank or whitespace normalizes to `null`. Besides a pinned semver string, accepts the literal `"latest"` (tracks the resolved base branch's current `VERSION`) or `"branch:<name>"` (tracks an explicit branch's `VERSION`) — see [self-hosting.md](../guides/self-hosting.md#the-self-host-finish-gates) |
+| `auth_park_timeout_minutes` | number | Must be a number, else hard error (`config.ts:1079-1084`) | `60` | OAuth park-and-poll timeout. `0` means an immediate credentials-specific halt |
+| `build_auth.mode` | string | `daemon-token`, `api-key`; empty string rejected (`config.ts:1117-1131`) | `daemon-token` | Selects the self-build auth source |
+| `build_auth.token_path` | string | Must be a string (`config.ts:1132-1137`) | `~/.ai-conductor/build-auth` | `~` is expanded; blank or whitespace falls back to the default |
 
 A declared `version_freeze` never approves an actual bump: any `VERSION` other than the frozen value
 still halts.

@@ -355,6 +355,20 @@ Two gates run before the `finish` dispatch on a self-build. Both HALT rather tha
 This repo declares a `version_freeze`, so ordinary features pass without a per-feature approval
 round-trip while a real VERSION bump still stops for a human.
 
+`version_freeze` accepts three shapes:
+
+| Value | Meaning |
+| --- | --- |
+| `"0.99.20"` (a pinned string) | Frozen at exactly that version. Must be bumped by hand when `VERSION` moves. |
+| `"latest"` | Tracks the repo's resolved base branch (the same discover-default-branch/fetch machinery the rebase gate uses — never hardcoded to `main`): the effective freeze is that branch's current `VERSION` file contents. |
+| `"branch:<name>"` | Tracks an explicit branch instead of the auto-discovered default, e.g. `"branch:release"`. |
+
+For `"latest"` and `"branch:<name>"`, resolution fetches the tracked branch and reads its `VERSION`
+at gate-check time; any git/network failure (no origin, branch not found, fetch failure) fails
+closed — the freeze resolves to no value, and the gate falls through to signal classification /
+HALT exactly as if no freeze were declared. A freeze still never approves an actual bump: if the
+worktree's own `VERSION` differs from the tracked value, the gate HALTs as usual.
+
 **Release artifact.** Runs the integrity suite (`test/test_harness_integrity.sh`, 120s timeout), then
 the changelog and migration-block check, then waiver evaluation. It HALTs on the **first** failure —
 later sub-gates are not consulted. A missing script, a timeout, and a non-zero exit are all HALTs.
