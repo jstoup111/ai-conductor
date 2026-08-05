@@ -116,6 +116,10 @@ while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$line" =~ (^|[[:space:];|&])\./bin/ ]]; then
     violation 'harness-path' 'harness binaries must use ${HARNESS_DIR}/bin, never ./bin'
   fi
+  consumer_harness_source_pattern='(git[[:space:]]+rev-parse[[:space:]]+--show-toplevel\)[[:space:]]*/src/conductor|\$\{?PROJECT_ROOT\}?/src/conductor|\$\{?PROJECT_ROOT\}?/\.claude/harness)'
+  if [[ "$line" =~ $consumer_harness_source_pattern ]]; then
+    violation 'harness-path' 'harness-owned conductor and hook sources must use ${HARNESS_DIR}, never consumer-relative paths'
+  fi
   command_line=$(strip_quoted_strings "$line")
   if [[ "$command_line" =~ (^[[:space:]]*|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f+|--force)([[:space:]]|$) ]] \
     || [[ "$command_line" =~ (^[[:space:]]*|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+branch.*(^|[[:space:]])-D([[:space:]]|$) ]]; then

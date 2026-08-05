@@ -192,7 +192,7 @@ echo "Review any running daemon and choose its lifecycle action yourself."
 
 ```bash migration
 # Rebuild the conductor engine (dist is no longer shipped in git).
-cd "$(git rev-parse --show-toplevel)/src/conductor" \
+cd "${HARNESS_DIR:?}/src/conductor" \
   && npm install --no-audit --no-fund \
   && npm run build
 ```
@@ -215,9 +215,8 @@ fi
 rm -f .claude/hooks/claude/post-commit-pipeline-sync.sh
 # Install the new fast-feedback derive hook in your project's .git/hooks:
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || echo '.')"
-HARNESS_ROOT="${PROJECT_ROOT}/.claude/harness"  # or wherever the harness is checked out
-if [ -d "$PROJECT_ROOT/.git" ] && [ -f "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" ]; then
-  cp "$HARNESS_ROOT/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
+if [ -d "$PROJECT_ROOT/.git" ] && [ -f "${HARNESS_DIR:?}/hooks/claude/post-commit-derive-feedback.sh" ]; then
+  cp "${HARNESS_DIR:?}/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
   chmod +x "$PROJECT_ROOT/.git/hooks/post-commit"
   echo "Installed fast-feedback post-commit hook"
 fi

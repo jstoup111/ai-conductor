@@ -53,6 +53,7 @@ ln -s "$PY3" "$STUBS_DIR/python3"
 # those commands local and deterministic while leaving bin/migrate itself real.
 cat > "$STUBS_DIR/npm" <<'EOF'
 #!/usr/bin/env bash
+printf '%s\n' "$PWD" >> "${NPM_PWD_LOG:?}"
 exit 0
 EOF
 cat > "$STUBS_DIR/claude" <<'EOF'
@@ -314,9 +315,14 @@ HOME_DIR=$(make_home real-jump v0.99.17)
 # Exercise the exact frozen queued set, rather than a synthetic changelog.
 cp "$REPO_ROOT/CHANGELOG.md" "$HARNESS/CHANGELOG.md"
 printf '0.99.20\n' > "$HARNESS/VERSION"
-# One queued migration rebuilds the consumer-local conductor engine. Its npm
-# boundary is faked above; this directory supplies only the local path it owns.
-mkdir -p "$CONSUMER/src/conductor"
+# The 0.99.20 migrations must take both their rebuild and hook sources from
+# HARNESS_DIR. These sentinels make that boundary observable without calling npm.
+mkdir -p "$HARNESS/src/conductor" "$HARNESS/hooks/claude"
+printf '#!/usr/bin/env bash\nprintf harness-hook-sentinel\\n\n' \
+  > "$HARNESS/hooks/claude/post-commit-derive-feedback.sh"
+chmod +x "$HARNESS/hooks/claude/post-commit-derive-feedback.sh"
+NPM_PWD_LOG="$TMP_ROOT/real-jump-npm-pwd.log"
+export NPM_PWD_LOG
 QUEUED_BLOCK_COUNT=$(queued_migration_block_count)
 WORKTREE="$TMP_ROOT/preserved-worktree"
 git -C "$CONSUMER" worktree add -q -b preserved-worktree "$WORKTREE"
@@ -343,6 +349,16 @@ PY
 assert 'worktrees are unchanged by the completed jump' "$([ "$(git -C "$CONSUMER" worktree list --porcelain)" = "$BEFORE_WORKTREES" ] && echo 0 || echo 1)"
 assert 'branches are unchanged by the completed jump' "$([ "$(git -C "$CONSUMER" branch --format='%(refname:short)' | sort)" = "$BEFORE_BRANCHES" ] && echo 0 || echo 1)"
 assert 'daemon state is unchanged by the completed jump' "$([ "$(cat "$CONSUMER/.daemon/daemon.pid")" = "$BEFORE_DAEMON" ] && echo 0 || echo 1)"
+
+assert 'the conductor rebuild runs from the harness-owned source directory' "$(
+  [ "$(sort -u "$NPM_PWD_LOG")" = "$HARNESS/src/conductor" ] && echo 0 || echo 1
+)"
+assert 'the derive hook is installed from the harness-owned source' "$(
+  contains "$(cat "$CONSUMER/.git/hooks/post-commit")" harness-hook-sentinel && echo 0 || echo 1
+)"
+assert 'the jump does not require a consumer-side harness source tree' "$(
+  [ ! -e "$CONSUMER/src/conductor" ] && echo 0 || echo 1
+)"
 
 FIRST_BYTES=$(consumer_file_hashes "$CONSUMER")
 run_migrate "$HARNESS" "$CONSUMER" "$HOME_DIR" --yes
