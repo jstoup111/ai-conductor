@@ -154,9 +154,19 @@ if not path.exists():
     raise SystemExit(0)
 
 try:
-    ledger = json.loads(path.read_text())
+    contents = path.read_text()
 except (OSError, json.JSONDecodeError) as error:
-    print(f"Invalid migration ledger {path}: {error}", file=sys.stderr)
+    print(f"Cannot read migration ledger {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+if not contents.strip():
+    print(f"Migration ledger is empty at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+
+try:
+    ledger = json.loads(contents)
+except json.JSONDecodeError as error:
+    print(f"Migration ledger contains invalid JSON at {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
     raise SystemExit(1)
 
 blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
@@ -173,7 +183,7 @@ valid = (
     )
 )
 if not valid:
-    print(f"Invalid migration ledger schema in {path}", file=sys.stderr)
+    print(f"Migration ledger has an unknown schema version at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
     raise SystemExit(1)
 
 print(json.dumps(ledger, sort_keys=True))
@@ -201,9 +211,17 @@ identity, release, body = sys.argv[2:]
 path.parent.mkdir(parents=True, exist_ok=True)
 if path.exists():
     try:
-        ledger = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
-        print(f"Invalid migration ledger {path}: {error}", file=sys.stderr)
+        contents = path.read_text()
+    except OSError as error:
+        print(f"Cannot read migration ledger {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+        raise SystemExit(1)
+    if not contents.strip():
+        print(f"Migration ledger is empty at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+        raise SystemExit(1)
+    try:
+        ledger = json.loads(contents)
+    except json.JSONDecodeError as error:
+        print(f"Migration ledger contains invalid JSON at {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
         raise SystemExit(1)
 else:
     ledger = {"schemaVersion": 1, "appliedBlocks": []}
@@ -222,7 +240,7 @@ valid = (
     )
 )
 if not valid:
-    print(f"Invalid migration ledger schema in {path}", file=sys.stderr)
+    print(f"Migration ledger has an unknown schema version at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
     raise SystemExit(1)
 
 record = {
@@ -386,7 +404,10 @@ run_project_migrations() {
   fi
 
   local blocks
-  blocks=$(select_migration_candidates)
+  if ! blocks=$(select_migration_candidates); then
+    fail "Cannot select migration candidates until the ledger is resolved"
+    return 1
+  fi
   if [ -z "$blocks" ]; then
     info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"
     return 0

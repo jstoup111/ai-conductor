@@ -105,13 +105,63 @@ printf 'first\\n'
 ```bash migration
 printf 'second\\n'
 ```
+
+## [1.2.0] - 2026-03-01
+
+## Migration
+
+```bash migration
+printf 'ran\\n' > "$MIGRATION_EFFECT"
+```
 ''')
 PY
 
+assert_corrupt_ledger_refuses_migrations() {
+  local description=$1 ledger_contents=$2 expected_condition=$3
+  local case_consumer="$TMP_ROOT/${expected_condition}-ledger-consumer"
+  local case_ledger case_effect ledger_digest output status
+
+  mkdir -p "$case_consumer"
+  case_ledger=$(cd "$case_consumer" && HOME="$TEST_HOME" ledger_path)
+  mkdir -p "$(dirname "$case_ledger")"
+  if [ "$expected_condition" = 'empty' ]; then
+    : > "$case_ledger"
+  else
+    printf '%s' "$ledger_contents" > "$case_ledger"
+  fi
+  ledger_digest=$(sha256sum "$case_ledger" | awk '{print $1}')
+
+  case_effect="$case_consumer/migration-side-effect"
+  if output=$(cd "$case_consumer" && HOME="$TEST_HOME" AUTO_YES=true CHANGELOG="$CHANGELOG" FROM_VERSION='0.9.0' TO_VERSION='1.2.0' MIGRATION_EFFECT="$case_effect" run_project_migrations 2>&1); then
+    status=0
+  else
+    status=$?
+  fi
+
+  assert "$description" "$(
+    case "$output" in
+      *"$expected_condition"*) condition_reported=0 ;;
+      *) condition_reported=1 ;;
+    esac
+    [ "$status" -ne 0 ] && [ "$condition_reported" -eq 0 ] && [ ! -e "$case_effect" ] \
+      && [ "$ledger_digest" = "$(sha256sum "$case_ledger" | awk '{print $1}')" ] && echo 0 || echo 1
+  )"
+}
+
+assert_corrupt_ledger_refuses_migrations \
+  'an empty ledger is reported and prevents migration side effects' '' 'empty'
+assert_corrupt_ledger_refuses_migrations \
+  'invalid ledger JSON is reported and prevents migration side effects' '{invalid json' 'invalid'
+assert_corrupt_ledger_refuses_migrations \
+  'an unknown ledger schema version is reported and prevents migration side effects' \
+  '{"schemaVersion": 999, "appliedBlocks": []}' 'schema'
+
 FIRST_BODY=$'printf \'first\\n\'\n'
 SECOND_BODY=$'printf \'second\\n\'\n'
+THIRD_BODY=$'printf \'ran\\n\' > "$MIGRATION_EFFECT"\n'
 (cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.0.0' "$FIRST_BODY")
 (cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.1.0' "$SECOND_BODY")
+(cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.2.0' "$THIRD_BODY")
 ALL_APPLIED_CANDIDATES=$(cd "$CONSUMER" && HOME="$TEST_HOME" select_migration_candidates)
 assert 'a pre-seeded ledger leaves no migration candidates' \
   "$( [ -z "$ALL_APPLIED_CANDIDATES" ] && echo 0 || echo 1)"
@@ -119,6 +169,7 @@ assert 'a pre-seeded ledger leaves no migration candidates' \
 PARTIAL_CONSUMER="$TMP_ROOT/partial-consumer"
 mkdir -p "$PARTIAL_CONSUMER"
 (cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.0.0' "$FIRST_BODY")
+(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.2.0' "$THIRD_BODY")
 PARTIAL_CANDIDATES=$(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" select_migration_candidates)
 assert 'a partial ledger leaves exactly the unapplied migration block' \
   "$( [ "$PARTIAL_CANDIDATES" = $'---MIGRATION-BLOCK--- version=1.1.0\nprintf \'second\\n\'' ] && echo 0 || echo 1)"
