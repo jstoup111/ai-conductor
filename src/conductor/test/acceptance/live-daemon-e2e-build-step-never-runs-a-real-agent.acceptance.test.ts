@@ -98,7 +98,9 @@ describe('live daemon E2E command resolution (#1311)', () => {
 
     expect(preflight).toMatch(/STEP_SKILL_INVOCATIONS/);
     expect(preflight).toMatch(/renderSkillInvocation/);
-    expect(preflight).toMatch(/kind\s*===?\s*['"]skill['"]/);
+    expect(preflight).toMatch(
+      /descriptor\.kind\s*(?:===?\s*['"]skill['"]|!==?\s*['"]skill['"]\s*\)\s*return\s*\[\])/,
+    );
     expect(preflight).toMatch(/SKILL\.md/);
     expect(preflight).toMatch(/missing|unresolved/i);
     expect(preflight).toMatch(/custom|project configuration|parallel/i);
