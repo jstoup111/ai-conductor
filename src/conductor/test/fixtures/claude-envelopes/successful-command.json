@@ -1,0 +1,11 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 1,
+  "result": "Completed fixture command.",
+  "total_cost_usd": 0.0001,
+  "usage": {
+    "input_tokens": 12,
+    "output_tokens": 8
+  }
+}

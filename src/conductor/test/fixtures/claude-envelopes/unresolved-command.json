@@ -1,0 +1,11 @@
+{
+  "subtype": "success",
+  "is_error": false,
+  "num_turns": 0,
+  "result": "Unknown command: /pipeline",
+  "total_cost_usd": 0,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  }
+}
