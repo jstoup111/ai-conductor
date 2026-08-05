@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   SMOKE_CAPABILITIES,
   assertGateCredentialedExecution,
   declareSmokeCapability,
+  emitSmokeOutcomeLedger,
   getDeclaredSmokeCapability,
   resolveAdvisorySmokeFile,
   resolveAdvisorySmokeCapabilities,
@@ -122,5 +123,35 @@ describe('smoke capability declarations', () => {
       outcome: 'failed',
       unmet: 'operator override',
     });
+  });
+
+  it('emits a distinct attributable ledger entry for every smoke-file outcome', () => {
+    const emit = vi.fn();
+
+    emitSmokeOutcomeLedger([
+      {
+        file: 'test/smoke/finish-record.smoke.test.ts',
+        capability: 'hermetic',
+        outcome: 'ran',
+      },
+      {
+        file: 'test/execution/codex-provider.smoke.test.ts',
+        capability: 'toolchain',
+        outcome: 'skipped',
+        unmet: 'codex',
+      },
+      {
+        file: 'test/engine/daemon-e2e-live.smoke.test.ts',
+        capability: 'credentialed',
+        outcome: 'failed',
+        evidencePath: 'artifacts/smoke/daemon-e2e-live.log',
+      },
+    ], emit);
+
+    expect(emit.mock.calls).toEqual([
+      ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
+      ['smoke ledger: test/execution/codex-provider.smoke.test.ts [toolchain] skipped (unmet: codex)'],
+      ['smoke ledger: test/engine/daemon-e2e-live.smoke.test.ts [credentialed] failed (evidence: artifacts/smoke/daemon-e2e-live.log)'],
+    ]);
   });
 });

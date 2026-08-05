@@ -7,6 +7,25 @@ export const SMOKE_CAPABILITIES = [
 
 export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
 
+export type SmokeOutcomeLedgerEntry =
+  | {
+    file: string;
+    capability: SmokeCapability;
+    outcome: 'ran';
+  }
+  | {
+    file: string;
+    capability: SmokeCapability;
+    outcome: 'skipped';
+    unmet: string;
+  }
+  | {
+    file: string;
+    capability: SmokeCapability;
+    outcome: 'failed';
+    evidencePath: string;
+  };
+
 export interface SmokeCapabilityAvailabilityDependencies {
   hasCommand(command: string): boolean;
   environment: Readonly<Record<string, string | undefined>>;
@@ -21,6 +40,27 @@ export type GateSmokeCapabilityResolution =
   | { outcome: 'failed'; unmet: string };
 
 const declarations = new Map<string, SmokeCapability>();
+
+/** Emits one attributable outcome line for every smoke file in a run. */
+export function emitSmokeOutcomeLedger(
+  entries: readonly SmokeOutcomeLedgerEntry[],
+  emit: (line: string) => void,
+): void {
+  for (const entry of entries) {
+    const prefix = `smoke ledger: ${entry.file} [${entry.capability}]`;
+    switch (entry.outcome) {
+      case 'ran':
+        emit(`${prefix} ran`);
+        break;
+      case 'skipped':
+        emit(`${prefix} skipped (unmet: ${entry.unmet})`);
+        break;
+      case 'failed':
+        emit(`${prefix} failed (evidence: ${entry.evidencePath})`);
+        break;
+    }
+  }
+}
 
 function forceSkipsCapability(
   environment: SmokeCapabilityAvailabilityDependencies['environment'],
