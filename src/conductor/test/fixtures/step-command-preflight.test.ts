@@ -69,4 +69,43 @@ describe('dispatchableStepCommands', () => {
       await rm(homeDir, { recursive: true, force: true });
     }
   });
+
+  it('reports every missing registry-derived command, including a non-pipeline command', async () => {
+    const homes = await Promise.all([
+      mkdtemp(join(tmpdir(), 'step-command-preflight-')),
+      mkdtemp(join(tmpdir(), 'step-command-preflight-')),
+    ]);
+    const cases = [
+      { homeDir: homes[0], missingSkillNames: new Set(['pipeline', 'bootstrap']) },
+      { homeDir: homes[1], missingSkillNames: new Set(['bootstrap']) },
+    ];
+
+    try {
+      await Promise.all(cases.map(async ({ homeDir, missingSkillNames }) => {
+        await Promise.all(dispatchableStepCommands('claude')
+          .filter(({ skillName }) => !missingSkillNames.has(skillName))
+          .map(async ({ skillName }) => {
+            const skillDir = join(homeDir, 'skills', skillName);
+            await mkdir(skillDir, { recursive: true });
+            await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
+          }));
+      }));
+
+      const failures = await Promise.all(cases.map(async ({ homeDir }) => {
+        try {
+          await assertStepCommandsResolve(homeDir, 'claude');
+          return '';
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error);
+        }
+      }));
+
+      expect(failures).toEqual([
+        expect.stringMatching(/pipeline.*bootstrap|bootstrap.*pipeline/s),
+        expect.stringMatching(/bootstrap/),
+      ]);
+    } finally {
+      await Promise.all(homes.map((homeDir) => rm(homeDir, { recursive: true, force: true })));
+    }
+  });
 });

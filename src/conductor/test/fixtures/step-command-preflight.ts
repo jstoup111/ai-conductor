@@ -36,12 +36,17 @@ export async function assertStepCommandsResolve(
   providerKey = 'claude',
 ): Promise<void> {
   const skillsDir = join(homeDir, 'skills');
-
-  await Promise.all(dispatchableStepCommands(providerKey).map(async ({ skillName, rendered }) => {
+  const unresolved = (await Promise.all(dispatchableStepCommands(providerKey).map(async (command) => {
     try {
-      await access(join(skillsDir, skillName, 'SKILL.md'));
+      await access(join(skillsDir, command.skillName, 'SKILL.md'));
+      return undefined;
     } catch {
-      throw new Error(`Unable to resolve skill ${skillName} for ${rendered} in ${skillsDir}.`);
+      return command;
     }
-  }));
+  }))).filter((command): command is DispatchableStepCommand => command !== undefined);
+
+  if (unresolved.length > 0) {
+    const commands = unresolved.map(({ skillName, rendered }) => `${skillName} (${rendered})`);
+    throw new Error(`Unable to resolve skills ${commands.join(', ')} in ${skillsDir}.`);
+  }
 }
