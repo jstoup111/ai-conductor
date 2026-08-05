@@ -17,7 +17,10 @@ import {
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
 
-const { gitInvocations } = vi.hoisted(() => ({ gitInvocations: [] as string[][] }));
+const { gitInvocations, failGitDiff } = vi.hoisted(() => ({
+  gitInvocations: [] as string[][],
+  failGitDiff: { value: false },
+}));
 
 vi.mock('execa', async (importOriginal) => {
   const actual = await importOriginal<typeof import('execa')>();
@@ -25,6 +28,13 @@ vi.mock('execa', async (importOriginal) => {
     ...actual,
     execa: (...args: Parameters<typeof actual.execa>) => {
       if (args[0] === 'git' && Array.isArray(args[1])) gitInvocations.push(args[1]);
+      if (args[0] === 'git' && Array.isArray(args[1]) && args[1][0] === 'diff' && failGitDiff.value) {
+        return Promise.resolve({
+          exitCode: 2,
+          stdout: '',
+          stderr: 'forced git diff probe failure',
+        }) as unknown as ReturnType<typeof actual.execa>;
+      }
       return actual.execa(...args);
     },
   };
@@ -59,6 +69,7 @@ async function makeRepo(files: Record<string, string>): Promise<string> {
 }
 
 afterEach(async () => {
+  failGitDiff.value = false;
   while (scratches.length > 0) await rm(scratches.pop()!, { recursive: true, force: true });
 });
 
@@ -420,6 +431,44 @@ describe('verifyProtectedArtifactSeal', () => {
       ok: false,
       reason: 'Protected artifact changed: .docs/plans/another-feature.md',
     });
+  });
+
+  it('fails closed and names git diff when the inheritance probe exits non-zero', async () => {
+    const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+    failGitDiff.value = true;
+
+    await expect(
+      verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'feature', baseBranch: 'main' }),
+    ).resolves.toEqual({
+      ok: false,
+      reason: 'Protected artifact provenance undeterminable: .docs/plans/another-feature.md\nInheritance probe failed: git diff.\nVerify Git access and retry.',
+    });
+  });
+
+  it('uses the normal changed-artifact halt, not undeterminable provenance, for a resolved-base modification', async () => {
+    const repo = await makeRepo({ '.docs/plans/another-feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await writeProjectFile(repo, '.docs/plans/another-feature.md', 'edited during BUILD\n');
+
+    const verdict = await verifyProtectedArtifactSeal({
+      projectRoot: repo,
+      featureDesc: 'feature',
+      baseBranch: 'main',
+    });
+
+    expect(verdict).toEqual({
+      ok: false,
+      reason: 'Protected artifact changed: .docs/plans/another-feature.md',
+    });
+    expect((verdict as { reason: string }).reason).not.toMatch(/undeterminable/i);
   });
 
   it('accepts base-tip content when the workspace differs from this branch HEAD', async () => {
