@@ -36,6 +36,44 @@ describe('structural: smoke test entry point', () => {
     expect(outcome).toBe('Smoke discovery found no test files:0');
   });
 
+  it('applies per-file capability decisions, records skips, and requires credentialed execution in gate mode', async () => {
+    const runVitest = vi.fn(async () => undefined);
+    const emit = vi.fn();
+
+    await runSmoke({
+      discover: async () => [
+        { file: 'test/smoke/finish-record.smoke.test.ts', capability: 'hermetic' },
+        { file: 'test/backlog-priority.smoke.test.ts', capability: 'toolchain' },
+        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', capability: 'credentialed' },
+      ],
+      runVitest,
+      mode: 'advisory',
+      hasCommand: (command) => command !== 'gh',
+      environment: {},
+      emit,
+    });
+
+    expect(runVitest).toHaveBeenCalledTimes(1);
+    expect(runVitest).toHaveBeenNthCalledWith(1, 'test/smoke/finish-record.smoke.test.ts');
+    expect(emit.mock.calls).toEqual(expect.arrayContaining([
+      ['smoke ledger: test/backlog-priority.smoke.test.ts [toolchain] skipped (unmet: gh)'],
+      ['smoke ledger: test/engine/daemon-e2e-live.smoke.test.ts [credentialed] skipped (unmet: CLAUDE_CODE_OAUTH_TOKEN)'],
+      ['smoke ledger: test/smoke/finish-record.smoke.test.ts [hermetic] ran'],
+    ]));
+
+    await expect(runSmoke({
+      discover: async () => [
+        { file: 'test/smoke/finish-record.smoke.test.ts', capability: 'hermetic' },
+        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', capability: 'credentialed' },
+      ],
+      runVitest,
+      mode: 'gate',
+      hasCommand: () => true,
+      environment: {},
+      emit,
+    })).rejects.toThrow('CLAUDE_CODE_OAUTH_TOKEN');
+  });
+
   it('discovers every known smoke file through the resolved smoke config', async () => {
     const vitest = await createVitest('test', {
       config: join(conductorRoot, 'vitest.smoke.config.ts'),

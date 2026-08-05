@@ -24,6 +24,7 @@ jobs:
         provider: [claude]
     env:
       CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+      GH_TOKEN: ${{ github.token }}
     steps:
       - name: Check live-provider credentials
         env:
@@ -45,14 +46,19 @@ jobs:
           node-version-file: src/conductor/.tool-versions
           cache: npm
           cache-dependency-path: src/conductor/package-lock.json
-      - name: Install Claude CLI
-        run: npm install --global @anthropic-ai/claude-code
+      - name: Install smoke toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes tmux
+          npm install --global @anthropic-ai/claude-code @openai/codex
       - name: Install conductor dependencies
         run: npm ci
         working-directory: src/conductor
       - name: Build conductor
         run: npm run build
         working-directory: src/conductor
-      - name: Run live daemon E2E smoke
-        run: npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts
+      - name: Run complete release smoke tier in gate mode
+        run: npm run smoke
         working-directory: src/conductor
+        env:
+          SMOKE_MODE: gate

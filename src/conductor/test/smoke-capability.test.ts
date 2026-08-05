@@ -50,7 +50,7 @@ describe('smoke capability declarations', () => {
 
     expect(resolutions).toEqual({
       hermetic: { outcome: 'ran' },
-      toolchain: { outcome: 'skipped', unmet: 'codex' },
+      toolchain: { outcome: 'skipped', unmet: 'toolchain' },
       credentialed: {
         outcome: 'skipped',
         unmet: 'CLAUDE_CODE_OAUTH_TOKEN',

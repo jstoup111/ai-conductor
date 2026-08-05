@@ -41,6 +41,14 @@ export type GateSmokeCapabilityResolution =
 
 const declarations = new Map<string, SmokeCapability>();
 
+/** The executable required by each smoke file that needs the toolchain capability. */
+export const SMOKE_TOOLCHAIN_COMMANDS: Readonly<Record<string, string>> = {
+  'test/backlog-priority.smoke.test.ts': 'gh',
+  'test/engine/daemon-tmux.smoke.test.ts': 'tmux',
+  'test/execution/codex-provider.smoke.test.ts': 'codex',
+  'test/smoke/publish-interrupted.smoke.test.ts': 'bin/setup',
+};
+
 /** Emits one attributable outcome line for every smoke file in a run. */
 export function emitSmokeOutcomeLedger(
   entries: readonly SmokeOutcomeLedgerEntry[],
@@ -86,9 +94,9 @@ export function resolveAdvisorySmokeCapabilities(
       : { outcome: 'ran' },
     toolchain: forceSkipsCapability(environment, 'toolchain')
       ? { outcome: 'skipped', unmet: 'operator override' }
-      : hasCommand('codex')
+      : hasCommand('toolchain')
       ? { outcome: 'ran' }
-      : { outcome: 'skipped', unmet: 'codex' },
+      : { outcome: 'skipped', unmet: 'toolchain' },
     credentialed: forceSkipsCapability(environment, 'credentialed')
       ? { outcome: 'skipped', unmet: 'operator override' }
       : environment.CLAUDE_CODE_OAUTH_TOKEN
@@ -106,7 +114,39 @@ export function resolveAdvisorySmokeFile(
   if (forceSkipsFile(dependencies.environment, file)) {
     return { outcome: 'skipped', unmet: 'operator override' };
   }
+  if (capability === 'toolchain') {
+    if (forceSkipsCapability(dependencies.environment, capability)) {
+      return { outcome: 'skipped', unmet: 'operator override' };
+    }
+    const command = SMOKE_TOOLCHAIN_COMMANDS[file];
+    if (command !== undefined && !dependencies.hasCommand(command)) {
+      return { outcome: 'skipped', unmet: command };
+    }
+    if (command !== undefined) return { outcome: 'ran' };
+  }
   return resolveAdvisorySmokeCapabilities(dependencies)[capability];
+}
+
+/** Resolves one smoke file's fail-closed gate outcome, including file overrides. */
+export function resolveGateSmokeFile(
+  file: string,
+  capability: SmokeCapability,
+  dependencies: SmokeCapabilityAvailabilityDependencies,
+): GateSmokeCapabilityResolution {
+  if (forceSkipsFile(dependencies.environment, file)) {
+    return { outcome: 'failed', unmet: 'operator override' };
+  }
+  if (capability === 'toolchain') {
+    if (forceSkipsCapability(dependencies.environment, capability)) {
+      return { outcome: 'failed', unmet: 'operator override' };
+    }
+    const command = SMOKE_TOOLCHAIN_COMMANDS[file];
+    if (command !== undefined && !dependencies.hasCommand(command)) {
+      return { outcome: 'failed', unmet: command };
+    }
+    if (command !== undefined) return { outcome: 'ran' };
+  }
+  return resolveGateSmokeCapabilities(dependencies)[capability];
 }
 
 /** Resolves each smoke capability's fail-closed outcome for a release gate. */
@@ -119,9 +159,9 @@ export function resolveGateSmokeCapabilities(
       : { outcome: 'ran' },
     toolchain: forceSkipsCapability(environment, 'toolchain')
       ? { outcome: 'failed', unmet: 'operator override' }
-      : hasCommand('codex')
+      : hasCommand('toolchain')
       ? { outcome: 'ran' }
-      : { outcome: 'failed', unmet: 'codex' },
+      : { outcome: 'failed', unmet: 'toolchain' },
     credentialed: forceSkipsCapability(environment, 'credentialed')
       ? { outcome: 'failed', unmet: 'operator override' }
       : environment.CLAUDE_CODE_OAUTH_TOKEN
