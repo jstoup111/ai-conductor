@@ -7234,6 +7234,16 @@ export class Conductor {
               join(this.projectRoot, LOOP_HALT_MARKER),
               'utf-8',
             ).catch(() => null);
+            const uncommittedPaths = await uncommittedPathsOrNull(
+              await this.completionCtx(state),
+            );
+            const uncommittedPathsReason = uncommittedPaths
+              ? `${uncommittedPaths.length} uncommitted paths: ${uncommittedPaths
+                  .slice(0, 3)
+                  .join(', ')}${
+                  uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
+                }`
+              : undefined;
             // #569 Task 5: a no_task_progress build stall is a more specific
             // and actionable diagnosis than a generic unchanged-input note,
             // so it takes precedence over `unchangedInputNote` (but never
@@ -7242,15 +7252,17 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : acceptanceRedHealFailureReason
-                  ? acceptanceRedHealFailureReason
-                  : lastBuildStallReason
-                    ? lastBuildStallReason
-                    : graderDispatchFailureReason
-                      ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
-                      : unchangedInputNote
-                        ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                        : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : uncommittedPathsReason
+                  ? uncommittedPathsReason
+                  : acceptanceRedHealFailureReason
+                    ? acceptanceRedHealFailureReason
+                    : lastBuildStallReason
+                      ? lastBuildStallReason
+                      : graderDispatchFailureReason
+                        ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                        : unchangedInputNote
+                          ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                          : `step '${step.name}' failed in auto mode (retries exhausted)`;
             if (!existingHalt || existingHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
             }

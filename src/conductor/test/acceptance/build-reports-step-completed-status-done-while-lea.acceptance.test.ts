@@ -188,7 +188,9 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       expect(attempt).toBe(2);
       expect(completedBuilds).toBe(0);
       expect(stepStarts).not.toContain('build_review');
-      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toBeTruthy();
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toMatch(
+        /^1 uncommitted paths: README\.md/m,
+      );
     });
 
     it('preserves the existing clean-tree exhaustion route to build_review', async () => {

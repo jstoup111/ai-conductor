@@ -11902,6 +11902,136 @@ describe('build-step stall circuit breaker', () => {
     }
   });
 
+  it('leads a dirty-tree exhaustion HALT with its paths without changing the no-commit-movement remediation HALT', async () => {
+    // The exhaustion escape is reached only when HEAD moved during the retry
+    // loop. Keep the final attempt dirty *and* moving so it does not enter the
+    // separate no_task_progress remediation path below.
+    const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+    vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
+    const git: GitRunner = async (args, { cwd }) => {
+      const result = await execa('git', args, { cwd });
+      return { stdout: result.stdout };
+    };
+    let headSha = 'base-head';
+    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
+      async () => headSha,
+    );
+    try {
+      await seedAllArtifactsExceptTaskStatus();
+      await writeTaskStatus(0, 1);
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'test: seed dirty exhaustion fixture'], { cwd: dir });
+      headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+      let dirtyEscapeAttempts = 0;
+      const dirtyEscapeRunner: StepRunner = {
+        run: vi.fn(async (step) => {
+          if (step === 'build') {
+            dirtyEscapeAttempts += 1;
+            const path = `src/attempt-${dirtyEscapeAttempts}.ts`;
+            await mkdir(join(dir, 'src'), { recursive: true });
+            await writeFile(join(dir, path), `export const attempt = ${dirtyEscapeAttempts};\n`);
+            await execa('git', ['add', path], { cwd: dir });
+            await execa('git', ['commit', '-m', `feat: attempt ${dirtyEscapeAttempts}`], { cwd: dir });
+            headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+            if (dirtyEscapeAttempts === 2) {
+              await writeFile(join(dir, path), 'export const attempt = "uncommitted";\n');
+            }
+          }
+          return { success: true };
+        }),
+      };
+      const dirtyEscapeHalts: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') dirtyEscapeHalts.push(event.reason);
+      });
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: dirtyEscapeRunner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        escalateBuildFailure: async () => ({}),
+        git,
+      }).run();
+      const dirtyEscapeHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+
+      // Reset only the terminal state from the first scenario. The worktree
+      // remains dirty, but this second run must use the existing no-progress
+      // remediation route rather than the commit-movement escape.
+      await writeState(statePath, {} as ConductState);
+      await writeFile(join(dir, '.pipeline/HALT'), '');
+      const noMovementEvents = new ConductorEventEmitter();
+      const noMovementHalts: string[] = [];
+      noMovementEvents.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') noMovementHalts.push(event.reason);
+      });
+      let remediationCalls = 0;
+      const noMovementRunner: StepRunner = {
+        run: vi.fn(async (step) => {
+          if (step === 'remediate') {
+            remediationCalls += 1;
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [{
+                  id: 'stall:dirty-tree',
+                  disposition: 'halt',
+                  category: 'product-scope',
+                  rationale: 'The uncommitted repair needs a human decision.',
+                  tasks: [],
+                }],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: noMovementRunner,
+        events: noMovementEvents,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        escalateBuildFailure: async () => ({}),
+        git,
+      }).run();
+
+      const nonEmptyDirtyEscapeLines = dirtyEscapeHalt.split('\n').filter((line) => line.trim());
+      expect({
+        dirtyEscapeAttempts,
+        dirtyEscapeFirstLine: nonEmptyDirtyEscapeLines[0],
+        dirtyEscapeUsesGenericRetryText: /retries exhausted/i.test(dirtyEscapeHalt),
+        dirtyEscapeHalts: dirtyEscapeHalts.length,
+        remediationCalls,
+        noMovementHalts: noMovementHalts.length,
+        noMovementHalt: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+      }).toMatchObject({
+        dirtyEscapeAttempts: 2,
+        dirtyEscapeFirstLine: expect.stringContaining('src/attempt-2.ts'),
+        dirtyEscapeUsesGenericRetryText: false,
+        dirtyEscapeHalts: 1,
+        remediationCalls: 1,
+        noMovementHalts: 1,
+        noMovementHalt: expect.stringContaining('uncommitted paths:'),
+      });
+    } finally {
+      currentCommitSha.mockRestore();
+      vi.mocked(execa).mockImplementation(() =>
+        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      );
+    }
+  });
+
   it('proceeds as succeeded when the interactive REPL finishes the work', async () => {
     await seedAllArtifactsExceptTaskStatus();
     await writeTaskStatus(2, 5); // stalled at 2/5
