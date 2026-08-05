@@ -708,4 +708,53 @@ describe('production FINISH publication composition', () => {
       }
     },
   );
+
+  it('defaults the finish-record runners to the real gh/git boundary when the composition root omits them', async () => {
+    // Regression: the coordinator forwarded an undefined runner bundle, so
+    // finish-record fell back to its fail-closed no-op and every daemon
+    // `record_outcome` attempt refused with "runGh not implemented" until the
+    // FINISH retry budget was exhausted.
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-record-runners-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+      const recordFinish = vi.fn(async () => 0);
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        baseBranch: 'main',
+        git: vi.fn(async () => commandResult),
+        gh: vi.fn(async () => commandResult),
+        // A keep outcome routes straight to `record_outcome` without needing a
+        // GitHub identity, isolating the runner wiring under test.
+        acquireInteractiveIntent: async () => 'keep',
+        observeReleaseReadiness: async () => 'present',
+        recordFinish,
+        // finishRecordRunners intentionally omitted — that is the defect.
+      });
+
+      await coordinator.advance({
+        state: {
+          feature_desc: 'feature',
+          worktree_branch: 'feat/feature',
+          build_review: 'done',
+          test_suite: 'done',
+          manual_test: 'done',
+          architecture_review_as_built: 'done',
+        } as ConductState,
+        mode: 'interactive',
+        daemon: false,
+        dispatchJudgment: vi.fn(async () => ({ success: true })),
+        emit: async () => {},
+      });
+
+      expect(recordFinish).toHaveBeenCalledOnce();
+      const runners = recordFinish.mock.calls[0]![2];
+      expect(runners).toBeDefined();
+      expect(typeof runners!.runGh).toBe('function');
+      expect(typeof runners!.runGit).toBe('function');
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
 });
