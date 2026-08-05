@@ -39,6 +39,7 @@ cat > "$CHANGELOG" <<'EOF'
 ## Migration
 
 ```bash migration
+# Preserve this shell comment while parsing the fence.
 printf '2.0-first\n'
 ```
 
@@ -76,7 +77,7 @@ printf 'shared\n'
 EOF
 
 BLOCKS=$(extract_migration_blocks '1.0.0' '2.0.0')
-EXPECTED=$'---MIGRATION-BLOCK--- version=1.9.0\nprintf \'1.9-first\\n\'\n---MIGRATION-BLOCK--- version=1.9.0\nprintf \'shared\\n\'\n---MIGRATION-BLOCK--- version=1.10.0\nprintf \'shared\\n\'\n---MIGRATION-BLOCK--- version=1.10.0\nprintf \'1.10-second\\n\'\n---MIGRATION-BLOCK--- version=2.0.0\nprintf \'2.0-first\\n\'\n---MIGRATION-BLOCK--- version=2.0.0\nprintf \'2.0-second\\n\''
+EXPECTED=$'---MIGRATION-BLOCK--- version=1.9.0\nprintf \'1.9-first\\n\'\n---MIGRATION-BLOCK--- version=1.9.0\nprintf \'shared\\n\'\n---MIGRATION-BLOCK--- version=1.10.0\nprintf \'shared\\n\'\n---MIGRATION-BLOCK--- version=1.10.0\nprintf \'1.10-second\\n\'\n---MIGRATION-BLOCK--- version=2.0.0\n# Preserve this shell comment while parsing the fence.\nprintf \'2.0-first\\n\'\n---MIGRATION-BLOCK--- version=2.0.0\nprintf \'2.0-second\\n\''
 assert 'three releases are emitted in ascending semantic order and preserve every within-release fence position' \
   "$([ "$BLOCKS" = "$EXPECTED" ] && echo 0 || echo 1)"
 
