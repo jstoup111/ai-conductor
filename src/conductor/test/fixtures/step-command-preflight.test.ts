@@ -144,4 +144,15 @@ describe('dispatchableStepCommands', () => {
       /(?:child_process|node:(?:http|https|net|tls)|\/providers\/|\b(?:exec|execFile|spawn|fork|fetch|request|get|invoke|invokeInteractive)\s*\()/,
     );
   });
+
+  it('does not hardcode any skill name from the invocation registry', async () => {
+    const source = await readFile(new URL('./step-command-preflight.ts', import.meta.url), 'utf8');
+    const skillNames = Object.values(STEP_SKILL_INVOCATIONS)
+      .filter((descriptor): descriptor is Extract<typeof descriptor, { kind: 'skill' }> =>
+        descriptor.kind === 'skill',
+      )
+      .map(({ skillName }) => skillName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+
+    expect(source).not.toMatch(new RegExp(`['\"](?:${skillNames.join('|')})['\"]`));
+  });
 });
