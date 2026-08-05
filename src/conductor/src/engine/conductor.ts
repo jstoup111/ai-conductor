@@ -166,6 +166,7 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
+  nonRetryablePublicationReason,
   routeFinishPublicationDisposition,
   type PublicationDisposition,
   type PrProseJudgmentRequest,
@@ -5481,6 +5482,29 @@ export class Conductor {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
               lastError = `FINISH publication retry: ${route.reason}`;
               retryHint = `${lastError}. Retry only the incomplete publication transition.`;
+
+              // Some publication reasons can never be satisfied by re-running
+              // the identical transition (nothing but `judge_pr_prose` crosses
+              // the provider boundary between attempts, so no retry changes the
+              // inputs). Halt on the FIRST observation instead of spending the
+              // whole budget to reach the same place — and say so, so the
+              // operator is never left wondering whether retries were used.
+              const nonRetryable = nonRetryablePublicationReason(route.reason);
+              if (nonRetryable) {
+                const reason =
+                  `FINISH publication cannot proceed: ${route.reason} is not retryable — ${nonRetryable}.\n` +
+                  'Retrying the identical transition cannot change this outcome, so the publication ' +
+                  'retry budget was deliberately NOT spent. Resolve the cited condition, then clear ' +
+                  'this HALT to let FINISH resume.';
+                await this.saveConductorStepStatus(state, 'finish', 'failed');
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await emitTracked({ type: 'loop_halt', reason });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+
               if (attempt < stepMaxRetries) {
                 await emitTracked({
                   type: 'step_retry',

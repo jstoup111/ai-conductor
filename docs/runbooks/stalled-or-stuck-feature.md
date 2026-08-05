@@ -186,11 +186,28 @@ gh pr list --head <branch> --base <base> --state open --json url,state
 body, then clear the HALT using [the resume
 procedure](#clear-a-halt-and-let-the-feature-resume).
 
-#### FINISH publication retry exhausted: `draft_pr_lease-rejected`
+#### FINISH publication halts
 
-**Symptom:** the run repeats `FINISH publication: establish_pr` → `retry FINISH` until the
-publication budget is spent, and halts with
-`FINISH publication retry exhausted: draft_pr_lease-rejected`.
+A FINISH publication failure halts one of two ways, and the marker says which:
+
+- `FINISH publication retry exhausted: <reason>` — the reason was transient (transport, GitHub,
+  filesystem, provider judgment, or a re-observation), so every attempt in the budget was spent
+  before giving up.
+- `FINISH publication cannot proceed: <reason> is not retryable — …` — the reason can never be
+  satisfied by re-running the identical transition, so the run halted on the **first** observation
+  and the retry budget was deliberately left unspent. Nothing but `judge_pr_prose` crosses the
+  provider boundary between attempts, so no retry authors a commit, wires a missing effect, or
+  reconciles a remote. These are `draft_pr_no-commits`, `draft_pr_skipped`,
+  `draft_pr_lease-rejected`, and the four `*_effect_unavailable` reasons. Both halts are
+  `needs-human`; recovery is the same — resolve the cited condition, then clear the HALT.
+
+An unrecognised reason always keeps its retries: the classifier fails closed toward retrying.
+
+#### `draft_pr_lease-rejected`
+
+**Symptom:** `.pipeline/HALT` reads
+`FINISH publication cannot proceed: draft_pr_lease-rejected is not retryable — the remote branch
+carries commits this checkout has never observed …`.
 
 **Diagnosis:** `establish_pr` publishes the feature branch with
 `git push -u origin <branch> --force-with-lease`, because the finish-time `rebase` step has just

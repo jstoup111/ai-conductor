@@ -474,6 +474,58 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
 };
 
 /**
+ * Publication retry reasons that re-running the identical transition can NEVER
+ * satisfy, mapped to the operator-facing explanation of why.
+ *
+ * Between FINISH attempts the conductor re-enters `finishPublication.advance`
+ * and nothing else: the provider is dispatched only for the `judge_pr_prose`
+ * transition, so no retry authors a commit, wires a missing effect, moves a
+ * branch, or reconciles a remote. For the reasons below the retry is therefore
+ * a guaranteed re-derivation of the same failure — the run used to spend its
+ * whole publication budget (~9s an attempt) to reach exactly the halt it could
+ * have taken on the first observation.
+ *
+ * Membership is DELIBERATELY narrow. Anything that can succeed on a second
+ * attempt — transport (`*push-failed*`), GitHub (`draft_pr_failed`), filesystem
+ * (`*_write_failed`, `pr_url_persistence_failed`), provider judgment, and every
+ * `*_not_verified_after_*` re-observation — keeps its retries.
+ */
+const NON_RETRYABLE_PUBLICATION_REASONS: Readonly<Record<string, string>> = {
+  draft_pr_effect_unavailable:
+    'the establish-PR effect is not wired into this coordinator, and the effect set is identical on every attempt',
+  shipped_record_effect_unavailable:
+    'the shipped-record effect is not wired into this coordinator, and the effect set is identical on every attempt',
+  presentation_repair_effect_unavailable:
+    'the presentation-repair effect is not wired into this coordinator, and the effect set is identical on every attempt',
+  outcome_record_effect_unavailable:
+    'the outcome-record effect is not wired into this coordinator, and the effect set is identical on every attempt',
+  'draft_pr_no-commits':
+    'the feature branch has no commits over its base, and no FINISH retry authors commits',
+  draft_pr_skipped:
+    'the publisher could not resolve a branch, a base, or the comparison between them (no branch recorded, detached HEAD, or an unresolvable base ref), and no FINISH retry changes any of them',
+  'draft_pr_lease-rejected':
+    'the remote branch carries commits this checkout has never observed; the same lease is refused identically on every attempt, and forcing past it would destroy that work',
+};
+
+/**
+ * Classify a publication retry reason for fail-fast halting.
+ *
+ * Returns the operator-facing explanation when the reason is provably
+ * non-retryable, and `undefined` otherwise.
+ *
+ * **Fails CLOSED toward retrying.** Only reasons explicitly listed in
+ * {@link NON_RETRYABLE_PUBLICATION_REASONS} are recognised — an unknown,
+ * malformed, or future reason keeps its full retry budget, because wrongly
+ * fail-fasting a healthy run is far more damaging than spending retries on a
+ * doomed one.
+ */
+export function nonRetryablePublicationReason(reason: string): string | undefined {
+  return Object.prototype.hasOwnProperty.call(NON_RETRYABLE_PUBLICATION_REASONS, reason)
+    ? NON_RETRYABLE_PUBLICATION_REASONS[reason]
+    : undefined;
+}
+
+/**
  * Fail-closed boundary between the publication coordinator and conductor.
  * Publication-only work may retry FINISH, while every other currently-known
  * outcome remains local to FINISH until its dedicated routing rule exists.

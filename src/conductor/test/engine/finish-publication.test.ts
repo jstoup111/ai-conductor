@@ -15,6 +15,17 @@ async function routeFinishPublicationDisposition(disposition: unknown) {
   return route(disposition);
 }
 
+async function nonRetryablePublicationReason(reason: string) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const classify = mod.nonRetryablePublicationReason;
+  if (typeof classify !== 'function') {
+    throw new Error(
+      'expected export "nonRetryablePublicationReason" to be a function (not yet implemented)',
+    );
+  }
+  return classify(reason) as string | undefined;
+}
+
 type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
 type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
 type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
@@ -429,7 +440,66 @@ describe('FINISH publication disposition routing', () => {
     ).resolves.toEqual({ kind: 'retry_finish', reason });
   });
 
+  // --- fail-fast classification ------------------------------------------
+  //
+  // Every retry_finish reason used to burn the full attempt budget before
+  // halting, even when re-running the identical transition could not possibly
+  // change the outcome. Between attempts the conductor re-enters
+  // `finishPublication.advance` ONLY — no provider is dispatched except for
+  // `judge_pr_prose` — so nothing observes new commits, wires a missing
+  // effect, or reconciles a moved remote on the retry path.
+
   it.each([
+    // The effect is not wired into the coordinator at all; the deps object is
+    // identical on every attempt.
+    'draft_pr_effect_unavailable',
+    'shipped_record_effect_unavailable',
+    'presentation_repair_effect_unavailable',
+    'outcome_record_effect_unavailable',
+    // The branch has nothing over base; no retry authors commits.
+    'draft_pr_no-commits',
+    // No branch recorded / detached HEAD / base unresolvable; no retry fixes it.
+    'draft_pr_skipped',
+    // The remote carries work this checkout never saw; the same lease is
+    // rejected identically, and forcing past it would destroy that work.
+    'draft_pr_lease-rejected',
+  ])('classifies %s as non-retryable, with an operator-facing explanation', async (reason) => {
+    const explanation = await nonRetryablePublicationReason(reason);
+    expect(typeof explanation).toBe('string');
+    expect((explanation as string).length).toBeGreaterThan(0);
+  });
+
+  it.each([
+    // Transport, auth, or network — a retry can genuinely succeed.
+    'draft_pr_push-failed',
+    'draft_pr_failed',
+    'pr_url_persistence_failed',
+    'pr_identity_not_verified_after_establish',
+    'shipped_record_write_failed',
+    'shipped_record_not_verified_after_write',
+    'judgment_timed_out',
+    'judgment_provider_unavailable',
+    'judgment_dispatch_failed',
+    'judgment_completed_reobserve',
+    'presentation_repair_failed',
+    'presentation_not_verified_after_repair',
+    'outcome_record_write_failed',
+    'outcome_record_not_verified_after_write',
+  ])('keeps %s retryable', async (reason) => {
+    await expect(nonRetryablePublicationReason(reason)).resolves.toBeUndefined();
+  });
+
+  it('fails CLOSED: an unknown or future reason stays retryable', async () => {
+    // Getting this backwards would fail-fast healthy runs, so the classifier
+    // must only ever recognise reasons it was explicitly taught.
+    await expect(nonRetryablePublicationReason('some_future_reason')).resolves.toBeUndefined();
+    await expect(nonRetryablePublicationReason('')).resolves.toBeUndefined();
+    await expect(nonRetryablePublicationReason('draft_pr_')).resolves.toBeUndefined();
+    await expect(nonRetryablePublicationReason('DRAFT_PR_NO-COMMITS')).resolves.toBeUndefined();
+  });
+
+  it.each([
+
     [
       'publication_snapshot_incoherent',
       'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
