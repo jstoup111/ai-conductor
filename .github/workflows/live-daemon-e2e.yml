@@ -61,4 +61,4 @@ jobs:
         run: npm run smoke
         working-directory: src/conductor
         env:
-          SMOKE_MODE: gate
+          SMOKE_MODE: ${{ inputs.require_credentials && 'gate' || 'advisory' }}

@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createVitest } from 'vitest/node';
 
 import type { SmokeCapability } from '../smoke-capability.js';
-import { runSmoke } from '../smoke-runner.js';
+import { parseSmokeCapabilityDeclaration, runSmoke } from '../smoke-runner.js';
 
 const structuralRoot = dirname(fileURLToPath(import.meta.url));
 const conductorRoot = join(structuralRoot, '../..');
@@ -34,6 +34,15 @@ describe('structural: smoke test entry point', () => {
     );
 
     expect(outcome).toBe('Smoke discovery found no test files:0');
+  });
+
+  it('names a discovered file and its invalid capability literal', () => {
+    const file = 'test/smoke/invalid-capability.smoke.test.ts';
+
+    expect(() => parseSmokeCapabilityDeclaration(
+      file,
+      `declareSmokeCapability('${file}', 'networked');`,
+    )).toThrow(`Smoke file ${file} declares invalid capability networked`);
   });
 
   it('applies per-file capability decisions, records skips, and requires credentialed execution in gate mode', async () => {

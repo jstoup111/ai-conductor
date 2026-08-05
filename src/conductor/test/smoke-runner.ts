@@ -7,6 +7,7 @@ import { execa } from 'execa';
 import { createVitest } from 'vitest/node';
 
 import {
+  SMOKE_CAPABILITIES,
   assertGateCredentialedExecution,
   assertSmokeDiscovery,
   emitSmokeOutcomeLedger,
@@ -30,6 +31,21 @@ export interface SmokeRunDependencies {
   hasCommand?: (command: string) => boolean;
   environment?: Readonly<Record<string, string | undefined>>;
   emit?: (line: string) => void;
+}
+
+/** Parses one discovered smoke file's declaration and enforces the closed capability set. */
+export function parseSmokeCapabilityDeclaration(
+  file: string,
+  source: string,
+): SmokeCapability {
+  const match = source.match(/declareSmokeCapability\(\s*['\"]([^'\"]+)['\"]\s*,\s*['\"]([^'\"]+)['\"]\s*\)/);
+  if (match === null || match[1] !== file) {
+    throw new Error(`Smoke file ${file} declares no capability`);
+  }
+  if (!SMOKE_CAPABILITIES.includes(match[2] as SmokeCapability)) {
+    throw new Error(`Smoke file ${file} declares invalid capability ${match[2]}`);
+  }
+  return match[2] as SmokeCapability;
 }
 
 /** Runs each discovered smoke file according to its declared capability. */
@@ -102,11 +118,7 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
     return Promise.all(files.map(async ({ moduleId }) => {
       const file = moduleId.slice(process.cwd().length + 1).replaceAll('\\', '/');
       const source = await readFile(moduleId, 'utf8');
-      const match = source.match(/declareSmokeCapability\(\s*['"]([^'"]+)['"]\s*,\s*['"](hermetic|toolchain|credentialed)['"]\s*\)/);
-      if (match === null || match[1] !== file) {
-        throw new Error(`Smoke file ${file} declares no capability`);
-      }
-      return { file, capability: match[2] as SmokeCapability };
+      return { file, capability: parseSmokeCapabilityDeclaration(file, source) };
     }));
   } finally {
     await vitest.close();

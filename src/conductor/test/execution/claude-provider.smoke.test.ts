@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution/claude-provider.js';
 import { declareSmokeCapability } from '../smoke-capability.js';
+import { unauthenticatedClaudeEnvironment } from './claude-provider-smoke-env.js';
 
 declareSmokeCapability('test/execution/claude-provider.smoke.test.ts', 'credentialed');
 
@@ -77,7 +78,7 @@ describe.skipIf(!shouldRunAuthTest)('claude CLI auth-failure signature (real bin
       try {
         const result = await execa('claude', ['-p', 'ping', '--print'], {
           reject: false,
-          env: { ...process.env, CLAUDE_CONFIG_DIR: emptyConfigDir },
+          env: unauthenticatedClaudeEnvironment(process.env, emptyConfigDir),
         });
 
         // Combine stdout + stderr, same as ClaudeProvider.invoke does.

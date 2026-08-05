@@ -100,7 +100,8 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/provider:\s*\[\s*claude\s*\]/);
     expect(workflow).toMatch(/inputs\.require_credentials/);
     expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(workflow).toMatch(/npx\s+vitest\s+run[^\n]*daemon-e2e-live\.smoke\.test\.ts/);
+    expect(workflow).toMatch(/npm\s+run\s+smoke/);
+    expect(workflow).toMatch(/SMOKE_MODE:\s*\$\{\{\s*inputs\.require_credentials\s*&&\s*'gate'\s*\|\|\s*'advisory'\s*\}\}/);
 
     const ciGate = ci.slice(ci.indexOf('ci-gate:'));
     expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
