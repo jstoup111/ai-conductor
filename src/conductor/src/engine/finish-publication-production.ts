@@ -21,6 +21,7 @@ import {
 import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
+  makeProductionFinishRecordRunners,
   type FinishRecordRunners,
 } from './finish-record-cli.js';
 import {
@@ -135,6 +136,11 @@ export function createProductionFinishPublicationCoordinator(
   const pipelineDir = dirname(deps.stateFilePath);
   const writeShippedRecord = deps.writeShippedRecord ?? dispatchShippedRecord;
   const recordFinish = deps.recordFinish ?? dispatchFinishRecord;
+  // finish-record's own default is a fail-closed no-op reserved for tests that
+  // assert zero gh/git spawns. Forwarding an absent bundle handed that no-op to
+  // production, so every `record_outcome` attempt refused with "runGh not
+  // implemented" and burned the FINISH retry budget instead of recording.
+  const finishRecordRunners = deps.finishRecordRunners ?? makeProductionFinishRecordRunners();
   // A real provider session is expensive. Retain terminal prose verdicts for
   // the exact observed title/body revision; a changed revision earns one new
   // session, while an unchanged deficient one cannot burn retries.
@@ -314,7 +320,7 @@ export function createProductionFinishPublicationCoordinator(
                 ? { kind: 'record', choice: 'pr', prUrl: request.prUrl, pipelineDir }
                 : { kind: 'record', choice: 'keep', pipelineDir },
               deps.projectRoot,
-              deps.finishRecordRunners,
+              finishRecordRunners,
             );
           },
         },
