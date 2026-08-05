@@ -121,14 +121,14 @@ jobs:
   smoke:
     needs: classify
     if: ${{ needs.classify.outputs.publishable == 'true' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Reserve the release smoke gate
-        run: echo 'Release classification is publishable; the live smoke gate runs here.'
+    uses: ./.github/workflows/live-daemon-e2e.yml
+    secrets: inherit
+    with:
+      require_credentials: true
 
   publish:
     needs: [classify, smoke]
-    if: ${{ needs.classify.outputs.publishable == 'true' }}
+    if: ${{ needs.classify.outputs.publishable == 'true' && needs.smoke.result == 'success' }}
     runs-on: ubuntu-latest
     concurrency:
       group: release-publisher

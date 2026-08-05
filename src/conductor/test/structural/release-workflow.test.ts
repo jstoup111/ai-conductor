@@ -31,8 +31,14 @@ describe('structural: release workflow', () => {
       .toBe('${{ steps.classify.outputs.publishable }}');
     expect(smoke.needs).toBe('classify');
     expect(String(smoke.if)).toMatch(/needs\.classify\.outputs\.publishable\s*==\s*'true'/);
+    expect(smoke.uses).toBe('./.github/workflows/live-daemon-e2e.yml');
+    expect(smoke.secrets).toBe('inherit');
+    expect(job(smoke.with, 'smoke inputs').require_credentials).toBe(true);
     expect(publish.needs).toEqual(expect.arrayContaining(['classify', 'smoke']));
     expect(String(publish.if)).toMatch(/needs\.classify\.outputs\.publishable\s*==\s*'true'/);
+    expect(String(publish.if)).toMatch(/needs\.smoke\.result\s*==\s*'success'/);
+    expect(String(publish.if)).not.toMatch(/(?:cancelled|timedout)/i);
+    expect(String(publish.if)).not.toMatch(/failure\(\)|cancelled\(\)|always\(\)/);
     expect(source).toContain('runReleasePublisherAction');
   });
 });
