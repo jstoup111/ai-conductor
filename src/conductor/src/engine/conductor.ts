@@ -149,6 +149,7 @@ import {
   type CompletionContext,
   ACCEPTANCE_SPECS_RED_EVIDENCE,
   removeBuildReviewVerdict,
+  uncommittedPathsOrNull,
 } from './artifacts.js';
 import { STEP_SKILL_INVOCATIONS } from './skill-invocation.js';
 import { selfHealAcceptanceRed, type AcceptanceRedExec } from './acceptance-red-runner.js';
@@ -1445,6 +1446,17 @@ export class Conductor {
       featureDesc: state.feature_desc,
       config: this.config,
       getHeadSha: () => currentCommitSha(this.projectRoot),
+      worktreeStatus: async () => {
+        try {
+          const { stdout } = await this.git(
+            ['status', '--porcelain', '--untracked-files=all'],
+            { cwd: this.projectRoot },
+          );
+          return stdout;
+        } catch {
+          return null;
+        }
+      },
       shipmentEvidence: this.shipmentEvidence,
       daemon: this.daemon,
       isHeadPushed: async () => {
@@ -6320,7 +6332,11 @@ export class Conductor {
               // code path) so the run proceeds to `build_review`, and record
               // which plan task ids were left unresolved so an operator can
               // still see the gap in `conduct-state.json`.
-              if (step.name === 'build' && anyAttemptMovedHead) {
+              if (
+                step.name === 'build' &&
+                anyAttemptMovedHead &&
+                (await uncommittedPathsOrNull(await this.completionCtx(state))) === null
+              ) {
                 let routedReason: string | undefined;
                 try {
                   const statusPath = join(this.projectRoot, '.pipeline/task-status.json');
@@ -7218,6 +7234,16 @@ export class Conductor {
               join(this.projectRoot, LOOP_HALT_MARKER),
               'utf-8',
             ).catch(() => null);
+            const uncommittedPaths = await uncommittedPathsOrNull(
+              await this.completionCtx(state),
+            );
+            const uncommittedPathsReason = uncommittedPaths
+              ? `${uncommittedPaths.length} uncommitted paths: ${uncommittedPaths
+                  .slice(0, 3)
+                  .join(', ')}${
+                  uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : ''
+                }`
+              : undefined;
             // #569 Task 5: a no_task_progress build stall is a more specific
             // and actionable diagnosis than a generic unchanged-input note,
             // so it takes precedence over `unchangedInputNote` (but never
@@ -7226,15 +7252,17 @@ export class Conductor {
             const reason =
               existingHalt && existingHalt.trim().length > 0
                 ? existingHalt.trim()
-                : acceptanceRedHealFailureReason
-                  ? acceptanceRedHealFailureReason
-                  : lastBuildStallReason
-                    ? lastBuildStallReason
-                    : graderDispatchFailureReason
-                      ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
-                      : unchangedInputNote
-                        ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
-                        : `step '${step.name}' failed in auto mode (retries exhausted)`;
+                : uncommittedPathsReason
+                  ? uncommittedPathsReason
+                  : acceptanceRedHealFailureReason
+                    ? acceptanceRedHealFailureReason
+                    : lastBuildStallReason
+                      ? lastBuildStallReason
+                      : graderDispatchFailureReason
+                        ? `${graderDispatchFailureReason} (retries exhausted with backoff — this is an infrastructure failure, not a code-quality rejection; the build's completed work is intact)`
+                        : unchangedInputNote
+                          ? `step '${step.name}' failed in auto mode: ${unchangedInputNote}`
+                          : `step '${step.name}' failed in auto mode (retries exhausted)`;
             if (!existingHalt || existingHalt.trim().length === 0) {
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
             }
@@ -8927,7 +8955,7 @@ export function buildRemediationHint(
 export function buildRetryHint(
   step: StepName,
   reason: string | undefined,
-  missing?: 'recording' | 'presentation' | 'other',
+  missing?: 'recording' | 'presentation' | 'uncommitted' | 'other',
   pipelineDirArg?: string,
 ): string {
   const r = reason ?? 'unknown';
@@ -8979,6 +9007,12 @@ export function buildRetryHint(
     return `Previous attempt did not satisfy the completion check: ${r}. Finish the work now.`;
   }
   if (step === 'build') {
+    if (missing === 'uncommitted') {
+      return (
+        `Previous attempt did not satisfy the completion check: ${r}. ` +
+        'Commit the uncommitted paths, then re-run the build step.'
+      );
+    }
     if (/tasks? not completed/i.test(r)) {
       return (
         `Previous attempt did not satisfy the completion check: ${r}. ` +

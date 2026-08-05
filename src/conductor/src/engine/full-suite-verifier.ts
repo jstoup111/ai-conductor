@@ -27,6 +27,7 @@ import {
   type FullSuiteExecutionFailure,
   type FullSuiteExecutionResult,
 } from './full-suite-executor.js';
+import { worktreeStatus } from './worktree-shared.js';
 import type { TestSuiteConfig } from '../types/config.js';
 
 export type FullSuiteStaleReason =
@@ -96,6 +97,7 @@ export interface FullSuiteLockOptions {
 interface FullSuiteVerificationContext {
   testSuite: TestSuiteConfig;
   fingerprint: FullSuiteFingerprint;
+  worktreeClean?: boolean;
 }
 
 type FullSuiteInspectionFailure = Extract<FullSuiteInspectionResult, { status: 'FAILED' }> & {
@@ -588,12 +590,12 @@ export class FullSuiteVerifier {
         return { status: 'REUSED', evidence: resolved.inspection.evidence };
       }
 
-      const { testSuite, fingerprint } = resolved.context;
+      const { testSuite, fingerprint, worktreeClean } = resolved.context;
       const freshness = resolved.inspection;
       const secretValues = declaredEnvironmentValues(testSuite, environment);
       const execution = await execute({ projectRoot, testSuite, environment });
       if (!execution.ok) {
-        const evidence = buildFailEvidence(fingerprint, execution);
+        const evidence = buildFailEvidence(fingerprint, execution, worktreeClean);
         try {
           await writeEvidence(projectRoot, evidence, secretValues);
         } catch {
@@ -647,6 +649,7 @@ export class FullSuiteVerifier {
         fingerprint: fingerprint.digest,
         categoryFingerprints: fingerprint.categoryFingerprints,
         provenanceHeadSha: fingerprint.headSha,
+        ...(worktreeClean === undefined ? {} : { worktreeClean }),
         command: execution.command,
         workingDirectory: execution.cwd,
         startedAt: execution.startedAt,
@@ -746,7 +749,11 @@ export class FullSuiteVerifier {
         };
       }
 
-      const context = { testSuite, fingerprint: fingerprintResult.fingerprint };
+      const context = {
+        testSuite,
+        fingerprint: fingerprintResult.fingerprint,
+        worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot),
+      };
       const persisted = await readEvidence(projectRoot);
       if (!persisted.usable) {
         if (persisted.reason === 'io_error') {
@@ -791,12 +798,14 @@ export class FullSuiteVerifier {
 function buildFailEvidence(
   fingerprint: FullSuiteFingerprint,
   execution: FullSuiteExecutionFailure,
+  worktreeClean: boolean | undefined,
 ): FullSuiteFailEvidence {
   const common = {
     version: FULL_SUITE_EVIDENCE_VERSION,
     outcome: 'FAIL' as const,
     fingerprint: fingerprint.digest,
     provenanceHeadSha: fingerprint.headSha,
+    ...(worktreeClean === undefined ? {} : { worktreeClean }),
     command: execution.command,
     workingDirectory: execution.cwd,
     startedAt: execution.startedAt,
@@ -819,6 +828,16 @@ function buildFailEvidence(
     exitCode: execution.exitCode,
     signal: execution.signal,
   };
+}
+
+async function fingerprintTimeWorktreeCleanliness(
+  projectRoot: string,
+): Promise<boolean | undefined> {
+  try {
+    return (await worktreeStatus(projectRoot)).length === 0;
+  } catch {
+    return undefined;
+  }
 }
 
 function buildPreflightFailEvidence(

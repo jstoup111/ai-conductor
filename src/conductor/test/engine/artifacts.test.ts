@@ -4,6 +4,8 @@ import { join, dirname, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
 import { execa } from 'execa';
+import { Conductor, type StepRunner } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -78,6 +80,7 @@ import {
   BUILD_REVIEW_VERDICT,
   removeBuildReviewVerdict,
   PR_BODY_REGEN_ATTEMPT_MARKER,
+  uncommittedPathsOrNull,
 } from '../../src/engine/artifacts.js';
 import type {
   CompletionResult,
@@ -1755,6 +1758,31 @@ describe('engine/artifacts', () => {
       expect(result).toEqual({ done: true });
     });
 
+    it('withholds legacy fallback completion for a dirty worktree', async () => {
+      await writeAllCompleteTaskStatus();
+
+      const result = await checkStepCompletion(dir, 'build', {
+        worktreeStatus: async () => ' M src/legacy-dirty.ts\n',
+      });
+
+      expect(result).toMatchObject({ done: false, missing: 'uncommitted' });
+      expect(result.reason).toContain('src/legacy-dirty.ts');
+    });
+
+    it.each([
+      ['an absent probe', undefined],
+      ['a throwing probe', async () => { throw new Error('unavailable'); }],
+      ['a null probe', async () => null],
+    ])('keeps legacy fallback completion fail-open for %s', async (_caseName, worktreeStatus) => {
+      await writeAllCompleteTaskStatus();
+
+      const result = await checkStepCompletion(dir, 'build', {
+        ...(worktreeStatus ? { worktreeStatus } : {}),
+      });
+
+      expect(result).toEqual({ done: true });
+    });
+
     // NEW TESTS: build predicate recomputes from seeded state + evidence
     describe('reworked build predicate: seed + derive', () => {
       async function writePlan(content: string) {
@@ -2010,6 +2038,224 @@ describe('engine/artifacts', () => {
         const result = await checkStepCompletion(dir, 'build', ctx);
 
         expect(result).toEqual({ done: true });
+      });
+
+      it('completes a no-op build when prior Task commits resolve every task and ignored .pipeline residue leaves porcelain empty', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, '.gitignore'), '.pipeline/\n');
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', '.gitignore', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'chore: initialize fixture'], { cwd: dir });
+
+        await writePlan(
+          '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n',
+        );
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        for (const id of ['1', '2']) {
+          await writeFile(join(dir, `task-${id}.txt`), `${id}\n`);
+          await execa('git', ['add', `task-${id}.txt`], { cwd: dir });
+          await execa('git', ['commit', '-m', `feat: finish task ${id}\n\nTask: ${id}\n`], { cwd: dir });
+        }
+
+        // Rows remain pending and are intentionally gitignored; the prior
+        // Task commits resolve the plan, while actual porcelain proves this
+        // ignored untracked residue does not over-broaden the cleanliness gate.
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'pending' },
+          { id: '2', name: 'Second task', status: 'pending' },
+        ]);
+        const worktreeStatus = async () =>
+          (await execa('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: dir })).stdout;
+
+        expect(await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
+          worktreeStatus,
+        })).toEqual({ done: true });
+      });
+
+      it('withholds build completion when all tasks resolve but the worktree has an uncommitted path', async () => {
+        await writePlan('### Task 1: First task\n**Story:** 1\n');
+        await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
+          worktreeStatus: async () => ' M src/a.ts\n',
+        });
+
+        expect(result.done).toBe(false);
+        const expectedMissing: CompletionResult['missing'] = 'uncommitted';
+        expect(result.missing).toBe(expectedMissing);
+        expect(result.reason).toContain('uncommitted');
+        expect(result.reason).toContain('src/a.ts');
+      });
+
+      describe('dirty-worktree predicate precedence', () => {
+        function dirtyWorktreeStatus() {
+          return vi.fn(async () => ' M src/dirty.ts\n');
+        }
+
+        it('keeps the halt-marker reason when the worktree is dirty', async () => {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+          await createFile(HALT_MARKER, 'awaiting user input');
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/halt-user-input-required/);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('keeps the missing-plan reason when the worktree is dirty', async () => {
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/missing.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/plan|missing|unreadable/i);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('keeps the empty-plan reason when the worktree is dirty', async () => {
+          await writePlan('# Empty Plan\n\nNo tasks defined.\n');
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/empty|no tasks/i);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('keeps the unresolved-task reason when the worktree is dirty', async () => {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'pending' }]);
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result.reason).toMatch(/tasks pending\/not completed/);
+          expect(result.missing).toBeUndefined();
+          expect(worktreeStatus).not.toHaveBeenCalled();
+        });
+
+        it('reports missing: uncommitted only after every earlier predicate branch passes', async () => {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+          const worktreeStatus = dirtyWorktreeStatus();
+
+          const result = await checkStepCompletion(dir, 'build', {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+            worktreeStatus,
+          });
+
+          expect(result).toMatchObject({
+            done: false,
+            missing: 'uncommitted',
+          });
+          expect(result.reason).toContain('src/dirty.ts');
+          expect(worktreeStatus).toHaveBeenCalledOnce();
+        });
+      });
+
+      describe('Task 5: probe-absent contexts preserve mocked-dispatch behavior', () => {
+        async function allTasksResolvedContext() {
+          await writePlan('### Task 1: First task\n**Story:** 1\n');
+          await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
+          return {
+            projectRoot: dir,
+            planPath: join(dir, '.docs/plans/phase-1.md'),
+          };
+        }
+
+        it.each([
+          ['has no probe', undefined, true],
+          ['has a throwing probe', async () => { throw new Error('unavailable'); }, true],
+          ['has a null-returning probe', async () => null, true],
+          ['reports a nonempty worktree', async () => ' M src/uncommitted.ts\n', false],
+        ])('completes only when the resolved-task context %s', async (_caseName, worktreeStatus, done) => {
+          const context = await allTasksResolvedContext();
+          const result = await checkStepCompletion(dir, 'build', {
+            ...context,
+            ...(worktreeStatus ? { worktreeStatus } : {}),
+          });
+
+          expect(result.done).toBe(done);
+        });
+
+        it('does not consult the worktree probe during a verifyArtifacts:false mocked dispatch', async () => {
+          const statusProbe = vi.fn(async () => ' M src/uncommitted.ts\n');
+          const runner: StepRunner = {
+            run: vi.fn(async () => ({ success: true })),
+          };
+          const conductor = new Conductor({
+            stateFilePath: join(dir, 'conduct-state.json'),
+            stepRunner: runner,
+            events: new ConductorEventEmitter(),
+            projectRoot: dir,
+            verifyArtifacts: false,
+            git: vi.fn(async (args: string[]) => {
+              if (args.join(' ') === 'status --porcelain --untracked-files=all') {
+                return { stdout: await statusProbe(), stderr: '', exitCode: 0 };
+              }
+              return { stdout: '', stderr: '', exitCode: 0 };
+            }),
+          });
+
+          await conductor.run();
+
+          expect(statusProbe).not.toHaveBeenCalled();
+        });
+      });
+
+      it('truncates dirty-worktree completion feedback after the first three paths', async () => {
+        const taskHeadings = Array.from(
+          { length: 7 },
+          (_, index) => `### Task ${index + 1}: Task ${index + 1}\n**Story:** ${index + 1}\n`,
+        ).join('\n');
+        await writePlan(taskHeadings);
+        await writeTasks(
+          Array.from(
+            { length: 7 },
+            (_, index) => ({ id: String(index + 1), name: `Task ${index + 1}`, status: 'completed' }),
+          ),
+        );
+
+        const result = await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
+          worktreeStatus: async () =>
+            ' M src/a.ts\n M src/b.ts\n M src/c.ts\n M src/d.ts\n M src/e.ts\n M src/f.ts\n M src/g.ts\n',
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.reason).toContain('src/a.ts, src/b.ts, src/c.ts');
+        expect(result.reason).toContain('(+4 more)');
       });
 
       // Task 5: mixed-evidence coverage — some tasks resolved via
@@ -4331,6 +4577,31 @@ Task 1 → Task 2
       const result = await checkStepCompletion(dir, 'build_review');
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/no build-review verdict/i);
+    });
+  });
+
+  describe('uncommittedPathsOrNull', () => {
+    it.each([
+      ['an absent probe', {}],
+      ['an empty probe result', { worktreeStatus: async () => '' }],
+      ['a null probe result', { worktreeStatus: async () => null }],
+      ['a throwing probe', { worktreeStatus: async () => { throw new Error('unavailable'); } }],
+    ])('fails open for %s', async (_caseName, ctx) => {
+      await expect(uncommittedPathsOrNull(ctx)).resolves.toBeNull();
+    });
+
+    it('returns ordered paths from porcelain statuses, taking a rename destination', async () => {
+      await expect(
+        uncommittedPathsOrNull({
+          worktreeStatus: async () => 'MM src/changed.ts\n M docs/a -> b.md\nA  staged.ts\n?? new-file.ts\nR  orig-name.ts -> new-name.ts\n',
+        }),
+      ).resolves.toEqual([
+        'src/changed.ts',
+        'docs/a -> b.md',
+        'staged.ts',
+        'new-file.ts',
+        'new-name.ts',
+      ]);
     });
   });
 });

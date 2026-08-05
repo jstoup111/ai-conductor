@@ -76,6 +76,10 @@ async function buildFixture(featureFiles: Record<string, string>): Promise<strin
   await g(['config', 'user.email', 't@t.com']);
   await g(['config', 'user.name', 'T']);
 
+  // The conductor writes its own state under .pipeline/ while running. Keep
+  // that fixture-owned state out of the real worktree-status probe so this
+  // test reaches the wiring verification group with a genuinely clean tree.
+  await writeFile(join(workDir, '.gitignore'), '.pipeline/\n');
   await mkdir(join(workDir, 'src'), { recursive: true });
   await writeFile(join(workDir, 'src', 'existing.ts'), 'export function existing() {}\n');
   await g(['add', '.']);

@@ -760,10 +760,11 @@ export interface CompletionResult {
    * body). That distinction is load-bearing: a publication defect is fixed by
    * rewriting the PR body, so the loop re-dispatches `finish` rather than
    * spending an LLM remediation turn that can only launder it into a rebuild.
-   * 'other' covers everything else. Undefined for backward compat (done:true,
-   * or predicates that don't classify).
+   * 'uncommitted' marks a build blocked by dirty worktree paths; 'other'
+   * covers everything else. Undefined for backward compat (done:true, or
+   * predicates that don't classify).
    */
-  missing?: 'recording' | 'presentation' | 'other';
+  missing?: 'recording' | 'presentation' | 'uncommitted' | 'other';
   /**
    * Trace of the per-attempt verdict-freshness check (Task 1,
    * session-fresh-verdict-artifacts). Populated by the three dispatched-judge
@@ -895,6 +896,13 @@ export interface CompletionContext {
    * environments without git behave exactly as before the guard existed.
    */
   getHeadSha?: () => Promise<string | null>;
+  /**
+   * Injectable working-tree status reader. Returns `git status --porcelain`
+   * output, or null when status cannot be determined. Absent/null/empty or a
+   * thrown probe fail open, so environments without git retain their prior
+   * completion behavior.
+   */
+  worktreeStatus?: () => Promise<string | null>;
   /** Whether the engine is running in daemon mode. Affects finish convergence (Story 2). */
   daemon?: boolean;
   /**
@@ -977,6 +985,47 @@ export interface CompletionContext {
    * so real callers need not wire this; tests inject a scratch-repo runner.
    */
   git?: GitRunner;
+}
+
+/**
+ * Return dirty paths reported by the optional working-tree probe, or null
+ * when the probe cannot establish a nonempty status. Renames report their
+ * destination path so callers can inspect the current worktree filename.
+ */
+export async function uncommittedPathsOrNull(ctx: CompletionContext): Promise<string[] | null> {
+  if (!ctx.worktreeStatus) return null;
+
+  try {
+    const porcelain = await ctx.worktreeStatus();
+    if (!porcelain) return null;
+
+    return porcelain
+      .split(/\r?\n/)
+      .filter((line) => line.length > 0)
+      .map((line) => {
+        const path = line.slice(3);
+        if (!/[RC]/.test(line.slice(0, 2))) return path;
+        const renameSeparator = path.indexOf(' -> ');
+        return renameSeparator === -1 ? path : path.slice(renameSeparator + 4);
+      });
+  } catch {
+    return null;
+  }
+}
+
+async function dirtyWorktreeCompletionOrNull(
+  ctx: CompletionContext,
+): Promise<CompletionResult | null> {
+  const uncommittedPaths = await uncommittedPathsOrNull(ctx);
+  if (!uncommittedPaths) return null;
+
+  const names = uncommittedPaths.slice(0, 3).join(', ');
+  const more = uncommittedPaths.length > 3 ? ` (+${uncommittedPaths.length - 3} more)` : '';
+  return {
+    done: false,
+    reason: `${uncommittedPaths.length} uncommitted paths: ${names}${more}`,
+    missing: 'uncommitted',
+  };
 }
 
 async function verifyDurableShipmentEvidence(
@@ -1908,6 +1957,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           reason: `${unresolved.length}/${planTaskIds.length} tasks pending/not completed: ${names}${more}`,
         };
       }
+
+      const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
+      if (dirtyWorktree) return dirtyWorktree;
       return { done: true };
     }
 
@@ -1943,6 +1995,8 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
         reason: `${incomplete.length}/${tasks.length} tasks not completed: ${names}${more}`,
       };
     }
+    const dirtyWorktree = await dirtyWorktreeCompletionOrNull(ctx);
+    if (dirtyWorktree) return dirtyWorktree;
     return { done: true };
   },
 

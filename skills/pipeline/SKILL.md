@@ -424,10 +424,14 @@ the gate.
 
 ### Retry Pre-Check (Connection Interruption Recovery)
 
-Before re-dispatching a task after a connection interruption or session resume:
-1. Check for uncommitted changes (`git status`) — work may exist but not be committed
-2. Check recent commits (`git log --oneline -3`) — subagent may have committed before disconnect
-3. If work exists, verify it (run tests) before re-doing — do not blindly re-dispatch
+The engine mechanically evaluates the working tree before BUILD completion and before an
+exhausted build may route on commit movement. When its status probe reports dirty paths, the
+tree is not eligible to complete or route; the halt names those paths until they are committed or
+discarded. A missing or failed probe preserves the legacy fail-open behavior.
+
+For connection interruption or session-resume diagnosis, inspect recent commits
+(`git log --oneline -3`) and verify existing work before redoing it. Do not rely on an implementer
+remembering a prompt-level dirty-tree check: the engine enforces the condition.
 
 This prevents wasting a full subagent dispatch to redo work that was already completed.
 

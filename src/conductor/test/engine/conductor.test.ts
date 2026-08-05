@@ -27,6 +27,7 @@ vi.mock('../../src/engine/rebase.js', async () => {
   };
 });
 import { execa } from 'execa';
+import * as projectPrelude from '../../src/engine/project-prelude.js';
 import type { ConductState, ConductorEvent, StepGroup, Track } from '../../src/types/index.js';
 import type { ConductStateStore } from '../../src/engine/conduct-state-store.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -64,6 +65,8 @@ import { createTaskEvidence } from '../../src/engine/task-evidence.js';
 import { AuditTrailWriter } from '../../src/engine/audit-trail.js';
 import { haltMarkerExists } from '../../src/engine/task-progress.js';
 import { writeVerdict, type GateVerdict } from '../../src/engine/gate-verdicts.js';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import * as rebaseModule from '../../src/engine/rebase.js';
 import {
   CLAUDE_MODEL_POLICY,
   CODEX_MODEL_POLICY,
@@ -11247,6 +11250,13 @@ describe('buildRetryHint', () => {
     expect(hint).toContain('.docs/plans');
   });
 
+  it('names and tells the next BUILD dispatch to commit uncommitted paths', () => {
+    const reason = 'uncommitted paths: src/engine/conductor.ts, src/engine/artifacts.ts';
+    const hint = buildRetryHint('build', reason, 'uncommitted');
+
+    expect(hint).toMatch(/^(?=[\s\S]*src\/engine\/conductor\.ts)(?=[\s\S]*src\/engine\/artifacts\.ts)(?=[\s\S]*\bcommit (the )?uncommitted paths\b)(?![\s\S]*Finish the work now)[\s\S]*$/i);
+  });
+
   it('cites manual-test-record for a missing manual_test marker', () => {
     const hint = buildRetryHint(
       'manual_test',
@@ -11820,6 +11830,226 @@ describe('build-step stall circuit breaker', () => {
     }
   });
 
+  it('does not route the exhausted commit-movement escape when the final worktree probe is dirty', async () => {
+    // This is deliberately the narrow owning seam for the escape: the final
+    // retry moves HEAD (setting anyAttemptMovedHead), then leaves a tracked
+    // file dirty and exhausts the fixed retry budget.
+    const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+    vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
+    const git: GitRunner = async (args, { cwd }) => {
+      const result = await execa('git', args, { cwd });
+      return { stdout: result.stdout };
+    };
+    let headSha = 'base-head';
+    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
+      async () => headSha,
+    );
+    try {
+      await seedAllArtifactsExceptTaskStatus();
+      await writeTaskStatus(0, 1);
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'test: seed build retry fixture'], { cwd: dir });
+      headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+      let buildAttempts = 0;
+      const stepsRun: StepName[] = [];
+      const completedBuilds: unknown[] = [];
+      const unattributedProgress: Array<{ attempt: number }> = [];
+      events.on('step_completed', (event) => {
+        if (event.type === 'step_completed' && event.step === 'build' && event.status === 'done') {
+          completedBuilds.push(event);
+        }
+      });
+      events.on('unattributed_progress', ((event: unknown) => {
+        const progress = event as { type: string; attempt: number };
+        if (progress.type === 'unattributed_progress') unattributedProgress.push(progress);
+      }) as never);
+      const runner: StepRunner = {
+        run: vi.fn(async (step) => {
+          stepsRun.push(step);
+          if (step === 'build') {
+            buildAttempts++;
+            if (buildAttempts === 1) {
+              await mkdir(join(dir, 'src'), { recursive: true });
+              await writeFile(join(dir, 'src/landed.ts'), 'export const landed = true;\n');
+              await execa('git', ['add', 'src/landed.ts'], { cwd: dir });
+              await execa('git', ['commit', '-m', 'feat: land unattributed work'], { cwd: dir });
+              headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+            } else {
+              // The exhaustion escape only becomes eligible when this final
+              // attempt moves HEAD. Commit work without a Task: trailer,
+              // refresh the mocked HEAD, then leave tracked residue behind.
+              await writeFile(join(dir, 'src/landed.ts'), 'export const landed = false;\n');
+              await execa('git', ['add', 'src/landed.ts'], { cwd: dir });
+              await execa('git', ['commit', '-m', 'feat: final unattributed work'], { cwd: dir });
+              headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+              await writeFile(join(dir, 'src/landed.ts'), 'export const landed = true;\n');
+            }
+          }
+          return { success: true };
+        }),
+      };
+      const onRecovery = vi.fn().mockResolvedValue('quit' as const);
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: runner,
+        events,
+        projectRoot: dir,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        onRecovery,
+        escalateBuildFailure: async () => ({}),
+        git,
+      });
+
+      await conductor.run();
+
+      expect(buildAttempts).toBe(2);
+      expect(unattributedProgress.map(({ attempt }) => ({ attempt }))).toEqual([{ attempt: 2 }]);
+      expect(completedBuilds).toHaveLength(0);
+      expect(stepsRun).not.toContain('build_review');
+      expect(onRecovery).toHaveBeenCalledWith('build', false, expect.any(Object));
+    } finally {
+      currentCommitSha.mockRestore();
+      vi.mocked(execa).mockImplementation(() =>
+        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      );
+    }
+  });
+
+  it('leads a dirty-tree exhaustion HALT with its paths without changing the no-commit-movement remediation HALT', async () => {
+    // The exhaustion escape is reached only when HEAD moved during the retry
+    // loop. Keep the final attempt dirty *and* moving so it does not enter the
+    // separate no_task_progress remediation path below.
+    const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+    vi.mocked(execa).mockImplementation(actualExeca as unknown as typeof execa);
+    const git: GitRunner = async (args, { cwd }) => {
+      const result = await execa('git', args, { cwd });
+      return { stdout: result.stdout };
+    };
+    let headSha = 'base-head';
+    const currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
+      async () => headSha,
+    );
+    try {
+      await seedAllArtifactsExceptTaskStatus();
+      await writeTaskStatus(0, 1);
+      await execa('git', ['init', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await execa('git', ['add', '.'], { cwd: dir });
+      await execa('git', ['commit', '-m', 'test: seed dirty exhaustion fixture'], { cwd: dir });
+      headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+      let dirtyEscapeAttempts = 0;
+      const dirtyEscapeRunner: StepRunner = {
+        run: vi.fn(async (step) => {
+          if (step === 'build') {
+            dirtyEscapeAttempts += 1;
+            const path = `src/attempt-${dirtyEscapeAttempts}.ts`;
+            await mkdir(join(dir, 'src'), { recursive: true });
+            await writeFile(join(dir, path), `export const attempt = ${dirtyEscapeAttempts};\n`);
+            await execa('git', ['add', path], { cwd: dir });
+            await execa('git', ['commit', '-m', `feat: attempt ${dirtyEscapeAttempts}`], { cwd: dir });
+            headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+            if (dirtyEscapeAttempts === 2) {
+              await writeFile(join(dir, path), 'export const attempt = "uncommitted";\n');
+            }
+          }
+          return { success: true };
+        }),
+      };
+      const dirtyEscapeHalts: string[] = [];
+      events.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') dirtyEscapeHalts.push(event.reason);
+      });
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: dirtyEscapeRunner,
+        events,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        escalateBuildFailure: async () => ({}),
+        git,
+      }).run();
+      const dirtyEscapeHalt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
+
+      // Reset only the terminal state from the first scenario. The worktree
+      // remains dirty, but this second run must use the existing no-progress
+      // remediation route rather than the commit-movement escape.
+      await writeState(statePath, {} as ConductState);
+      await writeFile(join(dir, '.pipeline/HALT'), '');
+      const noMovementEvents = new ConductorEventEmitter();
+      const noMovementHalts: string[] = [];
+      noMovementEvents.on('loop_halt', (event) => {
+        if (event.type === 'loop_halt') noMovementHalts.push(event.reason);
+      });
+      let remediationCalls = 0;
+      const noMovementRunner: StepRunner = {
+        run: vi.fn(async (step) => {
+          if (step === 'remediate') {
+            remediationCalls += 1;
+            await writeFile(
+              join(dir, '.pipeline/remediation.json'),
+              JSON.stringify({
+                dispositions: [{
+                  id: 'stall:dirty-tree',
+                  disposition: 'halt',
+                  category: 'product-scope',
+                  rationale: 'The uncommitted repair needs a human decision.',
+                  tasks: [],
+                }],
+              }),
+            );
+          }
+          return { success: true };
+        }),
+      };
+      await new Conductor({
+        stateFilePath: statePath,
+        stepRunner: noMovementRunner,
+        events: noMovementEvents,
+        projectRoot: dir,
+        mode: 'auto',
+        daemon: true,
+        verifyArtifacts: true,
+        maxRetries: 2,
+        escalateBuildFailure: async () => ({}),
+        git,
+      }).run();
+
+      const nonEmptyDirtyEscapeLines = dirtyEscapeHalt.split('\n').filter((line) => line.trim());
+      expect({
+        dirtyEscapeAttempts,
+        dirtyEscapeFirstLine: nonEmptyDirtyEscapeLines[0],
+        dirtyEscapeUsesGenericRetryText: /retries exhausted/i.test(dirtyEscapeHalt),
+        dirtyEscapeHalts: dirtyEscapeHalts.length,
+        remediationCalls,
+        noMovementHalts: noMovementHalts.length,
+        noMovementHalt: await readFile(join(dir, '.pipeline/HALT'), 'utf-8'),
+      }).toMatchObject({
+        dirtyEscapeAttempts: 2,
+        dirtyEscapeFirstLine: expect.stringContaining('src/attempt-2.ts'),
+        dirtyEscapeUsesGenericRetryText: false,
+        dirtyEscapeHalts: 1,
+        remediationCalls: 1,
+        noMovementHalts: 1,
+        noMovementHalt: expect.stringContaining('uncommitted paths:'),
+      });
+    } finally {
+      currentCommitSha.mockRestore();
+      vi.mocked(execa).mockImplementation(() =>
+        Promise.resolve({ stdout: '', stderr: '', exitCode: 0 }) as unknown as ReturnType<typeof execa>,
+      );
+    }
+  });
+
   it('proceeds as succeeded when the interactive REPL finishes the work', async () => {
     await seedAllArtifactsExceptTaskStatus();
     await writeTaskStatus(2, 5); // stalled at 2/5
@@ -12363,6 +12593,65 @@ describe('projectRoot is required', () => {
       // In a non-git directory, it should return null (indeterminate)
       expect(result).toBeNull();
     });
+
+    it('reports porcelain status from a dirty local git worktree', async () => {
+      const actualExeca = (await vi.importActual<typeof import('execa')>('execa')).execa;
+      await actualExeca('git', ['init', '-b', 'main'], { cwd: dir });
+      await actualExeca('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await actualExeca('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+      await writeFile(join(dir, 'tracked.txt'), 'initial\n');
+      await actualExeca('git', ['add', 'tracked.txt'], { cwd: dir });
+      await actualExeca('git', ['commit', '-m', 'test: initial tracked file'], { cwd: dir });
+      await writeFile(join(dir, 'tracked.txt'), 'modified\n');
+      await writeFile(join(dir, 'new.txt'), 'untracked\n');
+
+      const git: GitRunner = async (args, { cwd }) => {
+        const result = await actualExeca('git', args, { cwd });
+        return { stdout: result.stdout };
+      };
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        git,
+      });
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = await (conductor as any)['completionCtx'](state);
+
+      expect(await ctx.worktreeStatus?.()).toBe(' M tracked.txt\n?? new.txt');
+
+      await writeFile(join(dir, 'tracked.txt'), 'initial\n');
+      await rm(join(dir, 'new.txt'));
+      await writeFile(join(dir, '.gitignore'), 'ignored.txt\n');
+      await actualExeca('git', ['add', '.gitignore'], { cwd: dir });
+      await actualExeca('git', ['commit', '-m', 'test: ignore generated file'], { cwd: dir });
+      await writeFile(join(dir, 'ignored.txt'), 'ignored\n');
+
+      expect(await ctx.worktreeStatus?.()).toBe('');
+    });
+
+    it('returns null when the worktree status probe rejects', async () => {
+      const conductor = new Conductor({
+        stateFilePath: statePath,
+        stepRunner: createMockStepRunner(),
+        events,
+        projectRoot: dir,
+        git: async () => {
+          throw new Error('git unavailable');
+        },
+      });
+      const state: ConductState = {
+        worktree: 'pending',
+        session_started_at: Date.now(),
+      } as ConductState;
+      const ctx = await (conductor as any)['completionCtx'](state);
+
+      expect(await ctx.worktreeStatus?.()).toBeNull();
+    });
   });
 });
 
@@ -12821,6 +13110,106 @@ describe('rebase_gate_reverified event (Task 7: Conductor injects capability and
     // TODO: Implement a full test using the seedEvidenceCompleteBuild idiom from
     // test/integration/rebase-loop.test.ts:280-292, running the conductor from the
     // 'rebase' step in daemon mode to verify rebase_gate_reverified events are emitted.
+  });
+});
+
+describe('post-rebase build closure (Task 11)', () => {
+  let dir: string;
+  let statePath: string;
+  let events: ConductorEventEmitter;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'post-rebase-build-closure-'));
+    statePath = join(dir, 'conduct-state.json');
+    events = new ConductorEventEmitter();
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('blocks a reapplied autostash in the post-rebase build closure and preserves conflict halts', async () => {
+    // `rebase-autostash.test.ts` proves git reapplies this residue. This seam
+    // proves the daemon's post-rebase pre-verify does not certify BUILD around it.
+    await mkdir(join(dir, '.docs/plans'), { recursive: true });
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.docs/plans/feature.md'), '# Plan\n\n### Task 1: Commit it\n');
+    await writeFile(join(dir, '.pipeline/task-status.json'), JSON.stringify({
+      tasks: [{ id: 1, status: 'completed' }],
+    }));
+    await writeFile(join(dir, '.pipeline/task-evidence.json'), JSON.stringify({
+      evidenceStamps: { '1': { sha: 'a'.repeat(40), form: 'trailer' } },
+      noEvidenceAttempts: 0,
+      migrationGrandfather: [],
+    }));
+
+    const state = { manual_test: 'skipped' } as ConductState;
+    const git: GitRunner = async (args) => ({
+      stdout: args[0] === 'status' ? ' M src/reapplied.ts\n' : '',
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+      git,
+    });
+    const changed = {
+      kind: 'changed' as const,
+      changedCodePaths: ['src/base.ts'],
+      featureSurface: ['src/**'],
+    };
+    const performRebase = vi.mocked(rebaseModule.performRebase);
+    performRebase.mockResolvedValueOnce(changed);
+
+    try {
+      const closure = await checkStepCompletion(
+        dir,
+        'build',
+        await (conductor as any).completionCtx(state),
+      );
+      await (conductor as any).runRebaseStep(state);
+      const buildVerdict = JSON.parse(
+        await readFile(join(dir, '.pipeline/gates/build.json'), 'utf8'),
+      ) as GateVerdict;
+
+      expect({ closure, buildVerdict }).toMatchObject({
+        closure: {
+          done: false,
+          missing: 'uncommitted',
+          reason: expect.stringContaining('src/reapplied.ts'),
+        },
+        buildVerdict: { satisfied: false },
+      });
+    } finally {
+      performRebase.mockReset();
+      performRebase.mockResolvedValue({ kind: 'noop' });
+    }
+  });
+
+  it('keeps the conflict-halt path unchanged', async () => {
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: createMockStepRunner(),
+      events,
+      projectRoot: dir,
+      daemon: true,
+    });
+    const performRebase = vi.mocked(rebaseModule.performRebase);
+    performRebase.mockResolvedValueOnce({
+      kind: 'conflict_halt',
+      conflicts: ['src/base.ts'],
+      reason: 'conflict remains',
+    });
+
+    try {
+      await (conductor as any).runRebaseStep({ manual_test: 'skipped' } as ConductState);
+      expect(await readFile(join(dir, '.pipeline/HALT'), 'utf8')).toContain('conflict remains');
+    } finally {
+      performRebase.mockReset();
+      performRebase.mockResolvedValue({ kind: 'noop' });
+    }
   });
 });
 
