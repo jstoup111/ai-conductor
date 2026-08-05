@@ -41,6 +41,30 @@ assert_fixture relative-harness-path 1 ':8: harness-path clause' <<'EOF'
 ```
 EOF
 
+assert_fixture consumer-root-conductor-source 1 ':8: harness-path clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+cd "$(git rev-parse --show-toplevel)/src/conductor"
+```
+EOF
+
+assert_fixture consumer-root-hook-source 1 ':8: harness-path clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+cp "$PROJECT_ROOT/.claude/harness/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
+```
+EOF
+
 assert_fixture forced-removal 1 ':8: destructive-git clause' <<'EOF'
 # Changelog
 
@@ -193,6 +217,18 @@ assert_fixture conforming-block 0 'PASS migration block authoring contract' <<'E
 ```bash migration
 "${HARNESS_DIR:?HARNESS_DIR must be set by bin/migrate}/bin/install" --update
 echo "Restart the daemon yourself if it needs new configuration."
+```
+EOF
+
+assert_fixture conforming-harness-hook-source 0 'PASS migration block authoring contract' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+cp "${HARNESS_DIR:?}/hooks/claude/post-commit-derive-feedback.sh" "$PROJECT_ROOT/.git/hooks/post-commit"
 ```
 EOF
 
