@@ -30,7 +30,7 @@ Every config key named above is documented in [configuration](configuration.md).
 
 Note the ordering consequence at levels 2 and 7: a *config* tier override outranks a flat config value,
 but a *policy* tier override sits below every config source. Setting `defaults.model` therefore
-suppresses the policy's `plan: L → fable` promotion.
+suppresses the policy's `plan: L → opus` override.
 
 ## Which chain each field uses
 
@@ -61,27 +61,27 @@ not a tuning knob.
 | `memory` | haiku | gpt-5.6-luna | low | 1 | auto |
 | `assess` | sonnet | gpt-5.6-terra | high | 3 | manual |
 | `explore` | opus | gpt-5.6-sol | high | 3 | manual |
-| `prd` | fable | gpt-5.6-sol | high | 3 | manual |
+| `prd` | opus | gpt-5.6-sol | high | 3 | manual |
 | `complexity` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `stories` | sonnet | gpt-5.6-terra | medium | 3 | manual |
 | `conflict_check` | opus | gpt-5.6-terra | medium | 3 | conditional |
 | `plan` | opus | gpt-5.6-sol | high | 3 | manual |
 | `coherence_check` | sonnet | gpt-5.6-terra | medium | 3 | conditional |
 | `architecture_diagram` | sonnet | gpt-5.6-terra | medium | 3 | auto |
-| `architecture_review` | fable | gpt-5.6-sol | high | 5 | conditional |
+| `architecture_review` | opus | gpt-5.6-sol | high | 5 | conditional |
 | `worktree` | haiku | gpt-5.6-luna | low | 1 | auto |
 | `acceptance_specs` | opus | gpt-5.6-sol | medium | 3 | auto |
 | `build` | sonnet | gpt-5.6-terra | medium | 3 | auto |
-| `build_review` | fable | gpt-5.6-sol | high | 3 | conditional |
+| `build_review` | opus | gpt-5.6-sol | high | 3 | conditional |
 | `wiring_check` | sonnet | gpt-5.6-terra | low | 3 | auto |
 | `test_suite` | sonnet | gpt-5.6-terra | low | 1 | auto |
 | `manual_test` | sonnet | gpt-5.6-terra | medium | 3 | auto |
-| `prd_audit` | fable | gpt-5.6-sol | high | 3 | conditional |
-| `architecture_review_as_built` | fable | gpt-5.6-sol | high | 3 | conditional |
+| `prd_audit` | opus | gpt-5.6-sol | high | 3 | conditional |
+| `architecture_review_as_built` | opus | gpt-5.6-sol | high | 3 | conditional |
 | `retro` | sonnet | gpt-5.6-terra | medium | 3 | manual |
 | `rebase` | opus | gpt-5.6-terra | high | 1 | auto |
 | `finish` | sonnet | gpt-5.6-terra | medium | 6 | auto |
-| `remediate` | fable | gpt-5.6-sol | medium | 3 | auto |
+| `remediate` | opus | gpt-5.6-sol | medium | 3 | auto |
 | `attribution_verify` | opus | gpt-5.6-sol | high | 3 | auto |
 
 Sources: `provider-model-policy.ts:32-59` (Claude models), `:61-88` (Codex models), `:90-117` (efforts),
@@ -116,10 +116,10 @@ Six steps carry policy-level tier overrides. `COMMON_TIER_OVERRIDES`
 | --- | --- | --- | --- | --- |
 | `stories` | effort `low` | — | effort `high` | effort `high` |
 | `explore` | effort `low` | — | — | — |
-| `plan` | effort `medium`, `max_retries` 3 | — | effort `xhigh`, model `fable` | effort `xhigh`, model `gpt-5.6-sol` |
+| `plan` | effort `medium`, `max_retries` 3 | — | effort `xhigh`, model `opus` | effort `xhigh`, model `gpt-5.6-sol` |
 | `acceptance_specs` | — | — | effort `high` | effort `high` |
 | `build` | `max_retries` 3 | — | effort `high` | effort `high` |
-| `conflict_check` | — | — | model `fable` | model `gpt-5.6-sol` |
+| `conflict_check` | — | — | model `opus` | model `gpt-5.6-sol` |
 
 Every other step resolves identically across all three tiers. Which steps a tier *skips* is a separate
 concern — see [steps](steps.md).
@@ -224,9 +224,9 @@ against. Skill pins themselves remain Claude-scoped — see [Skill pins](#skill-
 | `domain-reviewer` | sonnet (<50-line diff), opus (≥50-line diff) | inherits Codex session/spawned-agent config |
 | `evaluator` | sonnet (value objects, pure functions, config, infra) / opus (concurrency, state mutation, security, auth, finance) | inherits Codex session/spawned-agent config |
 | `code-review` | opus | inherits Codex session/spawned-agent config |
-| `debugging` | fable | inherits Codex session/spawned-agent config |
+| `debugging` | opus | inherits Codex session/spawned-agent config |
 | `simplify` | sonnet | inherits Codex session/spawned-agent config |
-| `engineer` | fable | inherits Codex session/spawned-agent config |
+| `engineer` | opus | inherits Codex session/spawned-agent config |
 | `intake` | inherits caller | inherits Codex session/spawned-agent config |
 | `conduct` | haiku | inherits Codex session/spawned-agent config |
 | `pr` | sonnet | inherits Codex session/spawned-agent config |
@@ -251,8 +251,8 @@ collide with the renamed engine row and trip `assertNoDuplicateRowNames`.
 
 A `SKILL.md` may pin `model:` in its frontmatter so an interactive session runs it on the intended model
 regardless of the session's own model. Seven skills currently carry a pin: `assess` (sonnet),
-`architecture-diagram` (sonnet), `prd-audit` (opus), `code-review` (opus), `debugging` (fable),
-`engineer` (fable), and `simplify` (sonnet). Skill frontmatter fields are documented in
+`architecture-diagram` (sonnet), `prd-audit` (opus), `code-review` (opus), `debugging` (opus),
+`engineer` (opus), and `simplify` (sonnet). Skill frontmatter fields are documented in
 [skills](skills.md).
 
 `classifyPinnedSkill` (`src/conductor/src/tools/generate-model-table.ts:144-167`) sorts every skill into
