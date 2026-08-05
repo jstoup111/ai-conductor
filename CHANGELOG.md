@@ -16,6 +16,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 ### Added
 
 - Plan authoring and land now block a task that would hand BUILD a mutation to another feature's sealed DECIDE artifact, routing that amendment back to its owning DECIDE step instead. ([implementation PR #1303](https://github.com/jstoup111/ai-conductor/pull/1303)).
+- The self-host version freeze can track a branch's current VERSION via "latest" or "branch:<name>" instead of only a pinned semver string. ([implementation PR #1058](https://github.com/jstoup111/ai-conductor/pull/1058)).
 
 ### Changed
 
