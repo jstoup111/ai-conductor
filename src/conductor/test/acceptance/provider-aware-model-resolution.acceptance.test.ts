@@ -48,27 +48,27 @@ const CLAUDE_MODELS: Record<StepName, string> = {
   memory: 'haiku',
   assess: 'sonnet',
   explore: 'opus',
-  prd: 'fable',
+  prd: 'opus',
   complexity: 'sonnet',
   stories: 'sonnet',
   conflict_check: 'opus',
   plan: 'opus',
   architecture_diagram: 'sonnet',
-  architecture_review: 'fable',
+  architecture_review: 'opus',
   worktree: 'haiku',
   acceptance_specs: 'opus',
   build: 'sonnet',
-  build_review: 'fable',
+  build_review: 'opus',
   coherence_check: 'sonnet',
   wiring_check: 'sonnet',
   test_suite: 'sonnet',
   manual_test: 'sonnet',
-  prd_audit: 'fable',
-  architecture_review_as_built: 'fable',
+  prd_audit: 'opus',
+  architecture_review_as_built: 'opus',
   retro: 'sonnet',
   rebase: 'opus',
   finish: 'sonnet',
-  remediate: 'fable',
+  remediate: 'opus',
   attribution_verify: 'opus',
 };
 
@@ -158,9 +158,9 @@ const CLAUDE_POLICY: AcceptancePolicy = {
     ...COMMON_TIER_OVERRIDES,
     plan: {
       ...COMMON_TIER_OVERRIDES.plan,
-      L: { effort: 'xhigh', model: 'fable' },
+      L: { effort: 'xhigh', model: 'opus' },
     },
-    conflict_check: { L: { model: 'fable' } },
+    conflict_check: { L: { model: 'opus' } },
   },
   effortOrder: ['low', 'medium', 'high', 'xhigh', 'max'],
   modelEscalationOrder: ['haiku', 'sonnet', 'opus', 'fable'],
@@ -268,9 +268,9 @@ describe('#902 built-in provider policy matrix', () => {
       expect(new Set(bootstrapValues.map((value) => `${value.model}:${value.effort}`)).size).toBe(1);
     }
 
-    expect(resolveWithPolicy(CLAUDE_POLICY, 'plan', 'L').model).toBe('fable');
+    expect(resolveWithPolicy(CLAUDE_POLICY, 'plan', 'L').model).toBe('opus');
     expect(resolveWithPolicy(CODEX_POLICY, 'plan', 'L').model).toBe('gpt-5.6-sol');
-    expect(resolveWithPolicy(CLAUDE_POLICY, 'conflict_check', 'L').model).toBe('fable');
+    expect(resolveWithPolicy(CLAUDE_POLICY, 'conflict_check', 'L').model).toBe('opus');
     expect(resolveWithPolicy(CODEX_POLICY, 'conflict_check', 'L').model).toBe('gpt-5.6-sol');
     expect(resolveWithPolicy(CODEX_POLICY, 'plan', 'M').model).toBe('gpt-5.6-terra');
     expect(resolveWithPolicy(CODEX_POLICY, 'conflict_check', 'S').model).toBe('gpt-5.6-terra');
@@ -518,7 +518,7 @@ describe('#902 generated provider documentation', () => {
       /\| memory \| autonomous engine \| haiku \| low \| gpt-5\.6-luna \| low \|/,
     );
     expect(table).toMatch(
-      /\| plan \| autonomous engine \| opus \(S\/M\), fable \(L\) \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-sol \| medium \(S\), high \(M\), xhigh \(L\) \|/,
+      /\| plan \| autonomous engine \| opus \| medium \(S\), high \(M\), xhigh \(L\) \| gpt-5\.6-sol \| medium \(S\), high \(M\), xhigh \(L\) \|/,
     );
     expect(table).toMatch(
       /\| code-review \| supported-host interactive \| opus \|  \| inherits model from the Codex session or spawned-agent configuration \| inherits effort from the Codex session or spawned-agent configuration \|/,

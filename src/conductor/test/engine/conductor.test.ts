@@ -9387,7 +9387,7 @@ describe('engine/conductor', () => {
         provider: 'claude',
         outcome: 'success',
         invoked: true,
-        model: 'fable',
+        model: 'opus',
         reason: undefined,
         tokenUsage: { input: 120, output: 30 },
       },
