@@ -13,7 +13,8 @@ import {
   respawnPane,
 } from '../../src/engine/daemon-tmux.js';
 
-// Real-tmux smoke (Phase 3, FR-20, Task T36).
+// Real-tmux smoke (Phase 3, FR-20, Task T36). The `.smoke.test.ts` suffix
+// excludes this real-binary coverage from the ordinary Vitest suite.
 //
 // The unit tests for daemon-tmux.ts (test/engine/daemon-tmux.test.ts) spy on the
 // TmuxRunner and prove we pass the RIGHT ARGV — they cannot prove real tmux
