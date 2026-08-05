@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -131,8 +131,40 @@ async function hasSuccessfulTerminalState(worktreeDir: string, slug: string): Pr
 const hostToken = process.env.CLAUDE_CODE_OAUTH_TOKEN;
 const killSwitch = process.env.DAEMON_E2E_LIVE_SMOKE === '0';
 const shouldRun = claudeBinaryAvailable() && !killSwitch && !!hostToken;
+const advisoryProbe = process.env.DAEMON_E2E_LIVE_ADVISORY_PROBE === '1';
 
 describe('daemon E2E live terminal guard', () => {
+  it.skipIf(advisoryProbe)('skips an uncredentialed advisory run before provisioning a home', async () => {
+    const homesRoot = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-advisory-'));
+    const childEnv: NodeJS.ProcessEnv = {
+      ...process.env,
+      AI_CONDUCTOR_NO_REAL_EXEC: '1',
+      CLAUDE_CODE_OAUTH_TOKEN: '',
+      DAEMON_E2E_LIVE_SMOKE: '0',
+      DAEMON_E2E_LIVE_ADVISORY_PROBE: '1',
+      TMPDIR: homesRoot,
+      NO_COLOR: '1',
+      FORCE_COLOR: '0',
+    };
+    delete childEnv.AI_CONDUCTOR_TEST_TMP_ROOT;
+
+    try {
+      const result = await execa(
+        'npx',
+        [
+          'vitest', 'run', '--config', 'vitest.live-smoke.config.ts',
+          'test/engine/daemon-e2e-live.smoke.test.ts', '--reporter=dot',
+        ],
+        { cwd: fileURLToPath(new URL('../..', import.meta.url)), env: childEnv, extendEnv: false },
+      );
+
+      expect(result.stdout).toMatch(/Tests\s+\d+ passed \| \d+ skipped/);
+      expect((await readdir(homesRoot)).filter((entry) => entry.startsWith('self-host-'))).toEqual([]);
+    } finally {
+      await rm(homesRoot, { recursive: true, force: true });
+    }
+  });
+
   it('meters both provider methods and rejects totals above the configured cap', async () => {
     const provider: LLMProvider = {
       invoke: vi.fn<LLMProvider['invoke']>()
