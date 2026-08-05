@@ -11867,10 +11867,8 @@ describe('build-step stall circuit breaker', () => {
               await execa('git', ['commit', '-m', 'feat: land unattributed work'], { cwd: dir });
               headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
             } else {
-              await writeFile(join(dir, 'src/final-attempt.ts'), 'export const finalAttempt = true;\n');
-              await execa('git', ['add', 'src/final-attempt.ts'], { cwd: dir });
-              await execa('git', ['commit', '-m', 'feat: land final unattributed work'], { cwd: dir });
-              headSha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+              // The original #1270 shape: only an earlier attempt moved
+              // HEAD; the exhausted final attempt leaves tracked residue.
               await writeFile(join(dir, 'src/landed.ts'), 'export const landed = false;\n');
             }
           }

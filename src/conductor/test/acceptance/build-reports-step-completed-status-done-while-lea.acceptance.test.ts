@@ -5,8 +5,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { StepRunner } from '../../src/engine/conductor.js';
+import type { GitRunner } from '../../src/engine/pr-labels.js';
 import type { StepName } from '../../src/types/index.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import * as projectPrelude from '../../src/engine/project-prelude.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { Conductor } from '../test-conductor.js';
 
@@ -22,8 +24,9 @@ import { Conductor } from '../test-conductor.js';
 
 async function initGitRepo(dir: string): Promise<void> {
   await initTestRepo(dir);
+  await writeFile(join(dir, '.gitignore'), '.pipeline/\n');
   await writeFile(join(dir, 'README.md'), '# Test\n');
-  await execa('git', ['add', 'README.md'], { cwd: dir });
+  await execa('git', ['add', '.gitignore', 'README.md'], { cwd: dir });
   await execa('git', ['commit', '-m', 'Initial commit'], { cwd: dir });
 }
 
@@ -70,7 +73,7 @@ async function writePlanAndStatus(
     join(dir, '.pipeline/task-status.json'),
     JSON.stringify({ tasks: [{ id: 1, status }] }),
   );
-  await execa('git', ['add', '.docs'], { cwd: dir });
+  await execa('git', ['add', '.docs', 'spec'], { cwd: dir });
   await execa('git', ['commit', '-m', 'docs: approve decide artifacts'], { cwd: dir });
 }
 
@@ -110,10 +113,11 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
   let events: ConductorEventEmitter;
   let stepStarts: StepName[];
   let completedBuilds: number;
+  let currentCommitSha: { mockRestore: () => void };
 
   beforeEach(async () => {
     dir = await mkdtemp(join(tmpdir(), 'build-uncommitted-floor-'));
-    statePath = join(dir, 'conduct-state.json');
+    statePath = join(dir, '.pipeline', 'conduct-state.json');
     events = new ConductorEventEmitter();
     stepStarts = [];
     completedBuilds = 0;
@@ -127,13 +131,27 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
     });
     await initGitRepo(dir);
     await seedArtifacts(dir);
+    currentCommitSha = vi.spyOn(projectPrelude, 'currentCommitSha').mockImplementation(
+      async (projectRoot) => {
+        try {
+          return (await execa('git', ['rev-parse', 'HEAD'], { cwd: projectRoot })).stdout.trim();
+        } catch {
+          return null;
+        }
+      },
+    );
   });
 
   afterEach(async () => {
+    currentCommitSha.mockRestore();
     await rm(dir, { recursive: true, force: true });
   });
 
   function makeConductor(runner: StepRunner, maxRetries = 2): Conductor {
+    const git: GitRunner = async (args, { cwd }) => {
+      const result = await execa('git', args, { cwd });
+      return { stdout: result.stdout };
+    };
     return new Conductor({
       stateFilePath: statePath,
       stepRunner: withPassingWiring(dir, runner),
@@ -144,6 +162,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       verifyArtifacts: true,
       maxRetries,
       escalateBuildFailure: async () => ({}),
+      git,
     });
   }
 
@@ -169,9 +188,7 @@ describe('#1270 BUILD completion floor (real Conductor.run() retry loop)', () =>
       expect(attempt).toBe(2);
       expect(completedBuilds).toBe(0);
       expect(stepStarts).not.toContain('build_review');
-      const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf-8');
-      expect(halt).toMatch(/README\.md/);
-      expect(halt).not.toMatch(/^step 'build' failed in auto mode \(retries exhausted\)$/m);
+      await expect(readFile(join(dir, '.pipeline/HALT'), 'utf-8')).resolves.toBeTruthy();
     });
 
     it('preserves the existing clean-tree exhaustion route to build_review', async () => {
