@@ -77,6 +77,18 @@ git worktree remove -ff .worktrees/example
 ```
 EOF
 
+assert_fixture escaped-unquoted-quotes-before-forced-worktree-removal 1 ':8: destructive-git clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+printf \"message\"; git worktree remove -ff .worktrees/example
+```
+EOF
+
 assert_fixture safe-string-forced-worktree-removal 0 'PASS migration block authoring contract' <<'EOF'
 # Changelog
 

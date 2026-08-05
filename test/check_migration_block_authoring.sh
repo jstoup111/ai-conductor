@@ -43,6 +43,19 @@ strip_quoted_strings() {
           quote=''
         fi
       fi
+    elif [ "$escaped" = true ]; then
+      # An unquoted backslash quotes the next character. Keep ordinary
+      # characters because quote removal makes them part of the command word,
+      # but replace syntax characters so they cannot start a string or become
+      # a command separator in the stripped representation.
+      if [[ "$character" = [[:space:]] || "$character" = '"' || "$character" = "'" || "$character" = ';' || "$character" = '|' || "$character" = '&' ]]; then
+        result+=x
+      else
+        result+=$character
+      fi
+      escaped=false
+    elif [ "$character" = $'\\' ]; then
+      escaped=true
     elif [ "$character" = "'" ] || [ "$character" = '"' ]; then
       quote=$character
     else
@@ -51,6 +64,8 @@ strip_quoted_strings() {
 
     index=$((index + 1))
   done
+
+  [ "$escaped" = true ] && result+=x
 
   printf '%s' "$result"
 }
