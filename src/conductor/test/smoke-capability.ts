@@ -22,19 +22,51 @@ export type GateSmokeCapabilityResolution =
 
 const declarations = new Map<string, SmokeCapability>();
 
+function forceSkipsCapability(
+  environment: SmokeCapabilityAvailabilityDependencies['environment'],
+  capability: SmokeCapability,
+): boolean {
+  return environment.SMOKE_FORCE_SKIP?.split(',').includes(`capability:${capability}`) ?? false;
+}
+
+function forceSkipsFile(
+  environment: SmokeCapabilityAvailabilityDependencies['environment'],
+  file: string,
+): boolean {
+  return environment.SMOKE_FORCE_SKIP?.split(',').includes(`file:${file}`) ?? false;
+}
+
 /** Resolves each smoke capability's advisory outcome once for a smoke run. */
 export function resolveAdvisorySmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
   return {
-    hermetic: { outcome: 'ran' },
-    toolchain: hasCommand('codex')
+    hermetic: forceSkipsCapability(environment, 'hermetic')
+      ? { outcome: 'skipped', unmet: 'operator override' }
+      : { outcome: 'ran' },
+    toolchain: forceSkipsCapability(environment, 'toolchain')
+      ? { outcome: 'skipped', unmet: 'operator override' }
+      : hasCommand('codex')
       ? { outcome: 'ran' }
       : { outcome: 'skipped', unmet: 'codex' },
-    credentialed: environment.CLAUDE_CODE_OAUTH_TOKEN
+    credentialed: forceSkipsCapability(environment, 'credentialed')
+      ? { outcome: 'skipped', unmet: 'operator override' }
+      : environment.CLAUDE_CODE_OAUTH_TOKEN
       ? { outcome: 'ran' }
       : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
   };
+}
+
+/** Resolves one smoke file's advisory outcome, including a file-specific override. */
+export function resolveAdvisorySmokeFile(
+  file: string,
+  capability: SmokeCapability,
+  dependencies: SmokeCapabilityAvailabilityDependencies,
+): AdvisorySmokeCapabilityResolution {
+  if (forceSkipsFile(dependencies.environment, file)) {
+    return { outcome: 'skipped', unmet: 'operator override' };
+  }
+  return resolveAdvisorySmokeCapabilities(dependencies)[capability];
 }
 
 /** Resolves each smoke capability's fail-closed outcome for a release gate. */
@@ -42,11 +74,17 @@ export function resolveGateSmokeCapabilities(
   { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
 ): Record<SmokeCapability, GateSmokeCapabilityResolution> {
   return {
-    hermetic: { outcome: 'ran' },
-    toolchain: hasCommand('codex')
+    hermetic: forceSkipsCapability(environment, 'hermetic')
+      ? { outcome: 'failed', unmet: 'operator override' }
+      : { outcome: 'ran' },
+    toolchain: forceSkipsCapability(environment, 'toolchain')
+      ? { outcome: 'failed', unmet: 'operator override' }
+      : hasCommand('codex')
       ? { outcome: 'ran' }
       : { outcome: 'failed', unmet: 'codex' },
-    credentialed: environment.CLAUDE_CODE_OAUTH_TOKEN
+    credentialed: forceSkipsCapability(environment, 'credentialed')
+      ? { outcome: 'failed', unmet: 'operator override' }
+      : environment.CLAUDE_CODE_OAUTH_TOKEN
       ? { outcome: 'ran' }
       : { outcome: 'failed', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
   };

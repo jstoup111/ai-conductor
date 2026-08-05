@@ -4,6 +4,7 @@ import {
   assertGateCredentialedExecution,
   declareSmokeCapability,
   getDeclaredSmokeCapability,
+  resolveAdvisorySmokeFile,
   resolveAdvisorySmokeCapabilities,
   resolveGateSmokeCapabilities,
 } from './smoke-capability.js';
@@ -72,5 +73,54 @@ describe('smoke capability declarations', () => {
     expect(() => assertGateCredentialedExecution(['hermetic', 'toolchain'])).toThrow(
       'Gate-mode smoke run executed no credentialed test files',
     );
+  });
+
+  it('reports a capability force-skip as an operator override in advisory mode', () => {
+    const resolutions = resolveAdvisorySmokeCapabilities({
+      hasCommand: () => true,
+      environment: {
+        CLAUDE_CODE_OAUTH_TOKEN: 'token',
+        SMOKE_FORCE_SKIP: 'capability:credentialed',
+      },
+    });
+
+    expect(resolutions.credentialed).toEqual({
+      outcome: 'skipped',
+      unmet: 'operator override',
+    });
+  });
+
+  it('reports a file force-skip as an operator override in advisory mode', () => {
+    const resolution = resolveAdvisorySmokeFile(
+      'test/engine/daemon-e2e-live.smoke.test.ts',
+      'credentialed',
+      {
+        hasCommand: () => true,
+        environment: {
+          CLAUDE_CODE_OAUTH_TOKEN: 'token',
+          SMOKE_FORCE_SKIP: 'file:test/engine/daemon-e2e-live.smoke.test.ts',
+        },
+      },
+    );
+
+    expect(resolution).toEqual({
+      outcome: 'skipped',
+      unmet: 'operator override',
+    });
+  });
+
+  it('fails gate mode when an operator force-skips the credentialed capability', () => {
+    const resolutions = resolveGateSmokeCapabilities({
+      hasCommand: () => true,
+      environment: {
+        CLAUDE_CODE_OAUTH_TOKEN: 'token',
+        SMOKE_FORCE_SKIP: 'capability:credentialed',
+      },
+    });
+
+    expect(resolutions.credentialed).toEqual({
+      outcome: 'failed',
+      unmet: 'operator override',
+    });
   });
 });
