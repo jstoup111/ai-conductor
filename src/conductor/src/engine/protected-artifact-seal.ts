@@ -563,6 +563,34 @@ async function matchesBaseTip(
   return workspace !== undefined && workspace === committed.stdout;
 }
 
+/**
+ * True when this feature has not changed `path` since it diverged from the
+ * base branch, and its workspace still exactly reflects its own HEAD. This
+ * permits a feature that remains behind a newer base-tip artifact without
+ * accepting an in-worktree mutation or a change authored on the feature.
+ */
+async function branchUntouchedInheritance(
+  projectRoot: string,
+  baseRef: string,
+  path: string,
+): Promise<boolean> {
+  const changed = await execa('git', ['diff', '--name-only', `${baseRef}...HEAD`, '--', path], {
+    cwd: projectRoot,
+    reject: false,
+  }).catch(() => undefined);
+  if (!changed || changed.exitCode !== 0 || changed.stdout.length !== 0) return false;
+
+  const head = await execa('git', ['show', `HEAD:${path}`], {
+    cwd: projectRoot,
+    stripFinalNewline: false,
+    reject: false,
+  }).catch(() => undefined);
+  if (!head || head.exitCode !== 0) return false;
+
+  const workspace = await readContainedProtectedArtifact(projectRoot, path);
+  return workspace !== undefined && workspace === head.stdout;
+}
+
 async function inspectSeal(
   projectRoot: string,
   seal: ProtectedArtifactSeal,
@@ -579,7 +607,9 @@ async function inspectSeal(
   };
   const inheritedFromBase = async (path: string): Promise<boolean> => {
     const ref = await baseRef();
-    return ref !== undefined && (await matchesBaseTip(projectRoot, ref, path));
+    if (ref === undefined) return false;
+    return (await matchesBaseTip(projectRoot, ref, path))
+      || (await branchUntouchedInheritance(projectRoot, ref, path));
   };
 
   const expected = new Map(seal.protectedArtifacts.map((artifact) => [artifact.path, artifact.fingerprint]));

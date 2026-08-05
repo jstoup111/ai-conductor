@@ -594,6 +594,27 @@ describe('verifyProtectedArtifactSeal', () => {
       ]);
     });
 
+    it("tolerates another feature's inherited artifact when the feature HEAD remains behind main", async () => {
+      const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+      const baselineCommit = await git(repo, ['rev-parse', 'HEAD']);
+      await git(repo, ['checkout', '-q', '-b', 'setup']);
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner v1\n',
+      });
+      await git(repo, ['checkout', '-q', '-b', 'feature', 'main']);
+      await createProtectedArtifactSeal({
+        projectRoot: repo,
+        baselineCommit,
+      });
+      await advanceBaseWithoutMovingFeatureHead(repo, {
+        '.docs/plans/other-feature.md': 'amended by its owner v2\n',
+      });
+
+      const verdict = await verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' });
+
+      expect(verdict, verdict.ok ? undefined : verdict.reason).toMatchObject({ ok: true });
+    });
+
     it("tolerates ANOTHER feature's artifact changed to exactly the base branch tip", async () => {
       const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
       await createProtectedArtifactSeal({
