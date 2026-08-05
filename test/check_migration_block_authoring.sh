@@ -25,6 +25,36 @@ violation() {
   FAIL=1
 }
 
+strip_quoted_strings() {
+  local source=$1 result='' quote='' character escaped=false index=0
+
+  while [ "$index" -lt "${#source}" ]; do
+    character=${source:index:1}
+
+    if [ -n "$quote" ]; then
+      if [ "$quote" = "'" ] && [ "$character" = "'" ]; then
+        quote=''
+      elif [ "$quote" = '"' ]; then
+        if [ "$escaped" = true ]; then
+          escaped=false
+        elif [ "$character" = $'\\' ]; then
+          escaped=true
+        elif [ "$character" = '"' ]; then
+          quote=''
+        fi
+      fi
+    elif [ "$character" = "'" ] || [ "$character" = '"' ]; then
+      quote=$character
+    else
+      result+=$character
+    fi
+
+    index=$((index + 1))
+  done
+
+  printf '%s' "$result"
+}
+
 while IFS= read -r line || [ -n "$line" ]; do
   LINE_NUMBER=$((LINE_NUMBER + 1))
 
@@ -71,8 +101,9 @@ while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$line" =~ (^|[[:space:];|&])\./bin/ ]]; then
     violation 'harness-path' 'harness binaries must use ${HARNESS_DIR}/bin, never ./bin'
   fi
-  if [[ "$line" =~ git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f+|--force)([[:space:]]|$) ]] \
-    || [[ "$line" =~ git[[:space:]]+branch.*(^|[[:space:]])-D([[:space:]]|$) ]]; then
+  command_line=$(strip_quoted_strings "$line")
+  if [[ "$command_line" =~ (^|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f+|--force)([[:space:]]|$) ]] \
+    || [[ "$command_line" =~ (^|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+branch.*(^|[[:space:]])-D([[:space:]]|$) ]]; then
     violation 'destructive-git' 'do not force-remove worktrees or branches'
   fi
   if [[ "$line" =~ (^|[[:space:];|&])(conduct-ts|.+/bin/conduct-ts)[[:space:]]+daemon[[:space:]]+(start|stop|restart) ]] \

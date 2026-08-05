@@ -77,6 +77,66 @@ git worktree remove -ff .worktrees/example
 ```
 EOF
 
+assert_fixture safe-string-forced-worktree-removal 0 'PASS migration block authoring contract' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+printf '%s\n' 'git worktree remove -ff .worktrees/example'
+```
+EOF
+
+assert_fixture escaped-safe-string-forced-worktree-removal 0 'PASS migration block authoring contract' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+printf '%s\n' "safe \"; git worktree remove -ff .worktrees/example"
+```
+EOF
+
+assert_fixture compound-forced-worktree-removal 1 ':8: destructive-git clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+true; git worktree remove -ff .worktrees/example
+```
+EOF
+
+assert_fixture forced-branch-removal 1 ':8: destructive-git clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+git branch -D example
+```
+EOF
+
+assert_fixture compound-forced-branch-removal 1 ':8: destructive-git clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+false || git branch -D example
+```
+EOF
+
 assert_fixture unattended-daemon-restart 1 ':8: daemon-lifecycle clause' <<'EOF'
 # Changelog
 
