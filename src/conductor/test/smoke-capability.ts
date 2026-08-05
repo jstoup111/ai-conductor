@@ -14,6 +14,9 @@ export function declareSmokeCapability(
   file: string,
   capability: SmokeCapability,
 ): void {
+  if (!SMOKE_CAPABILITIES.includes(capability)) {
+    throw new Error(`Smoke file ${file} declares invalid capability ${capability}`);
+  }
   declarations.set(file, capability);
 }
 

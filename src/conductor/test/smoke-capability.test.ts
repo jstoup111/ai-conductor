@@ -22,6 +22,15 @@ describe('smoke capability declarations', () => {
     expect(getDeclaredSmokeCapability(file)).toBe('toolchain');
   });
 
+  it('rejects an out-of-set capability declaration', () => {
+    const file = 'test/smoke/invalid-capability.smoke.test.ts';
+    const capability = 'networked';
+
+    expect(() =>
+      declareSmokeCapability(file, capability as 'toolchain'),
+    ).toThrow(new Error(`Smoke file ${file} declares invalid capability ${capability}`));
+  });
+
   it('rejects a discovered smoke file without a capability declaration', () => {
     const file = 'test/smoke/undeclared.smoke.test.ts';
 
