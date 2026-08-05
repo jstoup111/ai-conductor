@@ -444,27 +444,38 @@ run_project_migrations() {
   # Execute blocks one at a time so a failure stops the sequence.
   local current_version=""
   local current_script=""
-  local exec_block=""
+  local candidate_position=0
+  local current_position=0
   while IFS= read -r line; do
     if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
       if [ -n "$current_script" ]; then
-        info "Executing migration for $current_version"
+        info "Executing migration for $current_version (candidate block $current_position)"
         if ! execute_migration_block "$current_script"; then
-          fail "Migration for $current_version failed"
+          fail "Migration for $current_version failed at candidate block $current_position"
+          return 1
+        fi
+        if ! ledger_record_applied "$current_version" "$current_script"; then
+          fail "Migration for $current_version succeeded but could not be recorded at candidate block $current_position"
           return 1
         fi
         ok "Migration $current_version applied"
       fi
       current_version="${line#*version=}"
       current_script=""
+      candidate_position=$((candidate_position + 1))
+      current_position=$candidate_position
     else
       current_script+="$line"$'\n'
     fi
   done <<< "$blocks"
   if [ -n "$current_script" ]; then
-    info "Executing migration for $current_version"
+    info "Executing migration for $current_version (candidate block $current_position)"
     if ! execute_migration_block "$current_script"; then
-      fail "Migration for $current_version failed"
+      fail "Migration for $current_version failed at candidate block $current_position"
+      return 1
+    fi
+    if ! ledger_record_applied "$current_version" "$current_script"; then
+      fail "Migration for $current_version succeeded but could not be recorded at candidate block $current_position"
       return 1
     fi
     ok "Migration $current_version applied"
