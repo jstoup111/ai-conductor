@@ -84,6 +84,20 @@ run_tty() {
   set -e
 }
 
+ledger_applied_count() {
+  python3 - "$HOME_DIR/.ai-conductor/migrations" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+ledgers = list(Path(sys.argv[1]).glob("*.json"))
+if not ledgers:
+    print(0)
+else:
+    print(len(json.loads(ledgers[0].read_text())["appliedBlocks"]))
+PY
+}
+
 if ! command -v script >/dev/null 2>&1; then
   printf 'FAIL scripted TTY utility is required for migration approval coverage\n'
   exit 1
@@ -104,6 +118,17 @@ assert 'skip leaves the candidate pending and continues to the next prompt' "$(
   [ ! -e "$CONSUMER/execution.log" ] && contains "$TTY_OUT" 'candidate block 2' && echo 0 || echo 1
 )"
 
+make_fixture skip-rerun
+run_tty $'n\ns\n'
+SKIP_LEDGER_COUNT=$(ledger_applied_count)
+run_tty $'a\n'
+assert 'skipped and stopped blocks have no applied ledger entries before rerun' "$(
+  [ "$SKIP_LEDGER_COUNT" -eq 0 ] && echo 0 || echo 1
+)"
+assert 'skip then stop re-offers exactly both pending blocks on rerun' "$(
+  [ "$TTY_CODE" -eq 0 ] && contains "$TTY_OUT" "printf 'first" && contains "$TTY_OUT" "printf 'second" && [ "$(printf '%s\n' "$TTY_OUT" | rg -c 'candidate block' || true)" -eq 2 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
+)"
+
 make_fixture accept-all
 run_tty $'a\n'
 assert 'accept-all executes every remaining candidate' "$(
@@ -114,6 +139,17 @@ make_fixture stop
 run_tty $'s\n'
 assert 'stop leaves the current and remaining candidates pending' "$(
   [ "$TTY_CODE" -eq 0 ] && [ ! -e "$CONSUMER/execution.log" ] && echo 0 || echo 1
+)"
+
+make_fixture stop-partway
+run_tty $'y\ns\n'
+STOP_LEDGER_COUNT=$(ledger_applied_count)
+run_tty $'a\n'
+assert 'stop after an applied prefix records only that prefix in the ledger' "$(
+  [ "$STOP_LEDGER_COUNT" -eq 1 ] && echo 0 || echo 1
+)"
+assert 'stop partway re-offers exactly the unreached suffix on rerun' "$(
+  [ "$TTY_CODE" -eq 0 ] && ! contains "$TTY_OUT" "printf 'first" && contains "$TTY_OUT" "printf 'second" && [ "$(printf '%s\n' "$TTY_OUT" | rg -c 'candidate block' || true)" -eq 1 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
 )"
 
 make_fixture invalid
