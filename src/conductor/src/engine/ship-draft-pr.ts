@@ -41,6 +41,60 @@ export const SHIP_DRAFT_PR_NOTE =
   'for the remaining ship steps. The `/finish` step authors the real title and body and ' +
   'marks this PR ready for review.';
 
+/**
+ * Compose the placeholder body for a SHIP-entry draft PR.
+ *
+ * The shape is the `/pr` skill's body template — `## Why` / `## What Changed` /
+ * `## Testing`, plus the issue-linking reference — because that is exactly what
+ * the finish completion gate demands before a PR may ship. The draft used to
+ * emit a lone `## Summary`, which is not that template: a reader landing on the
+ * PR mid-build, and the finish agent reading it back, both saw the WRONG
+ * section shape, and the gate's refusal named a template neither had ever been
+ * shown.
+ *
+ * It is still unmistakably a placeholder:
+ *   - {@link PR_BODY_FLOOR_MARKER} keeps it mechanically detectable
+ *     (`readFlooredBody`) so `finish` can never mistake it for authored prose;
+ *   - each section carries a visible "not yet authored" line, so a human reader
+ *     is never misled into thinking the prose is real.
+ *
+ * The `Closes` reference is named as an HTML comment rather than a live line:
+ * `injectIssueRef` appends the REAL `Closes owner/repo#N` right after this body
+ * is published (via `makeRetainedShipPrPresentable`), and a literal placeholder
+ * `Closes` line would either render broken or defeat that helper's idempotency
+ * probe.
+ *
+ * Deliberately carries NO release metadata: choosing a release disposition is
+ * the pre-finish `release-disposition` step's job, judged from the real diff.
+ */
+export function shipDraftPrBody(featureDesc: string): string {
+  const placeholder = '_Not yet authored — `/finish` replaces this placeholder with the real body._';
+  return [
+    PR_BODY_FLOOR_MARKER,
+    '',
+    '## Why',
+    '',
+    featureDesc,
+    '',
+    placeholder,
+    '',
+    '## What Changed',
+    '',
+    placeholder,
+    '',
+    '## Testing',
+    '',
+    placeholder,
+    '',
+    '<!-- Closes <owner/repo#N> — added automatically when this feature came from an intake issue. -->',
+    '',
+    '---',
+    '',
+    SHIP_DRAFT_PR_NOTE,
+    '',
+  ].join('\n');
+}
+
 export interface OpenShipDraftPrDeps {
   gh?: GhRunner;
   git?: GitRunner;
@@ -163,19 +217,9 @@ export async function openShipDraftPr(
       return { outcome: 'push-failed', reason };
     }
 
-    const title = `feat: ${deps.featureDesc?.trim() || branchToFeatureDesc(branch)}`;
-    const body = [
-      PR_BODY_FLOOR_MARKER,
-      '',
-      '## Summary',
-      '',
-      deps.featureDesc?.trim() || branchToFeatureDesc(branch),
-      '',
-      '---',
-      '',
-      SHIP_DRAFT_PR_NOTE,
-      '',
-    ].join('\n');
+    const featureDesc = deps.featureDesc?.trim() || branchToFeatureDesc(branch);
+    const title = `feat: ${featureDesc}`;
+    const body = shipDraftPrBody(featureDesc);
 
     const opts = { branch, base: baseBranch, draft: true, title, body };
     let { prUrl } = await findOrCreatePr(gh, cwd, opts, log);

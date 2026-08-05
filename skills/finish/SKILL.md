@@ -62,6 +62,13 @@ title/body quality and repair pass:
 - If the provider is unavailable or cannot make the judgment, report that
   bounded failure without changing publication state.
 
+The engine seeds the SHIP-entry draft with the PR body template already in
+place — `## Why`, `## What Changed`, `## Testing`, and the `Closes` reference —
+with each section explicitly marked "not yet authored". That skeleton is the
+structure the judgment expects to see filled in, not prose to accept: a body
+still carrying those markers, or the engine's body-floor marker, is placeholder
+by construction.
+
 Accepted prose authorizes the coordinator to continue with its deterministic
 transitions. It does not itself authorize any publication effect.
 

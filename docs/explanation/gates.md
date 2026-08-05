@@ -95,7 +95,7 @@ verdict layer, so they can be strict without disturbing the linear walk.
 | `retro` | a retro from a different feature or a prior session counting for this one |
 | `finish` | a publication outcome that was never coherently recorded — `.pipeline/finish-choice` is the final record, not the source of interactive intent; a `pr` outcome additionally requires the recorded PR identity and verified publication evidence |
 | `finish` (release readiness) | a configured release-disposition result that is missing, stale, malformed, or unreadable — FINISH reports the exact typed condition before dispatching prose judgment or making a publication mutation |
-| `finish` (presentation) | a PR shipping with halt boilerplate or an engine-generated body-floor marker — either classification keeps the bounded prose judgment required and prevents the final outcome record. A reused halt PR's *presentation* is repaired earlier still — at SHIP-phase adoption, so SHIP steps that run before `finish` do not read a `needs-remediation` placeholder; the draft→ready flip stays finish-only |
+| `finish` (presentation) | a PR shipping with halt boilerplate or an engine-generated body-floor marker — either classification keeps the bounded prose judgment required and prevents the final outcome record. Every completion-gate refusal in this class is classified `missing: 'presentation'`, which routes the loop back into `finish` for a body rewrite rather than into `/remediate` or `build`; that re-dispatch is bounded to one attempt per `pr_url` (recorded in `.pipeline/pr-body-regen-attempt.json`), after which the engine's deterministic body floor runs as a last resort so the feature still converges. A reused halt PR's *presentation* is repaired earlier still — at SHIP-phase adoption, so SHIP steps that run before `finish` do not read a `needs-remediation` placeholder; the draft→ready flip stays finish-only |
 
 Each predicate's exact file, format, and failure text is in [artifacts](../reference/artifacts.md).
 
@@ -179,9 +179,19 @@ continue to reopen DECIDE targets unchanged.
 
 **Remediation** is what a blocking SHIP audit — or a `build_review` completeness or scope failure — does when the
 fix is not obvious. It classifies each gap and routes it to the earliest step that can close it — build,
-acceptance specs, architecture review, or plan — all of which sit before the gate that found it. Two gap
-categories cannot be routed and halt for a human instead: architectural clarity and product scope. Neither
-is something an unattended run should decide.
+acceptance specs, architecture review, or plan — all of which sit before the gate that found it. A fifth
+disposition, `publication`, covers a gap whose only defect is the published PR prose (a placeholder or
+wrong-template body, a stale title, a missing `Closes` reference): it routes to `finish`, the step that owns
+PR prose, and — unlike the four step-valued targets — appends nothing to `.docs/plans/<slug>.md`, because a
+PR body fix is not plan work and amending the plan from here trips the protected-artifact self-amendment
+guard. Two gap categories cannot be routed and halt for a human instead: architectural clarity and product
+scope. Neither is something an unattended run should decide.
+
+A finish-gate refusal that is *itself* a publication defect never reaches the planner at all. The gate
+already names exactly what is wrong with the PR, so the loop re-dispatches `finish` directly for a body
+rewrite — bounded to one re-dispatch, after which the gate's own last-resort body floor converges the
+feature. Routing that through the planner is what once turned a 30-second `gh pr edit` into an 18-task
+rebuild.
 
 If the remediation plan is missing, stale, malformed, or has gaps it does not cover, the engine falls back
 to deterministic routing rather than trusting a partial plan. Unknown dispositions are dropped, not

@@ -754,10 +754,16 @@ export interface CompletionResult {
    * Machine-readable facet code for why `done` is false. 'recording' marks
    * misses caused by the finish skill failing to record its outcome (missing/
    * stale/invalid finish-choice marker, or missing pr_url for choice='pr');
+   * 'presentation' marks a pure PUBLICATION defect — every piece of evidence
+   * passed and only the recorded PR's own title/body is wrong (halt
+   * boilerplate, or an engine-generated placeholder instead of a `/pr`-authored
+   * body). That distinction is load-bearing: a publication defect is fixed by
+   * rewriting the PR body, so the loop re-dispatches `finish` rather than
+   * spending an LLM remediation turn that can only launder it into a rebuild.
    * 'other' covers everything else. Undefined for backward compat (done:true,
    * or predicates that don't classify).
    */
-  missing?: 'recording' | 'other';
+  missing?: 'recording' | 'presentation' | 'other';
   /**
    * Trace of the per-attempt verdict-freshness check (Task 1,
    * session-fresh-verdict-artifacts). Populated by the three dispatched-judge
@@ -2793,7 +2799,10 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `recorded PR ${prUrl} ${staleReason} — run /pr to author a real templated body (## Why / ## What Changed / ## Testing, plus the Closes reference) before completing; halt/remediation narrative belongs in a PR comment, not the body`,
-            missing: 'other',
+            // Publication defect, NOT unfinished work: every evidence check
+            // above already passed. The loop routes this straight back to a
+            // body rewrite.
+            missing: 'presentation',
           };
         }
         // Regeneration budget exhausted: fall through to the deterministic
@@ -2835,7 +2844,9 @@ export const CUSTOM_COMPLETION_PREDICATES: Partial<
           return {
             done: false,
             reason: `recorded PR ${prUrl} is still in draft state — not ready for ship (ship-readiness: requires PR to be marked ready before completing)`,
-            missing: 'other',
+            // Same publication class as the body checks above: fixed on the PR
+            // itself (`gh pr ready`), never by re-opening the build.
+            missing: 'presentation',
           };
         }
       } catch {
@@ -3281,7 +3292,44 @@ export const REMEDIATION_TARGET_STEPS = [
   'plan',
 ] as const;
 export type RemediationTarget = (typeof REMEDIATION_TARGET_STEPS)[number];
-export type RemediationDisposition = RemediationTarget | 'halt';
+
+/**
+ * Disposition for a gap whose remedy is PUBLISHED PROSE, not code — the PR
+ * body, its title, or its issue linkage.
+ *
+ * It is deliberately NOT a member of {@link REMEDIATION_TARGET_STEPS}:
+ *
+ *   - It routes to `finish`, the step that owns PR prose, rather than to a
+ *     BUILD-phase step. Before it existed the planner's only reachable route
+ *     for a presentation gap was `build`, so a 30-second `gh pr edit` re-opened
+ *     an entire implementation phase.
+ *   - It is excluded from the plan-append contract. A PR body fix is not plan
+ *     work; appending it to `.docs/plans/<slug>.md` amends a protected artifact
+ *     and trips the self-amendment guard.
+ */
+export const REMEDIATION_PUBLICATION_DISPOSITION = 'publication';
+
+export type RemediationDisposition =
+  | RemediationTarget
+  | typeof REMEDIATION_PUBLICATION_DISPOSITION
+  | 'halt';
+
+/** The step a disposition rewinds to. `publication` is prose-only work owned by `finish`. */
+export function remediationDispositionStep(
+  disposition: RemediationDisposition,
+): string {
+  return disposition === REMEDIATION_PUBLICATION_DISPOSITION ? 'finish' : disposition;
+}
+
+/**
+ * True when this disposition's tasks are appended to the plan file. Only the
+ * step-valued targets are; `publication` and `halt` never amend the plan.
+ */
+export function remediationDispositionAppendsToPlan(
+  disposition: RemediationDisposition,
+): boolean {
+  return (REMEDIATION_TARGET_STEPS as readonly string[]).includes(disposition);
+}
 export type RemediationHaltCategory = 'architectural-clarity' | 'product-scope';
 
 export interface RemediationGap {
@@ -3323,7 +3371,11 @@ export async function readRemediationPlan(
   const rawGaps = (parsed as { dispositions?: unknown })?.dispositions;
   if (!Array.isArray(rawGaps)) return null;
 
-  const valid: RemediationDisposition[] = [...REMEDIATION_TARGET_STEPS, 'halt'];
+  const valid: RemediationDisposition[] = [
+    ...REMEDIATION_TARGET_STEPS,
+    REMEDIATION_PUBLICATION_DISPOSITION,
+    'halt',
+  ];
   const gaps: RemediationGap[] = [];
   let invalidTasklessBuild = false;
   for (const g of rawGaps) {

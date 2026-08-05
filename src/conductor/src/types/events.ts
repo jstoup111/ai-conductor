@@ -489,6 +489,12 @@ export type ConductorEvent =
   | {
       /** The branch is behind but cleanly mergeable, so normal finish preserved its history. */
       type: 'rebase_mergeable_skip';
+      /** The ref the skip was decided against, e.g. `origin/main`. */
+      baseRef?: string;
+      /** That ref's sha, so a reader can tell WHICH base was compared. */
+      baseSha?: string | null;
+      /** Whether that ref came from origin or a local branch. */
+      baseKind?: 'remote' | 'local';
     }
   | {
       /** A clean rebase changed code/test paths → downstream re-verification. */

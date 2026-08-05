@@ -1356,7 +1356,9 @@ describe('engine/artifacts', () => {
       expect(result.done).toBe(false);
       expect(result.reason).toMatch(/draft/i);
       expect(result.reason).toMatch(/ship-readiness/i);
-      expect(result.missing).toBe('other');
+      // A still-draft PR is a publication defect, not unfinished work: it is
+      // fixed with `gh pr ready`, never by re-opening the build.
+      expect(result.missing).toBe('presentation');
     });
 
     it('Story 3: Phase 2 presentation (isDraft): passes when fakeGh returns isDraft=false with clean title (ready to ship)', async () => {
@@ -1637,6 +1639,27 @@ describe('engine/artifacts', () => {
         warnSpy.mockRestore();
         expect(second).toEqual({ done: true });
         expect(modes).toEqual(['capture-only', 'full']);
+      });
+
+      it("classifies a placeholder-body refusal as missing:'presentation' (a publication defect, not unfinished work)", async () => {
+        const prUrl = 'https://github.com/foo/bar/pull/9';
+        await createFile(FINISH_CHOICE_MARKER, 'pr');
+        await createFile('.pipeline/conduct-state.json', JSON.stringify({ pr_url: prUrl }));
+
+        readFlooredBodySpy.mockImplementation(async () => '<!-- conductor:pr-body-floor -->');
+        const fakeGh = async () => ({
+          stdout: JSON.stringify({ title: 'feat: something', isDraft: false, body: 'x' }),
+        });
+
+        const result = await checkStepCompletion(dir, 'finish', {
+          sessionStartedAt: 0,
+          isHeadPushed: async () => true,
+          gh: fakeGh as any,
+          repairFinishPr: vi.fn(async () => {}),
+        });
+
+        expect(result.done).toBe(false);
+        expect(result.missing).toBe('presentation');
       });
 
       it('bounded kickback: a marker recorded for a DIFFERENT pr_url does not spend this PR\'s budget', async () => {

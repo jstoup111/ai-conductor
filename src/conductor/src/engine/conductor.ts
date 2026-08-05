@@ -125,6 +125,9 @@ import {
   classifyPrdAuditGaps,
   classifyRetryDecision,
   readRemediationPlan,
+  REMEDIATION_PUBLICATION_DISPOSITION,
+  remediationDispositionAppendsToPlan,
+  remediationDispositionStep,
   sweepStaleReviewArtifacts,
   parseTrack,
   parseIntakeSourceRef,
@@ -418,6 +421,18 @@ export function isEngineComputedStep(step: StepName): boolean {
 // Anti-ping-pong: a single gate may be re-opened by kickback at most this many
 // times per feature before the loop HALTs for a human.
 const MAX_KICKBACKS_PER_GATE = 2;
+
+/**
+ * How many times one run may re-dispatch `finish` for a PUBLICATION defect —
+ * a completion-gate refusal where every evidence check passed and only the
+ * recorded PR's own body/title/draft state is wrong.
+ *
+ * One. The finish gate writes a durable one-shot record
+ * (`.pipeline/pr-body-regen-attempt.json`) the first time it refuses, so the
+ * NEXT pass falls through to the engine's deterministic body floor and
+ * converges. A second re-dispatch could therefore never change the outcome.
+ */
+const PUBLICATION_REDISPATCH_BUDGET = 1;
 // Cap on how many times the selector may pick any single gate before it
 // satisfies. Catches a gate whose verdict never improves and a build↔plan
 // kickback oscillation. Generous enough to allow legitimate kickback re-walks.
@@ -2098,9 +2113,19 @@ export class Conductor {
     // Remediation tasks are plan-modification tasks that close blocking gaps.
     // If gaps contain tasks, append them to the plan and re-seed task-status.json
     // so they show as pending and can be tracked for completion.
+    //
+    // `publication` gaps are excluded by construction: a PR-prose fix is not
+    // plan work, and appending it would amend `.docs/plans/<slug>.md` — a
+    // protected artifact — producing self-amendment warnings for a change that
+    // never belonged in the plan.
     const allTasks: Array<{ id: string; title: string }> = [];
     for (const gap of gaps) {
-      if (!sealedArtifactGapIds.has(gap.id) && gap.tasks && gap.tasks.length > 0) {
+      if (
+        !sealedArtifactGapIds.has(gap.id) &&
+        remediationDispositionAppendsToPlan(gap.disposition) &&
+        gap.tasks &&
+        gap.tasks.length > 0
+      ) {
         allTasks.push(...gap.tasks);
       }
     }
@@ -3060,6 +3085,13 @@ export class Conductor {
     // BUILD. Bounded like prdAuditSelfHeals so a bug BUILD can't actually fix
     // eventually halts for a human instead of ping-ponging.
     let manualTestSelfHeals = 0;
+    // How many times a PUBLICATION defect at the finish gate (the recorded PR's
+    // own body/title/draft state) has re-dispatched `finish` for a body
+    // rewrite. Capped at one: the finish gate's own durable one-shot record
+    // (`.pipeline/pr-body-regen-attempt.json`) makes the second pass apply the
+    // deterministic body floor, so exactly one re-dispatch is what convergence
+    // needs. See PUBLICATION_REDISPATCH_BUDGET.
+    let publicationRedispatches = 0;
     // Retry hints queued for a step that will be (re)entered via a kickback.
     // A prd_audit impl-gap routes back to BUILD and MUST tell the BUILD agent
     // which FRs to close — otherwise BUILD was dispatched with no context, saw a
@@ -4729,6 +4761,13 @@ export class Conductor {
         // instead of the generic "retries exhausted" that hides an infra failure
         // behind a message that reads like a code-quality rejection.
         let graderDispatchFailureReason: string | undefined;
+        // Set when THIS step's last completion-gate miss was a pure
+        // publication defect (`missing: 'presentation'` — the recorded PR's own
+        // body/title/draft state, with every evidence check already passed).
+        // Consulted by the auto-mode failure handling below to re-dispatch the
+        // publication work instead of routing it through the /remediate
+        // planner, whose vocabulary has no PR-body route.
+        let finishPresentationDefect: string | undefined;
         // A failed Codex readiness probe cannot establish whether the cached
         // login is usable, so it authorizes one real dispatch as a bounded
         // recovery trial. The token is consumed before that dispatch starts.
@@ -5417,6 +5456,10 @@ export class Conductor {
 
             if (!completion.done) {
               lastError = `Step '${step.name}' completed but completion check failed: ${completion.reason ?? 'unknown'}`;
+              finishPresentationDefect =
+                step.name === 'finish' && completion.missing === 'presentation'
+                  ? (completion.reason ?? 'PR presentation is not a /pr-authored body')
+                  : undefined;
               retryHint = buildRetryHint(
                 step.name,
                 completion.reason,
@@ -6741,6 +6784,74 @@ export class Conductor {
               // Both terminal branches now require an operator: product/plan
               // gaps need DECIDE input, while an implementation gap reaches
               // this writer only after autonomous self-healing is exhausted.
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              const prUrl = await this.surfaceRemediationPr(reason);
+              await emitTracked({ type: 'loop_halt', reason, prUrl });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+
+            // Publication-defect fast path. A finish-gate refusal classified
+            // `missing: 'presentation'` is not a gap anyone needs to reason
+            // about: every evidence condition already passed and the gate has
+            // named the exact wrong thing about the recorded PR. Re-dispatch
+            // the publication work directly.
+            //
+            // This MUST come before the /remediate hook below. The planner's
+            // disposition vocabulary routes to build | acceptance_specs |
+            // architecture_review | plan | publication | halt, and before
+            // `publication` existed a placeholder PR body had to launder
+            // through `build` — turning a 30-second `gh pr edit` into an
+            // 18-task rebuild whose appended task then tripped the
+            // protected-artifact self-amendment guard on the plan file.
+            //
+            // This LAYERS UNDER the FINISH publication coordinator's own
+            // routing (`routeFinishPublicationDisposition`, above): that seam
+            // owns dispositions the coordinator itself reports and never
+            // reaches remediation. This one owns the other axis — the
+            // completion gate re-reading the recorded PR AFTER a step reported
+            // success and finding presentation the coordinator's
+            // verify-after-write did not correct. Without a coordinator wired
+            // in, it is the only guard on that axis.
+            //
+            // Bounded by PUBLICATION_REDISPATCH_BUDGET, which is exactly the
+            // budget the gate's own durable one-shot record needs: the second
+            // pass applies the deterministic body floor and converges. Once the
+            // budget is spent, the defect deliberately falls through to the
+            // generic HALT rather than the planner — a PR body is never
+            // something BUILD can fix.
+            if (step.name === 'finish' && finishPresentationDefect) {
+              if (publicationRedispatches < PUBLICATION_REDISPATCH_BUDGET) {
+                publicationRedispatches++;
+                await emitTracked({
+                  type: 'kickback',
+                  from: 'finish',
+                  to: 'finish',
+                  evidence: finishPresentationDefect,
+                  count: publicationRedispatches,
+                });
+                pendingRetryHints.set(
+                  'finish',
+                  buildRetryHint(
+                    'finish',
+                    finishPresentationDefect,
+                    'presentation',
+                    join(this.projectRoot, '.pipeline'),
+                  ),
+                );
+                // Re-enter finish itself. No navigateBack: nothing downstream
+                // of finish exists to invalidate, and the implementation work
+                // this defect sits on top of must stay untouched.
+                (state as Record<string, unknown>).finish = 'stale';
+                await writeState(this.stateFilePath, state);
+                i--; // for-loop i++ lands back on finish
+                continue;
+              }
+              const reason =
+                `finish halted on a PR publication defect after ` +
+                `${publicationRedispatches} body-rewrite re-dispatch(es): ${finishPresentationDefect}`;
               await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
               await writeState(this.stateFilePath, state);
               const prUrl = await this.surfaceRemediationPr(reason);
@@ -8414,10 +8525,13 @@ export function earliestRemediationTarget(
   let best: StepName = 'build';
   let bestIdx = steps.length;
   for (const g of fixes) {
-    const idx = steps.findIndex((s) => s.name === g.disposition);
+    // `publication` is a disposition, not a step name — it resolves to `finish`,
+    // the step that owns PR prose.
+    const stepName = remediationDispositionStep(g.disposition);
+    const idx = steps.findIndex((s) => s.name === stepName);
     if (idx >= 0 && idx < bestIdx) {
       bestIdx = idx;
-      best = g.disposition as StepName;
+      best = stepName as StepName;
     }
   }
   return best;
@@ -8456,6 +8570,20 @@ export function buildRemediationHint(
     const tasks = g.tasks.length ? ` Tasks: ${g.tasks.map((t) => t.title).join('; ')}` : '';
     return `- ${g.id} [${g.disposition}]: ${g.rationale}.${tasks}`;
   });
+  // A publication-only plan is a prose defect. The generic wording below tells
+  // the agent to "make the code/spec changes", which is exactly how a PR-body
+  // gap turned into implementation work.
+  if (fixes.every((g) => g.disposition === REMEDIATION_PUBLICATION_DISPOSITION)) {
+    return (
+      `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
+      `${evidenceFile}). These are PUBLICATION gaps: the implementation is complete and ` +
+      'must not change. Fix only the pull request\'s published prose — rewrite the PR body ' +
+      '(`## Why` / `## What Changed` / `## Testing`, plus the `Closes` reference) with ' +
+      '`gh pr edit`, and correct the title or issue linkage if named below. Do not change ' +
+      'code, do not amend the plan, and do not re-run the build:\n' +
+      lines.join('\n')
+    );
+  }
   return (
     `Remediating blocking ${source} gaps (see .pipeline/remediation.json and ` +
     `${evidenceFile}). The task list may already show complete, but the ` +
@@ -8487,10 +8615,32 @@ export function buildRemediationHint(
 export function buildRetryHint(
   step: StepName,
   reason: string | undefined,
-  missing?: 'recording' | 'other',
+  missing?: 'recording' | 'presentation' | 'other',
   pipelineDirArg?: string,
 ): string {
   const r = reason ?? 'unknown';
+  if (step === 'finish' && missing === 'presentation') {
+    // A publication defect: every evidence check passed and only the PR's own
+    // title/body/draft state is wrong. The default "finish the work now" hint
+    // reads as "the implementation is incomplete" and sends the agent back into
+    // the code — which is exactly how a 30-second `gh pr edit` once turned into
+    // an 18-task rebuild.
+    return (
+      `Previous attempt did not satisfy the completion check: ${r}. ` +
+      'The implementation, the tests and the shipped-record are already complete — ' +
+      'ONLY the pull request\'s presentation is wrong. Do NOT re-implement anything, ' +
+      'do not change code, do not touch the plan, and do not re-run the build. Fix the ' +
+      'PR in place:\n' +
+      '  1. Author a real body from the branch diff — `## Why`, `## What Changed`, ' +
+      '`## Testing`, plus the `Closes` reference — and write it with `gh pr edit ' +
+      '<pr-url> --body <body>`. It must read like a clean first-pass finish: no halt ' +
+      'boilerplate, no remediation narrative (those belong in a `gh pr comment`), and ' +
+      'no engine placeholder text.\n' +
+      '  2. If the PR is still a draft, mark it ready with `gh pr ready <pr-url>`.\n' +
+      'Then re-record the finish outcome. The step is NOT complete until the recorded ' +
+      'PR carries an authored body.'
+    );
+  }
   if (step === 'finish' && missing === 'recording') {
     const dirArg = pipelineDirArg ?? '.pipeline';
     return (

@@ -327,6 +327,23 @@ describe('conductor/surgical-retry', () => {
       expect(hint).toContain('finish-record');
     });
 
+    it("missing='presentation' asks only for a PR body rewrite, never for more implementation", async () => {
+      const reason =
+        'recorded PR https://github.com/o/r/pull/1 body is an engine-generated placeholder';
+
+      const hint = buildRetryHint('finish', reason, 'presentation');
+
+      expect(hint).toContain(reason);
+      // Body-rewrite instructions, in the template shape the gate enforces.
+      expect(hint).toContain('## Why');
+      expect(hint).toContain('## What Changed');
+      expect(hint).toContain('## Testing');
+      expect(hint).toContain('gh pr edit');
+      // Never re-open implementation: the code and the plan are done.
+      expect(hint).not.toContain('Finish the work now');
+      expect(hint).toMatch(/do not (re-?implement|change code)/i);
+    });
+
     it('should not mutate input parameters', async () => {
       const reason = 'test reason';
       const missing: 'recording' | undefined = 'recording';
