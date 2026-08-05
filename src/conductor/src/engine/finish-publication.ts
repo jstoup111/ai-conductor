@@ -440,6 +440,11 @@ const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]
     'draft_pr_skipped',
     'draft_pr_no-commits',
     'draft_pr_push-failed',
+    // The establish_pr push is lease-protected (the finish-time rebase rewrote
+    // the branch). A REJECTED lease is kept as its own reason: it means the
+    // remote carries work this checkout never saw, which is an operator-visible
+    // condition distinct from an ordinary push failure.
+    'draft_pr_lease-rejected',
     'draft_pr_failed',
     'pr_url_persistence_failed',
     'pr_identity_not_verified_after_establish',

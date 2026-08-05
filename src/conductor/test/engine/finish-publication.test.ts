@@ -400,6 +400,10 @@ describe('FINISH publication disposition routing', () => {
     ['establish_pr', 'draft_pr_skipped'],
     ['establish_pr', 'draft_pr_no-commits'],
     ['establish_pr', 'draft_pr_push-failed'],
+    // A rejected LEASE is a genuinely-moved remote, not the expected
+    // rebase divergence — it stays its own named reason so an operator can
+    // tell "someone else pushed" from "the push simply failed".
+    ['establish_pr', 'draft_pr_lease-rejected'],
     ['establish_pr', 'draft_pr_failed'],
     ['establish_pr', 'pr_identity_not_verified_after_establish'],
     ['write_shipped_record', 'shipped_record_effect_unavailable'],

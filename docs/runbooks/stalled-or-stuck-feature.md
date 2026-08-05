@@ -186,6 +186,32 @@ gh pr list --head <branch> --base <base> --state open --json url,state
 body, then clear the HALT using [the resume
 procedure](#clear-a-halt-and-let-the-feature-resume).
 
+#### FINISH publication retry exhausted: `draft_pr_lease-rejected`
+
+**Symptom:** the run repeats `FINISH publication: establish_pr` → `retry FINISH` until the
+publication budget is spent, and halts with
+`FINISH publication retry exhausted: draft_pr_lease-rejected`.
+
+**Diagnosis:** `establish_pr` publishes the feature branch with
+`git push -u origin <branch> --force-with-lease`, because the finish-time `rebase` step has just
+rewritten that branch's history — the branch diverges from its own remote by construction, and a
+plain push could never succeed. A rejected **lease** means something else: the remote branch carries
+commits this worktree has never observed, so the push was refused rather than overwriting them.
+(An ordinary transport or permission failure reports `draft_pr_push-failed` instead.)
+
+```bash
+git -C .worktrees/<slug> fetch origin <branch>
+git -C .worktrees/<slug> log --oneline HEAD..origin/<branch>
+```
+
+- **Rows come back.** Real unseen work is on the remote. Integrate it (rebase the feature branch onto
+  `origin/<branch>`, or reconcile by hand) before letting FINISH retry.
+- **Empty.** The remote-tracking ref was merely stale; the fetch above refreshes the lease.
+
+**Recovery:** once `HEAD..origin/<branch>` is empty, clear the HALT using
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume). Never resolve this with a bare
+`git push --force` — that discards the very commits the lease protected.
+
 #### `halt_marker`
 
 The `pipeline` skill wrote `.pipeline/halt-user-input-required` — a genuine question that no

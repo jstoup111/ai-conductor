@@ -284,6 +284,15 @@ export function createProductionFinishPublicationCoordinator(
             branch: state.worktree_branch,
             baseBranch: deps.baseBranch,
             featureDesc: state.feature_desc,
+            // FINISH runs AFTER the finish-time `rebase` step, which rewrites
+            // the feature branch's history — same work, new SHAs. The branch
+            // therefore diverges from its own remote by construction, and a
+            // plain push is rejected non-fast-forward on every attempt, which
+            // used to burn the whole publication retry budget and HALT the
+            // feature. Publish with a lease so the expected self-inflicted
+            // divergence goes through while an actually-moved remote is still
+            // refused (`lease-rejected`, never a bare `--force`).
+            pushMode: 'lease',
           },
           persistEstablishedPrUrl: async (prUrl) => {
             // A production run normally has a state file already. Preserve
