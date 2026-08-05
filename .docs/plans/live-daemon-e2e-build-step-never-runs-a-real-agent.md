@@ -395,6 +395,16 @@ trigger, or a `ci-gate` entry.
 **Story:** Story 3
 **Type:** infrastructure
 
+> **Amended 2026-08-05 by #1311:** Do not run this credentialed proof from the local BUILD
+> agent. The daemon selected Codex for BUILD, and its isolated provider home correctly strips
+> `CLAUDE_CODE_OAUTH_TOKEN`; exposing Claude's credential to that agent would violate the
+> cross-provider isolation contract. Defer the empirical custom-step resolution proof to the
+> credentialed `live-daemon-e2e.yml` GitHub Actions run, where the workflow injects the repository
+> secret only into the isolated Claude smoke process. Local BUILD records this task as deferred to
+> that workflow and proceeds to Task 19 using the already captured unresolved-command envelope.
+> The workflow result is the authoritative C-6 evidence and remains a merge/release gate; a missing
+> secret or failed probe blocks there rather than asking a local agent for the token.
+
 **Steps:**
 1. Determine empirically whether `maintain-documentation` and `release-disposition`
    (`.ai-conductor/config.yml:114-125`) resolve when dispatched as `/maintain-documentation`
@@ -428,6 +438,10 @@ trigger, or a `ci-gate` entry.
 
 **Wired-into:** none (no new production surface)
 **Dependencies:** Task 18
+
+> **Amended 2026-08-05 by #1311:** Task 19 may proceed locally after Task 18 records its GitHub
+> Actions deferral; it does not wait for a credentialed nested Claude invocation during BUILD.
+> The deferred Task 18 workflow verdict still gates merge/release independently.
 
 ### Task 20: Classify an unresolved step command as an unsuccessful invocation
 **Story:** Story 3
