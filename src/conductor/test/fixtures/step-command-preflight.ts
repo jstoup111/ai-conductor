@@ -1,3 +1,5 @@
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 import {
   STEP_SKILL_INVOCATIONS,
   renderSkillInvocation,
@@ -26,4 +28,14 @@ export function dispatchableStepCommands(providerKey: string): readonly Dispatch
       rendered: renderSkillInvocation(descriptor, providerKey),
     }];
   });
+}
+
+/** Verify that every registry-derived command resolves from the isolated home. */
+export async function assertStepCommandsResolve(
+  homeDir: string,
+  providerKey = 'claude',
+): Promise<void> {
+  await Promise.all(dispatchableStepCommands(providerKey).map(({ skillName }) =>
+    access(join(homeDir, 'skills', skillName, 'SKILL.md')),
+  ));
 }
