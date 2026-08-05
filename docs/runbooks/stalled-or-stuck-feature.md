@@ -139,8 +139,16 @@ checkout or to the operator's real `~/.claude`/`~/.codex` while a step was in fl
 names the paths** — each tagged `added`, `removed`, or `changed`, capped at eight entries followed by
 `and N more`, with exact counts. Read them before investigating anything else.
 
-- A path under the live checkout is usually an editor save or a generated file. Stop editing the
-  harness checkout while a build runs; edit inside the feature worktree instead.
+- A path under the live checkout is usually an untracked file an operator session wrote — a
+  permission or approval grant (Claude Code's `.claude/settings.local.json` is untracked and
+  fingerprinted), a scratch or generated artifact, or a new file staged with `git add`. Git can
+  say a path is tracked but not who wrote it, so the guard fails closed on everything it cannot
+  attribute. An edit or deletion of an **already-tracked** file reports `M`/`D` and does not halt;
+  a git operation that rewrites tracked content without leaving it modified (`git pull`,
+  `git checkout`, `git stash`) does halt, because `git status` then comes back clean. Batch
+  root-checkout work between dispatches, or do it inside a worktree — see the live-checkout rule
+  in `AGENT_INSTRUCTIONS.md`'s **Daemon Operations Safety** section. Issue #1301 tracks the
+  attribution machinery that will remove this false-halt class.
 - A provider-state path that is config-like (`settings.json`, `config.toml`, `hooks.json`) means an
   unrelated interactive session changed operator config mid-build. That trip is deliberate and
   fail-closed — those files stay fingerprinted precisely because a real leak would look identical.
