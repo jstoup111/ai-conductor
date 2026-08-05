@@ -21,4 +21,10 @@ describe('smoke capability declarations', () => {
 
     expect(getDeclaredSmokeCapability(file)).toBe('toolchain');
   });
+
+  it('rejects a discovered smoke file without a capability declaration', () => {
+    const file = 'test/smoke/undeclared.smoke.test.ts';
+
+    expect(() => getDeclaredSmokeCapability(file)).toThrow(file);
+  });
 });

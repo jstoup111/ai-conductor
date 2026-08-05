@@ -17,9 +17,13 @@ export function declareSmokeCapability(
   declarations.set(file, capability);
 }
 
-/** Returns a smoke test file's declared capability, if it has one. */
+/** Returns a smoke test file's declared capability. */
 export function getDeclaredSmokeCapability(
   file: string,
-): SmokeCapability | undefined {
-  return declarations.get(file);
+): SmokeCapability {
+  const capability = declarations.get(file);
+  if (capability === undefined) {
+    throw new Error(`Smoke file ${file} declares no capability`);
+  }
+  return capability;
 }
