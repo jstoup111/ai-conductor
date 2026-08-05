@@ -35,6 +35,10 @@ log()  { echo "  $*"; }
 
 AUTO_YES=false
 DRY_RUN=false
+MIGRATION_APPLIED_COUNT=0
+MIGRATION_SKIPPED_COUNT=0
+MIGRATION_FAILED_COUNT=0
+MIGRATION_ALREADY_APPLIED_COUNT=0
 for arg in "$@"; do
   case "$arg" in
     --yes|-y) AUTO_YES=true ;;
@@ -42,6 +46,14 @@ for arg in "$@"; do
     *) fail "Unknown flag: $arg"; exit 2 ;;
   esac
 done
+
+print_migration_summary() {
+  log "Migration summary: applied=${MIGRATION_APPLIED_COUNT} skipped=${MIGRATION_SKIPPED_COUNT} failed=${MIGRATION_FAILED_COUNT} already-applied=${MIGRATION_ALREADY_APPLIED_COUNT}"
+}
+
+# Keep the final disposition visible even when installation or a migration block
+# fails.  The counters only describe project-level migration blocks.
+trap print_migration_summary EXIT
 
 # ─── Read from_version from config ────────────────────────────────────────────
 
@@ -192,6 +204,33 @@ PY
 
 ledger_exists() {
   [ -f "$(ledger_path)" ]
+}
+
+ledger_initialize() {
+  local path
+  path=$(ledger_path)
+  python3 - "$path" <<'PY'
+import json
+import os
+import sys
+import tempfile
+from pathlib import Path
+
+path = Path(sys.argv[1])
+if path.exists():
+    raise SystemExit(0)
+path.parent.mkdir(parents=True, exist_ok=True)
+with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as output:
+    json.dump({"schemaVersion": 1, "appliedBlocks": []}, output, sort_keys=True)
+    output.write("\n")
+    temporary = output.name
+try:
+    os.link(temporary, path)
+except FileExistsError:
+    pass
+finally:
+    os.unlink(temporary)
+PY
 }
 
 ledger_record_applied() {
@@ -393,6 +432,44 @@ select_migration_candidates() {
   printf '%s' "$candidates"
 }
 
+count_already_applied_blocks() {
+  local blocks ledger current_version="" current_script="" identity count=0 first_run_from
+  if ledger_exists; then
+    blocks=$(extract_migration_blocks "" "")
+  else
+    first_run_from=$FROM_VERSION
+    if [ -n "$first_run_from" ] && ! [[ "$first_run_from" =~ ^v?[0-9]+(\.[0-9]+)+$ ]]; then
+      first_run_from=$TO_VERSION
+    fi
+    blocks=$(extract_migration_blocks "$first_run_from" "$TO_VERSION")
+  fi
+  ledger=$(ledger_read) || return 1
+  [ -z "$blocks" ] && { printf '0'; return 0; }
+
+  while IFS= read -r line; do
+    if [[ "$line" == ---MIGRATION-BLOCK---* ]]; then
+      if [ -n "$current_script" ]; then
+        identity=$(block_identity "$current_version" "$current_script")
+        if [ "$(ledger_has_identity "$ledger" "$identity")" -eq 0 ]; then
+          count=$((count + 1))
+        fi
+      fi
+      current_version="${line#*version=}"
+      current_script=""
+    else
+      current_script+="$line"$'\n'
+    fi
+  done <<< "$blocks"
+
+  if [ -n "$current_script" ]; then
+    identity=$(block_identity "$current_version" "$current_script")
+    if [ "$(ledger_has_identity "$ledger" "$identity")" -eq 0 ]; then
+      count=$((count + 1))
+    fi
+  fi
+  printf '%s' "$count"
+}
+
 execute_migration_block() {
   local script=$1
   HARNESS_DIR="$HARNESS_DIR" bash -c 'set -euo pipefail; eval "$1"' migration-block "$script"
@@ -408,9 +485,13 @@ run_project_migrations() {
     return 0
   fi
 
-  local blocks
+  local blocks candidate_count
   if ! blocks=$(select_migration_candidates); then
     fail "Cannot select migration candidates until the ledger is resolved"
+    return 1
+  fi
+  if ! MIGRATION_ALREADY_APPLIED_COUNT=$(count_already_applied_blocks); then
+    fail "Cannot count already-applied migration blocks until the ledger is resolved"
     return 1
   fi
   if [ -z "$blocks" ]; then
@@ -423,13 +504,25 @@ run_project_migrations() {
   echo "$blocks"
   echo ""
 
+  candidate_count=$(printf '%s\n' "$blocks" | grep -c '^---MIGRATION-BLOCK---')
+
   if [ "$DRY_RUN" = true ]; then
+    MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
     log "(dry-run) would execute the blocks above"
     return 0
   fi
 
+  # Once migrations have been discovered, make the ledger authoritative even
+  # if none are approved this run.  Pending blocks must survive a later
+  # currentVersion advance; dry-runs intentionally leave no trace.
+  if ! ledger_initialize; then
+    fail "Cannot initialize migration ledger for pending blocks"
+    return 1
+  fi
+
   if [ "$AUTO_YES" != true ] && [ ! -t 0 ]; then
-    warn "No TTY and --yes not set — skipping project migrations"
+    MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
+    warn "No TTY and --yes not set — leaving project migrations pending; rerun with --yes or from a terminal"
     return 0
   fi
 
@@ -457,6 +550,7 @@ run_project_migrations() {
         case "$choice" in
           [yY]|[yY][eE][sS]) break ;;
           [nN]|[nN][oO])
+            MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + 1))
             warn "Skipping migration for $current_version at candidate block $current_position"
             return 0
             ;;
@@ -476,13 +570,16 @@ run_project_migrations() {
 
     info "Executing migration for $current_version (candidate block $current_position)"
     if ! execute_migration_block "$current_script"; then
+      MIGRATION_FAILED_COUNT=$((MIGRATION_FAILED_COUNT + 1))
       fail "Migration for $current_version failed at candidate block $current_position"
       return 1
     fi
     if ! ledger_record_applied "$current_version" "$current_script"; then
+      MIGRATION_FAILED_COUNT=$((MIGRATION_FAILED_COUNT + 1))
       fail "Migration for $current_version succeeded but could not be recorded at candidate block $current_position"
       return 1
     fi
+    MIGRATION_APPLIED_COUNT=$((MIGRATION_APPLIED_COUNT + 1))
     ok "Migration $current_version applied"
   }
 
@@ -502,6 +599,7 @@ run_project_migrations() {
   if [ -n "$current_script" ]; then
     apply_current_block || return 1
   fi
+  MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count - MIGRATION_APPLIED_COUNT - MIGRATION_SKIPPED_COUNT))
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────

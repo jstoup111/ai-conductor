@@ -84,6 +84,13 @@ run_tty() {
   set -e
 }
 
+run_no_tty() {
+  set +e
+  NO_TTY_OUT=$(cd "$CONSUMER" && HOME="$HOME_DIR" PATH="$TEST_PATH" "$HARNESS/bin/migrate" "$@" </dev/null 2>&1)
+  NO_TTY_CODE=$?
+  set -e
+}
+
 ledger_applied_count() {
   python3 - "$HOME_DIR/.ai-conductor/migrations" <<'PY'
 import json
@@ -96,6 +103,15 @@ if not ledgers:
 else:
     print(len(json.loads(ledgers[0].read_text())["appliedBlocks"]))
 PY
+}
+
+ledger_path() {
+  find "$HOME_DIR/.ai-conductor/migrations" -name '*.json' -print -quit 2>/dev/null || true
+}
+
+summary_has_count() {
+  local output=$1 label=$2 expected=$3
+  printf '%s\n' "$output" | rg -iq "(^|[^[:alnum:]-])${label}[[:space:]]*[:=][[:space:]]*${expected}([^0-9]|$)"
 }
 
 if ! command -v script >/dev/null 2>&1; then
@@ -157,6 +173,69 @@ run_tty $'wat\ny\ns\n'
 PROMPT_COUNT=$(printf '%s\n' "$TTY_OUT" | rg -ic 'accept.*skip.*all.*stop' || true)
 assert 'an invalid response is rejected and re-prompts before executing' "$(
   [ "$TTY_CODE" -eq 0 ] && [ "$PROMPT_COUNT" -ge 2 ] && contains "$TTY_OUT" 'Unrecognized response' && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = 'first' ] && echo 0 || echo 1
+)"
+
+make_fixture no-tty
+run_no_tty
+assert 'no-TTY execution leaves every pending block unexecuted and explains recovery' "$(
+  [ "$NO_TTY_CODE" -eq 0 ] && [ ! -e "$CONSUMER/execution.log" ] && contains "$NO_TTY_OUT" 'pending' && contains "$NO_TTY_OUT" '--yes' && echo 0 || echo 1
+)"
+assert 'no-TTY summary counts pending blocks as skipped without applying or failing any' "$(
+  summary_has_count "$NO_TTY_OUT" applied 0 && summary_has_count "$NO_TTY_OUT" skipped 2 && summary_has_count "$NO_TTY_OUT" failed 0 && summary_has_count "$NO_TTY_OUT" already-applied 0 && echo 0 || echo 1
+)"
+
+make_fixture no-tty-yes
+run_no_tty --yes
+assert '--yes applies and records every pending block without a TTY' "$(
+  [ "$NO_TTY_CODE" -eq 0 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && [ "$(ledger_applied_count)" -eq 2 ] && echo 0 || echo 1
+)"
+assert '--yes summary reports applied blocks with no skipped or failed outcomes' "$(
+  summary_has_count "$NO_TTY_OUT" applied 2 && summary_has_count "$NO_TTY_OUT" skipped 0 && summary_has_count "$NO_TTY_OUT" failed 0 && summary_has_count "$NO_TTY_OUT" already-applied 0 && echo 0 || echo 1
+)"
+
+make_fixture dry-run
+run_no_tty --yes
+DRY_LEDGER=$(ledger_path)
+DRY_LEDGER_BEFORE=$(cat "$DRY_LEDGER")
+cat >> "$HARNESS/CHANGELOG.md" <<'EOF'
+
+```bash migration
+printf 'third\n' >> execution.log
+```
+EOF
+run_no_tty --dry-run
+assert '--dry-run leaves an existing ledger byte-for-byte unchanged' "$(
+  [ "$NO_TTY_CODE" -eq 0 ] && [ "$(cat "$DRY_LEDGER")" = "$DRY_LEDGER_BEFORE" ] && echo 0 || echo 1
+)"
+assert '--dry-run executes no newly pending migration block' "$(
+  [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
+)"
+assert '--dry-run summary classifies every previewed block without applying or failing it' "$(
+  summary_has_count "$NO_TTY_OUT" applied 0 && summary_has_count "$NO_TTY_OUT" skipped 1 && summary_has_count "$NO_TTY_OUT" failed 0 && summary_has_count "$NO_TTY_OUT" already-applied 2 && echo 0 || echo 1
+)"
+
+make_fixture version-advanced-rerun
+run_no_tty
+printf '{"currentVersion": "v1.2.0"}\n' > "$HOME_DIR/.claude/ai-conductor.config.json"
+run_no_tty --yes
+assert 'a version advance after a no-TTY run cannot make pending blocks unreachable' "$(
+  [ "$NO_TTY_CODE" -eq 0 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
+)"
+run_no_tty --yes
+assert 'rerun summary reports already-applied blocks without re-executing them' "$(
+  [ "$NO_TTY_CODE" -eq 0 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && summary_has_count "$NO_TTY_OUT" applied 0 && summary_has_count "$NO_TTY_OUT" skipped 0 && summary_has_count "$NO_TTY_OUT" failed 0 && summary_has_count "$NO_TTY_OUT" already-applied 2 && echo 0 || echo 1
+)"
+
+make_fixture failure-summary
+cat >> "$HARNESS/CHANGELOG.md" <<'EOF'
+
+```bash migration
+false
+```
+EOF
+run_no_tty --yes
+assert 'a failed block produces a four-way summary with the failed count' "$(
+  [ "$NO_TTY_CODE" -ne 0 ] && summary_has_count "$NO_TTY_OUT" applied 2 && summary_has_count "$NO_TTY_OUT" skipped 0 && summary_has_count "$NO_TTY_OUT" failed 1 && summary_has_count "$NO_TTY_OUT" already-applied 0 && echo 0 || echo 1
 )"
 
 printf '\n%d passed, %d failed, %d total\n' "$PASS" "$FAIL" "$TOTAL"
