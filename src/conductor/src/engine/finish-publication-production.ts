@@ -18,7 +18,7 @@ import {
   NEEDS_REMEDIATION_TITLE_PREFIX,
   PR_BODY_FLOOR_MARKER,
 } from './halt-pr-rehabilitation.js';
-import { replaceState, requireStateMutation, savePrUrl } from './state.js';
+import { replaceState, requireStateMutation, savePrUrl, stepDone } from './state.js';
 import {
   dispatchFinishRecord,
   type FinishRecordRunners,
@@ -188,10 +188,20 @@ export function createProductionFinishPublicationCoordinator(
         intent,
         ports: {
           filesystem: {
+            // A step the engine resolved by SKIPPING is resolved evidence, not
+            // absent evidence: `stepDone` is the same 'done' || 'skipped'
+            // predicate every other resolution site uses. Comparing to 'done'
+            // alone reported a legitimately skipped step as missing, which
+            // preflight maps to `*_evidence_invalid` — a disposition the router
+            // deliberately has no rule for, so every technical-track feature
+            // (no manual_test, no prd_audit) halted at FINISH with all work
+            // green.
             observeImplementationEvidence: async () =>
-              state.build_review === 'done' && state.test_suite === 'done' ? 'present' : 'missing',
+              stepDone(state, 'build_review') && stepDone(state, 'test_suite')
+                ? 'present'
+                : 'missing',
             observeShipEvidence: async () =>
-              state.manual_test === 'done' && state.architecture_review_as_built === 'done'
+              stepDone(state, 'manual_test') && stepDone(state, 'architecture_review_as_built')
                 ? 'present'
                 : 'missing',
             observeOutcomeRecord: async () =>
