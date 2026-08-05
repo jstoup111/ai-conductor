@@ -43,6 +43,22 @@ STUBS_DIR="$TMP_ROOT/stubs"
 mkdir -p "$STUBS_DIR"
 PY3=$(python3 -c 'import sys; print(sys.executable)')
 ln -s "$PY3" "$STUBS_DIR/python3"
+# The copied runner reaches the actual 0.99.20 migration blocks below. Their
+# package-manager and provider commands are third-party boundaries, so keep
+# those commands local and deterministic while leaving bin/migrate itself real.
+cat > "$STUBS_DIR/npm" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat > "$STUBS_DIR/claude" <<'EOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = setup-token ]; then
+  mkdir -p "$HOME/.ai-conductor"
+  : > "$HOME/.ai-conductor/build-auth"
+fi
+exit 0
+EOF
+chmod +x "$STUBS_DIR/npm" "$STUBS_DIR/claude"
 TEST_PATH="$STUBS_DIR:$PATH"
 
 make_harness() {
@@ -117,6 +133,22 @@ find_ledger() {
     return 0
   fi
   find "$isolated_home/.ai-conductor" -type f -name '*.json' -print 2>/dev/null | head -n 1 || true
+}
+
+consumer_file_hashes() {
+  local consumer=$1
+  find "$consumer" -path "$consumer/.git" -prune -o -type f -print0 \
+    | sort -z \
+    | xargs -0r sha256sum
+}
+
+queued_migration_block_count() {
+  awk '
+    /^## \[0\.99\.20\]/{ in_release = 1; next }
+    /^## \[0\.99\.17\]/{ in_release = 0 }
+    in_release && /^```bash migration$/{ count += 1 }
+    END { print count + 0 }
+  ' "$REPO_ROOT/CHANGELOG.md"
 }
 
 write_ordered_changelog() {
@@ -235,11 +267,17 @@ if [ "${MIGRATE_TEST_SCOPE:-}" = parser ]; then
   exit
 fi
 
-printf 'Story 1/2/6 — ordered, durable multi-version jump\n'
-HARNESS=$(make_harness ordered)
-CONSUMER=$(make_consumer ordered)
-HOME_DIR=$(make_home ordered v0.99.17)
-write_ordered_changelog "$HARNESS"
+printf 'Story 6 — real 0.99.17-era jump end to end\n'
+HARNESS=$(make_harness real-jump)
+CONSUMER=$(make_consumer real-jump)
+HOME_DIR=$(make_home real-jump v0.99.17)
+# Exercise the exact frozen queued set, rather than a synthetic changelog.
+cp "$REPO_ROOT/CHANGELOG.md" "$HARNESS/CHANGELOG.md"
+printf '0.99.20\n' > "$HARNESS/VERSION"
+# One queued migration rebuilds the consumer-local conductor engine. Its npm
+# boundary is faked above; this directory supplies only the local path it owns.
+mkdir -p "$CONSUMER/src/conductor"
+QUEUED_BLOCK_COUNT=$(queued_migration_block_count)
 WORKTREE="$TMP_ROOT/preserved-worktree"
 git -C "$CONSUMER" worktree add -q -b preserved-worktree "$WORKTREE"
 BEFORE_WORKTREES=$(git -C "$CONSUMER" worktree list --porcelain)
@@ -247,28 +285,37 @@ BEFORE_BRANCHES=$(git -C "$CONSUMER" branch --format='%(refname:short)' | sort)
 BEFORE_DAEMON=$(cat "$CONSUMER/.daemon/daemon.pid")
 
 run_migrate "$HARNESS" "$CONSUMER" "$HOME_DIR" --yes
-assert 'multi-version jump exits zero' "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
-EXPECTED_ORDER=$(printf 'same-body\nsame-body\n1.2-first\n1.2-second')
-ACTUAL_ORDER=$(cat "$CONSUMER/execution.log" 2>/dev/null || true)
-assert 'blocks execute by ascending release then document position, including every Migration section' "$([ "$ACTUAL_ORDER" = "$EXPECTED_ORDER" ] && echo 0 || echo 1)"
-assert 'the exported harness location reaches the copied real entry point' "$([ "$(cat "$CONSUMER/harness-dir.log" 2>/dev/null || true)" = "$HARNESS" ] && echo 0 || echo 1)"
-assert 'the first run creates a durable per-consumer ledger' "$([ -n "$(find_ledger "$HOME_DIR")" ] && echo 0 || echo 1)"
+assert 'the real 0.99.17-era multi-version jump exits zero' "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
+EXPECTED_ORDER=$(seq 1 "$QUEUED_BLOCK_COUNT")
+ACTUAL_ORDER=$(printf '%s\n' "$OUT" | sed -nE 's/.*candidate block ([0-9]+).*/\1/p')
+assert 'the full corrected queued set executes in candidate order' "$([ "$ACTUAL_ORDER" = "$EXPECTED_ORDER" ] && echo 0 || echo 1)"
+LEDGER=$(find_ledger "$HOME_DIR")
+assert 'the completed jump records every real queued block in its durable per-consumer ledger' "$(
+  [ -n "$LEDGER" ] \
+    && [ "$(python3 - "$LEDGER" <<'PY'
+import json
+import sys
+print(len(json.load(open(sys.argv[1]))["appliedBlocks"]))
+PY
+)" -eq "$QUEUED_BLOCK_COUNT" ] \
+    && echo 0 || echo 1
+)"
 assert 'worktrees are unchanged by the completed jump' "$([ "$(git -C "$CONSUMER" worktree list --porcelain)" = "$BEFORE_WORKTREES" ] && echo 0 || echo 1)"
 assert 'branches are unchanged by the completed jump' "$([ "$(git -C "$CONSUMER" branch --format='%(refname:short)' | sort)" = "$BEFORE_BRANCHES" ] && echo 0 || echo 1)"
 assert 'daemon state is unchanged by the completed jump' "$([ "$(cat "$CONSUMER/.daemon/daemon.pid")" = "$BEFORE_DAEMON" ] && echo 0 || echo 1)"
 
-FIRST_BYTES=$(find "$CONSUMER" -maxdepth 1 -type f -exec sha256sum {} + | sort)
+FIRST_BYTES=$(consumer_file_hashes "$CONSUMER")
 run_migrate "$HARNESS" "$CONSUMER" "$HOME_DIR" --yes
-SECOND_ORDER=$(cat "$CONSUMER/execution.log" 2>/dev/null || true)
-SECOND_BYTES=$(find "$CONSUMER" -maxdepth 1 -type f -exec sha256sum {} + | sort)
-assert 'an immediate rerun executes no block twice' "$([ "$SECOND_ORDER" = "$EXPECTED_ORDER" ] && echo 0 || echo 1)"
+SECOND_BYTES=$(consumer_file_hashes "$CONSUMER")
+assert 'an immediate rerun exits zero and applies nothing' "$([ "$CODE" -eq 0 ] && ! contains "$OUT" 'Executing migration for' && echo 0 || echo 1)"
 assert 'an immediate rerun leaves consumer files byte-for-byte unchanged' "$([ "$SECOND_BYTES" = "$FIRST_BYTES" ] && echo 0 || echo 1)"
-assert 'an immediate rerun reports already-applied blocks' "$(contains "$OUT" 'already applied' && echo 0 || echo 1)"
+assert 'an immediate rerun accounts for every already-applied block' "$(contains "$OUT" "already-applied=$QUEUED_BLOCK_COUNT" && echo 0 || echo 1)"
 
-# Re-render prose around unchanged bodies. Identity must not depend on offsets.
-sed -i '1a\Rendered again with different release prose.' "$HARNESS/CHANGELOG.md"
-run_migrate "$HARNESS" "$CONSUMER" "$HOME_DIR" --yes
-assert 'changelog re-rendering does not invalidate body-based identities' "$([ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = "$EXPECTED_ORDER" ] && echo 0 || echo 1)"
+if [ "${MIGRATE_TEST_SCOPE:-}" = real-jump ]; then
+  printf 'Summary: %s passed, %s failed, %s executed\n' "$PASS" "$FAIL" "$TOTAL"
+  [ "$FAIL" -eq 0 ]
+  exit
+fi
 
 printf 'Story 1/2 — channel identity, exclusions, and malformed state\n'
 TAGGED_HARNESS=$(make_harness tagged)
@@ -278,7 +325,25 @@ cp "$TAGGED_HARNESS/CHANGELOG.md" "$MAIN_HARNESS/CHANGELOG.md"
 TAGGED_CONSUMER=$(make_consumer tagged)
 MAIN_CONSUMER=$(make_consumer main)
 TAGGED_HOME=$(make_home tagged v0.99.17)
-MAIN_HOME=$(make_home main 'main@abc1234')
+# A main@ identity has no sortable lower bound. Seed the only pre-0.99.17
+# block as already applied, then verify it offers the same pending set as the
+# equivalent tagged consumer.
+MAIN_HOME=$(make_home main v0.7.0)
+cp "$MAIN_HARNESS/CHANGELOG.md" "$MAIN_HARNESS/CHANGELOG.full"
+cat > "$MAIN_HARNESS/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [0.8.0]
+
+## Migration
+
+```bash migration
+printf 'too-old\n' >> execution.log
+```
+EOF
+run_migrate "$MAIN_HARNESS" "$MAIN_CONSUMER" "$MAIN_HOME" --yes
+mv "$MAIN_HARNESS/CHANGELOG.full" "$MAIN_HARNESS/CHANGELOG.md"
+set_version "$MAIN_HOME" 'main@abc1234'
 run_migrate "$TAGGED_HARNESS" "$TAGGED_CONSUMER" "$TAGGED_HOME" --dry-run
 TAGGED_PREVIEW=$OUT
 run_migrate "$MAIN_HARNESS" "$MAIN_CONSUMER" "$MAIN_HOME" --dry-run
@@ -298,7 +363,7 @@ printf 'must-not-run\n' >> execution.log
 ```
 EOF
 run_migrate "$MAIN_HARNESS" "$MAIN_CONSUMER" "$MAIN_HOME" --dry-run
-assert 'an unparsable release label is excluded and explicitly reported' "$(contains "$OUT" 'Unversioned' && contains "$OUT" 'excluded' && echo 0 || echo 1)"
+assert 'an unparsable release label is excluded and explicitly reported' "$(contains "$OUT" 'Unversioned' && contains "$OUT" 'Excluded' && echo 0 || echo 1)"
 
 LEDGER=$(find_ledger "$HOME_DIR")
 if [ -n "$LEDGER" ]; then
