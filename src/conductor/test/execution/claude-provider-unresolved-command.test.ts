@@ -50,6 +50,23 @@ describe('Claude custom-step command resolution evidence (#1311)', () => {
     });
   });
 
+  it('classifies from raw zero turns when token counts and the process exit code are zero', async () => {
+    const envelope = {
+      subtype: 'success', is_error: false, num_turns: 0,
+      result: 'Unknown command: /pipeline',
+      total_cost_usd: 0,
+      usage: { input_tokens: 0, output_tokens: 0 },
+    };
+
+    expect(parseJsonResult(JSON.stringify(envelope)).numTurns).toBe(0);
+    await expect(invokeEnvelope('/pipeline', envelope)).resolves.toMatchObject({
+      success: false,
+      exitCode: 0,
+      commandUnresolved: true,
+      commandUnresolvedName: 'pipeline',
+    });
+  });
+
   it('keeps prose, bare zero-turn, and mismatched-command results successful', async () => {
     const [prose, bareZeroTurn, differentCommand] = await Promise.all([
       invokeEnvelope('/pipeline', {
