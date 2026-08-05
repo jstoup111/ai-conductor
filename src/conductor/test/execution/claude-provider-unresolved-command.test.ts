@@ -1,9 +1,12 @@
-import { access, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { access, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ClaudeProvider, parseJsonResult } from '../../src/execution/claude-provider.js';
+import { Conductor } from '../test-conductor.js';
+import type { StepRunner } from '../../src/engine/conductor.js';
+import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { provisionProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 const worktreeRoot = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -65,6 +68,59 @@ describe('Claude custom-step command resolution evidence (#1311)', () => {
       commandUnresolved: true,
       commandUnresolvedName: 'pipeline',
     });
+  });
+
+  it('halts an unresolved command mechanically without retrying, escalating, or changing providers', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'unresolved-command-conductor-'));
+    const stateFilePath = join(projectRoot, 'conduct-state.json');
+    await writeFile(stateFilePath, JSON.stringify({
+      worktree: 'done', memory: 'done', explore: 'done', complexity: 'done',
+      complexity_tier: 'S', track: 'technical', stories: 'done', conflict_check: 'done',
+      plan: 'done', coherence_check: 'done', architecture_diagram: 'done',
+      architecture_review: 'done', acceptance_specs: 'done',
+    }));
+    const events = new ConductorEventEmitter();
+    const retries: unknown[] = [];
+    events.on('step_retry', (event) => { retries.push(event); });
+    const runner = {
+      run: vi.fn(async () => ({
+        success: false,
+        output: 'Unknown command: /pipeline',
+        commandUnresolved: true,
+        commandUnresolvedName: 'pipeline',
+        actualProvider: 'claude',
+        attempts: [{ provider: 'claude', invoked: true }],
+      })),
+    } as unknown as StepRunner;
+    const escalateBuildFailure = vi.fn(async () => ({}));
+    const conductor = new Conductor({
+      projectRoot,
+      stateFilePath,
+      stepRunner: runner,
+      events,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: false,
+      maxRetries: 3,
+      escalateBuildFailure,
+    });
+
+    try {
+      await conductor.run();
+      expect({
+        calls: vi.mocked(runner.run).mock.calls.length,
+        retries,
+        escalationCalls: escalateBuildFailure.mock.calls.length,
+        haltClass: await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
+      }).toEqual({
+        calls: 1,
+        retries: [],
+        escalationCalls: 0,
+        haltClass: 'mechanical',
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   it('keeps prose, bare zero-turn, and mismatched-command results successful', async () => {
