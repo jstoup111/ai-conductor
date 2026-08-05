@@ -391,6 +391,25 @@ describe('verifyProtectedArtifactSeal', () => {
     });
   });
 
+  it('accepts base-tip content when the workspace differs from this branch HEAD', async () => {
+    const repo = await makeRepo({ '.docs/plans/other-feature.md': 'approved plan\n' });
+    await git(repo, ['checkout', '-q', '-b', 'feat']);
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    await git(repo, ['checkout', '-q', 'main']);
+    await writeProjectFile(repo, '.docs/plans/other-feature.md', 'base-tip plan\n');
+    await git(repo, ['add', '.docs/plans/other-feature.md']);
+    await git(repo, ['commit', '-q', '-m', 'base updates plan']);
+    await git(repo, ['checkout', '-q', 'feat']);
+    await writeProjectFile(repo, '.docs/plans/other-feature.md', 'base-tip plan\n');
+
+    await expect(
+      verifyProtectedArtifactSeal({ projectRoot: repo, featureDesc: 'mine', baseBranch: 'main' }),
+    ).resolves.toMatchObject({ ok: true });
+  });
+
   it.each([
     ['deleted', async (repo: string) => rm(join(repo, '.docs/plans/feature.md')),
       'Protected artifact deleted: .docs/plans/feature.md'],
