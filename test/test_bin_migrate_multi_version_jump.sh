@@ -36,6 +36,11 @@ contains() {
   esac
 }
 
+if ! command -v rg >/dev/null 2>&1; then
+  printf 'SKIP ripgrep is required for multi-version migration acceptance coverage\n'
+  exit 0
+fi
+
 TMP_ROOT=$(mktemp -d)
 trap 'rm -rf "$TMP_ROOT"' EXIT
 
