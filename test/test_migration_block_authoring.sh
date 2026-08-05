@@ -89,6 +89,30 @@ cp "${PROJECT_ROOT}"/.claude/harness/hooks/claude/post-commit-derive-feedback.sh
 ```
 EOF
 
+assert_fixture quoted-command-substitution-conductor-source 1 ':8: harness-path clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+cd "$(git rev-parse --show-toplevel)"/src/conductor
+```
+EOF
+
+assert_fixture quoted-command-substitution-hook-source 1 ':8: harness-path clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+cp "$(git rev-parse --show-toplevel)"/.claude/harness/hooks/claude/post-commit-derive-feedback.sh "$PROJECT_ROOT/.git/hooks/post-commit"
+```
+EOF
+
 assert_fixture forced-removal 1 ':8: destructive-git clause' <<'EOF'
 # Changelog
 
