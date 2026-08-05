@@ -11,6 +11,7 @@
 // value directly — if propagation ever breaks (a vitest pool change, an
 // `env` override in the config), this fails instead of the leak returning.
 import { describe, it, expect } from 'vitest';
+import { execa } from 'execa';
 import { mkdtemp, rm } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
@@ -40,5 +41,25 @@ describe('tmpdir redirect propagation into forked workers', () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  describe('git ceiling propagation', () => {
+    it('keeps Git discovery inside the run root in this forked worker', async () => {
+      // Git receives the worker's inherited environment. A new non-repository
+      // directory below the ceiling must not search upward into this checkout.
+      const fixture = await mkdtemp(join(tmpdir(), 'git-ceiling-propagation-probe-'));
+      try {
+        expect(process.env.GIT_CEILING_DIRECTORIES?.split(':')).toContain(runRoot);
+
+        const result = await execa('git', ['rev-parse', '--show-toplevel'], {
+          cwd: fixture,
+          reject: false,
+        });
+
+        expect(result.exitCode).not.toBe(0);
+      } finally {
+        await rm(fixture, { recursive: true, force: true });
+      }
+    });
   });
 });

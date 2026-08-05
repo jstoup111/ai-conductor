@@ -169,6 +169,28 @@ describe('resolveMainRepoRoot (Task 1)', () => {
     expect(resolved).toBe(mainRoot);
   });
 
+  describe('with the run Git ceiling active (Task 8)', () => {
+    beforeEach(() => {
+      expect(process.env.GIT_CEILING_DIRECTORIES?.split(':')).toContain(tmpdir());
+    });
+
+    it('returns a fixture repository’s own root', async () => {
+      await initRepoWithWorktree('fixture-root');
+
+      await expect(resolveMainRepoRoot(mainRoot)).resolves.toBe(mainRoot);
+    });
+
+    it('returns a fixture repository’s root from its linked worktree', async () => {
+      const worktreeDir = await initRepoWithWorktree('fixture-worktree');
+
+      await expect(resolveMainRepoRoot(worktreeDir)).resolves.toBe(mainRoot);
+    });
+
+    it('preserves the passed directory for a non-Git fixture', async () => {
+      await expect(resolveMainRepoRoot(mainRoot)).resolves.toBe(mainRoot);
+    });
+  });
+
   it('resolveMainRepoRoot caches results per startDir to avoid repeated git calls', async () => {
     const worktreeDir = await initRepoWithWorktree('test-feat');
 

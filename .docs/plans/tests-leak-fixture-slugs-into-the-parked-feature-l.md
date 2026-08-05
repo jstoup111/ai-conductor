@@ -90,7 +90,8 @@ close #1251 last (Tasks 8–9), since they depend on both mechanisms.
   `snapshotParkedMarkers`, `diffParkedMarkers`
 - `src/conductor/test/park-leak-guard.test.ts` — new unit tests
 
-**Wired-into:** none (inert until `src/conductor/test/global-setup.ts`)
+**Wired-into:** `src/conductor/test/global-setup.ts#setup`,
+`src/conductor/test/global-setup.ts#runTeardownGuards`
 
 **Dependencies:** none
 
