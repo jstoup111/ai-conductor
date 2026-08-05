@@ -144,6 +144,88 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  it('halts on the FIRST attempt for a non-retryable publication reason, without spending the budget', async () => {
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        calls.push(step);
+        return {
+          success: false,
+          publicationDisposition: {
+            kind: 'publication_retry',
+            transition: 'establish_pr',
+            // The remote carries work this checkout never observed. Re-running
+            // the identical transition pushes the identical lease against the
+            // identical remote-tracking ref, so every further attempt is
+            // guaranteed to reach this same halt ~9s later.
+            reason: 'draft_pr_lease-rejected',
+          },
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 6,
+      events: new ConductorEventEmitter(),
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await conductor.run();
+
+    expect(calls).toEqual(['finish']);
+    const halt = await readFile(join(dir, '.pipeline/HALT'), 'utf8');
+    expect(halt).toContain('draft_pr_lease-rejected');
+    expect(halt).toContain('not retryable');
+    // Distinguishable from the exhausted-budget halt: the operator must not be
+    // left wondering whether six attempts were spent.
+    expect(halt).not.toContain('retry exhausted');
+  });
+
+  it('still spends the full retry budget for a transient publication reason', async () => {
+    const calls: StepName[] = [];
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        calls.push(step);
+        return {
+          success: false,
+          publicationDisposition: {
+            kind: 'publication_retry',
+            transition: 'ready_pr',
+            // A GitHub call that failed once can succeed on the next attempt.
+            reason: 'presentation_repair_failed',
+          },
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      events: new ConductorEventEmitter(),
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await conductor.run();
+
+    expect(calls).toEqual(['finish', 'finish', 'finish']);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'FINISH publication retry exhausted: presentation_repair_failed',
+    );
+  });
+
   it('routes a production accepted judgment through FINISH retry without a needs-human HALT', async () => {
     const pipeline = join(dir, '.pipeline');
     const productionStatePath = join(pipeline, 'conduct-state.json');

@@ -344,4 +344,121 @@ describe('openShipDraftPr', () => {
     const create = ghCalls.find((c) => c[1] === 'create')!;
     expect(create[create.indexOf('--title') + 1]).toBe('feat: widget import');
   });
+
+  // --- pushMode: the FINISH-time rebase rewrites history ------------------
+  //
+  // SHIP start and FINISH `establish_pr` reach this same publisher at moments
+  // with DIFFERENT safety properties. At SHIP start a rejection means the
+  // remote moved under an unmodified branch, so a plain push is correct. After
+  // the finish-time rebase the divergence is expected and self-inflicted, and a
+  // plain push can never succeed — the call site must be able to ask for a
+  // lease-protected publish (never bare `--force`).
+
+  it('defaults to a plain push when no pushMode is supplied', async () => {
+    const { git, calls: gitCalls } = aheadGit();
+    const { gh } = createsGh();
+
+    await openShipDraftPr({ gh, git, cwd: CWD, branch: BRANCH, baseBranch: BASE, featureDesc: 'x' });
+
+    expect(gitCalls.find((c) => c[0] === 'push')).toEqual(['push', '-u', 'origin', BRANCH]);
+    expect(gitCalls.flat()).not.toContain('--force-with-lease');
+  });
+
+  it('keeps the SHIP-start call site on a plain push when pushMode is explicitly plain', async () => {
+    const { git, calls: gitCalls } = aheadGit();
+    const { gh } = createsGh();
+
+    await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'x',
+      pushMode: 'plain',
+    });
+
+    expect(gitCalls.find((c) => c[0] === 'push')).toEqual(['push', '-u', 'origin', BRANCH]);
+    expect(gitCalls.flat()).not.toContain('--force-with-lease');
+    expect(gitCalls.flat()).not.toContain('--force');
+  });
+
+  it('publishes a rewritten branch with --force-with-lease when pushMode is lease', async () => {
+    const { git, calls: gitCalls } = fakeGit((args) => {
+      if (args[0] === 'rev-list') return { stdout: '31\n' };
+      if (args[0] === 'push') {
+        // A rebased branch can never be published by a plain push.
+        if (!args.includes('--force-with-lease')) {
+          return new Error('! [rejected] feat/widget-import -> feat/widget-import (non-fast-forward)');
+        }
+        return { stdout: '' };
+      }
+      return { stdout: '' };
+    });
+    const { gh } = createsGh();
+
+    const result = await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'x',
+      pushMode: 'lease',
+    });
+
+    expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
+    const push = gitCalls.find((c) => c[0] === 'push');
+    expect(push).toEqual(['push', '-u', 'origin', BRANCH, '--force-with-lease']);
+    // A lease, never a bare force: a genuinely-moved remote must still fail closed.
+    expect(gitCalls.flat()).not.toContain('--force');
+  });
+
+  it('reports a stale-lease rejection as its own outcome, distinct from push-failed', async () => {
+    const logs: string[] = [];
+    const { git } = fakeGit((args) => {
+      if (args[0] === 'rev-list') return { stdout: '31\n' };
+      if (args[0] === 'push') {
+        return new Error('! [rejected] feat/widget-import -> feat/widget-import (stale info)');
+      }
+      return { stdout: '' };
+    });
+    const { gh, calls: ghCalls } = createsGh();
+
+    const result = await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'x',
+      pushMode: 'lease',
+      log: (m) => logs.push(m),
+    });
+
+    expect(result.outcome).toBe('lease-rejected');
+    expect(ghCalls).toHaveLength(0);
+    expect(logs.join('\n')).toContain('stale info');
+  });
+
+  it('reports a non-lease lease-mode push failure as push-failed', async () => {
+    const { git } = fakeGit((args) => {
+      if (args[0] === 'rev-list') return { stdout: '31\n' };
+      if (args[0] === 'push') return new Error('fatal: could not read from remote repository');
+      return { stdout: '' };
+    });
+    const { gh } = createsGh();
+
+    const result = await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'x',
+      pushMode: 'lease',
+    });
+
+    expect(result.outcome).toBe('push-failed');
+  });
 });

@@ -297,6 +297,86 @@ describe('production FINISH publication composition', () => {
     }
   });
 
+  it('establishes the PR for a branch the finish-time rebase rewrote, which no plain push can publish', async () => {
+    // Regression: the FINISH-time `rebase` step rewrites the feature branch's
+    // history, so the branch legitimately diverges from its own remote (same
+    // work, new SHAs). A plain push is rejected non-fast-forward on EVERY
+    // attempt, so `establish_pr` burned the whole publication retry budget and
+    // halted the feature. `establish_pr` must publish with a lease instead.
+    const root = await mkdtemp(join(tmpdir(), 'finish-production-rebased-'));
+    try {
+      const pipeline = join(root, '.pipeline');
+      await mkdir(pipeline);
+
+      const state = {
+        feature_desc: 'feature',
+        worktree_branch: 'feat/feature',
+        build_review: 'done',
+        test_suite: 'done',
+        manual_test: 'done',
+        architecture_review_as_built: 'done',
+      } as ConductState;
+      const prUrl = 'https://github.com/acme/widget/pull/1275';
+      const pushes: string[][] = [];
+      const git = vi.fn(async (args: string[]) => {
+        if (args[0] === 'remote') return { stdout: 'origin\n' };
+        if (args[0] === 'rev-list') return { stdout: '31\n' };
+        if (args[0] === 'rev-parse') return { stdout: 'refs/remotes/origin/feat/feature\n' };
+        if (args[0] === 'push') {
+          pushes.push([...args]);
+          if (!args.includes('--force-with-lease')) {
+            throw new Error(
+              '! [rejected] feat/feature -> feat/feature (non-fast-forward)',
+            );
+          }
+          return { stdout: '' };
+        }
+        return { stdout: '' };
+      });
+      const gh = vi.fn(async (args: string[]) => {
+        if (args[0] === 'auth') return { stdout: '' };
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === 'feat/feature') {
+          throw new Error('no open PR');
+        }
+        if (args[0] === 'pr' && args[1] === 'create') return { stdout: `${prUrl}\n` };
+        if (args[0] === 'pr' && args[1] === 'view' && args[2] === prUrl) {
+          return { stdout: JSON.stringify({ url: prUrl, title: 'draft', body: 'draft', isDraft: true }) };
+        }
+        return { stdout: '' };
+      });
+      const coordinator = createProductionFinishPublicationCoordinator({
+        projectRoot: root,
+        stateFilePath: join(pipeline, 'conduct-state.json'),
+        git,
+        gh,
+        baseBranch: 'main',
+        observeReleaseReadiness: async () => 'present',
+      });
+
+      await expect(
+        coordinator.advance({
+          state,
+          mode: 'auto',
+          daemon: true,
+          dispatchJudgment: async () => ({ success: true }),
+          emit: async () => {},
+        }),
+      ).resolves.toMatchObject({
+        kind: 'publication_retry',
+        transition: 'establish_pr',
+        reason: 'pr_identity_not_verified_after_establish',
+      });
+
+      // Exactly one push, lease-protected — never a bare force.
+      expect(pushes).toEqual([['push', '-u', 'origin', 'feat/feature', '--force-with-lease']]);
+      await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(
+        `"pr_url": "${prUrl}"`,
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
   it('keeps accepted prose containing ordinary "required" language on the same transition after restart', async () => {
     const root = await mkdtemp(join(tmpdir(), 'finish-production-restart-'));
     try {

@@ -19,8 +19,12 @@
  *   - **Advisory**: every failure logs one loud line and returns an outcome.
  *     Nothing here ever throws into the conductor loop; only the finish-time
  *     publish is load-bearing.
- *   - **Never force-pushes.** Only a plain `git push -u origin <branch>`. A
- *     non-fast-forward rejection is reported, not forced through.
+ *   - **Never bare-force-pushes.** The default is a plain
+ *     `git push -u origin <branch>`; a non-fast-forward rejection is reported,
+ *     not forced through. A caller that has itself rewritten the branch's
+ *     history may opt into `pushMode: 'lease'`, which adds
+ *     `--force-with-lease` — never a bare `--force`, so a genuinely-moved
+ *     remote still fails closed. See {@link OpenShipDraftPrDeps.pushMode}.
  */
 
 import {
@@ -106,6 +110,26 @@ export interface OpenShipDraftPrDeps {
   baseBranch: string | undefined;
   /** Feature description used for the placeholder title. */
   featureDesc?: string;
+  /**
+   * How the feature branch is published. Defaults to `'plain'`.
+   *
+   * This publisher is reached at two moments with DIFFERENT safety properties:
+   *
+   *   - **SHIP start** (`conductor.ts`, before/during the build) — the branch's
+   *     history is untouched, so a rejection genuinely means the REMOTE moved.
+   *     Forcing there would race the build's own later pushes. `'plain'`.
+   *   - **FINISH `establish_pr`** (`finish-publication.ts`) — the finish-time
+   *     `rebase` step has just rewritten the branch (same work, new SHAs), so
+   *     divergence from its own remote is EXPECTED and self-inflicted and a
+   *     plain push can never succeed. Before this opt-in existed, that push was
+   *     rejected on every attempt, burned the whole publication retry budget,
+   *     and HALTed the feature. `'lease'`.
+   *
+   * `'lease'` adds `--force-with-lease`, never a bare `--force`: if the remote
+   * really did move under us, the lease is rejected and reported as
+   * {@link OpenShipDraftPrResult} `lease-rejected` rather than clobbering it.
+   */
+  pushMode?: 'plain' | 'lease';
   log?: (msg: string) => void;
 }
 
@@ -114,8 +138,16 @@ export type OpenShipDraftPrResult =
   | { outcome: 'skipped'; reason: string }
   /** Branch has nothing over base — never `gh pr create` on an empty branch. */
   | { outcome: 'no-commits' }
-  /** The plain push was rejected — no PR is opened off an unpushed branch. */
+  /** The push was rejected or errored — no PR is opened off an unpushed branch. */
   | { outcome: 'push-failed'; reason: string }
+  /**
+   * `pushMode: 'lease'` only: the lease was rejected, i.e. the remote branch
+   * carries work this checkout has never observed. Distinct from `push-failed`
+   * on purpose — it names a genuinely-moved remote (someone or something else
+   * pushed) rather than a transport/permission failure, and forcing past it
+   * would destroy that work.
+   */
+  | { outcome: 'lease-rejected'; reason: string }
   /** A draft PR now exists for the branch (freshly created or already open). */
   | { outcome: 'published'; prUrl: string }
   /** gh could not publish — advisory failure, the build continues. */
@@ -168,6 +200,16 @@ async function reobserveOpenPr(
 }
 
 /**
+ * Recognise git's stale-lease refusal. Mirrors the detection
+ * `pushRefreshedBranch` (autoresolve.ts) already uses for the same lease push:
+ * git reports `! [rejected] <ref> (stale info)` when the remote-tracking ref no
+ * longer matches the remote.
+ */
+function isLeaseRejection(reason: string): boolean {
+  return /stale info|stale-info|stale/i.test(reason);
+}
+
+/**
  * Push the feature branch and ensure an OPEN **draft** PR exists for it.
  *
  * Idempotent: `findOrCreatePr` returns an already-open PR untouched, so
@@ -205,12 +247,26 @@ export async function openShipDraftPr(
       return { outcome: 'no-commits' };
     }
 
-    // Plain push only. A rejection means the remote moved; forcing here would
-    // race the build's own later pushes and the finish-time rebase.
+    // Plain push by default: at SHIP start a rejection means the REMOTE moved,
+    // and forcing would race the build's own later pushes. Only a caller that
+    // has itself rewritten this branch's history (the FINISH-time rebase, via
+    // `pushMode: 'lease'`) publishes with a lease — and a lease, never a bare
+    // force, so an actually-moved remote is still refused.
+    const lease = deps.pushMode === 'lease';
+    const pushArgs = lease
+      ? ['push', '-u', 'origin', branch, '--force-with-lease']
+      : ['push', '-u', 'origin', branch];
     try {
-      await git(['push', '-u', 'origin', branch], { cwd });
+      await git(pushArgs, { cwd });
     } catch (err) {
       const reason = String(err);
+      if (lease && isLeaseRejection(reason)) {
+        log(
+          `[ship-draft-pr] lease push of ${branch} was REJECTED — the remote carries unseen work; ` +
+            `no draft PR opened and nothing was overwritten: ${reason}`,
+        );
+        return { outcome: 'lease-rejected', reason };
+      }
       log(
         `[ship-draft-pr] push of ${branch} failed — no draft PR opened (advisory, build continues): ${reason}`,
       );
