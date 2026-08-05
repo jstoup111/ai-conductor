@@ -65,6 +65,18 @@ git worktree remove -f .worktrees/example
 ```
 EOF
 
+assert_fixture repeated-short-forced-worktree-removal 1 ':8: destructive-git clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+git worktree remove -ff .worktrees/example
+```
+EOF
+
 assert_fixture unattended-daemon-restart 1 ':8: daemon-lifecycle clause' <<'EOF'
 # Changelog
 

@@ -71,7 +71,7 @@ while IFS= read -r line || [ -n "$line" ]; do
   if [[ "$line" =~ (^|[[:space:];|&])\./bin/ ]]; then
     violation 'harness-path' 'harness binaries must use ${HARNESS_DIR}/bin, never ./bin'
   fi
-  if [[ "$line" =~ git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f|--force)([[:space:]]|$) ]] \
+  if [[ "$line" =~ git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f+|--force)([[:space:]]|$) ]] \
     || [[ "$line" =~ git[[:space:]]+branch.*(^|[[:space:]])-D([[:space:]]|$) ]]; then
     violation 'destructive-git' 'do not force-remove worktrees or branches'
   fi
