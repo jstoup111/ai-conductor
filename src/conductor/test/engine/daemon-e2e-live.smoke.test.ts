@@ -346,6 +346,61 @@ describe('daemon E2E live terminal guard', () => {
     });
   });
 
+  it('keeps a post-preflight outcome failure distinct from an unresolved command and dumps diagnostics', async () => {
+    const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-outcome-'));
+    const provider: LLMProvider = {
+      invoke: vi.fn<LLMProvider['invoke']>().mockResolvedValue({
+        success: false,
+        output: 'fixture task did not produce its required commit',
+        exitCode: 1,
+      }),
+      invokeInteractive: vi.fn<LLMProvider['invokeInteractive']>(),
+    };
+    const provisioned = new ProvisionedHome(provider, {
+      executable: 'claude', env: {}, args: [], teardown: async () => {},
+    });
+    const preflight = vi.fn(async () => {});
+    const diagnostics: string[] = [];
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      diagnostics.push(args.map(String).join(' '));
+    });
+
+    try {
+      await mkdir(join(worktreeDir, '.daemon'), { recursive: true });
+      await mkdir(join(worktreeDir, '.pipeline'), { recursive: true });
+      await writeFile(join(worktreeDir, '.daemon', 'daemon.log'), 'outcome failure\n');
+      await writeFile(join(worktreeDir, '.pipeline', 'HALT'), 'fixture task did not finish\n');
+      let result: InvokeResult | undefined;
+      await dispatchAfterLivePreflight(
+        { homeDir: '/tmp/provisioned-home' },
+        async () => { result = await provisioned.invoke({ prompt: '/pipeline' } as InvokeOptions); },
+        preflight,
+      );
+      await dumpPipelineDiagnostics(worktreeDir);
+
+      expect({
+        preflightCalls: preflight.mock.calls.length,
+        dispatches: provisioned.dispatches,
+        terminal: await hasSuccessfulTerminalState(worktreeDir, 'daemon-e2e-live'),
+        success: result?.success,
+        commandUnresolved: result?.commandUnresolved,
+        commandUnresolvedName: result?.commandUnresolvedName,
+        diagnostics: diagnostics.join('\n'),
+      }).toEqual({
+        preflightCalls: 1,
+        dispatches: 1,
+        terminal: false,
+        success: false,
+        commandUnresolved: undefined,
+        commandUnresolvedName: undefined,
+        diagnostics: expect.stringMatching(/outcome failure[\s\S]*fixture task did not finish/),
+      });
+    } finally {
+      errorSpy.mockRestore();
+      await rm(worktreeDir, { recursive: true, force: true });
+    }
+  });
+
   it('does not dispatch a pre-halted fixture', async () => {
     const worktreeDir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-halted-'));
     const slug = 'daemon-e2e-live';
