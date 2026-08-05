@@ -79,7 +79,9 @@ EOF
 run_tty() {
   local input=$1
   set +e
-  TTY_OUT=$(cd "$CONSUMER" && printf '%s' "$input" | HOME="$HOME_DIR" PATH="$TEST_PATH" script -qec "$HARNESS/bin/migrate" /dev/null 2>&1)
+  # A broken approval loop must not leave this acceptance test running forever.
+  # --foreground lets timeout also terminate the scripted pseudo-terminal group.
+  TTY_OUT=$(cd "$CONSUMER" && printf '%s' "$input" | HOME="$HOME_DIR" PATH="$TEST_PATH" timeout --foreground 10s script -qec "$HARNESS/bin/migrate" /dev/null 2>&1)
   TTY_CODE=$?
   set -e
 }
@@ -119,6 +121,11 @@ if ! command -v script >/dev/null 2>&1; then
   exit 1
 fi
 
+if ! command -v timeout >/dev/null 2>&1; then
+  printf 'FAIL timeout utility is required to bound migration approval coverage\n'
+  exit 1
+fi
+
 make_fixture accept
 run_tty $'y\ns\n'
 assert 'accept executes only the previewed candidate before a later stop' "$(
@@ -142,7 +149,7 @@ assert 'skipped and stopped blocks have no applied ledger entries before rerun' 
   [ "$SKIP_LEDGER_COUNT" -eq 0 ] && echo 0 || echo 1
 )"
 assert 'skip then stop re-offers exactly both pending blocks on rerun' "$(
-  [ "$TTY_CODE" -eq 0 ] && contains "$TTY_OUT" "printf 'first" && contains "$TTY_OUT" "printf 'second" && [ "$(printf '%s\n' "$TTY_OUT" | rg -c 'candidate block' || true)" -eq 2 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
+  [ "$TTY_CODE" -eq 0 ] && contains "$TTY_OUT" "printf 'first" && contains "$TTY_OUT" "printf 'second" && [ "$(printf '%s\n' "$TTY_OUT" | rg -c 'Executing migration' || true)" -eq 2 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
 )"
 
 make_fixture accept-all
@@ -165,14 +172,26 @@ assert 'stop after an applied prefix records only that prefix in the ledger' "$(
   [ "$STOP_LEDGER_COUNT" -eq 1 ] && echo 0 || echo 1
 )"
 assert 'stop partway re-offers exactly the unreached suffix on rerun' "$(
-  [ "$TTY_CODE" -eq 0 ] && ! contains "$TTY_OUT" "printf 'first" && contains "$TTY_OUT" "printf 'second" && [ "$(printf '%s\n' "$TTY_OUT" | rg -c 'candidate block' || true)" -eq 1 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
+  [ "$TTY_CODE" -eq 0 ] && ! contains "$TTY_OUT" "printf 'first" && contains "$TTY_OUT" "printf 'second" && [ "$(printf '%s\n' "$TTY_OUT" | rg -c 'Previewing migration' || true)" -eq 1 ] && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = $'first\nsecond' ] && echo 0 || echo 1
 )"
 
 make_fixture invalid
 run_tty $'wat\ny\ns\n'
-PROMPT_COUNT=$(printf '%s\n' "$TTY_OUT" | rg -ic 'accept.*skip.*all.*stop' || true)
 assert 'an invalid response is rejected and re-prompts before executing' "$(
-  [ "$TTY_CODE" -eq 0 ] && [ "$PROMPT_COUNT" -ge 2 ] && contains "$TTY_OUT" 'Unrecognized response' && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = 'first' ] && echo 0 || echo 1
+  [ "$TTY_CODE" -eq 0 ] && contains "$TTY_OUT" 'Unrecognized response' && [ "$(cat "$CONSUMER/execution.log" 2>/dev/null || true)" = 'first' ] && echo 0 || echo 1
+)"
+
+make_fixture exhausted-input
+run_tty ''
+EOF_PROMPT_COUNT=$(printf '%s\n' "$TTY_OUT" | rg -ic 'accept.*skip.*all.*stop' || true)
+case "$EOF_PROMPT_COUNT" in
+  ''|*[!0-9]*) EOF_PROMPT_COUNT=0 ;;
+esac
+assert 'exhausted operator input fails closed before executing the pending block' "$(
+  [ "$TTY_CODE" -ne 0 ] && [ "$TTY_CODE" -ne 124 ] && [ ! -e "$CONSUMER/execution.log" ] && echo 0 || echo 1
+)"
+assert 'exhausted operator input does not spin the approval prompt' "$(
+  [ "$EOF_PROMPT_COUNT" -le 1 ] && echo 0 || echo 1
 )"
 
 make_fixture no-tty

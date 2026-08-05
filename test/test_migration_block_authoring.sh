@@ -53,6 +53,20 @@ git worktree remove --force .worktrees/example
 ```
 EOF
 
+assert_fixture indented-loop-body-forced-removal 1 ':9: destructive-git clause' <<'EOF'
+# Changelog
+
+## [1.2.3]
+
+## Migration
+
+```bash migration
+for wt in .worktrees/*; do
+  git worktree remove --force "$wt"
+done
+```
+EOF
+
 assert_fixture short-forced-worktree-removal 1 ':8: destructive-git clause' <<'EOF'
 # Changelog
 

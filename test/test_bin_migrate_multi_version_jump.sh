@@ -127,6 +127,15 @@ run_migrate() {
   set -e
 }
 
+run_tty_migrate() {
+  local harness=$1 consumer=$2 isolated_home=$3 input=$4
+  set +e
+  # Keep a defective approval loop from wedging the Story 6 path forever.
+  OUT=$(cd "$consumer" && printf '%s' "$input" | HOME="$isolated_home" PATH="$TEST_PATH" timeout --foreground 10s script -qec "$harness/bin/migrate" /dev/null 2>&1)
+  CODE=$?
+  set -e
+}
+
 find_ledger() {
   local isolated_home=$1
   if [ ! -d "$isolated_home/.ai-conductor" ]; then
@@ -447,28 +456,39 @@ run_migrate "$DRY_HARNESS" "$DRY_CONSUMER" "$DRY_HOME" --yes
 assert 'automatic approval applies all pending blocks without a terminal' "$([ "$CODE" -eq 0 ] && [ "$(cat "$DRY_CONSUMER/execution.log" 2>/dev/null || true)" = $'one\ntwo' ] && echo 0 || echo 1)"
 assert 'the closing summary distinguishes all four outcome classes' "$(contains "$OUT" 'applied' && contains "$OUT" 'skipped' && contains "$OUT" 'failed' && contains "$OUT" 'already-applied' && echo 0 || echo 1)"
 
-if command -v script >/dev/null 2>&1; then
+if command -v script >/dev/null 2>&1 && command -v timeout >/dev/null 2>&1; then
   TTY_HARNESS=$(make_harness tty)
   TTY_CONSUMER=$(make_consumer tty)
   TTY_HOME=$(make_home tty v0.99.17)
   cp "$APPROVAL_HARNESS/CHANGELOG.md" "$TTY_HARNESS/CHANGELOG.md"
-  set +e
-  TTY_OUT=$(cd "$TTY_CONSUMER" && printf 'bogus\nn\nall\n' | HOME="$TTY_HOME" PATH="$TEST_PATH" script -qec "$TTY_HARNESS/bin/migrate" /dev/null 2>&1)
-  TTY_CODE=$?
-  set -e
-  assert 'interactive preview offers accept, skip, accept-all, and stop per block' "$(contains "$TTY_OUT" 'accept' && contains "$TTY_OUT" 'skip' && contains "$TTY_OUT" 'all' && contains "$TTY_OUT" 'stop' && echo 0 || echo 1)"
-  TTY_PROMPTS=$(printf '%s\n' "$TTY_OUT" | rg -ic 'accept|run .*migration' || true)
-  assert 'an unrecognized response does not execute and causes a re-prompt' "$([ "$TTY_PROMPTS" -ge 2 ] && [ "$TTY_CODE" -eq 0 ] && echo 0 || echo 1)"
+  run_tty_migrate "$TTY_HARNESS" "$TTY_CONSUMER" "$TTY_HOME" $'bogus\nn\nall\n'
+  TTY_OUT=$OUT
+  TTY_CODE=$CODE
+  assert 'interactive preview offers yes, no, all, and stop per block' "$(contains "$TTY_OUT" 'yes' && contains "$TTY_OUT" 'no' && contains "$TTY_OUT" 'all' && contains "$TTY_OUT" 'stop' && echo 0 || echo 1)"
+  assert 'an unrecognized response does not execute and causes a re-prompt' "$(contains "$TTY_OUT" 'Unrecognized response' && [ "$TTY_CODE" -eq 0 ] && echo 0 || echo 1)"
   TTY_BEFORE_RERUN=$(cat "$TTY_CONSUMER/execution.log" 2>/dev/null || true)
   assert 'skip leaves only the accepted later block executed in the first run' "$([ "$TTY_BEFORE_RERUN" = 'two' ] && echo 0 || echo 1)"
   run_migrate "$TTY_HARNESS" "$TTY_CONSUMER" "$TTY_HOME" --yes
   assert 'a skipped block is offered on the next run while accepted blocks stay applied' "$([ "$(sort "$TTY_CONSUMER/execution.log" 2>/dev/null || true)" = $'one\ntwo' ] && echo 0 || echo 1)"
+  EOF_HARNESS=$(make_harness tty-eof)
+  EOF_CONSUMER=$(make_consumer tty-eof)
+  EOF_HOME=$(make_home tty-eof v0.99.17)
+  cp "$APPROVAL_HARNESS/CHANGELOG.md" "$EOF_HARNESS/CHANGELOG.md"
+  run_tty_migrate "$EOF_HARNESS" "$EOF_CONSUMER" "$EOF_HOME" ''
+  EOF_PROMPTS=$(printf '%s\n' "$OUT" | rg -ic 'accept|run .*migration' || true)
+  case "$EOF_PROMPTS" in
+    ''|*[!0-9]*) EOF_PROMPTS=0 ;;
+  esac
+  assert 'exhausted scripted-TTY input fails closed without executing the pending Story 6 block' "$([ "$CODE" -ne 0 ] && [ "$CODE" -ne 124 ] && [ ! -e "$EOF_CONSUMER/execution.log" ] && echo 0 || echo 1)"
+  assert 'exhausted scripted-TTY input cannot repeat approval warnings indefinitely' "$([ "$EOF_PROMPTS" -le 1 ] && echo 0 || echo 1)"
 else
   # This is an infrastructure error, not a skipped acceptance criterion.
-  assert 'interactive preview offers accept, skip, accept-all, and stop per block' 1
+  assert 'interactive preview offers yes, no, all, and stop per block' 1
   assert 'an unrecognized response does not execute and causes a re-prompt' 1
   assert 'skip leaves only the accepted later block executed in the first run' 1
   assert 'a skipped block is offered on the next run while accepted blocks stay applied' 1
+  assert 'exhausted scripted-TTY input fails closed without executing the pending Story 6 block' 1
+  assert 'exhausted scripted-TTY input cannot repeat approval warnings indefinitely' 1
 fi
 
 printf 'Story 6 — queued-block safety contract\n'
@@ -485,7 +505,7 @@ PY
 assert 'queued blocks do not invoke harness binaries through consumer-relative ./bin paths' "$(! printf '%s\n' "$QUEUED" | rg -q '(?m)^\s*\./bin/' && echo 0 || echo 1)"
 assert 'queued blocks do not force-remove worktrees or branches' "$(! printf '%s\n' "$QUEUED" | rg -q 'git (worktree remove --force|branch -D)' && echo 0 || echo 1)"
 assert 'queued blocks do not stop or restart a daemon unattended' "$(! printf '%s\n' "$QUEUED" | rg -q '(kill .*daemon|kill "?\$pid|conduct-ts daemon restart)' && echo 0 || echo 1)"
-assert 'the configuration append guard matches the key written by the block' "$(printf '%s\n' "$QUEUED" | rg -q "grep -q ['\"]?\^# attribution_judge_cutover:" && echo 0 || echo 1)"
+assert 'the configuration append guard matches the key written by the block' "$(printf '%s\n' "$QUEUED" | rg -qF "grep -qF '# attribution_judge_cutover:" && echo 0 || echo 1)"
 
 printf 'Summary: %s passed, %s failed, %s executed\n' "$PASS" "$FAIL" "$TOTAL"
 [ "$FAIL" -eq 0 ]

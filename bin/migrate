@@ -553,7 +553,10 @@ run_project_migrations() {
       echo ""
       while true; do
         local choice
-        read -r -p "  Apply this migration? [y]es, [n]o, [a]ll, [s]top: " choice
+        if ! IFS= read -r -p "  Apply this migration? [y]es, [n]o, [a]ll, [s]top: " choice < /dev/tty; then
+          fail "Approval channel closed — leaving migration for $current_version at candidate block $current_position pending"
+          return 1
+        fi
         case "$choice" in
           [yY]|[yY][eE][sS]) break ;;
           [nN]|[nN][oO])

@@ -117,8 +117,8 @@ while IFS= read -r line || [ -n "$line" ]; do
     violation 'harness-path' 'harness binaries must use ${HARNESS_DIR}/bin, never ./bin'
   fi
   command_line=$(strip_quoted_strings "$line")
-  if [[ "$command_line" =~ (^|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f+|--force)([[:space:]]|$) ]] \
-    || [[ "$command_line" =~ (^|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+branch.*(^|[[:space:]])-D([[:space:]]|$) ]]; then
+  if [[ "$command_line" =~ (^[[:space:]]*|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+worktree[[:space:]]+remove.*(^|[[:space:]])(-f+|--force)([[:space:]]|$) ]] \
+    || [[ "$command_line" =~ (^[[:space:]]*|[;|&][[:space:]]*|[[:space:]](if|then|do|else|elif)[[:space:]]+)git[[:space:]]+branch.*(^|[[:space:]])-D([[:space:]]|$) ]]; then
     violation 'destructive-git' 'do not force-remove worktrees or branches'
   fi
   if [[ "$line" =~ (^|[[:space:];|&])(conduct-ts|.+/bin/conduct-ts)[[:space:]]+daemon[[:space:]]+(start|stop|restart) ]] \
