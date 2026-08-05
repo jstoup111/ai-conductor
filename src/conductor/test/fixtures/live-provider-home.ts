@@ -10,6 +10,7 @@ import {
 export async function provisionLiveProviderHome(
   sourceRoot: string,
   claudeCodeOauthToken?: string,
+  baseDir?: string,
 ): Promise<ProviderHome> {
   return provisionProviderHome({
     provider: {
@@ -21,5 +22,6 @@ export async function provisionLiveProviderHome(
       }),
     },
     worktreeRoot: sourceRoot,
+    baseDir,
   });
 }

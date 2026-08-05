@@ -1,8 +1,9 @@
-import { lstat } from 'node:fs/promises';
+import { lstat, readdir } from 'node:fs/promises';
 import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-home.js';
 import { provisionLiveProviderHome } from './live-provider-home.js';
 
 describe('provisionLiveProviderHome', () => {
@@ -28,6 +29,28 @@ describe('provisionLiveProviderHome', () => {
       }
     } finally {
       await rm(sourceRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('fails closed when the explicit source root has no skills directory', async () => {
+    const sourceRoot = await mkdtemp(join(tmpdir(), 'live-provider-home-no-skills-'));
+    const homesRoot = await mkdtemp(join(tmpdir(), 'live-provider-home-homes-'));
+
+    try {
+      const error = await provisionLiveProviderHome(
+        sourceRoot,
+        undefined,
+        homesRoot,
+      ).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(ProviderHomeProvisionError);
+      expect(error).toMatchObject({
+        message: expect.stringContaining(`'skills' at ${join(sourceRoot, 'skills')}`),
+      });
+      expect(await readdir(homesRoot)).toEqual([]);
+    } finally {
+      await rm(sourceRoot, { recursive: true, force: true });
+      await rm(homesRoot, { recursive: true, force: true });
     }
   });
 });
