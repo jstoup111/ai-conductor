@@ -46,4 +46,27 @@ describe('dispatchableStepCommands', () => {
       await rm(homeDir, { recursive: true, force: true });
     }
   });
+
+  it('names the unresolved command, its rendered string, and the searched directory', async () => {
+    const homeDir = await mkdtemp(join(tmpdir(), 'step-command-preflight-'));
+    const pipelineCommand = dispatchableStepCommands('claude').find(
+      ({ skillName }) => skillName === 'pipeline',
+    );
+
+    try {
+      await Promise.all(dispatchableStepCommands('claude')
+        .filter(({ skillName }) => skillName !== 'pipeline')
+        .map(async ({ skillName }) => {
+          const skillDir = join(homeDir, 'skills', skillName);
+          await mkdir(skillDir, { recursive: true });
+          await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
+        }));
+
+      await expect(assertStepCommandsResolve(homeDir, 'claude')).rejects.toThrow(
+        new RegExp(`pipeline.*${pipelineCommand?.rendered}.*${homeDir}`, 's'),
+      );
+    } finally {
+      await rm(homeDir, { recursive: true, force: true });
+    }
+  });
 });

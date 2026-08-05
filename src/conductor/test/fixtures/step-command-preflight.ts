@@ -35,7 +35,13 @@ export async function assertStepCommandsResolve(
   homeDir: string,
   providerKey = 'claude',
 ): Promise<void> {
-  await Promise.all(dispatchableStepCommands(providerKey).map(({ skillName }) =>
-    access(join(homeDir, 'skills', skillName, 'SKILL.md')),
-  ));
+  const skillsDir = join(homeDir, 'skills');
+
+  await Promise.all(dispatchableStepCommands(providerKey).map(async ({ skillName, rendered }) => {
+    try {
+      await access(join(skillsDir, skillName, 'SKILL.md'));
+    } catch {
+      throw new Error(`Unable to resolve skill ${skillName} for ${rendered} in ${skillsDir}.`);
+    }
+  }));
 }
