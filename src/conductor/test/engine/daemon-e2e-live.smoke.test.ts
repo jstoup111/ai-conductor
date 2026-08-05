@@ -63,6 +63,34 @@ class TokenMeter implements LLMProvider {
   }
 }
 
+/** Test-local provider decorator that supplies the isolated home to every dispatch. */
+class ProvisionedHome implements LLMProvider {
+  readonly supportsSessionResume: boolean | undefined;
+  readonly lifecycleCapability: LLMProvider['lifecycleCapability'];
+  readonly readiness: LLMProvider['readiness'];
+  readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
+  readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
+
+  constructor(
+    private readonly provider: LLMProvider,
+    private readonly selfHost: NonNullable<InvokeOptions['selfHost']>,
+  ) {
+    this.supportsSessionResume = provider.supportsSessionResume;
+    this.lifecycleCapability = provider.lifecycleCapability;
+    this.readiness = provider.readiness?.bind(provider);
+    this.prepareSelfHostAuth = provider.prepareSelfHostAuth?.bind(provider);
+    this.resolveSelfHostExecutable = provider.resolveSelfHostExecutable?.bind(provider);
+  }
+
+  invoke(options: InvokeOptions): Promise<InvokeResult> {
+    return this.provider.invoke({ ...options, selfHost: this.selfHost });
+  }
+
+  invokeInteractive(options: InvokeOptions): Promise<InvokeResult | void> {
+    return this.provider.invokeInteractive({ ...options, selfHost: this.selfHost });
+  }
+}
+
 function assertTokenCap(totalTokens: number, cap: number): void {
   if (totalTokens > cap) {
     throw new Error(`Token cap ${cap} exceeded: observed ${totalTokens}`);
@@ -174,6 +202,58 @@ describe('daemon E2E live terminal guard', () => {
       preparation,
       executable: 'claude',
       untouchedTotal: 0,
+    });
+  });
+
+  it('injects the provisioned self-host invocation into both provider methods', async () => {
+    const readiness = { state: 'ready', provider: 'codex', source: 'api-key' } as const;
+    const preparation = { args: ['--auth'] };
+    const selfHost = {
+      executable: 'claude',
+      env: { CLAUDE_CONFIG_DIR: '/tmp/provisioned-home', CLAUDE_CODE_OAUTH_TOKEN: 'token' },
+      args: ['--provisioned'],
+      teardown: vi.fn(async () => {}),
+    };
+    const provider: LLMProvider = {
+      supportsSessionResume: true,
+      lifecycleCapability: { synchronousSpawnPermit: true },
+      invoke: vi.fn<LLMProvider['invoke']>()
+        .mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
+      invokeInteractive: vi.fn<LLMProvider['invokeInteractive']>()
+        .mockResolvedValue({ success: true, output: 'done', exitCode: 0 }),
+      readiness: vi.fn().mockResolvedValue(readiness),
+      prepareSelfHostAuth: vi.fn().mockResolvedValue(preparation),
+      resolveSelfHostExecutable: vi.fn().mockResolvedValue('claude'),
+    };
+    const provisioned = new ProvisionedHome(provider, selfHost);
+    const options = {
+      prompt: 'provisioned',
+      sessionId: 'session',
+      resume: false,
+      systemPrompt: 'unchanged',
+      selfHost: { executable: 'old', env: {}, args: [], teardown: async () => {} },
+    } satisfies InvokeOptions;
+
+    await provisioned.invoke(options);
+    await provisioned.invokeInteractive(options);
+
+    const expected = { ...options, selfHost };
+    expect({
+      invoke: vi.mocked(provider.invoke).mock.calls[0]?.[0],
+      interactive: vi.mocked(provider.invokeInteractive).mock.calls[0]?.[0],
+      supportsSessionResume: provisioned.supportsSessionResume,
+      lifecycleCapability: provisioned.lifecycleCapability,
+      readiness: await provisioned.readiness?.(),
+      preparation: await provisioned.prepareSelfHostAuth?.({ provider: 'codex', homeDir: '/tmp/home' }),
+      executable: await provisioned.resolveSelfHostExecutable?.(),
+    }).toEqual({
+      invoke: expected,
+      interactive: expected,
+      supportsSessionResume: true,
+      lifecycleCapability: provider.lifecycleCapability,
+      readiness,
+      preparation,
+      executable: 'claude',
     });
   });
 
