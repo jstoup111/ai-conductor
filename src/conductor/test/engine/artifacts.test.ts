@@ -2015,6 +2015,45 @@ describe('engine/artifacts', () => {
         expect(result).toEqual({ done: true });
       });
 
+      it('completes a no-op build when prior Task commits resolve every task and ignored .pipeline residue leaves porcelain empty', async () => {
+        await execa('git', ['init', '-b', 'main'], { cwd: dir });
+        await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+        await execa('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+        await writeFile(join(dir, '.gitignore'), '.pipeline/\n');
+        await writeFile(join(dir, 'README.md'), '# Test\n');
+        await execa('git', ['add', '.gitignore', 'README.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'chore: initialize fixture'], { cwd: dir });
+
+        await writePlan(
+          '### Task 1: First task\n**Story:** 1\n\n' +
+            '### Task 2: Second task\n**Story:** 2\n',
+        );
+        await execa('git', ['add', '.docs/plans/phase-1.md'], { cwd: dir });
+        await execa('git', ['commit', '-m', 'docs: add plan'], { cwd: dir });
+
+        for (const id of ['1', '2']) {
+          await writeFile(join(dir, `task-${id}.txt`), `${id}\n`);
+          await execa('git', ['add', `task-${id}.txt`], { cwd: dir });
+          await execa('git', ['commit', '-m', `feat: finish task ${id}\n\nTask: ${id}\n`], { cwd: dir });
+        }
+
+        // Rows remain pending and are intentionally gitignored; the prior
+        // Task commits resolve the plan, while actual porcelain proves this
+        // ignored untracked residue does not over-broaden the cleanliness gate.
+        await writeTasks([
+          { id: '1', name: 'First task', status: 'pending' },
+          { id: '2', name: 'Second task', status: 'pending' },
+        ]);
+        const worktreeStatus = async () =>
+          (await execa('git', ['status', '--porcelain', '--untracked-files=all'], { cwd: dir })).stdout;
+
+        expect(await checkStepCompletion(dir, 'build', {
+          projectRoot: dir,
+          planPath: join(dir, '.docs/plans/phase-1.md'),
+          worktreeStatus,
+        })).toEqual({ done: true });
+      });
+
       it('withholds build completion when all tasks resolve but the worktree has an uncommitted path', async () => {
         await writePlan('### Task 1: First task\n**Story:** 1\n');
         await writeTasks([{ id: '1', name: 'First task', status: 'completed' }]);
