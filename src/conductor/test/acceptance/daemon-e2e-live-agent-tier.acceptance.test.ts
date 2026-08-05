@@ -45,6 +45,9 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(source).toMatch(/new\s+ClaudeProvider\s*\(/);
     expect(source).toMatch(/new\s+DefaultStepRunner\s*\(/);
     expect(source).toMatch(/runDaemon\s*\(/);
+    expect(source).toMatch(/class\s+ProvisionedHome\s+implements\s+LLMProvider/);
+    expect(source).toMatch(/dispatches\s*=\s*0/);
+    expect(source).toMatch(/dispatchAfterLivePreflight\s*\(\s*providerHome\s*,\s*async/);
     expect(source).toMatch(/\.pipeline[/'"`]+DONE|join\([^)]*pipeline[^)]*['"]DONE['"]/);
     expect(source).toMatch(/\.pipeline[/'"`]+HALT|join\([^)]*pipeline[^)]*['"]HALT['"]/);
     expect(source).toMatch(/\.daemon[/'"`]+parked|join\([^)]*\.daemon[^)]*['"]parked['"]/);
