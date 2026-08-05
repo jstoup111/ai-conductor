@@ -1,0 +1,1598 @@
+import { describe, expect, it, vi } from 'vitest';
+import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
+import { ensureShipReady, rehabilitateHaltPr } from '../../src/engine/halt-pr-rehabilitation.js';
+
+const FINISH_PUBLICATION_MODULE = '../../src/engine/finish-publication.js';
+
+async function routeFinishPublicationDisposition(disposition: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const route = mod.routeFinishPublicationDisposition;
+  if (typeof route !== 'function') {
+    throw new Error(
+      'expected export "routeFinishPublicationDisposition" to be a function (not yet implemented)',
+    );
+  }
+  return route(disposition);
+}
+
+type ObservationState = 'present' | 'missing' | 'stale' | 'malformed' | 'unavailable';
+type PushObservationState = 'pushed' | 'unpushed' | 'stale' | 'malformed' | 'unavailable';
+type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+
+type PublicationCondition =
+  | {
+      code: 'release_readiness_invalid';
+      message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.';
+      nextAction: 'restore_release_readiness';
+    }
+  | {
+      code: 'ship_evidence_invalid';
+      message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.';
+      nextAction: 'rerun_ship_validators';
+    };
+
+interface AdvanceFinishPublicationInput {
+  observe(): Promise<PublicationSnapshot>;
+  emit?(event: unknown): void | Promise<void>;
+  effects: {
+    dispatchJudgment(...args: unknown[]): Promise<unknown>;
+    /**
+     * The final recorder owns its existing absolute-path guard and marker-last
+     * write order. The coordinator supplies only the authorized outcome after
+     * it has observed a coherent final publication row.
+     */
+    recordOutcome?: (request: FinishOutcomeRecordRequest) => Promise<void>;
+    createShippedRecord?: () => Promise<void>;
+    repairPresentation?: () => Promise<void>;
+    establishPr?: {
+      gh: GhRunner;
+      git: GitRunner;
+      cwd: string;
+      branch: string;
+      baseBranch: string;
+      featureDesc?: string;
+    };
+  };
+}
+
+type FinishOutcomeRecordRequest =
+  | { choice: 'pr'; prUrl: string }
+  | { choice: 'keep' };
+
+type AdvanceFinishPublicationResult =
+  | { kind: 'complete' }
+  | {
+      kind: 'advanced';
+      transition: 'judge_pr_prose' | 'establish_pr' | 'write_shipped_record' | 'ready_pr' | 'record_outcome';
+    }
+  | { kind: 'publication_retry'; condition: PublicationCondition }
+  | { kind: 'publication_retry'; transition: 'establish_pr' | 'write_shipped_record'; reason: string }
+  | {
+      kind: 'publication_retry';
+      transition: 'ready_pr';
+      reason: 'presentation_repair_effect_unavailable' | 'presentation_repair_failed' | 'presentation_not_verified_after_repair';
+    }
+  | {
+      kind: 'human_required';
+      reason: 'ambiguous_pr_identity' | 'invalid_shipped_record';
+    };
+
+type AdvanceFinishPublication = (
+  input: AdvanceFinishPublicationInput,
+) => Promise<AdvanceFinishPublicationResult>;
+
+interface PublicationObservationPorts {
+  filesystem: {
+    observeImplementationEvidence(): Promise<ObservationState>;
+    observeShipEvidence(): Promise<ObservationState>;
+    observeOutcomeRecord(): Promise<ObservationState>;
+  };
+  git: {
+    observePushEvidence(): Promise<PushObservationState>;
+  };
+  github: {
+    observePullRequest(): Promise<
+      | { state: 'one'; url: string; prose: 'accepted' | 'stale' | 'placeholder' | 'halt'; ready: boolean }
+      | { state: 'missing' | 'ambiguous' | 'malformed' | 'unavailable'; urls?: readonly string[] }
+    >;
+  };
+  shippedRecord: {
+    observeShippedRecord(): Promise<ObservationState>;
+  };
+  releaseReadiness: {
+    observeReleaseReadiness(): Promise<ObservationState>;
+  };
+}
+
+interface ObservePublicationSnapshotInput {
+  mode: 'daemon';
+  intent: {
+    outcome: 'pr';
+    authority: { kind: 'unattended_policy'; mode: 'daemon' };
+  };
+  ports: PublicationObservationPorts;
+}
+
+async function observePublicationSnapshot(input: ObservePublicationSnapshotInput) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const observer = mod.observePublicationSnapshot;
+  if (typeof observer !== 'function') {
+    throw new Error('expected export "observePublicationSnapshot" to be a function (not yet implemented)');
+  }
+  return observer(input);
+}
+
+async function resolveInteractivePublicationIntent(choice: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const resolver = mod.resolveInteractivePublicationIntent;
+  if (typeof resolver !== 'function') {
+    throw new Error(
+      'expected export "resolveInteractivePublicationIntent" to be a function (not yet implemented)',
+    );
+  }
+  return resolver(choice);
+}
+
+async function resolveUnattendedPublicationIntent(input: unknown) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const resolver = mod.resolveUnattendedPublicationIntent;
+  if (typeof resolver !== 'function') {
+    throw new Error(
+      'expected export "resolveUnattendedPublicationIntent" to be a function (not yet implemented)',
+    );
+  }
+  return resolver(input);
+}
+
+async function advanceFinishPublication(input: AdvanceFinishPublicationInput) {
+  const mod = (await import(FINISH_PUBLICATION_MODULE)) as Record<string, unknown>;
+  const coordinator = mod.advanceFinishPublication;
+  if (typeof coordinator !== 'function') {
+    throw new Error(
+      'expected export "advanceFinishPublication" to be a function (not yet implemented)',
+    );
+  }
+  return (coordinator as AdvanceFinishPublication)(input);
+}
+
+function readyPublicationSnapshot(
+  overrides: Partial<PublicationSnapshot> = {},
+): PublicationSnapshot {
+  const base = {
+    mode: 'daemon',
+    intent: {
+      outcome: 'pr',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    },
+    implementationEvidence: 'valid',
+    shipEvidence: 'valid',
+    releaseReadiness: 'valid',
+    branchPushed: 'valid',
+    pr: {
+      identity: 'one',
+      url: 'https://github.com/acme/widget/pull/1172',
+      prose: 'placeholder',
+      ready: false,
+    },
+    shippedRecord: 'valid',
+    outcomeRecord: 'missing',
+  } as const satisfies PublicationSnapshot;
+
+  return {
+    ...base,
+    ...overrides,
+    pr: overrides.pr ?? base.pr,
+  } as PublicationSnapshot;
+}
+
+function observerPorts(overrides: Partial<{
+  implementationEvidence: ObservationState;
+  shipEvidence: ObservationState;
+  outcomeRecord: ObservationState;
+  branchPushed: PushObservationState;
+  pr: Awaited<ReturnType<PublicationObservationPorts['github']['observePullRequest']>>;
+  shippedRecord: ObservationState;
+  releaseReadiness: ObservationState;
+}> = {}): PublicationObservationPorts {
+  return {
+    filesystem: {
+      observeImplementationEvidence: async () => overrides.implementationEvidence ?? 'present',
+      observeShipEvidence: async () => overrides.shipEvidence ?? 'present',
+      observeOutcomeRecord: async () => overrides.outcomeRecord ?? 'present',
+    },
+    git: {
+      observePushEvidence: async () => overrides.branchPushed ?? 'pushed',
+    },
+    github: {
+      observePullRequest: async () =>
+        overrides.pr ?? {
+          state: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+    },
+    shippedRecord: {
+      observeShippedRecord: async () => overrides.shippedRecord ?? 'present',
+    },
+    releaseReadiness: {
+      observeReleaseReadiness: async () => overrides.releaseReadiness ?? 'present',
+    },
+  };
+}
+
+function observationInput(ports: PublicationObservationPorts): ObservePublicationSnapshotInput {
+  return {
+    mode: 'daemon',
+    intent: {
+      outcome: 'pr',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    },
+    ports,
+  };
+}
+
+function draftPrFakes(ghHandler: (args: string[]) => { stdout: string } | Error) {
+  const gitCalls: string[][] = [];
+  const ghCalls: string[][] = [];
+  const git: GitRunner = async (args) => {
+    gitCalls.push([...args]);
+    if (args[0] === 'rev-list') return { stdout: '1\n' };
+    return { stdout: '' };
+  };
+  const gh: GhRunner = async (args) => {
+    ghCalls.push([...args]);
+    const result = ghHandler(args);
+    if (result instanceof Error) throw result;
+    return result;
+  };
+  return {
+    deps: {
+      gh,
+      git,
+      cwd: '/repo',
+      branch: 'feat/widget',
+      baseBranch: 'main',
+      featureDesc: 'widget',
+    },
+    gitCalls,
+    ghCalls,
+  };
+}
+
+function deferred<T = void>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
+describe('finish-publication domain types', () => {
+  it('exports the semantic unions for the publication lifecycle', async () => {
+    type PublicationIntent = import('../../src/engine/finish-publication.js').PublicationIntent;
+    type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+    type PublicationTransition = import('../../src/engine/finish-publication.js').PublicationTransition;
+    type PublicationDisposition = import('../../src/engine/finish-publication.js').PublicationDisposition;
+
+    const intent: PublicationIntent = {
+      outcome: 'pr',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    };
+    const interactiveIntent: PublicationIntent = {
+      outcome: 'pr',
+      authority: { kind: 'operator_confirmed', mode: 'interactive' },
+    };
+    const snapshot: PublicationSnapshot = {
+      mode: 'daemon',
+      intent,
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+      shippedRecord: 'valid',
+      outcomeRecord: 'valid',
+    };
+    // @ts-expect-error A daemon snapshot cannot carry interactive authority.
+    const mismatchedSnapshot: PublicationSnapshot = {
+      ...snapshot,
+      mode: 'daemon',
+      intent: interactiveIntent,
+    };
+    const transition: PublicationTransition = 'establish_pr';
+    const disposition: PublicationDisposition = { kind: 'complete' };
+
+    const destructiveIntent: PublicationIntent = {
+      // @ts-expect-error Unattended authority cannot choose an operator-only destructive outcome.
+      outcome: 'merge',
+      authority: { kind: 'unattended_policy', mode: 'daemon' },
+    };
+
+    void [mismatchedSnapshot, transition, disposition, destructiveIntent];
+
+    await expect(import('../../src/engine/finish-publication.js')).resolves.toBeTypeOf('object');
+  });
+
+  it.each([
+    ['an authorized keep outcome', {
+      ...readyPublicationSnapshot(),
+      mode: 'foreground-auto',
+      intent: {
+        outcome: 'keep',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+      branchPushed: 'missing',
+      pr: { identity: 'none' },
+    } as PublicationSnapshot, 'record_outcome'],
+    ['a missing PR identity', readyPublicationSnapshot({ pr: { identity: 'none' } }), 'establish_pr'],
+    ['an ambiguous PR identity', readyPublicationSnapshot({ pr: { identity: 'ambiguous', urls: [] } }), 'establish_pr'],
+    ['an indeterminate PR identity', readyPublicationSnapshot({ pr: { identity: 'indeterminate' } }), 'establish_pr'],
+    ['missing push evidence', readyPublicationSnapshot({ branchPushed: 'missing' }), 'establish_pr'],
+    ['invalid push evidence', readyPublicationSnapshot({ branchPushed: 'invalid' }), 'establish_pr'],
+    ['indeterminate push evidence', readyPublicationSnapshot({ branchPushed: 'indeterminate' }), 'establish_pr'],
+    ['missing release readiness', readyPublicationSnapshot({ releaseReadiness: 'missing' }), 'verify_release_readiness'],
+    ['invalid release readiness', readyPublicationSnapshot({ releaseReadiness: 'invalid' }), 'verify_release_readiness'],
+    ['indeterminate release readiness', readyPublicationSnapshot({ releaseReadiness: 'indeterminate' }), 'verify_release_readiness'],
+    ['a missing shipped record', readyPublicationSnapshot({ shippedRecord: 'missing' }), 'write_shipped_record'],
+    ['an invalid shipped record', readyPublicationSnapshot({ shippedRecord: 'invalid' }), 'write_shipped_record'],
+    ['an indeterminate shipped record', readyPublicationSnapshot({ shippedRecord: 'indeterminate' }), 'write_shipped_record'],
+    ['stale PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: true },
+    }), 'judge_pr_prose'],
+    ['placeholder PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'placeholder', ready: true },
+    }), 'judge_pr_prose'],
+    ['halt PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'halt', ready: true },
+    }), 'judge_pr_prose'],
+    ['indeterminate PR prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'indeterminate', ready: true },
+    }), 'judge_pr_prose'],
+    ['a draft PR with accepted prose', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+    }), 'ready_pr'],
+    ['all preceding PR publication progress complete', readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+    }), 'record_outcome'],
+  ] as const)('selects %s as the next deterministic publication transition', async (_state, snapshot, expected) => {
+    const module = await import('../../src/engine/finish-publication.js');
+    const nextFinishPublicationTransition = Reflect.get(module, 'nextFinishPublicationTransition') as (
+      snapshot: PublicationSnapshot,
+    ) => typeof expected;
+
+    expect(nextFinishPublicationTransition(snapshot)).toBe(expected);
+  });
+
+  it('rejects a PR outcome record without an external PR identity', async () => {
+    type PublicationSnapshot = import('../../src/engine/finish-publication.js').PublicationSnapshot;
+
+    const snapshot = {
+      mode: 'daemon',
+      intent: {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'daemon' },
+      },
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      pr: { identity: 'none' },
+      shippedRecord: 'valid',
+      outcomeRecord: 'valid',
+    } as PublicationSnapshot;
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => snapshot,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({
+      kind: 'publication_retry',
+      condition: { code: 'publication_snapshot_incoherent' },
+    });
+  });
+});
+
+describe('FINISH publication disposition routing', () => {
+  it.each([
+    ['establish_pr', 'draft_pr_effect_unavailable'],
+    ['establish_pr', 'draft_pr_skipped'],
+    ['establish_pr', 'draft_pr_no-commits'],
+    ['establish_pr', 'draft_pr_push-failed'],
+    ['establish_pr', 'draft_pr_failed'],
+    ['establish_pr', 'pr_identity_not_verified_after_establish'],
+    ['write_shipped_record', 'shipped_record_effect_unavailable'],
+    ['write_shipped_record', 'shipped_record_write_failed'],
+    ['write_shipped_record', 'shipped_record_not_verified_after_write'],
+    ['judge_pr_prose', 'judgment_timed_out'],
+    ['judge_pr_prose', 'judgment_provider_unavailable'],
+    ['judge_pr_prose', 'judgment_dispatch_failed'],
+    ['judge_pr_prose', 'judgment_completed_reobserve'],
+    ['ready_pr', 'presentation_repair_effect_unavailable'],
+    ['ready_pr', 'presentation_repair_failed'],
+    ['ready_pr', 'presentation_not_verified_after_repair'],
+    ['record_outcome', 'outcome_record_effect_unavailable'],
+    ['record_outcome', 'outcome_record_write_failed'],
+    ['record_outcome', 'outcome_record_not_verified_after_write'],
+  ] as const)('keeps publication retry %s/%s in FINISH', async (transition, reason) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        transition,
+        reason,
+      }),
+    ).resolves.toEqual({ kind: 'retry_finish', reason });
+  });
+
+  it.each([
+    [
+      'publication_snapshot_incoherent',
+      'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
+      'resolve_publication_state',
+    ],
+    [
+      'publication_snapshot_indeterminate',
+      'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.',
+      'restore_publication_observation',
+    ],
+    [
+      'release_readiness_missing',
+      'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+      'publish_release_readiness',
+    ],
+    [
+      'release_readiness_invalid',
+      'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+      'restore_release_readiness',
+    ],
+    [
+      'release_readiness_indeterminate',
+      'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+      'restore_release_readiness_observation',
+    ],
+  ] as const)('keeps publication condition %s in FINISH', async (code, message, nextAction) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        condition: { code, message, nextAction },
+      }),
+    ).resolves.toEqual({ kind: 'retry_finish', reason: code });
+  });
+
+  it.each([
+    [
+      'implementation_evidence_invalid',
+      'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+      'rerun_build_verification',
+    ],
+    [
+      'implementation_evidence_indeterminate',
+      'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
+      'restore_implementation_observation',
+    ],
+    [
+      'ship_evidence_invalid',
+      'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+      'rerun_ship_validators',
+    ],
+    [
+      'ship_evidence_indeterminate',
+      'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
+      'restore_ship_observation',
+    ],
+  ] as const)('halts evidence-invalid condition %s pending dedicated BUILD routing', async (code, message, nextAction) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        condition: { code, message, nextAction },
+      }),
+    ).resolves.toMatchObject({ kind: 'halt', reason: expect.stringContaining(code) });
+  });
+
+  it('permits only cited implementation-invalid evidence to route BUILD', async () => {
+    const evidence = 'build-review FAIL: src/engine/finish-publication.ts:497';
+
+    await expect(
+      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence }),
+    ).resolves.toEqual({ kind: 'retry_build', evidence });
+    await expect(
+      routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence: '   ' }),
+    ).resolves.toMatchObject({ kind: 'halt' });
+  });
+
+  it.each([
+    undefined,
+    { kind: 'complete', reason: 'contradictory' },
+    { kind: 'publication_retry', transition: 'record_outcome' },
+    { kind: 'publication_retry', transition: 'record_outcome', reason: 7 },
+    { kind: 'publication_retry', transition: 'unknown_transition', reason: 'bad' },
+    { kind: 'publication_retry', transition: 'record_outcome', reason: 'draft_pr_no-commits' },
+    {
+      kind: 'publication_retry',
+      condition: {
+        code: 'release_readiness_missing',
+        message: 'not the canonical message',
+        nextAction: 'publish_release_readiness',
+      },
+    },
+    {
+      kind: 'publication_retry',
+      transition: 'record_outcome',
+      reason: 'contradictory',
+      condition: { code: 'release_readiness_missing', message: 'bad', nextAction: 'bad' },
+    },
+    {
+      kind: 'implementation_invalid',
+      evidence: 'invalid proof',
+      reason: 'contradictory publication retry',
+    },
+    {
+      kind: 'publication_retry',
+      condition: { code: 'unknown_condition', message: 'bad', nextAction: 'bad' },
+    },
+    { kind: 'unknown' },
+  ])('halts unknown or contradictory disposition %#', async (disposition) => {
+    await expect(routeFinishPublicationDisposition(disposition)).resolves.toMatchObject({
+      kind: 'halt',
+      reason: expect.stringContaining('publication disposition'),
+    });
+  });
+});
+
+describe('observePublicationSnapshot', () => {
+  it('composes authoritative present evidence from injected filesystem, Git, GitHub, record, push, and readiness ports', async () => {
+    const calls: string[] = [];
+    const ports = observerPorts();
+    for (const source of Object.values(ports)) {
+      for (const [name, observe] of Object.entries(source)) {
+        const original = observe as () => Promise<unknown>;
+        Object.assign(source, { [name]: async () => {
+          calls.push(name);
+          return original();
+        } });
+      }
+    }
+
+    await expect(observePublicationSnapshot(observationInput(ports))).resolves.toMatchObject({
+      implementationEvidence: 'valid',
+      shipEvidence: 'valid',
+      releaseReadiness: 'valid',
+      branchPushed: 'valid',
+      pr: { identity: 'one', prose: 'accepted', ready: true },
+      shippedRecord: 'valid',
+      outcomeRecord: 'valid',
+    });
+    expect(calls).toEqual([
+      'observeImplementationEvidence',
+      'observeShipEvidence',
+      'observeOutcomeRecord',
+      'observePushEvidence',
+      'observePullRequest',
+      'observeShippedRecord',
+      'observeReleaseReadiness',
+    ]);
+  });
+
+  it.each([
+    ['missing', { implementationEvidence: 'missing' }, { implementationEvidence: 'invalid' }],
+    ['stale', { releaseReadiness: 'stale' }, { releaseReadiness: 'invalid' }],
+    ['malformed', { shippedRecord: 'malformed' }, { shippedRecord: 'invalid' }],
+    ['unpushed', { branchPushed: 'unpushed' }, { branchPushed: 'missing' }],
+    ['unavailable', { outcomeRecord: 'unavailable' }, { outcomeRecord: 'indeterminate' }],
+  ] as const)('maps %s evidence into the closed snapshot without inferring success', async (_row, overrides, expected) => {
+    await expect(
+      observePublicationSnapshot(observationInput(observerPorts(overrides))),
+    ).resolves.toMatchObject(expected);
+  });
+
+  it.each([
+    ['missing', { state: 'missing' as const }, { identity: 'none' }],
+    ['ambiguous', { state: 'ambiguous' as const, urls: ['https://github.com/acme/widget/pull/1', 'https://github.com/acme/widget/pull/2'] }, { identity: 'ambiguous' }],
+    ['malformed', { state: 'malformed' as const }, { identity: 'indeterminate' }],
+    ['unavailable', { state: 'unavailable' as const }, { identity: 'indeterminate' }],
+  ])('maps a %s GitHub observation without manufacturing a PR identity', async (_row, pr, expected) => {
+    await expect(
+      observePublicationSnapshot(observationInput(observerPorts({ pr }))),
+    ).resolves.toMatchObject({ pr: expected });
+  });
+});
+
+describe('resolveInteractivePublicationIntent', () => {
+  it.each([
+    ['pr', 'pr'],
+    ['keep', 'keep'],
+  ] as const)('preserves an operator-confirmed %s choice as interactive intent', async (_choice, outcome) => {
+    await expect(resolveInteractivePublicationIntent(outcome)).resolves.toEqual({
+      outcome,
+      authority: { kind: 'operator_confirmed', mode: 'interactive' },
+    });
+  });
+
+  it.each([
+    ['defer', 'interactive_intent_deferred'],
+    ['decline', 'interactive_intent_declined'],
+  ] as const)('halts %s without synthesizing a publication mutation', async (choice, reason) => {
+    await expect(resolveInteractivePublicationIntent(choice)).resolves.toEqual({
+      kind: 'human_required',
+      reason,
+    });
+  });
+
+  it.each(['merge-local', 'merge', 'discard'] as const)(
+    'halts the destructive %s choice for separate human action',
+    async (choice) => {
+      await expect(resolveInteractivePublicationIntent(choice)).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'interactive_intent_destructive_choice',
+      });
+    },
+  );
+});
+
+describe('resolveUnattendedPublicationIntent', () => {
+  it.each([
+    [
+      'daemon',
+      {
+        mode: 'daemon',
+        capabilities: { remote: 'configured', authentication: 'authenticated' },
+      },
+      {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'daemon' },
+      },
+    ],
+    [
+      'foreground-auto with configured remote and authenticated publication',
+      {
+        mode: 'foreground-auto',
+        capabilities: { remote: 'configured', authentication: 'authenticated' },
+      },
+      {
+        outcome: 'pr',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+    ],
+    [
+      'foreground-auto with no remote',
+      {
+        mode: 'foreground-auto',
+        capabilities: { remote: 'missing', authentication: 'authenticated' },
+      },
+      {
+        outcome: 'keep',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+    ],
+    [
+      'foreground-auto with unavailable publication authentication',
+      {
+        mode: 'foreground-auto',
+        capabilities: { remote: 'configured', authentication: 'unavailable' },
+      },
+      {
+        outcome: 'keep',
+        authority: { kind: 'unattended_policy', mode: 'foreground-auto' },
+      },
+    ],
+  ] as const)('resolves the existing safe policy for %s', async (_row, input, expected) => {
+    await expect(resolveUnattendedPublicationIntent(input)).resolves.toEqual(expected);
+  });
+
+  it('halts an outcome that daemon policy does not authorize instead of choosing keep', async () => {
+    await expect(
+      resolveUnattendedPublicationIntent({
+        mode: 'daemon',
+        capabilities: { remote: 'configured', authentication: 'authenticated' },
+        requestedOutcome: 'keep',
+      }),
+    ).resolves.toEqual({
+      kind: 'human_required',
+      reason: 'unattended_intent_unauthorized_outcome',
+    });
+  });
+
+  it.each([
+    ['daemon', 'merge'],
+    ['daemon', 'merge-local'],
+    ['daemon', 'discard'],
+    ['foreground-auto', 'merge'],
+    ['foreground-auto', 'merge-local'],
+    ['foreground-auto', 'discard'],
+  ] as const)(
+    'halts the destructive %s unattended %s request without synthesizing a mutation',
+    async (mode, requestedOutcome) => {
+      await expect(
+        resolveUnattendedPublicationIntent({
+          mode,
+          capabilities: { remote: 'configured', authentication: 'authenticated' },
+          requestedOutcome,
+        }),
+      ).resolves.toEqual({
+        kind: 'human_required',
+        reason: 'unattended_intent_destructive_choice',
+      });
+    },
+  );
+});
+
+describe('advanceFinishPublication preflight', () => {
+  it('reaches the judgment boundary once when observed publication, SHIP, and release readiness are valid', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns the exact release-readiness blocker before dispatching judgment', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({ releaseReadiness: 'invalid' }),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      condition: {
+        code: 'release_readiness_invalid',
+        message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+        nextAction: 'restore_release_readiness',
+      },
+    });
+
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('selects the stable SHIP blocker before an indeterminate release-readiness result without dispatching judgment', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({ shipEvidence: 'invalid', releaseReadiness: 'indeterminate' }),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      condition: {
+        code: 'ship_evidence_invalid',
+        message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+        nextAction: 'rerun_ship_validators',
+      },
+    });
+
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+});
+
+describe('advanceFinishPublication PR identity', () => {
+  it('reuses an observed existing draft identity without opening another PR', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    const draft = draftPrFakes(() => new Error('must not call GitHub'));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment, establishPr: draft.deps },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(draft.gitCalls).toHaveLength(0);
+    expect(draft.ghCalls).toHaveLength(0);
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens exactly one draft PR and re-observes its identity before advancing', async () => {
+    const draft = draftPrFakes((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+      return { stdout: '' };
+    });
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }))
+      .mockResolvedValueOnce(readyPublicationSnapshot());
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'establish_pr' });
+
+    expect(draft.ghCalls.filter((args) => args[1] === 'create')).toHaveLength(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('halts ambiguous PR identity without guessing a publication mutation', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    const draft = draftPrFakes(() => new Error('must not call GitHub'));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({
+            pr: { identity: 'ambiguous', urls: ['https://github.com/acme/widget/pull/1', 'https://github.com/acme/widget/pull/2'] },
+          }),
+        effects: { dispatchJudgment, establishPr: draft.deps },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'ambiguous_pr_identity' });
+
+    expect(draft.gitCalls).toHaveLength(0);
+    expect(draft.ghCalls).toHaveLength(0);
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('does not claim PR identity when GitHub fails and re-observation remains absent', async () => {
+    const draft = draftPrFakes(() => new Error('GitHub unavailable'));
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValue(readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' }));
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, establishPr: draft.deps } }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'establish_pr',
+      reason: 'draft_pr_failed',
+    });
+
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+});
+
+describe('advanceFinishPublication durable shipped evidence', () => {
+  it('reuses an existing verified shipped record without invoking its writer', async () => {
+    const createShippedRecord = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot(),
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+    expect(createShippedRecord).not.toHaveBeenCalled();
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it('creates an absent shipped record once and re-observes strict evidence before advancing', async () => {
+    let shippedRecord: PublicationSnapshot['shippedRecord'] = 'missing';
+    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord }));
+    const createShippedRecord = vi.fn(async () => {
+      shippedRecord = 'valid';
+    });
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
+
+    expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
+      writes: 1,
+      observations: 2,
+    });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('refuses mismatched shipped evidence without overwriting it', async () => {
+    const createShippedRecord = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({ shippedRecord: 'invalid' }),
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'invalid_shipped_record' });
+
+    expect(createShippedRecord).not.toHaveBeenCalled();
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('keeps FINISH retryable when the shipped-record push fails', async () => {
+    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord: 'missing' }));
+    const createShippedRecord = vi.fn(async () => {
+      throw new Error('git push failed');
+    });
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'write_shipped_record',
+      reason: 'shipped_record_write_failed',
+    });
+
+    expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
+      writes: 1,
+      observations: 2,
+    });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('recovers a lost writer response by verifying the record before retrying', async () => {
+    let shippedRecord: PublicationSnapshot['shippedRecord'] = 'missing';
+    const observe = vi.fn(async () => readyPublicationSnapshot({ shippedRecord }));
+    const createShippedRecord = vi.fn(async () => {
+      shippedRecord = 'valid';
+      throw new Error('writer response lost after push');
+    });
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment, createShippedRecord },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
+
+    expect({ writes: createShippedRecord.mock.calls.length, observations: observe.mock.calls.length }).toEqual({
+      writes: 1,
+      observations: 2,
+    });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+});
+
+describe('advanceFinishPublication concurrent mutation reconciliation', () => {
+  it.each([
+    ['PR', 'establish_pr'],
+    ['shipped record', 'write_shipped_record'],
+    ['presentation', 'ready_pr'],
+    ['final marker', 'record_outcome'],
+  ] as const)('coalesces two callers at the same incomplete %s transition', async (_name, transition) => {
+    const entered = deferred<void>();
+    const secondObserved = deferred<void>();
+    const release = deferred<void>();
+    let effectCalls = 0;
+    let observations = 0;
+    let snapshot = readyPublicationSnapshot();
+
+    const mutate = async (apply: () => void) => {
+      effectCalls += 1;
+      entered.resolve();
+      await secondObserved.promise;
+      await release.promise;
+      apply();
+    };
+
+    const effects: AdvanceFinishPublicationInput['effects'] = {
+      dispatchJudgment: async () => ({ kind: 'accepted' }),
+    };
+
+    switch (transition) {
+      case 'establish_pr': {
+        snapshot = readyPublicationSnapshot({ pr: { identity: 'none' }, branchPushed: 'missing' });
+        effects.establishPr = {
+          cwd: '/repo',
+          branch: 'feat/widget',
+          baseBranch: 'main',
+          git: async (args) => {
+            if (args[0] === 'rev-list') return { stdout: '1\n' };
+            return { stdout: '' };
+          },
+          gh: async (args) => {
+            if (args[1] === 'view') throw new Error('not found');
+            if (args[1] === 'create') {
+              await mutate(() => {
+                snapshot = readyPublicationSnapshot();
+              });
+              return { stdout: 'https://github.com/acme/widget/pull/1172\n' };
+            }
+            return { stdout: '' };
+          },
+        };
+        break;
+      }
+      case 'write_shipped_record':
+        snapshot = readyPublicationSnapshot({ shippedRecord: 'missing' });
+        effects.createShippedRecord = () => mutate(() => {
+          snapshot = readyPublicationSnapshot();
+        });
+        break;
+      case 'ready_pr':
+        snapshot = readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: false,
+          },
+        });
+        effects.repairPresentation = () => mutate(() => {
+          snapshot = readyPublicationSnapshot({
+            pr: {
+              identity: 'one',
+              url: 'https://github.com/acme/widget/pull/1172',
+              prose: 'accepted',
+              ready: true,
+            },
+          });
+        });
+        break;
+      case 'record_outcome':
+        snapshot = readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: true,
+          },
+        });
+        effects.recordOutcome = () => mutate(() => {
+          snapshot = readyPublicationSnapshot({
+            pr: {
+              identity: 'one',
+              url: 'https://github.com/acme/widget/pull/1172',
+              prose: 'accepted',
+              ready: true,
+            },
+            outcomeRecord: 'valid',
+          });
+        });
+        break;
+    }
+
+    const observe = async () => {
+      observations += 1;
+      if (observations === 2) secondObserved.resolve();
+      return structuredClone(snapshot);
+    };
+    const first = advanceFinishPublication({ observe, effects });
+    await entered.promise;
+    const second = advanceFinishPublication({ observe, effects });
+    await secondObserved.promise;
+    release.resolve();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(effectCalls).toBe(1);
+    const expected = transition === 'record_outcome'
+      ? { kind: 'complete' }
+      : { kind: 'advanced', transition };
+    expect([firstResult, secondResult]).toEqual([expected, expected]);
+  });
+});
+
+describe('advanceFinishPublication PR prose judgment boundary', () => {
+  it('skips judgment for accepted PR prose and proceeds to final verification', async () => {
+    const dispatchJudgment = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: true,
+          },
+          outcomeRecord: 'valid',
+        }),
+        effects: { dispatchJudgment },
+      }),
+    ).resolves.toEqual({ kind: 'complete' });
+
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it.each(['placeholder', 'halt'] as const)(
+    'dispatches one bounded judgment pass for %s PR prose',
+    async (prose) => {
+      let request: unknown;
+      const dispatchJudgment = vi.fn(async (receivedRequest: unknown) => {
+        request = receivedRequest;
+        return { kind: 'accepted' };
+      });
+
+      await expect(
+        advanceFinishPublication({
+          observe: async () =>
+            readyPublicationSnapshot({
+              pr: {
+                identity: 'one',
+                url: 'https://github.com/acme/widget/pull/1172',
+                prose,
+                ready: false,
+              },
+            }),
+          effects: { dispatchJudgment },
+        }),
+      ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+
+      expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+      expect(request).toEqual({
+        kind: 'finish_pr_prose_quality',
+        pullRequestUrl: 'https://github.com/acme/widget/pull/1172',
+        qualityScope: ['title', 'body'],
+        maximumPasses: 1,
+      });
+    },
+  );
+
+  it('dispatches again only when prose becomes stale after an accepted retry', async () => {
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockResolvedValueOnce(
+        readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: false,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'accepted',
+            ready: true,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose: 'stale',
+            ready: false,
+          },
+        }),
+      );
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, repairPresentation: async () => undefined } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ['timeout', { kind: 'timed_out' }, 'judgment_timed_out'],
+    ['provider unavailable', { kind: 'provider_unavailable' }, 'judgment_provider_unavailable'],
+  ] as const)(
+    'keeps verified publication progress retryable when judgment reports %s',
+    async (_failure, judgmentResult, reason) => {
+      const dispatchJudgment = vi.fn(async () => judgmentResult);
+      const createShippedRecord = vi.fn(async () => undefined);
+      const draft = draftPrFakes(() => new Error('must not create another PR'));
+
+      await expect(
+        advanceFinishPublication({
+          observe: async () => readyPublicationSnapshot(),
+          effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
+        }),
+      ).resolves.toEqual({
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason,
+      });
+
+      expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+      expect(createShippedRecord).not.toHaveBeenCalled();
+      expect(draft.gitCalls).toHaveLength(0);
+      expect(draft.ghCalls).toHaveLength(0);
+    },
+  );
+
+  it.each([
+    ['refusal', { kind: 'refused' }, 'judgment_refused'],
+    [
+      'malformed prose',
+      { kind: 'revision_required', reason: 'structurally_incomplete' },
+      'judgment_malformed_prose',
+    ],
+  ] as const)(
+    'requires a human without rolling back verified publication progress when judgment returns %s',
+    async (_failure, judgmentResult, reason) => {
+      const dispatchJudgment = vi.fn(async () => judgmentResult);
+      const createShippedRecord = vi.fn(async () => undefined);
+      const draft = draftPrFakes(() => new Error('must not create another PR'));
+
+      await expect(
+        advanceFinishPublication({
+          observe: async () => readyPublicationSnapshot(),
+          effects: { dispatchJudgment, createShippedRecord, establishPr: draft.deps },
+        }),
+      ).resolves.toEqual({ kind: 'human_required', reason });
+
+      expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+      expect(createShippedRecord).not.toHaveBeenCalled();
+      expect(draft.gitCalls).toHaveLength(0);
+      expect(draft.ghCalls).toHaveLength(0);
+    },
+  );
+
+  it('does not repeat judgment after a successful pass is re-observed as accepted', async () => {
+    let prose: Extract<PublicationSnapshot['pr'], { identity: 'one' }>['prose'] = 'placeholder';
+    let ready = false;
+    const dispatchJudgment = vi.fn(async () => {
+      prose = 'accepted';
+      return { kind: 'accepted' };
+    });
+    const observe = vi.fn(async () =>
+      readyPublicationSnapshot({
+          pr: {
+            identity: 'one',
+            url: 'https://github.com/acme/widget/pull/1172',
+            prose,
+            ready,
+        },
+      }),
+    );
+
+    await expect(
+      advanceFinishPublication({ observe, effects: { dispatchJudgment, repairPresentation: async () => undefined } }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'judge_pr_prose' });
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: {
+          dispatchJudgment,
+          repairPresentation: async () => {
+            ready = true;
+          },
+        },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('advanceFinishPublication final outcome commit point', () => {
+  it.each([
+    [
+      'PR',
+      readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+      }),
+      { choice: 'pr', prUrl: 'https://github.com/acme/widget/pull/1172' },
+    ],
+    [
+      'authorized foreground-auto keep',
+      readyPublicationSnapshot({
+        mode: 'foreground-auto',
+        intent: { outcome: 'keep', authority: { kind: 'unattended_policy', mode: 'foreground-auto' } },
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+      }),
+      { choice: 'keep' },
+    ],
+  ] as const)('records the %s outcome only after a final coherent observation', async (_outcome, initial, request) => {
+    const calls: string[] = [];
+    const observe = vi
+      .fn<() => Promise<PublicationSnapshot>>()
+      .mockImplementationOnce(async () => {
+        calls.push('observe-final-coherent-row');
+        return initial;
+      })
+      .mockImplementationOnce(async () => {
+        calls.push('observe-recorded-marker');
+        return { ...initial, outcomeRecord: 'valid' } as PublicationSnapshot;
+      });
+    const recordOutcome = vi.fn(async (received: FinishOutcomeRecordRequest) => {
+      calls.push('record-outcome');
+      expect(received).toEqual(request);
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), recordOutcome },
+      }),
+    ).resolves.toEqual({ kind: 'complete' });
+
+    expect(calls).toEqual([
+      'observe-final-coherent-row',
+      'record-outcome',
+      'observe-recorded-marker',
+    ]);
+  });
+
+  it('does not invoke the recorder until the final row is coherent and presentation-complete', async () => {
+    const recordOutcome = vi.fn(async () => undefined);
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () =>
+          readyPublicationSnapshot({
+            shipEvidence: 'invalid',
+            pr: {
+              identity: 'one',
+              url: 'https://github.com/acme/widget/pull/1172',
+              prose: 'accepted',
+              ready: true,
+            },
+          }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), recordOutcome },
+      }),
+    ).resolves.toMatchObject({ kind: 'publication_retry' });
+
+    expect(recordOutcome).not.toHaveBeenCalled();
+  });
+
+  it('keeps FINISH retryable when the injected recorder is interrupted after its state write and before its marker', async () => {
+    const writes: string[] = [];
+    const recordOutcome = vi.fn(async () => {
+      writes.push('state-write');
+      throw new Error('marker-write interrupted');
+    });
+    const observe = vi.fn(async () =>
+      readyPublicationSnapshot({
+        pr: {
+          identity: 'one',
+          url: 'https://github.com/acme/widget/pull/1172',
+          prose: 'accepted',
+          ready: true,
+        },
+      }),
+    );
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), recordOutcome },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'record_outcome',
+      reason: 'outcome_record_write_failed',
+    });
+
+    expect(writes).toEqual(['state-write']);
+    expect(recordOutcome).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('advanceFinishPublication accepted PR presentation', () => {
+  function hasMergeAuthorityArg(calls: readonly string[][]): boolean {
+    return calls.some((args) =>
+      args.some((arg) => arg === 'merge' || arg === '--auto' || arg === '--auto-merge'),
+    );
+  }
+
+  function fakePresentationGh(initial: {
+    isDraft: boolean;
+    labels?: string[];
+    title?: string;
+    body?: string;
+  }) {
+    const calls: string[][] = [];
+    let isDraft = initial.isDraft;
+    let labels = [...(initial.labels ?? [])];
+    let title = initial.title ?? 'feat: widget';
+    let body = initial.body ?? '## Summary\n\nAccepted presentation';
+    const gh: GhRunner = async (args) => {
+      calls.push([...args]);
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return { stdout: JSON.stringify({ isDraft, labels: labels.map((name) => ({ name })), title, body }) };
+      }
+      if (args[0] === 'api' && args.includes('--method') && args.includes('DELETE')) {
+        labels = labels.filter((name) => name !== 'needs-remediation');
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'ready') {
+        isDraft = false;
+        return { stdout: '' };
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--title')) {
+        title = args[args.indexOf('--title') + 1] ?? title;
+      }
+      if (args[0] === 'pr' && args[1] === 'edit' && args.includes('--body')) {
+        body = args[args.indexOf('--body') + 1] ?? body;
+      }
+      return { stdout: '' };
+    };
+    return { gh, calls, isReady: () => !isDraft };
+  }
+
+  it('leaves a clean accepted ready PR untouched', async () => {
+    const repairPresentation = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({ kind: 'accepted' }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: true },
+          outcomeRecord: 'valid',
+        }),
+        effects: { dispatchJudgment, repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'complete' });
+
+    expect(repairPresentation).not.toHaveBeenCalled();
+    expect(dispatchJudgment).not.toHaveBeenCalled();
+  });
+
+  it('repairs a reused halt PR only after accepted prose and re-observes it ready', async () => {
+    const github = fakePresentationGh({ isDraft: true, labels: ['needs-remediation'] });
+    let ready = false;
+    const observe = vi.fn(async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready },
+    }));
+    const repairPresentation = vi.fn(async () => {
+      await rehabilitateHaltPr({
+        gh: github.gh,
+        cwd: '/repo',
+        prUrl: 'https://github.com/acme/widget/pull/1172',
+        sourceRef: null,
+      });
+      ready = github.isReady();
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+
+    expect(repairPresentation).toHaveBeenCalledTimes(1);
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(github.calls.some((args) => args[0] === 'pr' && args[1] === 'ready')).toBe(true);
+    expect(hasMergeAuthorityArg(github.calls)).toBe(false);
+  });
+
+  it('flips an accepted draft PR ready and verifies the resulting observation', async () => {
+    const github = fakePresentationGh({ isDraft: true });
+    let ready = false;
+    const observe = vi.fn(async () => readyPublicationSnapshot({
+      pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready },
+    }));
+    const repairPresentation = vi.fn(async () => {
+      await ensureShipReady(github.gh, '/repo', 'https://github.com/acme/widget/pull/1172', undefined, async () => {});
+      ready = github.isReady();
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'ready_pr' });
+
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(github.calls.filter((args) => args[0] === 'pr' && args[1] === 'ready')).toHaveLength(1);
+    expect(hasMergeAuthorityArg(github.calls)).toBe(false);
+  });
+
+  it('refuses stale prose before it can invoke presentation repair', async () => {
+    const repairPresentation = vi.fn(async () => undefined);
+    const dispatchJudgment = vi.fn(async () => ({
+      kind: 'revision_required' as const,
+      reason: 'structurally_incomplete' as const,
+    }));
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'stale', ready: false },
+        }),
+        effects: { dispatchJudgment, repairPresentation },
+      }),
+    ).resolves.toEqual({ kind: 'human_required', reason: 'judgment_malformed_prose' });
+
+    expect(dispatchJudgment).toHaveBeenCalledTimes(1);
+    expect(repairPresentation).not.toHaveBeenCalled();
+  });
+
+  it('keeps accepted draft publication retryable when GitHub presentation repair is unavailable', async () => {
+    const repairPresentation = vi.fn(async () => {
+      throw new Error('GitHub unavailable');
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          pr: { identity: 'one', url: 'https://github.com/acme/widget/pull/1172', prose: 'accepted', ready: false },
+        }),
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }), repairPresentation },
+      }),
+    ).resolves.toEqual({
+      kind: 'publication_retry',
+      transition: 'ready_pr',
+      reason: 'presentation_repair_failed',
+    });
+
+    expect(repairPresentation).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('FINISH publication observability', () => {
+  it('emits a closed exact blocker without observed credential or URL content', async () => {
+    const events: unknown[] = [];
+
+    await expect(
+      advanceFinishPublication({
+        observe: async () => readyPublicationSnapshot({
+          releaseReadiness: 'missing',
+          pr: {
+            identity: 'one',
+            url: 'https://secret.example.test/token=not-for-telemetry',
+            prose: 'accepted',
+            ready: true,
+          },
+        }),
+        emit: (event) => { events.push(event); },
+        effects: { dispatchJudgment: async () => ({ kind: 'accepted' }) },
+      }),
+    ).resolves.toMatchObject({
+      kind: 'publication_retry',
+      condition: { code: 'release_readiness_missing' },
+    });
+
+    expect(events).toEqual([{
+      type: 'finish_publication_blocked',
+      condition: 'release_readiness_missing',
+    }]);
+    expect(JSON.stringify(events)).not.toContain('secret');
+  });
+
+  it('emits a transition start and completion around one verified publication effect', async () => {
+    const events: unknown[] = [];
+    let shippedRecord: 'missing' | 'valid' = 'missing';
+    const observe = async () => readyPublicationSnapshot({
+      pr: {
+        identity: 'one',
+        url: 'https://example.test/pull/1172',
+        prose: 'accepted',
+        ready: true,
+      },
+      shippedRecord,
+    });
+
+    await expect(
+      advanceFinishPublication({
+        observe,
+        emit: (event) => { events.push(event); },
+        effects: {
+          dispatchJudgment: async () => ({ kind: 'accepted' }),
+          createShippedRecord: async () => { shippedRecord = 'valid'; },
+        },
+      }),
+    ).resolves.toEqual({ kind: 'advanced', transition: 'write_shipped_record' });
+
+    expect(events).toEqual([
+      { type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record' },
+      { type: 'finish_publication_transition', phase: 'completed', transition: 'write_shipped_record' },
+    ]);
+  });
+});

@@ -360,12 +360,24 @@ Build a typed, engine-owned FINISH publication coordinator in 18 scoped TDD task
 **Story:** Story 6 — no unauthorized mechanical tail
 **Type:** refactor
 
+> **Amended 2026-08-04 by #1172:** this task additionally owns the FINISH retry budget and
+> retained attended intent. As originally written it promised terminal mode-matrix coverage while
+> omitting both, which is unreachable: `resolved-config.ts:53` permits one FINISH attempt, but
+> `finish-publication-production.ts:300-319` returns `publication_retry` after every verified
+> transition, so FINISH can never re-enter to reach a terminal disposition. Separately,
+> `acquireInteractiveIntent` is invoked inside `advance()`, so an attended run is re-prompted on
+> each transition retry rather than once. Steps 6-8, the added files, and the two added declared
+> sites below close that omission. The original steps and assertions are unchanged.
+
 **Steps:**
 1. Write failing integration tests whose first step is FINISH, expected dispatch is zero or one judgment call, and terminal condition is coordinator completion/HALT.
 2. Verify RED with unrelated steps pre-resolved and all participating gate evidence fresh.
 3. Wire the coordinator around the FINISH judgment boundary and narrow the machine-consumed finish skill/prompt to intent plus PR prose.
 4. Verify GREEN across interactive, default foreground, foreground-auto, and daemon fixtures; assert no test reaches a real provider/GitHub process.
 5. Commit `refactor(finish): delegate mechanics to publication coordinator`.
+6. Write a failing test pinning a default FINISH retry budget of at least six entries — one per `establish_pr`, `write_shipped_record`, `judge_pr_prose`, `ready_pr`, `record_outcome`, and the terminal authoritative re-observation — then raise `DEFAULT_STEP_RETRIES.finish` to satisfy it. The budget must hold without composition-root overrides.
+7. Write a failing test proving an attended FINISH run acquires publication intent exactly once and reuses the authorized choice across every deterministic transition retry, then hoist the intent acquisition out of the per-transition `advance()` path. A daemon run's behavior is unchanged: it still reads `.pipeline/finish-choice` and never prompts.
+8. Verify GREEN and commit `fix(finish): budget the transition retries and retain attended intent`.
 
 **Files:**
 - `src/conductor/src/engine/conductor.ts` — coordinator composition
@@ -373,8 +385,13 @@ Build a typed, engine-owned FINISH publication coordinator in 18 scoped TDD task
 - `skills/finish/SKILL.md` — machine-consumed responsibility contract
 - `src/conductor/test/engine/conductor-finish-publication.test.ts` — bounded mode matrix
 - `src/conductor/test/engine/step-runners.test.ts` — prompt contract
+- `src/conductor/src/engine/resolved-config.ts` — FINISH retry budget
+- `src/conductor/test/engine/resolved-config.test.ts` — budget floor pin
+- `src/conductor/src/engine/finish-publication-production.ts` — retained attended intent
+- `src/conductor/test/engine/finish-publication-production.test.ts` — intent-acquired-once pin
+- `src/conductor/test/acceptance/unattended-finish-publication.acceptance.test.ts` — real `Conductor.run` PR-path fixture across PR-present and PR-absent for interactive, default foreground, foreground-auto, and daemon, with exactly one prose judgment
 
-**Wired-into:** `src/conductor/src/engine/conductor.ts#run, src/conductor/src/engine/step-runners.ts#runDispatch`
+**Wired-into:** `src/conductor/src/engine/conductor.ts#run, src/conductor/src/engine/step-runners.ts#runDispatch, src/conductor/src/engine/resolved-config.ts#DEFAULT_STEP_RETRIES, src/conductor/src/engine/finish-publication-production.ts#acquireInteractiveIntent`
 **Dependencies:** Tasks 6, 10, 13, 16
 
 ### Task 18: Emit transition and terminal-disposition observability

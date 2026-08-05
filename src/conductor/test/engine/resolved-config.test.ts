@@ -148,6 +148,10 @@ describe('engine/resolved-config', () => {
       expect(DEFAULT_STEP_RETRIES.explore).toBe(3);
       // architecture_review is out of #188 scope — stays at 5.
       expect(DEFAULT_STEP_RETRIES.architecture_review).toBe(5);
+      // FINISH executes one deterministic publication transition per attempt:
+      // establish PR, shipped record, prose judgment, ready PR, outcome record,
+      // then a final authoritative observation.
+      expect(DEFAULT_STEP_RETRIES.finish).toBeGreaterThanOrEqual(6);
       expect(DEFAULT_STEP_RETRIES.bootstrap).toBe(1);
       expect(DEFAULT_STEP_RETRIES.test_suite).toBe(1);
     });

@@ -24,7 +24,12 @@ import { realpathSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
-import { Conductor } from './engine/conductor.js';
+import { Conductor, createFinishPresentationRepair } from './engine/conductor.js';
+import {
+  createProductionFinishPublicationCoordinator,
+  createProductionReleaseReadinessObserver,
+} from './engine/finish-publication-production.js';
+import { makeProductionGit } from './engine/pr-labels.js';
 import { DefaultStepRunner } from './engine/step-runners.js';
 import { createProviderRuntimeSet } from './engine/provider-runtime.js';
 import { ProviderSessionStore } from './engine/provider-session.js';
@@ -1164,6 +1169,12 @@ async function main(): Promise<void> {
   // startup.
   await spawnAutoUpdateCheck();
 
+  // FINISH and SHIP-entry draft publication both need a concrete PR base.
+  // Resolve origin's declared default with the existing local `main` fallback
+  // so foreground publication never receives an undefined base.
+  const finishPublicationBaseBranch =
+    (await originDefaultBranch(makeGitRunner(projectRoot))) ?? 'main';
+
   const conductor = new Conductor({
     stateFilePath,
     stepRunner,
@@ -1175,6 +1186,36 @@ async function main(): Promise<void> {
     modelPolicy: compatibilityRuntime.policy,
     providerExecution,
     projectRoot,
+    baseBranch: finishPublicationBaseBranch,
+    // FINISH mechanics are engine-owned. Keep this explicit at the foreground
+    // composition root so production cannot silently fall back to the
+    // judgment-only StepRunner path used before the coordinator existed.
+    finishPublication: createProductionFinishPublicationCoordinator({
+      projectRoot,
+      stateFilePath,
+      baseBranch: finishPublicationBaseBranch,
+      git: makeProductionGit(),
+      gh: makeProductionGh(),
+      repairPresentation: createFinishPresentationRepair({
+        projectRoot,
+        gh: makeProductionGh(),
+      }),
+      observeReleaseReadiness: createProductionReleaseReadinessObserver({
+        projectRoot,
+        config,
+      }),
+      acquireInteractiveIntent: async () => {
+        while (true) {
+          const answer = await promptHost.ask(
+            'Publication outcome: [p]ull request, [k]eep committed work, or [d]efer? ',
+          );
+          if (answer === 'p' || answer === 'pr' || answer === 'pull request') return 'pr';
+          if (answer === 'k' || answer === 'keep') return 'keep';
+          if (answer === 'd' || answer === 'defer') return 'defer';
+          console.log('  Invalid choice. Enter p, k, or d.');
+        }
+      },
+    }),
     featureDesc: opts.featureDesc,
     verifyArtifacts: true,
     onCheckpoint: (s) => promptHost.checkpoint(s),

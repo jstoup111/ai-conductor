@@ -581,26 +581,23 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 
 ### finish
 
-> Use when implementation is complete and all tests pass. Verifies with fresh evidence, presents completion options (merge, PR, keep, discard), and records the outcome.
+> Judge reader-facing PR prose at the engine-owned FINISH boundary after deterministic publication prerequisites pass.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`, `requires: []`, no model
   pin.
 - **Engine step** — `finish` (index 21, SHIP, prerequisite `rebase`). Loop gate, gating, no tier skip.
-  Dispatched as an interactive session because it asks the operator to choose a completion option.
-- **Inputs** — git status and rebase state; the configured aggregate verifier and its evidence; story
-  acceptance criteria; ADRs; the plan filename for the slug; merge-base, reflog, and PR state.
-- **Outputs** — `.pipeline/finish-choice`, written only by `conduct-ts finish-record`; `state.pr_url`;
-  `.pipeline/DONE`; the committed `.docs/shipped/<slug>.md`; `.pipeline/test-failures.md` on real
-  failures.
-- **Gate role** — blocking. Gate 0 refuses to finish a mid-rebase or mid-merge tree. Any stop means the
-  finish record is not written — the absent marker *is* the refusal signal the engine watches for,
-  and must never be hand-written. A failed staleness proof or a failed `--force-with-lease` must never
-  be retried with `--force`.
-- **Dispatches** — `agents/worktree-manager.md` only after an interactive merge-local outcome has
-  landed its shipped record on the local default branch, or after an interactive discard is
-  explicitly confirmed. On the Push & PR path, `finish` authors and publishes the PR **inline**
-  (§5a of the skill), records the outcome, and retains the feature worktree; the daemon's mergeable
-  sweep owns cleanup after the shipped record is proven on the remote default branch.
+  The production coordinator dispatches this skill only for one bounded retained-PR title/body quality
+  and repair pass.
+- **Inputs** — the retained PR identity plus its observed title and body. Deterministic BUILD, SHIP,
+  release-readiness, push, shipped-record, and outcome evidence stays engine-owned.
+- **Outputs** — accepted reader-facing PR prose or a bounded repair to the retained PR title/body. The
+  coordinator separately persists `state.pr_url`, commits `.docs/shipped/<slug>.md`, and writes
+  `.pipeline/finish-choice` through `conduct-ts finish-record` after verification.
+- **Gate role** — blocking. Missing or invalid deterministic evidence stops before this skill is
+  dispatched. Placeholder, halt, or structurally incomplete prose prevents the final outcome record.
+- **Interaction** — attended default and interactive foreground conduct asks the operator for PR, keep,
+  or defer before any publication observation or mutation. Explicit foreground-auto and daemon modes
+  use engine policy. No FINISH transition has PR merge or auto-merge authority.
 
 ### pr
 
@@ -706,7 +703,7 @@ subagent facility, not by the engine — the engine dispatches skills, and skill
 | `domain-reviewer.md` | Domain integrity reviewer with veto authority over tests and implementations | `tdd` at both DOMAIN phases, `code-review` |
 | `prd-auditor.md` | Audits one `FR-N` against shipped code; finding authority, never fixes | `prd-audit` |
 | `remediation-planner.md` | Emits per-gap dispositions and concrete tasks; planning authority, never edits code | `remediate` |
-| `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline`; `finish` after interactive merge-local or confirmed discard only |
+| `worktree-manager.md` | Git worktree lifecycle: creation, environment setup, merge-back, conflict resolution, proof-gated cleanup | `pipeline` |
 | `planner.md` | Expands brief requirements into implementable specs | Nothing — see below |
 | `cto-security.md` | Authn/authz, input validation, OWASP top 10, vulnerability surface | `assess` |
 | `cto-data-integrity.md` | Transactions, event sourcing, race conditions, migrations | `assess` |

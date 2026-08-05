@@ -1,0 +1,1284 @@
+import {
+  openShipDraftPr,
+  type OpenShipDraftPrDeps,
+} from './ship-draft-pr.js';
+import type {
+  FinishPublicationEvent,
+  FinishPublicationTransition,
+} from '../types/events.js';
+
+/**
+ * Closed domain vocabulary for resumable FINISH publication.  The coordinator
+ * derives these values from authoritative repository and external evidence;
+ * it never treats a local progress hint as a successful publication effect.
+ */
+
+/**
+ * Authority is part of the intent, rather than inferred from a caller's mode.
+ * Daemon policy may publish only a PR; the foreground automatic policy may
+ * safely keep work when publication is unavailable; interactive choices retain
+ * explicit operator authority.  Merge and discard are deliberately absent.
+ */
+export type PublicationIntent =
+  | {
+      outcome: 'pr';
+      authority: { kind: 'unattended_policy'; mode: 'daemon' };
+    }
+  | {
+      outcome: 'pr';
+      authority: { kind: 'unattended_policy'; mode: 'foreground-auto' };
+    }
+  | {
+      outcome: 'pr';
+      authority: { kind: 'operator_confirmed'; mode: 'interactive' };
+    }
+  | {
+      outcome: 'keep';
+      authority: { kind: 'unattended_policy'; mode: 'foreground-auto' };
+    }
+  | {
+      outcome: 'keep';
+      authority: { kind: 'operator_confirmed'; mode: 'interactive' };
+    };
+
+type DaemonPublicationIntent = Extract<
+  PublicationIntent,
+  { authority: { kind: 'unattended_policy'; mode: 'daemon' } }
+>;
+type ForegroundAutoPublicationIntent = Extract<
+  PublicationIntent,
+  { authority: { kind: 'unattended_policy'; mode: 'foreground-auto' } }
+>;
+type InteractivePublicationIntent = Extract<
+  PublicationIntent,
+  { authority: { kind: 'operator_confirmed'; mode: 'interactive' } }
+>;
+
+export type UnattendedPublicationMode = 'daemon' | 'foreground-auto';
+
+/**
+ * Capability observations are inputs from the composition root.  The intent
+ * policy is pure: it must not probe remotes or credentials itself.
+ */
+export interface UnattendedPublicationCapabilities {
+  remote: 'configured' | 'missing';
+  authentication: 'authenticated' | 'unavailable';
+}
+
+export interface UnattendedPublicationIntentInput {
+  mode: UnattendedPublicationMode;
+  capabilities: UnattendedPublicationCapabilities;
+  /** Reject a supplied outcome that diverges from the mode's safe policy. */
+  requestedOutcome?: unknown;
+}
+
+type PublicationEvidence = {
+  implementationEvidence: 'valid' | 'invalid' | 'indeterminate';
+  shipEvidence: 'valid' | 'invalid' | 'indeterminate';
+  releaseReadiness: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  branchPushed: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  shippedRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  outcomeRecord: 'valid' | 'missing' | 'invalid' | 'indeterminate';
+  pr: PublicationPullRequest;
+};
+
+export type PublicationPullRequest =
+  | {
+      identity: 'one';
+      url: string;
+      prose: 'accepted' | 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+      ready: boolean;
+    }
+  | { identity: 'none' }
+  | { identity: 'ambiguous'; urls: readonly string[] }
+  | { identity: 'indeterminate' };
+
+export type PublicationSnapshot =
+  | (PublicationEvidence & { mode: 'daemon'; intent: DaemonPublicationIntent })
+  | (PublicationEvidence & { mode: 'foreground-auto'; intent: ForegroundAutoPublicationIntent })
+  | (PublicationEvidence & { mode: 'interactive'; intent: InteractivePublicationIntent });
+
+/**
+ * A deterministic observer result. `present` means the boundary both found
+ * and verified the expected evidence; stale and malformed observations never
+ * receive the benefit of the doubt. `unavailable` covers a failed adapter
+ * call, so a transient dependency outage cannot manufacture completion.
+ */
+export type PublicationEvidenceObservation =
+  | 'present'
+  | 'missing'
+  | 'stale'
+  | 'malformed'
+  | 'unavailable';
+
+export type PushEvidenceObservation =
+  | 'pushed'
+  | 'unpushed'
+  | 'stale'
+  | 'malformed'
+  | 'unavailable';
+
+/** GitHub's authoritative view of the one PR eligible for this feature. */
+export type PullRequestObservation =
+  | {
+      state: 'one';
+      url: string;
+      prose: 'accepted' | 'stale' | 'placeholder' | 'halt';
+      ready: boolean;
+    }
+  | { state: 'missing' }
+  | { state: 'ambiguous'; urls: readonly string[] }
+  | { state: 'malformed' }
+  | { state: 'unavailable' };
+
+/**
+ * All repository and external boundaries used to construct a FINISH snapshot.
+ * The composition root supplies real adapters; unit tests supply fakes. The
+ * observer itself has no filesystem, process, or network fallback.
+ */
+export interface PublicationObservationPorts {
+  filesystem: {
+    observeImplementationEvidence(): Promise<PublicationEvidenceObservation>;
+    observeShipEvidence(): Promise<PublicationEvidenceObservation>;
+    observeOutcomeRecord(): Promise<PublicationEvidenceObservation>;
+  };
+  git: {
+    observePushEvidence(): Promise<PushEvidenceObservation>;
+  };
+  github: {
+    observePullRequest(): Promise<PullRequestObservation>;
+  };
+  shippedRecord: {
+    observeShippedRecord(): Promise<PublicationEvidenceObservation>;
+  };
+  releaseReadiness: {
+    observeReleaseReadiness(): Promise<PublicationEvidenceObservation>;
+  };
+}
+
+export type PublicationObservationContext =
+  | { mode: 'daemon'; intent: DaemonPublicationIntent }
+  | { mode: 'foreground-auto'; intent: ForegroundAutoPublicationIntent }
+  | { mode: 'interactive'; intent: InteractivePublicationIntent };
+
+export type ObservePublicationSnapshotInput = PublicationObservationContext & {
+  ports: PublicationObservationPorts;
+};
+
+/**
+ * Read every authoritative publication boundary into the closed snapshot.
+ * This is observation only: it has no local-state cache, mutation, process,
+ * or network behavior of its own. A failed observer is represented as
+ * indeterminate rather than escaping as an exception or being treated as
+ * evidence of absence.
+ */
+export async function observePublicationSnapshot(
+  input: ObservePublicationSnapshotInput,
+): Promise<PublicationSnapshot> {
+  const {
+    filesystem,
+    git,
+    github,
+    shippedRecord,
+    releaseReadiness,
+  } = input.ports;
+
+  const implementationEvidence = mapRequiredEvidence(
+    await safelyObserve(filesystem.observeImplementationEvidence),
+  );
+  const shipEvidence = mapRequiredEvidence(await safelyObserve(filesystem.observeShipEvidence));
+  const outcomeRecord = mapOptionalEvidence(await safelyObserve(filesystem.observeOutcomeRecord));
+  const branchPushed = mapPushEvidence(await safelyObserve(git.observePushEvidence));
+  const pr = mapPullRequest(await safelyObserve(github.observePullRequest));
+  const shipped = mapOptionalEvidence(await safelyObserve(shippedRecord.observeShippedRecord));
+  const readiness = mapReleaseReadiness(
+    await safelyObserve(releaseReadiness.observeReleaseReadiness),
+  );
+
+  return {
+    mode: input.mode,
+    intent: input.intent,
+    implementationEvidence,
+    shipEvidence,
+    releaseReadiness: readiness,
+    branchPushed,
+    pr,
+    shippedRecord: shipped,
+    outcomeRecord,
+  } as PublicationSnapshot;
+}
+
+async function safelyObserve<T>(observe: () => Promise<T>): Promise<T | 'unavailable'> {
+  try {
+    return await observe();
+  } catch {
+    return 'unavailable';
+  }
+}
+
+function mapRequiredEvidence(
+  observation: PublicationEvidenceObservation | 'unavailable',
+): PublicationEvidence['implementationEvidence'] {
+  switch (observation) {
+    case 'present':
+      return 'valid';
+    case 'unavailable':
+      return 'indeterminate';
+    case 'missing':
+    case 'stale':
+    case 'malformed':
+      return 'invalid';
+  }
+}
+
+function mapOptionalEvidence(
+  observation: PublicationEvidenceObservation | 'unavailable',
+): PublicationEvidence['shippedRecord'] {
+  switch (observation) {
+    case 'present':
+      return 'valid';
+    case 'missing':
+      return 'missing';
+    case 'unavailable':
+      return 'indeterminate';
+    case 'stale':
+    case 'malformed':
+      return 'invalid';
+  }
+}
+
+function mapReleaseReadiness(
+  observation: PublicationEvidenceObservation | 'unavailable',
+): PublicationEvidence['releaseReadiness'] {
+  return mapOptionalEvidence(observation);
+}
+
+function mapPushEvidence(
+  observation: PushEvidenceObservation | 'unavailable',
+): PublicationEvidence['branchPushed'] {
+  switch (observation) {
+    case 'pushed':
+      return 'valid';
+    case 'unpushed':
+      return 'missing';
+    case 'unavailable':
+      return 'indeterminate';
+    case 'stale':
+    case 'malformed':
+      return 'invalid';
+  }
+}
+
+function mapPullRequest(
+  observation: PullRequestObservation | 'unavailable',
+): PublicationEvidence['pr'] {
+  if (observation === 'unavailable') {
+    return { identity: 'indeterminate' };
+  }
+
+  switch (observation.state) {
+    case 'one':
+      return {
+        identity: 'one',
+        url: observation.url,
+        prose: observation.prose,
+        ready: observation.ready,
+      };
+    case 'missing':
+      return { identity: 'none' };
+    case 'ambiguous':
+      return { identity: 'ambiguous', urls: observation.urls };
+    case 'malformed':
+    case 'unavailable':
+      return { identity: 'indeterminate' };
+  }
+}
+
+export type PublicationSnapshotValidation =
+  | { kind: 'valid' }
+  | {
+      kind: 'incoherent';
+      reason: 'valid_outcome_record_requires_external_pr';
+    }
+  | {
+      kind: 'indeterminate';
+      reason:
+        | 'outcome_record_indeterminate'
+        | 'external_pr_identity_indeterminate';
+    };
+
+/**
+ * Validates whether the repository and external observations can describe the
+ * same publication state. This is deliberately not a completion decision.
+ */
+function validatePublicationSnapshot(
+  snapshot: PublicationSnapshot,
+): PublicationSnapshotValidation {
+  if (
+    snapshot.intent.outcome !== 'keep' &&
+    snapshot.outcomeRecord === 'valid' &&
+    snapshot.pr.identity === 'none'
+  ) {
+    return {
+      kind: 'incoherent',
+      reason: 'valid_outcome_record_requires_external_pr',
+    };
+  }
+
+  if (snapshot.outcomeRecord === 'indeterminate') {
+    return { kind: 'indeterminate', reason: 'outcome_record_indeterminate' };
+  }
+
+  if (snapshot.pr.identity === 'indeterminate') {
+    return {
+      kind: 'indeterminate',
+      reason: 'external_pr_identity_indeterminate',
+    };
+  }
+
+  return { kind: 'valid' };
+}
+
+export type PublicationTransition = FinishPublicationTransition;
+
+type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
+
+/**
+ * Selects the first publication effect still required by a closed snapshot.
+ * Every result is a resumable transition; the coordinator owns performing it
+ * and obtaining the next authoritative snapshot.
+ */
+export function nextFinishPublicationTransition(
+  snapshot: PublicationSnapshot,
+): PublicationTransition {
+  // An authorized keep outcome deliberately has no GitHub identity. Its
+  // durable finish record is the only remaining publication transition; do
+  // not manufacture a PR merely to satisfy the PR publication ordering.
+  if (snapshot.intent.outcome === 'keep') {
+    return 'record_outcome';
+  }
+
+  if (snapshot.pr.identity !== 'one' || snapshot.branchPushed !== 'valid') {
+    return 'establish_pr';
+  }
+
+  if (snapshot.releaseReadiness !== 'valid') {
+    return 'verify_release_readiness';
+  }
+
+  if (snapshot.shippedRecord !== 'valid') {
+    return 'write_shipped_record';
+  }
+
+  if (snapshot.pr.prose !== 'accepted') {
+    return 'judge_pr_prose';
+  }
+
+  if (!snapshot.pr.ready) {
+    return 'ready_pr';
+  }
+
+  return 'record_outcome';
+}
+
+export type PublicationDisposition =
+  | { kind: 'complete' }
+  | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
+  | { kind: 'publication_retry'; condition: PublicationCondition }
+  | { kind: 'implementation_invalid'; evidence: string }
+  | { kind: 'human_required'; reason: string };
+
+/** The only actions the conductor may take for a typed FINISH result. */
+export type FinishPublicationRoute =
+  | { kind: 'complete' }
+  | { kind: 'retry_finish'; reason: string }
+  | { kind: 'retry_build'; evidence: string }
+  | { kind: 'halt'; reason: string };
+
+const PUBLICATION_CONDITIONS = {
+  publication_snapshot_incoherent: {
+    message: 'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
+    nextAction: 'resolve_publication_state',
+  },
+  publication_snapshot_indeterminate: {
+    message: 'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.',
+    nextAction: 'restore_publication_observation',
+  },
+  implementation_evidence_invalid: {
+    message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+    nextAction: 'rerun_build_verification',
+  },
+  implementation_evidence_indeterminate: {
+    message: 'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
+    nextAction: 'restore_implementation_observation',
+  },
+  ship_evidence_invalid: {
+    message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+    nextAction: 'rerun_ship_validators',
+  },
+  ship_evidence_indeterminate: {
+    message: 'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
+    nextAction: 'restore_ship_observation',
+  },
+  release_readiness_missing: {
+    message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+    nextAction: 'publish_release_readiness',
+  },
+  release_readiness_invalid: {
+    message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+    nextAction: 'restore_release_readiness',
+  },
+  release_readiness_indeterminate: {
+    message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+    nextAction: 'restore_release_readiness_observation',
+  },
+} as const;
+
+const PUBLICATION_RETRY_REASONS: Record<PublicationTransition, readonly string[]> = {
+  establish_pr: [
+    'draft_pr_effect_unavailable',
+    'draft_pr_skipped',
+    'draft_pr_no-commits',
+    'draft_pr_push-failed',
+    'draft_pr_failed',
+    'pr_url_persistence_failed',
+    'pr_identity_not_verified_after_establish',
+  ],
+  verify_release_readiness: [],
+  write_shipped_record: [
+    'shipped_record_effect_unavailable',
+    'shipped_record_write_failed',
+    'shipped_record_not_verified_after_write',
+  ],
+  judge_pr_prose: [
+    'judgment_timed_out',
+    'judgment_provider_unavailable',
+    'judgment_dispatch_failed',
+    'judgment_completed_reobserve',
+  ],
+  ready_pr: [
+    'presentation_repair_effect_unavailable',
+    'presentation_repair_failed',
+    'presentation_not_verified_after_repair',
+  ],
+  record_outcome: [
+    'outcome_record_effect_unavailable',
+    'outcome_record_write_failed',
+    'outcome_record_not_verified_after_write',
+  ],
+};
+
+/**
+ * Fail-closed boundary between the publication coordinator and conductor.
+ * Publication-only work may retry FINISH, while every other currently-known
+ * outcome remains local to FINISH until its dedicated routing rule exists.
+ *
+ * `unknown` is intentional: the boundary can receive a malformed result from
+ * a future adapter, so compile-time exhaustiveness alone is insufficient.
+ */
+export function routeFinishPublicationDisposition(
+  disposition: unknown,
+): FinishPublicationRoute {
+  if (!isExactDisposition(disposition)) {
+    return {
+      kind: 'halt',
+      reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+    };
+  }
+
+  switch (disposition.kind) {
+    case 'complete':
+      return { kind: 'complete' };
+    case 'publication_retry':
+      if (
+        'condition' in disposition &&
+        (disposition.condition.code === 'implementation_evidence_invalid' ||
+          disposition.condition.code === 'implementation_evidence_indeterminate' ||
+          disposition.condition.code === 'ship_evidence_invalid' ||
+          disposition.condition.code === 'ship_evidence_indeterminate')
+      ) {
+        return {
+          kind: 'halt',
+          reason:
+            'FINISH evidence-invalid disposition requires its dedicated BUILD routing rule: ' +
+            disposition.condition.code,
+        };
+      }
+      return {
+        kind: 'retry_finish',
+        reason: 'reason' in disposition ? disposition.reason : disposition.condition.code,
+      };
+    case 'implementation_invalid':
+      return {
+        kind: 'retry_build',
+        evidence: disposition.evidence,
+      };
+    case 'human_required':
+      return { kind: 'halt', reason: disposition.reason };
+  }
+}
+
+function isExactDisposition(
+  disposition: unknown,
+): disposition is PublicationDisposition {
+  if (!disposition || typeof disposition !== 'object' || Array.isArray(disposition)) return false;
+  const value = disposition as Record<string, unknown>;
+  const keys = Object.keys(value).sort();
+  const hasOnly = (...expected: string[]) =>
+    keys.length === expected.length && keys.every((key, index) => key === expected.sort()[index]);
+
+  switch (value.kind) {
+    case 'complete':
+      return hasOnly('kind');
+    case 'publication_retry':
+      if (hasOnly('kind', 'transition', 'reason')) {
+        return (
+          isPublicationTransition(value.transition) &&
+          typeof value.reason === 'string' &&
+          PUBLICATION_RETRY_REASONS[value.transition].includes(value.reason)
+        );
+      }
+      return (
+        hasOnly('kind', 'condition') &&
+        isPublicationCondition(value.condition)
+      );
+    case 'implementation_invalid':
+      return (
+        hasOnly('kind', 'evidence') &&
+        typeof value.evidence === 'string' &&
+        value.evidence.trim().length > 0
+      );
+    case 'human_required':
+      return (
+        hasOnly('kind', 'reason') &&
+        typeof value.reason === 'string' &&
+        value.reason.length > 0
+      );
+    default:
+      return false;
+  }
+}
+
+function isPublicationTransition(value: unknown): value is PublicationTransition {
+  return (
+    value === 'establish_pr' ||
+    value === 'verify_release_readiness' ||
+    value === 'write_shipped_record' ||
+    value === 'judge_pr_prose' ||
+    value === 'ready_pr' ||
+    value === 'record_outcome'
+  );
+}
+
+function isPublicationCondition(value: unknown): value is PublicationCondition {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const condition = value as Record<string, unknown>;
+  const expected =
+    typeof condition.code === 'string'
+      ? PUBLICATION_CONDITIONS[condition.code as keyof typeof PUBLICATION_CONDITIONS]
+      : undefined;
+  return (
+    typeof condition.message === 'string' &&
+    typeof condition.nextAction === 'string' &&
+    expected?.message === condition.message &&
+    expected.nextAction === condition.nextAction &&
+    Object.keys(condition).length === 3
+  );
+}
+
+/** A deterministic FINISH condition with the only permitted operator action. */
+export type PublicationCondition =
+  | {
+      code: 'publication_snapshot_incoherent';
+      message: 'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.';
+      nextAction: 'resolve_publication_state';
+    }
+  | {
+      code: 'publication_snapshot_indeterminate';
+      message: 'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.';
+      nextAction: 'restore_publication_observation';
+    }
+  | {
+      code: 'implementation_evidence_invalid';
+      message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.';
+      nextAction: 'rerun_build_verification';
+    }
+  | {
+      code: 'implementation_evidence_indeterminate';
+      message: 'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.';
+      nextAction: 'restore_implementation_observation';
+    }
+  | {
+      code: 'ship_evidence_invalid';
+      message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.';
+      nextAction: 'rerun_ship_validators';
+    }
+  | {
+      code: 'ship_evidence_indeterminate';
+      message: 'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.';
+      nextAction: 'restore_ship_observation';
+    }
+  | {
+      code: 'release_readiness_missing';
+      message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.';
+      nextAction: 'publish_release_readiness';
+    }
+  | {
+      code: 'release_readiness_invalid';
+      message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.';
+      nextAction: 'restore_release_readiness';
+    }
+  | {
+      code: 'release_readiness_indeterminate';
+      message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.';
+      nextAction: 'restore_release_readiness_observation';
+    };
+
+export type PublicationPreflightResult =
+  | { kind: 'ready_for_judgment' }
+  | { kind: 'blocked'; condition: PublicationCondition };
+
+/**
+ * Checks only evidence that can block a judgment call without making any
+ * publication effect. The order is intentional: it gives multi-gap state one
+ * stable, actionable condition and never asks a judgment provider to infer
+ * deterministic repository or release state.
+ */
+function preflightFinishPublication(
+  snapshot: PublicationSnapshot,
+): PublicationPreflightResult {
+  const validation = validatePublicationSnapshot(snapshot);
+  if (validation.kind === 'incoherent') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'publication_snapshot_incoherent',
+        message: 'Publication evidence is contradictory. Resolve the cited publication state, then retry FINISH.',
+        nextAction: 'resolve_publication_state',
+      },
+    };
+  }
+  if (validation.kind === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'publication_snapshot_indeterminate',
+        message: 'Publication evidence could not be determined. Restore the evidence observer, then retry FINISH.',
+        nextAction: 'restore_publication_observation',
+      },
+    };
+  }
+
+  if (snapshot.implementationEvidence === 'invalid') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'implementation_evidence_invalid',
+        message: 'Implementation evidence is invalid. Re-run the BUILD verification, then retry FINISH.',
+        nextAction: 'rerun_build_verification',
+      },
+    };
+  }
+  if (snapshot.implementationEvidence === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'implementation_evidence_indeterminate',
+        message: 'Implementation evidence could not be determined. Restore the implementation evidence observer, then retry FINISH.',
+        nextAction: 'restore_implementation_observation',
+      },
+    };
+  }
+  if (snapshot.shipEvidence === 'invalid') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'ship_evidence_invalid',
+        message: 'SHIP evidence is invalid. Re-run the SHIP validators, then retry FINISH.',
+        nextAction: 'rerun_ship_validators',
+      },
+    };
+  }
+  if (snapshot.shipEvidence === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'ship_evidence_indeterminate',
+        message: 'SHIP evidence could not be determined. Restore the SHIP evidence observer, then retry FINISH.',
+        nextAction: 'restore_ship_observation',
+      },
+    };
+  }
+  if (snapshot.releaseReadiness === 'missing') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'release_readiness_missing',
+        message: 'Release readiness is missing. Publish a valid release readiness result, then retry FINISH.',
+        nextAction: 'publish_release_readiness',
+      },
+    };
+  }
+  if (snapshot.releaseReadiness === 'invalid') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'release_readiness_invalid',
+        message: 'Release readiness is invalid. Restore a valid release readiness result, then retry FINISH.',
+        nextAction: 'restore_release_readiness',
+      },
+    };
+  }
+  if (snapshot.releaseReadiness === 'indeterminate') {
+    return {
+      kind: 'blocked',
+      condition: {
+        code: 'release_readiness_indeterminate',
+        message: 'Release readiness could not be determined. Restore the readiness observer, then retry FINISH.',
+        nextAction: 'restore_release_readiness_observation',
+      },
+    };
+  }
+
+  return { kind: 'ready_for_judgment' };
+}
+
+/**
+ * The only provider-owned FINISH decision is whether the observed PR's title
+ * and body need repair. Everything else is selected from durable evidence.
+ */
+export type PrProseJudgmentRequest = {
+  kind: 'finish_pr_prose_quality';
+  pullRequestUrl: string;
+  qualityScope: readonly ['title', 'body'];
+  maximumPasses: 1;
+};
+
+/** The bounded provider result, including fail-closed judgment outcomes. */
+export type PrProseJudgmentResult =
+  | { kind: 'accepted' }
+  | { kind: 'revision_required'; reason: 'placeholder' | 'halt' | 'structurally_incomplete' }
+  | { kind: 'timed_out' }
+  | { kind: 'provider_unavailable' }
+  | { kind: 'refused' };
+
+/**
+ * The coordinator passes only an already-authorized outcome to the existing
+ * fail-closed recorder. Path validation and marker-last persistence remain
+ * inside that boundary; this domain layer never writes completion files.
+ */
+export type FinishOutcomeRecordRequest =
+  | { choice: 'pr'; prUrl: string }
+  | { choice: 'keep' };
+
+type PrWithJudgmentNeeded = Extract<PublicationPullRequest, { identity: 'one' }> & {
+  prose: 'stale' | 'placeholder' | 'halt' | 'indeterminate';
+};
+
+/**
+ * A typed predicate protects the expensive boundary: accepted observed prose
+ * is final for this pass, while a stale or incomplete observation earns one
+ * request. The predicate performs no provider work itself.
+ */
+function isPrProseJudgmentNeeded(
+  pr: PublicationPullRequest,
+): pr is PrWithJudgmentNeeded {
+  return pr.identity === 'one' && pr.prose !== 'accepted';
+}
+
+function prProseJudgmentRequest(pr: PrWithJudgmentNeeded): PrProseJudgmentRequest {
+  return {
+    kind: 'finish_pr_prose_quality',
+    pullRequestUrl: pr.url,
+    qualityScope: ['title', 'body'],
+    maximumPasses: 1,
+  };
+}
+
+export interface AdvanceFinishPublicationInput {
+  observe(): Promise<PublicationSnapshot>;
+  /** Best-effort, closed publication progress telemetry supplied by the composition root. */
+  emit?: PublicationEventEmitter;
+  effects: {
+    dispatchJudgment(request: PrProseJudgmentRequest): Promise<PrProseJudgmentResult>;
+    /**
+     * The existing shipped-record primitive writes, commits, and pushes the
+     * record. It is injected here because `observe` remains the authority for
+     * strict committed-tree and PR-head verification.
+     */
+    createShippedRecord?: () => Promise<void>;
+    /**
+     * Existing SHIP draft-PR primitive, supplied with injected Git/GitHub
+     * runners by the composition root. It is optional only because callers
+     * that already observed a stable identity never need this transition.
+     */
+    establishPr?: OpenShipDraftPrDeps;
+    /**
+     * Persist the authoritative URL returned by a successful draft-PR
+     * establishment before the coordinator re-observes PR identity. The
+     * composition root owns its durable feature-state representation.
+     */
+    persistEstablishedPrUrl?: (prUrl: string) => Promise<void>;
+    /**
+     * Existing order-gated PR presentation repair. The composition root owns
+     * the GitHub mechanics (halt rehabilitation, title/body floors, and the
+     * draft-to-ready flip); this coordinator invokes it only after accepted
+     * prose has been observed and verifies its result by re-observation.
+     */
+    repairPresentation?: () => Promise<void>;
+    /**
+     * Adapter for the existing finish-record primitive. It owns durable writes
+     * and refuses unsafe paths; the coordinator owns observe-before-record and
+     * re-observation after any interrupted response.
+     */
+    recordOutcome?: (request: FinishOutcomeRecordRequest) => Promise<void>;
+  };
+}
+
+export type AdvanceFinishPublicationResult =
+  | { kind: 'complete' }
+  | { kind: 'advanced'; transition: PublicationTransition }
+  | { kind: 'implementation_invalid'; evidence: string }
+  | { kind: 'publication_retry'; condition: PublicationCondition }
+  | {
+      kind: 'publication_retry';
+      transition: PublicationTransition;
+      reason: string;
+    }
+  | {
+      kind: 'publication_retry';
+      transition: 'record_outcome';
+      reason:
+        | 'outcome_record_effect_unavailable'
+        | 'outcome_record_write_failed'
+        | 'outcome_record_not_verified_after_write';
+    }
+  | {
+      kind: 'human_required';
+      reason:
+        | 'ambiguous_pr_identity'
+        | 'invalid_shipped_record'
+        | 'judgment_placeholder_prose'
+        | 'judgment_halt_prose'
+        | 'judgment_malformed_prose'
+        | 'judgment_refused';
+    };
+
+/**
+ * The effects object is the composition root's stable identity for one
+ * publication attempt. Coalescing by that identity prevents two resumptions
+ * in the same process from crossing the same mutation boundary concurrently.
+ * Each winner still verify-after-writes; followers receive that authoritative
+ * reconciliation rather than repeating a create, record, presentation, or
+ * marker effect.
+ */
+const activePublicationEffects = new WeakMap<
+  AdvanceFinishPublicationInput['effects'],
+  Map<PublicationTransition, Promise<AdvanceFinishPublicationResult>>
+>();
+
+async function coalescePublicationEffect(
+  effects: AdvanceFinishPublicationInput['effects'],
+  transition: PublicationTransition,
+  advance: () => Promise<AdvanceFinishPublicationResult>,
+): Promise<AdvanceFinishPublicationResult> {
+  let activeForPublication = activePublicationEffects.get(effects);
+  if (!activeForPublication) {
+    activeForPublication = new Map();
+    activePublicationEffects.set(effects, activeForPublication);
+  }
+
+  const active = activeForPublication.get(transition);
+  if (active) return active;
+
+  const winner = advance();
+  activeForPublication.set(transition, winner);
+  try {
+    return await winner;
+  } finally {
+    if (activeForPublication.get(transition) === winner) {
+      activeForPublication.delete(transition);
+    }
+    if (activeForPublication.size === 0) activePublicationEffects.delete(effects);
+  }
+}
+
+function mapPrProseJudgmentResult(
+  result: PrProseJudgmentResult,
+): AdvanceFinishPublicationResult {
+  switch (result.kind) {
+    case 'accepted':
+      return { kind: 'advanced', transition: 'judge_pr_prose' };
+    case 'timed_out':
+      return {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_timed_out',
+      };
+    case 'provider_unavailable':
+      return {
+        kind: 'publication_retry',
+        transition: 'judge_pr_prose',
+        reason: 'judgment_provider_unavailable',
+      };
+    case 'refused':
+      return { kind: 'human_required', reason: 'judgment_refused' };
+    case 'revision_required':
+      switch (result.reason) {
+        case 'placeholder':
+          return { kind: 'human_required', reason: 'judgment_placeholder_prose' };
+        case 'halt':
+          return { kind: 'human_required', reason: 'judgment_halt_prose' };
+        case 'structurally_incomplete':
+          return { kind: 'human_required', reason: 'judgment_malformed_prose' };
+      }
+  }
+}
+
+async function emitPublicationEvent(
+  emit: PublicationEventEmitter | undefined,
+  event: FinishPublicationEvent,
+): Promise<void> {
+  try {
+    await emit?.(event);
+  } catch {
+    // Observability must not alter a verified publication disposition.
+  }
+}
+
+async function advancedPublicationTransition(
+  emit: PublicationEventEmitter | undefined,
+  transition: PublicationTransition,
+): Promise<Extract<AdvanceFinishPublicationResult, { kind: 'advanced' }>> {
+  await emitPublicationEvent(emit, {
+    type: 'finish_publication_transition', phase: 'completed', transition,
+  });
+  return { kind: 'advanced', transition };
+}
+
+/**
+ * The narrow Task 7 coordinator seam: observe first, stop on deterministic
+ * blockers, and only then cross the injected judgment boundary.
+ */
+export async function advanceFinishPublication(
+  input: AdvanceFinishPublicationInput,
+): Promise<AdvanceFinishPublicationResult> {
+  const snapshot = await input.observe();
+  const preflight = preflightFinishPublication(snapshot);
+  if (preflight.kind === 'blocked') {
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_blocked',
+      condition: preflight.condition.code,
+    });
+    if (preflight.condition.code === 'implementation_evidence_invalid') {
+      return {
+        kind: 'implementation_invalid',
+        evidence: `${preflight.condition.code}: ${preflight.condition.message}`,
+      };
+    }
+    return { kind: 'publication_retry', condition: preflight.condition };
+  }
+
+  if (snapshot.pr.identity === 'ambiguous') {
+    return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'establish_pr') {
+    return coalescePublicationEffect(input.effects, 'establish_pr', async () => {
+      if (!input.effects.establishPr) {
+        return {
+          kind: 'publication_retry',
+          transition: 'establish_pr',
+          reason: 'draft_pr_effect_unavailable',
+        };
+      }
+
+      await emitPublicationEvent(input.emit, {
+        type: 'finish_publication_transition', phase: 'started', transition: 'establish_pr',
+      });
+
+      const draftPr = await openShipDraftPr(input.effects.establishPr);
+      if (draftPr.outcome === 'published' && input.effects.persistEstablishedPrUrl) {
+        try {
+          await input.effects.persistEstablishedPrUrl(draftPr.prUrl);
+        } catch {
+          return {
+            kind: 'publication_retry',
+            transition: 'establish_pr',
+            reason: 'pr_url_persistence_failed',
+          };
+        }
+      }
+      const observedAfterEstablish = await input.observe();
+      if (
+        observedAfterEstablish.pr.identity === 'one' &&
+        observedAfterEstablish.branchPushed === 'valid'
+      ) {
+        return advancedPublicationTransition(input.emit, 'establish_pr');
+      }
+      if (observedAfterEstablish.pr.identity === 'ambiguous') {
+        return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+
+      return {
+        kind: 'publication_retry',
+        transition: 'establish_pr',
+        reason:
+          draftPr.outcome === 'published'
+            ? 'pr_identity_not_verified_after_establish'
+            : `draft_pr_${draftPr.outcome}`,
+      };
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'write_shipped_record') {
+    // An invalid record can be a different feature's evidence, a stale hash,
+    // or an unpushed/malformed write. Replacing it would destroy the only
+    // diagnostic evidence, so require a human resolution rather than trying
+    // to overwrite it.
+    if (snapshot.shippedRecord === 'invalid') {
+      return { kind: 'human_required', reason: 'invalid_shipped_record' };
+    }
+    if (!input.effects.createShippedRecord) {
+      return {
+        kind: 'publication_retry',
+        transition: 'write_shipped_record',
+        reason: 'shipped_record_effect_unavailable',
+      };
+    }
+
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record',
+    });
+    return coalescePublicationEffect(input.effects, 'write_shipped_record', async () => {
+      let writeFailure: unknown;
+      try {
+        await input.effects.createShippedRecord!();
+      } catch (error) {
+        // A response can be lost after a successful push. The mandatory
+        // re-observation below distinguishes that case from an actual failure.
+        writeFailure = error;
+      }
+
+      const observedAfterWrite = await input.observe();
+      if (observedAfterWrite.shippedRecord === 'valid') {
+        return advancedPublicationTransition(input.emit, 'write_shipped_record');
+      }
+      if (observedAfterWrite.shippedRecord === 'invalid') {
+        return { kind: 'human_required', reason: 'invalid_shipped_record' };
+      }
+      return {
+        kind: 'publication_retry',
+        transition: 'write_shipped_record',
+        reason: writeFailure
+          ? 'shipped_record_write_failed'
+          : 'shipped_record_not_verified_after_write',
+      };
+    });
+  }
+
+  if (isPrProseJudgmentNeeded(snapshot.pr)) {
+    const pr = snapshot.pr;
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'judge_pr_prose',
+    });
+    return coalescePublicationEffect(input.effects, 'judge_pr_prose', async () => {
+      try {
+        const result = mapPrProseJudgmentResult(
+          await input.effects.dispatchJudgment(prProseJudgmentRequest(pr)),
+        );
+        return result.kind === 'advanced'
+          ? advancedPublicationTransition(input.emit, 'judge_pr_prose')
+          : result;
+      } catch {
+        // The dispatcher can lose its response after the provider has returned.
+        // Re-observation on the next FINISH pass is authoritative, so retain the
+        // already verified PR and shipped-record effects and retry only judgment.
+        return {
+          kind: 'publication_retry',
+          transition: 'judge_pr_prose',
+          reason: 'judgment_dispatch_failed',
+        };
+      }
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'ready_pr') {
+    if (!input.effects.repairPresentation) {
+      return {
+        kind: 'publication_retry',
+        transition: 'ready_pr',
+        reason: 'presentation_repair_effect_unavailable',
+      };
+    }
+
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'ready_pr',
+    });
+    return coalescePublicationEffect(input.effects, 'ready_pr', async () => {
+      try {
+        await input.effects.repairPresentation!();
+      } catch {
+        return {
+          kind: 'publication_retry',
+          transition: 'ready_pr',
+          reason: 'presentation_repair_failed',
+        };
+      }
+
+      const observedAfterPresentationRepair = await input.observe();
+      if (observedAfterPresentationRepair.pr.identity === 'ambiguous') {
+        return { kind: 'human_required', reason: 'ambiguous_pr_identity' };
+      }
+      if (
+        observedAfterPresentationRepair.pr.identity === 'one' &&
+        observedAfterPresentationRepair.pr.prose === 'accepted' &&
+        observedAfterPresentationRepair.pr.ready
+      ) {
+        return advancedPublicationTransition(input.emit, 'ready_pr');
+      }
+
+      return {
+        kind: 'publication_retry',
+        transition: 'ready_pr',
+        reason: 'presentation_not_verified_after_repair',
+      };
+    });
+  }
+
+  if (nextFinishPublicationTransition(snapshot) === 'record_outcome') {
+    // A previously observed terminal marker is already the durable commit
+    // point. Repeating the recorder would be unnecessary and could obscure a
+    // completed prior attempt.
+    if (snapshot.outcomeRecord === 'valid') {
+      return { kind: 'complete' };
+    }
+    if (!input.effects.recordOutcome) {
+      return {
+        kind: 'publication_retry',
+        transition: 'record_outcome',
+        reason: 'outcome_record_effect_unavailable',
+      };
+    }
+
+    let recordRequest: FinishOutcomeRecordRequest;
+    if (snapshot.intent.outcome === 'pr') {
+      // `record_outcome` is reachable only after a single PR identity was
+      // observed, but retain the check at the adapter boundary so a future
+      // transition-order refactor cannot manufacture a PR URL.
+      if (snapshot.pr.identity !== 'one') {
+        return {
+          kind: 'publication_retry',
+          transition: 'record_outcome',
+          reason: 'outcome_record_not_verified_after_write',
+        };
+      }
+      recordRequest = { choice: 'pr', prUrl: snapshot.pr.url };
+    } else {
+      recordRequest = { choice: 'keep' };
+    }
+
+    await emitPublicationEvent(input.emit, {
+      type: 'finish_publication_transition', phase: 'started', transition: 'record_outcome',
+    });
+    return coalescePublicationEffect(input.effects, 'record_outcome', async () => {
+      let writeFailure = false;
+      try {
+        await input.effects.recordOutcome!(recordRequest);
+      } catch {
+        // The recorder can complete its marker write before its caller loses the
+        // response. The observation below is authoritative in either case.
+        writeFailure = true;
+      }
+
+      const observedAfterRecord = await input.observe();
+      const observedPreflight = preflightFinishPublication(observedAfterRecord);
+      if (
+        observedPreflight.kind === 'ready_for_judgment' &&
+        nextFinishPublicationTransition(observedAfterRecord) === 'record_outcome' &&
+        observedAfterRecord.outcomeRecord === 'valid'
+      ) {
+        await emitPublicationEvent(input.emit, {
+          type: 'finish_publication_transition', phase: 'completed', transition: 'record_outcome',
+        });
+        return { kind: 'complete' };
+      }
+
+      return {
+        kind: 'publication_retry',
+        transition: 'record_outcome',
+        reason: writeFailure
+          ? 'outcome_record_write_failed'
+          : 'outcome_record_not_verified_after_write',
+      };
+    });
+  }
+
+  return { kind: 'advanced', transition: nextFinishPublicationTransition(snapshot) };
+}
+
+/**
+ * Parses the interactive host's raw choice without advancing publication.
+ * Only PR and keep are representable as coordinator intents; deferred,
+ * declined, and destructive choices remain explicit human decisions.
+ */
+export function resolveInteractivePublicationIntent(
+  choice: unknown,
+): InteractivePublicationIntent | Extract<PublicationDisposition, { kind: 'human_required' }> {
+  switch (choice) {
+    case 'pr':
+    case 'keep':
+      return {
+        outcome: choice,
+        authority: { kind: 'operator_confirmed', mode: 'interactive' },
+      };
+    case 'defer':
+      return { kind: 'human_required', reason: 'interactive_intent_deferred' };
+    case 'decline':
+      return { kind: 'human_required', reason: 'interactive_intent_declined' };
+    case 'merge-local':
+    case 'merge':
+    case 'discard':
+      return { kind: 'human_required', reason: 'interactive_intent_destructive_choice' };
+    default:
+      return { kind: 'human_required', reason: 'interactive_intent_unrecognized' };
+  }
+}
+
+/**
+ * Resolves the existing unattended policy without probing or mutating any
+ * external boundary. Daemon runs are PR-only; foreground auto keeps committed
+ * work when remote publication is not available. Neither policy may synthesize
+ * an operator-only destructive outcome.
+ */
+export function resolveUnattendedPublicationIntent(
+  input: UnattendedPublicationIntentInput,
+): DaemonPublicationIntent | ForegroundAutoPublicationIntent | Extract<PublicationDisposition, { kind: 'human_required' }> {
+  const { mode, capabilities, requestedOutcome } = input;
+
+  if (
+    requestedOutcome === 'merge' ||
+    requestedOutcome === 'merge-local' ||
+    requestedOutcome === 'discard'
+  ) {
+    return { kind: 'human_required', reason: 'unattended_intent_destructive_choice' };
+  }
+
+  if (mode === 'daemon') {
+    if (requestedOutcome !== undefined && requestedOutcome !== 'pr') {
+      return { kind: 'human_required', reason: 'unattended_intent_unauthorized_outcome' };
+    }
+    return { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'daemon' } };
+  }
+
+  const publicationAvailable =
+    capabilities.remote === 'configured' && capabilities.authentication === 'authenticated';
+  const outcome = publicationAvailable ? 'pr' : 'keep';
+  if (requestedOutcome !== undefined && requestedOutcome !== outcome) {
+    return { kind: 'human_required', reason: 'unattended_intent_unauthorized_outcome' };
+  }
+  if (publicationAvailable) {
+    return { outcome: 'pr', authority: { kind: 'unattended_policy', mode: 'foreground-auto' } };
+  }
+  return { outcome: 'keep', authority: { kind: 'unattended_policy', mode: 'foreground-auto' } };
+}

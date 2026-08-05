@@ -91,6 +91,29 @@ async function commitsAheadOfBase(
 }
 
 /**
+ * Re-observe an OPEN PR without creating one. This is used only after an
+ * indeterminate create-capable attempt, where another create could duplicate
+ * an identity whose response was lost.
+ */
+async function reobserveOpenPr(
+  gh: GhRunner,
+  cwd: string,
+  branch: string,
+  log: (msg: string) => void,
+): Promise<string | undefined> {
+  try {
+    const { stdout } = await gh(['pr', 'view', branch, '--json', 'url,state'], { cwd });
+    const data: { url?: unknown; state?: unknown } = JSON.parse(stdout);
+    return data.state === 'OPEN' && typeof data.url === 'string' && data.url.length > 0
+      ? data.url
+      : undefined;
+  } catch (err) {
+    log(`[ship-draft-pr] re-observation for ${branch} failed: ${err}`);
+    return undefined;
+  }
+}
+
+/**
  * Push the feature branch and ensure an OPEN **draft** PR exists for it.
  *
  * Idempotent: `findOrCreatePr` returns an already-open PR untouched, so
@@ -154,12 +177,14 @@ export async function openShipDraftPr(
       '',
     ].join('\n');
 
-    const { prUrl } = await findOrCreatePr(
-      gh,
-      cwd,
-      { branch, base: baseBranch, draft: true, title, body },
-      log,
-    );
+    const opts = { branch, base: baseBranch, draft: true, title, body };
+    let { prUrl } = await findOrCreatePr(gh, cwd, opts, log);
+    // GitHub can complete `pr create` and lose the response before the
+    // runner receives a URL. Re-observe the branch without another
+    // create-capable call: an unknown write outcome must never retry create.
+    if (!prUrl) {
+      prUrl = await reobserveOpenPr(gh, cwd, branch, log);
+    }
     if (!prUrl) {
       const reason = `gh could not open or resolve a draft PR for ${branch}`;
       log(`[ship-draft-pr] ${reason} (advisory, build continues)`);

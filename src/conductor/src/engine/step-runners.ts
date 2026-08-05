@@ -69,6 +69,7 @@ import {
   createProviderLifecycleEpisodeStore,
   type ProviderLifecycleEpisodeStore,
 } from './provider-lifecycle-store.js';
+import { parseFinishPrProseJudgment } from './finish-pr-prose-judgment.js';
 
 // Autonomous steps run in Claude's `-p` (print) mode with
 // --dangerously-skip-permissions. Completion is enforced by the conductor's
@@ -609,7 +610,7 @@ export class DefaultStepRunner implements StepRunner {
             );
             if (result) {
               this.callCount++;
-              return this.toStepRunResult(result);
+              return this.toStepRunResult(step, result);
             }
           } catch (error) {
             this.callCount++;
@@ -785,7 +786,7 @@ export class DefaultStepRunner implements StepRunner {
       if (!opts?.providerSessions) {
         await this.persistProviderAwareSuccess(verifiedResult);
       }
-      return this.toStepRunResult(verifiedResult);
+      return this.toStepRunResult(step, verifiedResult);
     } catch (error) {
       this.callCount++;
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -1027,11 +1028,16 @@ export class DefaultStepRunner implements StepRunner {
   }
 
   private toStepRunResult(
+    step: StepName,
     result: ProviderExecutionResult,
   ): StepRunResult {
+    const publicationDisposition = step === 'finish' && result.success
+      ? parseFinishPrProseJudgment(result.output)
+      : undefined;
     return {
       success: result.success,
       ...(result.output ? { output: result.output } : {}),
+      ...(publicationDisposition !== undefined ? { publicationDisposition } : {}),
       ...(result.authFailure ? { authFailure: true } : {}),
       ...(result.permissionDenied ? { permissionDenied: true } : {}),
       ...(result.rateLimited
@@ -1980,54 +1986,29 @@ export class DefaultStepRunner implements StepRunner {
       }
     }
 
-    // The finish skill normally asks the user to choose Merge/PR/Keep/Discard
-    // (skills/finish/SKILL.md §4). In auto/unattended mode there is no user, so
-    // print-mode Claude would emit prose and exit without writing
-    // `.pipeline/finish-choice` — leaving the gate permanently unsatisfied and
-    // the loop stuck (the validation failure this addresses). Tell it to decide
-    // deterministically and ACT, ending by writing the marker file.
+    // FINISH publication mechanics are engine-owned. The provider crosses this
+    // boundary only for one reader-facing PR-prose judgment and may repair
+    // only that retained PR's title/body; it must never create/push/merge/ready
+    // a PR or write completion state itself.
     if (step === 'finish' && this.mode === 'auto') {
-      // Use the ABSOLUTE worktree pipeline dir for the `finish-record` command.
-      // In daemon mode the finish skill performs branch/PR/worktree cleanup
-      // that `cd`s into the main repo (see agents/worktree-manager.md), so a
-      // relative `.pipeline` dir would resolve against the WRONG repo after
-      // cleanup while the completion gate reads the worktree's `.pipeline` —
-      // leaving it unsatisfied and HALTing a feature whose PR was genuinely
-      // created. `this.pipelineDir` is the worktree's `.pipeline` (daemon-cli
-      // passes it); fall back to the relative `.pipeline` when unset.
-      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
       prompt +=
-        '\n\nUNATTENDED (auto) MODE — no user is present to choose a finish outcome, so do NOT prompt. ' +
-        'Decide deterministically and ACT (do not merely describe):\n' +
-        '- If the repo has a configured git remote and `gh` is authenticated: push the branch and open a ' +
-        'PR with `gh pr create` (NEVER merge). If a PR for this branch already exists, reuse it instead ' +
-        'of failing (`gh pr view --json url -q .url`). Before recording, verify the STOP gate in §5 ' +
-        'Option 2 of the finish skill: (1) the PR URL is non-empty (`gh pr view --json url`), and (2) the ' +
-        'branch was pushed (`git merge-base --is-ancestor HEAD refs/remotes/origin/<branch>`). If EITHER ' +
-        'check fails, do NOT run the command below — HALT for human review. If BOTH pass, run:\n' +
-        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
-        '- Otherwise (no remote, or `gh` unavailable/unauthenticated): leave the work committed on the ' +
-        'branch and run:\n' +
-        `  conduct-ts finish-record --choice keep --pipeline-dir ${pipelineDirArg}\n` +
-        'IMPORTANT: `finish-record` performs its own verification (PR existence, push evidence) and is ' +
-        'the ONLY way to record the finish choice — do not write the marker or state files by hand. Do ' +
-        'NOT `cd` elsewhere before running it; the command above must use this exact `--pipeline-dir` ' +
-        'value regardless of the current working directory, since branch/PR/worktree cleanup may change ' +
-        'it. The step is NOT complete until `finish-record` exits 0.';
+        '\n\nUNATTENDED FINISH JUDGMENT — inspect only the retained PR title and body for reader-facing quality. ' +
+        'You may repair only that title/body, at most once, then return exactly one JSON object: ' +
+        '{"kind":"accepted"}, {"kind":"revision_required","reason":"placeholder|halt|structurally_incomplete"}, ' +
+        '{"kind":"timed_out"}, {"kind":"provider_unavailable"}, or {"kind":"refused"}. ' +
+        'Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, or completion files. ' +
+        'The publication coordinator owns every other mechanical transition and records the final outcome.';
     }
 
-    // Interactive/default Finish preserves the human's outcome choice. A PR
-    // choice still has to go through the canonical verified recorder so the
-    // engine creates its terminal marker rather than leaving the daemon to
-    // rediscover this worktree as unfinished.
+    // Interactive/default Finish preserves operator authority. The coordinator
+    // consumes the resulting intent and owns all mechanics.
     if (step === 'finish' && this.mode !== 'auto') {
-      const pipelineDirArg = this.pipelineDir ?? '.pipeline';
       prompt +=
-        '\n\nFINISH RECORDING — the human chooses the finish outcome. If they choose a PR, after creating or ' +
-        'reusing the PR and verifying it, you MUST run:\n' +
-        `  conduct-ts finish-record --choice pr --pr-url <url> --pipeline-dir ${pipelineDirArg}\n` +
-        'This verified command records the PR outcome and writes the terminal completion marker. Do not write ' +
-        'the marker or state files by hand.';
+        '\n\nINTERACTIVE FINISH — gather the operator publication intent (PR or keep) and, when a PR is present, ' +
+        'inspect only its title/body quality. For the bounded prose judgment you may repair only that retained PR title/body once, ' +
+        'then return exactly one JSON object using accepted, revision_required (placeholder|halt|structurally_incomplete), timed_out, ' +
+        'provider_unavailable, or refused. Do not create, push, merge, or ready a PR; do not alter labels, shipment evidence, ' +
+        'or completion files; the publication coordinator performs every other authorized transition.';
     }
 
     if (retryReason) {

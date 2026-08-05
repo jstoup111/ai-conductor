@@ -1141,6 +1141,37 @@ check_17_docs_site_contracts() {
 
 check_17_docs_site_contracts
 
+# ── 18. FINISH publication-contract residue ────────────────────────────────
+# The shipped FINISH skill has one narrow reader-facing contract. Keep the
+# structural checks here so a compatibility edit cannot reintroduce the retired
+# option headings, duplicate cleanup ownership, or impossible local outcome
+# instructions.
+echo ""
+echo -e "${BOLD}18. FINISH publication-contract residue${NC}"
+
+finish_skill="${HARNESS_DIR}/skills/finish/SKILL.md"
+if [ ! -f "$finish_skill" ]; then
+  assert "skills/finish/SKILL.md exists" 1
+else
+  grep -qiE 'attended default and interactive foreground' "$finish_skill" \
+    && grep -qiE '`pr`' "$finish_skill" \
+    && grep -qiE '`keep`' "$finish_skill" \
+    && grep -qiE '`defer`' "$finish_skill" \
+    && grep -qiE 'before any publication observation or mutation' "$finish_skill" \
+    && grep -qiE 'explicit.*foreground-auto.*daemon.*engine policy' "$finish_skill"
+  assert "skills/finish/SKILL.md — documents attended intent before publication activity" $?
+
+  ! grep -qiE '^\*\*Option [1-4]:' "$finish_skill"
+  assert "skills/finish/SKILL.md — contains no empty legacy option headings" $?
+
+  cleanup_owner_count=$(grep -ciE 'remote-default shipment cleanup' "$finish_skill" || true)
+  [ "$cleanup_owner_count" -eq 1 ]
+  assert "skills/finish/SKILL.md — assigns remote-default cleanup ownership exactly once" $?
+
+  ! grep -qiE '(recorded|outcome).*(merge-local|discard)|(merge-local|discard).*(recorded|outcome)' "$finish_skill"
+  assert "skills/finish/SKILL.md — contains no legacy merge-local/discard outcome instructions" $?
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""

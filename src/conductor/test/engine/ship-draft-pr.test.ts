@@ -135,6 +135,56 @@ describe('openShipDraftPr', () => {
     expect(ghCalls.filter((c) => c[1] === 'edit')).toHaveLength(0);
   });
 
+  it('rediscovers the draft PR when GitHub creates it but loses the create response', async () => {
+    const { git } = aheadGit();
+    let lookupCount = 0;
+    const { gh, calls } = fakeGh((args) => {
+      if (args[1] === 'view') {
+        lookupCount += 1;
+        if (lookupCount === 1) return new Error('no pull requests found');
+        return { stdout: JSON.stringify({ url: PR_URL, state: 'OPEN' }) };
+      }
+      if (args[1] === 'create') return new Error('connection reset after create');
+      return { stdout: '' };
+    });
+
+    const result = await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'x',
+    });
+
+    expect(result).toEqual({ outcome: 'published', prUrl: PR_URL });
+    expect(calls.filter((args) => args[1] === 'create')).toHaveLength(1);
+    expect(calls.filter((args) => args[1] === 'view')).toHaveLength(2);
+    expect(calls.map((args) => args[1])).toEqual(['view', 'create', 'view']);
+  });
+
+  it('fails after an unknown create outcome when lookup-only re-observation cannot resolve the PR', async () => {
+    const { git } = aheadGit();
+    const { gh, calls } = fakeGh((args) => {
+      if (args[1] === 'view') return new Error('no pull requests found');
+      if (args[1] === 'create') return new Error('connection reset after create');
+      return { stdout: '' };
+    });
+
+    const result = await openShipDraftPr({
+      gh,
+      git,
+      cwd: CWD,
+      branch: BRANCH,
+      baseBranch: BASE,
+      featureDesc: 'x',
+    });
+
+    expect(result.outcome).toBe('failed');
+    expect(calls.filter((args) => args[1] === 'create')).toHaveLength(1);
+    expect(calls.map((args) => args[1])).toEqual(['view', 'create', 'view']);
+  });
+
   it('does not push or open a PR when the branch has no commits over base', async () => {
     const { git, calls: gitCalls } = fakeGit((args) => {
       if (args[0] === 'rev-list') return { stdout: '0\n' };

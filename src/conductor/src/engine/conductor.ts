@@ -27,7 +27,7 @@ import type {
   TokenUsage,
 } from '../execution/llm-provider.js';
 import type { ObservedInterval } from '../execution/observed-interval.js';
-import type { ConductState } from '../types/index.js';
+import type { ConductState, FinishPublicationEvent } from '../types/index.js';
 import type {
   StepName,
   StepStatus,
@@ -158,6 +158,11 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
+  routeFinishPublicationDisposition,
+  type PublicationDisposition,
+  type PrProseJudgmentRequest,
+} from './finish-publication.js';
+import {
   bumpKickbackGateInLedger,
   clearKickbackLedger,
   readKickbackLedger,
@@ -280,6 +285,55 @@ export type { SchedulingUnitRef } from '../types/scheduling-unit.js';
 export interface OperatorParkedTermination {
   kind: 'operator-parked';
   boundary: SchedulingUnitRef;
+}
+
+/**
+ * Production-facing form of the existing FINISH presentation sequence.  The
+ * coordinator calls this only after accepted prose is re-observed; the order
+ * deliberately rehabilitates halt state and applies title/body floors before
+ * making a draft mergeable.
+ */
+export function createFinishPresentationRepair(input: {
+  projectRoot: string;
+  gh: GhRunner;
+  log?: (message: string) => void;
+  restoreReleaseMetadata?: (prUrl: string) => Promise<void>;
+}): (request: { prUrl: string; state: ConductState; mode?: 'capture-only' | 'full' }) => Promise<void> {
+  return async ({ prUrl, state, mode = 'full' }) => {
+    const { projectRoot: cwd, gh } = input;
+    const repairLog = input.log ?? console.warn;
+    let sourceRef: string | undefined;
+    try {
+      const planPath = await resolveFeaturePlanPath(cwd, state.feature_desc);
+      if (planPath && state.feature_desc) {
+        sourceRef = parseIntakeSourceRef(await readFile(join(cwd, `.docs/intake/${planStem(planPath)}.md`), 'utf8').catch(() => null));
+      }
+    } catch { /* floors remain valid without an intake source reference */ }
+    let testEvidenceLine: string | undefined;
+    try {
+      const tasks = normalizeTasks(JSON.parse(await readFile(join(cwd, '.pipeline/task-status.json'), 'utf8')));
+      const completed = tasks.filter((task) => task.status === 'completed' || task.status === 'skipped').length;
+      if (completed > 0) testEvidenceLine = `${completed}/${tasks.length} plan tasks completed with evidence-gated commits`;
+    } catch { /* optional body evidence */ }
+    try {
+      const haltReason = await readFile(join(cwd, '.pipeline/halt-user-input-required'), 'utf8').catch(() => null);
+      await postHaltHistoryComment({ gh, cwd, prUrl, haltReason, log: repairLog });
+    } catch (error) { repairLog(`[conductor-repair] postHaltHistoryComment failed: ${error}`); }
+    if (mode === 'capture-only') return;
+    try {
+      await rehabilitateHaltPr({ gh, cwd, prUrl, sourceRef, log: repairLog });
+    } catch (error) { repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${error}`); throw error; }
+    try {
+      await retitleFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, branch: state.worktree_branch }, repairLog);
+    } catch (error) { repairLog(`[conductor-repair] retitleFloor failed: ${error}`); throw error; }
+    try {
+      await bodyFloor(gh, cwd, prUrl, { featureDesc: state.feature_desc, sourceRef, testEvidenceLine }, repairLog);
+    } catch (error) { repairLog(`[conductor-repair] bodyFloor failed: ${error}`); throw error; }
+    await input.restoreReleaseMetadata?.(prUrl);
+    try {
+      await ensureShipReady(gh, cwd, prUrl, repairLog);
+    } catch (error) { repairLog(`[conductor-repair] ensureShipReady failed: ${error}`); throw error; }
+  };
 }
 
 /**
@@ -410,6 +464,11 @@ export function getNavigableSteps(
 export interface StepRunResult {
   success: boolean;
   output?: string;
+  /**
+   * Typed only by the FINISH composition boundary. Kept unknown at this edge
+   * so malformed adapter results fail closed instead of reaching remediation.
+   */
+  publicationDisposition?: unknown;
   /** Engine-observed provider subprocess intervals, forwarded without reinterpretation. */
   observedIntervals?: readonly ObservedInterval[];
   /** Engine-native aggregate-suite result retained for Task 17 failure routing. */
@@ -687,6 +746,21 @@ export interface StepRunner {
 
 export type ArtifactReviewResult = 'approved' | 'rejected' | 'skip';
 
+/**
+ * Engine-owned FINISH publication composition. The coordinator owns every
+ * deterministic publication effect and invokes `dispatchJudgment` only when
+ * observed PR title/body prose needs a single quality pass.
+ */
+export interface FinishPublicationCoordinator {
+  advance(input: {
+    state: ConductState;
+    mode: RunMode;
+    daemon: boolean;
+    dispatchJudgment(request: PrProseJudgmentRequest): Promise<StepRunResult>;
+    emit(event: FinishPublicationEvent): Promise<void>;
+  }): Promise<PublicationDisposition>;
+}
+
 export interface ConductorOptions {
   stateFilePath: string;
   stepRunner: StepRunner;
@@ -696,6 +770,8 @@ export interface ConductorOptions {
   resume?: boolean;
   fromStep?: StepName;
   mode?: RunMode;
+  /** Optional engine-owned FINISH publication coordinator. */
+  finishPublication?: FinishPublicationCoordinator;
   config?: HarnessConfig;
   /**
    * Provider-specific retry escalation ladder. Optional while callers migrate;
@@ -1062,6 +1138,7 @@ export class Conductor {
   private resume: boolean;
   private fromStep?: StepName;
   private mode: RunMode;
+  private readonly finishPublication?: FinishPublicationCoordinator;
   private config: HarnessConfig;
   private readonly legacyModelPolicy?: ProviderModelPolicy;
   private readonly providerExecution?: ProviderExecutionContext;
@@ -1318,89 +1395,18 @@ export class Conductor {
       planPath = undefined;
     }
 
-    // Resolve sourceRef from intake marker for repair callback
-    const sourceRef = await this.resolveIntakeSourceRef(state.feature_desc, planPath);
-
-    // Compose the repair callback that applies the four repairs in order
-    const repairFinishPr = async (
+    // Every production path uses this one sequence. The conductor alone adds
+    // its retained release-metadata restore between the body floor and ready.
+    const presentationRepair = createFinishPresentationRepair({
+      projectRoot: this.projectRoot,
+      gh: this.gh,
+      log: this.log,
+      restoreReleaseMetadata: (prUrl) => this.restoreFinishReleaseMetadata(prUrl),
+    });
+    const repairFinishPr = (
       prUrl: string,
       opts: { mode?: 'capture-only' | 'full' } = {},
-    ): Promise<void> => {
-      const gh = this.gh;
-      const cwd = this.projectRoot;
-      const branch = state.worktree_branch;
-      const featureDesc = state.feature_desc;
-      const repairLog = this.log ?? console.warn;
-      const mode = opts.mode ?? 'full';
-
-      // Step 0 (both modes): preserve the halt/remediation narrative as a PR
-      // COMMENT before anything rewrites the presentation. The shipped body is
-      // always the plain /pr template — recovery narrative never goes in it.
-      try {
-        const haltReason = await readFile(
-          join(this.projectRoot, '.pipeline/halt-user-input-required'),
-          'utf-8',
-        ).catch(() => null);
-        await postHaltHistoryComment({ gh, cwd, prUrl, haltReason, log: repairLog });
-      } catch (err) {
-        repairLog(`[conductor-repair] postHaltHistoryComment failed: ${err}`);
-      }
-
-      // capture-only: the finish gate is about to kick this PR back so /pr can
-      // author a real body. Mutating title/body/label/draft here would erase
-      // the very halt signals the gate re-reads on the next pass, letting a
-      // skipped /pr ship unchallenged — exactly the bug this ordering fixes.
-      if (mode === 'capture-only') return;
-
-      // Best-effort test-evidence line for the body floor: derived from
-      // .pipeline/task-status.json. Left undefined on any error — the floor
-      // then simply omits the "Test evidence" section. Also omitted when ZERO
-      // tasks are complete: the floor must never assert completion that did
-      // not happen (three merged PRs shipped "- [x] 0/16 plan tasks completed").
-      const testEvidenceLine = await this.resolveFloorTestEvidenceLine();
-
-      // Step 1: Rehabilitate halt PR (unlabel, title fix, close injection)
-      try {
-        await rehabilitateHaltPr({
-          gh,
-          cwd,
-          prUrl,
-          sourceRef,
-          log: repairLog,
-        });
-      } catch (err) {
-        // Warn-only: repair is best-effort, failures don't block further steps
-        repairLog(`[conductor-repair] rehabilitateHaltPr failed: ${err}`);
-      }
-
-      // Step 2: Retitle floor (fix stale needs-remediation: title)
-      try {
-        await retitleFloor(gh, cwd, prUrl, { featureDesc, branch }, repairLog);
-      } catch (err) {
-        // Warn-only
-        repairLog(`[conductor-repair] retitleFloor failed: ${err}`);
-      }
-
-      // Step 3: Body floor (fix stale halt-boilerplate body)
-      try {
-        await bodyFloor(gh, cwd, prUrl, { featureDesc, sourceRef, testEvidenceLine }, repairLog);
-      } catch (err) {
-        // Warn-only
-        repairLog(`[conductor-repair] bodyFloor failed: ${err}`);
-      }
-
-      // /finish may replace the complete PR body. Restore only the captured
-      // repository-local release disposition and keep its reader-facing prose.
-      await this.restoreFinishReleaseMetadata(prUrl);
-
-      // Step 4: Ensure PR is ready (draft→ready flip)
-      try {
-        await ensureShipReady(gh, cwd, prUrl, repairLog);
-      } catch (err) {
-        // Warn-only
-        repairLog(`[conductor-repair] ensureShipReady failed: ${err}`);
-      }
-    };
+    ): Promise<void> => presentationRepair({ prUrl, state, mode: opts.mode });
 
     return {
       sessionStartedAt: state.session_started_at,
@@ -1463,7 +1469,7 @@ export class Conductor {
     // focused unit tests. Its success authority is the runner result, so the
     // publication fence must not reintroduce artifact-only validation and
     // invalidate an otherwise green SHIP round indefinitely.
-    if (!this.verifyArtifacts && !this.daemon) return [];
+    if (this.finishPublication || (!this.verifyArtifacts && !this.daemon)) return [];
 
     const track = await this.resolveTrack(state);
     const membership = resolveGroupMembership(
@@ -1494,6 +1500,31 @@ export class Conductor {
     }
 
     return nonGreen;
+  }
+
+  /**
+   * Cross the provider boundary only when the coordinator asks for its one
+   * bounded PR-prose judgment. All other FINISH work remains coordinator-owned.
+   */
+  private async runFinishPublication(
+    state: ConductState,
+    options: StepRunOptions,
+  ): Promise<StepRunResult> {
+    if (!this.finishPublication) {
+      return this.stepRunner.run('finish', state, options);
+    }
+
+    const publicationDisposition = await this.finishPublication.advance({
+      state,
+      mode: this.mode,
+      daemon: this.daemon,
+      dispatchJudgment: async (_request) => this.stepRunner.run('finish', state, options),
+      emit: async (event) => this.events.emit(event),
+    });
+    return {
+      success: publicationDisposition.kind === 'complete',
+      publicationDisposition,
+    };
   }
 
   /**
@@ -1532,6 +1563,7 @@ export class Conductor {
     this.resume = opts.resume ?? false;
     this.fromStep = opts.fromStep;
     this.mode = opts.mode ?? 'default';
+    this.finishPublication = opts.finishPublication;
     this.config = opts.config ?? {};
     this.legacyModelPolicy = opts.modelPolicy;
     this.providerExecution = opts.providerExecution;
@@ -3248,7 +3280,7 @@ export class Conductor {
         return { kind: 'operator-parked', boundary };
       };
     try {
-      for (let i = startIndex; i < steps.length; i++) {
+      stepLoop: for (let i = startIndex; i < steps.length; i++) {
         const step = steps[i];
         // Clear any stale phase-active marker (e.g. left behind by a crash
         // mid-BUILD) unconditionally on every loop iteration, before any
@@ -3450,6 +3482,12 @@ export class Conductor {
           });
           if (draftPr.outcome === 'published') {
             this.shipDraftPrUrl = draftPr.prUrl;
+            // FINISH observes PR identity from durable feature state, not a
+            // process-local SHIP latch. Persist the already-created draft so a
+            // resumed coordinator can verify and advance it without issuing a
+            // second create-capable operation.
+            state.pr_url = draftPr.prUrl;
+            await savePrUrl(this.stateFilePath, draftPr.prUrl);
 
             // `findOrCreatePr` adopts any OPEN PR for the branch UNTOUCHED, so a
             // `needs-remediation` placeholder left by an earlier HALT becomes the
@@ -4948,12 +4986,20 @@ export class Conductor {
                 : step.name === 'worktree'
                   ? await this.runWorktreeStep(state)
                   : step.name === 'rebase'
-                    ? await this.runRebaseStep(state)
-                    : step.name === 'test_suite'
-                      ? await this.runTestSuiteStep()
-                      : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
-                        ? await this.runSelfBuildDispatch(step.name, state, retryHint)
-                        : await this.stepRunner.run(step.name, state, {
+                      ? await this.runRebaseStep(state)
+                      : step.name === 'test_suite'
+                        ? await this.runTestSuiteStep()
+                        : step.name === 'finish' && this.finishPublication
+                          ? await this.runFinishPublication(state, {
+                              retryReason: retryHint,
+                              attempt,
+                              escalate: resolved.escalate,
+                              modelOverride: esc.model,
+                              effortOverride: esc.effort,
+                            })
+                        : this.isSelfBuild() && (step.name === 'build' || (this.providerExecution && ['BUILD', 'SHIP'].includes(phaseForStep(step.name))))
+                          ? await this.runSelfBuildDispatch(step.name, state, retryHint)
+                          : await this.stepRunner.run(step.name, state, {
                             retryReason: retryHint,
                             attempt,
                             escalate: resolved.escalate,
@@ -5156,6 +5202,92 @@ export class Conductor {
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
             return;
+          }
+
+          // Publication outcomes have a closed, FINISH-local recovery path.
+          // Do this before generic step failure handling so a transient
+          // GitHub/recording failure cannot be reinterpreted as BUILD work by
+          // the broad remediation planner.
+          if (step.name === 'finish' && result.publicationDisposition !== undefined) {
+            const route = routeFinishPublicationDisposition(result.publicationDisposition);
+            if (route.kind === 'complete') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'complete' });
+              result.success = true;
+            }
+            if (route.kind === 'retry_finish') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
+              lastError = `FINISH publication retry: ${route.reason}`;
+              retryHint = `${lastError}. Retry only the incomplete publication transition.`;
+              if (attempt < stepMaxRetries) {
+                await emitTracked({
+                  type: 'step_retry',
+                  step: 'finish',
+                  attempt: attempt + 1,
+                  maxAttempts: stepMaxRetries,
+                  reason: lastError,
+                });
+                continue;
+              }
+              const reason = `FINISH publication retry exhausted: ${route.reason}`;
+              state.finish = 'failed';
+              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              await emitTracked({ type: 'loop_halt', reason });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            if (route.kind === 'retry_build') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_build' });
+              const kickback = await consumeKickbackBudget('finish', route.evidence);
+              if (!kickback.exhausted) {
+                await emitTracked({
+                  type: 'kickback',
+                  from: 'finish',
+                  to: 'build',
+                  evidence: route.evidence,
+                  count: kickback.entry.count,
+                });
+                pendingRetryHints.set(
+                  'build',
+                  `FINISH found invalid implementation evidence:\n${route.evidence}\n` +
+                    'Fix and commit the cited implementation defect, then re-run BUILD verification.',
+                );
+                await captureKickbackToBuildContext('finish');
+                const nav = navigateBack(state, 'build', steps);
+                state = nav.state;
+                // The failing FINISH step is not part of the done-only stale
+                // cascade, so explicitly restage it for the post-BUILD tail.
+                (state as Record<string, unknown>).finish = 'stale';
+                await writeState(this.stateFilePath, state);
+                i = nav.index - 1; // for-loop i++ lands on build
+                continue stepLoop;
+              }
+              const reason =
+                `FINISH implementation evidence remains invalid after ${kickback.entry.count} ` +
+                `build kickback(s) (cap ${MAX_KICKBACKS_PER_GATE}): ${route.evidence}`;
+              state.finish = 'failed';
+              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              await emitTracked({ type: 'loop_halt', reason });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            if (route.kind === 'halt') {
+              await emitTracked({ type: 'finish_publication_disposition', disposition: 'human_required' });
+              state.finish = 'failed';
+              await saveStepStatus(this.stateFilePath, 'finish', 'failed');
+              await writeHaltMarker(this.projectRoot, route.reason + '\n', 'needs-human');
+              await writeState(this.stateFilePath, state);
+              await emitTracked({ type: 'loop_halt', reason: route.reason });
+              process.off('SIGINT', sigintHandler);
+              process.off('SIGTERM', sigterm);
+              return;
+            }
+            result = { ...result, success: true };
           }
 
           if (!result.success) {

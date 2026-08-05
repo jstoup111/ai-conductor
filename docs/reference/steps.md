@@ -234,7 +234,7 @@ detail.
 | `architecture_review_as_built` | `.pipeline/architecture-review-as-built.md` | no | A `Verdict:` line reading `APPROVED` or `APPROVED WITH DRIFT NOTES`. `BLOCKED`, missing, or unrecognized all block |
 | `retro` | `.docs/retros/*.md` | yes | A retro file matching this feature's slug, fresh this session |
 | `rebase` | — | — | Computed from live git state, not a file |
-| `finish` | `.pipeline/finish-choice` | no | A fresh marker containing `pr`, `merge-local`, `keep`, or `discard`; a `pr` choice additionally requires `state.pr_url` |
+| `finish` | `.pipeline/finish-choice` | no | A fresh final-outcome marker. Interactive intent is acquired by the foreground prompt host before publication; the coordinator writes `pr` or `keep` through `finish-record` only after the corresponding evidence is coherent. Legacy `merge-local` and `discard` markers remain readable but are never synthesized by unattended FINISH |
 | `bootstrap`, `remediate`, `attribution_verify` | — | — | No completion glob. `remediate`'s output, `.pipeline/remediation.json`, is read directly by the engine to route |
 | `assess` | `.docs/decisions/technical-assessment-*.md` | yes | At least one matching file |
 

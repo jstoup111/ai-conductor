@@ -146,6 +146,18 @@ describe('renderDaemonEvent', () => {
     expect(lines({ type: 'loop_converged' })).toEqual(['· ✓ gate loop converged']);
   });
 
+  it('renders closed FINISH publication progress and dispositions without raw evidence', () => {
+    expect(lines({
+      type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record',
+    } as ConductorEvent)).toEqual(['· ▶ FINISH publication: write_shipped_record']);
+    expect(lines({
+      type: 'finish_publication_blocked', condition: 'release_readiness_missing',
+    } as ConductorEvent)).toEqual(['· ✋ FINISH publication blocked: release_readiness_missing']);
+    expect(lines({
+      type: 'finish_publication_disposition', disposition: 'retry_build',
+    } as ConductorEvent)).toEqual(['· ↩ FINISH publication: route to BUILD']);
+  });
+
   it('renders a mergeable skip distinctly from an already-current branch', () => {
     expect(lines({ type: 'rebase_noop' })).toEqual([]);
     expect(lines({ type: 'rebase_mergeable_skip' } as unknown as ConductorEvent)).toEqual([
@@ -360,6 +372,9 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
         featureSlug: 'feature',
         boundary: { kind: 'step', name: 'build' },
       },
+      { type: 'finish_publication_transition', phase: 'started', transition: 'ready_pr' },
+      { type: 'finish_publication_blocked', condition: 'release_readiness_missing' },
+      { type: 'finish_publication_disposition', disposition: 'complete' },
     ];
 
     const renderingTypes = new Set(
@@ -390,6 +405,9 @@ describe('renderDaemonEvent distinctness and completeness guards', () => {
       'parallel_completed',
       'rebase_mergeable_skip',
       'operator_park_boundary',
+      'finish_publication_transition',
+      'finish_publication_blocked',
+      'finish_publication_disposition',
     ]);
 
     expect(renderingTypes).toEqual(expected);

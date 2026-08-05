@@ -130,6 +130,8 @@ describe('operator park boundary contract', () => {
       'return await this.stepRunner.run(name, state, { retryReason: retryHint });',
       "return this.stepRunner.run('wiring_check', state);",
       'return runGroupBranch(member, state, { stepRunner: this.stepRunner }, 1);',
+      "return this.stepRunner.run('finish', state, options);",
+      'dispatchJudgment: async (_request) => this.stepRunner.run(\'finish\', state, options),',
     ];
     const dispatchPrimitives = [
       'this.stepRunner.run(',

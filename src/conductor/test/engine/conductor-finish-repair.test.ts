@@ -370,6 +370,7 @@ describe('conductor/finish-repair', () => {
 
   it('routes a daemon finish-repair exception through its supplied feature logger', async () => {
     const featureLogs: string[] = [];
+    const fakeGh = makeFakeGh();
     const conductor = new Conductor({
       stateFilePath: statePath,
       stepRunner: makeSuccessfulRunner(),
@@ -377,7 +378,7 @@ describe('conductor/finish-repair', () => {
       projectRoot: dir,
       daemon: true,
       log: (message) => featureLogs.push(message),
-      gh: makeFakeGh().runner,
+      gh: fakeGh.runner,
     });
     repairFailure.enabled = true;
 
@@ -385,9 +386,10 @@ describe('conductor/finish-repair', () => {
       feature_desc: 'test feature',
       worktree_branch: 'feat/test-feature',
     } satisfies ConductState);
-    await ctx.repairFinishPr('https://github.com/example/repo/pull/1');
+    await expect(ctx.repairFinishPr('https://github.com/example/repo/pull/1')).rejects.toThrow('retitle sentinel');
 
     expect(featureLogs).toContain('[conductor-repair] retitleFloor failed: Error: retitle sentinel');
+    expect(fakeGh.calls.some(({ args }) => args[0] === 'pr' && args[1] === 'ready')).toBe(false);
   });
 
   it('restores the pre-finish release metadata without replacing finish-authored reader content', async () => {

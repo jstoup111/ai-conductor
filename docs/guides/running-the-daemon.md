@@ -211,19 +211,21 @@ What the draft window does and does not mean:
 
 - **Nothing merges it.** A draft PR cannot be merged, and the mergeable sweep excludes drafts from
   its autoresolve and CI-fix candidates, so no remediation runs against an in-flight build's own PR.
-- **`finish` flips it ready.** The finish step authors the real title and body and marks the PR
-  ready for review; the finish completion gate then re-reads the PR and refuses to converge while it
-  is still a draft. `/finish` still commits `.docs/shipped/<slug>.md` on the implementation branch
-  before the final push — that is unchanged.
+- **FINISH flips it ready.** The engine-owned publication coordinator re-observes the PR, invokes one
+  bounded title/body judgment only while the prose is incomplete, writes and pushes the shipped
+  record, and then marks the PR ready for review. It re-enters FINISH after each verified transition,
+  so a retry resumes instead of replaying publication effects.
 - **The placeholder body is deliberately marked as one.** It carries the engine's body-floor marker,
-  so if `finish` somehow fails to author a real body the existing finish gate kicks back for one
-  rather than shipping the placeholder.
+  so FINISH keeps the prose judgment required and never records completion from placeholder or halt
+  content.
 - **It is advisory.** If the push is rejected or `gh` is unauthenticated, the engine logs one loud
   `[ship-draft-pr]` line and the build continues; only the finish-time publish is load-bearing.
 - **It is idempotent.** Re-entering SHIP after a kickback, resume, or rework reuses the open PR — it
   never opens a second one and never re-drafts a PR that finish already marked ready.
 - **Self-host builds are included.** The VERSION-approval and release-artifact gates still run
-  before `finish`, so they still gate the flip to ready-for-review — the draft simply exists earlier.
+  before `finish`. The coordinator also requires the configured `release-disposition` evidence to be
+  a regular file written during the current feature run; missing, stale, malformed, or unreadable
+  evidence stops before judgment, while a process restart alone does not invalidate it.
 
 There is no configuration for this; the timing is fixed.
 

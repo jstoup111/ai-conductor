@@ -72,6 +72,9 @@ const EVENT_TYPE_CLASSIFICATION: Record<
   credentials_park: 'not-audited-by-design',
   // Durable event-log telemetry, but deliberately outside the retro friction schema.
   credentials_park_progress: 'not-audited-by-design',
+  finish_publication_transition: 'not-audited-by-design',
+  finish_publication_blocked: 'not-audited-by-design',
+  finish_publication_disposition: 'not-audited-by-design',
   feature_complete: 'not-audited-by-design',
   dashboard_refresh: 'not-audited-by-design',
   protected_artifact_rebaseline: 'not-audited-by-design',
@@ -176,6 +179,15 @@ const EVENT_FIXTURES: { [K in ConductorEvent['type']]: Extract<ConductorEvent, {
     degradation: 'probe-failure',
     probeFailureKind: 'timeout',
     nextDisposition: 'trial-required',
+  },
+  finish_publication_transition: {
+    type: 'finish_publication_transition', phase: 'started', transition: 'write_shipped_record',
+  },
+  finish_publication_blocked: {
+    type: 'finish_publication_blocked', condition: 'release_readiness_missing',
+  },
+  finish_publication_disposition: {
+    type: 'finish_publication_disposition', disposition: 'retry_finish',
   },
   feature_complete: { type: 'feature_complete' },
   dashboard_refresh: { type: 'dashboard_refresh' },

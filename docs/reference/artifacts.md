@@ -388,7 +388,7 @@ Existence is the signal. Alphabetized.
 | `conduct-session-id` | step runners | Durable conductor run identity. It survives daemon restart and redispatch; provider attempts use separate fresh IDs and do not rewrite it |
 | `current-task` | `conduct-ts task` | Per-task stamp; the source of the `prepare-commit-msg` auto-stamp. Stale stamps are cleared during seeding |
 | `dispatch-count` | `pre-dispatch.sh` | One line per dispatch. Crossing the unattributed threshold emits `unattributed_dispatch` |
-| `finish-choice` | `finish` skill | SHIP-tail routing; subject to the session freshness check |
+| `finish-choice` | FINISH publication coordinator through `conduct-ts finish-record` | Final publication outcome; subject to the session freshness check. Interactive intent is acquired before this marker exists |
 | `halt-user-input-required` | `pipeline` skill on a user-requested exit | The build predicate returns not-done while it exists |
 | `phase-active` | `phase-marker.ts::writePhaseMarker` | Line-oriented on purpose so bash hooks can read it without a parser: `step: <name>`, `phase: <BUILD\|SHIP>`, `written: <ISO-8601>`, then zero or more `allow: <prefix>` lines. Removed idempotently on step exit |
 | `rate-limit-hit` | `rate-limit-wait.sh` | Line 1 epoch, line 2 wait seconds. See the `StopFailure` limitation in [settings and hooks](settings-and-hooks.md) |
