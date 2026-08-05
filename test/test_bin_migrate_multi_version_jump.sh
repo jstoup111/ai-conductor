@@ -392,6 +392,64 @@ TAGGED_BLOCKS=$(printf '%s\n' "$TAGGED_PREVIEW" | rg "printf '" || true)
 MAIN_BLOCKS=$(printf '%s\n' "$MAIN_PREVIEW" | rg "printf '" || true)
 assert 'main@sha offers the same candidate bodies as the equivalent tagged installation' "$([ "$MAIN_BLOCKS" = "$TAGGED_BLOCKS" ] && echo 0 || echo 1)"
 
+NO_LEDGER_MAIN_HARNESS=$(make_harness no-ledger-main)
+NO_LEDGER_MAIN_CONSUMER=$(make_consumer no-ledger-main)
+NO_LEDGER_MAIN_HOME=$(make_home no-ledger-main 'main@abc1234')
+cat > "$NO_LEDGER_MAIN_HARNESS/CHANGELOG.md" <<'EOF'
+# Changelog
+
+## [1.2.0]
+
+## Migration
+
+```bash migration
+printf 'already-current\n' >> execution.log
+```
+EOF
+run_migrate "$NO_LEDGER_MAIN_HARNESS" "$NO_LEDGER_MAIN_CONSUMER" "$NO_LEDGER_MAIN_HOME" --yes
+NO_LEDGER_MAIN_LEDGER=$(find_ledger "$NO_LEDGER_MAIN_HOME")
+assert 'a no-ledger main@sha run bootstraps a durable candidate baseline even when its first range is empty' "$(
+  [ "$CODE" -eq 0 ] \
+    && [ -n "$NO_LEDGER_MAIN_LEDGER" ] \
+    && if python3 - "$NO_LEDGER_MAIN_LEDGER" <<'PY'
+import json
+import sys
+
+ledger = json.load(open(sys.argv[1]))
+raise SystemExit(0 if ledger.get("candidateBaseline") == "v1.2.0" and ledger["appliedBlocks"] == [] else 1)
+PY
+then echo 0; else echo 1; fi
+)"
+printf '1.3.0\n' > "$NO_LEDGER_MAIN_HARNESS/VERSION"
+cat >> "$NO_LEDGER_MAIN_HARNESS/CHANGELOG.md" <<'EOF'
+
+## [1.3.0]
+
+## Migration
+
+```bash migration
+printf 'pending-first\n' >> execution.log
+```
+
+```bash migration
+printf 'pending-second\n' >> execution.log
+```
+EOF
+set_version "$NO_LEDGER_MAIN_HOME" 'main@def5678'
+run_migrate "$NO_LEDGER_MAIN_HARNESS" "$NO_LEDGER_MAIN_CONSUMER" "$NO_LEDGER_MAIN_HOME" --yes
+assert 'a later main@sha run applies every block after the durable candidate baseline' "$(
+  [ "$CODE" -eq 0 ] \
+    && [ "$(cat "$NO_LEDGER_MAIN_CONSUMER/execution.log" 2>/dev/null || true)" = $'pending-first\npending-second' ] \
+    && if python3 - "$NO_LEDGER_MAIN_LEDGER" <<'PY'
+import json
+import sys
+
+ledger = json.load(open(sys.argv[1]))
+raise SystemExit(0 if len(ledger["appliedBlocks"]) == 2 else 1)
+PY
+then echo 0; else echo 1; fi
+)"
+
 cat >> "$MAIN_HARNESS/CHANGELOG.md" <<'EOF'
 
 ## [Unversioned]

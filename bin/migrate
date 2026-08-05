@@ -207,9 +207,9 @@ ledger_exists() {
 }
 
 ledger_initialize() {
-  local path
+  local baseline=$1 path
   path=$(ledger_path)
-  python3 - "$path" <<'PY'
+  python3 - "$path" "$baseline" <<'PY'
 import json
 import os
 import sys
@@ -217,11 +217,12 @@ import tempfile
 from pathlib import Path
 
 path = Path(sys.argv[1])
+baseline = sys.argv[2]
 if path.exists():
     raise SystemExit(0)
 path.parent.mkdir(parents=True, exist_ok=True)
 with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as output:
-    json.dump({"schemaVersion": 1, "appliedBlocks": []}, output, sort_keys=True)
+    json.dump({"schemaVersion": 1, "candidateBaseline": baseline, "appliedBlocks": []}, output, sort_keys=True)
     output.write("\n")
     temporary = output.name
 try:
@@ -307,6 +308,30 @@ import sys
 ledger = json.loads(sys.argv[1])
 identity = sys.argv[2]
 print(0 if any(block["identity"] == identity for block in ledger["appliedBlocks"]) else 1)
+PY
+}
+
+# The first-run range boundary becomes durable state.  Once that baseline is
+# stored, every future target is compared against it and the applied ledger,
+# rather than a currentVersion value that an updater may already have advanced.
+first_run_candidate_baseline() {
+  if [ -n "$FROM_VERSION" ] && [[ "$FROM_VERSION" =~ ^v?[0-9]+(\.[0-9]+)+$ ]]; then
+    printf '%s' "$FROM_VERSION"
+  else
+    # A channel identity such as main@<sha> has no sortable lower bound.  The
+    # current target is its safe baseline: it must not replay prior history.
+    printf '%s' "$TO_VERSION"
+  fi
+}
+
+ledger_candidate_baseline() {
+  local ledger=$1
+  python3 - "$ledger" <<'PY'
+import json
+import sys
+
+baseline = json.loads(sys.argv[1]).get("candidateBaseline")
+print(baseline if isinstance(baseline, str) else "")
 PY
 }
 
@@ -415,20 +440,15 @@ PY
 # The ledger is the authority after its first record.  Parse every release so
 # an older pending block remains reachable even after currentVersion advances.
 select_migration_candidates() {
-  local blocks ledger current_version="" current_script="" identity candidates="" first_run_from
+  local blocks ledger baseline current_version="" current_script="" identity candidates=""
   if ledger_exists; then
-    blocks=$(extract_migration_blocks "" "")
+    ledger=$(ledger_read) || return 1
+    baseline=$(ledger_candidate_baseline "$ledger")
   else
-    # Preserve the old range boundary when creating a ledger for an existing
-    # consumer.  A channel identity such as main@<sha> has no sortable lower
-    # bound, so its equivalent tagged baseline is the target version.
-    first_run_from=$FROM_VERSION
-    if [ -n "$first_run_from" ] && ! [[ "$first_run_from" =~ ^v?[0-9]+(\.[0-9]+)+$ ]]; then
-      first_run_from=$TO_VERSION
-    fi
-    blocks=$(extract_migration_blocks "$first_run_from" "$TO_VERSION")
+    baseline=$(first_run_candidate_baseline)
+    ledger=$(ledger_read) || return 1
   fi
-  ledger=$(ledger_read) || return 1
+  blocks=$(extract_migration_blocks "$baseline" "$TO_VERSION")
   [ -z "$blocks" ] && return 0
 
   while IFS= read -r line; do
@@ -457,17 +477,15 @@ select_migration_candidates() {
 }
 
 count_already_applied_blocks() {
-  local blocks ledger current_version="" current_script="" identity count=0 first_run_from
+  local blocks ledger baseline current_version="" current_script="" identity count=0
   if ledger_exists; then
-    blocks=$(extract_migration_blocks "" "")
+    ledger=$(ledger_read) || return 1
+    baseline=$(ledger_candidate_baseline "$ledger")
   else
-    first_run_from=$FROM_VERSION
-    if [ -n "$first_run_from" ] && ! [[ "$first_run_from" =~ ^v?[0-9]+(\.[0-9]+)+$ ]]; then
-      first_run_from=$TO_VERSION
-    fi
-    blocks=$(extract_migration_blocks "$first_run_from" "$TO_VERSION")
+    baseline=$(first_run_candidate_baseline)
+    ledger=$(ledger_read) || return 1
   fi
-  ledger=$(ledger_read) || return 1
+  blocks=$(extract_migration_blocks "$baseline" "$TO_VERSION")
   [ -z "$blocks" ] && { printf '0'; return 0; }
 
   while IFS= read -r line; do
@@ -518,6 +536,26 @@ run_project_migrations() {
     fail "Cannot count already-applied migration blocks until the ledger is resolved"
     return 1
   fi
+  if [ "$DRY_RUN" = true ]; then
+    [ -z "$blocks" ] && { info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"; return 0; }
+    warn "Found migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}:"
+    echo ""
+    echo "$blocks"
+    echo ""
+    candidate_count=$(printf '%s\n' "$blocks" | grep -c '^---MIGRATION-BLOCK---')
+    MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
+    log "(dry-run) would execute the blocks above"
+    return 0
+  fi
+
+  # Once migrations have been discovered, make the ledger authoritative even
+  # if none are approved this run.  Pending blocks must survive a later
+  # currentVersion advance; dry-runs intentionally leave no trace.
+  if ! ledger_initialize "$(first_run_candidate_baseline)"; then
+    fail "Cannot initialize migration ledger for pending blocks"
+    return 1
+  fi
+
   if [ -z "$blocks" ]; then
     info "No migration blocks between ${FROM_VERSION:-<start>} and ${TO_VERSION}"
     return 0
@@ -529,20 +567,6 @@ run_project_migrations() {
   echo ""
 
   candidate_count=$(printf '%s\n' "$blocks" | grep -c '^---MIGRATION-BLOCK---')
-
-  if [ "$DRY_RUN" = true ]; then
-    MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
-    log "(dry-run) would execute the blocks above"
-    return 0
-  fi
-
-  # Once migrations have been discovered, make the ledger authoritative even
-  # if none are approved this run.  Pending blocks must survive a later
-  # currentVersion advance; dry-runs intentionally leave no trace.
-  if ! ledger_initialize; then
-    fail "Cannot initialize migration ledger for pending blocks"
-    return 1
-  fi
 
   if [ "$AUTO_YES" != true ] && [ ! -t 0 ]; then
     MIGRATION_SKIPPED_COUNT=$((MIGRATION_SKIPPED_COUNT + candidate_count))
