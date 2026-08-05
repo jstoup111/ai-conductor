@@ -4,6 +4,7 @@ import {
   declareSmokeCapability,
   getDeclaredSmokeCapability,
   resolveAdvisorySmokeCapabilities,
+  resolveGateSmokeCapabilities,
 } from './smoke-capability.js';
 
 describe('smoke capability declarations', () => {
@@ -51,6 +52,18 @@ describe('smoke capability declarations', () => {
         outcome: 'skipped',
         unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
       },
+    });
+  });
+
+  it('fails rather than skipping or succeeding when a gate-mode credential is absent', () => {
+    const resolutions = resolveGateSmokeCapabilities({
+      hasCommand: () => true,
+      environment: {},
+    });
+
+    expect(resolutions.credentialed).toEqual({
+      outcome: 'failed',
+      unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
     });
   });
 });

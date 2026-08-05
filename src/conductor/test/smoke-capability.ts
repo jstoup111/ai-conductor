@@ -16,6 +16,10 @@ export type AdvisorySmokeCapabilityResolution =
   | { outcome: 'ran' }
   | { outcome: 'skipped'; unmet: string };
 
+export type GateSmokeCapabilityResolution =
+  | { outcome: 'ran' }
+  | { outcome: 'failed'; unmet: string };
+
 const declarations = new Map<string, SmokeCapability>();
 
 /** Resolves each smoke capability's advisory outcome once for a smoke run. */
@@ -30,6 +34,21 @@ export function resolveAdvisorySmokeCapabilities(
     credentialed: environment.CLAUDE_CODE_OAUTH_TOKEN
       ? { outcome: 'ran' }
       : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+  };
+}
+
+/** Resolves each smoke capability's fail-closed outcome for a release gate. */
+export function resolveGateSmokeCapabilities(
+  { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
+): Record<SmokeCapability, GateSmokeCapabilityResolution> {
+  return {
+    hermetic: { outcome: 'ran' },
+    toolchain: hasCommand('codex')
+      ? { outcome: 'ran' }
+      : { outcome: 'failed', unmet: 'codex' },
+    credentialed: environment.CLAUDE_CODE_OAUTH_TOKEN
+      ? { outcome: 'ran' }
+      : { outcome: 'failed', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
   };
 }
 
