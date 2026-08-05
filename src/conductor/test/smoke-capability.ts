@@ -7,7 +7,31 @@ export const SMOKE_CAPABILITIES = [
 
 export type SmokeCapability = (typeof SMOKE_CAPABILITIES)[number];
 
+export interface SmokeCapabilityAvailabilityDependencies {
+  hasCommand(command: string): boolean;
+  environment: Readonly<Record<string, string | undefined>>;
+}
+
+export type AdvisorySmokeCapabilityResolution =
+  | { outcome: 'ran' }
+  | { outcome: 'skipped'; unmet: string };
+
 const declarations = new Map<string, SmokeCapability>();
+
+/** Resolves each smoke capability's advisory outcome once for a smoke run. */
+export function resolveAdvisorySmokeCapabilities(
+  { hasCommand, environment }: SmokeCapabilityAvailabilityDependencies,
+): Record<SmokeCapability, AdvisorySmokeCapabilityResolution> {
+  return {
+    hermetic: { outcome: 'ran' },
+    toolchain: hasCommand('codex')
+      ? { outcome: 'ran' }
+      : { outcome: 'skipped', unmet: 'codex' },
+    credentialed: environment.CLAUDE_CODE_OAUTH_TOKEN
+      ? { outcome: 'ran' }
+      : { outcome: 'skipped', unmet: 'CLAUDE_CODE_OAUTH_TOKEN' },
+  };
+}
 
 /** Rejects a smoke run that did not discover any test files. */
 export function assertSmokeDiscovery(discovered: { readonly length: number }): void {

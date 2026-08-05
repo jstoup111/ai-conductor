@@ -3,6 +3,7 @@ import {
   SMOKE_CAPABILITIES,
   declareSmokeCapability,
   getDeclaredSmokeCapability,
+  resolveAdvisorySmokeCapabilities,
 } from './smoke-capability.js';
 
 describe('smoke capability declarations', () => {
@@ -35,5 +36,21 @@ describe('smoke capability declarations', () => {
     const file = 'test/smoke/undeclared.smoke.test.ts';
 
     expect(() => getDeclaredSmokeCapability(file)).toThrow(file);
+  });
+
+  it('runs hermetic files and skips unavailable toolchain and credentialed files in advisory mode', () => {
+    const resolutions = resolveAdvisorySmokeCapabilities({
+      hasCommand: () => false,
+      environment: {},
+    });
+
+    expect(resolutions).toEqual({
+      hermetic: { outcome: 'ran' },
+      toolchain: { outcome: 'skipped', unmet: 'codex' },
+      credentialed: {
+        outcome: 'skipped',
+        unmet: 'CLAUDE_CODE_OAUTH_TOKEN',
+      },
+    });
   });
 });
