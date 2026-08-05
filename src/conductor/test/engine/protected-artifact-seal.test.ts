@@ -4,7 +4,7 @@ import { mkdir, mkdtemp, readFile, readdir, rename, rm, symlink, writeFile } fro
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   PROTECTED_ARTIFACT_DIRECTORIES,
   createProtectedArtifactSeal,
@@ -16,6 +16,19 @@ import {
   rotateProtectedArtifactSeal,
   verifyProtectedArtifactSeal,
 } from '../../src/engine/protected-artifact-seal.js';
+
+const { gitInvocations } = vi.hoisted(() => ({ gitInvocations: [] as string[][] }));
+
+vi.mock('execa', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('execa')>();
+  return {
+    ...actual,
+    execa: (...args: Parameters<typeof actual.execa>) => {
+      if (args[0] === 'git' && Array.isArray(args[1])) gitInvocations.push(args[1]);
+      return actual.execa(...args);
+    },
+  };
+});
 
 const execFile = promisify(execFileCallback);
 const scratches: string[] = [];
@@ -361,6 +374,24 @@ describe('verifyProtectedArtifactSeal', () => {
       ok: true,
       selfAmendments: [],
     }));
+  });
+
+  it('does not invoke git for a clean workspace before base inheritance needs resolving', async () => {
+    const repo = await makeRepo({ '.docs/plans/feature.md': 'approved plan\n' });
+    await createProtectedArtifactSeal({
+      projectRoot: repo,
+      baselineCommit: await git(repo, ['rev-parse', 'HEAD']),
+    });
+    gitInvocations.length = 0;
+
+    // No mismatch reaches inheritedFromBase, so inspectSeal must leave its
+    // baseRef thunk untouched. Supplying baseBranch would also invoke the
+    // separate stale-seal rotation flow, which this laziness guard excludes.
+    await expect(
+      verifyProtectedArtifactSeal({ projectRoot: repo }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(gitInvocations).toEqual([]);
   });
 
   it('rejects a changed protected artifact against the durable original seal', async () => {
