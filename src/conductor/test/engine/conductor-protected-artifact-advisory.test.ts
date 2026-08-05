@@ -164,10 +164,12 @@ describe('conductor protected-artifact self-amendment advisory', () => {
       warnings: warn.mock.calls,
       dispatches: run.mock.calls,
       halt: await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8'),
+      haltClass: await readFile(join(projectRoot, '.pipeline', 'HALT.class'), 'utf8'),
     }).toEqual({
       warnings: [],
       dispatches: [],
-      halt: expect.stringContaining('Protected artifact changed: .docs/plans/feature.md'),
+      halt: expect.stringMatching(/^Protected artifact changed: .docs\/plans\/feature\.md(?:\n|$)/),
+      haltClass: 'protected-artifact',
     });
   });
 
