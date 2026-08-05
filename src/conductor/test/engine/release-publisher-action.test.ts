@@ -1,9 +1,40 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { runReleasePublisherAction } from '../../src/engine/release-publisher-action.js';
+import { classifyReleasePublication, runReleasePublisherAction } from '../../src/engine/release-publisher-action.js';
 
 describe('engine/release-publisher-action — release PR provenance and retry safety (Tasks 14, 15)', () => {
   const config = { branch: 'release/pending', base: 'main', appLogin: 'release-app[bot]' };
+
+  it('classifies a designated merged release PR as publishable with its resolved version without mutating', async () => {
+    const { git, github } = dependencies();
+
+    await expect(classifyReleasePublication({
+      git,
+      github,
+      config,
+      event: { branch: 'main', commit: 'merged-release-head' },
+    })).resolves.toMatchObject({ state: 'publishable', version: '1.2.4' });
+
+    expect(git.createAnnotatedTag).not.toHaveBeenCalled();
+    expect(github.createRelease).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['an ordinary merge', { branch: 'main', commit: 'ordinary-merge' }],
+    ['a non-main push', { branch: 'release/pending', commit: 'merged-release-head' }],
+  ])('classifies %s as ignored without mutating', async (_name, event) => {
+    const { git, github } = dependencies({
+      author: 'developer',
+      head: 'feature/add-widget',
+      base: 'main',
+      mergeCommit: 'ordinary-merge',
+    });
+
+    await expect(classifyReleasePublication({ git, github, config, event })).resolves.toEqual({ state: 'ignored' });
+
+    expect(git.createAnnotatedTag).not.toHaveBeenCalled();
+    expect(github.createRelease).not.toHaveBeenCalled();
+  });
 
   it('publishes only the approved version section from the designated merged release PR', async () => {
     const git = {

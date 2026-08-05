@@ -49,6 +49,18 @@ export type ReleasePublisherActionResult =
   | { state: 'rejected'; reason: string }
   | { state: 'published'; version: string };
 
+export type ReleasePublicationClassification =
+  | { state: 'ignored' }
+  | { state: 'rejected'; reason: string }
+  | {
+    state: 'publishable';
+    version: string;
+    tag: string;
+    body: string;
+    existingTag: { commit: string } | undefined;
+    existingRelease: { tag: string; title: string; body: string; target: string } | undefined;
+  };
+
 /**
  * Publish a tag only after GitHub proves that this exact main commit is the
  * approved, complete, bot-owned release PR.  This boundary intentionally
@@ -58,6 +70,21 @@ export type ReleasePublisherActionResult =
 export async function runReleasePublisherAction(
   input: ReleasePublisherActionInput,
 ): Promise<ReleasePublisherActionResult> {
+  const classification = await classifyReleasePublication(input);
+  if (classification.state !== 'publishable') return classification;
+
+  await publishRelease(input, classification);
+  return { state: 'published', version: classification.version };
+}
+
+/**
+ * Resolve whether an event is eligible for publication without creating a tag
+ * or release.  The returned publishable state contains the read-only
+ * publication plan consumed by the mutation boundary.
+ */
+export async function classifyReleasePublication(
+  input: ReleasePublisherActionInput,
+): Promise<ReleasePublicationClassification> {
   if (input.event.branch !== input.config.base) return { state: 'ignored' };
 
   const pullRequest = await input.github.findMergedPullRequestByMergeCommit(input.event.commit);
@@ -91,13 +118,35 @@ export async function runReleasePublisherAction(
     return { state: 'rejected', reason: `The existing ${tag} GitHub Release does not match the approved release artifact.` };
   }
 
-  if (existingTag === undefined) {
-    await input.git.createAnnotatedTag({ tag, commit: input.event.commit, message: `Release ${tag}` });
+  return {
+    state: 'publishable',
+    version: approved.version,
+    tag,
+    body: approved.body,
+    existingTag,
+    existingRelease,
+  };
+}
+
+async function publishRelease(
+  input: ReleasePublisherActionInput,
+  classification: Extract<ReleasePublicationClassification, { state: 'publishable' }>,
+): Promise<void> {
+  if (classification.existingTag === undefined) {
+    await input.git.createAnnotatedTag({
+      tag: classification.tag,
+      commit: input.event.commit,
+      message: `Release ${classification.tag}`,
+    });
   }
-  if (existingRelease === undefined) {
-    await input.github.createRelease(release);
+  if (classification.existingRelease === undefined) {
+    await input.github.createRelease({
+      tag: classification.tag,
+      title: classification.tag,
+      body: classification.body,
+      target: input.event.commit,
+    });
   }
-  return { state: 'published', version: approved.version };
 }
 
 function sameRelease(
