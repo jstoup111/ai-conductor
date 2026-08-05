@@ -64,6 +64,7 @@ assert 'block identity is stable for the same release label and body' \
 assert 'block identity changes when either the release label or body changes' \
   "$([ "$IDENTITY" != "$CHANGED_RELEASE" ] && [ "$IDENTITY" != "$CHANGED_BODY" ] && echo 0 || echo 1)"
 
+(cd "$CONSUMER" && HOME="$TEST_HOME" ledger_initialize '1.0.0')
 (cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.2.0' "$BODY")
 assert 'an applied block is recorded with its stable identity, release, and body hash' \
   "$(LEDGER_PATH="$LEDGER" EXPECTED_IDENTITY="$IDENTITY" python3 - <<'PY'
@@ -155,10 +156,19 @@ assert_corrupt_ledger_refuses_migrations \
 assert_corrupt_ledger_refuses_migrations \
   'an unknown ledger schema version is reported and prevents migration side effects' \
   '{"schemaVersion": 999, "appliedBlocks": []}' 'schema'
+assert_corrupt_ledger_refuses_migrations \
+  'a legacy ledger without a candidate baseline is reported and prevents migration side effects' \
+  '{"schemaVersion": 1, "appliedBlocks": []}' 'candidate baseline'
+assert_corrupt_ledger_refuses_migrations \
+  'an invalid candidate baseline is reported and prevents migration side effects' \
+  '{"schemaVersion": 1, "candidateBaseline": "main@deadbeef", "appliedBlocks": []}' 'candidate baseline'
 
 FIRST_BODY=$'printf \'first\\n\'\n'
 SECOND_BODY=$'printf \'second\\n\'\n'
 THIRD_BODY=$'printf \'ran\\n\' > "$MIGRATION_EFFECT"\n'
+# These pre-seeded-ledger cases represent a target at the fixture's latest
+# release; they must not inherit the repository VERSION loaded while sourcing.
+TO_VERSION='1.2.0'
 (cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.0.0' "$FIRST_BODY")
 (cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.1.0' "$SECOND_BODY")
 (cd "$CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.2.0' "$THIRD_BODY")
@@ -168,6 +178,7 @@ assert 'a pre-seeded ledger leaves no migration candidates' \
 
 PARTIAL_CONSUMER="$TMP_ROOT/partial-consumer"
 mkdir -p "$PARTIAL_CONSUMER"
+(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" ledger_initialize '0.9.0')
 (cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.0.0' "$FIRST_BODY")
 (cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" ledger_record_applied '1.2.0' "$THIRD_BODY")
 PARTIAL_CANDIDATES=$(cd "$PARTIAL_CONSUMER" && HOME="$TEST_HOME" select_migration_candidates)

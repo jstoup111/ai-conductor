@@ -157,6 +157,7 @@ ledger_read() {
   path=$(ledger_path)
   python3 - "$path" <<'PY'
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -182,9 +183,12 @@ except json.JSONDecodeError as error:
     raise SystemExit(1)
 
 blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
+baseline = ledger.get("candidateBaseline") if isinstance(ledger, dict) else None
 valid = (
     isinstance(ledger, dict)
     and ledger.get("schemaVersion") == 1
+    and isinstance(baseline, str)
+    and re.fullmatch(r"v?\d+(?:\.\d+)+", baseline) is not None
     and isinstance(blocks, list)
     and all(
         isinstance(block, dict)
@@ -195,7 +199,7 @@ valid = (
     )
 )
 if not valid:
-    print(f"Migration ledger has an unknown schema version at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    print(f"Migration ledger has an unknown schema version or candidate baseline at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
     raise SystemExit(1)
 
 print(json.dumps(ledger, sort_keys=True))
@@ -212,6 +216,7 @@ ledger_initialize() {
   python3 - "$path" "$baseline" <<'PY'
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -220,6 +225,9 @@ path = Path(sys.argv[1])
 baseline = sys.argv[2]
 if path.exists():
     raise SystemExit(0)
+if re.fullmatch(r"v?\d+(?:\.\d+)+", baseline) is None:
+    print(f"Migration ledger requires a valid candidate baseline at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
 path.parent.mkdir(parents=True, exist_ok=True)
 with tempfile.NamedTemporaryFile("w", dir=path.parent, delete=False) as output:
     json.dump({"schemaVersion": 1, "candidateBaseline": baseline, "appliedBlocks": []}, output, sort_keys=True)
@@ -242,6 +250,7 @@ ledger_record_applied() {
 import hashlib
 import json
 import os
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -249,27 +258,30 @@ from pathlib import Path
 path = Path(sys.argv[1])
 identity, release, body = sys.argv[2:]
 path.parent.mkdir(parents=True, exist_ok=True)
-if path.exists():
-    try:
-        contents = path.read_text()
-    except OSError as error:
-        print(f"Cannot read migration ledger {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
-        raise SystemExit(1)
-    if not contents.strip():
-        print(f"Migration ledger is empty at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
-        raise SystemExit(1)
-    try:
-        ledger = json.loads(contents)
-    except json.JSONDecodeError as error:
-        print(f"Migration ledger contains invalid JSON at {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
-        raise SystemExit(1)
-else:
-    ledger = {"schemaVersion": 1, "appliedBlocks": []}
+if not path.exists():
+    print(f"Migration ledger is missing at {path}. Resolve it before recording migrations.", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    contents = path.read_text()
+except OSError as error:
+    print(f"Cannot read migration ledger {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+if not contents.strip():
+    print(f"Migration ledger is empty at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    ledger = json.loads(contents)
+except json.JSONDecodeError as error:
+    print(f"Migration ledger contains invalid JSON at {path}: {error}. Resolve it before rerunning migrations.", file=sys.stderr)
+    raise SystemExit(1)
 
 blocks = ledger.get("appliedBlocks") if isinstance(ledger, dict) else None
+baseline = ledger.get("candidateBaseline") if isinstance(ledger, dict) else None
 valid = (
     isinstance(ledger, dict)
     and ledger.get("schemaVersion") == 1
+    and isinstance(baseline, str)
+    and re.fullmatch(r"v?\d+(?:\.\d+)+", baseline) is not None
     and isinstance(blocks, list)
     and all(
         isinstance(block, dict)
@@ -280,7 +292,7 @@ valid = (
     )
 )
 if not valid:
-    print(f"Migration ledger has an unknown schema version at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
+    print(f"Migration ledger has an unknown schema version or candidate baseline at {path}. Resolve it before rerunning migrations.", file=sys.stderr)
     raise SystemExit(1)
 
 record = {
