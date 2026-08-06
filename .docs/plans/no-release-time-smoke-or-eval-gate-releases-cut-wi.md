@@ -34,6 +34,28 @@ other shared gate machinery to accommodate this feature, and deleting or un-expo
 production code to satisfy the probe. Both were attempted in `b798ceaa8` and correctly failed
 Scope. Task 6 and Task 7 still owe the tests that commit removed.
 
+**Amendment 2 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan authorizes the Task 13
+step 5 addition recorded below, and any diff carrying only that change is in scope.
+
+`1cfb77ab3` deleted the shared helper module
+`src/conductor/test/execution/claude-provider-smoke-env.ts` and inlined a private copy of
+`unauthenticatedClaudeEnvironment` into each of its two consumers. That was done to escape the
+wiring probe's orphan backstop, which at the time flagged an exported test helper as unwired
+production surface. The result is a tautology: `claude-provider-smoke-env.test.ts` declares the
+function it tests and asserts against its own copy, so no change to the real helper can fail it.
+
+That constraint is gone. Main now excludes test-path exports from the orphan backstop (#1334, in
+this branch since the rebase onto main), so a shared test helper no longer trips the gate and
+there is nothing left to work around.
+
+Task 13 therefore additionally requires restoring the shared module as the single definition,
+importing it in both consumers, and deleting the private copies — so the unit test exercises the
+helper the smoke test actually uses. This changes no other task, adds no production surface, and
+reverses a workaround rather than introducing a new seam.
+
+**Not authorized by this amendment:** re-deleting or un-exporting the shared helper, duplicating
+it again under another name, or weakening the unit test to accommodate the orphan backstop.
+
 ## Summary
 
 Give the smoke tier one auto-discovering entry point, replace nine bespoke env gates with a
@@ -303,9 +325,16 @@ complete.
 3. Replace each file's gate with a declaration; `publish-interrupted` is `toolchain` (it execs
    `bin/setup`, which runs `npm install`), not `hermetic`.
 4. Verify test passes (GREEN).
-5. Commit: "refactor(smoke): declare capabilities across the smoke tier"
+5. Restore `src/conductor/test/execution/claude-provider-smoke-env.ts` as the single definition of
+   `unauthenticatedClaudeEnvironment`, import it from both
+   `claude-provider.smoke.test.ts` and `claude-provider-smoke-env.test.ts`, and delete the private
+   copy each of those files currently declares. The unit test must exercise the imported helper, so
+   a change to it can fail the test (Amendment 2).
+6. Commit: "refactor(smoke): declare capabilities across the smoke tier"
 
 **Files:**
+- `src/conductor/test/execution/claude-provider-smoke-env.ts`
+- `src/conductor/test/execution/claude-provider-smoke-env.test.ts`
 - `src/conductor/test/smoke/autoresolve-smoke.test.ts`
 - `src/conductor/test/smoke/finish-record.smoke.test.ts`
 - `src/conductor/test/smoke/publish-interrupted.smoke.test.ts`
