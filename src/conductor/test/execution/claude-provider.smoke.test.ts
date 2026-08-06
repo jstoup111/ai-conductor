@@ -6,20 +6,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { detectsModelUnavailable, detectsAuthFailure } from '../../src/execution/claude-provider.js';
+import { unauthenticatedClaudeEnvironment } from './claude-provider-smoke-env.js';
 
 const smokeCapability = 'credentialed';
-
-function unauthenticatedClaudeEnvironment(
-  environment: NodeJS.ProcessEnv,
-  configDirectory: string,
-): NodeJS.ProcessEnv {
-  const childEnvironment: NodeJS.ProcessEnv = {
-    ...environment,
-    CLAUDE_CONFIG_DIR: configDirectory,
-  };
-  delete childEnvironment.CLAUDE_CODE_OAUTH_TOKEN;
-  return childEnvironment;
-}
 
 /**
  * Real-binary smoke test for TS-1 Done-When 3: prove the real Claude CLI's
