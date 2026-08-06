@@ -78,7 +78,7 @@ complete.
 - `src/conductor/package.json` — new `smoke` script
 - `src/conductor/test/structural/smoke-entry-point.test.ts` — new test
 
-**Wired-into:** `src/conductor/package.json#scripts.smoke`
+**Wired-into:** `src/conductor/scripts/smoke.ts#runSmokeCli`
 **Dependencies:** none
 
 ### Task 2: Prove discovery finds every known smoke file
@@ -148,7 +148,7 @@ complete.
 - `src/conductor/test/smoke-capability.ts` — helper module
 - `src/conductor/test/smoke-capability.test.ts` — new test
 
-**Wired-into:** `src/conductor/test/smoke-capability.ts#declareSmokeCapability`
+**Wired-into:** `src/conductor/src/engine/smoke-runner.ts#resolveGateSmokeFile`
 **Dependencies:** none
 
 ### Task 6: Reject an undeclared smoke file
@@ -330,7 +330,7 @@ complete.
 - `src/conductor/src/engine/release-publisher-action.ts`
 - `src/conductor/test/engine/release-publisher-action.test.ts`
 
-**Wired-into:** `src/conductor/src/index.ts#exports, .github/workflows/release.yml#classify`
+**Wired-into:** `src/conductor/src/index.ts#classifyReleasePublication, .github/workflows/release.yml#classify`
 **Dependencies:** none
 
 ### Task 16: Classify performs no mutation, and rejects bad evidence
