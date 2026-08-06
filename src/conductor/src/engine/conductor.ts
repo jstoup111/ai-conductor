@@ -5459,7 +5459,7 @@ export class Conductor {
               `Cannot dispatch '${step.name}': ${command} is not available in the provider skill catalog.\n` +
               'Re-provision the provider home with the required skill, then re-queue this feature.';
             await writeHaltMarker(this.projectRoot, haltReason + '\n', 'mechanical');
-            await writeState(this.stateFilePath, state);
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
             await emitTracked({ type: 'loop_halt', reason: haltReason });
             process.off('SIGINT', sigintHandler);
             process.off('SIGTERM', sigterm);
