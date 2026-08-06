@@ -966,6 +966,44 @@ describe('Task 4: idea-scoped spec requirement on the product track (#488)', () 
     ).rejects.toThrow(/Stories reference.*selected stories artifact/i);
   });
 
+  it('Task 13: rejects an unrelated but valid Stories artifact', async () => {
+    await mkdir(join(repoPath, '.docs', 'stories'), { recursive: true });
+    await writeFile(join(repoPath, '.docs', 'stories', 'unrelated.md'), ACCEPTED_STORIES);
+    await git(['add', '.docs'], repoPath);
+    await git(['commit', '-m', 'legacy unrelated stories on main'], repoPath);
+
+    const idea = 'dep bump';
+    const worktree = await createEngineerWorktree(repoPath, idea);
+    await rm(join(worktree.worktreePath, '.docs', 'coherence'), { recursive: true, force: true });
+    const dir = worktree.worktreePath;
+    await mkdir(join(dir, '.docs', 'specs'), { recursive: true });
+    await mkdir(join(dir, '.docs', 'plans'), { recursive: true });
+    await writeFile(join(dir, '.docs', 'specs', 'dep-bump.md'), '# PRD: dep bump\n\nApproved.\n');
+    await writeFile(join(dir, '.docs', 'stories', 'dep-bump.md'), ACCEPTED_STORIES);
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      PLAN_WITH_DEPS.replace('.docs/stories/dep-bump.md', '.docs/stories/unrelated.md'),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), idea, dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/selected stories artifact.*resolved: \.docs\/stories\/unrelated\.md/i);
+  });
+
+  it('Task 13: reports a traversal Stories reference as invalid', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      PLAN_WITH_DEPS.replace('.docs/stories/dep-bump.md', '../../outside.md'),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(/Stories reference.*resolved: invalid/i);
+  });
+
   it('rejects an absolute Stories reference because it cannot survive checkout relocation', async () => {
     const dir = await seedValidWorktree();
     await writeFile(
