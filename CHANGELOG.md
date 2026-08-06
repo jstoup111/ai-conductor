@@ -42,6 +42,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - `bin/migrate` now correctly and safely applies every pending migration when a consumer project jumps multiple releases at once, instead of only the latest. ([implementation PR #1325](https://github.com/jstoup111/ai-conductor/pull/1325)).
 - The build step no longer reports itself complete or routes an exhausted build through commit-movement while the worktree has uncommitted paths — the halt now names the dirty paths so they can be committed or discarded first. ([implementation PR #1312](https://github.com/jstoup111/ai-conductor/pull/1312)).
 - The wiring reachability gate no longer flags test-only exported helpers as unwired production surface. ([implementation PR #1334](https://github.com/jstoup111/ai-conductor/pull/1334)).
+- Merged specs whose plan uses an inline-code, linked, or annotated `**Stories:**` reference now resolve and dispatch instead of being silently dropped; `conduct-ts daemon status` lists blocked specs with reason and remedy; and a `## Migration` section that ends a PR body no longer parses as malformed release metadata. ([implementation PR #1337](https://github.com/jstoup111/ai-conductor/pull/1337)).
 
 ## [0.99.20] - 2026-08-03
 
