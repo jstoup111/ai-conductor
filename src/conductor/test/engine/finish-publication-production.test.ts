@@ -6,6 +6,7 @@ import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
 } from '../../src/engine/finish-publication-production.js';
+import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
@@ -44,6 +45,53 @@ describe('production FINISH publication composition', () => {
         dispatchJudgment: async () => ({ success: true }),
         emit: async () => {},
       })).resolves.toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  });
+
+  it('passes a genuine establish-PR verification failure through as a FINISH retry', async () => {
+    const advanceFinishPublication = vi.fn(async () => ({
+      kind: 'publication_retry' as const,
+      transition: 'establish_pr' as const,
+      reason: 'pr_identity_not_verified_after_establish',
+    }));
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: '/project',
+        stateFilePath: '/project/.pipeline/conduct-state.json',
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+      });
+
+      const disposition = await coordinator.advance({
+        state: {} as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      });
+
+      expect(disposition).toEqual({
+        kind: 'publication_retry',
+        transition: 'establish_pr',
+        reason: 'pr_identity_not_verified_after_establish',
+      });
+      expect(routeFinishPublicationDisposition(disposition)).toEqual({
+        kind: 'retry_finish',
+        reason: 'pr_identity_not_verified_after_establish',
+      });
     } finally {
       vi.doUnmock('../../src/engine/finish-publication.js');
       vi.resetModules();

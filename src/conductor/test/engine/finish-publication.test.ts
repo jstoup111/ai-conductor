@@ -407,6 +407,22 @@ describe('finish-publication domain types', () => {
 
 describe('FINISH publication disposition routing', () => {
   it.each([
+    ['establish_pr', 'pr_identity_not_verified_after_establish'],
+    ['write_shipped_record', 'shipped_record_not_verified_after_write'],
+    ['judge_pr_prose', 'judgment_completed_reobserve'],
+    ['ready_pr', 'presentation_not_verified_after_repair'],
+    ['record_outcome', 'outcome_record_not_verified_after_write'],
+  ] as const)('accepts legacy synthesized retry %s/%s by exact disposition validation', async (transition, reason) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        transition,
+        reason,
+      }),
+    ).resolves.toEqual({ kind: 'retry_finish', reason });
+  });
+
+  it.each([
     ['establish_pr', 'draft_pr_effect_unavailable'],
     ['establish_pr', 'draft_pr_skipped'],
     ['establish_pr', 'draft_pr_no-commits'],
