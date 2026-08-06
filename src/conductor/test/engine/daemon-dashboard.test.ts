@@ -624,6 +624,56 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     );
   });
 
+  it('keeps an open-PR retained worktree out of ELIGIBLE even when discovery offers it', async () => {
+    const slug = 'retained-open-pr';
+    const prUrl = 'https://github.com/example/repo/pull/43';
+    await mkdir(join(worktreeBase, slug), { recursive: true });
+    await makeProcessedJson(slug, prUrl);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item(slug)],
+      prStateProbe: async (queriedPrUrl) => ({ prUrl: queriedPrUrl, state: 'open' }),
+    });
+    const out = renderDashboard(state);
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug, reason: 'pr-open-awaiting-main', prUrl },
+    ]);
+    expect(state.neverStarted).not.toContain(slug);
+    expect(out).toContain(`RETAINED WORKTREES (1)\n  • ${slug} — pr-open-awaiting-main  → ${prUrl}`);
+    expect(eligibleSection).toContain('ELIGIBLE (0)');
+    expect(eligibleSection).not.toContain(`  • ${slug}`);
+  });
+
+  it('keeps a probe-unknown retained worktree out of ELIGIBLE even when discovery offers it', async () => {
+    const slug = 'retained-unknown-pr';
+    const prUrl = 'https://github.com/example/repo/pull/44';
+    await mkdir(join(worktreeBase, slug), { recursive: true });
+    await makeProcessedJson(slug, prUrl);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item(slug)],
+      prStateProbe: async () => {
+        throw new Error('probe unavailable');
+      },
+    });
+    const out = renderDashboard(state);
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug, reason: 'pr-state-unknown', prUrl },
+    ]);
+    expect(state.neverStarted).not.toContain(slug);
+    expect(out).toContain(`RETAINED WORKTREES (1)\n  • ${slug} — pr-state-unknown  → ${prUrl}`);
+    expect(eligibleSection).toContain('ELIGIBLE (0)');
+    expect(eligibleSection).not.toContain(`  • ${slug}`);
+  });
+
   it('degrades a rejecting probe per retained row while continuing the scan', async () => {
     const rejectedPrUrl = 'https://github.com/example/repo/pull/43';
     const closedPrUrl = 'https://github.com/example/repo/pull/44';
