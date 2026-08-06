@@ -50,6 +50,30 @@ operator for a token mid-BUILD is not an acceptable substitute.
 dependency, editing shared gate machinery to accommodate this feature, and any further
 BUILD-authored amendment of this plan.
 
+**Amendment 2 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan authorizes the
+Task 7 step 2 additions recorded below, and any diff carrying only those additions is in scope.
+
+As authored, the plan required zero dispatches only as a *preflight-failure* expectation and
+unmetered counting only as *meter* behavior, so nothing on the successful credentialed path
+asserted either. A run in which the provider was never actually dispatched, or in which every
+result came back unmetered, could satisfy every stated condition and pass — which is precisely
+the silent no-op this feature exists to catch. `daemon-e2e-live.smoke.test.ts` currently reports
+`dispatches` through a `console.info` in a `finally` block, where it can never fail a run.
+
+Task 7 step 2 therefore additionally requires, on the successful credentialed path:
+
+- `provisioned.dispatches > 0` — the provider was really invoked, not skipped or short-circuited.
+- `meter.unmetered === 0` — every result was metered, so a zero-token total cannot be read as
+  free work rather than absent work.
+
+Both are assertions in `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`, not log lines.
+This adds no task and changes no dependency; it closes a planning omission in an existing
+task's acceptance conditions.
+
+**Not authorized by this amendment:** relaxing the token cap, converting any existing assertion
+to a warning, or asserting these conditions anywhere other than the successful credentialed path
+(preflight-failure and meter-behavior expectations are unchanged).
+
 ## Summary
 
 Give the live daemon E2E fixture its own provisioned provider home, copied from the checkout
@@ -250,9 +274,12 @@ trigger, or a `ci-gate` entry.
 **Steps:**
 1. Wire the provisioning decorator into the smoke's provider chain so the real dispatch runs
    against the provisioned home.
-2. Assert in the smoke itself that the build dispatch reports non-zero turns and non-zero token
-   usage, and that `terminal`, `madeCommit`, `touchedFixture`, and `taskTrailer` are all true.
-   These assertions are the durable gate; they fail the smoke when A-1 or A-2 is violated.
+2. Assert in the smoke itself, on the successful credentialed path, that the build dispatch
+   reports non-zero turns and non-zero token usage; that `provisioned.dispatches > 0` and
+   `meter.unmetered === 0`; and that `terminal`, `madeCommit`, `touchedFixture`, and
+   `taskTrailer` are all true. These assertions are the durable gate; they fail the smoke when
+   A-1 or A-2 is violated. `dispatches` and `unmetered` are assertions, not log lines
+   (Amendment 2).
 3. If the dispatch is blocked for lack of workspace trust (A-2 wrong), seed a minimal trust
    file in the fixture's OWN home; do not reach for the sandbox's ambient-state reader.
 4. Commit: "test(live-e2e): dispatch the build step against a provisioned provider home"
