@@ -72,4 +72,62 @@ describe('engine/release-metadata — structured PR release disposition (Task 1)
     expect(() => parseReleaseDisposition(`${metadata}\n\n## Migration\n\nnone`))
       .toThrow('Invalid release disposition: Migration');
   });
+
+  describe('Migration section terminated by a thematic break', () => {
+    // The SHIP-entry draft body (`shipDraftPrBody`) always ends with a `---`
+    // rule, the placeholder note, and the injected `Closes` line. When the
+    // release-disposition step appends the template's `## Migration` / `none`
+    // section above that trailer, no further `##` heading follows it, so a
+    // section terminator that only recognises headings swallows the whole
+    // trailer and the disposition is rejected as malformed.
+    const fields = [
+      'Release-Disposition: note',
+      'Release-Category: Fixed',
+      'Release-Semver: minor',
+      'Release-Note: Correct a defect.',
+    ].join('\n');
+    const trailer = [
+      '',
+      '---',
+      '',
+      'Draft opened automatically at the start of the SHIP phase.',
+      '',
+      'Closes owner/repo#1330',
+    ].join('\n');
+
+    it('reads a "none" section above the draft trailer as no migration', () => {
+      expect(parseReleaseDisposition(`${fields}\n\n## Migration\n\nnone\n${trailer}`)).toEqual({
+        disposition: 'note',
+        category: 'Fixed',
+        semver: 'minor',
+        note: 'Correct a defect.',
+      });
+    });
+
+    it('retains a runnable fence that sits above the draft trailer', () => {
+      const migration = '```bash migration\n./bin/install --update\n```';
+      expect(
+        parseReleaseDisposition(`${fields}\n\n## Migration\n\n${migration}\n${trailer}`),
+      ).toMatchObject({ migration });
+    });
+
+    it('does not treat a rule inside the runnable fence as the section end', () => {
+      const migration = '```bash migration\ncat <<EOF\n---\nEOF\n```';
+      expect(
+        parseReleaseDisposition(`${fields}\n\n## Migration\n\n${migration}\n${trailer}`),
+      ).toMatchObject({ migration });
+    });
+
+    it('still rejects prose that is neither "none" nor a runnable fence', () => {
+      expect(() => parseReleaseDisposition(`${fields}\n\n## Migration\n\nTODO\n${trailer}`))
+        .toThrow('Invalid release disposition: Migration');
+    });
+
+    it('rejects a no-note disposition carrying a real migration above the trailer', () => {
+      const migration = '```bash migration\n./bin/install --update\n```';
+      expect(() =>
+        parseReleaseDisposition(`Release-Disposition: no-note\n\n## Migration\n\n${migration}\n${trailer}`),
+      ).toThrow('Invalid release disposition: Migration');
+    });
+  });
 });
