@@ -41,6 +41,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The daemon no longer halts a build when a branch has simply fallen behind a protected artifact it never touched, and halt reasons for protected-artifact violations now name the specific cause (uncommitted edit, feature-authored change, or undeterminable provenance) with a recovery step. ([implementation PR #1321](https://github.com/jstoup111/ai-conductor/pull/1321)).
 - `bin/migrate` now correctly and safely applies every pending migration when a consumer project jumps multiple releases at once, instead of only the latest. ([implementation PR #1325](https://github.com/jstoup111/ai-conductor/pull/1325)).
 - The build step no longer reports itself complete or routes an exhausted build through commit-movement while the worktree has uncommitted paths — the halt now names the dirty paths so they can be committed or discarded first. ([implementation PR #1312](https://github.com/jstoup111/ai-conductor/pull/1312)).
+- The wiring reachability gate no longer flags test-only exported helpers as unwired production surface. ([implementation PR #1334](https://github.com/jstoup111/ai-conductor/pull/1334)).
 
 ## [0.99.20] - 2026-08-03
 
