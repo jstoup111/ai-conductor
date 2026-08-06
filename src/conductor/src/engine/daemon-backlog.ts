@@ -760,11 +760,35 @@ export async function discoverBacklog(
     const planContent = await tree.readFile(planRel);
     if (planContent === null) continue;
 
+    if (await isProcessed(slug)) continue;
+
+    // The processed marker and shipped-record stem are identity-only dedup:
+    // run them before content classification so completed work with a malformed
+    // Stories reference is never reported as blocked. Content-hash dedup stays
+    // below because it needs vetted plan + stories bytes to be trustworthy.
+    const shippedMatch = shippedRecords.find((r) => r.stem === slug);
+    if (shippedMatch) {
+      try {
+        await opts.repairProcessed?.(slug, shippedMatch.record);
+      } catch (err) {
+        // Repair is best-effort only — correctness of the skip never depends
+        // on the local cache marker actually being written. Log and move on.
+        log(
+          `shipped dedup: ${slug} already shipped (base-branch record found) but repairing ` +
+            `the local processed-cache failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      await warnOnce(
+        slug,
+        `skip ${slug}: shipped dedup — implementation already merged (base-branch shipped record found); not re-dispatching.`,
+      );
+      continue;
+    }
+
     const storiesRef = await resolveStoriesRef(tree, slug, planContent);
     if (storiesRef.kind !== 'resolved') continue; // no stories on the base branch → not eligible
     const storiesRel = storiesRef.path;
-
-    if (await isProcessed(slug)) continue;
 
     // Carry the engineer-assessed complexity tier so the daemon build honors it
     // (Small skips acceptance_specs/retro). Resolve it before vetting so those
@@ -798,16 +822,14 @@ export async function discoverBacklog(
 
     // The coherence artifact is mandatory for every non-S tier. This remains
     // intentionally shallow: discovery has only the base-branch tree, while
-    // the semantic validator needs a change set and runs at land. Check both
-    // shipped-dedup identities first so a completed implementation is never
-    // reported as missing coherence before its existing dedup path handles it.
-    const shippedByStem = shippedRecords.some((record) => record.stem === slug);
+    // the semantic validator needs a change set and runs at land. Stem-match
+    // dedup already returned above; retain content-hash dedup here because it
+    // depends on the vetted plan + stories content used to compute this digest.
     const candidateDigest = specHash(
       Buffer.from(planContent, 'utf-8'),
       Buffer.from(storiesContent, 'utf-8'),
     ).digest;
     const shippedByContent =
-      !shippedByStem &&
       shippedRecords.some(
         (record) =>
           !('malformed' in record.record) &&
@@ -816,7 +838,6 @@ export async function discoverBacklog(
     const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
     if (
       tier !== 'S' &&
-      !shippedByStem &&
       !shippedByContent &&
       !hasCoherenceTableDataRow(coherenceContent)
     ) {
@@ -825,34 +846,6 @@ export async function discoverBacklog(
         `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
           `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
           'Author it on the default branch; logged once.',
-      );
-      continue;
-    }
-
-    // Shipped-work dedup (Story 3/Task 4): a content-eligible candidate whose
-    // stem matches a shipped record already committed on the base branch has
-    // already merged its implementation — never re-dispatch or re-kick it,
-    // even if the local `isProcessed` cache missed it (a stale/reset cache).
-    // Runs AFTER content filters (so a shipped spec is never mis-logged as
-    // "identity unresolved" or "owner gated") and BEFORE the owner gate (so a
-    // shipped spec with an unresolved identity or foreign owner stamp is still
-    // reported as shipped, not as an owner-gate skip).
-    const shippedMatch = shippedRecords.find((r) => r.stem === slug);
-    if (shippedMatch) {
-      try {
-        await opts.repairProcessed?.(slug, shippedMatch.record);
-      } catch (err) {
-        // Repair is best-effort only — correctness of the skip never depends
-        // on the local cache marker actually being written. Log and move on.
-        log(
-          `shipped dedup: ${slug} already shipped (base-branch record found) but repairing ` +
-            `the local processed-cache failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        continue;
-      }
-      await warnOnce(
-        slug,
-        `skip ${slug}: shipped dedup — implementation already merged (base-branch shipped record found); not re-dispatching.`,
       );
       continue;
     }

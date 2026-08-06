@@ -153,6 +153,46 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toEqual([]);
   });
 
+  it('does not classify an unresolvable Stories reference as blocked after a processed-marker dedup', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/processed-unresolvable.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    const isProcessed = vi.fn(async () => true);
+
+    const result = await discoverBacklog(dir, isProcessed, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(isProcessed).toHaveBeenCalledWith('processed-unresolvable');
+  });
+
+  it('does not classify an unresolvable Stories reference as blocked after shipped-by-stem dedup', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/shipped-unresolvable.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/shipped-unresolvable.md'),
+      renderShippedRecord({ slug: 'shipped-unresolvable', specHash: 'deadbeef' }),
+    );
+    const repairProcessed = vi.fn(async () => {});
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+      repairProcessed,
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(repairProcessed).toHaveBeenCalledOnce();
+    expect(repairProcessed).toHaveBeenCalledWith(
+      'shipped-unresolvable',
+      expect.objectContaining({ slug: 'shipped-unresolvable' }),
+    );
+  });
+
   describe('dependency gate (Task 11)', () => {
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
