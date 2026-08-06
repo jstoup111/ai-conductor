@@ -167,9 +167,11 @@ import {
   type Disposition,
 } from './build-review-disposition.js';
 import {
+  FINISH_PUBLICATION_PROGRESS_ALLOWANCE,
   nonRetryablePublicationReason,
   routeFinishPublicationDisposition,
   type PublicationDisposition,
+  type PublicationTransition,
   type PrProseJudgmentRequest,
 } from './finish-publication.js';
 import {
@@ -4935,6 +4937,8 @@ export class Conductor {
         // `build_progress_halt.attempt_ceiling` so a progressing build isn't
         // halted just because the fixed retry budget ran out.
         let progressAttempts = 0;
+        let publicationProgressAttempts = 0;
+        let lastPublicationTransition: PublicationTransition | undefined;
         // HEAD sha captured at build-step entry for per-attempt liveness
         // telemetry and stall classification.
         const headShaBeforeBuild: string | null =
@@ -5489,6 +5493,28 @@ export class Conductor {
             if (route.kind === 'complete') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'complete' });
               result.success = true;
+            }
+            if (route.kind === 'progress_finish') {
+              // A completed publication transition advances FINISH's own
+              // state machine; it is neither a failure nor a retry. Re-enter
+              // immediately without consuming this step's attempt budget.
+              publicationProgressAttempts++;
+              lastPublicationTransition = route.transition;
+              if (publicationProgressAttempts >= FINISH_PUBLICATION_PROGRESS_ALLOWANCE) {
+                const reason =
+                  `FINISH publication progress allowance exhausted after ` +
+                  `${publicationProgressAttempts} transition(s); last transition: ` +
+                  `${lastPublicationTransition}. Human review required.`;
+                await this.saveConductorStepStatus(state, 'finish', 'failed');
+                await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+                await this.persistPendingStateChanges(state, 'persist conductor transition');
+                await emitTracked({ type: 'loop_halt', reason });
+                process.off('SIGINT', sigintHandler);
+                process.off('SIGTERM', sigterm);
+                return;
+              }
+              attempt--;
+              continue;
             }
             if (route.kind === 'retry_finish') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });

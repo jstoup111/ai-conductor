@@ -335,23 +335,13 @@ export function createProductionFinishPublicationCoordinator(
         },
       });
 
-      // A transition is intentionally one effect per attempt. Re-enter FINISH
-      // with a fresh observation instead of manufacturing completion from an
-      // unverified write.
+      // A transition is intentionally one effect per attempt. The core
+      // coordinator has verified the effect before reporting an advance, so
+      // re-enter FINISH without charging it to the retry budget.
       if (result.kind === 'advanced') {
         return {
-          kind: 'publication_retry',
+          kind: 'publication_progress',
           transition: result.transition,
-          reason:
-            result.transition === 'establish_pr'
-              ? 'pr_identity_not_verified_after_establish'
-              : result.transition === 'write_shipped_record'
-                ? 'shipped_record_not_verified_after_write'
-                : result.transition === 'judge_pr_prose'
-                  ? 'judgment_completed_reobserve'
-                  : result.transition === 'ready_pr'
-                    ? 'presentation_not_verified_after_repair'
-                    : 'outcome_record_not_verified_after_write',
         };
       }
       return result;

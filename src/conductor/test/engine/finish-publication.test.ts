@@ -407,6 +407,22 @@ describe('finish-publication domain types', () => {
 
 describe('FINISH publication disposition routing', () => {
   it.each([
+    ['establish_pr', 'pr_identity_not_verified_after_establish'],
+    ['write_shipped_record', 'shipped_record_not_verified_after_write'],
+    ['judge_pr_prose', 'judgment_completed_reobserve'],
+    ['ready_pr', 'presentation_not_verified_after_repair'],
+    ['record_outcome', 'outcome_record_not_verified_after_write'],
+  ] as const)('accepts legacy synthesized retry %s/%s by exact disposition validation', async (transition, reason) => {
+    await expect(
+      routeFinishPublicationDisposition({
+        kind: 'publication_retry',
+        transition,
+        reason,
+      }),
+    ).resolves.toEqual({ kind: 'retry_finish', reason });
+  });
+
+  it.each([
     ['establish_pr', 'draft_pr_effect_unavailable'],
     ['establish_pr', 'draft_pr_skipped'],
     ['establish_pr', 'draft_pr_no-commits'],
@@ -573,6 +589,40 @@ describe('FINISH publication disposition routing', () => {
     await expect(
       routeFinishPublicationDisposition({ kind: 'implementation_invalid', evidence: '   ' }),
     ).resolves.toMatchObject({ kind: 'halt' });
+  });
+
+  it('routes every publication-progress transition back to FINISH', async () => {
+    const transitions = [
+      'verify_release_readiness',
+      'judge_pr_prose',
+      'establish_pr',
+      'write_shipped_record',
+      'ready_pr',
+      'record_outcome',
+    ] as const;
+
+    await expect(
+      Promise.all(
+        transitions.map(async (transition) => routeFinishPublicationDisposition({
+          kind: 'publication_progress',
+          transition,
+        })),
+      ),
+    ).resolves.toEqual(transitions.map((transition) => ({ kind: 'progress_finish', transition })));
+  });
+
+  it('rejects publication-progress dispositions without exactly a known kind and transition', async () => {
+    await expect(
+      Promise.all([
+        { kind: 'publication_progress', transition: 'unknown_transition' },
+        { kind: 'publication_progress' },
+        { kind: 'publication_progress', transition: 'record_outcome', reason: 'extra' },
+      ].map(routeFinishPublicationDisposition)),
+    ).resolves.toEqual([
+      { kind: 'halt', reason: 'Unknown or contradictory FINISH publication disposition; human review required.' },
+      { kind: 'halt', reason: 'Unknown or contradictory FINISH publication disposition; human review required.' },
+      { kind: 'halt', reason: 'Unknown or contradictory FINISH publication disposition; human review required.' },
+    ]);
   });
 
   it.each([

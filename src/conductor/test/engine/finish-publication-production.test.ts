@@ -6,6 +6,7 @@ import {
   createProductionFinishPublicationCoordinator,
   createProductionReleaseReadinessObserver,
 } from '../../src/engine/finish-publication-production.js';
+import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 import { PR_BODY_FLOOR_MARKER } from '../../src/engine/halt-pr-rehabilitation.js';
 import { HALT_PR_BANNER_SENTINEL } from '../../src/engine/pr-labels.js';
 import type { dispatchFinishRecord } from '../../src/engine/finish-record-cli.js';
@@ -14,6 +15,89 @@ import type { ConductState } from '../../src/types/index.js';
 const commandResult = { stdout: '' };
 
 describe('production FINISH publication composition', () => {
+  it('reports a verified advance as publication progress', async () => {
+    const advanceFinishPublication = vi.fn(async () => ({
+      kind: 'advanced' as const,
+      transition: 'write_shipped_record' as const,
+    }));
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: '/project',
+        stateFilePath: '/project/.pipeline/conduct-state.json',
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+      });
+
+      await expect(coordinator.advance({
+        state: {} as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      })).resolves.toEqual({ kind: 'publication_progress', transition: 'write_shipped_record' });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  });
+
+  it('passes a genuine establish-PR verification failure through as a FINISH retry', async () => {
+    const advanceFinishPublication = vi.fn(async () => ({
+      kind: 'publication_retry' as const,
+      transition: 'establish_pr' as const,
+      reason: 'pr_identity_not_verified_after_establish',
+    }));
+    vi.resetModules();
+    vi.doMock('../../src/engine/finish-publication.js', async () => ({
+      ...await vi.importActual('../../src/engine/finish-publication.js'),
+      advanceFinishPublication,
+    }));
+
+    try {
+      const { createProductionFinishPublicationCoordinator: createCoordinator } = await import(
+        '../../src/engine/finish-publication-production.js'
+      );
+      const coordinator = createCoordinator({
+        projectRoot: '/project',
+        stateFilePath: '/project/.pipeline/conduct-state.json',
+        baseBranch: 'main',
+        git: async () => commandResult,
+        gh: async () => commandResult,
+      });
+
+      const disposition = await coordinator.advance({
+        state: {} as ConductState,
+        mode: 'auto',
+        daemon: true,
+        dispatchJudgment: async () => ({ success: true }),
+        emit: async () => {},
+      });
+
+      expect(disposition).toEqual({
+        kind: 'publication_retry',
+        transition: 'establish_pr',
+        reason: 'pr_identity_not_verified_after_establish',
+      });
+      expect(routeFinishPublicationDisposition(disposition)).toEqual({
+        kind: 'retry_finish',
+        reason: 'pr_identity_not_verified_after_establish',
+      });
+    } finally {
+      vi.doUnmock('../../src/engine/finish-publication.js');
+      vi.resetModules();
+    }
+  });
+
   it.each([
     ['missing', 'missing'],
     ['stale', 'stale'],
@@ -272,7 +356,7 @@ describe('production FINISH publication composition', () => {
           dispatchJudgment: async () => ({ success: true }),
           emit: async (event) => { events.push(event); },
         }),
-      ).resolves.toMatchObject({ kind: 'publication_retry', transition: 'establish_pr' });
+      ).resolves.toEqual({ kind: 'publication_progress', transition: 'establish_pr' });
 
       await expect(readFile(join(pipeline, 'conduct-state.json'), 'utf8')).resolves.toContain(`"pr_url": "${prUrl}"`);
       const reobservedState = JSON.parse(
@@ -362,11 +446,7 @@ describe('production FINISH publication composition', () => {
           dispatchJudgment: async () => ({ success: true }),
           emit: async () => {},
         }),
-      ).resolves.toMatchObject({
-        kind: 'publication_retry',
-        transition: 'establish_pr',
-        reason: 'pr_identity_not_verified_after_establish',
-      });
+      ).resolves.toEqual({ kind: 'publication_progress', transition: 'establish_pr' });
 
       // Exactly one push, lease-protected — never a bare force.
       expect(pushes).toEqual([['push', '-u', 'origin', 'feat/feature', '--force-with-lease']]);
