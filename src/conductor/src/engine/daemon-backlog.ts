@@ -543,8 +543,8 @@ export interface WaitingItem {
  * A merged spec that cannot yet enter the build backlog because a required
  * specification artifact is missing, unapproved, or unresolvable.
  *
- * Populated by later tasks in this plan; `discoverBacklog` returns `blocked: []`
- * unconditionally until then (this task only introduces the type + shape).
+ * `discoverBacklog` includes these entries when merged specs have actionable
+ * content failures.
  */
 export interface BlockedSpecItem {
   slug: string;
@@ -572,8 +572,8 @@ export interface BlockedSpecItem {
  *   the daemon's own identity is unresolved (fail-closed, nothing scanned this
  *   pass). Resolved unowned specs default-build and receive a per-spec log.
  *
- * Populated by later tasks in this plan; `discoverBacklog` returns `gated: []`
- * unconditionally until then (this task only introduces the type + shape).
+ * `discoverBacklog` includes these entries when ownership-gate conditions hold
+ * merged specs or the repository out of the build backlog.
  */
 export interface GatedSpecItem {
   kind: 'spec';
