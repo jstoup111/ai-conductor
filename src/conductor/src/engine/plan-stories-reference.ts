@@ -15,7 +15,7 @@ function normalizeStoriesReference(reference: string): string {
 }
 
 /**
- * Resolve the stories artifact named by a plan to a repo-relative POSIX path.
+ * Resolve the stories artifact named by a plan to a `.docs/`-relative POSIX path.
  *
  * Plans may use a plain path, an inline-code path, or a Markdown link. Relative
  * link targets are resolved from the plan file; `.docs/...` references remain
@@ -52,6 +52,7 @@ export function resolvePlanStoriesPath(
     normalized === '..' ||
     normalized.startsWith('../') ||
     posix.isAbsolute(normalized) ||
+    !normalized.startsWith('.docs/') ||
     !normalized.endsWith('.md')
   ) {
     return null;

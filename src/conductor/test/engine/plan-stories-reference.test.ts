@@ -14,6 +14,7 @@ describe('resolvePlanStoriesPath', () => {
     ['an annotated Windows drive-absolute path', '`C:\\outside\\stories.md` (note)', null],
     ['an annotated Windows UNC path', '`\\\\server\\share\\stories.md` (note)', null],
     ['an annotated traversal path', '`../../../outside.md` (note)', null],
+    ['an annotated path outside the docs tree', '../../outside.md (annotated)', null],
     ['a non-path first token', 'not-a-path (note)', null],
     ['an empty reference', '', null],
     ['no Stories line', undefined, '.docs/stories/feature.md'],

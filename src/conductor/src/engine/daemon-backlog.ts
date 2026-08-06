@@ -20,6 +20,7 @@ import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
 import type { BacklogTreeSource } from './backlog-tree-source.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -502,6 +503,13 @@ export interface DiscoverBacklogOpts {
    * caller-side implementation, which must resolve false rather than throw.
    */
   shippedOnFeatureBranch?: (slug: string) => Promise<boolean>;
+  /**
+   * Operator-park boundary. Defaults to the durable `.daemon/parked/<slug>`
+   * marker reader; injectable so discovery tests never need filesystem or git
+   * parking setup. A parked spec is already held by an operator decision and
+   * must not be classified as blocked for a second reason.
+   */
+  isOperatorParked?: (slug: string) => Promise<boolean>;
 }
 
 /**
@@ -521,9 +529,9 @@ export interface DiscoverBacklogOpts {
  * `Status: Accepted` (not DRAFT), and the plan declares a dependency tree. A
  * feature already marked processed (via `isProcessed`) is skipped.
  *
- * Returns `{ items, waiting }`: `items` are the eligible-to-build features
- * (unchanged shape/behavior). `waiting` is reserved for specs held back by an
- * unresolved dependency gate — always `[]` today; a later task populates it.
+ * Returns `{ items, waiting, blocked, gated }`: `items` are eligible-to-build
+ * features, `waiting` contains dependency-held specs, `blocked` contains
+ * actionable content failures, and `gated` contains ownership-held specs.
  */
 export interface WaitingItem {
   slug: string;
@@ -696,6 +704,8 @@ export async function discoverBacklog(
   // candidate — `listShippedRecords` already batches this via a single
   // `listShippedFiles()` call), then match each candidate by stem below.
   const shippedRecords = await listShippedRecords(tree);
+  const isOperatorParked =
+    opts.isOperatorParked ?? ((slug: string) => readOperatorParkMarker(projectRoot, slug));
 
   // Dated-plan/undated-marker mismatch: per-feature metadata markers (`.docs/complexity/<stem>.md`,
   // `.docs/track/<stem>.md`) are keyed by the PLAN STEM, but specs exist whose
@@ -791,6 +801,8 @@ export async function discoverBacklog(
       continue;
     }
 
+    if (await isOperatorParked(slug)) continue;
+
     const storiesRef = await resolveStoriesRef(tree, slug, planContent);
     if (storiesRef.kind === 'unresolvable') {
       const remedy =
@@ -826,11 +838,40 @@ export async function discoverBacklog(
     const tierMarker = await readFeatureMarker('.docs/complexity', slug);
     const tier = parseComplexityTier(tierMarker.content);
 
+    // Content-hash dedup needs the plan + stories bytes, but it must still
+    // precede EVERY content classification. A shipped spec with draft stories,
+    // no dependency tree, or no coherence artifact is completed work, not
+    // actionable blocked work.
+    const storiesContent = (await tree.readFile(storiesRel)) ?? '';
+    const candidateDigest = specHash(
+      Buffer.from(planContent, 'utf-8'),
+      Buffer.from(storiesContent, 'utf-8'),
+    ).digest;
+    const hashMatch = shippedRecords.find(
+      (r) => !('malformed' in r.record) && r.record.specHash === candidateDigest,
+    );
+    if (hashMatch) {
+      try {
+        await opts.repairProcessed?.(slug, hashMatch.record);
+      } catch (err) {
+        log(
+          `shipped dedup: ${slug} matches shipped content under '${hashMatch.stem}' but ` +
+            `repairing the local processed-cache failed: ${err instanceof Error ? err.message : String(err)}`,
+        );
+        continue;
+      }
+      await warnOnce(
+        slug,
+        `skip ${slug}: shipped dedup — shipped under '${hashMatch.stem}', candidate ` +
+          `'${slug}' matches by content (spec_hash); not re-dispatching.`,
+      );
+      continue;
+    }
+
     // Eligibility = APPROVED + well-formed. The daemon pre-seeds the front half
     // (stories/plan = done) and never re-runs their gates, so this is the only
     // place specs are vetted before autonomous build. Reject unapproved or
     // dependency-tree-less plans rather than silently building them.
-    const storiesContent = (await tree.readFile(storiesRel)) ?? '';
     if (!isStoriesApproved(storiesContent)) {
       blockedItems.push({
         slug,
@@ -860,23 +901,10 @@ export async function discoverBacklog(
 
     // The coherence artifact is mandatory for every non-S tier. This remains
     // intentionally shallow: discovery has only the base-branch tree, while
-    // the semantic validator needs a change set and runs at land. Stem-match
-    // dedup already returned above; retain content-hash dedup here because it
-    // depends on the vetted plan + stories content used to compute this digest.
-    const candidateDigest = specHash(
-      Buffer.from(planContent, 'utf-8'),
-      Buffer.from(storiesContent, 'utf-8'),
-    ).digest;
-    const shippedByContent =
-      shippedRecords.some(
-        (record) =>
-          !('malformed' in record.record) &&
-          record.record.specHash === candidateDigest,
-      );
+    // the semantic validator needs a change set and runs at land.
     const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
     if (
       tier !== 'S' &&
-      !shippedByContent &&
       !hasCoherenceTableDataRow(coherenceContent)
     ) {
       blockedItems.push({
@@ -904,35 +932,6 @@ export async function discoverBacklog(
         slug,
         `skip ${slug}: shipped dedup — finish already recorded the ship on this feature's ` +
           'branch; awaiting the human merge, not re-dispatching.',
-      );
-      continue;
-    }
-
-    // Content-hash dedup (Story 4/Task 6): catches a RENAMED spec — same plan
-    // + stories content as a shipped record, but under a different stem, so
-    // the stem-match above misses it. Computed AFTER the stem-match dedup
-    // (cheaper, so it runs first) and still BEFORE the owner gate (a renamed
-    // shipped spec is reported as shipped, not as owner-gated). The candidate
-    // digest is compared against every shipped record's `spec_hash`; a match
-    // means the implementation already shipped under the OLD stem, so the
-    // cache is repaired under the candidate's (NEW) slug, not the old one.
-    const hashMatch = shippedRecords.find(
-      (r) => !('malformed' in r.record) && r.record.specHash === candidateDigest,
-    );
-    if (hashMatch) {
-      try {
-        await opts.repairProcessed?.(slug, hashMatch.record);
-      } catch (err) {
-        log(
-          `shipped dedup: ${slug} matches shipped content under '${hashMatch.stem}' but ` +
-            `repairing the local processed-cache failed: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        continue;
-      }
-      await warnOnce(
-        slug,
-        `skip ${slug}: shipped dedup — shipped under '${hashMatch.stem}', candidate ` +
-          `'${slug}' matches by content (spec_hash); not re-dispatching.`,
       );
       continue;
     }

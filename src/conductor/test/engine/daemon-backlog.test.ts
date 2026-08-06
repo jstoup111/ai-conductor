@@ -412,6 +412,51 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toEqual([]);
   });
 
+  it.each([
+    ['draft stories', '# Stories\n**Status:** Draft\n', planWithDeps('.docs/stories/renamed.md')],
+    [
+      'a missing dependency tree',
+      APPROVED_STORIES,
+      '# Plan\n**Stories:** .docs/stories/renamed.md\n### Task 1\n',
+    ],
+  ])('does not block shipped-by-content specs with %s', async (_description, stories, plan) => {
+    await writeFile(join(dir, '.docs/plans/renamed.md'), plan);
+    await writeFile(join(dir, '.docs/stories/renamed.md'), stories);
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/original.md'),
+      renderShippedRecord({
+        slug: 'original',
+        specHash: specHash(Buffer.from(plan, 'utf-8'), Buffer.from(stories, 'utf-8')).digest,
+      }),
+    );
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items).toEqual([]);
+  });
+
+  it('does not block an operator-parked spec that fails content eligibility', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/operator-parked.md'),
+      planWithDeps('.docs/stories/operator-parked.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/operator-parked.md'), '# Stories\n**Status:** Draft\n');
+    const isOperatorParked = vi.fn(async (slug: string) => slug === 'operator-parked');
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+      isOperatorParked,
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items).toEqual([]);
+    expect(isOperatorParked).toHaveBeenCalledWith('operator-parked');
+  });
+
   it('Task 8: an undeduped content plan still reports its eligibility failure as blocked', async () => {
     const plan = planWithDeps('.docs/stories/changed.md');
     await writeFile(join(dir, '.docs/plans/changed.md'), plan);
