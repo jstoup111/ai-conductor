@@ -532,6 +532,24 @@ export interface WaitingItem {
 }
 
 /**
+ * A merged spec that cannot yet enter the build backlog because a required
+ * specification artifact is missing, unapproved, or unresolvable.
+ *
+ * Populated by later tasks in this plan; `discoverBacklog` returns `blocked: []`
+ * unconditionally until then (this task only introduces the type + shape).
+ */
+export interface BlockedSpecItem {
+  slug: string;
+  reason:
+    | 'unresolvable-stories-ref'
+    | 'stories-missing'
+    | 'stories-not-approved'
+    | 'no-dependency-tree'
+    | 'missing-coherence';
+  remedy: string;
+}
+
+/**
  * An owner-gate skip surfaced to the operator (FR-7/FR-11). Distinct from
  * `WaitingItem` (dependency gate): `GatedItem` covers specs (and repo-scoped
  * conditions) held back by the OWNERSHIP gate, not the dependency gate.
@@ -622,7 +640,12 @@ export async function discoverBacklog(
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
   opts: DiscoverBacklogOpts = {},
-): Promise<{ items: BacklogItem[]; waiting: WaitingItem[]; gated: GatedItem[] }> {
+): Promise<{
+  items: BacklogItem[];
+  waiting: WaitingItem[];
+  blocked: BlockedSpecItem[];
+  gated: GatedItem[];
+}> {
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
@@ -666,7 +689,7 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return { items: [], waiting: [], gated: [] };
+  if (planFiles.length === 0) return { items: [], waiting: [], blocked: [], gated: [] };
 
   // Shipped-record dedup (Story 3/Task 4): read every committed shipped
   // record from the base-branch tree ONCE per discovery run (not once per
@@ -991,7 +1014,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    return { items, waiting: [], gated: gatedItems };
+    return { items, waiting: [], blocked: [], gated: gatedItems };
   }
   const resolver = opts.resolver;
   const gated: BacklogItem[] = [];
@@ -1027,7 +1050,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  return { items: gated, waiting, gated: gatedItems };
+  return { items: gated, waiting, blocked: [], gated: gatedItems };
 }
 
 /**

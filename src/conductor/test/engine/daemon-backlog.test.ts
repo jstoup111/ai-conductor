@@ -109,7 +109,7 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
     expect(
       await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) }),
-    ).toEqual({ items: [], waiting: [], gated: [] });
+    ).toEqual({ items: [], waiting: [], blocked: [], gated: [] });
     await rm(empty, { recursive: true, force: true });
   });
 
@@ -136,6 +136,21 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.items.map((b) => b.slug)).toEqual(['feature-shape']);
     expect(result.waiting).toEqual([]);
     expect(result.gated).toEqual([]);
+  });
+
+  it('returns blocked: [] for a buildable-only fixture (Task 4)', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/blocked-channel-shape.md'),
+      planWithDeps('.docs/stories/blocked-channel-shape.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/blocked-channel-shape.md'), APPROVED_STORIES);
+    await writeCoherence('blocked-channel-shape');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
   });
 
   describe('dependency gate (Task 11)', () => {
