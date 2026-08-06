@@ -193,6 +193,13 @@ rewrite — bounded to one re-dispatch, after which the gate's own last-resort b
 feature. Routing that through the planner is what once turned a 30-second `gh pr edit` into an 18-task
 rebuild.
 
+A verified FINISH publication transition is progress, not a failed attempt: it immediately re-enters
+FINISH without spending the step retry budget or advancing its model-escalation rung. This separate
+allowance is bounded to 12 verified transitions per FINISH step entry. If publication still has not
+converged when the allowance is exhausted, the conductor writes a `needs-human` HALT naming the last
+transition rather than looping indefinitely. The [stalled-feature runbook](../runbooks/stalled-or-stuck-feature.md#finish-publication-halts)
+defines diagnosis and recovery for that halt.
+
 If the remediation plan is missing, stale, malformed, or has gaps it does not cover, the engine falls back
 to deterministic routing rather than trusting a partial plan. Unknown dispositions are dropped, not
 honored.

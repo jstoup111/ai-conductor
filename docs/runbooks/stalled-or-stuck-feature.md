@@ -229,7 +229,7 @@ procedure](#clear-a-halt-and-let-the-feature-resume).
 
 #### FINISH publication halts
 
-A FINISH publication failure halts one of two ways, and the marker says which:
+A FINISH publication failure or non-converging progress halts one of three ways, and the marker says which:
 
 - `FINISH publication retry exhausted: <reason>` — the reason was transient (transport, GitHub,
   filesystem, provider judgment, or a re-observation), so every attempt in the budget was spent
@@ -241,6 +241,19 @@ A FINISH publication failure halts one of two ways, and the marker says which:
   reconciles a remote. These are `draft_pr_no-commits`, `draft_pr_skipped`,
   `draft_pr_lease-rejected`, and the four `*_effect_unavailable` reasons. Both halts are
   `needs-human`; recovery is the same — resolve the cited condition, then clear the HALT.
+- `FINISH publication progress allowance exhausted after <N> transition(s); last transition: <transition>.
+  Human review required.` — FINISH made verified publication progress, so none of the step retry
+  budget was spent. The separate progress allowance reached its 12-transition bound before the
+  publication state converged, and this is a `needs-human` halt.
+
+**Diagnosis:** inspect the named last transition and the preceding FINISH publication events in the
+daemon log. Twelve verified transitions without convergence means the publication state machine is
+cycling or an external publication state is not settling; do not clear the HALT merely to repeat the
+same cycle.
+
+**Recovery:** reconcile the cited transition and the external PR/remote state until the next FINISH
+entry can converge. Only then clear the HALT using [the resume
+procedure](#clear-a-halt-and-let-the-feature-resume).
 
 An unrecognised reason always keeps its retries: the classifier fails closed toward retrying.
 
