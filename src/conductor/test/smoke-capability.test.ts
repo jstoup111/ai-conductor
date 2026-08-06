@@ -6,6 +6,7 @@ import {
   resolveAdvisorySmokeFile,
   resolveGateSmokeFile,
 } from '../src/engine/smoke-capability.js';
+import { runSmokeCli } from '../src/engine/smoke-runner.js';
 
 describe('smoke capability declarations', () => {
   it('exposes exactly the closed smoke capability set', () => {
@@ -118,5 +119,36 @@ describe('smoke capability declarations', () => {
       ['smoke ledger: test/execution/codex-provider.smoke.test.ts [toolchain] skipped (unmet: codex)'],
       ['smoke ledger: test/engine/daemon-e2e-live.smoke.test.ts [credentialed] failed (evidence: artifacts/smoke/daemon-e2e-live.log)'],
     ]);
+  });
+
+  it('rejects a discovered smoke file with no declaration before running an executor', async () => {
+    const runVitest = vi.fn();
+    const emit = vi.fn();
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [{
+        file: 'test/smoke/undeclared.smoke.test.ts',
+        source: 'import { it } from \'vitest\';',
+      }],
+      runVitest,
+      emit,
+    })).rejects.toThrow('Smoke file test/smoke/undeclared.smoke.test.ts declares no capability');
+
+    expect(runVitest).not.toHaveBeenCalled();
+    expect(emit).not.toHaveBeenCalledWith(expect.stringContaining('[hermetic]'));
+  });
+
+  it('rejects an out-of-set discovered capability before running an executor', async () => {
+    const runVitest = vi.fn();
+
+    await expect(runSmokeCli('vitest.smoke.config.ts', {
+      discover: async () => [{
+        file: 'test/smoke/invalid.smoke.test.ts',
+        source: "const smokeCapability = 'networked';",
+      }],
+      runVitest,
+    })).rejects.toThrow('Smoke file test/smoke/invalid.smoke.test.ts declares invalid capability networked');
+
+    expect(runVitest).not.toHaveBeenCalled();
   });
 });

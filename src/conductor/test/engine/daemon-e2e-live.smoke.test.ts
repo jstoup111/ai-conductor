@@ -21,7 +21,7 @@ import { initTestRepo } from '../fixtures/git-repo.js';
 import { dispatchableStepCommands } from '../fixtures/step-command-preflight.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 
-export const smokeCapability = 'credentialed';
+const smokeCapability = 'credentialed';
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
 //

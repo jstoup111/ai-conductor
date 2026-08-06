@@ -12,7 +12,7 @@ import {
   setRemainOnExit,
   respawnPane,
 } from '../../src/engine/daemon-tmux.js';
-export const smokeCapability = 'toolchain';
+const smokeCapability = 'toolchain';
 
 // Real-tmux smoke (Phase 3, FR-20, Task T36). The `.smoke.test.ts` suffix
 // excludes this real-binary coverage from the ordinary Vitest suite.

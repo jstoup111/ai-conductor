@@ -20,7 +20,7 @@ export type SmokeRunMode = 'advisory' | 'gate';
 
 export interface DiscoveredSmokeFile {
   file: string;
-  capability: SmokeCapability;
+  source: string;
 }
 
 export interface SmokeRunDependencies {
@@ -56,7 +56,10 @@ async function runSmoke({
   environment = process.env,
   emit = console.info,
 }: SmokeRunDependencies): Promise<void> {
-  const files = await discover();
+  const files = (await discover()).map(({ file, source }) => ({
+    file,
+    capability: parseSmokeCapabilityDeclaration(file, source),
+  }));
   assertSmokeDiscovery(files);
 
   const ledger: SmokeOutcomeLedgerEntry[] = [];
@@ -117,7 +120,7 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
     return Promise.all(files.map(async ({ moduleId }) => {
       const file = moduleId.slice(process.cwd().length + 1).replaceAll('\\', '/');
       const source = await readFile(moduleId, 'utf8');
-      return { file, capability: parseSmokeCapabilityDeclaration(file, source) };
+      return { file, source };
     }));
   } finally {
     await vitest.close();

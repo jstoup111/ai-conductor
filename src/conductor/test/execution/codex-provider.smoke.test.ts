@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { execa } from 'execa';
 import { CODEX_AUTH_FAILURE_RE } from '../../src/execution/codex-provider.js';
-export const smokeCapability = 'toolchain';
+const smokeCapability = 'toolchain';
 
 /**
  * Opt-in real Codex CLI compatibility checks. These commands never invoke

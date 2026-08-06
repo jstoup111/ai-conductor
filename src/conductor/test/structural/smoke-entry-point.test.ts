@@ -42,9 +42,9 @@ describe('structural: smoke test entry point', () => {
 
     await runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [
-        { file: 'test/smoke/finish-record.smoke.test.ts', capability: 'hermetic' },
-        { file: 'test/backlog-priority.smoke.test.ts', capability: 'toolchain' },
-        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', capability: 'credentialed' },
+        { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
+        { file: 'test/backlog-priority.smoke.test.ts', source: "const smokeCapability = 'toolchain';" },
+        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', source: "const smokeCapability = 'credentialed';" },
       ],
       runVitest,
       mode: 'advisory',
@@ -63,8 +63,8 @@ describe('structural: smoke test entry point', () => {
 
     await expect(runSmokeCli('vitest.smoke.config.ts', {
       discover: async () => [
-        { file: 'test/smoke/finish-record.smoke.test.ts', capability: 'hermetic' },
-        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', capability: 'credentialed' },
+        { file: 'test/smoke/finish-record.smoke.test.ts', source: "const smokeCapability = 'hermetic';" },
+        { file: 'test/engine/daemon-e2e-live.smoke.test.ts', source: "const smokeCapability = 'credentialed';" },
       ],
       runVitest,
       mode: 'gate',
