@@ -434,6 +434,21 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.eligible).toEqual([]);
   });
 
+  it('classifies a worktree without state, HALT, or ledger entry as never-started', async () => {
+    await mkdir(join(worktreeBase, 'never-started', '.pipeline'), { recursive: true });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state).toMatchObject({
+      neverStarted: ['never-started'],
+      retainedWorktrees: [],
+    });
+  });
+
   it('renders retained worktrees from disk even when absent from the watch registry', async () => {
     await mkdir(join(worktreeBase, 'capped-out'), { recursive: true });
     await mkdir(join(worktreeBase, 'resolve-capped-out'), { recursive: true });
