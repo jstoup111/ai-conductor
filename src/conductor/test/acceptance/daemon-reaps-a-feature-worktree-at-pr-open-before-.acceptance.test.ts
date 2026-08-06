@@ -322,7 +322,8 @@ describe('deferred feature-worktree reap — production lifecycle entry points',
     const dashboard = renderDashboard(state);
     expect(dashboard).toMatch(/RETAINED WORKTREES \(1\)/);
     expect(dashboard).toContain(SLUG);
-    expect(dashboard).toContain('pr-closed-unmerged');
+    expect(dashboard).toContain('reason: retained after ship; PR closed without merge');
+    expect(dashboard).toContain(`remedy: conduct daemon reclaim-worktree ${SLUG}`);
   });
 
   it('S5: the disk-listed retained worktree can be reclaimed by one exact slug from a nested cwd', async () => {

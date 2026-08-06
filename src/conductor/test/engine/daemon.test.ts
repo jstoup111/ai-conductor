@@ -318,7 +318,7 @@ describe('engine/daemon — runDaemon', () => {
           reason: 'original terminal failure',
         }),
         logs: expect.arrayContaining([
-          expect.stringMatching(/HALT write error/),
+          expect.stringMatching(/unrecoverable-state: HALT marker write failed for f0/),
         ]),
       });
     } finally {
