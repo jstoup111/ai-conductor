@@ -832,6 +832,11 @@ export async function discoverBacklog(
     // dependency-tree-less plans rather than silently building them.
     const storiesContent = (await tree.readFile(storiesRel)) ?? '';
     if (!isStoriesApproved(storiesContent)) {
+      blockedItems.push({
+        slug,
+        reason: 'stories-not-approved',
+        remedy: `Set **Status:** Accepted in ${storiesRel} on the default branch.`,
+      });
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.`,
@@ -839,6 +844,13 @@ export async function discoverBacklog(
       continue;
     }
     if (!planHasDependencyTree(planContent)) {
+      blockedItems.push({
+        slug,
+        reason: 'no-dependency-tree',
+        remedy:
+          `Add a ## Task Dependency Graph section or **Dependencies:** lines to ${planRel} ` +
+          'on the default branch.',
+      });
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
@@ -867,6 +879,11 @@ export async function discoverBacklog(
       !shippedByContent &&
       !hasCoherenceTableDataRow(coherenceContent)
     ) {
+      blockedItems.push({
+        slug,
+        reason: 'missing-coherence',
+        remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.`,
+      });
       await warnOnce(
         slug,
         `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +

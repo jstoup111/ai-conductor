@@ -253,6 +253,78 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(logs.filter((message) => /missing-stories.*\.docs\/stories\/missing-stories\.md/i.test(message))).toHaveLength(1);
   });
 
+  it('blocks unapproved stories while preserving the existing warning', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/unapproved-stories.md'),
+      planWithDeps('.docs/stories/unapproved-stories.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/unapproved-stories.md'), '# Stories\n**Status:** Draft\n');
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'unapproved-stories',
+        reason: 'stories-not-approved',
+        remedy: 'Set **Status:** Accepted in .docs/stories/unapproved-stories.md on the default branch.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip unapproved-stories: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.',
+    );
+  });
+
+  it('blocks plans without a dependency tree while preserving the existing warning', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/no-dependency-tree.md'),
+      '# Plan\n**Stories:** .docs/stories/no-dependency-tree.md\n### Task 1\n',
+    );
+    await writeFile(join(dir, '.docs/stories/no-dependency-tree.md'), APPROVED_STORIES);
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'no-dependency-tree',
+        reason: 'no-dependency-tree',
+        remedy: 'Add a ## Task Dependency Graph section or **Dependencies:** lines to .docs/plans/no-dependency-tree.md on the default branch.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip no-dependency-tree: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.',
+    );
+  });
+
+  it('blocks missing coherence while preserving the existing warning', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/missing-coherence.md'),
+      planWithDeps('.docs/stories/missing-coherence.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/missing-coherence.md'), APPROVED_STORIES);
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'missing-coherence',
+        reason: 'missing-coherence',
+        remedy: 'Author a valid coherence table in .docs/coherence/missing-coherence.md on the default branch.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier unresolved. Author it on the default branch; logged once.',
+    );
+  });
+
   describe('dependency gate (Task 11)', () => {
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
