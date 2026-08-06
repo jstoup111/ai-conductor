@@ -11,7 +11,7 @@
 // primitives (`isLive`, `readPidRecord`) and the daemon-log readers — they never
 // re-encode the pidfile path or write anything.
 
-import { stat } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { isLive, readPidRecord, type KillProbe } from './daemon-lock.js';
 import { resolveRegistryPath, readRegistry, type ProjectRecord } from './registry.js';
@@ -330,6 +330,55 @@ function formatGatedAge(writtenAt: string, now: Date): string {
   return `${minutes}m ago`;
 }
 
+/** Per-pass read model written by daemon-backlog's blocked-spec scan. */
+interface BlockedSnapshot {
+  schemaVersion: 1;
+  writtenAt: string;
+  blocked: Array<{ slug: string; reason: string; remedy: string }>;
+}
+
+/**
+ * Read the local blocked-spec snapshot only. This is deliberately a filesystem
+ * read: daemon status must not invoke git, GitHub, or a network boundary merely
+ * to explain the latest completed scan.
+ */
+async function readBlockedSnapshot(repoPath: string): Promise<BlockedSnapshot | undefined> {
+  try {
+    const raw = await readFile(join(repoPath, '.daemon', 'blocked.json'), 'utf-8');
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      (parsed as { schemaVersion?: unknown }).schemaVersion !== 1
+    ) {
+      return undefined;
+    }
+    return parsed as BlockedSnapshot;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Render a blocked-spec line from the daemon's per-pass local read model. */
+function blockedSpecLine(blocked: BlockedSnapshot['blocked'][number]): string {
+  return `    • ${blocked.slug} — ${blocked.reason} — ${blocked.remedy}`;
+}
+
+/** Render the per-repository BLOCKED section without querying any external state. */
+async function renderBlockedSection(repoPath: string, out: (line: string) => void, clock: Clock): Promise<void> {
+  const snapshot = await readBlockedSnapshot(repoPath);
+  if (!snapshot) return;
+
+  const age = formatGatedAge(snapshot.writtenAt, clock());
+  if (snapshot.blocked.length === 0) {
+    out(`  BLOCKED: no specs are blocked (as of ${age})`);
+    return;
+  }
+
+  out(`  BLOCKED (as of ${age}):`);
+  for (const blocked of snapshot.blocked) out(blockedSpecLine(blocked));
+}
+
 /**
  * Render the per-repo GATED section (Task 15, S5 HP-1/HP-2/NP-4/NP-5) by
  * reading `.daemon/gated.json` via `readGatedSnapshot` — read-only, no git/gh
@@ -408,6 +457,7 @@ export async function runDaemonStatus(
     // attempt the snapshot read for them (AC: "path-missing repo skips the read").
     if (row.liveness !== 'path-missing') {
       await renderGatedSection(record.path, out, clock);
+      await renderBlockedSection(record.path, out, clock);
       await renderAgreementLine(record.path, out);
     }
   }
