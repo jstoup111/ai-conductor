@@ -737,8 +737,9 @@ export async function discoverBacklog(
     const planContent = await tree.readFile(planRel);
     if (planContent === null) continue;
 
-    const storiesRel = await resolveStoriesRef(tree, slug, planContent);
-    if (!storiesRel) continue; // no stories on the base branch → not eligible
+    const storiesRef = await resolveStoriesRef(tree, slug, planContent);
+    if (storiesRef.kind !== 'resolved') continue; // no stories on the base branch → not eligible
+    const storiesRel = storiesRef.path;
 
     if (await isProcessed(slug)) continue;
 
@@ -1067,17 +1068,24 @@ function unownedDefaultedMessage(slug: string, defaultedOwner: string): string {
 /**
  * Resolve the repo-relative stories path a plan depends on, validating it exists
  * ON THE BASE-BRANCH TREE. Prefers the explicit `**Stories:** <path>` line; falls
- * back to a stories file sharing the plan's stem. Returns null if neither is
- * present on the base branch.
+ * back to a stories file sharing the plan's stem.
  */
-async function resolveStoriesRef(
+export type StoriesRefResolution =
+  | { kind: 'resolved'; path: string }
+  | { kind: 'unresolvable' }
+  | { kind: 'missing'; path: string };
+
+export async function resolveStoriesRef(
   tree: BacklogTreeSource,
   slug: string,
   planContent: string,
-): Promise<string | null> {
+): Promise<StoriesRefResolution> {
   const candidate = resolvePlanStoriesPath(
     `.docs/plans/${slug}.md`,
     planContent,
   );
-  return candidate && (await tree.readFile(candidate)) !== null ? candidate : null;
+  if (!candidate) return { kind: 'unresolvable' };
+  return (await tree.readFile(candidate)) !== null
+    ? { kind: 'resolved', path: candidate }
+    : { kind: 'missing', path: candidate };
 }

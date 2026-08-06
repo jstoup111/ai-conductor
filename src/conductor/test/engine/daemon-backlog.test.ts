@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile as fsReadFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {
   discoverBacklog,
   fastForwardRoot,
+  resolveStoriesRef,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -77,6 +78,32 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     isProcessed?: (slug: string) => Promise<boolean>,
     log?: (m: string) => void,
   ) => (await discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) })).items;
+
+  describe('resolveStoriesRef', () => {
+    it('reports an unresolvable explicit Stories reference', async () => {
+      const tree = {
+        listPlanFiles: async () => [],
+        listShippedFiles: async () => [],
+        readFile: vi.fn(async () => null),
+      } satisfies BacklogTreeSource;
+
+      await expect(
+        resolveStoriesRef(tree, 'unresolvable', '# Plan\n**Stories:** /outside/stories.md\n'),
+      ).resolves.toEqual({ kind: 'unresolvable' });
+    });
+
+    it('reports a resolved Stories path absent from the injected tree', async () => {
+      const tree = {
+        listPlanFiles: async () => [],
+        listShippedFiles: async () => [],
+        readFile: vi.fn(async () => null),
+      } satisfies BacklogTreeSource;
+
+      await expect(
+        resolveStoriesRef(tree, 'missing', '# Plan\n**Stories:** .docs/stories/missing.md\n'),
+      ).resolves.toEqual({ kind: 'missing', path: '.docs/stories/missing.md' });
+    });
+  });
 
   it('returns [] when there is no plans dir', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
