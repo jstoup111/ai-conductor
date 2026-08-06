@@ -667,7 +667,7 @@ function retainedRemedy(entry: RetainedWorktreeEntry): string {
   if (entry.reason === 'pr-open-awaiting-main') {
     return 'no operator action applies; retention ends when the PR lands on main';
   }
-  return `conduct daemon reclaim-worktree ${entry.slug}`;
+  return 'run conduct daemon reclaim-worktree for this row';
 }
 
 /** Verdict-kind-specific detail suffix for a WAITING row. */
@@ -736,8 +736,7 @@ export function renderDashboard(
         : entry.annotation === 'merged-ready'
           ? ' — merged — ready to reconcile'
           : '';
-    lines.push(`  • ${entry.slug} — ${reason}${detail}${annotation}`);
-    lines.push(`    remedy: conduct daemon unpark ${entry.slug}`);
+    lines.push(`  • ${entry.slug} — ${reason}${detail}${annotation}; remedy: run conduct daemon unpark for this row`);
   }
 
   const halted = state.halted.filter((h) => !parkedSet.has(h.slug));
@@ -745,8 +744,7 @@ export function renderDashboard(
   lines.push(`HALTED (${halted.length})`);
   for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
-    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}`);
-    lines.push(`    remedy: clear .worktrees/${h.slug}/.pipeline/HALT to resume`);
+    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}; remedy: clear this row's .pipeline/HALT to resume`);
   }
 
   const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
@@ -762,8 +760,7 @@ export function renderDashboard(
   if (retainedWorktrees.length > 0) {
     lines.push(`RETAINED WORKTREES (${retainedWorktrees.length})`);
     for (const entry of retainedWorktrees) {
-      lines.push(`  • ${entry.slug} — reason: ${retainedReason(entry)}${prSuffix(entry.prUrl)}`);
-      lines.push(`    remedy: ${retainedRemedy(entry)}`);
+      lines.push(`  • ${entry.slug} — reason: ${retainedReason(entry)}${prSuffix(entry.prUrl)}; remedy: ${retainedRemedy(entry)}`);
     }
   }
 
@@ -773,8 +770,7 @@ export function renderDashboard(
   if (neverStarted.length > 0) {
     lines.push(`NEVER-STARTED (${neverStarted.length})`);
     for (const slug of neverStarted) {
-      lines.push(`  • ${slug} — reason: no pipeline state was ever written`);
-      lines.push('    remedy: no operator action applies; feature remains dispatchable');
+      lines.push(`  • ${slug} — reason: no pipeline state was ever written; remedy: no operator action applies; feature remains dispatchable`);
     }
   }
 
