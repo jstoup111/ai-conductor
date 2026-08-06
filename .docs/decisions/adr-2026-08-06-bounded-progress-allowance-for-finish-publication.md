@@ -25,32 +25,36 @@ Publication progress is the same shape of problem and should use the same shape 
 
 ## Decision
 
-Bound the non-charging re-entry with two independent engine-level limits. Either one being
-reached halts the run; neither is configurable.
+Bound the non-charging re-entry with a single engine-level limit: a **total progress
+allowance**. A counter of publication advances that bypassed the retry budget, checked
+against a fixed ceiling set to twice the number of publication transitions (six transitions →
+twelve). That admits a healthy five-to-six advance run plus legitimate revisits with margin,
+and terminates well short of a loop regardless of which transitions repeat. The counter also
+records the last transition seen, so the HALT reason names where the run stopped.
 
-1. **Total progress allowance.** A counter of publication advances that bypassed the retry
-   budget, checked against a fixed ceiling. The ceiling is set to twice the number of
-   publication transitions (six transitions → twelve), which admits a healthy five-to-six
-   advance run plus legitimate revisits with margin, and terminates well short of a loop.
-2. **Per-transition stuck cap.** A per-transition tally of bypassed advances, checked
-   against a fixed cap of three. A transition reporting a verified advance a fourth time
-   means the machine is re-doing an effect whose result the snapshot does not carry
-   forward. That is the operator-actionable condition, so the HALT reason names the
-   transition.
-
-Both counters are scoped to a single `finish` step execution — they reset when the step is
+The counter is scoped to a single `finish` step execution — it resets when the step is
 re-entered from outside, exactly as `progressAttempts` does.
+
+**A per-transition stuck cap is deliberately NOT part of this decision.** It would halt a
+repeating transition sooner and name it more precisely, but the allowance alone discharges
+the termination obligation, and #1342's third outcome asks for a bounded halt naming the
+stuck transition — which the allowance halt provides. A second counter is a diagnostic
+refinement, recorded here as an available follow-up rather than built now.
 
 The HALT class stays `needs-human`, matching the existing publication-exhaustion HALT.
 
 ## Consequences
 
-- Termination is guaranteed: the total allowance alone bounds the loop at twelve bypassed
-  advances regardless of the machine's behavior.
-- The healthy revisit observed in PR #1337 is permitted — `establish_pr` twice is two of a
-  cap of three, and two of an allowance of twelve.
+- Termination is guaranteed: the allowance bounds the loop at twelve bypassed advances
+  regardless of the machine's behavior.
+- The healthy revisit observed in PR #1337 is permitted — two advances of an allowance of
+  twelve.
 - A stuck publication now halts with a strictly more useful message than today's generic
-  "retry exhausted": it names the transition that stopped making progress.
+  "retry exhausted": it names the transition the run stopped on.
+- A transition that repeats tightly burns the shared allowance rather than being caught by a
+  dedicated cap, so it halts later than it could — up to twelve advances instead of four.
+  Accepted: the delay is bounded, cheap (no provider dispatch except `judge_pr_prose`), and
+  the halt still names the transition.
 - The ceilings are constants rather than `settings.json` keys, so no configuration schema
   changes and the change carries no consumer migration surface. If a future publication
   machine grows past six transitions, the allowance must be revisited with it — the

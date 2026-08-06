@@ -22,12 +22,12 @@ sequenceDiagram
         P-->>C: publication_progress(transition)
         C->>R: route
         R-->>C: progress_finish(transition)
-        C->>L: FINISH publication: progress (no retry line)
+        Note over C,L: no event emitted - the transition's own completed line already shows progress
         Note over C: budget NOT charged - progress allowance charged instead
-        alt progress allowance intact and transition not stuck
+        alt progress allowance intact
             C->>P: re-enter FINISH with a fresh observation
-        else allowance exhausted or transition stuck
-            C->>L: HALT naming the stuck transition
+        else allowance reached
+            C->>L: HALT naming the transition the run stopped on
         end
     else effect ran but re-observation did not verify it
         A-->>P: publication_retry(transition, reason)
@@ -68,14 +68,16 @@ mirrors the existing progress-bypass precedent in the same file — the build st
 (`conductor.ts:4933-4936`, `:6276-6303`), which likewise undoes the attempt increment and
 is bounded by a separate ceiling.
 
-Two independent bounds, either of which halts:
+One bound, deliberately: a **total progress allowance**. The publication machine has six
+transitions; a healthy run uses five to six advances and may legitimately revisit one (the
+observed `establish_pr` twice, when the shipped-record commit left the branch unpushed
+again). A fixed ceiling above that permits legitimate revisits and still terminates
+regardless of which transitions repeat. The halt records the last transition seen, so the
+operator gets the actionable signal without a second counter.
 
-1. **Total progress allowance.** The publication machine has six transitions; a healthy run
-   uses five to six advances and may legitimately revisit one (the observed `establish_pr`
-   twice, when the shipped-record commit left the branch unpushed again). A fixed ceiling
-   above that permits legitimate revisits and still terminates.
-2. **Per-transition stuck cap.** A single transition reporting progress more times than the
-   cap means the machine is advancing without the snapshot moving forward. That halts with
-   the offending transition named, which is the operator-actionable signal.
+A per-transition stuck cap would halt a repeating transition sooner and more precisely, but
+it is a sharper diagnostic rather than a correctness requirement — the allowance alone proves
+termination. It is left as a follow-up if the allowance halt proves too coarse in practice.
 
-Both bounds are engine constants, not configuration, so `settings.json` schema is untouched.
+The allowance is an engine constant, not configuration, so `settings.json` schema is
+untouched.

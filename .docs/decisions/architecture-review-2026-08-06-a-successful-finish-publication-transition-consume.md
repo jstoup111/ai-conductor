@@ -9,11 +9,11 @@
 
 | Check | Assessment |
 |---|---|
-| Stack compatibility | Yes. Four existing TypeScript engine modules (`finish-publication.ts`, `finish-publication-production.ts`, `conductor.ts`, `types/events.ts`) plus one renderer arm in `daemon-cli.ts`. No new packages, services, or infrastructure. |
+| Stack compatibility | Yes. Three existing TypeScript engine modules (`finish-publication.ts`, `finish-publication-production.ts`, `conductor.ts`) plus `HARNESS.md`. No new packages, services, or infrastructure. Deliberately excluded: the event schema and renderer — see the plan's scope note. |
 | Prerequisites | None. The state machine already returns `{ kind: 'advanced', transition }` on a verified effect (`finish-publication.ts:1009-1013`); the distinction exists and is discarded one layer later. |
 | Integration surface | Internal only. No git, GitHub, filesystem, or provider boundary moves. The publication effects object and `AdvanceFinishPublicationResult` are unchanged. |
-| Data implications | None. No persisted schema, no migration, no `settings.json` key. `PublicationDisposition`, `FinishPublicationRoute` and the `FinishPublicationEvent` union widen; all are in-process types plus one appended event-log discriminator value. |
-| Termination risk | The material risk, and the reason the change is not Small. Addressed by `adr-2026-08-06-bounded-progress-allowance-for-finish-publication` with two independent bounds, mirroring the build step's existing `progressAttempts` / `attempt_ceiling` precedent (`conductor.ts:4933-4936`, `:6276-6303`). |
+| Data implications | None. No persisted schema, no migration, no `settings.json` key, and no event-schema change. `PublicationDisposition` and `FinishPublicationRoute` widen; both are in-process types. |
+| Termination risk | The material risk, and the reason the change is not Small. Addressed by `adr-2026-08-06-bounded-progress-allowance-for-finish-publication` with a bounded progress allowance, mirroring the build step's existing `progressAttempts` / `attempt_ceiling` precedent (`conductor.ts:4933-4936`, `:6276-6303`). |
 | Fail-closed boundary | `isExactDisposition` (`finish-publication.ts:583`) validates disposition shape by exact key set and rejects anything unrecognised into a HALT. The new kind must be enrolled there in the same change, or a correct adapter result halts the run. Called out as a plan prerequisite. |
 | Performance risk | None. No additional observation, network call, or dispatch. The change strictly reduces work by removing spurious retry attempts. |
 
@@ -37,7 +37,7 @@
   #1107 as related-but-not-required. The design honors that: no shared retry taxonomy is
   introduced, and no other step's accounting changes.
 - **Diagram accuracy:** `.docs/architecture/a-successful-finish-publication-transition-consume.md`
-  matches this design (the three outcome branches, the two bounds) and renders.
+  matches this design (the three outcome branches, the single allowance bound) and renders.
 
 ## Wiring Surface
 
@@ -45,8 +45,7 @@
 |---|---|
 | `publication_progress` disposition kind | Emitted by `makeProductionFinishPublication`'s `advance` wrapper (`finish-publication-production.ts:338-356`) — an already-wired return path, no new entry point. |
 | `progress_finish` route | Returned by `routeFinishPublicationDisposition`, whose sole production caller is `conductor.ts:5488`. |
-| Progress-allowance + stuck-cap counters | Declared in the `finish` retry loop alongside the existing `progressAttempts`; read only by the `progress_finish` arm added at `conductor.ts:5493-5528`. |
-| `'progress'` disposition event value | Emitted via `emitTracked` in that same arm; rendered by the existing `finish_publication_disposition` arm in `daemon-cli.ts:2194`. |
+| Progress-allowance counter + last-transition record | Declared in the `finish` retry loop alongside the existing `progressAttempts`; read only by the `progress_finish` arm added at `conductor.ts:5493-5528`. |
 
 No orphan seam: every new surface has a named production caller in the plan.
 

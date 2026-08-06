@@ -74,6 +74,6 @@ validator routes a correct adapter result to
 fixed. This is carried as condition 1 of the architecture review and as an explicit
 single-task requirement in the plan.
 
-The adapter change (Task 3) must follow the type + route change (Tasks 1-2), and the
-conductor accounting (Tasks 5+) must follow the adapter change, or intermediate commits leave
+The adapter change (Task 2) must follow the type + route change (Task 1), and the
+conductor accounting (Tasks 4+) must follow the adapter change, or intermediate commits leave
 the machine routing progress to a halt.
