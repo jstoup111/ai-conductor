@@ -184,7 +184,11 @@ function parseDiffForNewExports(diffText: string): NewExport[] {
       continue;
     }
 
-    if (currentFile === null) continue;
+    // The gate verifies that newly-added production surfaces are wired into
+    // production. Test fixtures may export helpers solely for test composition;
+    // treating those as production exports turns valid test-only seams into
+    // orphan-export gaps.
+    if (currentFile === null || isTestPath(currentFile)) continue;
 
     const content = rawLine.slice(1).trim();
     const symbols = symbolsFromAddedLine(content);

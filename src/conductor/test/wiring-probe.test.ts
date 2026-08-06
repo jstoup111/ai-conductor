@@ -138,6 +138,23 @@ describe('extractNewExports', () => {
     expect(result).toContainEqual({ file: 'src/qux.ts', symbol: 'newFn' });
     expect(result).not.toContainEqual({ file: 'src/qux.ts', symbol: 'existingFn' });
   });
+
+  it('ignores exports added only to test fixtures while retaining production exports', async () => {
+    const diff = [
+      DIFF_HEADER('test/fixtures/live-helper.ts'),
+      '+export async function testOnlyHelper() {}',
+      DIFF_HEADER('src/live-helper.ts'),
+      '+export async function productionHelper() {}',
+    ].join('\n');
+    const { git } = fakeGit([
+      { stdout: 'abc123\n' },
+      { stdout: diff },
+    ]);
+
+    const result = await extractNewExports(git, 'abc123');
+
+    expect(result).toEqual([{ file: 'src/live-helper.ts', symbol: 'productionHelper' }]);
+  });
 });
 
 // ── Base derivation ladder ────────────────────────────────────────────────────
