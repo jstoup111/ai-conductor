@@ -90,8 +90,13 @@ export interface RetainedWorktreeEntry {
    * pipeline had already reached a completed run (`.pipeline/DONE` present)
    * before that happened, so the stale `.pipeline/HALT` left behind is not a
    * live block — it is surfaced as reclaimable (Story S3/S5).
+   * `shipped-no-pr-reference` — the processed ledger proves a ship, but its
+   * legacy entry contains no PR URL, so no PR state can be asserted.
    */
-  reason: 'pr-open-awaiting-main' | 'pr-closed-unmerged';
+  reason:
+    | 'pr-open-awaiting-main'
+    | 'pr-closed-unmerged'
+    | 'shipped-no-pr-reference';
 }
 
 /**
@@ -387,6 +392,7 @@ export async function scanInheritedState(
 ): Promise<InheritedState> {
   const processed = await readProcessedEntries(deps.processedDir);
   const processedSlugs = new Set(processed.map((p) => p.slug));
+  const processedBySlug = new Map(processed.map((entry) => [entry.slug, entry]));
   const slugs = await listWorktreeSlugs(deps.worktreeBase);
 
   const halted: HaltedEntry[] = [];
@@ -437,7 +443,12 @@ export async function scanInheritedState(
         !slug.startsWith('resolve-') && !slug.startsWith('engineer-');
       if (processedSlugs.has(slug)) {
         if (isRetainedFeatureWorktree) {
-          retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
+          retainedWorktrees.push({
+            slug,
+            reason: processedBySlug.get(slug)?.prUrl
+              ? 'pr-open-awaiting-main'
+              : 'shipped-no-pr-reference',
+          });
         }
         continue; // processed worktrees are retained, never in-progress
       }
