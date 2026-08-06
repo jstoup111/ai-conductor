@@ -5490,6 +5490,13 @@ export class Conductor {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'complete' });
               result.success = true;
             }
+            if (route.kind === 'progress_finish') {
+              // A completed publication transition advances FINISH's own
+              // state machine; it is neither a failure nor a retry. Re-enter
+              // immediately without consuming this step's attempt budget.
+              attempt--;
+              continue;
+            }
             if (route.kind === 'retry_finish') {
               await emitTracked({ type: 'finish_publication_disposition', disposition: 'retry_finish' });
               lastError = `FINISH publication retry: ${route.reason}`;

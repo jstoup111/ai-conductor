@@ -6,7 +6,7 @@ import type { ConductState, StepName } from '../../src/types/index.js';
 import { Conductor } from '../test-conductor.js';
 import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
-import { writeState } from '../../src/engine/state.js';
+import { readState, writeState } from '../../src/engine/state.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
@@ -144,6 +144,39 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  it('re-enters FINISH after verified publication progress without charging a retry', async () => {
+    const stepRetries: StepName[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') stepRetries.push(event.step);
+    });
+    const advance = vi.fn()
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'ready_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'complete' } as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      maxRetries: 1,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    const state = await readState(statePath);
+    expect({
+      finish: state.ok ? state.value.finish : undefined,
+      publicationAdvances: advance.mock.calls.length,
+      stepRetries,
+    }).toEqual({ finish: 'done', publicationAdvances: 2, stepRetries: [] });
+  });
+
   it('halts on the FIRST attempt for a non-retryable publication reason, without spending the budget', async () => {
     const calls: StepName[] = [];
     const runner: StepRunner = {
@@ -226,7 +259,7 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
-  it('routes a production accepted judgment through FINISH retry without a needs-human HALT', async () => {
+  it('routes a production accepted judgment through FINISH progress without a needs-human HALT', async () => {
     const pipeline = join(dir, '.pipeline');
     const productionStatePath = join(pipeline, 'conduct-state.json');
     const prUrl = 'https://example.test/pr/17';
@@ -299,7 +332,7 @@ describe('Conductor FINISH publication routing', () => {
     await conductor.run();
 
     expect(runner.run).toHaveBeenCalledOnce();
-    expect(dispositions).toContain('retry_finish');
+    expect(dispositions).not.toContain('retry_finish');
     expect(dispositions).not.toContain('human_required');
     await expect(readFile(join(pipeline, 'HALT'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' });
   });
