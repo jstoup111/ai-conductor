@@ -593,6 +593,30 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
+  it('warns of unrecoverable state when the slug-derived HALT marker cannot be written', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-unrecoverable-marker-'));
+    const logs: string[] = [];
+    try {
+      const featureDeps = deps(
+        { done: true, halted: false },
+        {},
+        { throwIn: 'createWorktree' },
+      );
+      featureDeps.projectRoot = projectRoot;
+      featureDeps.log = (message) => logs.push(message);
+      await mkdir(join(projectRoot, '.worktrees'), { recursive: true });
+      await writeFile(join(projectRoot, '.worktrees', ITEM.slug), 'not a directory', 'utf-8');
+
+      await makeRunFeature(featureDeps)(ITEM);
+
+      expect(logs.join('\n')).toMatch(
+        new RegExp(`unrecoverable-state[\\s\\S]*${ITEM.slug}`, 'i'),
+      );
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   describe('daemon-only triage routing (Task 13 — makeRunFeature wiring)', () => {
     // Story TS-2: setup-failure triage + daemon mode dispatch flow
     // Story TS-1: non-setup errors keep today's path
@@ -1683,7 +1707,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
           expect(rec.teardownKeep).toBe(true);
 
           // Verify log sink received the write-failure notification
-          const haltFailLog = logCalls.find(msg => msg.includes('HALT') && (msg.includes('error') || msg.includes('Error')));
+          const haltFailLog = logCalls.find(msg => msg.includes('unrecoverable-state') && msg.includes(ITEM.slug));
           expect(haltFailLog).toBeTruthy();
         } finally {
           await rm(wt, { recursive: true, force: true });
