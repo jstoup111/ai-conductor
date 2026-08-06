@@ -473,6 +473,21 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     });
   });
 
+  it('renders a never-started eligible slug in ELIGIBLE', async () => {
+    await mkdir(join(worktreeBase, 'never-started', '.pipeline'), { recursive: true });
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item('never-started')],
+    });
+    const out = renderDashboard(state);
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'), out.indexOf('PROCESSED'));
+
+    expect(state.retainedWorktrees).toEqual([]);
+    expect(eligibleSection).toContain('• never-started');
+  });
+
   it('classifies setup-era-only pipeline artifacts as never-started', async () => {
     const pipeline = join(worktreeBase, 'setup-only', '.pipeline');
     await mkdir(join(pipeline, 'git-hooks'), { recursive: true });
