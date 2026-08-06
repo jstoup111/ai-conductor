@@ -158,6 +158,7 @@ valid.
 ### Task 4: A progress route re-enters FINISH without charging the budget
 
 **Story:** Story 2 — the attempt counter is unchanged across a `progress_finish` route.
+**Story:** Story 5 — no retry-announcing event is emitted for a successful transition.
 **Type:** happy-path
 
 **Steps:**
@@ -179,7 +180,8 @@ valid.
 
 ### Task 5: A five-transition success completes with its retry budget intact
 
-**Story:** Story 2 — the regression #1342 asks for by name, and the daemon-log property.
+**Story:** Story 2 — the regression #1342 asks for by name.
+**Story:** Story 5 — zero `step_retry` events over a fully-successful publication.
 **Type:** happy-path
 
 **Steps:**
@@ -227,9 +229,10 @@ transition it stopped on.
 
 ### Task 7: Consolidated negative paths — fail-closed, revisits, reset, and no routing regression
 
-**Story:** Story 1 negative path, Story 3 negative paths, Story 4 — malformed progress
-dispositions halt, a legitimate revisit is not a stall, counters reset per step entry, and every
-pre-existing routing outcome is unchanged.
+**Story:** Story 1 negative path — malformed progress dispositions halt fail-closed.
+**Story:** Story 3 negative paths — a legitimate revisit is not a stall, and the counter
+resets per step entry.
+**Story:** Story 4 — every pre-existing routing outcome is unchanged.
 **Type:** negative-path
 
 **Steps:**
