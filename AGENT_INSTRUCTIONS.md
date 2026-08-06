@@ -148,7 +148,7 @@ controls implementation order.
 ### Validation Suite
 
 Run `test/test_harness_integrity.sh`. The checks below are the ones you break most often; the script
-actually runs 17 numbered and 2 unnumbered checks, several of which carry lettered
+actually runs 20 numbered and 2 unnumbered checks, several of which carry lettered
 sub-checks (1b, 5a-5c, 9a-9c). The canonical enumeration — every check, what makes it
 fail, and how to fix it — is [`docs/contributing/validation.md`](docs/contributing/validation.md).
 

@@ -1199,6 +1199,56 @@ else
   fi
 fi
 
+# ── 20. Stories heading grammar agrees with the engine ─────────────────────
+# `splitStoryBlocks` (src/conductor/src/engine/artifacts.ts) splits a stories
+# file into per-story blocks by matching `## Story` + whitespace + an id. When
+# the /stories template teaches an id-less heading, nothing errors — the file
+# becomes one unnamed block, the per-story happy/negative gate runs once over
+# the whole file, per-story plan coverage collapses to a filename-derived id,
+# and the only loud symptom is a `fabricated-id` coherence failure at land.
+# That divergence is invisible to every other check, so pin the two together:
+# the template the skill teaches must parse under the engine's own regex.
+echo ""
+echo -e "${BOLD}20. Stories heading grammar agrees with the engine${NC}"
+
+stories_skill="${HARNESS_DIR}/skills/stories/SKILL.md"
+artifacts_ts="${HARNESS_DIR}/src/conductor/src/engine/artifacts.ts"
+
+if [ ! -f "$stories_skill" ] || [ ! -f "$artifacts_ts" ]; then
+  assert "skills/stories/SKILL.md and src/conductor/src/engine/artifacts.ts exist" 1
+else
+  # The engine's grammar, asserted to still be the one this check assumes. If
+  # splitStoryBlocks' regex is ever changed, this fails first and names itself,
+  # rather than letting the template silently drift to the new form.
+  if grep -qF 'const heading = /^##\s+Story\s+([A-Za-z0-9.\-]+)/i;' "$artifacts_ts"; then
+    assert "splitStoryBlocks still requires '## Story <id>' (engine grammar unchanged)" 0
+  else
+    echo "    artifacts.ts#splitStoryBlocks no longer declares the expected heading regex." | sed 's/^/  /'
+    echo "    Update this check AND skills/stories/SKILL.md together." | sed 's/^/  /'
+    assert "splitStoryBlocks still requires '## Story <id>' (engine grammar unchanged)" 1
+  fi
+
+  # Every `## Story` heading in the skill's own template must carry an id.
+  bad_headings=$(grep -nE '^## Story' "$stories_skill" \
+    | grep -vE '^[0-9]+:## Story[[:space:]]+[A-Za-z0-9.-]+' || true)
+  if [ -z "$bad_headings" ]; then
+    assert "skills/stories/SKILL.md templates only id-carrying story headings" 0
+  else
+    echo "$bad_headings" | sed 's/^/    /'
+    echo "    An id-less '## Story:' heading does not match splitStoryBlocks and" | sed 's/^/  /'
+    echo "    silently collapses a stories file into one unnamed block." | sed 's/^/  /'
+    assert "skills/stories/SKILL.md templates only id-carrying story headings" 1
+  fi
+
+  # The skill must state that the id is required, so an author who reads the
+  # prose rather than copying the template reaches the same conclusion.
+  if grep -qiE 'story heading .*MUST carry an id|## Story <id>' "$stories_skill"; then
+    assert "skills/stories/SKILL.md states the story-id requirement explicitly" 0
+  else
+    assert "skills/stories/SKILL.md states the story-id requirement explicitly" 1
+  fi
+fi
+
 # ── Summary ──────────────────────────────────────────────────────────────────
 
 echo ""
