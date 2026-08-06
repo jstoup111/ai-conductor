@@ -394,6 +394,8 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       discover: async () => [],
     });
     expect(state.inProgress).toEqual([{ slug: 'bad', step: 'unknown' }]);
+    expect(state.neverStarted).toEqual([]);
+    expect(state.retainedWorktrees).toEqual([]);
   });
 
   it('missing .worktrees/ → zero worktrees (no throw)', async () => {
