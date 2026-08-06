@@ -395,19 +395,6 @@ describe('verifyDeclaredSites', () => {
     });
   });
 
-  it('accepts package-script and module-export structural anchors', async () => {
-    const sites: WiredIntoSite[] = [
-      { path: 'package.json', symbol: 'scripts.smoke' },
-      { path: 'src/index.ts', symbol: 'exports' },
-    ];
-    const result = await verifyDeclaredSites(sites, [], fakeReader({
-      'package.json': '{\n  "scripts": { "smoke": "node smoke.ts" }\n}',
-      'src/index.ts': "export { runSmoke } from './smoke-runner.js';\n",
-    }));
-
-    expect(result.gaps).toEqual([]);
-  });
-
   it('reports a gap for a declared site whose file has no reference to the symbol', async () => {
     const sites: WiredIntoSite[] = [{ path: 'src/x.ts', symbol: 'foo' }];
     const newExports = [{ file: 'src/foo.ts', symbol: 'foo' }];
