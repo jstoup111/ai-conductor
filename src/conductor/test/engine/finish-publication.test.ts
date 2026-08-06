@@ -575,6 +575,40 @@ describe('FINISH publication disposition routing', () => {
     ).resolves.toMatchObject({ kind: 'halt' });
   });
 
+  it('routes every publication-progress transition back to FINISH', async () => {
+    const transitions = [
+      'verify_release_readiness',
+      'judge_pr_prose',
+      'establish_pr',
+      'write_shipped_record',
+      'ready_pr',
+      'record_outcome',
+    ] as const;
+
+    await expect(
+      Promise.all(
+        transitions.map(async (transition) => routeFinishPublicationDisposition({
+          kind: 'publication_progress',
+          transition,
+        })),
+      ),
+    ).resolves.toEqual(transitions.map((transition) => ({ kind: 'progress_finish', transition })));
+  });
+
+  it('rejects publication-progress dispositions without exactly a known kind and transition', async () => {
+    await expect(
+      Promise.all([
+        { kind: 'publication_progress', transition: 'unknown_transition' },
+        { kind: 'publication_progress' },
+        { kind: 'publication_progress', transition: 'record_outcome', reason: 'extra' },
+      ].map(routeFinishPublicationDisposition)),
+    ).resolves.toEqual([
+      { kind: 'halt', reason: 'Unknown or contradictory FINISH publication disposition; human review required.' },
+      { kind: 'halt', reason: 'Unknown or contradictory FINISH publication disposition; human review required.' },
+      { kind: 'halt', reason: 'Unknown or contradictory FINISH publication disposition; human review required.' },
+    ]);
+  });
+
   it.each([
     undefined,
     { kind: 'complete', reason: 'contradictory' },

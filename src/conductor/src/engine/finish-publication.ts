@@ -383,6 +383,7 @@ export function nextFinishPublicationTransition(
 
 export type PublicationDisposition =
   | { kind: 'complete' }
+  | { kind: 'publication_progress'; transition: PublicationTransition }
   | { kind: 'publication_retry'; transition: PublicationTransition; reason: string }
   | { kind: 'publication_retry'; condition: PublicationCondition }
   | { kind: 'implementation_invalid'; evidence: string }
@@ -391,6 +392,7 @@ export type PublicationDisposition =
 /** The only actions the conductor may take for a typed FINISH result. */
 export type FinishPublicationRoute =
   | { kind: 'complete' }
+  | { kind: 'progress_finish'; transition: PublicationTransition }
   | { kind: 'retry_finish'; reason: string }
   | { kind: 'retry_build'; evidence: string }
   | { kind: 'halt'; reason: string };
@@ -546,6 +548,8 @@ export function routeFinishPublicationDisposition(
   switch (disposition.kind) {
     case 'complete':
       return { kind: 'complete' };
+    case 'publication_progress':
+      return { kind: 'progress_finish', transition: disposition.transition };
     case 'publication_retry':
       if (
         'condition' in disposition &&
@@ -587,6 +591,8 @@ function isExactDisposition(
   switch (value.kind) {
     case 'complete':
       return hasOnly('kind');
+    case 'publication_progress':
+      return hasOnly('kind', 'transition') && isPublicationTransition(value.transition);
     case 'publication_retry':
       if (hasOnly('kind', 'transition', 'reason')) {
         return (
