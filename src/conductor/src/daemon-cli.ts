@@ -1609,7 +1609,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           log,
           prStateProbe: async (prUrl) => {
             const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
-            return state === 'OPEN' ? 'open' : state === 'CLOSED' ? 'closed' : undefined;
+            return state === 'OPEN'
+              ? { prUrl, state: 'open' }
+              : state === 'CLOSED'
+                ? { prUrl, state: 'closed' }
+                : undefined;
           },
         });
         // Task 11 (operator-park, FR-6): PARKED outranks every other group.

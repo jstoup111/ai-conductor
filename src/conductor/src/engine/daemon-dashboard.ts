@@ -104,8 +104,14 @@ export interface RetainedWorktreeEntry {
     | 'pr-state-unknown';
 }
 
+/** A PR-state observation, including the PR identity the adapter actually resolved. */
+export interface PrStateProbeResult {
+  prUrl: string;
+  state: 'open' | 'closed';
+}
+
 /** Optional PR-state lookup injected by the CLI; the dashboard never performs I/O itself. */
-export type PrStateProbe = (prUrl: string) => Promise<'open' | 'closed' | undefined>;
+export type PrStateProbe = (prUrl: string) => Promise<PrStateProbeResult | undefined>;
 
 /**
  * A spec held back by an unresolved dependency gate (FR-6). Carries the
@@ -454,15 +460,23 @@ export async function scanInheritedState(
       if (processedSlugs.has(slug)) {
         if (isRetainedFeatureWorktree) {
           const prUrl = processedBySlug.get(slug)?.prUrl;
-          const prState = prUrl && deps.prStateProbe
-            ? await deps.prStateProbe(prUrl)
-            : undefined;
+          let prState: PrStateProbeResult | undefined;
+          if (prUrl && deps.prStateProbe) {
+            try {
+              prState = await deps.prStateProbe(prUrl);
+            } catch {
+              // Probe availability is enrichment only: retain this row as
+              // unknown while the remaining worktrees continue scanning.
+              prState = undefined;
+            }
+          }
+          const matchedPrState = prUrl && prState?.prUrl === prUrl ? prState.state : undefined;
           retainedWorktrees.push({
             slug,
             prUrl,
-            reason: prState === 'closed'
+            reason: matchedPrState === 'closed'
               ? 'pr-closed-unmerged'
-              : prState === 'open'
+              : matchedPrState === 'open'
                 ? 'pr-open-awaiting-main'
                 : prUrl
                   ? 'pr-state-unknown'

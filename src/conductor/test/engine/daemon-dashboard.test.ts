@@ -609,7 +609,10 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       worktreeBase,
       processedDir,
       discover: async () => [],
-      prStateProbe: async (prUrl) => (prUrl === openPrUrl ? 'open' : 'closed'),
+      prStateProbe: async (prUrl) => ({
+        prUrl,
+        state: prUrl === openPrUrl ? 'open' : 'closed',
+      }),
     });
 
     expect(state.retainedWorktrees).toEqual([
@@ -619,6 +622,52 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(renderDashboard(state)).toContain(
       `awaiting-main — pr-open-awaiting-main  → ${openPrUrl}`,
     );
+  });
+
+  it('degrades a rejecting probe per retained row while continuing the scan', async () => {
+    const rejectedPrUrl = 'https://github.com/example/repo/pull/43';
+    const closedPrUrl = 'https://github.com/example/repo/pull/44';
+    await mkdir(join(worktreeBase, 'probe-rejected'), { recursive: true });
+    await mkdir(join(worktreeBase, 'probe-closed'), { recursive: true });
+    await makeProcessedJson('probe-rejected', rejectedPrUrl);
+    await makeProcessedJson('probe-closed', closedPrUrl);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      prStateProbe: async (prUrl) => {
+        if (prUrl === rejectedPrUrl) throw new Error('probe unavailable');
+        return { prUrl, state: 'closed' };
+      },
+    });
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug: 'probe-closed', reason: 'pr-closed-unmerged', prUrl: closedPrUrl },
+      { slug: 'probe-rejected', reason: 'pr-state-unknown', prUrl: rejectedPrUrl },
+    ]);
+    expect(state.retainedWorktrees?.some((entry) => entry.reason === 'pr-open-awaiting-main')).toBe(false);
+  });
+
+  it('ignores an open probe result that identifies a different PR', async () => {
+    const queriedPrUrl = 'https://github.com/example/repo/pull/45';
+    await mkdir(join(worktreeBase, 'probe-mismatched'), { recursive: true });
+    await makeProcessedJson('probe-mismatched', queriedPrUrl);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      prStateProbe: async () => ({
+        prUrl: 'https://github.com/example/repo/pull/other',
+        state: 'open',
+      }),
+    });
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug: 'probe-mismatched', reason: 'pr-state-unknown', prUrl: queriedPrUrl },
+    ]);
+    expect(state.retainedWorktrees?.some((entry) => entry.reason === 'pr-open-awaiting-main')).toBe(false);
   });
 });
 
