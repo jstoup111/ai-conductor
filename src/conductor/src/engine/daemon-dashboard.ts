@@ -94,11 +94,14 @@ export interface RetainedWorktreeEntry {
    * live block — it is surfaced as reclaimable (Story S3/S5).
    * `shipped-no-pr-reference` — the processed ledger proves a ship, but its
    * legacy entry contains no PR URL, so no PR state can be asserted.
+   * `pr-state-unknown` — the processed ledger records a PR URL, but no
+   * injected probe established whether that PR remains open.
    */
   reason:
     | 'pr-open-awaiting-main'
     | 'pr-closed-unmerged'
-    | 'shipped-no-pr-reference';
+    | 'shipped-no-pr-reference'
+    | 'pr-state-unknown';
 }
 
 /** Optional PR-state lookup injected by the CLI; the dashboard never performs I/O itself. */
@@ -459,9 +462,11 @@ export async function scanInheritedState(
             prUrl,
             reason: prState === 'closed'
               ? 'pr-closed-unmerged'
-              : prState === 'open' || prUrl
+              : prState === 'open'
                 ? 'pr-open-awaiting-main'
-                : 'shipped-no-pr-reference',
+                : prUrl
+                  ? 'pr-state-unknown'
+                  : 'shipped-no-pr-reference',
           });
         }
         continue; // processed worktrees are retained, never in-progress

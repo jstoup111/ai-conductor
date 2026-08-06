@@ -580,6 +580,23 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.retainedWorktrees?.some((entry) => entry.reason === 'pr-open-awaiting-main')).toBe(false);
   });
 
+  it('renders a shipped ledger PR URL as unknown when no PR-state probe is injected', async () => {
+    const prUrl = 'https://github.com/example/repo/pull/41';
+    await mkdir(join(worktreeBase, 'unknown-pr-state'), { recursive: true });
+    await makeProcessedJson('unknown-pr-state', prUrl);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug: 'unknown-pr-state', reason: 'pr-state-unknown', prUrl },
+    ]);
+    expect(state.retainedWorktrees?.some((entry) => entry.reason === 'pr-open-awaiting-main')).toBe(false);
+  });
+
   it('refines shipped ledger rows from an injected PR-state probe', async () => {
     const openPrUrl = 'https://github.com/example/repo/pull/41';
     const closedPrUrl = 'https://github.com/example/repo/pull/42';
