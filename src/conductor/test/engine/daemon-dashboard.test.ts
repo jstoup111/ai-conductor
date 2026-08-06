@@ -12,6 +12,7 @@ import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { ComplexityTier } from '../../src/types/index.js';
 import type { PriorityResolution } from '../../src/engine/backlog-priority.js';
 import type { GatedItem } from '../../src/engine/daemon-backlog.js';
+import { isOperatorParked, writeOperatorPark } from '../../src/engine/park-marker.js';
 
 function item(slug: string, tier?: ComplexityTier): BacklogItem {
   return tier ? { slug, tier } : { slug };
@@ -486,6 +487,42 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 
     expect(state.retainedWorktrees).toEqual([]);
     expect(eligibleSection).toContain('• never-started');
+  });
+
+  it('renders an operator-parked never-started worktree under PARKED, not ELIGIBLE', async () => {
+    const slug = 'never-started-parked';
+    await mkdir(join(worktreeBase, slug, '.pipeline'), { recursive: true });
+    await writeOperatorPark(root, slug);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item(slug)],
+    });
+    const out = renderDashboard({
+      ...state,
+      parked: (await isOperatorParked(root, slug)) ? [slug] : [],
+    });
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+
+    expect(out).toContain('PARKED (1)\n  • never-started-parked');
+    expect(eligibleSection).not.toContain(slug);
+  });
+
+  it('renders a halted never-started worktree under HALTED, not ELIGIBLE', async () => {
+    const slug = 'never-started-halted';
+    await makeHalted(slug, 'needs operator');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [item(slug)],
+    });
+    const out = renderDashboard(state);
+    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+
+    expect(out).toContain('HALTED (1)\n  • never-started-halted — needs operator');
+    expect(eligibleSection).not.toContain(slug);
   });
 
   it('classifies setup-era-only pipeline artifacts as never-started', async () => {
