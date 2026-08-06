@@ -650,6 +650,26 @@ function gatedRepoLine(g: GatedItem & { kind: 'repo' }): string {
   return `  ⚠ ${label} — ${g.remedy}`;
 }
 
+function retainedReason(entry: RetainedWorktreeEntry): string {
+  switch (entry.reason) {
+    case 'pr-open-awaiting-main':
+      return 'retained after ship; PR is open and awaiting main';
+    case 'pr-closed-unmerged':
+      return 'retained after ship; PR closed without merge';
+    case 'shipped-no-pr-reference':
+      return 'retained after ship; no PR reference was recorded';
+    case 'pr-state-unknown':
+      return 'retained after ship; PR state is unknown';
+  }
+}
+
+function retainedRemedy(entry: RetainedWorktreeEntry): string {
+  if (entry.reason === 'pr-open-awaiting-main') {
+    return 'no operator action applies; retention ends when the PR lands on main';
+  }
+  return `conduct daemon reclaim-worktree ${entry.slug}`;
+}
+
 /** Verdict-kind-specific detail suffix for a WAITING row. */
 export function waitingDetail(verdict: BlockerVerdict): string {
   switch (verdict.kind) {
@@ -708,38 +728,53 @@ export function renderDashboard(
   const parkedSet = new Set(parkedSlugs.map((p) => p.slug));
   lines.push(`PARKED (${parkedSlugs.length})`);
   for (const entry of parkedSlugs) {
-    const provenance = entry.provenance === 'auto' ? ' — auto-parked' : entry.provenance === 'operator' ? ' — operator' : '';
-    const reason = entry.reason ? ` (${entry.reason})` : '';
+    const reason = entry.provenance === 'auto' ? 'auto-parked' : 'operator-parked';
+    const detail = entry.reason ? `: ${entry.reason}` : '';
     const annotation =
       entry.annotation === 'orphan'
         ? ' — orphan — needs manual review'
         : entry.annotation === 'merged-ready'
           ? ' — merged — ready to reconcile'
           : '';
-    lines.push(`  • ${entry.slug}${provenance}${reason}${annotation}`);
+    lines.push(`  • ${entry.slug} — ${reason}${detail}${annotation}`);
+    lines.push(`    remedy: conduct daemon unpark ${entry.slug}`);
   }
 
   const halted = state.halted.filter((h) => !parkedSet.has(h.slug));
+  const haltedSet = new Set(halted.map((h) => h.slug));
   lines.push(`HALTED (${halted.length})`);
   for (const h of halted) {
     const step = h.step ? ` @${h.step}` : '';
-    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}`);
+    lines.push(`  • ${h.slug}${tierTag(h.tier)}${step} — reason: ${h.reason}${lifecycleSuffix(h.lifecycle)}${prSuffix(h.prUrl)}`);
+    lines.push(`    remedy: clear .worktrees/${h.slug}/.pipeline/HALT to resume`);
   }
 
-  const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug));
+  const inProgress = state.inProgress.filter((p) => !parkedSet.has(p.slug) && !haltedSet.has(p.slug));
   lines.push(`IN-PROGRESS (${inProgress.length})`);
   for (const p of inProgress) {
     lines.push(`  • ${p.slug}${tierTag(p.tier)} @${p.step}${lifecycleSuffix(p.lifecycle)}${heartbeatSuffix(p.heartbeatAgeMs)}${prSuffix(p.prUrl)}`);
   }
 
   const retainedWorktrees = (state.retainedWorktrees ?? []).filter(
-    (entry) => !parkedSet.has(entry.slug),
+    (entry) => !parkedSet.has(entry.slug) && !haltedSet.has(entry.slug),
   );
   const retainedWorktreeSet = new Set(retainedWorktrees.map((entry) => entry.slug));
   if (retainedWorktrees.length > 0) {
     lines.push(`RETAINED WORKTREES (${retainedWorktrees.length})`);
     for (const entry of retainedWorktrees) {
-      lines.push(`  • ${entry.slug} — ${entry.reason}${prSuffix(entry.prUrl)}`);
+      lines.push(`  • ${entry.slug} — reason: ${retainedReason(entry)}${prSuffix(entry.prUrl)}`);
+      lines.push(`    remedy: ${retainedRemedy(entry)}`);
+    }
+  }
+
+  const neverStarted = (state.neverStarted ?? []).filter(
+    (slug) => !parkedSet.has(slug) && !haltedSet.has(slug) && !retainedWorktreeSet.has(slug),
+  );
+  if (neverStarted.length > 0) {
+    lines.push(`NEVER-STARTED (${neverStarted.length})`);
+    for (const slug of neverStarted) {
+      lines.push(`  • ${slug} — reason: no pipeline state was ever written`);
+      lines.push('    remedy: no operator action applies; feature remains dispatchable');
     }
   }
 
@@ -757,6 +792,7 @@ export function renderDashboard(
     (g) =>
       g.kind !== 'spec' ||
       (!parkedSet.has(g.slug) &&
+        !haltedSet.has(g.slug) &&
         !retainedWorktreeSet.has(g.slug) &&
         !processedSlugsSet.has(g.slug)),
   );
@@ -773,6 +809,7 @@ export function renderDashboard(
   const waiting = (state.waiting ?? []).filter(
     (w) =>
       !parkedSet.has(w.slug) &&
+      !haltedSet.has(w.slug) &&
       !retainedWorktreeSet.has(w.slug) &&
       !gatedSlugs.has(w.slug),
   );
@@ -793,6 +830,7 @@ export function renderDashboard(
       !waitingSlugs.has(e.slug) &&
       !gatedSlugs.has(e.slug) &&
       !parkedSet.has(e.slug) &&
+      !haltedSet.has(e.slug) &&
       !retainedWorktreeSet.has(e.slug),
   );
   lines.push(`ELIGIBLE (${eligible.length})`);

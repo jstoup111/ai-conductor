@@ -521,7 +521,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     const out = renderDashboard(state);
     const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
 
-    expect(out).toContain('HALTED (1)\n  • never-started-halted — needs operator');
+    expect(out).toContain('HALTED (1)\n  • never-started-halted — reason: needs operator');
     expect(eligibleSection).not.toContain(slug);
   });
 
@@ -561,7 +561,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       out
         .split('\n')
         .filter((line) => line.startsWith('RETAINED WORKTREES') || line.startsWith('  • ')),
-    ).toEqual(['RETAINED WORKTREES (1)', '  • capped-out — shipped-no-pr-reference']);
+    ).toEqual(['RETAINED WORKTREES (1)', '  • capped-out — reason: retained after ship; no PR reference was recorded']);
   });
 
   it('derives shipped-no-pr-reference for a legacy shipped ledger entry', async () => {
@@ -620,7 +620,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       { slug: 'closed-unmerged', reason: 'pr-closed-unmerged', prUrl: closedPrUrl },
     ]);
     expect(renderDashboard(state)).toContain(
-      `awaiting-main — pr-open-awaiting-main  → ${openPrUrl}`,
+      `awaiting-main — reason: retained after ship; PR is open and awaiting main  → ${openPrUrl}`,
     );
   });
 
@@ -643,7 +643,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       { slug, reason: 'pr-open-awaiting-main', prUrl },
     ]);
     expect(state.neverStarted).not.toContain(slug);
-    expect(out).toContain(`RETAINED WORKTREES (1)\n  • ${slug} — pr-open-awaiting-main  → ${prUrl}`);
+    expect(out).toContain(`RETAINED WORKTREES (1)\n  • ${slug} — reason: retained after ship; PR is open and awaiting main  → ${prUrl}`);
     expect(eligibleSection).toContain('ELIGIBLE (0)');
     expect(eligibleSection).not.toContain(`  • ${slug}`);
   });
@@ -669,7 +669,7 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       { slug, reason: 'pr-state-unknown', prUrl },
     ]);
     expect(state.neverStarted).not.toContain(slug);
-    expect(out).toContain(`RETAINED WORKTREES (1)\n  • ${slug} — pr-state-unknown  → ${prUrl}`);
+    expect(out).toContain(`RETAINED WORKTREES (1)\n  • ${slug} — reason: retained after ship; PR state is unknown  → ${prUrl}`);
     expect(eligibleSection).toContain('ELIGIBLE (0)');
     expect(eligibleSection).not.toContain(`  • ${slug}`);
   });
@@ -722,6 +722,53 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
+  it('renders one reason and remedy for every excluded row', () => {
+    const out = renderDashboard({
+      halted: [
+        { slug: 'halted-empty', reason: 'unknown' },
+        { slug: 'double-qualified', reason: 'lower-precedence halt' },
+      ],
+      inProgress: [],
+      eligible: [{ slug: 'never-started' }, { slug: 'double-qualified' }],
+      processed: [],
+      processedCount: 0,
+      parked: [
+        { slug: 'parked', provenance: 'operator', reason: 'operator requested' },
+        { slug: 'double-qualified', provenance: 'operator' },
+      ],
+      retainedWorktrees: [{ slug: 'retained', reason: 'pr-closed-unmerged' }],
+      neverStarted: ['never-started'],
+    });
+
+    expect(out).toContain('• parked — operator-parked: operator requested');
+    expect(out).toContain('remedy: conduct daemon unpark parked');
+    expect(out).toContain('• halted-empty — reason: unknown');
+    expect(out).toContain('remedy: clear .worktrees/halted-empty/.pipeline/HALT to resume');
+    expect(out).toContain('• retained — reason: retained after ship; PR closed without merge');
+    expect(out).toContain('remedy: conduct daemon reclaim-worktree retained');
+    expect(out).toContain('• never-started — reason: no pipeline state was ever written');
+    expect(out).toContain('remedy: no operator action applies; feature remains dispatchable');
+    expect(out.match(/• double-qualified/g)).toHaveLength(1);
+    expect(out).toContain('• double-qualified — operator-parked');
+    expect(out).not.toContain('lower-precedence halt');
+  });
+
+  it('does not render orphan reason or remedy lines when every exclusion bucket is clear', () => {
+    const out = renderDashboard({
+      halted: [],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      parked: [],
+      retainedWorktrees: [],
+      neverStarted: [],
+    });
+
+    expect(out).not.toContain('reason:');
+    expect(out).not.toContain('remedy:');
+  });
+
   it('renders orphan and merged-ready PARKED annotations while unannotated entries keep their line', () => {
     const out = renderDashboard({
       halted: [{ slug: 'orphaned', reason: 'would otherwise halt' }],
@@ -736,9 +783,9 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       ],
     });
 
-    expect(out).toContain(
-      'PARKED (3)\n  • merged — merged — ready to reconcile\n  • orphaned — orphan — needs manual review\n  • plain',
-    );
+    expect(out).toContain('• merged — operator-parked — merged — ready to reconcile');
+    expect(out).toContain('• orphaned — operator-parked — orphan — needs manual review');
+    expect(out).toContain('• plain — operator-parked');
     expect(out).toContain('HALTED (0)');
     expect(out).toContain('ELIGIBLE (0)');
   });
@@ -765,7 +812,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
     const out = renderDashboard(state, { includeCompleted: true });
     expect(out).toContain('HALTED (1)');
     expect(out).toContain(
-      'h1 [L] @prd_audit — rebase conflict  → https://github.com/o/r/pull/7',
+      'h1 [L] @prd_audit — reason: rebase conflict  → https://github.com/o/r/pull/7',
     );
     expect(out).toContain('IN-PROGRESS (1)');
     expect(out).toContain('ip1 [M] @build');
@@ -809,7 +856,7 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       processedCount: 0,
     };
     const out = renderDashboard(state);
-    expect(out).toContain('halted — Provider preparation exhausted. (provider halted: attempt attempt-4, recovery 1 — preparation-timeout-exhausted)');
+    expect(out).toContain('halted — reason: Provider preparation exhausted. (provider halted: attempt attempt-4, recovery 1 — preparation-timeout-exhausted)');
     expect(out).toContain('preparing @build (provider preparing: attempt attempt-1, recovery 0) (activity telemetry: 45s ago)');
     expect(out).toContain('running @build (provider running: attempt attempt-2, recovery 0)');
     expect(out).toContain('recovering @build (provider recovering: attempt attempt-3, recovery 1 — preparation-timeout)');
@@ -1103,8 +1150,8 @@ describe('engine/daemon-dashboard — exactly-one-bucket invariant (Task 10, S2 
       'processed-slug',
     ];
     for (const slug of slugs) {
-      const occurrences = out.split(slug).length - 1;
-      expect(occurrences).toBe(1);
+      const rows = out.split('\n').filter((line) => line.startsWith(`  • ${slug}`));
+      expect(rows).toHaveLength(1);
     }
   });
 });
