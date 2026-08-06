@@ -305,7 +305,8 @@ history.
 > (escalation ascends for upgrade-on-retry; availability descends from the active rung for
 > substitute-on-dead). Because escalation
 > derives purely from the attempt number, non-budget-consuming retries (rate-limit, stale
-> session, auth park-and-poll) re-run at the *same* rung rather than climbing. Deep-step
+> session, auth park-and-poll, verified FINISH publication advance) re-run at the *same* rung rather
+> than climbing. Deep-step
 > retry budgets (`explore`, `prd`, `plan`, `build`) drop from 5 to **3** — the floor that
 > still reaches the attempt-3 model-bump rung. Escalation is **on by default**; set
 > `steps.<step>.escalate: false` (also valid at `phases.<PHASE>` / `defaults`) to pin the
