@@ -18,7 +18,7 @@ import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
-import { assertStepCommandsResolve } from '../fixtures/step-command-preflight.js';
+import { dispatchableStepCommands } from '../fixtures/step-command-preflight.js';
 import type { ProviderHome } from '../../src/engine/self-host/provider-home.js';
 
 // TokenMeter accumulates every real Claude InvokeResult.tokenUsage value.
@@ -107,7 +107,7 @@ type LiveProviderPreflight = (homeDir: string, providerKey?: string) => Promise<
 async function dispatchAfterLivePreflight(
   home: Pick<ProviderHome, 'homeDir'>,
   dispatch: () => Promise<void>,
-  preflight: LiveProviderPreflight = assertStepCommandsResolve,
+  preflight: LiveProviderPreflight = dispatchableStepCommands.assertResolves,
 ): Promise<void> {
   await preflight(home.homeDir, 'claude');
   await dispatch();

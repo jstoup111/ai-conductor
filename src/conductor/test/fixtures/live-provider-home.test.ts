@@ -9,7 +9,6 @@ import { ProviderHomeProvisionError } from '../../src/engine/self-host/provider-
 import type { ResolvedSelfHostProvider } from '../../src/engine/self-host/provider-home.js';
 import {
   provisionLiveProviderHome,
-  withLiveProviderHome,
 } from './live-provider-home.js';
 
 const execFileAsync = promisify(execFile);
@@ -30,6 +29,19 @@ async function createSourceCheckout(): Promise<string> {
   await git(sourceRoot, ['add', 'skills']);
   await git(sourceRoot, ['commit', '-m', 'fixture']);
   return sourceRoot;
+}
+
+/** Test-only lifecycle exercise; the smoke owns teardown directly. */
+async function withLiveProviderHome<T>(
+  sourceRoot: string,
+  use: (home: Awaited<ReturnType<typeof provisionLiveProviderHome>>) => Promise<T>,
+): Promise<T> {
+  const home = await provisionLiveProviderHome(sourceRoot);
+  try {
+    return await use(home);
+  } finally {
+    await home.teardown();
+  }
 }
 
 describe('provisionLiveProviderHome', () => {

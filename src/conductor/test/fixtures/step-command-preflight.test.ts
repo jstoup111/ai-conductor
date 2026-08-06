@@ -7,7 +7,6 @@ import {
   renderSkillInvocation,
 } from '../../src/engine/skill-invocation.js';
 import {
-  assertStepCommandsResolve,
   dispatchableStepCommands,
 } from './step-command-preflight.js';
 
@@ -24,7 +23,7 @@ type PreflightWithFilesystemAccess = (
   },
 ) => Promise<void>;
 
-const assertWithInjectedFilesystemAccess = assertStepCommandsResolve as unknown as PreflightWithFilesystemAccess;
+const assertWithInjectedFilesystemAccess = dispatchableStepCommands.assertResolves as PreflightWithFilesystemAccess;
 
 describe('dispatchableStepCommands', () => {
   it('derives every skill command from the registry and excludes engine-native steps', () => {
@@ -56,7 +55,7 @@ describe('dispatchableStepCommands', () => {
         await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
       }));
 
-      await expect(assertStepCommandsResolve(homeDir, 'claude')).resolves.toBeUndefined();
+      await expect(dispatchableStepCommands.assertResolves(homeDir, 'claude')).resolves.toBeUndefined();
     } finally {
       await rm(homeDir, { recursive: true, force: true });
     }
@@ -77,7 +76,7 @@ describe('dispatchableStepCommands', () => {
           await writeFile(join(skillDir, 'SKILL.md'), '# fixture\n');
         }));
 
-      await expect(assertStepCommandsResolve(homeDir, 'claude')).rejects.toThrow(
+      await expect(dispatchableStepCommands.assertResolves(homeDir, 'claude')).rejects.toThrow(
         new RegExp(`pipeline.*${pipelineCommand?.rendered}.*${homeDir}`, 's'),
       );
     } finally {
@@ -104,7 +103,7 @@ describe('dispatchableStepCommands', () => {
 
       const diagnostics = await Promise.all(providers.map(async (provider, index) => {
         try {
-          await assertStepCommandsResolve(homes[index], provider);
+          await dispatchableStepCommands.assertResolves(homes[index], provider);
           return '';
         } catch (error) {
           return error instanceof Error ? error.message : String(error);
@@ -143,7 +142,7 @@ describe('dispatchableStepCommands', () => {
 
       const failures = await Promise.all(cases.map(async ({ homeDir }) => {
         try {
-          await assertStepCommandsResolve(homeDir, 'claude');
+          await dispatchableStepCommands.assertResolves(homeDir, 'claude');
           return '';
         } catch (error) {
           return error instanceof Error ? error.message : String(error);

@@ -25,7 +25,7 @@ export interface StepCommandPreflightDependencies {
  * only its declared skill entries. Daemon-entry install-freshness owns the
  * global catalog; this preflight owns only the isolated run home.
  */
-export function dispatchableStepCommands(providerKey: string): readonly DispatchableStepCommand[] {
+function deriveDispatchableStepCommands(providerKey: string): readonly DispatchableStepCommand[] {
   return Object.entries(STEP_SKILL_INVOCATIONS).flatMap(([step, descriptor]) => {
     if (descriptor.kind !== 'skill') return [];
     return [{
@@ -37,14 +37,14 @@ export function dispatchableStepCommands(providerKey: string): readonly Dispatch
 }
 
 /** Verify that every registry-derived command resolves from the isolated home. */
-export async function assertStepCommandsResolve(
+async function assertStepCommandsResolve(
   homeDir: string,
   providerKey = 'claude',
   dependencies: StepCommandPreflightDependencies = {},
 ): Promise<void> {
   const skillsDir = join(homeDir, 'skills');
   const accessFile = dependencies.access ?? access;
-  const unresolved = (await Promise.all(dispatchableStepCommands(providerKey).map(async (command) => {
+  const unresolved = (await Promise.all(deriveDispatchableStepCommands(providerKey).map(async (command) => {
     try {
       await accessFile(join(skillsDir, command.skillName, 'SKILL.md'));
       return undefined;
@@ -58,3 +58,12 @@ export async function assertStepCommandsResolve(
     throw new Error(`Unable to resolve skills ${commands.join(', ')} in ${skillsDir}.`);
   }
 }
+
+/**
+ * The registry-derived command collection is the fixture's sole public seam.
+ * Its resolution operation stays on that seam rather than creating a second
+ * test-only export that the runtime can never reach.
+ */
+export const dispatchableStepCommands = Object.assign(deriveDispatchableStepCommands, {
+  assertResolves: assertStepCommandsResolve,
+});

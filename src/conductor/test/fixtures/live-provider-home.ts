@@ -27,21 +27,3 @@ export async function provisionLiveProviderHome(
     baseDir,
   });
 }
-
-/**
- * Use the live smoke's isolated home and always remove it before returning or
- * propagating a caller failure.
- */
-export async function withLiveProviderHome<T>(
-  sourceRoot: string,
-  use: (home: ProviderHome) => Promise<T>,
-  claudeCodeOauthToken?: string,
-  baseDir?: string,
-): Promise<T> {
-  const home = await provisionLiveProviderHome(sourceRoot, claudeCodeOauthToken, baseDir);
-  try {
-    return await use(home);
-  } finally {
-    await home.teardown();
-  }
-}
