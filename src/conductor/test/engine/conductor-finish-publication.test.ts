@@ -247,6 +247,53 @@ describe('Conductor FINISH publication routing', () => {
     );
   });
 
+  it.each([
+    {
+      name: 'repeated ready_pr progress',
+      transitions: ['ready_pr'] as const,
+      lastTransition: 'ready_pr',
+    },
+    {
+      name: 'alternating publication progress',
+      transitions: ['establish_pr', 'ready_pr'] as const,
+      lastTransition: 'ready_pr',
+    },
+  ])('halts %s at the twelve-transition allowance', async ({ transitions, lastTransition }) => {
+    const advance = vi.fn(async () => {
+      // The sentinel bounds the pre-fix infinite loop. A correct implementation
+      // halts after the twelfth verified transition and never reaches it.
+      if (advance.mock.calls.length > 12) throw ROUTED_SENTINEL;
+      return {
+        kind: 'publication_progress',
+        transition: transitions[(advance.mock.calls.length - 1) % transitions.length],
+      } as const;
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect({
+      publicationAdvances: advance.mock.calls.length,
+      halt: await readFile(join(dir, '.pipeline/HALT'), 'utf8').catch(() => ''),
+      haltClass: await readFile(join(dir, '.pipeline/HALT.class'), 'utf8').catch(() => ''),
+    }).toEqual({
+      publicationAdvances: 12,
+      halt: expect.stringContaining(lastTransition),
+      haltClass: 'needs-human',
+    });
+  });
+
   it('halts on the FIRST attempt for a non-retryable publication reason, without spending the budget', async () => {
     const calls: StepName[] = [];
     const runner: StepRunner = {

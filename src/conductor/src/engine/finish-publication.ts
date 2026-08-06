@@ -341,6 +341,12 @@ function validatePublicationSnapshot(
 
 export type PublicationTransition = FinishPublicationTransition;
 
+/**
+ * A FINISH execution may observe every transition twice before a non-converging
+ * publication state requires operator review.
+ */
+export const FINISH_PUBLICATION_PROGRESS_ALLOWANCE = 2 * 6;
+
 type PublicationEventEmitter = (event: FinishPublicationEvent) => void | Promise<void>;
 
 /**
