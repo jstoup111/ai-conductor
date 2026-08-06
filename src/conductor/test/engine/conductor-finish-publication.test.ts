@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { ConductState, StepName } from '../../src/types/index.js';
@@ -8,6 +8,7 @@ import type { StepRunner } from '../../src/engine/conductor.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
 import { readState, writeState } from '../../src/engine/state.js';
 import { createProductionFinishPublicationCoordinator } from '../../src/engine/finish-publication-production.js';
+import { routeFinishPublicationDisposition } from '../../src/engine/finish-publication.js';
 
 vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../../src/engine/project-prelude.js')>()),
@@ -674,5 +675,190 @@ describe('Conductor FINISH publication routing', () => {
     await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
       'publication disposition',
     );
+  });
+
+  it.each([
+    {
+      name: 'an unknown transition',
+      disposition: { kind: 'publication_progress', transition: 'publish_everywhere' },
+    },
+    {
+      name: 'an extra key',
+      disposition: { kind: 'publication_progress', transition: 'ready_pr', reason: 'unexpected' },
+    },
+  ])('fails closed for publication progress carrying %s', ({ disposition }) => {
+    expect(routeFinishPublicationDisposition(disposition)).toEqual({
+      kind: 'halt',
+      reason: 'Unknown or contradictory FINISH publication disposition; human review required.',
+    });
+  });
+
+  it('accepts the observed establish-record-establish publication revisit without a HALT', async () => {
+    const stepRetries: StepName[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') stepRetries.push(event.step);
+    });
+    const advance = vi.fn()
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'establish_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'write_shipped_record' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'establish_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'ready_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'record_outcome' } as const)
+      .mockResolvedValueOnce({ kind: 'complete' } as const);
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await conductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(6);
+    expect(stepRetries).toEqual([]);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('done');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it('starts a fresh FINISH entry with a fresh publication progress allowance', async () => {
+    const exhaustedAdvance = vi.fn(async () => ({
+      kind: 'publication_progress' as const,
+      transition: 'ready_pr' as const,
+    }));
+    const exhausted = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance: exhaustedAdvance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+    await exhausted.run();
+    expect(exhaustedAdvance).toHaveBeenCalledTimes(12);
+
+    await unlink(join(dir, '.pipeline/HALT'));
+    await unlink(join(dir, '.pipeline/HALT.class'));
+    const freshAdvance = vi.fn()
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'ready_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'complete' } as const);
+    const fresh = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance: freshAdvance },
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await fresh.run();
+
+    expect(freshAdvance).toHaveBeenCalledTimes(2);
+    const state = await readState(statePath);
+    expect(state.ok && state.value.finish).toBe('done');
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    await expect(readFile(join(dir, '.pipeline/HALT.class'), 'utf8')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+  });
+
+  it.each([
+    {
+      name: 'a transient retry', behavior: 'retry_then_sentinel', calls: 2, retries: 1,
+      halt: ROUTED_SENTINEL.message,
+    },
+    {
+      name: 'retry exhaustion', behavior: 'retry_exhaustion', calls: 3, retries: 2,
+      halt: 'FINISH publication retry exhausted: draft_pr_failed',
+    },
+    {
+      name: 'a non-retryable first observation', behavior: 'non_retryable', calls: 1, retries: 0,
+      halt: 'draft_pr_lease-rejected is not retryable',
+    },
+    {
+      name: 'a BUILD kickback', behavior: 'build_kickback', calls: 2, retries: 0,
+      halt: ROUTED_SENTINEL.message,
+    },
+    {
+      name: 'a human-required result', behavior: 'human_required', calls: 1, retries: 0,
+      halt: 'operator must reconcile the publication state',
+    },
+  ] as const)('keeps legacy routing accounting for %s', async ({ behavior, calls: expectedCalls, retries, halt }) => {
+    const calls: StepName[] = [];
+    const stepRetries: StepName[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') stepRetries.push(event.step);
+    });
+    const runner: StepRunner = {
+      run: vi.fn(async (step) => {
+        calls.push(step);
+        if (behavior === 'retry_then_sentinel' && calls.length === 2) throw ROUTED_SENTINEL;
+        if (behavior === 'build_kickback' && step === 'build') throw ROUTED_SENTINEL;
+        if (behavior === 'build_kickback') {
+          return {
+            success: false,
+            publicationDisposition: { kind: 'implementation_invalid', evidence: 'BUILD proof is stale' },
+          };
+        }
+        if (behavior === 'human_required') {
+          return {
+            success: false,
+            publicationDisposition: { kind: 'human_required', reason: 'operator must reconcile the publication state' },
+          };
+        }
+        return {
+          success: false,
+          publicationDisposition: {
+            kind: 'publication_retry',
+            transition: 'establish_pr',
+            reason: behavior === 'non_retryable'
+              ? 'draft_pr_lease-rejected'
+              : 'draft_pr_failed',
+          },
+        };
+      }),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await conductor.run();
+
+    expect(calls).toHaveLength(expectedCalls);
+    expect(stepRetries).toHaveLength(retries);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(halt);
   });
 });
