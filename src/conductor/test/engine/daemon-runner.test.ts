@@ -569,14 +569,28 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     expect(rec.teardownKeep).toBe(true);
   });
 
-  it('a throw during createWorktree yields an error with no teardown', async () => {
-    const rec: { teardownKeep?: boolean } = {};
-    const run = makeRunFeature(
-      deps({ done: true, halted: false }, rec, { throwIn: 'createWorktree' }),
-    );
-    const out = await run(ITEM);
-    expect(out.status).toBe('error');
-    expect(rec.teardownKeep).toBeUndefined(); // never created → nothing to tear down
+  it('a throw during createWorktree leaves a slug-derived HALT marker with an operator resume action', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-create-worktree-'));
+    try {
+      const rec: { teardownKeep?: boolean } = {};
+      const featureDeps = deps(
+        { done: true, halted: false },
+        rec,
+        { throwIn: 'createWorktree' },
+      );
+      featureDeps.projectRoot = projectRoot;
+      const run = makeRunFeature(featureDeps);
+
+      const out = await run(ITEM);
+
+      expect(out.status).toBe('error');
+      expect(rec.teardownKeep).toBeUndefined(); // never created → nothing to tear down
+      await expect(
+        readFile(join(projectRoot, '.worktrees', ITEM.slug, '.pipeline', 'HALT'), 'utf-8'),
+      ).resolves.toMatch(/fail in createWorktree[\s\S]*rm .pipeline\/HALT/);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 
   describe('daemon-only triage routing (Task 13 — makeRunFeature wiring)', () => {

@@ -353,7 +353,7 @@ export function makeRunFeature(
               featureLog(
                 `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
               );
-              await writeErrorHalt(worktree, triageOutcome.outputTail, featureLog, triageOutcome);
+              await writeErrorHalt(worktree.path, triageOutcome.outputTail, featureLog, triageOutcome);
               await deps.teardownWorktree(worktree, true);
               return {
                 slug: item.slug,
@@ -481,7 +481,7 @@ export function makeRunFeature(
         const reason = shipmentFailure;
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree, reason, featureLog);
+        await writeErrorHalt(worktree.path, reason, featureLog);
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -533,7 +533,7 @@ export function makeRunFeature(
         outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
           ? outcome.triageEvidence
           : undefined;
-      await writeErrorHalt(worktree, noMarkerReason, featureLog, triageEvidenceForHalt);
+      await writeErrorHalt(worktree.path, noMarkerReason, featureLog, triageEvidenceForHalt);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -549,8 +549,13 @@ export function makeRunFeature(
       // (the daemon log otherwise shows a bare `error`) and the feature parks for
       // inspection instead of being silently excluded for the run's lifetime.
       const reason = err instanceof Error ? err.message : String(err);
+      const haltRoot = worktree?.path ?? (
+        deps.projectRoot ? join(deps.projectRoot, '.worktrees', item.slug) : undefined
+      );
+      if (haltRoot) {
+        await writeErrorHalt(haltRoot, reason, featureLog);
+      }
       if (worktree) {
-        await writeErrorHalt(worktree, reason, featureLog);
         await deps.teardownWorktree(worktree, true).catch(() => {});
       }
       return {
@@ -570,7 +575,7 @@ export function makeRunFeature(
  * parks for human inspection rather than being silently excluded. Best-effort:
  * a write failure must never mask the original error.
  */
-async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
+async function writeErrorHalt(worktreePath: string, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
   let note = `feature errored — parked for human inspection\n${reason}\n`;
 
   // If triage evidence is present and it's a park outcome, render extended diagnostics
@@ -606,10 +611,10 @@ async function writeErrorHalt(worktree: FeatureWorktree, reason: string, log?: (
     `  1. Fix the cause of the error above (project setup / config / environment / a crashed step).\n` +
     `  2. rm .pipeline/HALT\n` +
     `  3. Re-queue the feature (restart the daemon if it was excluded this run).\n`;
-  await writeHaltMarker(worktree.path, note, 'needs-human');
+  await writeHaltMarker(worktreePath, note, 'needs-human');
   await Promise.all([
-    readFile(join(worktree.path, '.pipeline', 'HALT'), 'utf-8'),
-    readFile(join(worktree.path, '.pipeline', 'HALT.class'), 'utf-8'),
+    readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8'),
+    readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),
   ]).then(([body, haltClass]) => {
     if (body !== note || haltClass !== 'needs-human') {
       throw new Error('marker verification failed');
