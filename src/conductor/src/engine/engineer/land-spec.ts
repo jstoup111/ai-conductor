@@ -262,7 +262,8 @@ export async function landSpec(
     throw new Error(
       `landSpec: plan Stories reference does not resolve to the selected stories artifact ` +
         `"${storiesRepoPath}" (resolved: ${referencedStoriesPath ?? 'invalid'}). ` +
-        'Use a repo-relative path or a Markdown link whose target resolves to that artifact.',
+        'Use a repo-relative path, an inline-code path, or a Markdown link whose target resolves to that artifact; ' +
+        'each form may be followed by a trailing annotation.',
     );
   }
 

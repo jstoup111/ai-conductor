@@ -26,6 +26,8 @@ type ReleaseFieldName = typeof fieldNames[number];
 const releaseFieldNames = new Set<string>(fieldNames);
 const migrationSectionRe = /(?:^|\n)###?\s+Migration\s*\n([\s\S]*?)(?=\n##\s|$)/g;
 const runnableMigrationFenceRe = /^```bash migration\s*\n[\s\S]*?```$/;
+const thematicBreakRe = /^(?:-{3,}|\*{3,}|_{3,})$/;
+const fenceDelimiterRe = /^```/;
 const releaseMetadataLineRe = /^Release-(?:Disposition|Category|Semver|Note):.*(?:\r?\n|$)/gm;
 const migrationBlockRe = /(?:\r?\n)?## Migration\s*\r?\n```bash migration\s*\r?\n[\s\S]*?```(?=\r?\n##\s|$)/g;
 
@@ -38,12 +40,39 @@ export function isRunnableMigrationBlock(value: string): boolean {
   return runnableMigrationFenceRe.test(value);
 }
 
+/**
+ * The Migration section's OWN content, cut at the first Markdown thematic break
+ * (`---`, `***`, `___`) that sits outside a fenced code block.
+ *
+ * `migrationSectionRe` can only end a section at the next `##`/`###` heading or
+ * at end-of-body, and a PR body's Migration section is routinely the LAST
+ * heading in it: `shipDraftPrBody` closes every SHIP-entry draft with a `---`
+ * rule, the placeholder note, and the injected `Closes owner/repo#N` line, and
+ * `release-disposition` writes the template's `## Migration` section above that
+ * trailer. Without this cut the whole trailer is swallowed into the section, so
+ * a correct `none` reads as prose and the disposition is rejected as malformed.
+ *
+ * Fence tracking keeps a rule INSIDE a ```bash migration``` block (a heredoc
+ * body, say) from truncating a real migration.
+ */
+function migrationSectionContent(raw: string): string {
+  const kept: string[] = [];
+  let inFence = false;
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (fenceDelimiterRe.test(trimmed)) inFence = !inFence;
+    else if (!inFence && thematicBreakRe.test(trimmed)) break;
+    kept.push(line);
+  }
+  return kept.join('\n').trim();
+}
+
 function parseMigrationBlock(body: string): string | undefined {
   const sections = [...body.matchAll(migrationSectionRe)];
   if (sections.length === 0) return undefined;
   if (sections.length !== 1) invalidReleaseDisposition('Migration');
 
-  const migration = sections[0]![1]!.trim();
+  const migration = migrationSectionContent(sections[0]![1]!);
   if (migration === 'none') return undefined;
   if (!isRunnableMigrationBlock(migration)) invalidReleaseDisposition('Migration');
   return migration;

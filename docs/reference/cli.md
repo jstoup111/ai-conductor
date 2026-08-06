@@ -195,9 +195,16 @@ conduct-ts daemon status
 
 Takes no flags. Sweeps the project registry and prints one badge line per repo: state, name, path,
 `pid`, `since`, `version:<engine-version-id>`, pause metadata, the last log line with its mtime, and
-`session:up` or `session:down`. It then prints a `GATED:` section from `.daemon/gated.json` and an
-`attribution agreement: N% (n=…)` line from `.daemon/attribution-accuracy.jsonl`; both are skipped for
-repos whose path is missing.
+`session:up` or `session:down`. It then prints a `GATED:` section from `.daemon/gated.json`, a
+`BLOCKED` section from `.daemon/blocked.json`, and an `attribution agreement: N% (n=…)` line from
+`.daemon/attribution-accuracy.jsonl`; all are skipped for repos whose path is missing.
+
+`BLOCKED` is the last completed discovery pass: every line contains the slug, machine-readable
+reason, and remediation text, followed by the snapshot age. An empty valid snapshot prints that no
+specs are blocked. If the snapshot is missing, malformed, or unreadable, status reports blocked
+state unknown rather than implying an all-clear. This is a read-only local-file view: it does not
+invoke Git, GitHub, or the network. The daemon startup dashboard does not yet render this section;
+that UI work is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
 Nine rendered states. `restart-pending` and `dead-pane` are overlays: they take precedence in the
 badge, but the underlying liveness and pause facts stay on the row.

@@ -1,7 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { basename, join as pathJoin } from 'node:path';
 import { promisify } from 'node:util';
-import { rm } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import type { BacklogItem } from './daemon.js';
 import {
   planHasDependencyTree,
@@ -20,6 +21,7 @@ import { announceWaitingForRoot } from './daemon-waiting-announce.js';
 import { listShippedRecords, parseShippedRecord, specHash } from './shipped-record.js';
 import type { BacklogTreeSource } from './backlog-tree-source.js';
 import { resolvePlanStoriesPath } from './plan-stories-reference.js';
+import { isOperatorParked as readOperatorParkMarker } from './park-marker.js';
 import {
   healPlan,
   enumerateCandidates,
@@ -502,6 +504,18 @@ export interface DiscoverBacklogOpts {
    * caller-side implementation, which must resolve false rather than throw.
    */
   shippedOnFeatureBranch?: (slug: string) => Promise<boolean>;
+  /**
+   * Operator-park boundary. Defaults to the durable `.daemon/parked/<slug>`
+   * marker reader; injectable so discovery tests never need filesystem or git
+   * parking setup. A parked spec is already held by an operator decision and
+   * must not be classified as blocked for a second reason.
+   */
+  isOperatorParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Persist the per-pass blocked read model. Optional for isolated tests; a
+   * snapshot is observability only, so its failure must never hold dispatch.
+   */
+  writeBlockedSnapshot?: (blocked: BlockedSpecItem[]) => Promise<void>;
 }
 
 /**
@@ -521,14 +535,58 @@ export interface DiscoverBacklogOpts {
  * `Status: Accepted` (not DRAFT), and the plan declares a dependency tree. A
  * feature already marked processed (via `isProcessed`) is skipped.
  *
- * Returns `{ items, waiting }`: `items` are the eligible-to-build features
- * (unchanged shape/behavior). `waiting` is reserved for specs held back by an
- * unresolved dependency gate — always `[]` today; a later task populates it.
+ * Returns `{ items, waiting, blocked, gated }`: `items` are eligible-to-build
+ * features, `waiting` contains dependency-held specs, `blocked` contains
+ * actionable content failures, and `gated` contains ownership-held specs.
  */
 export interface WaitingItem {
   slug: string;
   sourceRef?: string;
   verdict: BlockerVerdict;
+}
+
+/**
+ * A merged spec that cannot yet enter the build backlog because a required
+ * specification artifact is missing, unapproved, or unresolvable.
+ *
+ * `discoverBacklog` includes these entries when merged specs have actionable
+ * content failures.
+ */
+export interface BlockedSpecItem {
+  slug: string;
+  reason:
+    | 'unresolvable-stories-ref'
+    | 'stories-missing'
+    | 'stories-not-approved'
+    | 'no-dependency-tree'
+    | 'missing-coherence';
+  remedy: string;
+}
+
+/**
+ * Atomically replace the per-pass blocked-spec read model. A discovery pass
+ * owns the complete list, so rewriting the whole file clears entries fixed
+ * since the previous pass without a separate cleanup path.
+ */
+async function writeBlockedSnapshot(
+  projectRoot: string,
+  blocked: BlockedSpecItem[],
+): Promise<void> {
+  const daemonDir = pathJoin(projectRoot, '.daemon');
+  const destination = pathJoin(daemonDir, 'blocked.json');
+  const temporary = pathJoin(
+    daemonDir,
+    `.blocked-tmp-${randomBytes(6).toString('hex')}.json`,
+  );
+  const snapshot = {
+    schemaVersion: 1,
+    writtenAt: new Date().toISOString(),
+    blocked,
+  };
+
+  await mkdir(daemonDir, { recursive: true });
+  await writeFile(temporary, JSON.stringify(snapshot, null, 2), 'utf-8');
+  await rename(temporary, destination);
 }
 
 /**
@@ -546,8 +604,8 @@ export interface WaitingItem {
  *   the daemon's own identity is unresolved (fail-closed, nothing scanned this
  *   pass). Resolved unowned specs default-build and receive a per-spec log.
  *
- * Populated by later tasks in this plan; `discoverBacklog` returns `gated: []`
- * unconditionally until then (this task only introduces the type + shape).
+ * `discoverBacklog` includes these entries when ownership-gate conditions hold
+ * merged specs or the repository out of the build backlog.
  */
 export interface GatedSpecItem {
   kind: 'spec';
@@ -622,7 +680,12 @@ export async function discoverBacklog(
   isProcessed: (slug: string) => Promise<boolean> = async () => false,
   log: (msg: string) => void = () => {},
   opts: DiscoverBacklogOpts = {},
-): Promise<{ items: BacklogItem[]; waiting: WaitingItem[]; gated: GatedItem[] }> {
+): Promise<{
+  items: BacklogItem[];
+  waiting: WaitingItem[];
+  blocked: BlockedSpecItem[];
+  gated: GatedItem[];
+}> {
   const baseBranch = opts.baseBranch ?? 'main';
   const tree = opts.treeSource ?? gitTreeSource(projectRoot, baseBranch);
 
@@ -666,13 +729,25 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return { items: [], waiting: [], gated: [] };
+  const persistBlockedSnapshot = async (blocked: BlockedSpecItem[]): Promise<void> => {
+    try {
+      await (opts.writeBlockedSnapshot ?? ((items) => writeBlockedSnapshot(projectRoot, items)))(blocked);
+    } catch (err) {
+      log(`blocked snapshot: failed to persist latest state: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
+  if (planFiles.length === 0) {
+    await persistBlockedSnapshot([]);
+    return { items: [], waiting: [], blocked: [], gated: [] };
+  }
 
   // Shipped-record dedup (Story 3/Task 4): read every committed shipped
   // record from the base-branch tree ONCE per discovery run (not once per
   // candidate — `listShippedRecords` already batches this via a single
   // `listShippedFiles()` call), then match each candidate by stem below.
   const shippedRecords = await listShippedRecords(tree);
+  const isOperatorParked =
+    opts.isOperatorParked ?? ((slug: string) => readOperatorParkMarker(projectRoot, slug));
 
   // Dated-plan/undated-marker mismatch: per-feature metadata markers (`.docs/complexity/<stem>.md`,
   // `.docs/track/<stem>.md`) are keyed by the PLAN STEM, but specs exist whose
@@ -723,6 +798,11 @@ export async function discoverBacklog(
   };
 
   const items: BacklogItem[] = [];
+  const blockedItems: BlockedSpecItem[] = [];
+  const block = async (item: BlockedSpecItem, message: string): Promise<void> => {
+    blockedItems.push(item);
+    await warnOnce(item.slug, message);
+  };
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
@@ -737,82 +817,12 @@ export async function discoverBacklog(
     const planContent = await tree.readFile(planRel);
     if (planContent === null) continue;
 
-    const storiesRel = await resolveStoriesRef(tree, slug, planContent);
-    if (!storiesRel) continue; // no stories on the base branch → not eligible
-
     if (await isProcessed(slug)) continue;
 
-    // Carry the engineer-assessed complexity tier so the daemon build honors it
-    // (Small skips acceptance_specs/retro). Resolve it before vetting so those
-    // checks can use it. The marker is committed at
-    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — and
-    // `slug` plus the base-branch tree source are unchanged through the vetting
-    // block below. Absent/garbled → undefined, and the daemon falls back to 'M'
-    // (legacy behavior, no breakage).
-    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
-    const tier = parseComplexityTier(tierMarker.content);
-
-    // Eligibility = APPROVED + well-formed. The daemon pre-seeds the front half
-    // (stories/plan = done) and never re-runs their gates, so this is the only
-    // place specs are vetted before autonomous build. Reject unapproved or
-    // dependency-tree-less plans rather than silently building them.
-    const storiesContent = (await tree.readFile(storiesRel)) ?? '';
-    if (!isStoriesApproved(storiesContent)) {
-      await warnOnce(
-        slug,
-        `skip ${slug}: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.`,
-      );
-      continue;
-    }
-    if (!planHasDependencyTree(planContent)) {
-      await warnOnce(
-        slug,
-        `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
-      );
-      continue;
-    }
-
-    // The coherence artifact is mandatory for every non-S tier. This remains
-    // intentionally shallow: discovery has only the base-branch tree, while
-    // the semantic validator needs a change set and runs at land. Check both
-    // shipped-dedup identities first so a completed implementation is never
-    // reported as missing coherence before its existing dedup path handles it.
-    const shippedByStem = shippedRecords.some((record) => record.stem === slug);
-    const candidateDigest = specHash(
-      Buffer.from(planContent, 'utf-8'),
-      Buffer.from(storiesContent, 'utf-8'),
-    ).digest;
-    const shippedByContent =
-      !shippedByStem &&
-      shippedRecords.some(
-        (record) =>
-          !('malformed' in record.record) &&
-          record.record.specHash === candidateDigest,
-      );
-    const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
-    if (
-      tier !== 'S' &&
-      !shippedByStem &&
-      !shippedByContent &&
-      !hasCoherenceTableDataRow(coherenceContent)
-    ) {
-      await warnOnce(
-        slug,
-        `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
-          `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
-          'Author it on the default branch; logged once.',
-      );
-      continue;
-    }
-
-    // Shipped-work dedup (Story 3/Task 4): a content-eligible candidate whose
-    // stem matches a shipped record already committed on the base branch has
-    // already merged its implementation — never re-dispatch or re-kick it,
-    // even if the local `isProcessed` cache missed it (a stale/reset cache).
-    // Runs AFTER content filters (so a shipped spec is never mis-logged as
-    // "identity unresolved" or "owner gated") and BEFORE the owner gate (so a
-    // shipped spec with an unresolved identity or foreign owner stamp is still
-    // reported as shipped, not as an owner-gate skip).
+    // The processed marker and shipped-record stem are identity-only dedup:
+    // run them before content classification so completed work with a malformed
+    // Stories reference is never reported as blocked. Content-hash dedup stays
+    // below because it needs vetted plan + stories bytes to be trustworthy.
     const shippedMatch = shippedRecords.find((r) => r.stem === slug);
     if (shippedMatch) {
       try {
@@ -833,29 +843,52 @@ export async function discoverBacklog(
       continue;
     }
 
-    // Pre-merge shipped dedup: `/finish` already committed this feature's
-    // shipped record onto its own branch, so the implementation is complete and
-    // waiting on a human merge. Re-dispatching here re-runs `finish` on a
-    // feature whose worktree the finished run already tore down, which surfaces
-    // as an opaque "path does not exist" provider error and loops. Runs AFTER
-    // the base-branch dedup (a merged feature reports as merged, not pending).
-    if (await opts.shippedOnFeatureBranch?.(slug)) {
-      await warnOnce(
-        slug,
-        `skip ${slug}: shipped dedup — finish already recorded the ship on this feature's ` +
-          'branch; awaiting the human merge, not re-dispatching.',
+    if (await isOperatorParked(slug)) continue;
+
+    const storiesRef = await resolveStoriesRef(tree, slug, planContent);
+    if (storiesRef.kind === 'unresolvable') {
+      const remedy =
+        `Fix ${planRel}: use a repo-relative path, an inline-code path, or a Markdown link, ` +
+        'each optionally followed by a trailing annotation.';
+      await block(
+        { slug, reason: 'unresolvable-stories-ref', remedy },
+        `skip ${slug}: merged spec cannot build — Stories reference cannot resolve. ${remedy} ` +
+          'logged once.',
       );
       continue;
     }
+    if (storiesRef.kind === 'missing') {
+      const remedy =
+        `Create the Stories file at ${storiesRef.path} on the default branch, or fix its ` +
+        `reference in ${planRel}.`;
+      await block(
+        { slug, reason: 'stories-missing', remedy },
+        `skip ${slug}: merged spec cannot build — Stories file missing at ${storiesRef.path}. ` +
+          `${remedy} logged once.`,
+      );
+      continue;
+    }
+    const storiesRel = storiesRef.path;
 
-    // Content-hash dedup (Story 4/Task 6): catches a RENAMED spec — same plan
-    // + stories content as a shipped record, but under a different stem, so
-    // the stem-match above misses it. Computed AFTER the stem-match dedup
-    // (cheaper, so it runs first) and still BEFORE the owner gate (a renamed
-    // shipped spec is reported as shipped, not as owner-gated). The candidate
-    // digest is compared against every shipped record's `spec_hash`; a match
-    // means the implementation already shipped under the OLD stem, so the
-    // cache is repaired under the candidate's (NEW) slug, not the old one.
+    // Carry the engineer-assessed complexity tier so the daemon build honors it
+    // (Small skips acceptance_specs/retro). Resolve it before vetting so those
+    // checks can use it. The marker is committed at
+    // `.docs/complexity/<plan-stem>.md` — the SAME stem as the plan — and
+    // `slug` plus the base-branch tree source are unchanged through the vetting
+    // block below. Absent/garbled → undefined, and the daemon falls back to 'M'
+    // (legacy behavior, no breakage).
+    const tierMarker = await readFeatureMarker('.docs/complexity', slug);
+    const tier = parseComplexityTier(tierMarker.content);
+
+    // Content-hash dedup needs the plan + stories bytes, but it must still
+    // precede EVERY content classification. A shipped spec with draft stories,
+    // no dependency tree, or no coherence artifact is completed work, not
+    // actionable blocked work.
+    const storiesContent = (await tree.readFile(storiesRel)) ?? '';
+    const candidateDigest = specHash(
+      Buffer.from(planContent, 'utf-8'),
+      Buffer.from(storiesContent, 'utf-8'),
+    ).digest;
     const hashMatch = shippedRecords.find(
       (r) => !('malformed' in r.record) && r.record.specHash === candidateDigest,
     );
@@ -873,6 +906,74 @@ export async function discoverBacklog(
         slug,
         `skip ${slug}: shipped dedup — shipped under '${hashMatch.stem}', candidate ` +
           `'${slug}' matches by content (spec_hash); not re-dispatching.`,
+      );
+      continue;
+    }
+
+    // Eligibility = APPROVED + well-formed. The daemon pre-seeds the front half
+    // (stories/plan = done) and never re-runs their gates, so this is the only
+    // place specs are vetted before autonomous build. Reject unapproved or
+    // dependency-tree-less plans rather than silently building them.
+    if (!isStoriesApproved(storiesContent)) {
+      blockedItems.push({
+        slug,
+        reason: 'stories-not-approved',
+        remedy: `Set **Status:** Accepted in ${storiesRel} on the default branch.`,
+      });
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.`,
+      );
+      continue;
+    }
+    if (!planHasDependencyTree(planContent)) {
+      blockedItems.push({
+        slug,
+        reason: 'no-dependency-tree',
+        remedy:
+          `Add a ## Task Dependency Graph section or **Dependencies:** lines to ${planRel} ` +
+          'on the default branch.',
+      });
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.`,
+      );
+      continue;
+    }
+
+    // The coherence artifact is mandatory for every non-S tier. This remains
+    // intentionally shallow: discovery has only the base-branch tree, while
+    // the semantic validator needs a change set and runs at land.
+    const coherenceContent = await tree.readFile(`.docs/coherence/${slug}.md`);
+    if (
+      tier !== 'S' &&
+      !hasCoherenceTableDataRow(coherenceContent)
+    ) {
+      blockedItems.push({
+        slug,
+        reason: 'missing-coherence',
+        remedy: `Author a valid coherence table in .docs/coherence/${slug}.md on the default branch.`,
+      });
+      await warnOnce(
+        slug,
+        `skip ${slug}: merged spec cannot build — missing or unparseable coherence artifact ` +
+          `(.docs/coherence/${slug}.md) required for tier ${tier ?? 'unresolved'}. ` +
+          'Author it on the default branch; logged once.',
+      );
+      continue;
+    }
+
+    // Pre-merge shipped dedup: `/finish` already committed this feature's
+    // shipped record onto its own branch, so the implementation is complete and
+    // waiting on a human merge. Re-dispatching here re-runs `finish` on a
+    // feature whose worktree the finished run already tore down, which surfaces
+    // as an opaque "path does not exist" provider error and loops. Runs AFTER
+    // the base-branch dedup (a merged feature reports as merged, not pending).
+    if (await opts.shippedOnFeatureBranch?.(slug)) {
+      await warnOnce(
+        slug,
+        `skip ${slug}: shipped dedup — finish already recorded the ship on this feature's ` +
+          'branch; awaiting the human merge, not re-dispatching.',
       );
       continue;
     }
@@ -990,7 +1091,8 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    return { items, waiting: [], gated: gatedItems };
+    await persistBlockedSnapshot(blockedItems);
+    return { items, waiting: [], blocked: blockedItems, gated: gatedItems };
   }
   const resolver = opts.resolver;
   const gated: BacklogItem[] = [];
@@ -1026,7 +1128,8 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  return { items: gated, waiting, gated: gatedItems };
+  await persistBlockedSnapshot(blockedItems);
+  return { items: gated, waiting, blocked: blockedItems, gated: gatedItems };
 }
 
 /**
@@ -1067,17 +1170,24 @@ function unownedDefaultedMessage(slug: string, defaultedOwner: string): string {
 /**
  * Resolve the repo-relative stories path a plan depends on, validating it exists
  * ON THE BASE-BRANCH TREE. Prefers the explicit `**Stories:** <path>` line; falls
- * back to a stories file sharing the plan's stem. Returns null if neither is
- * present on the base branch.
+ * back to a stories file sharing the plan's stem.
  */
-async function resolveStoriesRef(
+export type StoriesRefResolution =
+  | { kind: 'resolved'; path: string }
+  | { kind: 'unresolvable' }
+  | { kind: 'missing'; path: string };
+
+export async function resolveStoriesRef(
   tree: BacklogTreeSource,
   slug: string,
   planContent: string,
-): Promise<string | null> {
+): Promise<StoriesRefResolution> {
   const candidate = resolvePlanStoriesPath(
     `.docs/plans/${slug}.md`,
     planContent,
   );
-  return candidate && (await tree.readFile(candidate)) !== null ? candidate : null;
+  if (!candidate) return { kind: 'unresolvable' };
+  return (await tree.readFile(candidate)) !== null
+    ? { kind: 'resolved', path: candidate }
+    : { kind: 'missing', path: candidate };
 }

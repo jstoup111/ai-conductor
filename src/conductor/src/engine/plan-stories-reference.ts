@@ -2,9 +2,20 @@ import { posix, win32 } from 'node:path';
 
 const STORIES_LINE = /^\s*\*\*Stories:\*\*\s*(.*?)\s*$/im;
 const MARKDOWN_LINK = /^\[[^\]]+\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)$/;
+const LEADING_MARKDOWN_LINK = /^\[[^\]]+\]\(([^\s)]+)(?:\s+['"][^)]*['"])?\)/;
+
+function normalizeStoriesReference(reference: string): string {
+  const inlineCode = reference.match(/^`([^`]*)`/);
+  if (inlineCode) return inlineCode[1].trim();
+
+  const markdown = reference.match(LEADING_MARKDOWN_LINK);
+  if (markdown) return markdown[1];
+
+  return reference.trim().split(/\s+/, 1)[0] ?? '';
+}
 
 /**
- * Resolve the stories artifact named by a plan to a repo-relative POSIX path.
+ * Resolve the stories artifact named by a plan to a `.docs/`-relative POSIX path.
  *
  * Plans may use a plain path, an inline-code path, or a Markdown link. Relative
  * link targets are resolved from the plan file; `.docs/...` references remain
@@ -20,10 +31,7 @@ export function resolvePlanStoriesPath(
     return `.docs/stories/${posix.basename(planRepoPath, '.md')}.md`;
   }
 
-  let reference = match[1].trim();
-  if (reference.startsWith('`') && reference.endsWith('`')) {
-    reference = reference.slice(1, -1).trim();
-  }
+  let reference = normalizeStoriesReference(match[1]);
 
   const markdown = reference.match(MARKDOWN_LINK);
   if (markdown) reference = markdown[1];
@@ -44,6 +52,7 @@ export function resolvePlanStoriesPath(
     normalized === '..' ||
     normalized.startsWith('../') ||
     posix.isAbsolute(normalized) ||
+    !normalized.startsWith('.docs/') ||
     !normalized.endsWith('.md')
   ) {
     return null;

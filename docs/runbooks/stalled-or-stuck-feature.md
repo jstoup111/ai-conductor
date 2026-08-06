@@ -28,6 +28,27 @@ Any of these:
 All per-feature evidence lives in the feature's own worktree: `.worktrees/<slug>/.pipeline/`.
 All daemon-level evidence lives at the main repo root: `.daemon/`.
 
+### Blocked merged spec
+
+**Symptom:** A merged plan never dispatches, and `conduct-ts daemon status` lists it in `BLOCKED`
+with a reason and remedy. This is a discovery refusal, not a feature HALT: no feature worktree or
+`.pipeline/HALT` exists yet. The startup dashboard does not render this state
+([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)); use `daemon status`.
+
+**Diagnosis:** Read the `BLOCKED` line. Common reasons are `unresolvable-stories-ref`,
+`stories-missing`, `stories-not-approved`, `no-dependency-tree`, and `missing-coherence`. The
+snapshot is `.daemon/blocked.json`; a missing or malformed snapshot means only that no completed
+discovery pass is available, not that the spec is clear.
+
+**Recovery:** Apply the line's remedy on the repository's default branch. Do not repair only a
+feature branch or a local working tree: discovery reads the committed default-branch tree. After an
+upgrade that adds this visibility, the first discovery pass may dispatch a previously invisible,
+otherwise-buildable merged spec when the repository has no processed marker for it. That is expected;
+review the plan before starting the daemon if those older specs are not ready to build.
+
+**Verification:** Run `conduct-ts daemon status` after the next pass. A repaired spec disappears
+from `BLOCKED` and is eligible for dispatch; a remaining entry includes its current remedy.
+
 ### 1. Read the halt marker first
 
 ```bash

@@ -375,9 +375,9 @@ describe('engine/daemon-observe-cli', () => {
       });
       expect(code).toBe(0);
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
-      // One status line per repo, plus a GATED section line for each repo whose
-      // path exists (path-missing repos skip the snapshot read entirely).
-      expect(out.length).toBe(5);
+      // One status line per repo, plus GATED and BLOCKED section lines for each
+      // repo whose path exists (path-missing repos skip snapshot reads entirely).
+      expect(out.length).toBe(7);
     });
 
     it('prints a friendly message for an empty registry', async () => {
@@ -515,6 +515,83 @@ describe('engine/daemon-observe-cli', () => {
 
         execFileSpy.mockRestore();
         execSpy.mockRestore();
+      });
+    });
+
+    describe('BLOCKED section (Task 10, Story 4 HP-2/HP-4)', () => {
+      async function writeBlockedSnapshot(repo: string, body: unknown): Promise<void> {
+        const daemonDir = join(repo, '.daemon');
+        await mkdir(daemonDir, { recursive: true });
+        await writeFile(
+          join(daemonDir, 'blocked.json'),
+          typeof body === 'string' ? body : JSON.stringify(body),
+          'utf8',
+        );
+      }
+
+      it('renders every blocked slug with its reason, remedy, and snapshot age without git or network calls', async () => {
+        const repo = join(root, 'repo-blocked');
+        await mkdir(repo, { recursive: true });
+        await writeBlockedSnapshot(repo, {
+          schemaVersion: 1,
+          writtenAt: '2026-08-05T12:00:00.000Z',
+          blocked: [
+            { slug: 'missing-stories', reason: 'stories-missing', remedy: 'Create the stories file.' },
+            { slug: 'needs-graph', reason: 'no-dependency-tree', remedy: 'Add dependency edges.' },
+          ],
+        });
+        const registryPath = await registry([record('repo-blocked', repo)]);
+        const execFileSpy = vi.spyOn(cp, 'execFile');
+        const execSpy = vi.spyOn(cp, 'exec');
+        const out: string[] = [];
+
+        try {
+          await runDaemonStatus({
+            registryPath,
+            out: (line) => out.push(line),
+            clock: () => new Date('2026-08-05T12:05:00.000Z'),
+          });
+
+          expect({ output: out.join('\n'), execFileCalls: execFileSpy.mock.calls, execCalls: execSpy.mock.calls }).toEqual({
+            output: expect.stringMatching(
+              /BLOCKED \(as of 5m ago\):[\s\S]*missing-stories — stories-missing — Create the stories file\.[\s\S]*needs-graph — no-dependency-tree — Add dependency edges\./,
+            ),
+            execFileCalls: [],
+            execCalls: [],
+          });
+        } finally {
+          execFileSpy.mockRestore();
+          execSpy.mockRestore();
+        }
+      });
+
+      it('reports blocked state as unknown when no blocked snapshot has been recorded', async () => {
+        const repo = join(root, 'repo-no-blocked-snapshot');
+        await mkdir(repo, { recursive: true });
+        const registryPath = await registry([record('repo-no-blocked-snapshot', repo)]);
+        const out: string[] = [];
+
+        const result = await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect({ code: result.code, output: out.join('\n') }).toEqual({
+          code: 0,
+          output: expect.stringContaining('BLOCKED: blocked state unknown — no scan recorded'),
+        });
+      });
+
+      it('reports an unreadable blocked snapshot as unknown and exits successfully', async () => {
+        const repo = join(root, 'repo-malformed-blocked-snapshot');
+        await mkdir(repo, { recursive: true });
+        await writeBlockedSnapshot(repo, '{"schemaVersion": 1, "writ');
+        const registryPath = await registry([record('repo-malformed-blocked-snapshot', repo)]);
+        const out: string[] = [];
+
+        const result = await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect({ code: result.code, output: out.join('\n') }).toEqual({
+          code: 0,
+          output: expect.stringContaining('BLOCKED: blocked state unknown — snapshot unreadable'),
+        });
       });
     });
 

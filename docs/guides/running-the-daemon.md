@@ -23,10 +23,11 @@ so an unmerged `spec/<slug>` branch is invisible to it.
 | A fresh install | `bin/install --check` exits 0 or 2 — the freshness gate accepts both |
 | At least one merged spec on the default branch | `.docs/plans/<slug>.md` present on `main` |
 
-## Fix a discovery rejection
+## Fix a blocked merged spec
 
-Discovery reads only the default branch. It skips a merged spec, rather than starting a build, when
-it logs one of these lines:
+Discovery reads only the default branch. When it cannot build a merged spec, it marks that spec
+`blocked` rather than dispatching it, writes the reason and remedy to `.daemon/blocked.json`, and
+logs one of these lines:
 
 ```text
 skip <slug>: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.
@@ -36,9 +37,16 @@ skip <slug>: merged spec cannot build — missing or unparseable coherence artif
 
 The first two reject an unapproved stories artifact or a plan without a task dependency tree. The
 third applies only outside tier S: author a parseable `.docs/coherence/<stem>.md` on the default
-branch, or verify that the feature is correctly classified as tier S. Each reason is logged once
-per slug through `.daemon/warned/<slug>`; the marker suppresses repeated poll warnings until the
-spec is fixed.
+branch, or verify that the feature is correctly classified as tier S. Fix the indicated artifact
+on the default branch; the next discovery pass replaces the blocked snapshot, clearing a repaired
+spec without manual cleanup. Each reason is logged once per slug through `.daemon/warned/<slug>`;
+the marker suppresses repeated poll warnings until the spec is fixed.
+
+Run `conduct-ts daemon status` to read the persisted `BLOCKED` section. It lists each blocked slug,
+machine-readable reason, remedy, and the latest scan age without invoking Git or the network. An
+empty snapshot reports that no specs are blocked; no valid snapshot means the blocked state is
+unknown until discovery completes. The startup dashboard does not yet render blocked specs;
+dashboard treatment is tracked in [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
 DECIDE artifacts are human-authored before merge. The daemon pre-seeds every DECIDE step (recording
 tier-skipped steps as skipped) and starts at BUILD; it never authors or reruns DECIDE work.
@@ -74,8 +82,11 @@ conduct-ts daemon status
 
 Sweeps the whole project registry and prints one badge line per repo — state, path, pid, since,
 engine version id, pause metadata, last log line and its mtime, and tmux session up/down. It then
-prints a `GATED:` section and an attribution-agreement line. The nine state badges and what each one
-means are in [cli reference](../reference/cli.md#daemon-status); `● running` is the one you want.
+prints `GATED:` and `BLOCKED` sections plus an attribution-agreement line. `BLOCKED` reads the
+latest discovery snapshot and lists every blocked spec's reason and remedy; it is not yet part of
+the startup dashboard ([#1332](https://github.com/jstoup111/ai-conductor/issues/1332)). The nine
+state badges and what each one means are in [cli reference](../reference/cli.md#daemon-status);
+`● running` is the one you want.
 
 `status` exits 0 even when entries are stale or missing — those are reported, not errors. It exits 1
 only when the registry itself is unreadable.

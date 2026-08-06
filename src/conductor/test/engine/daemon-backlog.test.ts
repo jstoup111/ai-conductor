@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtemp, rm, mkdir, writeFile, readFile as fsReadFile, readdir } from 'fs/promises';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {
   discoverBacklog,
   fastForwardRoot,
+  resolveStoriesRef,
   type BacklogTreeSource,
 } from '../../src/engine/daemon-backlog.js';
 import { makeGitRunner } from '../../src/engine/rebase.js';
@@ -78,11 +79,37 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     log?: (m: string) => void,
   ) => (await discoverBacklog(dir, isProcessed, log, { treeSource: fsTreeSource(dir) })).items;
 
+  describe('resolveStoriesRef', () => {
+    it('reports an unresolvable explicit Stories reference', async () => {
+      const tree = {
+        listPlanFiles: async () => [],
+        listShippedFiles: async () => [],
+        readFile: vi.fn(async () => null),
+      } satisfies BacklogTreeSource;
+
+      await expect(
+        resolveStoriesRef(tree, 'unresolvable', '# Plan\n**Stories:** /outside/stories.md\n'),
+      ).resolves.toEqual({ kind: 'unresolvable' });
+    });
+
+    it('reports a resolved Stories path absent from the injected tree', async () => {
+      const tree = {
+        listPlanFiles: async () => [],
+        listShippedFiles: async () => [],
+        readFile: vi.fn(async () => null),
+      } satisfies BacklogTreeSource;
+
+      await expect(
+        resolveStoriesRef(tree, 'missing', '# Plan\n**Stories:** .docs/stories/missing.md\n'),
+      ).resolves.toEqual({ kind: 'missing', path: '.docs/stories/missing.md' });
+    });
+  });
+
   it('returns [] when there is no plans dir', async () => {
     const empty = await mkdtemp(join(tmpdir(), 'empty-'));
     expect(
       await discoverBacklog(empty, undefined, undefined, { treeSource: fsTreeSource(empty) }),
-    ).toEqual({ items: [], waiting: [], gated: [] });
+    ).toEqual({ items: [], waiting: [], blocked: [], gated: [] });
     await rm(empty, { recursive: true, force: true });
   });
 
@@ -109,6 +136,418 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.items.map((b) => b.slug)).toEqual(['feature-shape']);
     expect(result.waiting).toEqual([]);
     expect(result.gated).toEqual([]);
+  });
+
+  it('returns blocked: [] for a buildable-only fixture (Task 4)', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/blocked-channel-shape.md'),
+      planWithDeps('.docs/stories/blocked-channel-shape.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/blocked-channel-shape.md'), APPROVED_STORIES);
+    await writeCoherence('blocked-channel-shape');
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+  });
+
+  it('does not classify an unresolvable Stories reference as blocked after a processed-marker dedup', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/processed-unresolvable.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    const isProcessed = vi.fn(async () => true);
+
+    const result = await discoverBacklog(dir, isProcessed, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(isProcessed).toHaveBeenCalledWith('processed-unresolvable');
+  });
+
+  it('does not classify an unresolvable Stories reference as blocked after shipped-by-stem dedup', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/shipped-unresolvable.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/shipped-unresolvable.md'),
+      renderShippedRecord({ slug: 'shipped-unresolvable', specHash: 'deadbeef' }),
+    );
+    const repairProcessed = vi.fn(async () => {});
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+      repairProcessed,
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(repairProcessed).toHaveBeenCalledOnce();
+    expect(repairProcessed).toHaveBeenCalledWith(
+      'shipped-unresolvable',
+      expect.objectContaining({ slug: 'shipped-unresolvable' }),
+    );
+  });
+
+  it('blocks an unresolvable Stories reference and logs its actionable remedy once across scans', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/unresolvable-stories.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    const warned = new Set<string>();
+    const logs: string[] = [];
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+
+    const first = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    const second = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+
+    expect(first.blocked).toEqual([
+      {
+        slug: 'unresolvable-stories',
+        reason: 'unresolvable-stories-ref',
+        remedy:
+          'Fix .docs/plans/unresolvable-stories.md: use a repo-relative path, an inline-code path, or a Markdown link, each optionally followed by a trailing annotation.',
+      },
+    ]);
+    expect(second.blocked).toEqual(first.blocked);
+    expect(logs.filter((message) => /unresolvable-stories.*repo-relative.*inline-code.*Markdown link.*trailing annotation/i.test(message))).toHaveLength(1);
+  });
+
+  it('blocks a missing Stories file and logs its resolved path once across scans', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/missing-stories.md'),
+      planWithDeps('.docs/stories/missing-stories.md'),
+    );
+    const warned = new Set<string>();
+    const logs: string[] = [];
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+
+    const first = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    const second = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+
+    expect(first.blocked).toEqual([
+      {
+        slug: 'missing-stories',
+        reason: 'stories-missing',
+        remedy:
+          'Create the Stories file at .docs/stories/missing-stories.md on the default branch, or fix its reference in .docs/plans/missing-stories.md.',
+      },
+    ]);
+    expect(second.blocked).toEqual(first.blocked);
+    expect(logs.filter((message) => /missing-stories.*\.docs\/stories\/missing-stories\.md/i.test(message))).toHaveLength(1);
+  });
+
+  it('blocks unapproved stories while preserving the existing warning', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/unapproved-stories.md'),
+      planWithDeps('.docs/stories/unapproved-stories.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/unapproved-stories.md'), '# Stories\n**Status:** Draft\n');
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'unapproved-stories',
+        reason: 'stories-not-approved',
+        remedy: 'Set **Status:** Accepted in .docs/stories/unapproved-stories.md on the default branch.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip unapproved-stories: merged spec cannot build — stories not approved (need "Status: Accepted", no DRAFT). Fix the spec on the default branch; logged once.',
+    );
+  });
+
+  it('blocks plans without a dependency tree while preserving the existing warning', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/no-dependency-tree.md'),
+      '# Plan\n**Stories:** .docs/stories/no-dependency-tree.md\n### Task 1\n',
+    );
+    await writeFile(join(dir, '.docs/stories/no-dependency-tree.md'), APPROVED_STORIES);
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'no-dependency-tree',
+        reason: 'no-dependency-tree',
+        remedy: 'Add a ## Task Dependency Graph section or **Dependencies:** lines to .docs/plans/no-dependency-tree.md on the default branch.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip no-dependency-tree: merged spec cannot build — plan has no dependency tree ("## Task Dependency Graph" or "**Dependencies:**" lines). Fix the spec on the default branch; logged once.',
+    );
+  });
+
+  it('blocks missing coherence while preserving the existing warning', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/missing-coherence.md'),
+      planWithDeps('.docs/stories/missing-coherence.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/missing-coherence.md'), APPROVED_STORIES);
+    const logs: string[] = [];
+
+    const result = await discoverBacklog(dir, undefined, (message) => logs.push(message), {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([
+      {
+        slug: 'missing-coherence',
+        reason: 'missing-coherence',
+        remedy: 'Author a valid coherence table in .docs/coherence/missing-coherence.md on the default branch.',
+      },
+    ]);
+    expect(logs).toContain(
+      'skip missing-coherence: merged spec cannot build — missing or unparseable coherence artifact (.docs/coherence/missing-coherence.md) required for tier unresolved. Author it on the default branch; logged once.',
+    );
+  });
+
+  it('Task 8: blocked classification is visibility-only across the mixed discovery fixture', async () => {
+    const writeEligible = async (slug: string, storiesRef = `.docs/stories/${slug}.md`) => {
+      await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(storiesRef));
+      await writeFile(join(dir, `.docs/stories/${slug}.md`), APPROVED_STORIES);
+      await writeCoherence(slug);
+    };
+
+    // The two buildable entries are the pre-blocked-channel dispatch set, with
+    // the newly supported annotated Stories reference added to it.
+    await writeEligible('buildable');
+    await writeEligible('annotated-reference', '`.docs/stories/annotated-reference.md` (accepted)');
+
+    // These valid specs leave the eligible list for their pre-existing reasons.
+    await writeEligible('gated');
+    await writeEligible('waiting');
+    await mkdir(join(dir, '.docs/intake'), { recursive: true });
+    await writeFile(join(dir, '.docs/intake/waiting.md'), 'Source-Ref: acme/app#42\n');
+    await writeEligible('processed');
+    await writeEligible('shipped-by-content');
+    const shippedPlan = planWithDeps('.docs/stories/shipped-by-content.md');
+    const shippedHash = specHash(
+      Buffer.from(shippedPlan, 'utf-8'),
+      Buffer.from(APPROVED_STORIES, 'utf-8'),
+    ).digest;
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/old-name.md'),
+      renderShippedRecord({ slug: 'old-name', specHash: shippedHash }),
+    );
+
+    // One candidate for every blocked reason.
+    await writeFile(join(dir, '.docs/plans/unresolvable.md'), planWithDeps('/outside/stories.md'));
+    await writeFile(join(dir, '.docs/plans/missing.md'), planWithDeps('.docs/stories/missing.md'));
+    await writeFile(join(dir, '.docs/plans/unapproved.md'), planWithDeps('.docs/stories/unapproved.md'));
+    await writeFile(join(dir, '.docs/stories/unapproved.md'), '# Stories\n**Status:** Draft\n');
+    await writeFile(
+      join(dir, '.docs/plans/no-dependencies.md'),
+      '# Plan\n**Stories:** .docs/stories/no-dependencies.md\n### Task 1\n',
+    );
+    await writeFile(join(dir, '.docs/stories/no-dependencies.md'), APPROVED_STORIES);
+    await writeFile(join(dir, '.docs/plans/no-coherence.md'), planWithDeps('.docs/stories/no-coherence.md'));
+    await writeFile(join(dir, '.docs/stories/no-coherence.md'), APPROVED_STORIES);
+
+    const result = await discoverBacklog(dir, async (slug) => slug === 'processed', undefined, {
+      treeSource: fsTreeSource(dir),
+      daemonOwner: { resolved: true, id: 'alice' },
+      readStamp: async (slug) =>
+        slug === 'gated' ? { present: true as const, id: 'bob' } : { present: false as const },
+      readMergeTime: async () => null,
+      cutover: null,
+      resolver: {
+        resolve: async () => ({ kind: 'blocked' as const, blockers: [{ repo: 'acme/app', number: '42' }] }),
+      },
+    });
+
+    expect(result.items.map((item) => item.slug)).toEqual(['annotated-reference', 'buildable']);
+    expect(result.waiting.map((item) => item.slug)).toEqual(['waiting']);
+    expect(result.gated).toMatchObject([{ kind: 'spec', slug: 'gated', reason: 'other-owner' }]);
+    expect(result.blocked.map((item) => [item.slug, item.reason])).toEqual([
+      ['missing', 'stories-missing'],
+      ['no-coherence', 'missing-coherence'],
+      ['no-dependencies', 'no-dependency-tree'],
+      ['unapproved', 'stories-not-approved'],
+      ['unresolvable', 'unresolvable-stories-ref'],
+    ]);
+  });
+
+  it('Task 8: a content-hash-shipped plan produces no blocked entry', async () => {
+    const plan = planWithDeps('.docs/stories/renamed.md');
+    await writeFile(join(dir, '.docs/plans/renamed.md'), plan);
+    await writeFile(join(dir, '.docs/stories/renamed.md'), APPROVED_STORIES);
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/original.md'),
+      renderShippedRecord({
+        slug: 'original',
+        specHash: specHash(Buffer.from(plan, 'utf-8'), Buffer.from(APPROVED_STORIES, 'utf-8')).digest,
+      }),
+    );
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+  });
+
+  it.each([
+    ['draft stories', '# Stories\n**Status:** Draft\n', planWithDeps('.docs/stories/renamed.md')],
+    [
+      'a missing dependency tree',
+      APPROVED_STORIES,
+      '# Plan\n**Stories:** .docs/stories/renamed.md\n### Task 1\n',
+    ],
+  ])('does not block shipped-by-content specs with %s', async (_description, stories, plan) => {
+    await writeFile(join(dir, '.docs/plans/renamed.md'), plan);
+    await writeFile(join(dir, '.docs/stories/renamed.md'), stories);
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/original.md'),
+      renderShippedRecord({
+        slug: 'original',
+        specHash: specHash(Buffer.from(plan, 'utf-8'), Buffer.from(stories, 'utf-8')).digest,
+      }),
+    );
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items).toEqual([]);
+  });
+
+  it('does not block an operator-parked spec that fails content eligibility', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/operator-parked.md'),
+      planWithDeps('.docs/stories/operator-parked.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/operator-parked.md'), '# Stories\n**Status:** Draft\n');
+    const isOperatorParked = vi.fn(async (slug: string) => slug === 'operator-parked');
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+      isOperatorParked,
+    });
+
+    expect(result.blocked).toEqual([]);
+    expect(result.items).toEqual([]);
+    expect(isOperatorParked).toHaveBeenCalledWith('operator-parked');
+  });
+
+  it('Task 8: an undeduped content plan still reports its eligibility failure as blocked', async () => {
+    const plan = planWithDeps('.docs/stories/changed.md');
+    await writeFile(join(dir, '.docs/plans/changed.md'), plan);
+    await writeFile(join(dir, '.docs/stories/changed.md'), '# Stories\n**Status:** Draft\n');
+    await mkdir(join(dir, '.docs/shipped'), { recursive: true });
+    await writeFile(
+      join(dir, '.docs/shipped/original.md'),
+      renderShippedRecord({
+        slug: 'original',
+        specHash: specHash(Buffer.from(plan, 'utf-8'), Buffer.from(APPROVED_STORIES, 'utf-8')).digest,
+      }),
+    );
+
+    const result = await discoverBacklog(dir, async () => false, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(result.blocked).toMatchObject([{ slug: 'changed', reason: 'stories-not-approved' }]);
+  });
+
+  it('Task 9: writes and replaces the per-pass blocked snapshot', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/snapshot.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+
+    const first = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(first.blocked).toEqual([
+      expect.objectContaining({ slug: 'snapshot', reason: 'unresolvable-stories-ref' }),
+    ]);
+    const firstSnapshot = JSON.parse(
+      await fsReadFile(join(dir, '.daemon/blocked.json'), 'utf-8'),
+    );
+    expect(firstSnapshot).toEqual({
+      schemaVersion: 1,
+      writtenAt: expect.any(String),
+      blocked: first.blocked,
+    });
+
+    await writeFile(
+      join(dir, '.docs/plans/snapshot.md'),
+      planWithDeps('.docs/stories/snapshot.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/snapshot.md'), APPROVED_STORIES);
+    await writeCoherence('snapshot');
+
+    const second = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(second.blocked).toEqual([]);
+    const secondSnapshot = JSON.parse(
+      await fsReadFile(join(dir, '.daemon/blocked.json'), 'utf-8'),
+    );
+    expect(secondSnapshot).toEqual({
+      schemaVersion: 1,
+      writtenAt: expect.any(String),
+      blocked: [],
+    });
+  });
+
+  it('keeps blocked classification and eligible dispatch when writing its snapshot fails', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/blocked.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    await writeFile(
+      join(dir, '.docs/plans/eligible.md'),
+      planWithDeps('.docs/stories/eligible.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/eligible.md'), APPROVED_STORIES);
+    await writeCoherence('eligible');
+
+    const snapshotError = new Error('disk unavailable');
+    const writeBlockedSnapshot = vi.fn(async () => {
+      throw snapshotError;
+    });
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+      writeBlockedSnapshot,
+    });
+
+    expect(result).toMatchObject({
+      items: [{ slug: 'eligible' }],
+      blocked: [{ slug: 'blocked', reason: 'unresolvable-stories-ref' }],
+    });
+    expect(writeBlockedSnapshot).toHaveBeenCalledOnce();
   });
 
   describe('dependency gate (Task 11)', () => {

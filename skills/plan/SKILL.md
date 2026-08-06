@@ -211,6 +211,23 @@ doesn't flag it.
 
 ### 5. Plan Format
 
+### `**Stories:**` Reference Forms
+
+The `**Stories:**` line identifies the one stories artifact the plan covers. Use one of
+these forms, each optionally followed by a human-readable trailing annotation:
+
+```markdown
+**Stories:** .docs/stories/<feature>.md
+**Stories:** `.docs/stories/<feature>.md` (accepted stories)
+**Stories:** [accepted stories](../stories/<feature>.md) — reviewed
+```
+
+The plain and inline-code forms name a repo-relative path. A Markdown link resolves its target
+from the plan file; its target must resolve to the selected `.docs/stories/` artifact. Do not use
+absolute paths, traversal outside the repository, a prose-only value, or a link to a different
+stories file. Land and backlog discovery use the same resolution rule, so an invalid or unrelated
+reference is refused before it can become a blocked merged spec.
+
 ```markdown
 # Implementation Plan: [Feature Name]
 
