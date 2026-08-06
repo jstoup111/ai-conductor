@@ -208,7 +208,7 @@ describe('FINISH publication progress accounting', () => {
       'ready_pr',
     );
     await expect(readFile(join(result.root, '.pipeline/HALT.class'), 'utf8')).resolves.toBe(
-      'needs-human\n',
+      'needs-human',
     );
   });
 });
