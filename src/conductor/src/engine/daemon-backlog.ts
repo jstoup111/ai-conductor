@@ -1,7 +1,8 @@
 import { execFile as execFileCb } from 'node:child_process';
 import { basename, join as pathJoin } from 'node:path';
 import { promisify } from 'node:util';
-import { rm } from 'node:fs/promises';
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises';
+import { randomBytes } from 'node:crypto';
 import type { BacklogItem } from './daemon.js';
 import {
   planHasDependencyTree,
@@ -558,6 +559,32 @@ export interface BlockedSpecItem {
 }
 
 /**
+ * Atomically replace the per-pass blocked-spec read model. A discovery pass
+ * owns the complete list, so rewriting the whole file clears entries fixed
+ * since the previous pass without a separate cleanup path.
+ */
+async function writeBlockedSnapshot(
+  projectRoot: string,
+  blocked: BlockedSpecItem[],
+): Promise<void> {
+  const daemonDir = pathJoin(projectRoot, '.daemon');
+  const destination = pathJoin(daemonDir, 'blocked.json');
+  const temporary = pathJoin(
+    daemonDir,
+    `.blocked-tmp-${randomBytes(6).toString('hex')}.json`,
+  );
+  const snapshot = {
+    schemaVersion: 1,
+    writtenAt: new Date().toISOString(),
+    blocked,
+  };
+
+  await mkdir(daemonDir, { recursive: true });
+  await writeFile(temporary, JSON.stringify(snapshot, null, 2), 'utf-8');
+  await rename(temporary, destination);
+}
+
+/**
  * An owner-gate skip surfaced to the operator (FR-7/FR-11). Distinct from
  * `WaitingItem` (dependency gate): `GatedItem` covers specs (and repo-scoped
  * conditions) held back by the OWNERSHIP gate, not the dependency gate.
@@ -697,7 +724,10 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
-  if (planFiles.length === 0) return { items: [], waiting: [], blocked: [], gated: [] };
+  if (planFiles.length === 0) {
+    await writeBlockedSnapshot(projectRoot, []);
+    return { items: [], waiting: [], blocked: [], gated: [] };
+  }
 
   // Shipped-record dedup (Story 3/Task 4): read every committed shipped
   // record from the base-branch tree ONCE per discovery run (not once per
@@ -1049,6 +1079,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
+    await writeBlockedSnapshot(projectRoot, blockedItems);
     return { items, waiting: [], blocked: blockedItems, gated: gatedItems };
   }
   const resolver = opts.resolver;
@@ -1085,6 +1116,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
+  await writeBlockedSnapshot(projectRoot, blockedItems);
   return { items: gated, waiting, blocked: blockedItems, gated: gatedItems };
 }
 

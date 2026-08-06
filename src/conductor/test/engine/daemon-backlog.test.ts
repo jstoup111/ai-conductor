@@ -477,6 +477,50 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     expect(result.blocked).toMatchObject([{ slug: 'changed', reason: 'stories-not-approved' }]);
   });
 
+  it('Task 9: writes and replaces the per-pass blocked snapshot', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/snapshot.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+
+    const first = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(first.blocked).toEqual([
+      expect.objectContaining({ slug: 'snapshot', reason: 'unresolvable-stories-ref' }),
+    ]);
+    const firstSnapshot = JSON.parse(
+      await fsReadFile(join(dir, '.daemon/blocked.json'), 'utf-8'),
+    );
+    expect(firstSnapshot).toEqual({
+      schemaVersion: 1,
+      writtenAt: expect.any(String),
+      blocked: first.blocked,
+    });
+
+    await writeFile(
+      join(dir, '.docs/plans/snapshot.md'),
+      planWithDeps('.docs/stories/snapshot.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/snapshot.md'), APPROVED_STORIES);
+    await writeCoherence('snapshot');
+
+    const second = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+    });
+
+    expect(second.blocked).toEqual([]);
+    const secondSnapshot = JSON.parse(
+      await fsReadFile(join(dir, '.daemon/blocked.json'), 'utf-8'),
+    );
+    expect(secondSnapshot).toEqual({
+      schemaVersion: 1,
+      writtenAt: expect.any(String),
+      blocked: [],
+    });
+  });
+
   describe('dependency gate (Task 11)', () => {
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
