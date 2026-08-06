@@ -44,6 +44,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The build step no longer reports itself complete or routes an exhausted build through commit-movement while the worktree has uncommitted paths — the halt now names the dirty paths so they can be committed or discarded first. ([implementation PR #1312](https://github.com/jstoup111/ai-conductor/pull/1312)).
 - The wiring reachability gate no longer flags test-only exported helpers as unwired production surface. ([implementation PR #1334](https://github.com/jstoup111/ai-conductor/pull/1334)).
 - Merged specs whose plan uses an inline-code, linked, or annotated `**Stories:**` reference now resolve and dispatch instead of being silently dropped; `conduct-ts daemon status` lists blocked specs with reason and remedy; and a `## Migration` section that ends a PR body no longer parses as malformed release metadata. ([implementation PR #1337](https://github.com/jstoup111/ai-conductor/pull/1337)).
+- The /stories skill now requires machine-parseable story IDs, preserving per-story validation, plan coverage, and coherence checks. ([implementation PR #1341](https://github.com/jstoup111/ai-conductor/pull/1341)).
 
 ## [0.99.20] - 2026-08-03
 
