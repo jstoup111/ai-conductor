@@ -83,6 +83,8 @@ export interface ProcessedEntry {
 
 export interface RetainedWorktreeEntry {
   slug: string;
+  /** PR URL recorded in the processed ledger, when available. */
+  prUrl?: string;
   /**
    * `pr-open-awaiting-main` — a verified ship whose PR has not yet merged to
    * `origin/main` (the `.daemon/processed/` ledger names it).
@@ -98,6 +100,9 @@ export interface RetainedWorktreeEntry {
     | 'pr-closed-unmerged'
     | 'shipped-no-pr-reference';
 }
+
+/** Optional PR-state lookup injected by the CLI; the dashboard never performs I/O itself. */
+export type PrStateProbe = (prUrl: string) => Promise<'open' | 'closed' | undefined>;
 
 /**
  * A spec held back by an unresolved dependency gate (FR-6). Carries the
@@ -185,6 +190,8 @@ export interface ScanInheritedStateDeps {
   >;
   /** Optional log sink for skipped-worktree diagnostics. */
   log?: (msg: string) => void;
+  /** Optional PR-state lookup for refining processed-ledger retained reasons. */
+  prStateProbe?: PrStateProbe;
 }
 
 /** The completed-run marker; mirrors the private constant in conductor.ts. */
@@ -443,11 +450,18 @@ export async function scanInheritedState(
         !slug.startsWith('resolve-') && !slug.startsWith('engineer-');
       if (processedSlugs.has(slug)) {
         if (isRetainedFeatureWorktree) {
+          const prUrl = processedBySlug.get(slug)?.prUrl;
+          const prState = prUrl && deps.prStateProbe
+            ? await deps.prStateProbe(prUrl)
+            : undefined;
           retainedWorktrees.push({
             slug,
-            reason: processedBySlug.get(slug)?.prUrl
-              ? 'pr-open-awaiting-main'
-              : 'shipped-no-pr-reference',
+            prUrl,
+            reason: prState === 'closed'
+              ? 'pr-closed-unmerged'
+              : prState === 'open' || prUrl
+                ? 'pr-open-awaiting-main'
+                : 'shipped-no-pr-reference',
           });
         }
         continue; // processed worktrees are retained, never in-progress
@@ -706,7 +720,7 @@ export function renderDashboard(
   if (retainedWorktrees.length > 0) {
     lines.push(`RETAINED WORKTREES (${retainedWorktrees.length})`);
     for (const entry of retainedWorktrees) {
-      lines.push(`  • ${entry.slug} — ${entry.reason}`);
+      lines.push(`  • ${entry.slug} — ${entry.reason}${prSuffix(entry.prUrl)}`);
     }
   }
 

@@ -579,6 +579,30 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     ]);
     expect(state.retainedWorktrees?.some((entry) => entry.reason === 'pr-open-awaiting-main')).toBe(false);
   });
+
+  it('refines shipped ledger rows from an injected PR-state probe', async () => {
+    const openPrUrl = 'https://github.com/example/repo/pull/41';
+    const closedPrUrl = 'https://github.com/example/repo/pull/42';
+    await mkdir(join(worktreeBase, 'awaiting-main'), { recursive: true });
+    await mkdir(join(worktreeBase, 'closed-unmerged'), { recursive: true });
+    await makeProcessedJson('awaiting-main', openPrUrl);
+    await makeProcessedJson('closed-unmerged', closedPrUrl);
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+      prStateProbe: async (prUrl) => (prUrl === openPrUrl ? 'open' : 'closed'),
+    });
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug: 'awaiting-main', reason: 'pr-open-awaiting-main', prUrl: openPrUrl },
+      { slug: 'closed-unmerged', reason: 'pr-closed-unmerged', prUrl: closedPrUrl },
+    ]);
+    expect(renderDashboard(state)).toContain(
+      `awaiting-main — pr-open-awaiting-main  → ${openPrUrl}`,
+    );
+  });
 });
 
 describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
