@@ -262,6 +262,10 @@ describe('daemon-backlog — fastForwardRoot (git integration)', () => {
     await expect(access(join(repoDir, '.docs/plans/remote-only.md'))).rejects.toThrow();
     const { items: before } = await discoverBacklog(repoDir, undefined, undefined, {
       baseBranch: defaultBranch,
+      // This precondition probe must not leave discovery's observability
+      // snapshot in the fixture's working tree; fastForwardRoot correctly
+      // refuses a dirty checkout.
+      writeBlockedSnapshot: async () => {},
     });
     expect(before).toHaveLength(0);
 

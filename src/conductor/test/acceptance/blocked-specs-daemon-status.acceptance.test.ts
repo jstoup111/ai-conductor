@@ -281,7 +281,6 @@ describe('blocked merged specs remain visible through daemon status (Covers: FR-
 
   it('a blocked snapshot write failure is advisory: blocked results and eligible dispatch still return', async () => {
     const root = await freshRoot('blocked-specs-write-failure-');
-    await writeFile(join(root, '.daemon'), 'not a directory', 'utf-8');
     const files = new Map<string, string>([
       ['.docs/plans/blocked.md', buildablePlan('see the stories directory')],
       ['.docs/complexity/blocked.md', 'Tier: S\n'],
@@ -292,6 +291,9 @@ describe('blocked merged specs remain visible through daemon status (Covers: FR-
 
     const result = (await discoverBacklog(root, undefined, undefined, {
       treeSource: mapTreeSource(files),
+      writeBlockedSnapshot: async () => {
+        throw new Error('disk unavailable');
+      },
     })) as unknown as DiscoveryWithBlocked;
 
     expect(result.blocked).toEqual(
