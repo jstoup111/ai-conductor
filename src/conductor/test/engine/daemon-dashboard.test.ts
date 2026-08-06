@@ -503,10 +503,13 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       ...state,
       parked: (await isOperatorParked(root, slug)) ? [slug] : [],
     });
-    const eligibleSection = out.slice(out.indexOf('ELIGIBLE'));
+    const lowerPrecedenceSections = out.slice(out.indexOf('HALTED'));
 
-    expect(out).toContain('PARKED (1)\n  • never-started-parked');
-    expect(eligibleSection).not.toContain(slug);
+    expect(state.neverStarted).toEqual([slug]);
+    expect(state.retainedWorktrees).toEqual([]);
+    expect(out.split('\n')).toContain(`  • ${slug} — operator-parked; remedy: run conduct daemon unpark for this row`);
+    expect(out).toContain('PARKED (1)');
+    expect(lowerPrecedenceSections).not.toContain(slug);
   });
 
   it('renders a halted never-started worktree under HALTED, not ELIGIBLE', async () => {
@@ -561,7 +564,10 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       out
         .split('\n')
         .filter((line) => line.startsWith('RETAINED WORKTREES') || line.startsWith('  • ')),
-    ).toEqual(['RETAINED WORKTREES (1)', '  • capped-out — reason: retained after ship; no PR reference was recorded']);
+    ).toEqual([
+      'RETAINED WORKTREES (1)',
+      '  • capped-out — reason: retained after ship; no PR reference was recorded; remedy: run conduct daemon reclaim-worktree for this row',
+    ]);
   });
 
   it('derives shipped-no-pr-reference for a legacy shipped ledger entry', async () => {
@@ -741,19 +747,31 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
     });
 
     expect(out).toContain('• parked — operator-parked: operator requested');
-    expect(out).toContain('remedy: conduct daemon unpark parked');
-    expect(out).toContain('• halted-empty — reason: unknown');
-    expect(out).toContain('remedy: clear .worktrees/halted-empty/.pipeline/HALT to resume');
-    expect(out).toContain('• retained — reason: retained after ship; PR closed without merge');
-    expect(out).toContain('remedy: conduct daemon reclaim-worktree retained');
-    expect(out).toContain('• never-started — reason: no pipeline state was ever written');
-    expect(out).toContain('remedy: no operator action applies; feature remains dispatchable');
+    expect(out).toContain('remedy: run conduct daemon unpark for this row');
+    expect(out).toContain('• halted-empty — reason: unknown; remedy: clear this row\'s .pipeline/HALT to resume');
+    expect(out).toContain('• retained — reason: retained after ship; PR closed without merge; remedy: run conduct daemon reclaim-worktree for this row');
+    expect(out).toContain('• never-started — reason: no pipeline state was ever written; remedy: no operator action applies; feature remains dispatchable');
     expect(out.match(/• double-qualified/g)).toHaveLength(1);
     expect(out).toContain('• double-qualified — operator-parked');
     expect(out).not.toContain('lower-precedence halt');
   });
 
-  it('does not render orphan reason or remedy lines when every exclusion bucket is clear', () => {
+  it('renders annotations for excluded rows but none when every exclusion bucket is clear', () => {
+    const annotated = renderDashboard({
+      halted: [{ slug: 'halted', reason: 'unknown' }],
+      inProgress: [],
+      eligible: [],
+      processed: [],
+      processedCount: 0,
+      parked: [{ slug: 'parked', provenance: 'operator' }],
+      retainedWorktrees: [{ slug: 'retained', reason: 'pr-closed-unmerged' }],
+      neverStarted: ['never-started'],
+    });
+    expect(annotated).toContain('reason: unknown; remedy: clear this row\'s .pipeline/HALT to resume');
+    expect(annotated).toContain('operator-parked; remedy: run conduct daemon unpark for this row');
+    expect(annotated).toContain('reason: retained after ship; PR closed without merge; remedy: run conduct daemon reclaim-worktree for this row');
+    expect(annotated).toContain('reason: no pipeline state was ever written; remedy: no operator action applies; feature remains dispatchable');
+
     const out = renderDashboard({
       halted: [],
       inProgress: [],
@@ -765,8 +783,14 @@ describe('engine/daemon-dashboard — renderDashboard (FR-1/FR-2)', () => {
       neverStarted: [],
     });
 
-    expect(out).not.toContain('reason:');
-    expect(out).not.toContain('remedy:');
+    expect(out).toBe([
+      '── inherited state ──────────────────────────────────────────',
+      'PARKED (0)',
+      'HALTED (0)',
+      'IN-PROGRESS (0)',
+      'ELIGIBLE (0)',
+      '─────────────────────────────────────────────────────────────',
+    ].join('\n'));
   });
 
   it('renders orphan and merged-ready PARKED annotations while unannotated entries keep their line', () => {
@@ -1150,8 +1174,7 @@ describe('engine/daemon-dashboard — exactly-one-bucket invariant (Task 10, S2 
       'processed-slug',
     ];
     for (const slug of slugs) {
-      const rows = out.split('\n').filter((line) => line.startsWith(`  • ${slug}`));
-      expect(rows).toHaveLength(1);
+      expect(out.split(slug)).toHaveLength(2);
     }
   });
 });
