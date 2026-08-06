@@ -337,25 +337,42 @@ interface BlockedSnapshot {
   blocked: Array<{ slug: string; reason: string; remedy: string }>;
 }
 
+type BlockedSnapshotRead =
+  | { kind: 'ok'; snapshot: BlockedSnapshot }
+  | { kind: 'unknown'; why: 'missing' | 'unreadable' | 'schema-mismatch' };
+
 /**
  * Read the local blocked-spec snapshot only. This is deliberately a filesystem
  * read: daemon status must not invoke git, GitHub, or a network boundary merely
  * to explain the latest completed scan.
  */
-async function readBlockedSnapshot(repoPath: string): Promise<BlockedSnapshot | undefined> {
+async function readBlockedSnapshot(repoPath: string): Promise<BlockedSnapshotRead> {
   try {
     const raw = await readFile(join(repoPath, '.daemon', 'blocked.json'), 'utf-8');
     const parsed: unknown = JSON.parse(raw);
     if (
       typeof parsed !== 'object' ||
       parsed === null ||
-      (parsed as { schemaVersion?: unknown }).schemaVersion !== 1
+      (parsed as { schemaVersion?: unknown }).schemaVersion !== 1 ||
+      typeof (parsed as { writtenAt?: unknown }).writtenAt !== 'string' ||
+      !Array.isArray((parsed as { blocked?: unknown }).blocked) ||
+      !(parsed as { blocked: unknown[] }).blocked.every(
+        (item) =>
+          typeof item === 'object' &&
+          item !== null &&
+          typeof (item as { slug?: unknown }).slug === 'string' &&
+          typeof (item as { reason?: unknown }).reason === 'string' &&
+          typeof (item as { remedy?: unknown }).remedy === 'string',
+      )
     ) {
-      return undefined;
+      return { kind: 'unknown', why: 'schema-mismatch' };
     }
-    return parsed as BlockedSnapshot;
-  } catch {
-    return undefined;
+    return { kind: 'ok', snapshot: parsed as BlockedSnapshot };
+  } catch (err) {
+    return {
+      kind: 'unknown',
+      why: (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'unreadable',
+    };
   }
 }
 
@@ -366,9 +383,19 @@ function blockedSpecLine(blocked: BlockedSnapshot['blocked'][number]): string {
 
 /** Render the per-repository BLOCKED section without querying any external state. */
 async function renderBlockedSection(repoPath: string, out: (line: string) => void, clock: Clock): Promise<void> {
-  const snapshot = await readBlockedSnapshot(repoPath);
-  if (!snapshot) return;
+  const result = await readBlockedSnapshot(repoPath);
+  if (result.kind === 'unknown') {
+    const reason =
+      result.why === 'missing'
+        ? 'no scan recorded'
+        : result.why === 'unreadable'
+          ? 'snapshot unreadable'
+          : 'snapshot schema mismatch';
+    out(`  BLOCKED: blocked state unknown — ${reason}`);
+    return;
+  }
 
+  const { snapshot } = result;
   const age = formatGatedAge(snapshot.writtenAt, clock());
   if (snapshot.blocked.length === 0) {
     out(`  BLOCKED: no specs are blocked (as of ${age})`);

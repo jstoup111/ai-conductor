@@ -521,6 +521,35 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     });
   });
 
+  it('keeps blocked classification and eligible dispatch when writing its snapshot fails', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/blocked.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    await writeFile(
+      join(dir, '.docs/plans/eligible.md'),
+      planWithDeps('.docs/stories/eligible.md'),
+    );
+    await writeFile(join(dir, '.docs/stories/eligible.md'), APPROVED_STORIES);
+    await writeCoherence('eligible');
+
+    const snapshotError = new Error('disk unavailable');
+    const writeBlockedSnapshot = vi.fn(async () => {
+      throw snapshotError;
+    });
+
+    const result = await discoverBacklog(dir, undefined, undefined, {
+      treeSource: fsTreeSource(dir),
+      writeBlockedSnapshot,
+    });
+
+    expect(result).toMatchObject({
+      items: [{ slug: 'eligible' }],
+      blocked: [{ slug: 'blocked', reason: 'unresolvable-stories-ref' }],
+    });
+    expect(writeBlockedSnapshot).toHaveBeenCalledOnce();
+  });
+
   describe('dependency gate (Task 11)', () => {
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));

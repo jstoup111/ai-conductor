@@ -511,6 +511,11 @@ export interface DiscoverBacklogOpts {
    * must not be classified as blocked for a second reason.
    */
   isOperatorParked?: (slug: string) => Promise<boolean>;
+  /**
+   * Persist the per-pass blocked read model. Optional for isolated tests; a
+   * snapshot is observability only, so its failure must never hold dispatch.
+   */
+  writeBlockedSnapshot?: (blocked: BlockedSpecItem[]) => Promise<void>;
 }
 
 /**
@@ -724,8 +729,15 @@ export async function discoverBacklog(
   };
 
   const planFiles = (await tree.listPlanFiles()).filter((f) => f.endsWith('.md'));
+  const persistBlockedSnapshot = async (blocked: BlockedSpecItem[]): Promise<void> => {
+    try {
+      await (opts.writeBlockedSnapshot ?? ((items) => writeBlockedSnapshot(projectRoot, items)))(blocked);
+    } catch (err) {
+      log(`blocked snapshot: failed to persist latest state: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   if (planFiles.length === 0) {
-    await writeBlockedSnapshot(projectRoot, []);
+    await persistBlockedSnapshot([]);
     return { items: [], waiting: [], blocked: [], gated: [] };
   }
 
@@ -1079,7 +1091,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    await writeBlockedSnapshot(projectRoot, blockedItems);
+    await persistBlockedSnapshot(blockedItems);
     return { items, waiting: [], blocked: blockedItems, gated: gatedItems };
   }
   const resolver = opts.resolver;
@@ -1116,7 +1128,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  await writeBlockedSnapshot(projectRoot, blockedItems);
+  await persistBlockedSnapshot(blockedItems);
   return { items: gated, waiting, blocked: blockedItems, gated: gatedItems };
 }
 

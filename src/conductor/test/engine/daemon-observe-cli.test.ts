@@ -375,9 +375,9 @@ describe('engine/daemon-observe-cli', () => {
       });
       expect(code).toBe(0);
       expect(rows.map((r) => r.liveness)).toEqual(['running', 'stale', 'path-missing']);
-      // One status line per repo, plus a GATED section line for each repo whose
-      // path exists (path-missing repos skip the snapshot read entirely).
-      expect(out.length).toBe(5);
+      // One status line per repo, plus GATED and BLOCKED section lines for each
+      // repo whose path exists (path-missing repos skip snapshot reads entirely).
+      expect(out.length).toBe(7);
     });
 
     it('prints a friendly message for an empty registry', async () => {
@@ -563,6 +563,35 @@ describe('engine/daemon-observe-cli', () => {
           execFileSpy.mockRestore();
           execSpy.mockRestore();
         }
+      });
+
+      it('reports blocked state as unknown when no blocked snapshot has been recorded', async () => {
+        const repo = join(root, 'repo-no-blocked-snapshot');
+        await mkdir(repo, { recursive: true });
+        const registryPath = await registry([record('repo-no-blocked-snapshot', repo)]);
+        const out: string[] = [];
+
+        const result = await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect({ code: result.code, output: out.join('\n') }).toEqual({
+          code: 0,
+          output: expect.stringContaining('BLOCKED: blocked state unknown — no scan recorded'),
+        });
+      });
+
+      it('reports an unreadable blocked snapshot as unknown and exits successfully', async () => {
+        const repo = join(root, 'repo-malformed-blocked-snapshot');
+        await mkdir(repo, { recursive: true });
+        await writeBlockedSnapshot(repo, '{"schemaVersion": 1, "writ');
+        const registryPath = await registry([record('repo-malformed-blocked-snapshot', repo)]);
+        const out: string[] = [];
+
+        const result = await runDaemonStatus({ registryPath, out: (line) => out.push(line) });
+
+        expect({ code: result.code, output: out.join('\n') }).toEqual({
+          code: 0,
+          output: expect.stringContaining('BLOCKED: blocked state unknown — snapshot unreadable'),
+        });
       });
     });
 
