@@ -7,6 +7,33 @@
 **Stories:** .docs/stories/no-release-time-smoke-or-eval-gate-releases-cut-wi.md
 **Conflict check:** Clean as of 2026-08-04 — 0 blocking, 2 degrading resolved
 
+## Amendments
+
+**Amendment 1 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan explicitly
+authorizes the correction of its own `**Wired-into:**` declarations recorded below, and any
+diff that carries only that correction is in scope for this plan.
+
+As authored, three anchors named call sites the wiring probe can never resolve, so
+`wiring_check` failed on every build and BUILD could not fix it — BUILD may not rewrite an
+approved plan (see #1306; #1190 is the durable DECIDE-time validator). The anchors were
+wrong as authored, not made wrong by the implementation:
+
+| Task(s) | As authored | Corrected to | Why the original could never resolve |
+|---|---|---|---|
+| 1 | `src/conductor/package.json#scripts.smoke` | `src/conductor/scripts/smoke.ts#runSmokeCli` | A JSON script key is not a code symbol; the probe searches file text for a declaration. |
+| 5–13 | `src/conductor/test/smoke-capability.ts#declareSmokeCapability` | `src/conductor/src/engine/smoke-runner.ts#resolveGateSmokeFile` | Neither that path nor that symbol has ever existed in this repository. |
+| 15–17 | `src/conductor/src/index.ts#exports` | `src/conductor/src/index.ts#classifyReleasePublication` | `exports` is a keyword, not an exported symbol. |
+
+Scope of this amendment is exactly the `**Wired-into:**` lines above. It changes no task's
+steps, files, dependencies, or acceptance criteria, and adds no work. Correcting an anchor to
+name the real production call site tightens what `wiring_check` verifies; it does not weaken
+the gate, and no gate machinery is modified.
+
+**Not authorized by this amendment:** editing `src/conductor/src/engine/wiring-probe.ts` or any
+other shared gate machinery to accommodate this feature, and deleting or un-exporting tested
+production code to satisfy the probe. Both were attempted in `b798ceaa8` and correctly failed
+Scope. Task 6 and Task 7 still owe the tests that commit removed.
+
 ## Summary
 
 Give the smoke tier one auto-discovering entry point, replace nine bespoke env gates with a
