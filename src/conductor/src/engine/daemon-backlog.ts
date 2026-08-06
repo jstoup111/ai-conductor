@@ -746,6 +746,11 @@ export async function discoverBacklog(
   };
 
   const items: BacklogItem[] = [];
+  const blockedItems: BlockedSpecItem[] = [];
+  const block = async (item: BlockedSpecItem, message: string): Promise<void> => {
+    blockedItems.push(item);
+    await warnOnce(item.slug, message);
+  };
   // slug -> raw (unparseable) Source-Ref text, for specs whose intake marker
   // is present but malformed (see the dependency-gate loop below).
   const malformedSourceRefs = new Map<string, string>();
@@ -787,7 +792,28 @@ export async function discoverBacklog(
     }
 
     const storiesRef = await resolveStoriesRef(tree, slug, planContent);
-    if (storiesRef.kind !== 'resolved') continue; // no stories on the base branch → not eligible
+    if (storiesRef.kind === 'unresolvable') {
+      const remedy =
+        `Fix ${planRel}: use a repo-relative path, an inline-code path, or a Markdown link, ` +
+        'each optionally followed by a trailing annotation.';
+      await block(
+        { slug, reason: 'unresolvable-stories-ref', remedy },
+        `skip ${slug}: merged spec cannot build — Stories reference cannot resolve. ${remedy} ` +
+          'logged once.',
+      );
+      continue;
+    }
+    if (storiesRef.kind === 'missing') {
+      const remedy =
+        `Create the Stories file at ${storiesRef.path} on the default branch, or fix its ` +
+        `reference in ${planRel}.`;
+      await block(
+        { slug, reason: 'stories-missing', remedy },
+        `skip ${slug}: merged spec cannot build — Stories file missing at ${storiesRef.path}. ` +
+          `${remedy} logged once.`,
+      );
+      continue;
+    }
     const storiesRel = storiesRef.path;
 
     // Carry the engineer-assessed complexity tier so the daemon build honors it
@@ -1007,7 +1033,7 @@ export async function discoverBacklog(
   // content-eligible, non-intake specs and dispatch unaffected, preserving
   // today's behavior for hand-authored work.
   if (!opts.resolver) {
-    return { items, waiting: [], blocked: [], gated: gatedItems };
+    return { items, waiting: [], blocked: blockedItems, gated: gatedItems };
   }
   const resolver = opts.resolver;
   const gated: BacklogItem[] = [];
@@ -1043,7 +1069,7 @@ export async function discoverBacklog(
   }
 
   announceWaitingForRoot(projectRoot, log, waiting);
-  return { items: gated, waiting, blocked: [], gated: gatedItems };
+  return { items: gated, waiting, blocked: blockedItems, gated: gatedItems };
 }
 
 /**

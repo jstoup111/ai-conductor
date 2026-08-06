@@ -193,6 +193,66 @@ describe('engine/daemon-backlog — discoverBacklog (eligibility vetting)', () =
     );
   });
 
+  it('blocks an unresolvable Stories reference and logs its actionable remedy once across scans', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/unresolvable-stories.md'),
+      planWithDeps('/outside/stories.md'),
+    );
+    const warned = new Set<string>();
+    const logs: string[] = [];
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+
+    const first = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    const second = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+
+    expect(first.blocked).toEqual([
+      {
+        slug: 'unresolvable-stories',
+        reason: 'unresolvable-stories-ref',
+        remedy:
+          'Fix .docs/plans/unresolvable-stories.md: use a repo-relative path, an inline-code path, or a Markdown link, each optionally followed by a trailing annotation.',
+      },
+    ]);
+    expect(second.blocked).toEqual(first.blocked);
+    expect(logs.filter((message) => /unresolvable-stories.*repo-relative.*inline-code.*Markdown link.*trailing annotation/i.test(message))).toHaveLength(1);
+  });
+
+  it('blocks a missing Stories file and logs its resolved path once across scans', async () => {
+    await writeFile(
+      join(dir, '.docs/plans/missing-stories.md'),
+      planWithDeps('.docs/stories/missing-stories.md'),
+    );
+    const warned = new Set<string>();
+    const logs: string[] = [];
+    const opts = {
+      treeSource: fsTreeSource(dir),
+      hasWarned: async (slug: string) => warned.has(slug),
+      markWarned: async (slug: string) => {
+        warned.add(slug);
+      },
+    };
+
+    const first = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+    const second = await discoverBacklog(dir, undefined, (message) => logs.push(message), opts);
+
+    expect(first.blocked).toEqual([
+      {
+        slug: 'missing-stories',
+        reason: 'stories-missing',
+        remedy:
+          'Create the Stories file at .docs/stories/missing-stories.md on the default branch, or fix its reference in .docs/plans/missing-stories.md.',
+      },
+    ]);
+    expect(second.blocked).toEqual(first.blocked);
+    expect(logs.filter((message) => /missing-stories.*\.docs\/stories\/missing-stories\.md/i.test(message))).toHaveLength(1);
+  });
+
   describe('dependency gate (Task 11)', () => {
     async function seedWithSourceRef(slug: string, sourceRef: string) {
       await writeFile(join(dir, `.docs/plans/${slug}.md`), planWithDeps(`.docs/stories/${slug}.md`));
