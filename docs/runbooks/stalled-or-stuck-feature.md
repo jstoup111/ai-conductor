@@ -77,7 +77,7 @@ A feature that errors gets a diagnostic HALT written at the deterministic
 that marker after fixing the cause. If the daemon log reports `unrecoverable-state`, it could not
 write that marker; repair the target directory or permissions first, then re-run the dispatch.
 
-`NEVER-STARTED` is not a halt: it means no `conduct-state.json` was ever written and the feature
+`NEVER-STARTED` is not a halt: the dashboard found no readable `conduct-state.json`, and the feature
 remains dispatchable. Do not reclaim or unpark it merely to make it run. For a retained row, follow
 its `remedy:` line: an open PR needs no action until it lands; a closed, unknown, or legacy PR state
 can be handled with `conduct daemon reclaim-worktree <slug>` when reclaim is appropriate.
