@@ -1607,6 +1607,10 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
           processedDir,
           discover: () => discoverTick({ refresh: true }),
           log,
+          prStateProbe: async (prUrl) => {
+            const { state } = await tracker.viewPullRequest(prUrl, projectRoot);
+            return state === 'OPEN' ? 'open' : state === 'CLOSED' ? 'closed' : undefined;
+          },
         });
         // Task 11 (operator-park, FR-6): PARKED outranks every other group.
         // `scanInheritedState` has no concept of parking, so compute the
