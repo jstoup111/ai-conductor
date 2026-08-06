@@ -159,6 +159,8 @@ export interface InheritedState {
   gated?: GatedItem[];
   /** Feature worktrees retained after PR open until their branch lands on main. */
   retainedWorktrees?: RetainedWorktreeEntry[];
+  /** Feature worktrees that have not yet written pipeline state. */
+  neverStarted?: string[];
 }
 
 export interface ScanInheritedStateDeps {
@@ -391,6 +393,7 @@ export async function scanInheritedState(
   const haltedSlugs = new Set<string>();
   const inProgress: InProgressEntry[] = [];
   const retainedWorktrees: RetainedWorktreeEntry[] = [];
+  const neverStarted: string[] = [];
 
   for (const slug of slugs) {
     try {
@@ -440,9 +443,9 @@ export async function scanInheritedState(
       }
       if (!present) {
         if (isRetainedFeatureWorktree) {
-          retainedWorktrees.push({ slug, reason: 'pr-open-awaiting-main' });
+          neverStarted.push(slug);
         }
-        continue; // no conduct-state → not in-progress
+        continue; // no conduct-state → never-started, not in-progress
       }
       if (donePresent) {
         // Finished pipeline, stale HALT, not (yet) in the processed ledger —
@@ -546,6 +549,7 @@ export async function scanInheritedState(
     gated,
     priorityResolution,
     retainedWorktrees,
+    neverStarted,
   };
 }
 
