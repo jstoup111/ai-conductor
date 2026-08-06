@@ -63,10 +63,26 @@ behaviors, so each story stays small and independently verifiable. Tag every sto
 `FR-N` it came from (traceability: PRD → story → plan task). Every `FR-N` must be covered by
 at least one story.
 
+**Every story heading MUST carry an id**, in the form `## Story <id>: <title>` (`## Story 1: …`,
+`## Story 2.1: …`). The id is machine-parsed, not decorative: the engine splits a stories file into
+per-story blocks by matching `## Story` followed by **whitespace** and an id of `[A-Za-z0-9.-]`.
+A heading with no id — `## Story: Title` — does not match, so the whole file collapses into a single
+unnamed block and three gates silently degrade:
+
+- the mandatory happy-path/negative-path check runs once over the **whole file** instead of per
+  story, so a story missing a negative path passes whenever any *other* story in the file has one;
+- per-story plan coverage falls back to a single file-derived id, so a plan covering one story
+  satisfies coverage for all of them;
+- every `story-<id>` citation in a coherence mapping resolves to nothing and is rejected as a
+  fabricated id — the first loud symptom, and it appears only at land, long after the real mistake.
+
+Separators other than whitespace after the id are free (`## Story 1: Title` and `## Story 1 — Title`
+both parse). What is not optional is the id itself.
+
 ```markdown
 **Status:** Accepted
 
-## Story: [Descriptive Title]
+## Story 1: [Descriptive Title]
 
 **Requirement:** FR-N
 
@@ -169,6 +185,8 @@ with existing stories.
 
 ## Verification
 
+- [ ] Every story heading carries a machine-parseable id (`## Story <id>: <title>`) — an
+      id-less heading silently collapses the file into one block and degrades three gates
 - [ ] Every requirement in the design doc has at least one story
 - [ ] Every story has both happy AND negative paths
 - [ ] At least one negative path per acceptance criterion
