@@ -919,6 +919,37 @@ describe('Task 8: protected-target land gate blast radius', () => {
 });
 
 describe('Task 4: idea-scoped spec requirement on the product track (#488)', () => {
+  it('Task 12: lands when an annotated Stories reference resolves to the selected artifact', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      PLAN_WITH_DEPS.replace(
+        '.docs/stories/dep-bump.md',
+        '`.docs/stories/dep-bump.md` (one accepted story)',
+      ),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    const result = await landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh });
+
+    expect(result.branch).toBeTruthy();
+  });
+
+  it('Task 12: names the selected artifact, invalid resolution, and accepted annotated forms on refusal', async () => {
+    const dir = await seedValidWorktree();
+    await writeFile(
+      join(dir, '.docs', 'plans', 'dep-bump.md'),
+      PLAN_WITH_DEPS.replace('.docs/stories/dep-bump.md', '/outside/stories.md'),
+    );
+    const gh: GhRunner = async () => ({ stdout: 'bob\n' });
+
+    await expect(
+      landSpec(target(), 'dep bump', dir, undefined, { ownerConfig: {}, gh }),
+    ).rejects.toThrow(
+      /\.docs\/stories\/dep-bump\.md.*resolved: invalid.*repo-relative path.*inline-code path.*Markdown link.*trailing annotation/i,
+    );
+  });
+
   it('rejects a plan whose Stories link does not resolve to the selected stories artifact', async () => {
     const dir = await seedValidWorktree();
     await writeFile(
