@@ -45,6 +45,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - The wiring reachability gate no longer flags test-only exported helpers as unwired production surface. ([implementation PR #1334](https://github.com/jstoup111/ai-conductor/pull/1334)).
 - Merged specs whose plan uses an inline-code, linked, or annotated `**Stories:**` reference now resolve and dispatch instead of being silently dropped; `conduct-ts daemon status` lists blocked specs with reason and remedy; and a `## Migration` section that ends a PR body no longer parses as malformed release metadata. ([implementation PR #1337](https://github.com/jstoup111/ai-conductor/pull/1337)).
 - The /stories skill now requires machine-parseable story IDs, preserving per-story validation, plan coverage, and coherence checks. ([implementation PR #1341](https://github.com/jstoup111/ai-conductor/pull/1341)).
+- FINISH now re-enters immediately after a verified publication transition instead of spending step retry budget or escalation, bounded to 12 transitions per FINISH entry with a dedicated needs-human halt if publication still hasn't converged. ([implementation PR #1345](https://github.com/jstoup111/ai-conductor/pull/1345)).
 
 ## [0.99.20] - 2026-08-03
 
