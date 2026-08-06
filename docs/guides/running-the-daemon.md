@@ -477,10 +477,18 @@ proof-gated cleanup paths.
   by later ticks.
 
 `conduct-ts daemon status`'s startup dashboard groups every retained worktree under
-`RETAINED WORKTREES (<n>)`, each line reading `<slug> — <reason>` where `<reason>` is
-`pr-open-awaiting-main` (the common case above) or `pr-closed-unmerged` (a finished pipeline whose
-PR closed without merging — reclaimable). A parked slug is excluded from this section, same as
-every other dashboard group.
+`RETAINED WORKTREES (<n>)`. A retained row includes an evidence-derived reason and a `remedy:`
+line. `pr-open-awaiting-main` appears only after the daemon has verified that the ledger's PR URL
+is still open; an unavailable, failed, or mismatched PR lookup reports `pr-state-unknown` instead.
+Legacy ships with no recorded URL report `shipped-no-pr-reference`. Closed-unmerged, unknown, and
+legacy retained rows name `conduct daemon reclaim-worktree <slug>` as the available operator
+action; an open PR states that retention ends when the PR lands on main.
+
+`NEVER-STARTED (<n>)` is separate from retained worktrees. It means the directory has never written
+`.pipeline/conduct-state.json`; it remains dispatchable and needs no operator action. PARKED and
+HALTED take precedence over both groups: their rows state the reason and print the corresponding
+`conduct daemon unpark <slug>` or HALT-clear remedy. A slug appears in only its highest-precedence
+dashboard group.
 
 To remove a single retained worktree by hand — a closed-unmerged one you've decided not to
 resume, or one you want gone before its shipped record lands — use

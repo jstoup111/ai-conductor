@@ -20,6 +20,7 @@ Any of these:
 - The daemon log shows `▶ start <slug>` and then nothing for a long time.
 - `■ done <slug>: halted` or `■ done <slug>: error` appears and the slug stops being dispatched.
 - The startup dashboard lists the slug under HALTED instead of IN-PROGRESS or ELIGIBLE.
+- The dashboard lists a reason and `remedy:` line for a PARKED, HALTED, or retained slug.
 - The same build step retries repeatedly with the same reason.
 - A feature is marked complete but the PR never appeared.
 
@@ -50,10 +51,15 @@ never absent for long. Content the reader doesn't recognize still reads as `uncl
 | `legacy` | Predates total classification; stamped by the daemon's startup migration. | Yes, on a base-branch advance, same as `mechanical`. |
 | *(absent / unrecognized)* | Treated as `unclassified`. | No — skipped on every sweep, same as `needs-human`. |
 
-A feature that errored rather than halted gets a diagnostic HALT written for it, so the daemon
-log's bare `error` line always has a body to read — **unless the failure happened before the
-worktree existed**. If `.worktrees/<slug>` is missing entirely, no HALT was written; go to
-[worktree and evidence recovery](worktree-and-evidence-recovery.md).
+A feature that errors gets a diagnostic HALT written at the deterministic
+`.worktrees/<slug>/.pipeline/HALT` path even when worktree creation itself fails. Read and clear
+that marker after fixing the cause. If the daemon log reports `unrecoverable-state`, it could not
+write that marker; repair the target directory or permissions first, then re-run the dispatch.
+
+`NEVER-STARTED` is not a halt: it means no `conduct-state.json` was ever written and the feature
+remains dispatchable. Do not reclaim or unpark it merely to make it run. For a retained row, follow
+its `remedy:` line: an open PR needs no action until it lands; a closed, unknown, or legacy PR state
+can be handled with `conduct daemon reclaim-worktree <slug>` when reclaim is appropriate.
 
 ### 2. Classify the stall
 
