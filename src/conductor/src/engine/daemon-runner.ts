@@ -353,7 +353,7 @@ export function makeRunFeature(
               featureLog(
                 `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
               );
-              await writeErrorHalt(worktree.path, triageOutcome.outputTail, featureLog, triageOutcome);
+              await writeErrorHalt(worktree.path, triageOutcome.outputTail, featureLog, triageOutcome, item.slug);
               await deps.teardownWorktree(worktree, true);
               return {
                 slug: item.slug,
@@ -481,7 +481,7 @@ export function makeRunFeature(
         const reason = shipmentFailure;
         const doneMarker = join(worktree.path, '.pipeline', 'DONE');
         await rm(doneMarker, { force: true }).catch(() => {});
-        await writeErrorHalt(worktree.path, reason, featureLog);
+        await writeErrorHalt(worktree.path, reason, featureLog, undefined, item.slug);
 
         // Escalate the false ship: push the branch and open a draft needs-remediation PR
         // (so even the failure path preserves the work on origin). Best-effort: logs any
@@ -533,7 +533,7 @@ export function makeRunFeature(
         outcome.triageEvidence && outcome.triageEvidence.kind === 'park'
           ? outcome.triageEvidence
           : undefined;
-      await writeErrorHalt(worktree.path, noMarkerReason, featureLog, triageEvidenceForHalt);
+      await writeErrorHalt(worktree.path, noMarkerReason, featureLog, triageEvidenceForHalt, item.slug);
       await deps.teardownWorktree(worktree, true);
       // FR-14: sweep mergeable labels after feature completes (error/no-marker).
       await maybeSweep();
@@ -553,7 +553,7 @@ export function makeRunFeature(
         deps.projectRoot ? join(deps.projectRoot, '.worktrees', item.slug) : undefined
       );
       if (haltRoot) {
-        await writeErrorHalt(haltRoot, reason, featureLog);
+        await writeErrorHalt(haltRoot, reason, featureLog, undefined, item.slug);
       }
       if (worktree) {
         await deps.teardownWorktree(worktree, true).catch(() => {});
@@ -575,7 +575,13 @@ export function makeRunFeature(
  * parks for human inspection rather than being silently excluded. Best-effort:
  * a write failure must never mask the original error.
  */
-async function writeErrorHalt(worktreePath: string, reason: string, log?: (msg: string) => void, triageEvidence?: unknown): Promise<void> {
+async function writeErrorHalt(
+  worktreePath: string,
+  reason: string,
+  log?: (msg: string) => void,
+  triageEvidence?: unknown,
+  slug?: string,
+): Promise<void> {
   let note = `feature errored — parked for human inspection\n${reason}\n`;
 
   // If triage evidence is present and it's a park outcome, render extended diagnostics
@@ -620,7 +626,11 @@ async function writeErrorHalt(worktreePath: string, reason: string, log?: (msg: 
       throw new Error('marker verification failed');
     }
   }).catch((err) => {
-    if (log) log(`[daemon-runner] HALT write error: ${err instanceof Error ? err.message : String(err)}`);
+    if (log) {
+      log(
+        `[daemon-runner] unrecoverable-state: HALT marker write failed for ${slug ?? worktreePath}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   });
 }
 
