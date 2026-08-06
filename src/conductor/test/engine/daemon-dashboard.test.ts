@@ -425,6 +425,28 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     expect(state.halted).toEqual([]);
   });
 
+  it('excludes infrastructure worktrees from never-started while containing a state-read failure', async () => {
+    await mkdir(join(worktreeBase, 'engineer-bootstrap'), { recursive: true });
+    await mkdir(join(worktreeBase, 'resolve-conflict'), { recursive: true });
+    await mkdir(join(worktreeBase, 'never-started', '.pipeline'), { recursive: true });
+    await makeStateful('active', { build: 'in_progress' });
+
+    // A file where `.pipeline/` should be makes the state-file read reject.
+    const unreadable = join(worktreeBase, 'unreadable');
+    await mkdir(unreadable, { recursive: true });
+    await writeFile(join(unreadable, '.pipeline'), 'not a directory', 'utf-8');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.neverStarted).toEqual(['never-started', 'unreadable']);
+    expect(state.retainedWorktrees).toEqual([]);
+    expect(state.inProgress).toEqual([{ slug: 'active', step: 'build' }]);
+  });
+
   it('backlog discovery failure degrades eligible to [] without throwing', async () => {
     const state = await scanInheritedState({
       worktreeBase,
