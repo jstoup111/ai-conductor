@@ -2,6 +2,27 @@ import { describe, expect, it } from 'vitest';
 import { resolvePlanStoriesPath } from '../../src/engine/plan-stories-reference.js';
 
 describe('resolvePlanStoriesPath', () => {
+  it.each([
+    ['a bare path', '.docs/stories/feature.md', '.docs/stories/feature.md'],
+    ['an inline-code path', '`.docs/stories/feature.md`', '.docs/stories/feature.md'],
+    [
+      'a Markdown link',
+      '[feature stories](../stories/feature.md)',
+      '.docs/stories/feature.md',
+    ],
+    ['an annotated POSIX-absolute path', '`/outside/stories.md` (note)', null],
+    ['an annotated Windows drive-absolute path', '`C:\\outside\\stories.md` (note)', null],
+    ['an annotated Windows UNC path', '`\\\\server\\share\\stories.md` (note)', null],
+    ['an annotated traversal path', '`../../../outside.md` (note)', null],
+    ['a non-path first token', 'not-a-path (note)', null],
+    ['an empty reference', '', null],
+    ['no Stories line', undefined, '.docs/stories/feature.md'],
+  ])('preserves the result for %s', (_description, reference, expected) => {
+    const planContent = reference === undefined ? '# Plan' : `**Stories:** ${reference}`;
+
+    expect(resolvePlanStoriesPath('.docs/plans/feature.md', planContent)).toBe(expected);
+  });
+
   it('resolves a backticked Stories path with a parenthetical annotation', () => {
     const result = resolvePlanStoriesPath(
       '.docs/plans/feature.md',
@@ -38,21 +59,4 @@ describe('resolvePlanStoriesPath', () => {
     expect(result).toBe('.docs/stories/feature.md');
   });
 
-  it('rejects a Windows drive-absolute Stories reference on every host OS', () => {
-    const result = resolvePlanStoriesPath(
-      '.docs/plans/feature.md',
-      '**Stories:** C:\\outside\\stories.md',
-    );
-
-    expect(result).toBeNull();
-  });
-
-  it('rejects a Windows UNC Stories reference on every host OS', () => {
-    const result = resolvePlanStoriesPath(
-      '.docs/plans/feature.md',
-      '**Stories:** \\\\server\\share\\stories.md',
-    );
-
-    expect(result).toBeNull();
-  });
 });
