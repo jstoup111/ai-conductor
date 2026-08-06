@@ -449,6 +449,25 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
     });
   });
 
+  it('classifies setup-era-only pipeline artifacts as never-started', async () => {
+    const pipeline = join(worktreeBase, 'setup-only', '.pipeline');
+    await mkdir(join(pipeline, 'git-hooks'), { recursive: true });
+    await mkdir(join(pipeline, 'session-hooks'), { recursive: true });
+    await mkdir(join(pipeline, 'audit-trail'), { recursive: true });
+    await writeFile(join(pipeline, 'step-heartbeat'), '{}\n', 'utf-8');
+    await writeFile(join(pipeline, 'task-evidence.json'), '{}\n', 'utf-8');
+    await writeFile(join(pipeline, 'events.jsonl'), '', 'utf-8');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.neverStarted).toEqual(['setup-only']);
+    expect(state.retainedWorktrees).toEqual([]);
+  });
+
   it('renders retained worktrees from disk even when absent from the watch registry', async () => {
     await mkdir(join(worktreeBase, 'capped-out'), { recursive: true });
     await mkdir(join(worktreeBase, 'resolve-capped-out'), { recursive: true });
