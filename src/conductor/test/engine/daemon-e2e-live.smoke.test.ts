@@ -39,6 +39,7 @@ class TokenMeter implements LLMProvider {
   readonly prepareSelfHostAuth: LLMProvider['prepareSelfHostAuth'];
   readonly resolveSelfHostExecutable: LLMProvider['resolveSelfHostExecutable'];
   totalTokens = 0;
+  totalTurns = 0;
   unmetered = 0;
 
   constructor(private readonly provider: LLMProvider) {
@@ -67,6 +68,7 @@ class TokenMeter implements LLMProvider {
       return;
     }
     this.totalTokens += result.tokenUsage.input + result.tokenUsage.output;
+    this.totalTurns += result.tokenUsage.numTurns ?? 0;
   }
 }
 
@@ -119,6 +121,16 @@ function assertTokenCap(totalTokens: number, unmetered: number, cap: number): vo
       `Token cap ${cap} exceeded: observed ${totalTokens}; unmetered results: ${unmetered}`,
     );
   }
+}
+
+function assertSuccessfulCredentialedRun(
+  provisioned: Pick<ProvisionedHome, 'dispatches'> | undefined,
+  meter: Pick<TokenMeter, 'totalTurns' | 'totalTokens' | 'unmetered'>,
+): void {
+  expect(provisioned?.dispatches ?? 0).toBeGreaterThan(0);
+  expect(meter.totalTurns).toBeGreaterThan(0);
+  expect(meter.totalTokens).toBeGreaterThan(0);
+  expect(meter.unmetered).toBe(0);
 }
 
 const fixturePlanPath = fileURLToPath(
@@ -192,10 +204,10 @@ describe('daemon E2E live terminal guard', () => {
   it('meters both provider methods and rejects totals above the configured cap', async () => {
     const provider: LLMProvider = {
       invoke: vi.fn<LLMProvider['invoke']>()
-        .mockResolvedValueOnce({ success: true, output: 'done', exitCode: 0, tokenUsage: { input: 12, output: 3 } })
+        .mockResolvedValueOnce({ success: true, output: 'done', exitCode: 0, tokenUsage: { input: 12, output: 3, numTurns: 4 } })
         .mockResolvedValueOnce({ success: true, output: 'done', exitCode: 0 }),
       invokeInteractive: vi.fn<LLMProvider['invokeInteractive']>()
-        .mockResolvedValue({ success: true, output: 'done', exitCode: 0, tokenUsage: { input: 5, output: 7 } }),
+        .mockResolvedValue({ success: true, output: 'done', exitCode: 0, tokenUsage: { input: 5, output: 7, numTurns: 2 } }),
     };
     const meter = new TokenMeter(provider);
     const options = { prompt: 'metered' } as InvokeOptions;
@@ -206,6 +218,7 @@ describe('daemon E2E live terminal guard', () => {
 
     expect({
       total: meter.totalTokens,
+      turns: meter.totalTurns,
       unmetered: meter.unmetered,
       forwardedInvoke: vi.mocked(provider.invoke).mock.calls.every(([sent]) => sent === options),
       forwardedInteractive: vi.mocked(provider.invokeInteractive).mock.calls
@@ -220,6 +233,7 @@ describe('daemon E2E live terminal guard', () => {
       })(),
     }).toEqual({
       total: 27,
+      turns: 6,
       unmetered: 1,
       forwardedInvoke: true,
       forwardedInteractive: true,
@@ -228,6 +242,29 @@ describe('daemon E2E live terminal guard', () => {
     expect(() => assertTokenCap(meter.totalTokens, meter.unmetered, 26)).toThrow(
       'Token cap 26 exceeded: observed 27; unmetered results: 1',
     );
+  });
+
+  it('requires successful credentialed runs to dispatch with reported turns, tokens, and no unmetered results', () => {
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 0 },
+    )).not.toThrow();
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 0 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 0 },
+    )).toThrow();
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 0, totalTokens: 1, unmetered: 0 },
+    )).toThrow();
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 1, totalTokens: 0, unmetered: 0 },
+    )).toThrow();
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 1 },
+    )).toThrow();
   });
 
   it('wraps a provider transparently, preserving capability flags and optional members', async () => {
@@ -534,6 +571,8 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
       const { stdout: changedFiles } = await execa(
         'git', ['diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD'], { cwd: worktreeDir },
       );
+
+      assertSuccessfulCredentialedRun(provisioned, meter);
 
       expect({
         terminal: await hasSuccessfulTerminalState(worktreeDir, slug),
