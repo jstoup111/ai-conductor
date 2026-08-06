@@ -484,9 +484,9 @@ Legacy ships with no recorded URL report `shipped-no-pr-reference`. Closed-unmer
 legacy retained rows name `conduct daemon reclaim-worktree <slug>` as the available operator
 action; an open PR states that retention ends when the PR lands on main.
 
-`NEVER-STARTED (<n>)` is separate from retained worktrees. It means the directory has never written
-`.pipeline/conduct-state.json`; it remains dispatchable and needs no operator action. PARKED and
-HALTED take precedence over both groups: their rows state the reason and print the corresponding
+`NEVER-STARTED (<n>)` is separate from retained worktrees. It means the dashboard found no readable
+`.pipeline/conduct-state.json`; it remains dispatchable and needs no operator action. PARKED and a
+live HALTED marker take precedence over both groups: their rows state the reason and print the corresponding
 `conduct daemon unpark <slug>` or HALT-clear remedy. A slug appears in only its highest-precedence
 dashboard group.
 
