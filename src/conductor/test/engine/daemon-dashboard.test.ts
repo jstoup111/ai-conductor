@@ -561,7 +561,23 @@ describe('engine/daemon-dashboard — scanInheritedState (FR-2/FR-3)', () => {
       out
         .split('\n')
         .filter((line) => line.startsWith('RETAINED WORKTREES') || line.startsWith('  • ')),
-    ).toEqual(['RETAINED WORKTREES (1)', '  • capped-out — pr-open-awaiting-main']);
+    ).toEqual(['RETAINED WORKTREES (1)', '  • capped-out — shipped-no-pr-reference']);
+  });
+
+  it('derives shipped-no-pr-reference for a legacy shipped ledger entry', async () => {
+    await mkdir(join(worktreeBase, 'legacy-shipped'), { recursive: true });
+    await makeProcessed('legacy-shipped');
+
+    const state = await scanInheritedState({
+      worktreeBase,
+      processedDir,
+      discover: async () => [],
+    });
+
+    expect(state.retainedWorktrees).toEqual([
+      { slug: 'legacy-shipped', reason: 'shipped-no-pr-reference' },
+    ]);
+    expect(state.retainedWorktrees?.some((entry) => entry.reason === 'pr-open-awaiting-main')).toBe(false);
   });
 });
 
