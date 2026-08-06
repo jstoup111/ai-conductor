@@ -177,6 +177,76 @@ describe('Conductor FINISH publication routing', () => {
     }).toEqual({ finish: 'done', publicationAdvances: 2, stepRetries: [] });
   });
 
+  it('keeps the full retry allowance after five publication advances', async () => {
+    const stepRetries: StepName[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_retry', (event) => {
+      if (event.type === 'step_retry') stepRetries.push(event.step);
+    });
+    const advance = vi.fn()
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'establish_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'write_shipped_record' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'judge_pr_prose' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'ready_pr' } as const)
+      .mockResolvedValueOnce({ kind: 'publication_progress', transition: 'record_outcome' } as const)
+      .mockResolvedValueOnce({ kind: 'complete' } as const);
+    const progressConductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true })) },
+      finishPublication: { advance },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'default',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+    });
+
+    await progressConductor.run();
+
+    expect(advance).toHaveBeenCalledTimes(6);
+    // Task 4's progress route must remain silent; this test's five advances
+    // must not be indistinguishable from charged retry events.
+    expect(stepRetries).toEqual([]);
+
+    const retryCalls: StepName[] = [];
+    const retryConductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: {
+        run: vi.fn(async (step) => {
+          retryCalls.push(step);
+          return {
+            success: false,
+            publicationDisposition: {
+              kind: 'publication_retry',
+              transition: 'ready_pr',
+              reason: 'presentation_repair_failed',
+            },
+          };
+        }),
+      },
+      events,
+      projectRoot: dir,
+      fromStep: 'finish',
+      mode: 'auto',
+      maxRetries: 3,
+      git: async () => ({ stdout: '' }),
+      gh: async () => ({ stdout: '' }),
+      runGh: async () => ({ stdout: '' }),
+      escalateBuildFailure: vi.fn(async () => ({})),
+    });
+
+    await retryConductor.run();
+
+    expect(retryCalls).toEqual(['finish', 'finish', 'finish']);
+    expect(stepRetries).toEqual(['finish', 'finish']);
+    await expect(readFile(join(dir, '.pipeline/HALT'), 'utf8')).resolves.toContain(
+      'FINISH publication retry exhausted: presentation_repair_failed',
+    );
+  });
+
   it('halts on the FIRST attempt for a non-retryable publication reason, without spending the budget', async () => {
     const calls: StepName[] = [];
     const runner: StepRunner = {
