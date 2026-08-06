@@ -107,8 +107,9 @@ of completed specs does not bury the one spec I need to fix.
 - Given a merged spec that fails a content check and whose plan and stories content match a
   committed shipped record's spec hash, when a discovery pass runs, then it produces no
   blocked entry.
-- Given a merged spec that fails a content check and whose slug is operator-parked, when the
-  dashboard renders, then the slug appears under `PARKED` and not under `BLOCKED`.
+- Given a merged spec that fails a content check and whose slug is operator-parked, when a
+  discovery pass runs, then it produces no blocked entry — a parked spec is already held by
+  operator decision and needs no second reason.
 
 #### Negative Paths
 - Given a fixture repository, when discovery runs once against the pre-change behaviour and
@@ -121,41 +122,9 @@ of completed specs does not bury the one spec I need to fix.
 
 ---
 
-## Story 4: The startup dashboard renders a BLOCKED group
+## Story 4: `daemon status` explains a blocked spec without scanning anything
 
-**Requirement:** FR-10, FR-11
-
-As a daemon operator watching the daemon start, I want blocked specs in their own group so
-that an idle daemon explains itself without my reading a log file.
-
-### Acceptance Criteria
-
-#### Happy Path
-- Given a discovery result containing two blocked specs, when the dashboard renders, then it
-  emits a `BLOCKED (2)` group with one line per slug carrying the reason and the remedy.
-- Given a discovery result containing no blocked specs, when the dashboard renders, then the
-  `BLOCKED (0)` group is rendered, matching the `GATED` convention of always showing the
-  count when the channel is present.
-- Given a discovery result with entries in every channel, when the dashboard renders, then
-  each slug appears in exactly one group, and the group order is
-  `PARKED`, `HALTED`, `IN-PROGRESS`, `RETAINED WORKTREES`, `GATED`, `BLOCKED`, `WAITING`,
-  `ELIGIBLE`, `PROCESSED`.
-
-#### Negative Paths
-- Given a slug present in both the blocked list and the halted list, when the dashboard
-  renders, then it appears only under `HALTED` — the higher-precedence bucket wins and the
-  slug is not double-listed.
-- Given a blocked slug that is also operator-parked, when the dashboard renders, then it
-  appears only under `PARKED`.
-- Given a discovery result whose blocked channel is absent entirely (legacy caller), when the
-  dashboard renders, then it renders exactly as it does today, with no `BLOCKED` group and no
-  error.
-
----
-
-## Story 5: `daemon status` explains a blocked spec without scanning anything
-
-**Requirement:** FR-12, FR-13, FR-14, FR-15, NFR-1, NFR-3
+**Requirement:** FR-10, FR-11, FR-12, FR-13, NFR-1, NFR-3
 
 As a daemon operator checking from a phone, I want `conduct-ts daemon status` alone to tell me
 why a merged and accepted spec is not eligible.
@@ -181,14 +150,14 @@ why a merged and accepted spec is not eligible.
 - Given a snapshot file containing unparseable content, when `daemon status` runs, then it
   reports blocked state as unknown and the status run still succeeds.
 - Given a snapshot write that fails, when the discovery pass completes, then the pass still
-  returns its blocked entries to the dashboard and the daemon continues dispatching eligible
+  returns its blocked entries to its caller and the daemon continues dispatching eligible
   work.
 
 ---
 
-## Story 6: Landing refuses an unusable stories reference and names the accepted forms
+## Story 5: Landing refuses an unusable stories reference and names the accepted forms
 
-**Requirement:** FR-16, FR-17
+**Requirement:** FR-14, FR-15
 
 As a spec author, I want the land gate to tell me exactly which reference forms are accepted,
 so that I fix the plan instead of guessing.

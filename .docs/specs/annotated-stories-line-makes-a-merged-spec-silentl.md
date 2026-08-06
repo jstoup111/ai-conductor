@@ -61,6 +61,13 @@ automation untouched.
 - Retroactively surfacing already-processed or already-shipped legacy plans (82 of them here)
   as blocked work.
 - Extending `HALTED`, park, or the ownership gate, or changing their automation.
+- **Rendering blocked specs in the daemon startup dashboard.** The dashboard is already past
+  its readable limit at this repository's scale (102 lines, rows up to 328 characters, 85 of
+  102 rows inert), so adding a ninth group to it would make the display worse, not better.
+  Blocked specs reach the operator through `conduct-ts daemon status`, which is where the
+  reported triage actually happened. The dashboard's redesign — including how it should
+  present blocked work — is deferred to
+  [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 - GitHub write-back (PR or issue comments) for blocked specs.
 - Supporting stories references outside the repository, above the repository root, or with a
   non-Markdown target.
@@ -105,30 +112,26 @@ automation untouched.
 
 ### Operator visibility
 
-- **FR-10:** The daemon startup dashboard renders a `BLOCKED` group listing every blocked
-  spec with its reason and remedy.
-- **FR-11:** Every spec discovered on the default branch appears in exactly one dashboard
-  group; the precedence chain is pinned and `BLOCKED` takes its place within it.
-- **FR-12:** Each discovery pass writes the full blocked result to a per-repo snapshot,
+- **FR-10:** Each discovery pass writes the full blocked result to a per-repo snapshot,
   replacing the previous contents, so an entry that stops being blocked disappears without
   operator cleanup.
-- **FR-13:** `conduct-ts daemon status` reads that snapshot and renders a per-repo blocked
+- **FR-11:** `conduct-ts daemon status` reads that snapshot and renders a per-repo blocked
   section with each slug's reason and remedy.
-- **FR-14:** `daemon status` labels the snapshot's freshness, and reports an explicit unknown
+- **FR-12:** `daemon status` labels the snapshot's freshness, and reports an explicit unknown
   state when the snapshot is missing or unparseable, rather than implying zero blocked specs.
-- **FR-15:** `daemon status` performs no repository scan, git operation, or network call to
+- **FR-13:** `daemon status` performs no repository scan, git operation, or network call to
   render the blocked section.
 
 ### Authoring-side refusal
 
-- **FR-16:** `landSpec` continues to refuse a plan whose stories reference does not resolve to
+- **FR-14:** `landSpec` continues to refuse a plan whose stories reference does not resolve to
   the selected stories artifact, and its error names the accepted reference forms — including
   that a trailing annotation is permitted.
-- **FR-17:** The `/plan` skill documents the accepted `**Stories:**` reference forms.
+- **FR-15:** The `/plan` skill documents the accepted `**Stories:**` reference forms.
 
 ## Non-Functional Requirements
 
-- **NFR-1:** `daemon status` stays cheap and offline (FR-15) — it remains a phone-speed check.
+- **NFR-1:** `daemon status` stays cheap and offline (FR-13) — it remains a phone-speed check.
 - **NFR-2:** Discovery adds no repository writes beyond the blocked snapshot and the existing
   warn-once markers.
 - **NFR-3:** A malformed or unreadable blocked snapshot never fails a `daemon status` run.
@@ -137,8 +140,8 @@ automation untouched.
 
 - A plan carrying `` **Stories:** `.docs/stories/x.md` (11 stories) `` on the default branch,
   with approved stories and a dependency tree, appears in `ELIGIBLE` and dispatches.
-- A plan whose stories reference cannot resolve appears in `BLOCKED` with that reason and a
-  remedy, in both the startup dashboard and `daemon status`, and never in `ELIGIBLE`.
+- A plan whose stories reference cannot resolve is reported by `daemon status` as blocked,
+  with that reason and a remedy, and never appears in `ELIGIBLE`.
 - `daemon status` on a repo whose daemon has never run reports blocked state as unknown, not
   as zero.
-- A repository whose plans are all processed or shipped shows an empty `BLOCKED` group.
+- A repository whose plans are all processed or shipped reports zero blocked specs.

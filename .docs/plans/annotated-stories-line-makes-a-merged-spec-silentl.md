@@ -7,12 +7,18 @@
 
 ## Summary
 
-Make an unbuildable merged spec blocking and visible instead of silently skipped. Fifteen
+Make an unbuildable merged spec blocking and visible instead of silently skipped. Thirteen
 small tasks add token-first normalization to the shared stories-reference resolver, split the
 two stories-resolution failures apart, reorder the discovery gauntlet so dedup precedes
-classification, emit a structured `blocked` channel for every content decline, render a
-`BLOCKED` dashboard group, persist a per-pass snapshot that `conduct-ts daemon status` reads
-offline, and make the land-time refusal name the accepted reference forms.
+classification, emit a structured `blocked` channel for every content decline, persist a
+per-pass snapshot that `conduct-ts daemon status` reads offline, and make the land-time
+refusal name the accepted reference forms.
+
+Startup-dashboard rendering of the blocked channel is deliberately **out of scope** — the
+dashboard is already unreadable at this repository's scale and its redesign, including how it
+should present blocked work, is tracked by
+[#1332](https://github.com/jstoup111/ai-conductor/issues/1332). The `blocked` channel this
+plan adds is the data that issue will render.
 
 ## Technical Approach
 
@@ -229,54 +235,9 @@ offline, and make the land-time refusal name the accepted reference forms.
 
 **Dependencies:** Task 7
 
-### Task 9: Render the BLOCKED dashboard group
+### Task 9: Persist the per-pass blocked snapshot
 
-**Story:** Story 4 — The startup dashboard renders a BLOCKED group, happy paths
-**Type:** happy-path
-
-**Steps:**
-1. Add failing tests asserting a `BLOCKED (2)` group with a reason-and-remedy line per slug,
-   a `BLOCKED (0)` group when the channel is present but empty, and the full group order
-   `PARKED`, `HALTED`, `IN-PROGRESS`, `RETAINED WORKTREES`, `GATED`, `BLOCKED`, `WAITING`,
-   `ELIGIBLE`, `PROCESSED`.
-2. Verify the focused dashboard tests fail (RED).
-3. Carry blocked entries through `scanInheritedState` into the dashboard state and render the
-   group between `GATED` and `WAITING`, following the `gatedSpecLine` shape.
-4. Verify the focused dashboard tests pass (GREEN).
-5. Commit with message: "feat(dashboard): render the BLOCKED group"
-
-**Files:** `src/conductor/src/engine/daemon-dashboard.ts`,
-`src/conductor/test/engine/daemon-dashboard.test.ts`
-
-**Wired-into:** `src/conductor/src/engine/daemon-dashboard.ts#renderDashboard`
-
-**Dependencies:** Task 7
-
-### Task 10: Keep every spec in exactly one dashboard group
-
-**Story:** Story 4 — The startup dashboard renders a BLOCKED group, negative paths
-**Type:** negative-path
-
-**Steps:**
-1. Add failing tests asserting a slug present in both blocked and halted renders only under
-   `HALTED`, a blocked-and-parked slug renders only under `PARKED`, and a dashboard state with
-   the blocked channel absent renders byte-identically to today with no `BLOCKED` group.
-2. Verify the focused dashboard tests fail (RED).
-3. Filter blocked entries by the parked, halted, retained, and processed sets before
-   rendering, and make the group conditional on the channel being present.
-4. Verify the focused dashboard tests pass (GREEN).
-5. Commit with message: "fix(dashboard): keep BLOCKED out of higher-precedence buckets"
-
-**Files:** `src/conductor/src/engine/daemon-dashboard.ts`,
-`src/conductor/test/engine/daemon-dashboard.test.ts`
-
-**Wired-into:** `src/conductor/src/engine/daemon-dashboard.ts#renderDashboard`
-
-**Dependencies:** Task 9
-
-### Task 11: Persist the per-pass blocked snapshot
-
-**Story:** Story 5 — `daemon status` explains a blocked spec, happy paths 1 and 3
+**Story:** Story 4 — `daemon status` explains a blocked spec, happy paths 1 and 3
 **Type:** infrastructure
 
 **Steps:**
@@ -296,9 +257,9 @@ offline, and make the land-time refusal name the accepted reference forms.
 
 **Dependencies:** Task 7
 
-### Task 12: Render the blocked section in `daemon status`
+### Task 10: Render the blocked section in `daemon status`
 
-**Story:** Story 5 — `daemon status` explains a blocked spec, happy paths 2 and 4
+**Story:** Story 4 — `daemon status` explains a blocked spec, happy paths 2 and 4
 **Type:** happy-path
 
 **Steps:**
@@ -316,11 +277,11 @@ offline, and make the land-time refusal name the accepted reference forms.
 
 **Wired-into:** `src/conductor/src/engine/daemon-observe-cli.ts#runDaemonStatus`
 
-**Dependencies:** Task 11
+**Dependencies:** Task 9
 
-### Task 13: Report unknown rather than zero, and never fail a status run
+### Task 11: Report unknown rather than zero, and never fail a status run
 
-**Story:** Story 5 — `daemon status` explains a blocked spec, negative paths
+**Story:** Story 4 — `daemon status` explains a blocked spec, negative paths
 **Type:** negative-path
 
 **Steps:**
@@ -339,11 +300,11 @@ offline, and make the land-time refusal name the accepted reference forms.
 
 **Wired-into:** `src/conductor/src/engine/daemon-observe-cli.ts#runDaemonStatus`
 
-**Dependencies:** Task 12
+**Dependencies:** Task 10
 
-### Task 14: Make the land refusal name the accepted reference forms
+### Task 12: Make the land refusal name the accepted reference forms
 
-**Story:** Story 6 — Landing refuses an unusable stories reference, happy paths 1 and 2
+**Story:** Story 5 — Landing refuses an unusable stories reference, happy paths 1 and 2
 **Type:** happy-path
 
 **Steps:**
@@ -363,9 +324,9 @@ offline, and make the land-time refusal name the accepted reference forms.
 
 **Dependencies:** Task 1
 
-### Task 15: Document the blocked state and the accepted reference forms
+### Task 13: Document the blocked state and the accepted reference forms
 
-**Story:** Story 6 — Landing refuses an unusable stories reference, happy path 3
+**Story:** Story 5 — Landing refuses an unusable stories reference, happy path 3
 **Type:** documentation
 
 **Steps:**
@@ -375,8 +336,9 @@ offline, and make the land-time refusal name the accepted reference forms.
 3. Make any assertion adjustment those cases require.
 4. Verify the focused land tests pass (GREEN).
 5. Document the accepted `**Stories:**` reference forms in the `/plan` skill; document the
-   `BLOCKED` group and the `daemon status` blocked section in
-   `docs/guides/running-the-daemon.md` and `docs/reference/cli.md`; add a blocked-spec entry
+   blocked state and the `daemon status` blocked section in
+   `docs/guides/running-the-daemon.md` and `docs/reference/cli.md`, noting that the startup
+   dashboard does not yet render it (#1332); add a blocked-spec entry
    to `docs/runbooks/stalled-or-stuck-feature.md` noting that the remedy is on the default
    branch and that a first pass after upgrading may dispatch previously-invisible specs in a
    repository without processed markers.
@@ -390,7 +352,7 @@ offline, and make the land-time refusal name the accepted reference forms.
 
 **Wired-into:** none (no new production surface)
 
-**Dependencies:** Task 14
+**Dependencies:** Task 12
 
 ## Task Dependency Graph
 
@@ -398,16 +360,14 @@ offline, and make the land-time refusal name the accepted reference forms.
 graph TD
   T1[Task 1: normalize reference] --> T2[Task 2: preserve refusals]
   T1 --> T3[Task 3: split resolution outcomes]
-  T1 --> T14[Task 14: land error message]
+  T1 --> T12[Task 12: land error message]
   T3 --> T4[Task 4: type blocked channel]
   T4 --> T5[Task 5: dedup first]
   T5 --> T6[Task 6: block on stories reasons]
   T6 --> T7[Task 7: block on content reasons]
   T7 --> T8[Task 8: visibility-only proof]
-  T7 --> T9[Task 9: BLOCKED group]
-  T9 --> T10[Task 10: one-bucket invariant]
-  T7 --> T11[Task 11: blocked snapshot]
-  T11 --> T12[Task 12: status section]
-  T12 --> T13[Task 13: unknown, never zero]
-  T14 --> T15[Task 15: documentation]
+  T7 --> T9[Task 9: blocked snapshot]
+  T9 --> T10[Task 10: status section]
+  T10 --> T11[Task 11: unknown, never zero]
+  T12 --> T13[Task 13: documentation]
 ```

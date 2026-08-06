@@ -3,9 +3,9 @@
 **Last updated:** 2026-08-05
 **Scope:** How a merged spec that cannot build becomes first-class visible state: a
 token-first stories-reference resolver, a reordered per-plan gauntlet in `discoverBacklog`
-that emits structured `blocked` entries after dedup, a `BLOCKED` dashboard group mirroring
-the `GATED` pattern from #208, and a per-pass `.daemon/blocked.json` snapshot read by
-`conduct-ts daemon status`. PRD:
+that emits structured `blocked` entries after dedup, and a per-pass `.daemon/blocked.json`
+snapshot read by `conduct-ts daemon status`, mirroring the `GATED` snapshot pattern from #208.
+Startup-dashboard rendering is out of scope and deferred to #1332. PRD:
 `.docs/specs/annotated-stories-line-makes-a-merged-spec-silentl.md` (issue #1330).
 
 ## Component View
@@ -34,11 +34,9 @@ graph TD
     WMARK["warn-once markers"]:::existing
   end
 
-  subgraph dash["startup dashboard"]
-    SCAN["scanInheritedState"]:::existing
-    BGRP["BLOCKED group - reason + remedy per slug"]:::new
-    GGRP["GATED group"]:::existing
-    REND["renderDashboard - pinned precedence"]:::changed
+  subgraph dash["startup dashboard (unchanged here - see #1332)"]
+    SCAN["scanInheritedState - receives blocked entries as data"]:::existing
+    REND["renderDashboard - no BLOCKED group yet"]:::existing
   end
 
   subgraph observe["daemon status CLI"]
@@ -63,12 +61,9 @@ graph TD
   COLL --> WARN
   WARN -.-> WMARK
   OG --> PICK
-  COLL -- "blocked entries in scan result" --> SCAN
+  COLL -. "available as data; not rendered yet (#1332)" .-> SCAN
   COLL -- "rewrite each pass" --> SNAP
-  SCAN --> BGRP
-  SCAN --> GGRP
-  BGRP --> REND
-  GGRP --> REND
+  SCAN --> REND
   STAT --> BREAD
   BREAD --> SNAP
   GSNAP -.-> STAT
@@ -139,3 +134,6 @@ sequenceDiagram
 - **Token-first normalization.** The resolver normalizes the reference before validating it,
   rather than special-casing a trailing parenthetical — see
   `adr-2026-08-05-token-first-stories-reference-normalization`.
+- **The startup dashboard is not touched.** Blocked entries are produced as data and reach the
+  operator through `daemon status`; how the dashboard should display them belongs to its
+  redesign, tracked by [#1332](https://github.com/jstoup111/ai-conductor/issues/1332).

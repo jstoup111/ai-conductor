@@ -49,19 +49,27 @@ An unbuildable merged spec has no worktree, no attempt id, no recovery count, no
 
 ## Decision
 
-Option A. `BLOCKED` is its own channel from `discoverBacklog`, its own dashboard group, its
-own snapshot, and its own `daemon status` section. `HALTED`, `GATED`, park, and the
-dependency gate are untouched.
+Option A. `BLOCKED` is its own channel from `discoverBacklog`, its own snapshot, and its own
+`daemon status` section. `HALTED`, `GATED`, park, and the dependency gate are untouched.
+
+**Startup-dashboard rendering is deliberately deferred.** The operator cut it from this
+change: the dashboard already renders 102 lines with rows up to 328 characters, 85 of them
+inert, so adding a ninth group would make it less readable, not more. The reported triage
+happened through `conduct-ts daemon status`, which this change does cover. How the dashboard
+should present blocked work is part of its redesign, tracked by
+[#1332](https://github.com/jstoup111/ai-conductor/issues/1332).
 
 ## Consequences
 
-- The dashboard precedence chain becomes
-  `PARKED > HALTED > PROCESSED > IN-PROGRESS > RETAINED > GATED > BLOCKED > WAITING > ELIGIBLE`.
-  By construction a blocked spec never reaches the owner gate or the dependency gate (content
-  vetting runs first), so `BLOCKED` can never co-occur with `GATED` or `WAITING` for one
-  slug; the ordering documents that invariant rather than resolving a real contention.
-- The one-bucket invariant (every discovered spec appears in exactly one group) is extended
-  to cover blocked specs, and is tested.
+- The `blocked` channel is available to the dashboard as data from the moment this ships;
+  #1332 decides how to render it. Nothing in the dashboard changes here.
+- A blocked spec never reaches the owner gate or the dependency gate, because content vetting
+  runs first — so `BLOCKED` can never co-occur with `GATED` or `WAITING` for one slug. That
+  invariant is a property of the gauntlet order, not of any rendering, and it holds whether or
+  not a group is displayed.
+- The parked, processed, and shipped exclusions are applied in *discovery* rather than at
+  render time (see `adr-2026-08-05-blocked-classification-after-dedup`), so any future
+  consumer — dashboard, status, or otherwise — receives an already-actionable list.
 - `.daemon/blocked.json` joins `.daemon/gated.json` as a per-pass snapshot; the two are
   independent files with the same lifecycle.
 - No halt-related automation, runbook, or marker format changes.
