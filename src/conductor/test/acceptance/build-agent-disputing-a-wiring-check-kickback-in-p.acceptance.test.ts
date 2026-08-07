@@ -267,7 +267,8 @@ describe('#1336 disputed wiring kickback build outcome', () => {
     ) as unknown;
     expect(latestOutcome(payload)).toMatchObject({ outcome: 'moved' });
     const halt = await readFile(join(projectRoot, '.pipeline', 'HALT'), 'utf8');
-    expect(halt).toMatch(/kickback|cap|repeated/i);
+    expect(halt).toMatch(/wiring_check/i);
+    expect(halt).not.toMatch(/refused: the build made no tree change/i);
 
     // A missing observation sidecar fails open: no pre-dispatch refusal may
     // have prevented the first build above.

@@ -2061,7 +2061,19 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
       log(`${dot} ${chalk.cyan('▶')} ${event.step}`);
       break;
     case 'step_completed':
-      log(`${dot}   ${event.step} ${chalk.green('✓')} ${chalk.green(event.status)}`);
+      {
+        let treeAnnotation = '';
+        if (event.step === 'build' && (event.treeBefore !== undefined || event.treeAfter !== undefined)) {
+          if (event.treeBefore === null || event.treeAfter === null) {
+            treeAnnotation = ' (tree unknown)';
+          } else if (event.treeBefore === event.treeAfter) {
+            treeAnnotation = ` (tree ${event.treeAfter.slice(0, 7)} unchanged)`;
+          } else {
+            treeAnnotation = ` (tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)})`;
+          }
+        }
+        log(`${dot}   ${event.step} ${chalk.green('✓')} ${chalk.green(event.status)}${treeAnnotation}`);
+      }
       break;
     case 'parallel_started':
       log(`${dot} ${chalk.cyan('▶')} ${event.step} [${event.branches.join(', ')}]`);

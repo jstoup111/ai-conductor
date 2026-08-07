@@ -189,10 +189,14 @@ const execFileAsync = promisify(execFile);
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
 import {
   classifyBuildSettle,
+  composeBuildOutcomeHaltReason,
+  latestBuildOutcome,
   readBuildOutcome,
+  resolveBuildOutcomeCategory,
+  sameNoOpCycle,
   writeBuildOutcome,
 } from './build-outcome.js';
-import type { BuildOutcomeStore } from './build-outcome.js';
+import type { BuildOutcomeRung, BuildOutcomeStore } from './build-outcome.js';
 
 async function writeBuildOutcomeBestEffort(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
   await writeBuildOutcome(projectRoot, outcome).catch(() => {});
@@ -3357,6 +3361,23 @@ export class Conductor {
     // so daemon re-dispatch cannot reset either loop guard.
     const kickbackEscalationEnabled = this.config.kickback_escalation?.enabled ?? true;
 
+    const pendingBuildKickbackGate = async (): Promise<string | null> => {
+      const ledger = await readKickbackLedger(this.projectRoot);
+      const pending = Object.entries(ledger.gates)
+        .filter(([, entry]) => !entry.priorVerdict)
+        .map(([gate]) => gate);
+      return pending.length === 1 ? pending[0]! : null;
+    };
+
+    const currentBuildRung = (): BuildOutcomeRung => {
+      const build = getStepDefinition('build');
+      const resolvedBuild = resolveStepConfig(
+        'build', build.phase, this.modelPolicyForStep('build'), this.config,
+        { tier: state.complexity_tier },
+      );
+      return { model: resolvedBuild.model, effort: resolvedBuild.effort };
+    };
+
     const consumeKickbackBudget = async (gate: StepName, reason: string) => {
       const [treeHash, resolvedCount] = await Promise.all([
         currentTreeHash(this.projectRoot),
@@ -3409,6 +3430,19 @@ export class Conductor {
       const ledger = await readKickbackLedger(this.projectRoot);
       const ctx = ledger.gates[sourceGate];
       if (!ctx || ctx.priorVerdict) return { halt: false };
+      const [outcomes, treeHash] = await Promise.all([
+        readBuildOutcome(this.projectRoot),
+        currentTreeHash(this.projectRoot),
+      ]);
+      const priorOutcome = latestBuildOutcome(outcomes);
+      if (sameNoOpCycle(priorOutcome, {
+        gate: sourceGate,
+        treeHash,
+        verdict: false,
+        rung: currentBuildRung(),
+      })) {
+        return { halt: true, reason: composeBuildOutcomeHaltReason(priorOutcome!, sourceGate) };
+      }
       // Consume the baseline before checking it. A later, unrelated failure
       // must not reuse this one even if the current check throws or halts.
       await writeKickbackLedger(this.projectRoot, {
@@ -5430,6 +5464,8 @@ export class Conductor {
                 countResolvedTasks(this.projectRoot),
               ]);
               const outcomeStore = await readBuildOutcome(this.projectRoot);
+              const note = result.output ? result.output.split('\n').slice(-200) : undefined;
+              const gate = await pendingBuildKickbackGate();
               await writeBuildOutcomeBestEffort(this.projectRoot, {
                 ...outcomeStore,
                 records: [
@@ -5442,14 +5478,15 @@ export class Conductor {
                       resolvedAfter,
                     }),
                     terminalOutcome: 'no-verdict',
-                    gate: null,
-                    verdict: null,
+                    gate,
+                    verdict: gate === null ? null : false,
                     rung: { model: result.model ?? resolved.model, effort: resolved.effort },
                     treeBefore: treeHashBeforeBuild,
                     treeAfter,
                     headBefore: headShaBeforeBuild,
                     headAfter,
-                    note: result.output ? result.output.split('\n').slice(-200) : undefined,
+                    note,
+                    category: await resolveBuildOutcomeCategory(this.projectRoot, note),
                     reason: 'authFailure',
                   },
                 ],
@@ -6504,6 +6541,8 @@ export class Conductor {
               countResolvedTasks(this.projectRoot),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
+            const note = lastError ? lastError.split('\n').slice(-200) : undefined;
+            const gate = await pendingBuildKickbackGate();
             await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
               records: [
@@ -6516,14 +6555,15 @@ export class Conductor {
                     resolvedAfter,
                   }),
                   terminalOutcome: 'failed',
-                  gate: null,
-                  verdict: null,
+                  gate,
+                  verdict: gate === null ? null : false,
                   rung: { model: failedStepResult?.model ?? resolved.model, effort: resolved.effort },
                   treeBefore: treeHashBeforeBuild,
                   treeAfter,
                   headBefore: headShaBeforeBuild,
                   headAfter,
-                  note: lastError ? lastError.split('\n').slice(-200) : undefined,
+                  note,
+                  category: await resolveBuildOutcomeCategory(this.projectRoot, note),
                 },
               ],
             });
@@ -7635,6 +7675,7 @@ export class Conductor {
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
+          let completedBuildTreeAfter: string | null | undefined;
           if (step.name === 'build') {
             const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
               currentCommitSha(this.projectRoot),
@@ -7642,6 +7683,8 @@ export class Conductor {
               countResolvedTasks(this.projectRoot),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
+            completedBuildTreeAfter = treeAfter;
+            const gate = await pendingBuildKickbackGate();
             await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
               records: [
@@ -7654,14 +7697,15 @@ export class Conductor {
                     resolvedAfter,
                   }),
                   terminalOutcome: 'done',
-                  gate: null,
-                  verdict: null,
+                  gate,
+                  verdict: gate === null ? null : false,
                   rung: { model: stepResult?.model ?? resolved.model, effort: resolved.effort },
                   treeBefore: treeHashBeforeBuild,
                   treeAfter,
                   headBefore: headShaBeforeBuild,
                   headAfter,
                   note: tail,
+                  category: await resolveBuildOutcomeCategory(this.projectRoot, tail),
                 },
               ],
             });
@@ -7676,6 +7720,10 @@ export class Conductor {
             unmetered: stepResult?.tokenUsage ? undefined : true,
             preferredProvider: stepResult?.preferredProvider,
             actualProvider: stepResult?.actualProvider,
+            ...(step.name === 'build' && {
+              treeBefore: treeHashBeforeBuild,
+              treeAfter: completedBuildTreeAfter,
+            }),
             ...(stepResult?.observedIntervals
               ? { observedIntervals: stepResult.observedIntervals }
               : {}),

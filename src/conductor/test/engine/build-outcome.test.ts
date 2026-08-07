@@ -15,6 +15,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import { rename } from 'node:fs/promises';
 import {
   classifyBuildSettle,
+  composeBuildOutcomeHaltReason,
   inferBuildOutcomeCategory,
   readBuildOutcome,
   resolveBuildOutcomeCategory,
@@ -178,6 +179,24 @@ describe('build outcome category', () => {
     await expect(resolveBuildOutcomeCategory(dir, ['this needs a decision'])).resolves.toBe('belongs-to-decide');
     await expect(resolveBuildOutcomeCategory(dir)).resolves.toBe('silent-no-movement');
     expect(inferBuildOutcomeCategory(['the gate is stale'])).toBe('disputes-gate');
+  });
+
+  it.each(['disputes-gate', 'belongs-to-decide', 'silent-no-movement'] as const)(
+    'is advisory: %s leaves exact-cycle refusal unchanged',
+    (category) => {
+      expect(sameNoOpCycle(priorOutcome({ category }), {
+        gate: 'wiring_check', treeHash: 'tree-1', verdict: false,
+        rung: { model: 'gpt-5.6-terra', effort: 'medium' },
+      })).toBe(true);
+    },
+  );
+
+  it('names the operator decision and keeps a multi-line note below the reason line', () => {
+    const reason = composeBuildOutcomeHaltReason(priorOutcome({
+      category: 'belongs-to-decide', note: ['the finding is stale', 'return to DECIDE'],
+    }), 'wiring_check');
+    expect(reason.split('\n')[0]).toMatch(/choose.*accept.*gate.*DECIDE/i);
+    expect(reason).toContain('return to DECIDE');
   });
 });
 
