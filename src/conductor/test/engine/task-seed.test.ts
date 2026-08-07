@@ -276,6 +276,142 @@ Content
     });
   });
 
+  describe('declared files merge', () => {
+    it('adds declared files without clobbering preserved rows or their existing files', async () => {
+      await fsPromises.mkdir(join(dir, '.pipeline'), { recursive: true });
+      await fsPromises.writeFile(
+        join(dir, '.pipeline/task-status.json'),
+        JSON.stringify({
+          tasks: [
+            {
+              id: '1',
+              name: 'In flight',
+              status: 'in_progress',
+              files: ['src/already-tracked.ts'],
+              dispatch_id: 'dispatch-1',
+            },
+            {
+              id: '2',
+              name: 'Finished',
+              status: 'completed',
+              files: ['src/finished.ts'],
+              commit: 'abc123',
+              restored_from: 'task-trailer',
+            },
+            {
+              id: '3',
+              name: 'Skipped',
+              status: 'skipped',
+              files: ['src/skipped.ts'],
+              skip_reason: 'not-needed',
+              operator_note: 'preserve me',
+            },
+          ],
+        }),
+      );
+
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: First Task
+**Files:** src/declared.ts
+
+## Task 2: Second Task
+**Files:** src/declared.ts
+
+## Task 3: Third Task
+**Files:** src/declared.ts
+`,
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+      expect(status.tasks.find((task: any) => task.id === '1')).toMatchObject({
+        status: 'in_progress',
+        dispatch_id: 'dispatch-1',
+        files: ['src/already-tracked.ts', 'src/declared.ts'],
+      });
+      expect(status.tasks.find((task: any) => task.id === '2')).toMatchObject({
+        status: 'completed',
+        commit: 'abc123',
+        restored_from: 'task-trailer',
+        files: ['src/finished.ts', 'src/declared.ts'],
+      });
+      expect(status.tasks.find((task: any) => task.id === '3')).toMatchObject({
+        status: 'skipped',
+        skip_reason: 'not-needed',
+        operator_note: 'preserve me',
+        files: ['src/skipped.ts', 'src/declared.ts'],
+      });
+    });
+
+    it('seeds an explicit Files none declaration as an empty array', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: No files
+**Files:** none
+`,
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+      expect(status.tasks.find((task: any) => task.id === '1').files).toEqual([]);
+    });
+
+    it('does not add files when the plan has no Files declarations', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: First Task
+Ordinary prose only.
+
+## Task 2: Second Task
+More ordinary prose.
+`,
+      );
+
+      await expect(seedTaskStatus(dir, planPath)).resolves.not.toThrow();
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+      expect(status.tasks).toEqual([
+        expect.objectContaining({ id: '1' }),
+        expect.objectContaining({ id: '2' }),
+      ]);
+      expect(status.tasks.every((task: any) => task.files === undefined)).toBe(true);
+    });
+
+    it('does not treat backticked prose file bullets as declared files', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: Prose-only paths
+- Read \`src/incidental.ts\` before changing behavior.
+- Compare against \`docs/reference.md\` for context.
+`,
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+      expect(status.tasks.find((task: any) => task.id === '1').files).toBeUndefined();
+    });
+  });
+
   describe('upsert new plan tasks', () => {
     it('adds new plan tasks to existing file', async () => {
       // Setup: existing task-status.json with one task

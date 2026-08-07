@@ -72,6 +72,14 @@ function mergeStatusRows(a: TaskStatusRecord, b: TaskStatusRecord): TaskStatusRe
   return merged;
 }
 
+/** Add plan-declared paths without discarding paths already recorded on a row. */
+function mergeDeclaredFiles(existingFiles: unknown, declaredFiles: string[]): string[] {
+  const existing = Array.isArray(existingFiles)
+    ? existingFiles.filter((file): file is string => typeof file === 'string')
+    : [];
+  return [...new Set([...existing, ...declaredFiles])];
+}
+
 /**
  * Canonical task ids proven complete by a `Task: <id>` trailer on a commit
  * reachable on the current branch, mapped to the sha of the newest such
@@ -309,7 +317,7 @@ export async function seedTaskStatus(projectRoot: string, planPath: string, engi
         // surviving phantom bare row ends up keyed `T<N>` to match the plan,
         // trailers, and evidence stamps.
         existing.id = taskId;
-        if (declaredFiles) existing.files = declaredFiles;
+        if (declaredFiles) existing.files = mergeDeclaredFiles(existing.files, declaredFiles);
 
         // Preserve in_progress
         if (existing.status === 'in_progress') {
