@@ -13,6 +13,7 @@ import {
   makeRunFeature,
   type FeatureRunnerDeps,
 } from '../../src/engine/daemon-runner.js';
+import { isOperatorParked, removeOperatorPark } from '../../src/engine/park-marker.js';
 import { preflightBuildAuthCheck } from '../../src/engine/self-host/build-auth-preflight.js';
 import { buildAuthRemediationMessage } from '../../src/engine/self-host/build-auth-message.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
@@ -26,6 +27,40 @@ function items(n: number): BacklogItem[] {
 /** Backlog that returns the full list every poll; the daemon filters started. */
 function staticBacklog(list: BacklogItem[]) {
   return async () => list;
+}
+
+function makeSetupTriageParkingRunner(
+  projectRoot: string,
+  reason: () => string,
+  onTriage: () => void,
+) {
+  return makeRunFeature({
+    createWorktree: async (slug) => {
+      const path = join(projectRoot, '.worktrees', slug);
+      await mkdir(path, { recursive: true });
+      return { path, branch: `feat/${slug}` };
+    },
+    prepareWorktree: async () => {
+      throw new SetupFailureError('setup failed', 'setup output');
+    },
+    runSetupTriage: async () => {
+      onTriage();
+      return { kind: 'park', outputTail: reason() };
+    },
+    runConductor: async () => {},
+    readOutcome: async () => ({ done: false, halted: false }),
+    teardownWorktree: async () => {},
+    markProcessed: async () => {},
+    daemon: true,
+    provider: {
+      invoke: async () => ({ success: true, output: '', exitCode: 0 }),
+      invokeInteractive: async () => {},
+    },
+    project: 'test-project',
+    projectRoot,
+    runGh: async () => ({ stdout: '' }),
+    enrollWatch: async () => {},
+  } satisfies FeatureRunnerDeps);
 }
 
 describe('engine/daemon — runDaemon', () => {
@@ -272,7 +307,7 @@ describe('engine/daemon — runDaemon', () => {
       }).toEqual({
         outcome: expect.objectContaining({ status: 'error', reason: diagnostic }),
         haltBody:
-          `feature errored — parked for human inspection\n${diagnostic}\n` +
+          `feature parked — will not re-dispatch on the next scan\n${diagnostic}\n` +
           '\n──── Triage Evidence ────\n' +
           `\nOutput tail:\n${diagnostic}\n` +
           '\nNo quarantine ref exists (clean-HEAD case)\n' +
@@ -286,6 +321,114 @@ describe('engine/daemon — runDaemon', () => {
     } finally {
       await rm(worktree, { recursive: true, force: true });
     }
+  });
+
+  describe('automatic setup-triage parks survive daemon scans (Task 11)', () => {
+    const item: BacklogItem = { slug: 'setup-triage-parked' };
+
+    it('runs one fix session across repeated scans after setup triage parks the feature', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-triage-park-scans-'));
+      let triageCalls = 0;
+      try {
+        const runFeature = makeSetupTriageParkingRunner(
+          projectRoot,
+          () => 'first setup failure',
+          () => { triageCalls++; },
+        );
+
+        await runDaemon({
+          discoverBacklog: staticBacklog([item]),
+          runFeature,
+          isParked: (slug) => isOperatorParked(projectRoot, slug),
+          sleep: async () => {},
+        }, { concurrency: 1, once: false, maxIdlePolls: 3 });
+
+        expect(triageCalls).toBe(1);
+        await expect(isOperatorParked(projectRoot, item.slug)).resolves.toBe(true);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('excludes an automatically parked slug after the daemon restarts with empty dispatch state', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-triage-park-restart-'));
+      let triageCalls = 0;
+      try {
+        const runFeature = makeSetupTriageParkingRunner(
+          projectRoot,
+          () => 'setup still broken',
+          () => { triageCalls++; },
+        );
+        await runFeature(item);
+
+        await runDaemon({
+          discoverBacklog: staticBacklog([item]),
+          runFeature,
+          isParked: (slug) => isOperatorParked(projectRoot, slug),
+          sleep: async () => {},
+        }, { concurrency: 1, once: false, maxIdlePolls: 2 });
+
+        expect(triageCalls).toBe(1);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('excludes an automatically parked slug when worktree recreation removed its HALT marker', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-triage-park-no-halt-'));
+      let triageCalls = 0;
+      try {
+        const runFeature = makeSetupTriageParkingRunner(
+          projectRoot,
+          () => 'setup still broken',
+          () => { triageCalls++; },
+        );
+        await runFeature(item);
+        await rm(join(projectRoot, '.worktrees', item.slug, '.pipeline', 'HALT'), { force: true });
+
+        await runDaemon({
+          discoverBacklog: staticBacklog([item]),
+          runFeature,
+          isParked: (slug) => isOperatorParked(projectRoot, slug),
+          sleep: async () => {},
+        }, { concurrency: 1, once: false, maxIdlePolls: 2 });
+
+        expect(triageCalls).toBe(1);
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('writes a new automatic marker reason after unpark and a later setup-triage park', async () => {
+      const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-triage-park-repark-'));
+      let triageCalls = 0;
+      let failureReason = 'first setup failure';
+      try {
+        const runFeature = makeSetupTriageParkingRunner(
+          projectRoot,
+          () => failureReason,
+          () => { triageCalls++; },
+        );
+        await runFeature(item);
+
+        await removeOperatorPark(projectRoot, item.slug);
+        await rm(join(projectRoot, '.worktrees', item.slug, '.pipeline', 'HALT'), { force: true });
+        failureReason = 'different setup failure';
+
+        await runDaemon({
+          discoverBacklog: staticBacklog([item]),
+          runFeature,
+          isParked: (slug) => isOperatorParked(projectRoot, slug),
+          sleep: async () => {},
+        }, { concurrency: 1, once: true });
+
+        expect(triageCalls).toBe(2);
+        await expect(readFile(join(projectRoot, '.daemon', 'parked', item.slug), 'utf-8'))
+          .resolves.toContain('different setup failure');
+      } finally {
+        await rm(projectRoot, { recursive: true, force: true });
+      }
+    });
   });
 
   it('logs a daemon terminal HALT write failure without replacing the original feature error', async () => {

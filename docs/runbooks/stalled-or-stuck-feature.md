@@ -456,6 +456,34 @@ terminal result.
 If the project's `bin/setup` failed inside the worktree, the feature may be quarantined:
 `.pipeline/QUARANTINE` exists and a `wip/setup-quarantine-<slug>` branch holds the evidence.
 
+#### Automatic setup-triage park
+
+**Symptom:** a setup failure's triage ends with a retained worktree and a main-root marker at
+`.daemon/parked/<slug>` whose first line begins `auto-parked:`. This is a durable automatic
+park, not a missing dispatch or a transient in-memory daemon state.
+
+**Diagnosis:** read the first line of `.worktrees/<slug>/.pipeline/HALT` together with the
+marker. The first line has one of three meanings:
+
+- `feature parked — will not re-dispatch on the next scan` — the automatic marker was written
+  (or was already present), so the daemon will keep the feature excluded.
+- `feature errored — automatic park failed: …; run conduct-ts daemon park <slug>` — the marker
+  could not be written. Repair the reported filesystem error, then park it explicitly before
+  changing its worktree state.
+- `feature errored — will re-dispatch on the next scan` — this was a non-park termination, so
+  no automatic marker suppresses the next scan.
+
+**Recovery:** fix the underlying setup problem first. Clear the feature's `HALT` and
+`HALT.class` using [the resume procedure](#clear-a-halt-and-let-the-feature-resume), then remove
+the automatic marker and restore dispatch eligibility:
+
+```bash
+conduct-ts daemon unpark <slug>
+```
+
+**Verification:** `test ! -e .daemon/parked/<slug>` succeeds. The next daemon scan logs
+`↻ resume <slug>` or starts the feature, rather than another parked skip.
+
 ### 3. Re-verify SHIP evidence with `--diagnose`
 
 `--diagnose` re-runs the SHIP-gating completion predicates — `test_suite`, `manual_test`,
