@@ -355,27 +355,33 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
       expect(reasons[0]).toMatch(/DECIDE/);
     });
 
-    it('does not fire on a verdict whose kickback.from is another step (negative path 2)', async () => {
+    it('does not attribute a later-step verdict to build (negative path 2)', async () => {
       await seedStoriesAndPlan();
       await writeState(statePath, { ...FRONT_DONE });
 
       const ran: StepName[] = [];
       let halted = false;
+      const kicks: Array<{ from: StepName; to: StepName }> = [];
       events.on('loop_halt', () => {
         halted = true;
       });
+      events.on('kickback', (event) => {
+        if (event.type === 'kickback') kicks.push({ from: event.from, to: event.to });
+      });
 
-      // `kickback.from` names `wiring_check`, not the completing `build` step —
-      // the verdict belongs to another step's kickback and must not be matched
-      // at all, so neither the guard nor navigateBack may fire on it.
+      // `kickback.from` names `wiring_check`, not the completing `build` step.
+      // The build scan must not attribute it to build. The normal loop later
+      // reaches wiring_check, whose matching verdict re-opens plan until the
+      // existing selection cap halts the unresolved gate.
       await conductorAtBuild(
         buildKicksBackToPlan(ran, 'wiring_check' as StepName),
         { daemon: true },
       ).run();
 
-      expect(halted).toBe(false);
-      expect(await exists(HALT_MARKER)).toBe(false);
-      expect(await exists(HALT_CLASS_MARKER)).toBe(false);
+      expect(kicks).not.toContainEqual({ from: 'build', to: 'plan' });
+      expect(halted).toBe(true);
+      const body = await readHaltBody();
+      expect(body).toMatch(/gate 'plan' selected .* without satisfying/);
     });
   });
 
@@ -507,6 +513,13 @@ describe('acceptance: daemon-mode DECIDE kickbacks HALT instead of re-running (#
         stories: 'done',
         acceptance_specs: 'done',
       } as ConductState);
+      // The test intentionally starts at conflict_check so it can prove the
+      // front-half scan. Authorize that one DECIDE entry; the architecture
+      // amendment it emits remains ungranted and must HALT.
+      await writeFile(
+        join(dir, '.pipeline/decide-grant.json'),
+        JSON.stringify({ version: 1, step: 'conflict_check', grantedBy: 'operator' }),
+      );
 
       const ran: StepName[] = [];
       const runner: StepRunner = {

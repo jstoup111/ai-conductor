@@ -302,6 +302,16 @@ export async function planProtectedTargetsCommand(
   return 1;
 }
 
+/** Register operator-directed DECIDE authorization in the discoverable CLI. */
+function registerCommands(program: Command): void {
+  program
+    .command('decide-grant')
+    .description('Authorize one named autonomous DECIDE step for one feature')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--step <step>', 'DECIDE step to authorize')
+    .requiredOption('--reason <reason>', 'Operator reason for this one-time grant');
+}
+
 export function createProgram(): Command {
   const program = createBaseProgram();
 
@@ -449,12 +459,7 @@ export function createProgram(): Command {
     .command('plan-protected-targets <path>')
     .description('Blocking scan for plan tasks that target another feature’s protected artifact');
 
-  program
-    .command('decide-grant')
-    .description('Authorize one named autonomous DECIDE step for one feature')
-    .requiredOption('--slug <slug>', 'Feature worktree slug')
-    .requiredOption('--step <step>', 'DECIDE step to authorize')
-    .requiredOption('--reason <reason>', 'Operator reason for this one-time grant');
+  registerCommands(program);
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the
