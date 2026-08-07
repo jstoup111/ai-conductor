@@ -78,7 +78,9 @@ Per `/plan`'s documentation boundary, ordinary documentation is not planned as t
 `docs/reference/cli.md` (new verb), `docs/reference/configuration.md` (new key, `test_suite` table at
 `:527-531`), and `docs/contributing/testing.md:37,40` — the latter states the sentinel "is the
 success token the pre-SHIP `test_suite` gate reads", which is **false**; the gate classifies on exit
-code. The `CHANGELOG` entry IS a task (Task 20) because the release gate machinery reads it.
+code. No task records the release note: implementation branches never write `CHANGELOG.md` or
+`VERSION`. The bot-owned `automation/release-pr` is their sole writer, and the pipeline's
+`release-disposition` step derives the PR's release metadata itself.
 
 ## Tasks
 
@@ -450,22 +452,6 @@ code. The `CHANGELOG` entry IS a task (Task 20) because the release gate machine
 **Wired-into:** same as Task 18
 **Dependencies:** Task 18
 
-### Task 20: Record the change in the changelog
-**Story:** none (infrastructure: release-gate `[Unreleased]` entry required by condition C6)
-**Type:** infrastructure
-**Steps:**
-1. Add an `[Unreleased]` entry describing the new scoped-run verb, the new optional config key, and
-   the repaired package scripts.
-2. Confirm no `## Migration` block is added and `VERSION` is **not** bumped — the classifier is not
-   tripped (`adr-2026-08-01-scoped-run-verb-release-surface`) and the repo is version-locked pre-v1.
-3. Commit: "docs(changelog): record scoped-run interface"
-
-**Files likely touched:**
-- `CHANGELOG.md` — `[Unreleased]` entry
-
-**Wired-into:** none (no new production surface)
-**Dependencies:** Task 19
-
 ## Task Dependency Graph
 
 ```
@@ -476,7 +462,7 @@ Task 1 (config key)
      ├─ Task 5 (multi/mid placeholder)
      │   ├─ Task 6 (failure classification) ─ Task 13 (CLI wiring)
      │   │                                     ├─ Task 14 (no evidence) ─ Task 15 (aggregate regression)
-     │   │                                     └─ Task 18 (grader) ─ Task 19 (isolation + contracts) ─ Task 20 (changelog)
+     │   │                                     └─ Task 18 (grader) ─ Task 19 (isolation + contracts)
      │   └─ Task 9 (quoting) ─ Task 10 (metacharacters)
      ├─ Task 7 (empty refusal) ─ Task 8 (blank + message)
      └─ Task 11 (unavailable) ─ Task 12 (missing config)
@@ -518,7 +504,7 @@ All eight stories are cited; both path types are covered for every story.
 | C3 — selector with a space | Task 9 |
 | C4 — unconfigured negative path | Task 11 |
 | C5 — no #1176/#1205 overlap | Conflict report; no task touches reuse, latency, size, or calibration |
-| C6 — changelog, no VERSION bump | Task 20 |
+| C6 — release note, no VERSION bump | `release-disposition` step; no task writes `CHANGELOG.md` or `VERSION` |
 | C7 — documentation | `maintain-documentation` step (see Documentation note) |
 | C8 — empty-selection refusal | Tasks 7, 8 |
 

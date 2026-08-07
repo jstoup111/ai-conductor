@@ -11,7 +11,7 @@
 
 `adr-2026-08-01-engine-owned-scoped-test-invocation` introduces a `conduct-ts` verb for scoped test
 runs and a new key in `.ai-conductor/config.yml`. `CLAUDE.md` requires a runnable `bash migration`
-block in `CHANGELOG.md` for any PR that changes the `bin/conduct` CLI or the `settings.json` schema,
+block in the PR body for any PR that changes the `bin/conduct` CLI or the `settings.json` schema,
 with a `.docs/release-waivers/` waiver as the alternative when the self-host gate's path-based
 classifier flags a surface that the actual edit does not touch.
 
@@ -84,10 +84,19 @@ Against that table:
 5. **No hook is touched.** The feature adds no file under `hooks/`, consistent with Option B being
    rejected in the prior ADR on feasibility grounds.
 
-6. **A `CHANGELOG.md` entry is still required.** This is a notable reader-visible implementation
-   change — a new CLI verb and a new config key — so the `[Unreleased]` entry is mandatory under the
-   release gate's changelog rule. That is independent of the migration question. **VERSION is not
-   bumped**: this repository is version-locked pre-v1.
+6. **The implementation writes neither `CHANGELOG.md` nor `VERSION`.** This is a notable
+   reader-visible change — a new CLI verb and a new config key — but recording it is not the
+   implementation branch's job. The bot-owned `automation/release-pr` is the sole writer of both
+   files, maintained from merged-PR metadata, and the pipeline's `release-disposition` step derives
+   the PR's release declaration on its own. An implementation branch that edits either file trips
+   the release gate. That is independent of the migration question.
+
+   *Amended 2026-08-07 (operator-authorized).* As approved on 2026-08-01 this item required an
+   `[Unreleased]` entry as a planned task. The release process changed underneath it: #1265 moved
+   `CHANGELOG.md`/`VERSION` ownership to the bot-owned release PR and replaced per-branch changelog
+   edits with PR-body `Release-*` metadata. The gate no longer reads a changelog at all — the word
+   does not appear in `release-gate.ts`. Building the item as originally written would have made
+   the forbidden edit. The decision itself — no migration block, no waiver — is unchanged.
 
 ## Verify-Claims Ledger
 

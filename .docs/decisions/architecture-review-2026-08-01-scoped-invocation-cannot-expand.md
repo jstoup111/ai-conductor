@@ -124,8 +124,8 @@ condition below.
   that key only; an empty selector list is refused rather than executed; no constraint added to
   `test_suite.command`; no silent fallback.
 - `adr-2026-08-01-scoped-run-verb-release-surface.md` — no migration block and no waiver, given the
-  classifier's exact-path rules, subject to the `bin/conduct` constraint. A `CHANGELOG.md`
-  `[Unreleased]` entry is still required; VERSION stays locked pre-v1.
+  classifier's exact-path rules, subject to the `bin/conduct` constraint. The implementation writes
+  neither `CHANGELOG.md` nor `VERSION`; the bot-owned release PR owns both.
 
 ## Conditions
 
@@ -144,8 +144,10 @@ condition below.
   occurs naturally and is already an enumerated broad-fallback trigger (`HARNESS.md:336`).
 - **C5** — `/conflict-check` must confirm no story overlaps #1176 or #1205 per the scope discipline
   table.
-- **C6** — A `CHANGELOG.md` `[Unreleased]` entry is required (notable reader-visible change: new CLI
-  verb + new config key). VERSION is not bumped.
+- **C6** — The implementation writes neither `CHANGELOG.md` nor `VERSION` (amended 2026-08-07). The
+  change is notable and reader-visible — new CLI verb + new config key — but the bot-owned
+  `automation/release-pr` owns both files, and the pipeline's `release-disposition` step derives the
+  PR's release declaration. No task records the note.
 - **C7** — Documentation upkeep is mandatory in the same PR: the new verb → `docs/reference/cli.md`;
   the new config key → `docs/reference/configuration.md`; the changed test-execution policy →
   `HARNESS.md`.
