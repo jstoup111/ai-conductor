@@ -56,6 +56,81 @@ reverses a workaround rather than introducing a new seam.
 **Not authorized by this amendment:** re-deleting or un-exporting the shared helper, duplicating
 it again under another name, or weakening the unit test to accommodate the orphan backstop.
 
+**Amendment 3 — 2026-08-07, operator-authorized (DECIDE-owned).** This plan authorizes the Task 1,
+Task 10 and Task 14 additions and the new Task 21 recorded below, and any diff carrying only that
+work is in scope.
+
+`build_review` failed completeness on four findings. Three are defects in delivered work; the
+fourth is a missing test that no task owns, which is why remediation could not proceed without
+returning to DECIDE.
+
+**1. The tier can only ever execute one file (Task 1).** `discoverSmokeFiles` calls `createVitest`
+in the *parent* process, which evaluates `vitest.smoke.config.ts` and therefore
+`ensureRunTmpRootSync(tmpdir())`, mutating the parent's `AI_CONDUCTOR_TEST_TMP_ROOT` and `TMPDIR`
+to a fresh run root. Every per-file `execa` child inherits it; the first child's `global-setup`
+teardown calls `removeRunTmpRoot` and deletes it; the second child dies at config load with
+`tmpdir-leak-guard: unable to resolve realpath for run root … ENOENT`. This is fatal to the
+feature's purpose — the release gate runs `npm run smoke`, so as delivered the smoke job can never
+report success and no release can ever publish.
+
+Task 1 additionally requires that discovery not mutate the parent process's environment: resolve
+the file set without evaluating the config in-process, or restore the parent's tmp-root variables
+before dispatching any child. Each child must establish and tear down its own run root.
+
+**2. Gate mode counts a self-skipped file as executed (Task 10).** `assertGateCredentialedExecution`
+treats a file as executed whenever its `vitest` child exits 0. A file whose internal
+`describe.skipIf(...)` skips every test also exits 0 — verified: `build-token-auth.smoke.test.ts`
+reports "3 skipped" and exits 0. So with `CLAUDE_CODE_OAUTH_TOKEN` set but the `claude` binary
+absent, all three credentialed files self-skip, the ledger records them `ran`, and the gate passes
+having asserted nothing. That is exactly the vacuous pass Task 10 exists to prevent, so its stated
+guarantee — "an empty credentialed set can never report a pass" — is undelivered.
+
+Task 10 additionally requires that execution be established from the child's reported test
+outcomes, not its exit code: a file all of whose tests skipped counts as skipped, and gate mode
+fails when no `credentialed` file actually executed an assertion. The architecture review recorded
+this independently as D-3.
+
+**3. Task 14 was never performed.** Its only artifact is `3cf75a55f`
+"chore(evidence): smoke advisory tier verified", an **empty** commit, and the advisory tier
+demonstrably does not complete cleanly (finding 1). The three previously-never-run files received
+only a capability line — no recorded outcome, no fix, no force-skip reason. Task 14 stands as
+written and is still owed; its evidence must be a real recorded run, and a commit with no files
+does not discharge it.
+
+**4. Nothing exercises the runner's real dispatch path (new Task 21).** Every runner test
+(`test/structural/smoke-entry-point.test.ts`, `test/smoke-capability.test.ts`) injects a stubbed
+`runVitest`/`discover`, and the workflow tests only string-match YAML and `package.json`. No test
+invokes `runSmokeCli` against the real `discoverSmokeFiles` + `execa` path with more than one
+executing file — which is precisely why finding 1 shipped green. The plan as authored has no task
+that owns this, so it is added rather than assigned to an existing one.
+
+### Task 21: Execute more than one file through the real runner path
+**Story:** Story 1, negative path
+**Type:** negative-path
+
+**Steps:**
+1. Write a failing test that invokes `runSmokeCli` with real discovery and real child dispatch over
+   at least two executing smoke files, asserting both run and the process exits 0.
+2. Verify the test fails (RED) — it reproduces the `tmpdir-leak-guard` ENOENT on the second file.
+3. Implement the Task 1 discovery fix above.
+4. Verify the test passes (GREEN).
+5. Commit: "test(smoke): execute the whole tier through the real runner"
+
+**Files:**
+- `src/conductor/test/structural/smoke-entry-point.test.ts`
+- `src/conductor/src/engine/smoke-runner.ts`
+
+**Wired-into:** `src/conductor/scripts/smoke.ts#runSmokeCli`
+**Dependencies:** Task 1
+
+This test must not stub `discoverSmokeFiles`, `runVitest`, or `execa`. A stubbed runner cannot
+observe the inherited-tmp-root defect, which is the whole reason the gap exists.
+
+**Not authorized by this amendment:** deleting, skipping, or force-skipping smoke files to make the
+tier pass; relaxing the tmpdir leak guard or `global-setup`'s teardown to tolerate a shared run
+root; or satisfying Task 21 with a stubbed dispatch. Task 14's force-skip route remains available
+only for a genuine environment limitation with a recorded reason, never for a defect.
+
 ## Summary
 
 Give the smoke tier one auto-discovering entry point, replace nine bespoke env gates with a
@@ -493,7 +568,8 @@ complete.
 Smoke runner seam                    Publisher seam
 ─────────────────                    ──────────────
 Task 1 ─┬─ Task 2 ── Task 3          Task 15 ── Task 16 ── Task 17
-        └─ Task 4                                   │
+        ├─ Task 4                                   │
+        └─ Task 21 (Amendment 3)                    │
                                                     │
 Task 5 ─┬─ Task 6                                   │
         └─ Task 7 ── Task 8 ── Task 9 ── Task 10 ── Task 11 ── Task 12 ── Task 13 ── Task 14
@@ -516,7 +592,7 @@ Tasks 1-4 and 5-14 are independent of 15-17; all three converge at Task 18.
 
 - [ ] All happy-path criteria covered: Story 1 → Tasks 1-2; Story 2 → Tasks 5, 8, 12-13;
       Story 3 → Tasks 15, 17; Story 4 → Tasks 18-19; Story 5 → Task 20
-- [ ] All negative-path criteria covered: Story 1 → Tasks 3-4; Story 2 → Tasks 6-7, 9-11;
+- [ ] All negative-path criteria covered: Story 1 → Tasks 3-4, 21; Story 2 → Tasks 6-7, 9-11;
       Story 3 → Task 16; Story 4 → Task 19; Story 5 → Task 20
 - [ ] No task exceeds 5 minutes of work
 - [ ] Dependencies are explicit and acyclic
