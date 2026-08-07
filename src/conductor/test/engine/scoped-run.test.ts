@@ -1,3 +1,4 @@
+import { execa } from 'execa';
 import { describe, expect, it, vi } from 'vitest';
 import {
   runScopedCommand,
@@ -51,6 +52,27 @@ describe('runScopedCommand', () => {
       "npx vitest run 'test/with space-_./~:.test.ts'",
       expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
+  });
+
+  it('passes shell metacharacters, quotes, and leading hyphens as literal selector arguments', async () => {
+    let stdout = '';
+    const runner = vi.fn<ScopedRunRunner>(async (command) => {
+      const result = await execa(command, { shell: true, reject: false });
+      stdout = result.stdout;
+      return result.exitCode ?? 1;
+    });
+
+    const result = await runScopedCommand({
+      template: "printf '<%s>' {selectors}",
+      selectors: ['; echo INJECTED', "test/quote'file.test.ts", '-leading-selector'],
+      runner,
+    });
+
+    expect({ result, stdout, runnerCallCount: runner.mock.calls.length }).toEqual({
+      result: { exitCode: 0, reason: 'passed', message: 'Selected tests passed.' },
+      stdout: "<; echo INJECTED><test/quote'file.test.ts><-leading-selector>",
+      runnerCallCount: 1,
+    });
   });
 
   it('refuses an empty selector list before substituting or running a command', async () => {

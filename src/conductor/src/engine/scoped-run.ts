@@ -29,7 +29,8 @@ export interface ScopedRunCommandOptions {
 }
 
 function formatSelector(selector: string): string {
-  return /\s/.test(selector) ? `'${selector}'` : selector;
+  if (/^[A-Za-z0-9_@%+=:,./-]+$/.test(selector)) return selector;
+  return `'${selector.replace(/'/g, `'"'"'`)}'`;
 }
 
 export async function runScopedCommand({
