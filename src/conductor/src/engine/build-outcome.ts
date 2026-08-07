@@ -36,7 +36,7 @@ export interface ClassifyBuildSettleInput {
 
 export interface NoOpCycleInput {
   gate: string;
-  treeHash: string;
+  treeHash: string | null;
   verdict: boolean;
   rung: BuildOutcomeRung;
 }
@@ -62,6 +62,8 @@ export function sameNoOpCycle(
   return prior !== null
     && prior.outcome === 'no-movement'
     && prior.gate === current.gate
+    && prior.treeAfter !== null
+    && current.treeHash !== null
     && prior.treeAfter === current.treeHash
     && prior.verdict === current.verdict
     && prior.rung.model === current.rung.model
