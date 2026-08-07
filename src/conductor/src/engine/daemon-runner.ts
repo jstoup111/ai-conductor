@@ -661,15 +661,23 @@ export async function terminateFeature({
   slug,
   projectRoot,
 }: TerminateFeatureOptions): Promise<void> {
+  let autoParkWriteError: string | undefined;
   const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug
     ? await writeAutoPark(projectRoot ?? worktreePath, slug, reason)
       .then(() => 'written' as const)
-      .catch(() => 'failed' as const)
+      .catch((err) => {
+        autoParkWriteError = err instanceof Error ? err.message : String(err);
+        log?.(`[daemon-runner] auto-park write failed for ${slug}: ${autoParkWriteError}`);
+        return 'failed' as const;
+      })
     : 'not-requested';
+  const haltReason = autoParkWriteOutcome === 'failed'
+    ? `${reason}\n\nAutomatic park marker write failed: ${autoParkWriteError}\nRun: conduct-ts daemon park ${slug}`
+    : reason;
 
   await writeErrorHalt(
     worktreePath,
-    reason,
+    haltReason,
     log,
     triageEvidence,
     slug,
@@ -677,7 +685,7 @@ export async function terminateFeature({
       ? 'feature parked — will not re-dispatch on the next scan'
       : autoParkWriteOutcome === 'not-requested'
         ? 'feature errored — will re-dispatch on the next scan'
-        : 'feature errored — parked for human inspection',
+        : `feature errored — automatic park failed: ${autoParkWriteError}; run conduct-ts daemon park ${slug}`,
   );
 }
 

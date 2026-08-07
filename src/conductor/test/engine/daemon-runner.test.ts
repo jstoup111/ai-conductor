@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 const filesystemWriteOrder = vi.hoisted(() => ({
   events: [] as string[],
   markerPath: '',
+  failParkWrite: false,
 }));
 
 vi.mock('node:fs/promises', async (importOriginal) => {
@@ -33,6 +34,12 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       if (isParkMarker) {
         filesystemWriteOrder.markerPath = path;
         filesystemWriteOrder.events.push('park-marker:issued');
+        if (filesystemWriteOrder.failParkWrite) {
+          const error = Object.assign(new Error('EACCES: permission denied writing auto-park marker'), {
+            code: 'EACCES',
+          });
+          throw error;
+        }
       }
       try {
         const handle = await actual.open(...args);
@@ -146,6 +153,45 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('reports a failed auto-park write loudly without crashing the daemon', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-write-failure-'));
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    const logs: string[] = [];
+    try {
+      await mkdir(worktreePath, { recursive: true });
+      filesystemWriteOrder.failParkWrite = true;
+
+      await expect(terminateFeature({
+        worktreePath,
+        projectRoot,
+        reason: 'runtime dispatch failure',
+        park: true,
+        slug: ITEM.slug,
+        log: (message) => logs.push(message),
+      })).resolves.toBeUndefined();
+
+      const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
+      expect({
+        haltFirstLine: halt.split('\n', 1)[0],
+        containsWriteFailure: halt.includes('EACCES: permission denied writing auto-park marker'),
+        containsRemedy: halt.includes(`conduct-ts daemon park ${ITEM.slug}`),
+        containsParkedClaim: halt.includes('feature parked — will not re-dispatch on the next scan'),
+        parkFailureLogs: logs.filter((line) => line.includes(ITEM.slug) && /park.*write.*fail/i.test(line)),
+        haltVerificationLogs: logs.filter((line) => line.includes('HALT marker write failed')),
+      }).toEqual({
+        haltFirstLine: 'feature errored — automatic park failed: EACCES: permission denied writing auto-park marker; run conduct-ts daemon park feat-x',
+        containsWriteFailure: true,
+        containsRemedy: true,
+        containsParkedClaim: false,
+        parkFailureLogs: ['[daemon-runner] auto-park write failed for feat-x: EACCES: permission denied writing auto-park marker'],
+        haltVerificationLogs: [],
+      });
+    } finally {
+      filesystemWriteOrder.failParkWrite = false;
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('terminateFeature writes the settled auto-park outcome before its parked HALT, including EEXIST', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-marker-'));
     try {
