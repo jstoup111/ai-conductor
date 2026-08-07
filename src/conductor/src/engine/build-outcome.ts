@@ -37,7 +37,7 @@ export interface BuildOutcomeStore {
   records: BuildOutcomeRecord[];
 }
 
-export const BUILD_OUTCOME_PATH = '.pipeline/build-outcome.json';
+const BUILD_OUTCOME_PATH = '.pipeline/build-outcome.json';
 const BUILD_DISPUTE_PATH = '.pipeline/build-dispute.json';
 
 export interface ClassifyBuildSettleInput {
@@ -67,7 +67,7 @@ export function classifyBuildSettle({
   return 'no-movement';
 }
 
-export function inferBuildOutcomeCategory(note?: string[]): BuildOutcomeCategory {
+function inferBuildOutcomeCategory(note?: string[]): BuildOutcomeCategory {
   const text = note?.join('\n').toLowerCase() ?? '';
   if (!text) return 'silent-no-movement';
   if (/\b(decide|decision|product scope|requirements?)\b/.test(text)) return 'belongs-to-decide';

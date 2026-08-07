@@ -80,7 +80,7 @@ is gitignored.
 - src/conductor/src/engine/build-outcome.ts — new module: types + `classifyBuildSettle`
 - src/conductor/test/engine/build-outcome.test.ts — new unit test
 
-**Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+**Wired-into:** src/conductor/src/engine/conductor.ts#run
 **Dependencies:** none
 
 ---
@@ -190,7 +190,7 @@ is gitignored.
 - src/conductor/src/engine/build-outcome.ts — `writeBuildOutcome`
 - src/conductor/test/engine/build-outcome.test.ts — atomicity and cleanup cases
 
-**Wired-into:** none (inert until src/conductor/src/engine/conductor.ts)
+**Wired-into:** src/conductor/src/engine/conductor.ts#run
 **Dependencies:** Task 1
 
 ---
