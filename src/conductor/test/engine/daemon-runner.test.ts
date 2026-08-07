@@ -1,4 +1,59 @@
 import { describe, it, expect, vi } from 'vitest';
+
+const filesystemWriteOrder = vi.hoisted(() => ({
+  events: [] as string[],
+  markerPath: '',
+}));
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const { existsSync } = await import('node:fs');
+  return {
+    ...actual,
+    writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+      const path = String(args[0]);
+      const isHalt = path.endsWith('/.pipeline/HALT');
+      if (isHalt) {
+        filesystemWriteOrder.events.push('halt:issued');
+        if (existsSync(filesystemWriteOrder.markerPath)) {
+          filesystemWriteOrder.events.push('park-marker:present-at-halt');
+        }
+      }
+      try {
+        const result = await actual.writeFile(...args);
+        if (isHalt) filesystemWriteOrder.events.push('halt:settled');
+        return result;
+      } catch (error) {
+        throw error;
+      }
+    },
+    open: async (...args: Parameters<typeof actual.open>) => {
+      const path = String(args[0]);
+      const isParkMarker = path.includes('/.daemon/parked/');
+      if (isParkMarker) {
+        filesystemWriteOrder.markerPath = path;
+        filesystemWriteOrder.events.push('park-marker:issued');
+      }
+      try {
+        const handle = await actual.open(...args);
+        if (!isParkMarker) return handle;
+        const close = handle.close.bind(handle);
+        handle.close = async () => {
+          const result = await close();
+          filesystemWriteOrder.events.push('park-marker:settled');
+          return result;
+        };
+        return handle;
+      } catch (error) {
+        if (isParkMarker && (error as NodeJS.ErrnoException).code === 'EEXIST') {
+          filesystemWriteOrder.events.push('park-marker:already-parked');
+        }
+        throw error;
+      }
+    },
+  };
+});
+
 import { mkdtemp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -91,11 +146,16 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
-  it('terminateFeature with park true writes an auto-park marker containing the reason and timestamp', async () => {
+  it('terminateFeature writes the settled auto-park outcome before its parked HALT, including EEXIST', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-marker-'));
     try {
+      const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+      await mkdir(worktreePath, { recursive: true });
+
+      filesystemWriteOrder.events.length = 0;
+      filesystemWriteOrder.markerPath = '';
       await terminateFeature({
-        worktreePath: projectRoot,
+        worktreePath,
         projectRoot,
         reason: 'runtime dispatch failure',
         park: true,
@@ -103,8 +163,39 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       });
 
       const marker = await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8');
+      const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
 
       expect(marker).toMatch(/^auto-parked: runtime dispatch failure\ntimestamp: .+\n$/);
+      expect(halt.split('\n', 1)[0]).toBe('feature parked — will not re-dispatch on the next scan');
+      expect(filesystemWriteOrder.events).toEqual([
+        'park-marker:issued',
+        'park-marker:settled',
+        'halt:issued',
+        'park-marker:present-at-halt',
+        'halt:settled',
+      ]);
+
+      const originalMarker = marker;
+      filesystemWriteOrder.events.length = 0;
+      filesystemWriteOrder.markerPath = '';
+      await terminateFeature({
+        worktreePath,
+        projectRoot,
+        reason: 'new reason must not replace an existing park',
+        park: true,
+        slug: ITEM.slug,
+      });
+
+      expect(await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).toBe(originalMarker);
+      expect((await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8')).split('\n', 1)[0])
+        .toBe('feature parked — will not re-dispatch on the next scan');
+      expect(filesystemWriteOrder.events).toEqual([
+        'park-marker:issued',
+        'park-marker:already-parked',
+        'halt:issued',
+        'park-marker:present-at-halt',
+        'halt:settled',
+      ]);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }

@@ -673,9 +673,11 @@ export async function terminateFeature({
     log,
     triageEvidence,
     slug,
-    autoParkWriteOutcome === 'not-requested'
-      ? 'feature errored — will re-dispatch on the next scan'
-      : 'feature errored — parked for human inspection',
+    autoParkWriteOutcome === 'written'
+      ? 'feature parked — will not re-dispatch on the next scan'
+      : autoParkWriteOutcome === 'not-requested'
+        ? 'feature errored — will re-dispatch on the next scan'
+        : 'feature errored — parked for human inspection',
   );
 }
 
