@@ -87,7 +87,9 @@ the run rather than proposing a release that under-reports what shipped.
 1. `classify` reads the release-PR provenance, audit, and committed artifacts, then exposes whether the
    commit is publishable. It performs no publication mutation.
 2. `smoke` runs only for a publishable classification. It calls the reusable live-daemon E2E workflow with
-   inherited secrets and `require_credentials: true`.
+   inherited secrets and `require_credentials: true`, which runs the complete smoke tier
+   (`npm run smoke`) in fail-closed gate mode — see [testing](testing.md#smoke-tests) — not just the
+   daemon E2E case.
 3. `publish` runs only when the classification remains publishable and the smoke job concludes `success`.
    Cancelled, timed-out, skipped, and failed smoke jobs do not authorize publication.
 
