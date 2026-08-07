@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { execa } from 'execa';
+import { unauthenticatedClaudeExecaOptions } from '../execution/claude-provider-smoke-env.js';
 import { execFileSync } from 'node:child_process';
 import { rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -78,19 +79,14 @@ describe.skipIf(!shouldRun)(
       async () => {
         const emptyConfigDir = await mkdtemp(join(tmpdir(), 'claude-token-unset-'));
         try {
-          // Create env without CLAUDE_CODE_OAUTH_TOKEN
-          const env = { ...process.env };
-          delete env.CLAUDE_CODE_OAUTH_TOKEN;
-
+          // Unsetting the token requires extendEnv: false — execa otherwise
+          // merges the parent's value back in. See the shared helper.
           const result = await execa(
             'claude',
             ['-p', 'say ok', '--print'],
             {
               reject: false,
-              env: {
-                ...env,
-                CLAUDE_CONFIG_DIR: emptyConfigDir,
-              },
+              ...unauthenticatedClaudeExecaOptions(process.env, emptyConfigDir),
             },
           );
 
