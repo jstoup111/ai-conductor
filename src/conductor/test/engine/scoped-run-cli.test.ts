@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 import { readFile } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ScopedRunRunner } from '../../src/engine/scoped-run.js';
 
 describe('scoped-run CLI adapter', () => {
@@ -37,6 +40,51 @@ describe('scoped-run CLI adapter', () => {
     const cli = await import('../../src/engine/scoped-run-cli.js');
 
     expect(cli.detectScopedRunCommand(['node', 'conduct-ts', 'test-suite'])).toBeNull();
+  });
+
+  it('reports a missing project configuration without throwing', async () => {
+    const cli = await import('../../src/engine/scoped-run-cli.js');
+    const projectRoot = await mkdtemp(join(tmpdir(), 'scoped-run-missing-config-'));
+    const printed: string[] = [];
+
+    try {
+      const exitCode = await cli.dispatchScopedRunCommand(
+        { kind: 'run', selectors: ['test/selected.test.ts'] },
+        { projectRoot, print: (message) => printed.push(message) },
+      );
+
+      expect({ exitCode, printed }).toEqual({
+        exitCode: 1,
+        printed: [expect.stringMatching(/config file not found/i)],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('runs a scoped-only test_suite configuration without aggregate fields', async () => {
+    const cli = await import('../../src/engine/scoped-run-cli.js');
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    const exitCode = await cli.dispatchScopedRunCommand(
+      { kind: 'run', selectors: ['test/selected.test.ts'] },
+      {
+        loadProjectConfig: async () => ({
+          ok: true,
+          config: { test_suite: { scoped_command: 'npx vitest run {selectors}' } },
+          warnings: [],
+        }),
+        runner,
+      },
+    );
+
+    expect({ exitCode, calls: runner.mock.calls }).toEqual({
+      exitCode: 0,
+      calls: [[
+        'npx vitest run test/selected.test.ts',
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      ]],
+    });
   });
 
   it('registers the scoped-run detector and dispatcher before normal pipeline parsing', async () => {

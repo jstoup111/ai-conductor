@@ -983,6 +983,14 @@ complexity:
       expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
     });
 
+    it('accepts a scoped-only test_suite declaration', () => {
+      const result = validateConfig({
+        test_suite: { scoped_command: 'npx vitest run {selectors}' },
+      });
+
+      expect(result.ok).toBe(true);
+    });
+
     it('rejects a scoped_command template without the selector placeholder', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),

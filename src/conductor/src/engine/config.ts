@@ -1207,7 +1207,14 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
     }
   }
 
-  if (typeof raw.command !== 'string' || raw.command.trim() === '') {
+  if (raw.command === undefined && raw.scoped_command === undefined) {
+    return {
+      type: 'validation_error',
+      message: 'test_suite.command or test_suite.scoped_command must be configured',
+    };
+  }
+
+  if (raw.command !== undefined && (typeof raw.command !== 'string' || raw.command.trim() === '')) {
     return {
       type: 'validation_error',
       message: 'test_suite.command must be a non-empty string',

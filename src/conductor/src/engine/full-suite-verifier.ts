@@ -28,7 +28,7 @@ import {
   type FullSuiteExecutionResult,
 } from './full-suite-executor.js';
 import { worktreeStatus } from './worktree-shared.js';
-import type { TestSuiteConfig } from '../types/config.js';
+import type { AggregateTestSuiteConfig, TestSuiteConfig } from '../types/config.js';
 
 export type FullSuiteStaleReason =
   | Exclude<FullSuiteEvidenceUnusableReason, 'io_error'>
@@ -95,7 +95,7 @@ export interface FullSuiteLockOptions {
 }
 
 interface FullSuiteVerificationContext {
-  testSuite: TestSuiteConfig;
+  testSuite: AggregateTestSuiteConfig;
   fingerprint: FullSuiteFingerprint;
   worktreeClean?: boolean;
 }
@@ -727,13 +727,24 @@ export class FullSuiteVerifier {
         };
       }
       const testSuite = config.config.test_suite;
+      if (testSuite.command === undefined) {
+        return {
+          inspection: {
+            status: 'FAILED',
+            reason: 'invalid_config',
+            message: 'Project config must declare test_suite.command for aggregate verification',
+          },
+          testSuite,
+        };
+      }
+      const aggregateTestSuite: AggregateTestSuiteConfig = testSuite as AggregateTestSuiteConfig;
       const fingerprintResult = await fingerprint({
         projectRoot,
-        testSuite,
+        testSuite: aggregateTestSuite,
         environmentValues: environment,
       });
       if (!fingerprintResult.ok) {
-        const secretValues = declaredEnvironmentValues(testSuite, environment);
+        const secretValues = declaredEnvironmentValues(aggregateTestSuite, environment);
         return {
           inspection: {
             status: 'FAILED',
@@ -745,12 +756,12 @@ export class FullSuiteVerifier {
               secretValues,
             ),
           },
-          testSuite,
+          testSuite: aggregateTestSuite,
         };
       }
 
       const context = {
-        testSuite,
+        testSuite: aggregateTestSuite,
         fingerprint: fingerprintResult.fingerprint,
         worktreeClean: await fingerprintTimeWorktreeCleanliness(projectRoot),
       };

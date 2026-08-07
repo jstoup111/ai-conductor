@@ -96,6 +96,24 @@ afterEach(async () => {
 });
 
 describe('FullSuiteVerifier', () => {
+  it('fails aggregate verification explicitly when only scoped_command is configured', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'full-suite-scoped-only-'));
+    scratches.push(projectRoot);
+    await writeProjectFile(
+      projectRoot,
+      '.ai-conductor/config.yml',
+      'test_suite:\n  scoped_command: npx vitest run {selectors}\n',
+    );
+
+    const result = await new FullSuiteVerifier({ projectRoot }).ensure();
+
+    expect(result).toMatchObject({
+      status: 'FAILED',
+      reason: 'invalid_config',
+      message: expect.stringMatching(/test_suite\.command.*aggregate verification/i),
+    });
+  });
+
   it('persists fingerprint-time worktree cleanliness on PASS and FAIL evidence', async () => {
     const passRoot = await makeFingerprintProject();
     const pass = await new FullSuiteVerifier({

@@ -390,13 +390,15 @@ export interface HarnessSelfHostConfig {
 
 /** Project-owned aggregate test operation used by full-suite verification. */
 export interface TestSuiteConfig {
-  command: string;
+  command?: string;
   scoped_command?: string;
   working_directory?: string;
   timeout_seconds?: number;
   inputs?: string[];
   environment?: string[];
 }
+
+export type AggregateTestSuiteConfig = TestSuiteConfig & { command: string };
 
 export interface HarnessConfig {
   harness_version?: string;
