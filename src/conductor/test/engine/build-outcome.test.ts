@@ -191,11 +191,37 @@ describe('build outcome category', () => {
     },
   );
 
+  it.each(['disputes-gate', 'belongs-to-decide', 'silent-no-movement'] as const)(
+    'gates nothing: %s leaves refusal, escalation, and halt disposition byte-identical',
+    (category) => {
+      const record = priorOutcome({ category, note: ['the gate is stale'] });
+      const escalation = sameNoOpCycle(record, {
+        gate: 'wiring_check',
+        treeHash: 'tree-1',
+        verdict: false,
+        rung: { model: 'gpt-5.6-terra', effort: 'medium' },
+      });
+      const outcomes = JSON.stringify({
+        refusal: escalation,
+        escalation: { halt: escalation },
+        haltDisposition: composeBuildOutcomeHaltReason(record, 'wiring_check'),
+      });
+
+      expect(outcomes).toBe(JSON.stringify({
+        refusal: true,
+        escalation: { halt: true },
+        haltDisposition: 'wiring_check kickback-to-build refused: the build made no tree change ' +
+          '(tree tree-1 unchanged). Investigate the unchanged build before retrying.\n' +
+          'Build note: the gate is stale',
+      }));
+    },
+  );
+
   it('names the operator decision and keeps a multi-line note below the reason line', () => {
     const reason = composeBuildOutcomeHaltReason(priorOutcome({
       category: 'belongs-to-decide', note: ['the finding is stale', 'return to DECIDE'],
     }), 'wiring_check');
-    expect(reason.split('\n')[0]).toMatch(/choose.*accept.*gate.*DECIDE/i);
+    expect(reason.split('\n')[0]).toContain('Investigate the unchanged build before retrying.');
     expect(reason).toContain('return to DECIDE');
   });
 });
