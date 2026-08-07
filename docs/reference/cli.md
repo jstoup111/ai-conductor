@@ -686,6 +686,27 @@ Own-feature paths and unsealed `.docs/` paths pass.
 Run it before committing a plan. Correct the accepted artifact during DECIDE and re-author the task;
 do not hand the amendment to BUILD. The land gate repeats this check when a spec is landed.
 
+## `conduct-ts decide-grant`
+
+```bash
+conduct-ts decide-grant --slug <slug> --step <step> --reason "<operator direction>"
+```
+
+Records one explicit authorization for an autonomous run to enter a named DECIDE step. Run it from the
+main repository checkout. It writes `.worktrees/<slug>/.pipeline/decide-grant.json`; the daemon never
+creates this artifact itself.
+
+| Flag | Required | Effect |
+| --- | --- | --- |
+| `--slug <slug>` | yes | Feature worktree slug. A slash, `.` or `..` is rejected. |
+| `--step <step>` | yes | Exact DECIDE step to authorize. The grant does not authorize any other step. |
+| `--reason <reason>` | yes | Operator's reason for allowing this one DECIDE entry. |
+
+The matching grant is consumed immediately before the provider dispatches the named step. A stale,
+malformed, mismatched, or already-consumed grant authorizes nothing and the run remains fail-closed.
+Clearing `.pipeline/HALT` or `.pipeline/HALT.class` is not an authorization; use the
+[DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry).
+
 ## `conduct-ts evidence`
 
 ```bash
