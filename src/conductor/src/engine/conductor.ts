@@ -529,6 +529,10 @@ export interface StepRunResult {
    * The conductor halts and reports the auth failure.
    */
   authFailure?: boolean;
+  /** The provider reported that the exact dispatched slash command is unavailable. */
+  commandUnresolved?: boolean;
+  /** The unavailable command name, without its leading slash. */
+  commandUnresolvedName?: string;
   /** A provider's automatic permission review denied the requested action. */
   permissionDenied?: boolean;
   /**
@@ -5442,6 +5446,24 @@ export class Conductor {
               : undefined;
             attempt--;
             continue;
+          }
+
+          // A missing command is a deterministic environment failure. Retrying,
+          // escalating model/effort, or walking providers cannot make a command
+          // appear in the provisioned catalog for this run.
+          if (result.commandUnresolved) {
+            const command = result.commandUnresolvedName
+              ? `/${result.commandUnresolvedName}`
+              : 'the dispatched command';
+            const haltReason =
+              `Cannot dispatch '${step.name}': ${command} is not available in the provider skill catalog.\n` +
+              'Re-provision the provider home with the required skill, then re-queue this feature.';
+            await writeHaltMarker(this.projectRoot, haltReason + '\n', 'mechanical');
+            await this.persistPendingStateChanges(state, 'persist conductor transition');
+            await emitTracked({ type: 'loop_halt', reason: haltReason });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
           }
 
           // A missing worktree is terminal for this run. The runner refused to

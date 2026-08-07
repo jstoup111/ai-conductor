@@ -1039,6 +1039,14 @@ export class DefaultStepRunner implements StepRunner {
       ...(result.output ? { output: result.output } : {}),
       ...(publicationDisposition !== undefined ? { publicationDisposition } : {}),
       ...(result.authFailure ? { authFailure: true } : {}),
+      ...(result.commandUnresolved
+        ? {
+            commandUnresolved: true,
+            ...(result.commandUnresolvedName
+              ? { commandUnresolvedName: result.commandUnresolvedName }
+              : {}),
+          }
+        : {}),
       ...(result.permissionDenied ? { permissionDenied: true } : {}),
       ...(result.rateLimited
         ? {
@@ -1123,6 +1131,18 @@ export class DefaultStepRunner implements StepRunner {
         authFailure: true,
         ...(result.authentication
           ? { authentication: result.authentication }
+          : {}),
+        ...observedIntervals,
+      };
+    }
+
+    if (result.commandUnresolved) {
+      return {
+        success: false,
+        output: result.output,
+        commandUnresolved: true,
+        ...(result.commandUnresolvedName
+          ? { commandUnresolvedName: result.commandUnresolvedName }
           : {}),
         ...observedIntervals,
       };

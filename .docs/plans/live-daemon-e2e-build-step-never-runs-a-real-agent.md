@@ -7,6 +7,73 @@
 **Stories:** .docs/stories/live-daemon-e2e-build-step-never-runs-a-real-agent.md
 **Conflict check:** Clean as of 2026-08-04 — 4 blocking found and resolved in DECIDE, 4 degrading resolved
 
+## Amendments
+
+**Amendment 1 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan authorizes the
+Task 18 withdrawal and the Task 19 / Task 7 changes recorded below, and any diff carrying only
+those changes is in scope for this plan.
+
+**Withdraw the two BUILD-authored amendment blocks.** Commit `82762d8e9` (stamped `Task: 18`)
+added `> **Amended 2026-08-05 by #1311:**` blocks to Task 18 and Task 19 that removed Task 18's
+blocking force and let Task 20 land with the gate unsettled. HARNESS.md:82-98 assigns DECIDE
+artifact amendment to DECIDE and routes a BUILD-discovered amendment need back through
+remediation; BUILD may not author one. Those blocks are removed by this amendment, not ratified.
+
+**Withdraw Task 18 (review condition C-6) entirely.** Task 18 required empirical credentialed
+proof that this repository's config-declared custom steps resolve, so the Task 20 classification
+"cannot redden this repository's own SHIP tail as a side effect". That premise fails:
+
+- Task 20's classifier is evidence-gated, not heuristic. `unresolvedCommandName`
+  (`src/conductor/src/execution/claude-provider.ts:472-478`) returns a name only when the
+  provider's own output matches `Unknown command: /<name>` **and** `num_turns === 0`. It cannot
+  misfire on a custom step that resolves, so no prior proof is needed for it to be correct.
+- If a config-declared step genuinely does not resolve, the classifier reporting it is the
+  feature working as intended, not a regression this plan must pre-empt. Whether this
+  repository's own custom steps resolve is a local operational concern, not a release gate.
+- The withdrawn deferral target does not gate anything: `.github/workflows/live-daemon-e2e.yml`
+  is `workflow_dispatch` / `workflow_call` only. Making the live E2E block a release is issue
+  **#1299** and is deliberately out of scope here; C-6-style evidence belongs there, scoped to
+  **core** steps rather than repository-specific custom ones.
+
+**Task 19** returns to depending on Task 7, its dependency before the BUILD-authored block.
+Task 20 remains dependent on Task 19 as approved; no blocking dependency is weakened, because
+the gate that was weakened no longer exists.
+
+**Task 7** keeps its credentialed turn/token/cost observation. Its execution boundary is the
+credentialed `live-daemon-e2e.yml` run, which injects the repository secret only into the
+isolated Claude smoke process. Local BUILD cannot produce this evidence: the daemon may route
+BUILD to Codex, whose isolated provider home correctly strips `CLAUDE_CODE_OAUTH_TOKEN`, and
+exposing Claude's credential to a Codex agent would violate cross-provider isolation. Asking an
+operator for a token mid-BUILD is not an acceptable substitute.
+
+**Not authorized by this amendment:** weakening or removing any other task's blocking
+dependency, editing shared gate machinery to accommodate this feature, and any further
+BUILD-authored amendment of this plan.
+
+**Amendment 2 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan authorizes the
+Task 7 step 2 additions recorded below, and any diff carrying only those additions is in scope.
+
+As authored, the plan required zero dispatches only as a *preflight-failure* expectation and
+unmetered counting only as *meter* behavior, so nothing on the successful credentialed path
+asserted either. A run in which the provider was never actually dispatched, or in which every
+result came back unmetered, could satisfy every stated condition and pass — which is precisely
+the silent no-op this feature exists to catch. `daemon-e2e-live.smoke.test.ts` currently reports
+`dispatches` through a `console.info` in a `finally` block, where it can never fail a run.
+
+Task 7 step 2 therefore additionally requires, on the successful credentialed path:
+
+- `provisioned.dispatches > 0` — the provider was really invoked, not skipped or short-circuited.
+- `meter.unmetered === 0` — every result was metered, so a zero-token total cannot be read as
+  free work rather than absent work.
+
+Both are assertions in `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`, not log lines.
+This adds no task and changes no dependency; it closes a planning omission in an existing
+task's acceptance conditions.
+
+**Not authorized by this amendment:** relaxing the token cap, converting any existing assertion
+to a warning, or asserting these conditions anywhere other than the successful credentialed path
+(preflight-failure and meter-behavior expectations are unchanged).
+
 ## Summary
 
 Give the live daemon E2E fixture its own provisioned provider home, copied from the checkout
@@ -68,10 +135,10 @@ conjunction of `num_turns === 0` and a `result` naming the exact command this di
 `tokenUsage.numTurns`: `claude-provider.ts:438-458` populates `tokenUsage` only when input and
 output tokens are both non-zero, and the failing envelope reported neither.
 
-**Two tasks are gates, not milestones.** Task 7 is the first live dispatch and settles review
-assumptions A-1 and A-2; everything after it depends on it. Task 18 settles review condition C-6
-before the classification lands, so the change cannot redden this repository's own SHIP tail as
-a side effect.
+**One task is a gate, not a milestone.** Task 7 is the first live dispatch and settles review
+assumptions A-1 and A-2; everything after it depends on it. (Task 18 previously gated on review
+condition C-6; Amendment 1 withdraws it — the Task 20 classifier is evidence-gated and cannot
+misfire on a resolving custom step, so no prior proof is owed.)
 
 ## Prerequisites
 
@@ -207,14 +274,23 @@ trigger, or a `ci-gate` entry.
 **Steps:**
 1. Wire the provisioning decorator into the smoke's provider chain so the real dispatch runs
    against the provisioned home.
-2. Run the live smoke with credentials; confirm the build dispatch reports non-zero turns and
-   non-zero token usage, and that `terminal`, `madeCommit`, `touchedFixture`, and `taskTrailer`
-   are all true.
-3. Record the observed turn count, token usage, and cost — the proof for review assumptions
-   A-1 and A-2.
-4. If the dispatch is blocked for lack of workspace trust (A-2 wrong), seed a minimal trust
+2. Assert in the smoke itself, on the successful credentialed path, that the build dispatch
+   reports non-zero turns and non-zero token usage; that `provisioned.dispatches > 0` and
+   `meter.unmetered === 0`; and that `terminal`, `madeCommit`, `touchedFixture`, and
+   `taskTrailer` are all true. These assertions are the durable gate; they fail the smoke when
+   A-1 or A-2 is violated. `dispatches` and `unmetered` are assertions, not log lines
+   (Amendment 2).
+3. If the dispatch is blocked for lack of workspace trust (A-2 wrong), seed a minimal trust
    file in the fixture's OWN home; do not reach for the sandbox's ambient-state reader.
-5. Commit: "test(live-e2e): dispatch the build step against a provisioned provider home"
+4. Commit: "test(live-e2e): dispatch the build step against a provisioned provider home"
+
+**Execution boundary (Amendment 1).** The credentialed run that exercises step 2 is the
+`live-daemon-e2e.yml` GitHub Actions workflow, which injects the repository secret only into
+the isolated Claude smoke process. Local BUILD cannot produce it — the daemon may route BUILD
+to Codex, whose isolated provider home correctly strips `CLAUDE_CODE_OAUTH_TOKEN`, and handing
+Claude's credential to a Codex agent would violate cross-provider isolation. BUILD therefore
+delivers and commits the assertions, not a captured transcript; the observed turn/token/cost
+numbers are the workflow run's output and are not a committed repository artifact.
 
 **Files:** `src/conductor/test/engine/daemon-e2e-live.smoke.test.ts`
 **Wired-into:** none (no new production surface)
@@ -391,24 +467,21 @@ trigger, or a `ci-gate` entry.
 **Wired-into:** none (no new production surface)
 **Dependencies:** Task 16
 
-### Task 18: GATE — establish whether this repo's custom steps currently resolve
+### Task 18: WITHDRAWN by Amendment 1 — see `## Amendments`
 **Story:** Story 3
 **Type:** infrastructure
 
-**Steps:**
-1. Determine empirically whether `maintain-documentation` and `release-disposition`
-   (`.ai-conductor/config.yml:114-125`) resolve when dispatched as `/maintain-documentation`
-   and `/release-disposition` in a real self-host build environment.
-2. Record the finding as evidence — this is review condition C-6.
-3. If they resolve, proceed to Task 19 unchanged.
-4. If they do not, they are producing silent zero-turn successes today: either fix the
-   dispatch or scope the classification to exclude config-declared steps, and say which in
-   the PR body. Do not proceed to Task 20 until this is settled.
-5. Commit: "test(provider): record custom-step command resolution evidence"
+This task is withdrawn. Its premise — that the unresolved-command classification could
+misfire on this repository's own config-declared custom steps, and therefore needed an
+empirical credentialed proof (review condition C-6) settled first — does not hold against
+the classifier Task 20 actually specifies. No work is owed here, and nothing downstream
+waits on it.
 
-**Files:** `src/conductor/test/execution/claude-provider-unresolved-command.test.ts`
+**Steps:** none — withdrawn.
+
+**Files:** none
 **Wired-into:** none (no new production surface)
-**Dependencies:** Task 7
+**Dependencies:** none
 
 ### Task 19: Pin a real unresolved-command envelope as a test fixture
 **Story:** Story 3
@@ -427,7 +500,7 @@ trigger, or a `ci-gate` entry.
 - `src/conductor/test/execution/claude-provider-unresolved-command.test.ts`
 
 **Wired-into:** none (no new production surface)
-**Dependencies:** Task 18
+**Dependencies:** Task 7
 
 ### Task 20: Classify an unresolved step command as an unsuccessful invocation
 **Story:** Story 3
@@ -560,8 +633,8 @@ Task 1 ─┬─ Task 2
         ▼                                                   ▼
 Preflight seam (Stories 2, 5)              Provider seam (Stories 3, 4)
 ─────────────────────────────              ────────────────────────────
-Task 8 ─┬─ Task 9 ── Task 10 ── Task 11    Task 18  ◀── GATE: settles C-6
-        ├─ Task 12                   │        │
+Task 8 ─┬─ Task 9 ── Task 10 ── Task 11    (Task 18 withdrawn — Amendment 1)
+        ├─ Task 12                   │
         ├─ Task 13                   │     Task 19 ── Task 20 ─┬─ Task 21
         ├─ Task 14                   │                         ├─ Task 22
         └─ Task 15                   │                         ├─ Task 23
@@ -573,9 +646,9 @@ Task 8 ─┬─ Task 9 ── Task 10 ── Task 11    Task 18  ◀── GATE
                                                Task 25
 ```
 
-Tasks 8-17 and 18-24 are independent of each other; both converge at Task 25. Nothing after
-Task 7 starts until the live dispatch has proven the mechanism, and nothing after Task 18
-touches classification until the custom-step question is settled.
+Tasks 8-17 and 19-24 are independent of each other; both converge at Task 25. Nothing after
+Task 7 starts until the live dispatch has proven the mechanism. Task 18 is withdrawn by
+Amendment 1, so the classification seam begins at Task 19.
 
 ## Integration Points
 

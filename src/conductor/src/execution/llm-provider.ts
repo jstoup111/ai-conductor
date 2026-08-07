@@ -194,6 +194,10 @@ export interface InvokeResult {
   providerUnavailable?: boolean;
   providerUnavailableScope?: ProviderUnavailableScope;
   providerUnavailableReason?: string;
+  /** Set when a provider reports that the exact dispatched slash command is unknown. */
+  commandUnresolved?: boolean;
+  /** The slash-command name reported as unresolved, without its leading slash. */
+  commandUnresolvedName?: string;
   /** Set by the execution layer when a cached unavailable provider is skipped. */
   providerInvocationSkipped?: boolean;
   /** Provider-owned, safe authentication source/readiness metadata. */

@@ -139,6 +139,26 @@ In daemon mode the engine synthesizes a remediation prompt into
 rounds per gate. A zero-work stall never terminal-HALTs from that path; it falls through to the
 ordinary retry and park route.
 
+#### Unresolved step command
+
+**Symptom:** `.pipeline/HALT` reads `Cannot dispatch '<step>': /<command> is not available in
+the provider skill catalog.` and its class is `mechanical`.
+
+**Diagnosis:** the provider ran but reported the exact dispatched slash command as unknown —
+the run's home is missing the skill that step renders to. This is a deterministic environment
+failure: retrying, escalating model or effort, or walking providers cannot make a command
+appear in a catalog that does not have it, so the conductor halts immediately instead of
+spending further attempts.
+
+**Recovery:** re-provision the provider home (or self-host sandbox) with the missing skill, then
+clear the HALT using [the resume procedure](#clear-a-halt-and-let-the-feature-resume). Because
+this is a `mechanical`-class HALT, the daemon's ordinary re-kick sweep also clears it on a
+base-branch advance — but re-kicking without fixing the catalog just reproduces the halt on
+the next dispatch.
+
+**Verification:** after the next dispatch, the daemon log shows the step's command resolving
+and the run advancing past it; it must not return to the same `commandUnresolved` HALT.
+
 #### Provider preparation exhausted
 
 **Symptom:** `.pipeline/HALT` begins `Provider preparation exhausted.` and its class is

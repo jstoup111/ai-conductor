@@ -75,16 +75,31 @@ invocation runs it and reports through `ci-gate`.
 ### Live-provider daemon E2E smoke
 
 `test/engine/daemon-e2e-live.smoke.test.ts` is the opt-in real-provider layer
-over that deterministic fixture. It dispatches the real Claude provider, then
-asserts a successful terminal state (`DONE`, with no `HALT` or park marker), a
-new commit, the declared fixture change, and a `Task: 1` trailer. On failure it
-uses the deterministic fixture's shared `dumpPipelineDiagnostics` helper to
-print the daemon log, halt reason, task status, task evidence, and park markers.
+over that deterministic fixture. Before dispatch it provisions an isolated
+Claude home from `test/fixtures/live-provider-home.ts` (skills copied from the
+checkout under test, never the operator's own `~/.claude`) and preflights
+every registry-rendered step command against that home via
+`test/fixtures/step-command-preflight.ts`; an unresolved skill fails the run
+before any provider dispatch or token spend. It then dispatches the real
+Claude provider through that provisioned home, asserts a successful terminal
+state (`DONE`, with no `HALT` or park marker), a new commit, the declared
+fixture change, and a `Task: 1` trailer, and asserts the run was genuinely
+credentialed: at least one dispatch occurred, reported turns and tokens are
+both above zero, and no result came back unmetered. On failure it uses the
+deterministic fixture's shared `dumpPipelineDiagnostics` helper to print the
+daemon log, halt reason, task status, task evidence, and park markers. A
+provider result carrying `commandUnresolved` (the dispatched slash command is
+absent from the provisioned skill catalog) stays distinct from an ordinary
+outcome failure in these diagnostics.
 
 It needs the `claude` binary and the `CLAUDE_CODE_OAUTH_TOKEN` secret; set
 `DAEMON_E2E_LIVE_SMOKE=0` to disable an otherwise credentialed local run. Its
 token meter defaults `DAEMON_E2E_LIVE_TOKEN_CAP` to `100000`; lower that value
-when running the smoke manually. Run it directly from `src/conductor`:
+when running the smoke manually. A separate always-on case asserts the
+uncredentialed path skips before provisioning any home at all — set
+`DAEMON_E2E_LIVE_ADVISORY_PROBE=1` to run only that probe in a child process
+(used internally by the case itself; you should not need to set it by hand).
+Run it directly from `src/conductor`:
 
 ```bash
 npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts
