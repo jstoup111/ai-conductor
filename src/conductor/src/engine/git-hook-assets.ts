@@ -2,8 +2,8 @@
  * Git hook scripts embedded as engine assets
  *
  * Both hooks are written to .pipeline/git-hooks/ at worktree provisioning
- * and wired via git config core.hooksPath. They use only bash, git, node -e,
- * and POSIX tools — no dist references, no conduct-ts invocations.
+ * and wired via git config core.hooksPath. They use no dist references; the
+ * commit-msg hook invokes the installed conduct-ts scope-check command.
  */
 
 /**
@@ -83,9 +83,9 @@ export const PREPARE_COMMIT_MSG_HOOK = [
  *
  * What remains: when a Task: trailer IS present, its FORMAT is still
  * validated (rejects task-N naming drift; rejects an id not present in
- * task-status.json). Warns (never blocks) on bundling and
- * subject-vs-trailer mismatch. Chains to $GIT_COMMON_DIR/hooks/commit-msg
- * if it exists.
+ * task-status.json). Enforces plan-scope containment for attributed commits
+ * and warns on subject-vs-trailer mismatch. Chains to $GIT_COMMON_DIR/hooks/
+ * commit-msg if it exists.
  */
 export const COMMIT_MSG_HOOK = [
   '#!/bin/bash',
@@ -177,48 +177,11 @@ export const COMMIT_MSG_HOOK = [
   '  # evidence trailers are telemetry now, not a gate. An empty build-step',
   '  # commit with a Task: trailer no longer needs an Evidence: trailer.',
   '',
-  '  # Warn (don\'t block) on bundling check — best effort based on files mapping',
+  '  # Enforce plan-scope containment for task-attributed commits.',
   '  if [[ -f "$TASK_STATUS_FILE" ]]; then',
-  '    node -e "',
-  '      const fs = require(\'fs\');',
-  '      try {',
-  '        const data = JSON.parse(fs.readFileSync(\'$TASK_STATUS_FILE\', \'utf-8\'));',
-  '        const tasks = data.tasks || [];',
-  '',
-  '        // Get staged files',
-  '        const { execSync } = require(\'child_process\');',
-  '        let stagedFiles = [];',
-  '        try {',
-  '          const output = execSync(\'git diff-index --cached --name-only HEAD\', {',
-  '            encoding: \'utf-8\',',
-  '            stdio: [\'pipe\', \'pipe\', \'ignore\']',
-  '          });',
-  '          stagedFiles = output.trim().split(\'\\n\').filter(f => f);',
-  '        } catch {}',
-  '',
-  '        if (stagedFiles.length > 0) {',
-  '          const tasksByFile = {};',
-  '          tasks.forEach(t => {',
-  '            if (t.files && Array.isArray(t.files)) {',
-  '              t.files.forEach(f => {',
-  '                tasksByFile[f] = t.id;',
-  '              });',
-  '            }',
-  '          });',
-  '',
-  '          const mappedTasks = new Set();',
-  '          stagedFiles.forEach(f => {',
-  '            if (tasksByFile[f]) {',
-  '              mappedTasks.add(tasksByFile[f]);',
-  '            }',
-  '          });',
-  '',
-  '          if (mappedTasks.size > 1) {',
-  '            console.error(\'commit-msg: WARNING — staged diff spans files of multiple plan tasks\');',
-  '          }',
-  '        }',
-  '      } catch {}',
-  '    " || true',
+  '    if ! conduct-ts scope-check "$COMMIT_MSG_FILE"; then',
+  '      exit 1',
+  '    fi',
   '  fi',
   '',
   '  # Warn on subject vs trailer mismatch',

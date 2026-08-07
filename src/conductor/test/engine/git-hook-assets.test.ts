@@ -88,9 +88,13 @@ describe('git-hook-assets — embedding hook scripts', () => {
       expect(code).toBe(0);
     });
 
-    it('does not reference src/conductor/dist or conduct-ts', () => {
+    it('does not reference src/conductor/dist and invokes scope-check', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
-      expect(COMMIT_MSG_HOOK).not.toMatch(/conduct-ts/);
+      expect(COMMIT_MSG_HOOK).not.toMatch(/tasksByFile/);
+      expect(COMMIT_MSG_HOOK).toMatch(/conduct-ts scope-check "\$COMMIT_MSG_FILE"/);
+      expect(COMMIT_MSG_HOOK).toMatch(
+        /if ! conduct-ts scope-check "\$COMMIT_MSG_FILE"; then\n\s+exit 1\n\s+fi/
+      );
     });
   });
 
@@ -112,12 +116,11 @@ describe('git-hook-assets — embedding hook scripts', () => {
 
     const FORBIDDEN_PATTERNS = [
       { pattern: /\bdist\//, name: 'dist/ reference' },
-      { pattern: /\bconduct\b/, name: 'conduct CLI invocation' },
       { pattern: /\bnpm\b/, name: 'npm invocation' },
       { pattern: /\bnpx\b/, name: 'npx invocation' },
     ];
 
-    it('PREPARE_COMMIT_MSG_HOOK does not reference dist/, conduct, npm, or npx', () => {
+    it('PREPARE_COMMIT_MSG_HOOK does not reference dist/, npm, or npx', () => {
       for (const { pattern, name } of FORBIDDEN_PATTERNS) {
         expect(
           PREPARE_COMMIT_MSG_HOOK,
@@ -126,7 +129,7 @@ describe('git-hook-assets — embedding hook scripts', () => {
       }
     });
 
-    it('COMMIT_MSG_HOOK does not reference dist/, conduct, npm, or npx', () => {
+    it('COMMIT_MSG_HOOK does not reference dist/, npm, or npx except its scope-check CLI', () => {
       for (const { pattern, name } of FORBIDDEN_PATTERNS) {
         expect(
           COMMIT_MSG_HOOK,
@@ -135,11 +138,10 @@ describe('git-hook-assets — embedding hook scripts', () => {
       }
     });
 
-    it('both hooks do not spawn CLI tools like conduct, npm, or npx', () => {
+    it('both hooks do not spawn package-manager CLI tools', () => {
       /**
        * Check for invocations of forbidden CLI tools.
        * We look for word boundaries to catch:
-       * - `conduct ...` or `$(conduct ...)`
        * - `npm ...` or `$(npm ...)`
        * - `npx ...` or `$(npx ...)`
        *
@@ -148,7 +150,6 @@ describe('git-hook-assets — embedding hook scripts', () => {
        * outside the `node -e` context.
        */
       const forbiddenCliPatterns = [
-        /\bconduct\b/,
         /\bnpm\b/,
         /\bnpx\b/,
       ];
