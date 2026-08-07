@@ -17,4 +17,18 @@ describe('runScopedCommand', () => {
     );
     expect(exitCode).toBe(7);
   });
+
+  it('substitutes every selector at a mid-template placeholder', async () => {
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    await runScopedCommand({
+      template: 'npx vitest run {selectors} --reporter=dot',
+      selectors: ['test/a.test.ts', 'test/b.test.ts', 'test/c.test.ts'],
+      runner,
+    });
+
+    expect(runner).toHaveBeenCalledWith(
+      'npx vitest run test/a.test.ts test/b.test.ts test/c.test.ts --reporter=dot',
+    );
+  });
 });
