@@ -11,6 +11,44 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
+## [0.100.0] - 2026-08-07
+
+### Added
+
+- Plan authoring and land now block a task that would hand BUILD a mutation to another feature's sealed DECIDE artifact, routing that amendment back to its owning DECIDE step instead. ([implementation PR #1303](https://github.com/jstoup111/ai-conductor/pull/1303)).
+- The self-host version freeze can track a branch's current VERSION via "latest" or "branch:<name>" instead of only a pinned semver string. ([implementation PR #1058](https://github.com/jstoup111/ai-conductor/pull/1058)).
+- The daemon dashboard now shows a NEVER-STARTED section for worktrees with no pipeline state, distinguishes retained-worktree exclusion reasons (open/closed/unknown PR state, missing PR reference), and prints a concrete remedy for every excluded row. ([implementation PR #1338](https://github.com/jstoup111/ai-conductor/pull/1338)).
+- The daemon now refuses to re-dispatch a build after a wiring-check kickback that would repeat an already-observed no-op build cycle, halting immediately instead of burning a turn, and annotates build completion log lines with the observed tree-hash movement. ([implementation PR #1350](https://github.com/jstoup111/ai-conductor/pull/1350)).
+
+### Changed
+
+- The rebase skill now verifies replay intent against source and upstream commits, halts on the first semantic ambiguity, and reconciles every rebased commit against that captured intent before reporting success. ([implementation PR #1292](https://github.com/jstoup111/ai-conductor/pull/1292)).
+- Claude autonomous and interactive defaults now use Opus instead of Fable while retaining Fable for escalation and availability fallback. ([implementation PR #1327](https://github.com/jstoup111/ai-conductor/pull/1327)).
+
+### Fixed
+
+- The wiring gate now accepts inert waiver refs wrapped in Markdown inline code, instead of failing with "inert waiver ref not found" for a file that exists. ([implementation PR #1276](https://github.com/jstoup111/ai-conductor/pull/1276)).
+- The bot-owned release PR now opens on repositories that squash- or rebase-merge; its candidate range no longer required merge commits. ([implementation PR #1278](https://github.com/jstoup111/ai-conductor/pull/1278)).
+- A self-host build no longer halts when the ship-start push fails but its draft PR is already open — the release gate resolves the retained PR from the feature branch, and still halts fail-closed when no open PR exists. ([implementation PR #1290](https://github.com/jstoup111/ai-conductor/pull/1290)).
+- The remediation planner no longer falsely halts for a human architecture decision when a gap is conforming implementation, test, or documentation drift that preserves already-approved architecture — it now routes that work straight to build, and the daemon halts with a clear reason instead of silently dispatching a taskless build route. ([implementation PR #1283](https://github.com/jstoup111/ai-conductor/pull/1283)).
+- Build repair now re-verifies every non-skipped BUILD member after a kickback instead of trusting a stale on-disk verdict, so a passing member the gate check reads as unsatisfied no longer blocks the run in a terminal-less park. ([implementation PR #1291](https://github.com/jstoup111/ai-conductor/pull/1291)).
+- A SHIP step that runs before finish now reads a presentable implementation PR instead of a reused needs-remediation halt placeholder, so a feature that halted earlier no longer stalls its pre-finish ship gates. ([implementation PR #1304](https://github.com/jstoup111/ai-conductor/pull/1304)).
+- FINISH now converges deterministically through an engine-owned publication coordinator instead of spending minutes retrying non-deterministic provider judgment. ([implementation PR #1295](https://github.com/jstoup111/ai-conductor/pull/1295)).
+- The SHIP draft PR now opens with the real PR body template; a placeholder-body finish refusal re-dispatches finish for a body rewrite instead of re-running the build; /remediate gains a publication disposition that never amends the plan; and the rebase is no longer skipped on textual mergeability when the base has moved in code or was resolved from a degraded local fallback. ([implementation PR #1316](https://github.com/jstoup111/ai-conductor/pull/1316)).
+- The daemon no longer silently discards an out-of-process edit to conduct-state.json when it writes state next; conflicting field writes are now detected and surfaced instead of one side winning silently. ([implementation PR #1305](https://github.com/jstoup111/ai-conductor/pull/1305)).
+- Restored the engine build after a semantic merge conflict left two undefined `writeState` calls on the finish publication-defect path, which halted every newly dispatched feature at setup. ([implementation PR #1320](https://github.com/jstoup111/ai-conductor/pull/1320)).
+- FINISH no longer halts a feature that legitimately skipped a SHIP step; a skipped step now counts as resolved evidence rather than missing evidence. ([implementation PR #1322](https://github.com/jstoup111/ai-conductor/pull/1322)).
+- FINISH now records the publication outcome instead of exhausting its retry budget — the coordinator was handing finish-record a fail-closed no-op instead of the real gh/git runners. ([implementation PR #1323](https://github.com/jstoup111/ai-conductor/pull/1323)).
+- FINISH now publishes the rebased feature branch with a lease-protected push instead of halting on a rejected plain push, and halts immediately — with an explanation — on a publication reason no retry could ever satisfy, rather than spending the whole retry budget first. ([implementation PR #1326](https://github.com/jstoup111/ai-conductor/pull/1326)).
+- The daemon no longer halts a build when a branch has simply fallen behind a protected artifact it never touched, and halt reasons for protected-artifact violations now name the specific cause (uncommitted edit, feature-authored change, or undeterminable provenance) with a recovery step. ([implementation PR #1321](https://github.com/jstoup111/ai-conductor/pull/1321)).
+- `bin/migrate` now correctly and safely applies every pending migration when a consumer project jumps multiple releases at once, instead of only the latest. ([implementation PR #1325](https://github.com/jstoup111/ai-conductor/pull/1325)).
+- The build step no longer reports itself complete or routes an exhausted build through commit-movement while the worktree has uncommitted paths — the halt now names the dirty paths so they can be committed or discarded first. ([implementation PR #1312](https://github.com/jstoup111/ai-conductor/pull/1312)).
+- The wiring reachability gate no longer flags test-only exported helpers as unwired production surface. ([implementation PR #1334](https://github.com/jstoup111/ai-conductor/pull/1334)).
+- Merged specs whose plan uses an inline-code, linked, or annotated `**Stories:**` reference now resolve and dispatch instead of being silently dropped; `conduct-ts daemon status` lists blocked specs with reason and remedy; and a `## Migration` section that ends a PR body no longer parses as malformed release metadata. ([implementation PR #1337](https://github.com/jstoup111/ai-conductor/pull/1337)).
+- The /stories skill now requires machine-parseable story IDs, preserving per-story validation, plan coverage, and coherence checks. ([implementation PR #1341](https://github.com/jstoup111/ai-conductor/pull/1341)).
+- FINISH now re-enters immediately after a verified publication transition instead of spending step retry budget or escalation, bounded to 12 transitions per FINISH entry with a dedicated needs-human halt if publication still hasn't converged. ([implementation PR #1345](https://github.com/jstoup111/ai-conductor/pull/1345)).
+- The live daemon E2E build step now dispatches a real, credentialed agent and the engine halts deterministically with a clear diagnostic when a step's slash command is unresolved by the provider's skill catalog, instead of the step silently reporting an artifactless success. ([implementation PR #1319](https://github.com/jstoup111/ai-conductor/pull/1319)).
+
 ## [0.99.20] - 2026-08-03
 
 Two months of work between `v0.99.17` (2026-05-02) and the move to bot-owned release
