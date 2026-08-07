@@ -14,7 +14,13 @@ vi.mock('../../src/engine/project-prelude.js', async (importOriginal) => ({
   currentTreeHash: vi.fn(async () => 'tree-before-build'),
 }));
 
+vi.mock('../../src/engine/build-outcome.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../src/engine/build-outcome.js')>();
+  return { ...actual, writeBuildOutcome: vi.fn(actual.writeBuildOutcome) };
+});
+
 import * as projectPrelude from '../../src/engine/project-prelude.js';
+import { writeBuildOutcome } from '../../src/engine/build-outcome.js';
 
 describe('conductor build-outcome baseline capture', () => {
   let dir: string;
@@ -138,7 +144,7 @@ describe('conductor build-outcome baseline capture', () => {
     expect(started).toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(failed).toContainEqual(expect.objectContaining({ step: 'build' }));
     expect(dispatched[0]).toBe('build');
-    expect(completed).toHaveLength(1);
+    expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));
     const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {
       records: Array<Record<string, unknown>>;
     };
@@ -219,5 +225,30 @@ describe('conductor build-outcome baseline capture', () => {
       headBefore: fixtureHead,
       headAfter: fixtureHead,
     });
+  });
+
+  it('keeps a successful build outcome when the sidecar write fails', async () => {
+    vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue(fixtureHead);
+    vi.mocked(writeBuildOutcome).mockRejectedValueOnce(new Error('pipeline is unwritable'));
+    const completed: unknown[] = [];
+    const events = new ConductorEventEmitter();
+    events.on('step_completed', (event) => {
+      if (event.type === 'step_completed' && event.step === 'build') completed.push(event);
+    });
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: { run: vi.fn(async () => ({ success: true, output: 'completed despite stamp failure' })) },
+      events,
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    expect(completed).toContainEqual(expect.objectContaining({ step: 'build', status: 'done' }));
   });
 });
