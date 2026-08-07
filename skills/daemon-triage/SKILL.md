@@ -1,6 +1,6 @@
 ---
 name: daemon-triage
-description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Gathers read-only evidence, classifies the failure against a deterministic signal table, routes to the right runbook, and writes a triage report. May then perform recovery, but only with explicit operator approval for each action — it never mutates anything unprompted. Intended only for operator invocation; never auto-dispatched."
+description: "Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Diagnoses the failure and routes it to the right runbook. Operator-invoked only; never auto-dispatched, and never mutates anything without explicit per-action approval."
 enforcement: advisory
 phase: all
 standalone: true

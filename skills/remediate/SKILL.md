@@ -1,6 +1,6 @@
 ---
 name: remediate
-description: "Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Reasons over the blocking gaps and emits per-gap remediation dispositions + concrete tasks, routing each to the right step (build/acceptance_specs/architecture_review/plan, or publication for a PR-prose-only gap) — and HALTs only for architectural-clarity or product-scope gaps that need a human."
+description: "Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human."
 enforcement: gating
 phase: ship
 standalone: true
