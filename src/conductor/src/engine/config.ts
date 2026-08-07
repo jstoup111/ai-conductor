@@ -1195,6 +1195,7 @@ function validateTestSuiteBlock(raw: unknown, projectRoot?: string): ConfigError
 
   const allowed = new Set([
     'command',
+    'scoped_command',
     'working_directory',
     'timeout_seconds',
     'inputs',
