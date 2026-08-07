@@ -280,6 +280,8 @@ worktree removal.
 | `task-status.json` | `{ plan_ref?, tasks: [{ id, name?, status?, … }] }`. Duplicate rows merge by status rank: `completed`/`skipped` 3, `in_progress` 2, `pending` 1. A row restored from git evidence also carries `commit` and `restored_from: "task-trailer"` | `task-seed.ts::seedTaskStatus` | Re-seeded from the plan on **every** build-gate evaluation and at the build preflight. Written atomically (same-directory temp plus `rename(2)`) and re-read afterwards — a reconstruction that does not land throws rather than reporting success | Self-heals from the plan on the next evaluation, **with completions intact**: see reconstruction below |
 | `engine-state.json` | `{ activePlanPath?: string, … }` | `task-seed.ts`, `conductor.ts` (atomic) | Written when the active plan is resolved | Resolution falls back to stem match, then to a single plan on disk. With several plans and no match it returns nothing and the build gate **fails closed** rather than guessing |
 | `kickback-ledger.json` | `{ version: 1, gates: Record<gate, { count, treeHash, lastReason, priorVerdict, resolvedBefore }> }` | `kickback-ledger.ts` | Read-modify-write atomically (temp file + `rename(2)`) on every kickback-consuming gate check. A gate's `count` resets to 1 only when its tree hash or resolved-task count moved since the last entry; otherwise it survives daemon re-dispatch and increments toward `MAX_KICKBACKS_PER_GATE` (2). Cleared entirely on a fresh feature session | Missing, malformed, or version-mismatched ledgers fail open to an empty budget (never throw); a gate's cross-dispatch kickback count resets, so a HALT that should already have fired may take one more lap to trigger |
+| `build-outcome.json` | `{ version: 1, records: BuildOutcomeRecord[] }`. Each record carries `outcome` (`moved`/`no-movement`), `terminalOutcome` (`done`/`failed`/`no-verdict`), the kicking-back `gate` (or `null`), the gate `verdict` at entry, the `rung` (`model`, `effort`) dispatched at, both movement witnesses (`treeBefore`/`treeAfter`, `headBefore`/`headAfter`), and an optional bounded `note` (the same last-200-lines tail `step_completed` carries) plus an inferred or agent-declared `category` (`disputes-gate`/`belongs-to-decide`/`silent-no-movement`) | `build-outcome.ts`, appended to at every build-step terminal outcome from `conductor.ts` | Read before every `wiring_check` kickback re-entry to `build`: when the latest record matches the pending cycle exactly on tree hash, gate, verdict, and rung, the conductor refuses to re-dispatch and halts instead of paying for an identical no-op turn (`sameNoOpCycle`) | Missing, corrupt, or version-mismatched sidecars fail open to an empty record set (never throw, never block dispatch); a lost sidecar just means one already-observed no-op cycle may be repeated once before the guard has evidence again |
+| `build-dispute.json` | `{ category: 'disputes-gate' \| 'belongs-to-decide' \| 'silent-no-movement' }` | optional, hand- or agent-authored during a build step | `resolveBuildOutcomeCategory`, preferred over the note-text inference when present and well-formed | Absent, malformed, or shape-invalid content is ignored outright and the category is inferred from the build's note text instead — this artifact is never required for any behavior in the feature |
 
 ### Reconstruction: what self-heals and what must not
 
@@ -600,6 +602,15 @@ The BUILD-member settle events carry only a member, decision, and closed basis c
 `build_member_evidence_recomputed` is `recompute` with `recorded-head-versus-current-head`,
 `fingerprint-mismatch`, or `fresh-evidence-required`. They make reuse observable without becoming a
 second validity authority; the BUILD group join still decides round satisfaction.
+
+A `build` step's `step_completed` event carries two build-only witnesses, `treeBefore`/`treeAfter`
+(absent on every other step and on events from an older engine). Both the daemon-log renderer and
+the interactive renderer use them to annotate the line with the tree movement observed for that
+step — `(tree abc1234..def5678)` when it moved, `(tree abc1234 unchanged)` when it did not, or
+`(tree unknown)` when the hash could not be determined. This is a rendering-only annotation of the
+same witness pair persisted in `.pipeline/build-outcome.json`; the two fields do not report the
+separate HEAD-commit witness (`adr-2026-07-23-commit-movement-liveness-floor`), which can legitimately
+disagree on the same turn (an empty commit moves HEAD without moving the tree).
 
 `session_policy` records when the fail-closed `supportsSessionResume` capability seam suppresses a
 would-be session resume. Both built-in providers declare the capability false, so this is diagnostic

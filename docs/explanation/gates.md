@@ -177,6 +177,16 @@ planner-driven `planRemediation` seam consult the same phase policy: a DECIDE ta
 `needs-human` instead of returning the daemon to human-judgment work. Interactive amendment kickbacks
 continue to reopen DECIDE targets unchanged.
 
+A `wiring_check` kickback into `build` additionally checks `.pipeline/build-outcome.json`
+before dispatching. If the most recent build-settle record already observed a no-movement outcome
+for this exact cycle — same tree hash, same gate, same verdict, same model/effort rung — the
+conductor refuses to re-dispatch and halts immediately instead of spending a full turn re-running a
+build already known to change nothing. A prior no-op record never blocks a cycle that differs on any
+one of those four components: a moved tree, a different verdict, a different gate, or a strictly more
+capable rung all dispatch normally, and a missing or unreadable sidecar fails open to dispatch. This
+refusal only ever produces a halt, never a silent skip forward past the gate — see
+[the runbook](../runbooks/stalled-or-stuck-feature.md#kickback-loops) for diagnosis and recovery.
+
 **Remediation** is what a blocking SHIP audit — or a `build_review` completeness or scope failure — does when the
 fix is not obvious. It classifies each gap and routes it to the earliest step that can close it — build,
 acceptance specs, architecture review, or plan — all of which sit before the gate that found it. A fifth
