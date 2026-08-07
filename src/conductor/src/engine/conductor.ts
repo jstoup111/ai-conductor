@@ -5153,6 +5153,11 @@ export class Conductor {
         // route through the completion-seam success path instead of the
         // generic "retries exhausted" HALT.
         let anyAttemptMovedHead = false;
+        // A budget-exhausted build with real commit movement advances once to
+        // build_review even though its ordinary completion predicate remains
+        // false. This is scoped to this dispatch only: a later kickback build
+        // must re-establish ordinary completion (or route again) on its own.
+        let buildRoutedForward = false;
         // Task 8: Capture stall question for error handling in degraded remediation exits.
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
@@ -6646,6 +6651,7 @@ export class Conductor {
                   await freshEvidence.write();
                 }
                 succeeded = true;
+                buildRoutedForward = true;
                 successOutput = result.output;
                 stepResult = result;
                 break;
@@ -7951,6 +7957,7 @@ export class Conductor {
               stuckGate,
               steps,
               indexOf,
+              buildRoutedForward,
             );
           } catch (transitionErr) {
             // Tag the escaped rejection with which step-transition it happened
@@ -8220,6 +8227,7 @@ export class Conductor {
     stuckGate: Map<StepName, number>,
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
+    buildRoutedForward = false,
   ): Promise<number | null | 'halt'> {
     // The gate-driven tail engages only when completion is verified against
     // artifacts (verifyArtifacts=true) — the single satisfaction authority
@@ -8315,7 +8323,13 @@ export class Conductor {
       // strict shipment evidence. Persist that successful verdict directly so
       // the tail does not repeat an external PR-head read before convergence.
       const verdict: GateObjectiveVerdict =
-        step.name === 'finish'
+        step.name === 'build' && buildRoutedForward
+          ? {
+              satisfied: true,
+              reason: state.build_routed_reason ?? 'build routed after commit movement',
+              checkedAt: Date.now(),
+            }
+          : step.name === 'finish'
           ? { satisfied: true, checkedAt: Date.now() }
           : await computeAndWriteVerdict(
               this.projectRoot,
@@ -8471,13 +8485,20 @@ export class Conductor {
     // {satisfied:false, kickback.from === this step}). Re-open that gate
     // (pending) + cascade-stale its downstream so they re-run; HALT if a gate
     // has been re-opened past the cap.
-    const kickbackVerdict = await this.scanKickbackVerdicts(
-      step.name,
-      state,
-      verdicts,
-      steps,
-      { navigate: true },
-    );
+    // A changed rebase has already consumed every rebase-origin invalidation
+    // above, carrying the delta-derived preserved set into each navigation.
+    // Scanning the same verdicts again would navigate them a second time with
+    // the generic cascade and incorrectly stale preserved judged gates.
+    const kickbackVerdict =
+      step.name === 'rebase' && this.lastRebaseOutcome?.kind === 'changed'
+        ? null
+        : await this.scanKickbackVerdicts(
+            step.name,
+            state,
+            verdicts,
+            steps,
+            { navigate: true },
+          );
     if (kickbackVerdict === 'halt') return 'halt';
 
     const decision = selectNextGate({
