@@ -184,7 +184,11 @@ import {
   readKickbackLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
-import { decideEntryDisposition, decideKickbackDisposition } from './decide-entry-policy.js';
+import {
+  decideEntryDisposition,
+  decideKickbackDisposition,
+  renderDecideEntryHalt,
+} from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -3733,6 +3737,75 @@ export class Conductor {
           );
           await emitTracked({ type: 'config_skip', step: step.name });
           continue;
+        }
+
+        // An autonomous forward walk must not author a DECIDE artifact merely
+        // because its persisted status is unresolved. Re-check the artifact
+        // at the dispatch boundary: a missing or indeterminate answer is not
+        // authority to enter DECIDE, while a healthy artifact fast-forwards.
+        if (this.verifyArtifacts && step.phase === 'DECIDE') {
+          const hasContract =
+            this.config.steps?.[step.name]?.completion_artifact !== undefined ||
+            CUSTOM_COMPLETION_PREDICATES[step.name] !== undefined ||
+            (STEP_ARTIFACT_GLOBS[step.name] ?? []).length > 0;
+          let satisfied: boolean | 'unknown' = 'unknown';
+          let evidence: string | undefined;
+          try {
+            const completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+            satisfied = completion.done;
+            evidence = completion.reason;
+          } catch {
+            // Completion verification is an authorization boundary: an
+            // unreadable or throwing predicate must fail closed, not become
+            // an implicit permission to dispatch an authoring session.
+            satisfied = 'unknown';
+          }
+          const missingStoriesArtifact =
+            step.name === 'stories' && state.feature_desc
+              ? `.docs/stories/${state.feature_desc}.md`
+              : undefined;
+          const haltEvidence =
+            missingStoriesArtifact && satisfied === false
+              ? `${evidence ?? 'completion check reported no evidence'}; expected ${missingStoriesArtifact}`
+              : evidence;
+
+          const disposition = decideEntryDisposition({
+            target: step.name,
+            steps,
+            daemon: this.daemon,
+            tier: state.complexity_tier,
+            hasContract,
+            satisfied,
+            grant: null,
+            sourceGate: 'forward-walk',
+            evidence: haltEvidence,
+          });
+          if (disposition.kind === 'fast-forward') {
+            await this.saveConductorStepStatus(state, step.name, disposition.as);
+            continue;
+          }
+          if (disposition.kind === 'halt') {
+            const { halt } = disposition;
+            const reason = renderDecideEntryHalt({
+              ...halt,
+              evidence: haltEvidence ?? halt.evidence,
+              reason:
+                satisfied === false
+                  ? `artifact unsatisfied — ${haltEvidence ?? 'completion check reported no evidence'}`
+                  : satisfied === 'unknown'
+                    ? 'artifact satisfaction is unknown — completion verification could not establish it'
+                    : halt.reason,
+            });
+            await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+            await emitTracked({ type: 'loop_halt', reason });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
         }
 
         // Resolve per-step config (model, effort, retries, review…). Tier is
