@@ -43,4 +43,30 @@ describe('evaluateScopeContainment', () => {
       }),
     ).toEqual({ allowed: true });
   });
+
+  it('does not over-accept a filename that merely ends in the declared path', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/conductor/src/engine/audit-trail.ts'],
+        task: { id: '4', files: ['src/conductor/src/engine/trail.ts'] },
+      }),
+    ).toEqual({
+      allowed: false,
+      taskId: '4',
+      offendingPaths: ['src/conductor/src/engine/audit-trail.ts'],
+    });
+  });
+
+  it('allows machinery-authored paths alongside task-declared paths', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: [
+          'src/conductor/src/engine/plan-scope-containment.ts',
+          '.pipeline/task-status.json',
+          '.docs/shipped/pipeline-commits-files-outside-the-active-plan-bef.md',
+        ],
+        task: { id: '4', files: ['src/conductor/src/engine/plan-scope-containment.ts'] },
+      }),
+    ).toEqual({ allowed: true });
+  });
 });

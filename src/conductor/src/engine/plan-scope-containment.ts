@@ -1,4 +1,5 @@
 import { fileMatchesPlanPath } from './autoheal.js';
+import { MACHINERY_AUTHORED_PATHS } from './build-review-inputs.js';
 
 export interface ScopeContainmentTask {
   id: string;
@@ -25,7 +26,9 @@ export function evaluateScopeContainment({
   task,
 }: ScopeContainmentInput): ScopeContainmentResult {
   const offendingPaths = stagedPaths.filter(
-    (path) => !task.files.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)),
+    (path) =>
+      !MACHINERY_AUTHORED_PATHS.some((machineryPath) => path.startsWith(machineryPath)) &&
+      !task.files.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)),
   );
 
   return offendingPaths.length === 0
