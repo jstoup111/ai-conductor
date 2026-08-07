@@ -1,5 +1,6 @@
 import { fileMatchesPlanPath } from './autoheal.js';
 import { MACHINERY_AUTHORED_PATHS } from './build-review-inputs.js';
+import type { ScopeTrailer } from './scope-trailer.js';
 
 export interface ScopeContainmentTask {
   id: string;
@@ -12,6 +13,7 @@ export interface ScopeContainmentInput {
   task?: ScopeContainmentTask;
   taskId?: string;
   tasks?: readonly ScopeContainmentTask[];
+  scopeTrailers?: readonly ScopeTrailer[];
 }
 
 export type ScopeContainmentResult =
@@ -29,6 +31,7 @@ export function evaluateScopeContainment({
   task,
   taskId,
   tasks,
+  scopeTrailers = [],
 }: ScopeContainmentInput): ScopeContainmentResult {
   const taskRows = tasks ?? (task === undefined ? [] : [task]);
   const activeTaskId = taskId ?? task?.id;
@@ -55,7 +58,8 @@ export function evaluateScopeContainment({
   const offendingPaths = stagedPaths.filter(
     (path) =>
       !MACHINERY_AUTHORED_PATHS.some((machineryPath) => path.startsWith(machineryPath)) &&
-      !declaredFiles.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)),
+      !declaredFiles.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)) &&
+      !scopeTrailers.some((trailer) => fileMatchesPlanPath(path, trailer.path)),
   );
 
   return offendingPaths.length === 0

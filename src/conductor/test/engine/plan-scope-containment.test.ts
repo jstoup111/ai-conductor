@@ -82,6 +82,21 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('allows a path widened by a Scope trailer for this commit', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: ['src/conductor/src/index.ts'],
+        task: { id: '6', status: 'in_progress', files: ['src/conductor/src/engine/scope-trailer.ts'] },
+        scopeTrailers: [
+          {
+            path: 'src/conductor/src/index.ts',
+            rationale: 'registers the command',
+          },
+        ],
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it.each([
     {
       name: 'no task declares Files anywhere',
