@@ -78,6 +78,11 @@ while IFS= read -r line || [ -n "$line" ]; do
       if [[ "$line" =~ ^##\ \[([0-9]+\.[0-9]+\.[0-9]+)\] ]]; then
         RELEASE=${BASH_REMATCH[1]}
         SKIP_BLOCK=false
+      elif [[ "$line" =~ ^##\ \[Unreleased\] ]]; then
+        # Feature migrations are staged here until the bot-owned release PR
+        # renders their versioned entry.
+        RELEASE="Unreleased"
+        SKIP_BLOCK=false
       elif [[ "$line" =~ ^##\ \[Unversioned\] ]]; then
         # The pre-versioned archive predates runnable release attribution and
         # is unreachable by bin/migrate's semver selector.

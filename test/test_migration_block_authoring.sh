@@ -255,6 +255,18 @@ echo "orphaned"
 ```
 EOF
 
+assert_fixture unreleased-block 0 'PASS migration block authoring contract' <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+## Migration
+
+```bash migration
+echo "pending release migration"
+```
+EOF
+
 assert_fixture conforming-block 0 'PASS migration block authoring contract' <<'EOF'
 # Changelog
 
