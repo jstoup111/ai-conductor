@@ -983,6 +983,23 @@ complexity:
       expect(result.config.test_suite?.scoped_command).toBe('npx vitest run {selectors}');
     });
 
+    it('rejects a scoped_command template without the selector placeholder', async () => {
+      await writeFile(
+        join(tmpDir, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npm test\n  scoped_command: npx vitest run\n',
+      );
+
+      const result = await loadConfig(tmpDir);
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.scoped_command.*\{selectors\}/),
+        },
+      });
+    });
+
     it('loads a test_suite without scoped_command as undefined', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
