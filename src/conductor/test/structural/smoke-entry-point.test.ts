@@ -1,4 +1,4 @@
-import { readFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -73,6 +73,66 @@ describe('structural: smoke test entry point', () => {
       emit,
     })).rejects.toThrow('CLAUDE_CODE_OAUTH_TOKEN');
   });
+
+  it(
+    'executes both hermetic smoke files through real discovery and child-process dispatch',
+    async () => {
+      const ledger: string[] = [];
+      const fixtureDir = await mkdtemp(join(structuralRoot, '.task21-smoke-'));
+      const fixtureFiles = ['first.smoke.test.ts', 'second.smoke.test.ts']
+        .map((name) => join(fixtureDir, name));
+      const config = join(conductorRoot, `${fixtureDir.split('/').at(-1)?.slice(1)}.config.ts`);
+      const originalRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      const originalTmpdir = process.env.TMPDIR;
+
+      try {
+        await Promise.all(fixtureFiles.map((file) => writeFile(file, [
+          "import { expect, it } from 'vitest';",
+          "const smokeCapability = 'hermetic';",
+          "it('executes', () => expect(true).toBe(true));",
+        ].join('\n'))));
+        await writeFile(config, [
+          "import { tmpdir } from 'node:os';",
+          "import { defineConfig } from 'vitest/config';",
+          "import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';",
+          '',
+          'ensureRunTmpRootSync(tmpdir());',
+          'export default defineConfig({ test: {',
+          `  include: ${JSON.stringify(fixtureFiles.map((file) => relative(conductorRoot, file)))},`,
+          '  exclude: [],',
+          "  environment: 'node',",
+          "  setupFiles: ['./test/setup.ts'],",
+          "  globalSetup: ['./test/global-setup.ts'],",
+          "  pool: 'forks',",
+          "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
+          '} });',
+        ].join('\n'));
+
+        delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+        delete process.env.TMPDIR;
+        try {
+          await runSmokeCli(relative(conductorRoot, config), {
+            mode: 'advisory',
+            environment: {},
+            emit: (line) => ledger.push(line),
+          });
+        } finally {
+          if (originalRunTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+          else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = originalRunTmpRoot;
+          if (originalTmpdir === undefined) delete process.env.TMPDIR;
+          else process.env.TMPDIR = originalTmpdir;
+        }
+
+        expect(ledger.filter((line) => line.endsWith('[hermetic] ran'))).toEqual(
+          fixtureFiles.map((file) => `smoke ledger: ${relative(conductorRoot, file)} [hermetic] ran`),
+        );
+      } finally {
+        await rm(config, { force: true });
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
 
   it('discovers every known smoke file through the resolved smoke config', async () => {
     const vitest = await createVitest('test', {

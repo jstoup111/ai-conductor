@@ -109,12 +109,15 @@ function defaultHasCommand(command: string): boolean {
 }
 
 async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSmokeFile[]> {
-  const vitest = await createVitest('test', {
-    config: resolve(config),
-    root: process.cwd(),
-  });
+  const parentRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+  const parentTmpdir = process.env.TMPDIR;
+  let vitest: Awaited<ReturnType<typeof createVitest>> | undefined;
 
   try {
+    vitest = await createVitest('test', {
+      config: resolve(config),
+      root: process.cwd(),
+    });
     const files = await vitest.globTestFiles();
     const { readFile } = await import('node:fs/promises');
     return Promise.all(files.map(async ({ moduleId }) => {
@@ -123,7 +126,14 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
       return { file, source };
     }));
   } finally {
-    await vitest.close();
+    try {
+      await vitest?.close();
+    } finally {
+      if (parentRunTmpRoot === undefined) delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
+      else process.env.AI_CONDUCTOR_TEST_TMP_ROOT = parentRunTmpRoot;
+      if (parentTmpdir === undefined) delete process.env.TMPDIR;
+      else process.env.TMPDIR = parentTmpdir;
+    }
   }
 }
 
