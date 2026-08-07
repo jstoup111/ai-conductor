@@ -9,6 +9,40 @@
 **Conflict check:** Clean as of 2026-08-02, including open GitHub issues (one HIGH interaction, C1, mitigated by Tasks 6 and 8)
 **Issue:** #1227
 
+## Amendments
+
+**Amendment 1 — 2026-08-07, operator-authorized (DECIDE-owned).** This plan corrects Task 14's
+release-artifact instructions, recorded below, and authorizes the diff that reverts the work the
+original instructions forced.
+
+As authored, Task 14 step 3 said "Add a `CHANGELOG.md` `[Unreleased]` entry and a `## Migration`
+section with a runnable ```bash migration``` block", and listed `CHANGELOG.md` in its Files. Both
+contradict this repository's release gates, which the plan did not consult:
+
+- CLAUDE.md, Release & Update Gates preamble: "Implementation branches never write `CHANGELOG.md`
+  or `VERSION`." `CHANGELOG.md`'s own header repeats this.
+- CLAUDE.md, Release gate 2: "Migration blocks for breaking changes travel in the **PR body**, not
+  `CHANGELOG.md`" — inside a `## Migration` section of the PR body.
+
+The instruction was unsatisfiable as written. A runnable migration block under `[Unreleased]` is
+rejected by integrity check 19 by design, because `bin/migrate` drops that section before semver
+selection (`bin/migrate:418`), so no consumer would ever run it; and a non-empty `[Unreleased]`
+makes the bot-owned release-PR renderer throw (`release-renderer.ts:151-157`). Following the plan
+therefore produced an inert migration and an out-of-plan widening of check 19 to make the invalid
+placement pass.
+
+**Corrected Task 14.** Step 3 updates `docs/reference/settings-and-hooks.md`,
+`docs/explanation/gates.md`, and `docs/reference/cli.md` only. It does **not** touch `CHANGELOG.md`
+or `VERSION`. The mandatory migration block (architecture-review F4) is a PR-body artifact authored
+at publication, not a file on this branch; the waiver path still does not apply. Task 14's Files
+list drops the `CHANGELOG.md` line.
+
+**Authorized revert.** This plan authorizes reverting, to their `main` state, the four files the
+original instruction forced out of plan scope: `CHANGELOG.md`,
+`test/check_migration_block_authoring.sh`, `test/test_migration_block_authoring.sh`, and
+`docs/contributing/validation.md`. Integrity check 19's contract is restored unchanged — it is the
+gate that caught this and must not be weakened.
+
 ## Summary
 
 A 14-task plan adding deterministic plan-scope containment at the git commit boundary, a
@@ -363,10 +397,11 @@ follow-up flip earned on live data (architecture-review F6).
 3. Update `docs/reference/settings-and-hooks.md` (commit-msg containment behavior and the
    report-only default), `docs/explanation/gates.md` (the new gate and the `Scope:` trailer
    contract), and `docs/reference/cli.md` (`conduct-ts scope-check` and its three-valued exit
-   codes). Add a `CHANGELOG.md` `[Unreleased]`
-   entry and a `## Migration` section with a runnable ```bash migration``` block that re-wires
-   git hooks in existing worktrees — required because this changes real hook behavior, so the
-   waiver path does not apply (architecture-review F4). Do not touch `VERSION`.
+   codes). Do not touch `CHANGELOG.md` or `VERSION` — implementation branches never write
+   either. The runnable ```bash migration``` block that re-wires git hooks in existing
+   worktrees is still mandatory (architecture-review F4; the waiver path does not apply because
+   this changes real hook behavior), but it belongs in the `## Migration` section of the **PR
+   body**, authored at publication — not in any file on this branch (Amendment 1).
 4. Verify GREEN and run `test/test_harness_integrity.sh`.
 5. Commit `test(engine): reproduce #1074 out-of-scope commit rejection`.
 
@@ -375,7 +410,6 @@ follow-up flip earned on live data (architecture-review F6).
 - `docs/reference/settings-and-hooks.md` — hook behavior
 - `docs/explanation/gates.md` — gate and `Scope:` trailer contract
 - `docs/reference/cli.md` — `scope-check`
-- `CHANGELOG.md` — `[Unreleased]` entry and migration block
 
 **Wired-into:** none (test and documentation only)
 **Dependencies:** Task 10, Task 11, Task 13
@@ -409,6 +443,7 @@ Tasks 1-2 and 3 are independent roots and may run in parallel.
 ## Validation
 
 - `test/test_harness_integrity.sh` must pass before any commit (repository rule).
-- No `VERSION` edit — the repository is version-locked pre-v1; `CHANGELOG.md [Unreleased]` only.
+- No `VERSION` or `CHANGELOG.md` edit — implementation branches never write either
+  (Amendment 1).
 - The migration block is mandatory (architecture-review F4); a release waiver is not
-  acceptable for this change.
+  acceptable for this change. It travels in the PR body's `## Migration` section.

@@ -11,30 +11,6 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-### Added
-
-- Plan-scope containment reports undeclared task-attributed commit paths by default and records explicit `Scope:` widenings for review before enforcement is enabled.
-
-## Migration
-
-```bash migration
-# Refresh generated hooks in an existing prepared worktree so commit-msg uses
-# the report-only plan-scope containment check. Safe to re-run: removing only
-# generated files makes the next worktree provisioning pass recreate them and
-# retains the worktree-scoped core.hooksPath setting.
-WORKTREE_ROOT="${1:-.}"
-HOOKS_DIR="$WORKTREE_ROOT/.pipeline/git-hooks"
-if [ ! -d "$WORKTREE_ROOT/.pipeline" ]; then
-  echo "No .pipeline/ found at $WORKTREE_ROOT — not a prepared conductor worktree; nothing to migrate."
-elif [ -d "$HOOKS_DIR" ]; then
-  rm -f "$HOOKS_DIR/commit-msg" "$HOOKS_DIR/prepare-commit-msg"
-  git -C "$WORKTREE_ROOT" config --worktree core.hooksPath "$HOOKS_DIR"
-  echo "Cleared stale generated hooks and rewired core.hooksPath. Re-run the build step (or restart the daemon) to regenerate the current hooks."
-else
-  echo "No generated hooks found at $HOOKS_DIR; re-run the build step (or restart the daemon) to provision them."
-fi
-```
-
 ## [0.99.20] - 2026-08-03
 
 Two months of work between `v0.99.17` (2026-05-02) and the move to bot-owned release
