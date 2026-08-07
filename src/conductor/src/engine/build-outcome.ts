@@ -84,6 +84,10 @@ function emptyBuildOutcome(): BuildOutcomeStore {
   return { version: 1, records: [] };
 }
 
+function isEffortLevel(value: unknown): value is EffortLevel {
+  return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' || value === 'max';
+}
+
 function isBuildOutcomeRecord(value: unknown): value is BuildOutcomeRecord {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
 
@@ -99,7 +103,7 @@ function isBuildOutcomeRecord(value: unknown): value is BuildOutcomeRecord {
     && record.rung !== null
     && !Array.isArray(record.rung)
     && typeof (record.rung as Record<string, unknown>).model === 'string'
-    && typeof (record.rung as Record<string, unknown>).effort === 'string'
+    && isEffortLevel((record.rung as Record<string, unknown>).effort)
     && isNullableString(record.treeBefore)
     && isNullableString(record.treeAfter)
     && isNullableString(record.headBefore)

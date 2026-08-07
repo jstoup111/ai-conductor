@@ -117,6 +117,17 @@ describe('readBuildOutcome', () => {
     await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
   });
 
+  it('fails open when a record has an unknown effort level', async () => {
+    const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(sidecarPath, JSON.stringify({
+      version: 1,
+      records: [{ ...priorOutcome(), rung: { model: 'gpt-5.6-terra', effort: 'invalid' } }],
+    }));
+
+    await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
+  });
+
   it.each([
     ['invalid JSON', 'not valid json {'],
     ['an unsupported version', JSON.stringify({ version: 2, records: [] })],
