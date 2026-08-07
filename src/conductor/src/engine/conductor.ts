@@ -1020,10 +1020,14 @@ async function selectChangedArtifacts(
   return changed;
 }
 
-function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
+function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
   if (config.steps?.[step]?.completion_artifact) return true;
   if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
+}
+
+function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
+  return hasCompletionContract(step, config);
 }
 
 /** Seed best-effort task progress telemetry before every BUILD dispatch. */
@@ -3292,7 +3296,7 @@ export class Conductor {
             steps,
             daemon: this.daemon,
             tier: state.complexity_tier,
-            hasContract: stepHasCompletionCheck(clampedStep.name, this.config),
+            hasContract: hasCompletionContract(clampedStep.name, this.config),
             satisfied: gateSatisfied(clampedStep.name, state, verdicts),
             grant: null,
             sourceGate: 'resume-clamp',
@@ -3775,10 +3779,7 @@ export class Conductor {
         // at the dispatch boundary: a missing or indeterminate answer is not
         // authority to enter DECIDE, while a healthy artifact fast-forwards.
         if (this.verifyArtifacts && step.phase === 'DECIDE') {
-          const hasContract =
-            this.config.steps?.[step.name]?.completion_artifact !== undefined ||
-            CUSTOM_COMPLETION_PREDICATES[step.name] !== undefined ||
-            (STEP_ARTIFACT_GLOBS[step.name] ?? []).length > 0;
+          const hasContract = hasCompletionContract(step.name, this.config);
           let satisfied: boolean | 'unknown' = 'unknown';
           let evidence: string | undefined;
           try {
@@ -8166,10 +8167,7 @@ export class Conductor {
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
         }
-        const hasContract =
-          this.config.steps?.[target]?.completion_artifact !== undefined ||
-          CUSTOM_COMPLETION_PREDICATES[target] !== undefined ||
-          (STEP_ARTIFACT_GLOBS[target] ?? []).length > 0;
+        const hasContract = hasCompletionContract(target, this.config);
         const disposition = await this.resolveDecideEntryDisposition({
           target,
           steps,
