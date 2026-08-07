@@ -22,6 +22,22 @@ export type DecideEntryDisposition =
   | { kind: 'halt'; halt: DecideEntryHalt };
 
 /**
+ * Render the operator-facing body for a refused autonomous DECIDE entry.
+ * Callers own the durable marker and must write this as `needs-human`.
+ */
+export function renderDecideEntryHalt(halt: DecideEntryHalt): string {
+  return [
+    'DECIDE entry refused — autonomous run may not enter DECIDE without operator direction.',
+    '',
+    `Source gate:       ${halt.sourceGate}`,
+    `Requested target:  ${halt.target}`,
+    `Evidence:          ${halt.evidence ?? 'none provided'}`,
+    `Why refused:       ${halt.reason}`,
+    'Operator choices:  direct a return to a named step | correct the routing target | reject the kickback',
+  ].join('\n');
+}
+
+/**
  * Decide whether a daemon may enter a DECIDE-phase target.
  *
  * This is deliberately a pure policy: callers own reading contracts, checking
