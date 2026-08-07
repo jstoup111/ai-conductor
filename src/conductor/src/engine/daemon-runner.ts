@@ -31,6 +31,7 @@ import {
 } from './shipment-evidence.js';
 import { currentCommitSha } from './project-prelude.js';
 import { writeHaltMarker } from './halt-marker.js';
+import { writeAutoPark } from './park-marker.js';
 import type { OperatorParkedTermination } from './conductor.js';
 
 /**
@@ -642,7 +643,10 @@ export interface TerminateFeatureOptions {
   log?: (msg: string) => void;
   triageEvidence?: unknown;
   slug?: string;
+  projectRoot?: string;
 }
+
+type AutoParkWriteOutcome = 'not-requested' | 'written' | 'failed';
 
 /**
  * Record an errored feature's diagnostic HALT. A non-parked termination leaves
@@ -655,16 +659,23 @@ export async function terminateFeature({
   log,
   triageEvidence,
   slug,
+  projectRoot,
 }: TerminateFeatureOptions): Promise<void> {
+  const autoParkWriteOutcome: AutoParkWriteOutcome = park && slug
+    ? await writeAutoPark(projectRoot ?? worktreePath, slug, reason)
+      .then(() => 'written' as const)
+      .catch(() => 'failed' as const)
+    : 'not-requested';
+
   await writeErrorHalt(
     worktreePath,
     reason,
     log,
     triageEvidence,
     slug,
-    park
-      ? 'feature errored — parked for human inspection'
-      : 'feature errored — will re-dispatch on the next scan',
+    autoParkWriteOutcome === 'not-requested'
+      ? 'feature errored — will re-dispatch on the next scan'
+      : 'feature errored — parked for human inspection',
   );
 }
 

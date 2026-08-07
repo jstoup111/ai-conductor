@@ -91,6 +91,57 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('terminateFeature with park true writes an auto-park marker containing the reason and timestamp', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-marker-'));
+    try {
+      await terminateFeature({
+        worktreePath: projectRoot,
+        projectRoot,
+        reason: 'runtime dispatch failure',
+        park: true,
+        slug: ITEM.slug,
+      });
+
+      const marker = await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8');
+
+      expect(marker).toMatch(/^auto-parked: runtime dispatch failure\ntimestamp: .+\n$/);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('terminateFeature with park true writes a worktree marker at the main repository root', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-auto-park-worktree-'));
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    try {
+      await mkdir(worktreePath, { recursive: true });
+
+      await terminateFeature({
+        worktreePath,
+        projectRoot,
+        reason: 'runtime dispatch failure',
+        park: true,
+        slug: ITEM.slug,
+      });
+
+      const markerAtMainRoot = await readFile(
+        join(projectRoot, '.daemon', 'parked', ITEM.slug),
+        'utf-8',
+      ).then(() => true).catch(() => false);
+      const markerAtWorktree = await readFile(
+        join(worktreePath, '.daemon', 'parked', ITEM.slug),
+        'utf-8',
+      ).then(() => true).catch(() => false);
+
+      expect({ markerAtMainRoot, markerAtWorktree }).toEqual({
+        markerAtMainRoot: true,
+        markerAtWorktree: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('terminateFeature with park false records an error that will re-dispatch without a park marker', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-terminate-feature-'));
     const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
