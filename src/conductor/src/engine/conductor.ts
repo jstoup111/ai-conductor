@@ -2439,7 +2439,16 @@ export class Conductor {
       };
     }
     if (fixes.length > 0) {
-      const target = earliestRemediationTarget(fixes, steps);
+      const { target, unresolved } = earliestRemediationTarget(fixes, steps);
+      if (unresolved.length > 0) {
+        return {
+          kind: 'halt',
+          detail:
+            `remediation contained unresolvable disposition${unresolved.length === 1 ? '' : 's'}: ` +
+            unresolved.join(', ') +
+            ' — human needed to provide a resolvable remediation target',
+        };
+      }
       // #644: DECIDE is operator-only in daemon mode. An autonomous rewind to a
       // DECIDE-phase step (architecture_review, plan, …) would re-run the whole
       // downstream DECIDE tail unattended — HALT to the human instead. Phase is
@@ -9078,25 +9087,31 @@ export function resolveGroupMembership(
  * The earliest target step among a set of remediation fixes. The loop
  * navigateBacks here and re-runs forward, so picking the earliest re-runs every
  * step a fix needs (e.g. an `architecture_review` fix + a `build` fix → start at
- * `architecture_review`). Defaults to `build` if none resolve.
+ * `architecture_review`). Unresolvable dispositions are surfaced to the caller
+ * so it can refuse to route a remediation plan it cannot fully understand.
  */
 export function earliestRemediationTarget(
   fixes: RemediationGap[],
   steps: StepDefinition[],
-): StepName {
+): { target: StepName; unresolved: string[] } {
   let best: StepName = 'build';
   let bestIdx = steps.length;
+  const unresolved = new Set<string>();
   for (const g of fixes) {
     // `publication` is a disposition, not a step name — it resolves to `finish`,
     // the step that owns PR prose.
     const stepName = remediationDispositionStep(g.disposition);
     const idx = steps.findIndex((s) => s.name === stepName);
+    if (idx < 0) {
+      unresolved.add(g.disposition);
+      continue;
+    }
     if (idx >= 0 && idx < bestIdx) {
       bestIdx = idx;
       best = stepName as StepName;
     }
   }
-  return best;
+  return { target: best, unresolved: [...unresolved] };
 }
 
 /**
