@@ -57,6 +57,14 @@ describe('createRenderer', () => {
     expect(output).toContain('✓ Worktree');
   });
 
+  it('renders build tree movement in the interactive transcript only for build', async () => {
+    await renderer({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456', treeAfter: 'abc123456' });
+    expect(stream.output()).toContain('tree abc1234 unchanged');
+    stream.reset();
+    await renderer({ type: 'step_completed', step: 'plan', status: 'done', treeBefore: 'abc123456', treeAfter: 'def567890' });
+    expect(stream.output()).not.toContain('tree abc1234');
+  });
+
   it('renders dashboard on tier_skip', async () => {
     await renderer({ type: 'tier_skip', step: 'conflict_check', tier: 'S' });
     expect(stream.output()).toContain('Conductor: Add login');

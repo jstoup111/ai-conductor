@@ -107,6 +107,28 @@ export function sameNoOpCycle(
     && prior.rung.effort === current.rung.effort;
 }
 
+/**
+ * Explains the operator decision behind a refused, known-empty build cycle.
+ * Category is deliberately presentation-only: matching is performed solely by
+ * `sameNoOpCycle` before this formatter is reached.
+ */
+export function composeBuildOutcomeHaltReason(record: BuildOutcomeRecord, gate: string): string {
+  const decision = record.category === 'belongs-to-decide'
+    ? 'Choose whether to accept the gate finding or return the feature to DECIDE.'
+    : record.category === 'disputes-gate'
+      ? 'Choose whether to accept the gate finding or investigate the build agent\'s dispute.'
+      : 'Investigate why the build produced no tree change before retrying.';
+  const note = record.note?.filter(Boolean).join('\n');
+  const tree = record.treeAfter ? `tree ${record.treeAfter.slice(0, 7)} unchanged` : 'tree unchanged';
+  return `${gate} kickback-to-build refused: the build made no tree change (${tree}). ${decision}` +
+    (note ? `\nBuild note: ${note}` : '');
+}
+
+/** Returns the most recent observation, if this sidecar has one. */
+export function latestBuildOutcome(store: BuildOutcomeStore): BuildOutcomeRecord | null {
+  return store.records.at(-1) ?? null;
+}
+
 function emptyBuildOutcome(): BuildOutcomeStore {
   return { version: 1, records: [] };
 }

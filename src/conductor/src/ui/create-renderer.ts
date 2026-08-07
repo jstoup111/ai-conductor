@@ -113,6 +113,14 @@ export function createRenderer(
           lastStepTail = { step: event.step, lines: event.tail };
         }
         region.resume();
+        if (event.step === 'build' && (event.treeBefore !== undefined || event.treeAfter !== undefined)) {
+          const treeAnnotation = event.treeBefore === null || event.treeAfter === null
+            ? 'tree unknown'
+            : event.treeBefore === event.treeAfter
+              ? `tree ${event.treeAfter.slice(0, 7)} unchanged`
+              : `tree ${event.treeBefore.slice(0, 7)}..${event.treeAfter.slice(0, 7)}`;
+          region.log(`  ${chalk.green('✓')} build ${chalk.green(event.status)} (${treeAnnotation})`);
+        }
         await renderDashboard();
         notify('Conductor', `Step completed: ${event.step}`);
         break;

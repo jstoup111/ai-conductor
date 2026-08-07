@@ -151,6 +151,9 @@ export type ConductorEvent =
       /** Provider that produced the successful result. */
       actualProvider?: string;
       observedIntervals?: readonly ObservedInterval[];
+      /** Build-only tree witnesses; absent on legacy and non-build events. */
+      treeBefore?: string | null;
+      treeAfter?: string | null;
     }
   | {
       type: 'step_failed';

@@ -40,6 +40,17 @@ describe('renderDaemonEvent', () => {
     ]);
   });
 
+  it('renders build tree witnesses without changing legacy or non-build lines', () => {
+    expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456', treeAfter: 'abc123456' }))
+      .toEqual(['·   build ✓ done (tree abc1234 unchanged)']);
+    expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456', treeAfter: 'def567890' }))
+      .toEqual(['·   build ✓ done (tree abc1234..def5678)']);
+    expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: null, treeAfter: 'def567890' }))
+      .toEqual(['·   build ✓ done (tree unknown)']);
+    expect(lines({ type: 'step_completed', step: 'plan', status: 'done', treeBefore: 'abc', treeAfter: 'def' }))
+      .toEqual(['·   plan ✓ done']);
+  });
+
   it('renders deterministic build verification group boundaries', () => {
     expect(lines({
       type: 'parallel_started',
