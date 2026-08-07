@@ -390,6 +390,41 @@ The record is `{ satisfied, reason, checkedAt, kickback }`. `reason` is the exac
 gate computed. The concepts behind gate verdicts are in [gates](../explanation/gates.md); the
 per-step evidence files are listed in [artifacts](../reference/artifacts.md).
 
+#### Refused no-op wiring kickback
+
+**Symptom:** `.pipeline/HALT` reads `wiring_check kickback-to-build refused: the build made no
+tree change (tree <hash> unchanged). Investigate the unchanged build before retrying.`, optionally
+followed by `Build note: <quoted tail>`. The build step for this cycle never dispatched — no
+provider call was made.
+
+**Diagnosis:** the conductor checks `.pipeline/build-outcome.json` before re-entering `build` under
+a `wiring_check` kickback. When the latest record already observed `outcome: "no-movement"` for the
+identical cycle — same tree hash, same gate, same gate verdict, same model/effort rung — it refuses
+to pay for a turn already known to change nothing and halts immediately instead. Read the record:
+
+```bash
+cat .worktrees/<slug>/.pipeline/build-outcome.json
+```
+
+The last entry's `category` (`disputes-gate`, `belongs-to-decide`, or `silent-no-movement`) reflects
+either an agent-declared `.pipeline/build-dispute.json` or an inference from the build's note text,
+and names what the prior build concluded: that the `wiring_check` finding is wrong, that the work
+belongs back in DECIDE, or that nothing was said at all.
+
+**Recovery:** decide between the gate and the build, using the quoted note as evidence — this
+refusal never overrides `wiring_check`'s own verdict, and recording a dispute never turns a real
+wiring gap into a pass (see [gates](../explanation/gates.md#kickback-and-remediation-routing)). If
+the gate's finding is wrong, correct or waive it so the next kickback lands at a different verdict.
+If the work genuinely belongs to an earlier step, return the feature to DECIDE. If the wiring gap is
+real and the build simply has not addressed it yet, make a tree-changing attempt — any commit that
+moves the tree hash is a different cycle and dispatches normally — then clear the HALT using
+[the resume procedure](#clear-a-halt-and-let-the-feature-resume). A strictly more capable
+model/effort rung also counts as a different cycle and is never refused.
+
+**Verification:** after the next dispatch, `.pipeline/build-outcome.json` gains a new record whose
+`treeBefore`/`treeAfter` differ from the refused cycle's, and the daemon log's `step_completed` line
+for `build` shows the moved tree hashes rather than `unchanged`.
+
 #### BUILD verification after a repair
 
 **Symptom:** a repair returned to BUILD and you need to determine whether `wiring_check` or

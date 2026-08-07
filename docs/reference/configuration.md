@@ -898,12 +898,17 @@ Contract (`src/conductor/src/engine/config.ts:934-957`): absent or `null` yields
 anything malformed — non-object, unknown inner key, or non-boolean `enabled` — is replaced with
 `{ enabled: true }` with **no warning**. The resolved block is written back.
 
-Consumed at `src/conductor/src/engine/conductor.ts:2438` (`?? true`). When enabled, the no-op
+Consumed at `src/conductor/src/engine/conductor.ts:3362` (`?? true`). When enabled, the no-op
 escalation guard compares the pre- and post-build tree hashes (and resolved-task counts) for the
 kickback; an empty commit therefore does not count as progress. Setting `enabled: false` disables
 that tree-hash witness and reverts to re-kicking until the cap. It does not disable the durable
 per-gate cap, which still bounds unchanged cross-dispatch loops; the `planRemediation` guard is
 also not gated by this flag (`src/conductor/src/types/config.ts:302-308`).
+
+The same flag also gates the pre-dispatch refusal of a repeated no-op `wiring_check` kickback
+cycle: with `enabled: false`, an identical no-movement cycle re-dispatches `build` again instead of
+halting immediately. See [`.pipeline/build-outcome.json`](artifacts.md#core-state) and the
+[refused no-op wiring kickback runbook](../runbooks/stalled-or-stuck-feature.md#refused-no-op-wiring-kickback).
 
 ## daemon_verbose
 
