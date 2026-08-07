@@ -274,11 +274,11 @@ describe('acceptance: setup-before-dispatch wedge — deterministic setup-failur
     await git('config', 'user.email', 'test@example.com');
     await git('config', 'user.name', 'Test');
     await git('config', 'commit.gpgsign', 'false');
-    // `.env` is written by prepareWorktree on every run, and `.pipeline/HALT`
-    // is written by the engine's error-park path on every error (today AND
-    // after #446 ships) — ignore both so git-status/dirty-tree assertions only
-    // see state THIS spec constructed, not the engine's own bookkeeping.
-    await writeFile(join(dir, '.gitignore'), '.env\n.pipeline/\n', 'utf-8');
+    // `.env` is written by prepareWorktree on every run, `.pipeline/HALT` is
+    // written by the engine's error path, and `.daemon/parked/<slug>` is the
+    // durable auto-park runtime marker. Ignore engine bookkeeping so
+    // git-status/dirty-tree assertions only see state THIS spec constructed.
+    await writeFile(join(dir, '.gitignore'), '.env\n.pipeline/\n.daemon/\n', 'utf-8');
     await writeFile(join(dir, 'README.md'), '# base\n');
     await git('add', '-A');
     await git('commit', '-m', 'initial commit');

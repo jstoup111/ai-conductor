@@ -224,8 +224,8 @@ describe('automatic park termination — real runner to durable daemon consumers
     expect(await exists(join(worktreePath, '.daemon', 'parked', SLUG))).toBe(false);
 
     const halt = await readFile(haltPath(), 'utf8');
-    expect(halt).toMatch(/^feature errored .*parked/i);
-    expect(halt).toMatch(/will not be re-dispatched/i);
+    expect(halt).toMatch(/^feature parked — will not re-dispatch on the next scan/i);
+    expect(halt).toMatch(/will not re-dispatch/i);
     expect(halt).toContain('project setup (bin/setup) failed: exit 1');
     expect(halt).toContain('No quarantine ref exists');
     expect(halt).toContain('Contract outcome: setup-still-failing');
@@ -238,6 +238,9 @@ describe('automatic park termination — real runner to durable daemon consumers
 
     const reconciliation = await reconcileParkedFeatures({
       projectRoot,
+      // The production adapter is correctly blocked in ordinary Vitest runs;
+      // keep this acceptance path on its real local-Git fixture boundary.
+      runGit: async (args, { cwd }) => ({ stdout: await git(args, cwd) }),
       autoCleanup: false,
       getIssueState: async () => 'OPEN',
     });
