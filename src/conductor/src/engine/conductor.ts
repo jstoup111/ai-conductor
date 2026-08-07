@@ -4945,8 +4945,13 @@ export class Conductor {
         let lastPublicationTransition: PublicationTransition | undefined;
         // HEAD sha captured at build-step entry for per-attempt liveness
         // telemetry and stall classification.
-        const headShaBeforeBuild: string | null =
-          step.name === 'build' ? await currentCommitSha(this.projectRoot) : null;
+        const [headShaBeforeBuild, treeHashBeforeBuild]: [string | null, string | null] =
+          step.name === 'build'
+            ? await Promise.all([
+              currentCommitSha(this.projectRoot),
+              currentTreeHash(this.projectRoot),
+            ])
+            : [null, null];
         // adr-2026-07-23-commit-movement-liveness-floor: per-attempt SHA
         // baseline for the `no_task_progress` breaker's liveness-floor
         // conjunct — distinct from `headShaBeforeBuild` above (which is
