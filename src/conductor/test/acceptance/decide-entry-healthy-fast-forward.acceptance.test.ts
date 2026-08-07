@@ -8,6 +8,7 @@ import {
   cleanupDecideEntryFixture,
   conductorFor,
   createDecideEntryFixture,
+  pathExists,
   recordingFailureRunner,
   seedHealthyDecideArtifacts,
   type DecideEntryFixture,
@@ -50,11 +51,22 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       memory: 'done',
     });
     const ran: StepName[] = [];
+    let haltedBeforeFirstDispatch = false;
 
-    await conductorFor(fixture, recordingFailureRunner(ran)).run();
+    await conductorFor(fixture, {
+      run: async (step) => {
+        ran.push(step);
+        haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+      },
+    }).run();
 
     expect(ran[0]).toBe('acceptance_specs');
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
+    const state = await readState(fixture.statePath);
+    expect(state.ok && state.value.explore).toBe('skipped');
+    expect(state.ok && state.value.complexity).toBe('skipped');
+    expect(haltedBeforeFirstDispatch).toBe(false);
   });
 
   it('Small tier skips its optional DECIDE artifacts and first dispatches BUILD', async () => {
@@ -66,8 +78,15 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
       memory: 'done',
     });
     const ran: StepName[] = [];
+    let haltedBeforeFirstDispatch = false;
 
-    await conductorFor(fixture, recordingFailureRunner(ran)).run();
+    await conductorFor(fixture, {
+      run: async (step) => {
+        ran.push(step);
+        haltedBeforeFirstDispatch = await pathExists(fixture.root, '.pipeline/HALT');
+        return { success: false, output: 'acceptance sentinel: stop after observed dispatch' };
+      },
+    }).run();
 
     expect(ran[0]).toBe('build');
     expect(ran.filter((step) => DECIDE_STEPS.includes(step))).toEqual([]);
@@ -76,6 +95,8 @@ describe('acceptance: healthy DECIDE artifacts fast-forward without provider cos
     expect(state.ok && state.value.architecture_review).toBe('skipped');
     expect(state.ok && state.value.conflict_check).toBe('skipped');
     expect(state.ok && state.value.coherence_check).toBe('skipped');
+    expect(state.ok && state.value.acceptance_specs).toBe('skipped');
+    expect(haltedBeforeFirstDispatch).toBe(false);
   });
 
   it('an unresolved tier defaults to L and therefore skips none of the optional DECIDE steps', async () => {
