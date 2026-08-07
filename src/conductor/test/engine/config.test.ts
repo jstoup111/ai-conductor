@@ -1000,6 +1000,26 @@ complexity:
       });
     });
 
+    it.each([
+      ['an empty string', ''],
+      ['a whitespace-only string', '   '],
+      ['a number', 42],
+      ['a list', ['npx', 'vitest', 'run', '{selectors}']],
+      ['an object', { command: 'npx vitest run {selectors}' }],
+    ])('rejects scoped_command that is %s', (_name, scopedCommand) => {
+      const result = validateConfig({
+        test_suite: { command: 'npm test', scoped_command: scopedCommand },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: {
+          type: 'validation_error',
+          message: expect.stringMatching(/test_suite\.scoped_command/),
+        },
+      });
+    });
+
     it('loads a test_suite without scoped_command as undefined', async () => {
       await writeFile(
         join(tmpDir, '.ai-conductor', 'config.yml'),
