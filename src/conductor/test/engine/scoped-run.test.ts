@@ -54,6 +54,25 @@ describe('runScopedCommand', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it('refuses all-whitespace selectors as an aggregate selection without running a command', async () => {
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    const result = await runScopedCommand({
+      template: 'npx vitest run {selectors}',
+      selectors: ['', '  '],
+      runner,
+    });
+
+    expect({ result, runnerCallCount: runner.mock.calls.length }).toEqual({
+      result: {
+        exitCode: 1,
+        reason: 'empty_selection',
+        message: expect.stringMatching(/empty selection is an aggregate run.*shared aggregate verifier/i),
+      },
+      runnerCallCount: 0,
+    });
+  });
+
   it('reports a selected-test failure without invoking the aggregate command', async () => {
     const runner = vi.fn<ScopedRunRunner>(async () => 7);
 

@@ -38,15 +38,17 @@ export async function runScopedCommand({
     return () => clearTimeout(timeout);
   },
 }: ScopedRunCommandOptions): Promise<ScopedRunResult> {
-  if (selectors.length === 0) {
+  const normalizedSelectors = selectors.map((selector) => selector.trim()).filter(Boolean);
+
+  if (normalizedSelectors.length === 0) {
     return {
       exitCode: 1,
       reason: 'empty_selection',
-      message: 'Scoped test run requires at least one selector.',
+      message: 'Scoped test run requires at least one selector; an empty selection is an aggregate run, so use the shared aggregate verifier.',
     };
   }
 
-  const command = template.replace('{selectors}', selectors.join(' '));
+  const command = template.replace('{selectors}', normalizedSelectors.join(' '));
   const controller = new AbortController();
   const run = runner(command, { signal: controller.signal });
   let cancelTimeout: (() => void) | undefined;
