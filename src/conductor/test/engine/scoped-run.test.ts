@@ -1,5 +1,10 @@
 import { execa } from 'execa';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
+import { checkStepCompletion } from '../../src/engine/artifacts.js';
+import { FullSuiteVerifier } from '../../src/engine/full-suite-verifier.js';
 import {
   runScopedCommand,
   type ScopedRunRunner,
@@ -205,5 +210,75 @@ describe('runScopedCommand', () => {
       'npx vitest run test/slow.test.ts',
       expect.anything(),
     );
+  });
+
+  it('leaves pre-existing aggregate evidence byte-identical after a successful scoped run', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'scoped-run-evidence-'));
+    const evidencePath = join(projectRoot, '.pipeline', 'test-suite-evidence.json');
+    const priorEvidence = '{"aggregate":"evidence"}\n';
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    try {
+      await mkdir(join(projectRoot, '.pipeline'), { recursive: true });
+      await writeFile(evidencePath, priorEvidence, 'utf8');
+
+      await runScopedCommand({
+        template: 'npx vitest run {selectors}',
+        selectors: ['test/selected.test.ts'],
+        runner,
+      });
+
+      expect(await readFile(evidencePath, 'utf8')).toBe(priorEvidence);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('cannot satisfy the aggregate test_suite gate when its successful run has no aggregate evidence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'scoped-run-gate-'));
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    try {
+      await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+      await writeFile(
+        join(projectRoot, '.ai-conductor', 'config.yml'),
+        'test_suite:\n  command: npx vitest run\n',
+        'utf8',
+      );
+      await runScopedCommand({
+        template: 'npx vitest run {selectors}',
+        selectors: ['test/selected.test.ts'],
+        runner,
+      });
+      const inspection = await new FullSuiteVerifier({
+        projectRoot,
+        fingerprint: async () => ({
+          ok: true,
+          fingerprint: {
+            digest: 'sha256:scoped-run-test',
+            headSha: 'scoped-run-head',
+            categoryFingerprints: {
+              additional_inputs: 'additional-inputs',
+              dependencies: 'dependencies',
+              environment: 'environment',
+              migrations: 'migrations',
+              project_config: 'project-config',
+              source: 'source',
+              test_infrastructure: 'test-infrastructure',
+              tests: 'tests',
+            },
+          },
+        }),
+      }).inspect();
+
+      await expect(checkStepCompletion(projectRoot, 'test_suite', {
+        fullSuiteInspect: async () => inspection,
+      })).resolves.toMatchObject({
+        done: false,
+        reason: expect.stringMatching(/PASS evidence is stale: missing/i),
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
   });
 });
