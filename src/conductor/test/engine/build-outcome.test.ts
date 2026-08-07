@@ -11,4 +11,14 @@ describe('classifyBuildSettle', () => {
       classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore, resolvedAfter }),
     ).toBe(expected);
   });
+
+  it.each([
+    ['treeBefore is null', null, 'after-tree'],
+    ['treeAfter is null', 'before-tree', null],
+    ['both tree hashes are null', null, null],
+  ] as const)('returns no-movement when %s', (_description, treeBefore, treeAfter) => {
+    expect(
+      classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore: 2, resolvedAfter: 3 }),
+    ).toBe('no-movement');
+  });
 });
