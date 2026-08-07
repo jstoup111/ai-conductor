@@ -95,6 +95,13 @@ describe('buildGraderPrompt', () => {
     expect(prompt).not.toMatch(/run the project's (full |entire )?test suite/i);
   });
 
+  it('directs the grader to the scoped-run interface without stale full-suite ownership', () => {
+    const prompt = buildGraderPrompt(inputs);
+
+    expect(prompt).toContain('conduct-ts scoped-run');
+    expect(prompt).not.toContain('The full project suite runs at CI and at finish, not here.');
+  });
+
   it('includes the completeness rubric item and forbids per-task reasoning', () => {
     const prompt = buildGraderPrompt(inputs);
 
