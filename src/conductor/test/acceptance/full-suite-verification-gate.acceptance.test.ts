@@ -14,7 +14,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa, type ResultPromise } from 'execa';
 import { spawnSync } from 'node:child_process';
-import { closeSync, mkdirSync, openSync, readFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, writeFileSync } from 'node:fs';
 import {
   access,
   mkdir,
@@ -114,6 +114,56 @@ function invokeRealSuite(
     exitCode,
     stdout: readFileSync(stdoutPath, 'utf8'),
     stderr: readFileSync(stderrPath, 'utf8'),
+  };
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\\"'\\\"'")}'`;
+}
+
+function invokeScriptWithFakeVitest(
+  script: string,
+  argumentsToForward: string[],
+): { exitCode: number | null; stdout: string; stderr: string; runnerArguments: string[] } {
+  const binDirectory = join(scratchParent, 'fake-bin');
+  const runnerArgumentsPath = join(scratchParent, 'fake-vitest-arguments');
+  mkdirSync(binDirectory, { recursive: true });
+  const fakeVitestPath = join(binDirectory, 'vitest');
+  writeFileSync(
+    fakeVitestPath,
+    [
+      '#!/bin/sh',
+      'printf "%s\\n" "$@" > "$FAKE_VITEST_ARGUMENTS"',
+      'for argument in "$@"; do',
+      '  if [ "$argument" = "__fake_vitest_failure__" ]; then',
+      '    exit 23',
+      '  fi',
+      'done',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+  chmodSync(fakeVitestPath, 0o755);
+
+  const result = spawnSync(
+    'sh',
+    ['-c', `${script} ${argumentsToForward.map(shellQuote).join(' ')}`],
+    {
+      cwd: repo,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        FAKE_VITEST_ARGUMENTS: runnerArgumentsPath,
+        PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
+      },
+    },
+  );
+
+  return {
+    exitCode: result.status,
+    stdout: result.stdout ?? '',
+    stderr: result.stderr ?? '',
+    runnerArguments: readFileSync(runnerArgumentsPath, 'utf8').trim().split('\n'),
   };
 }
 
@@ -301,6 +351,49 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
       });
     }
   });
+});
+
+describe('Story 7 — package-script selector forwarding (Task 17)', () => {
+  it('keeps the legacy trailing-echo shape detectable by the fake runner', async () => {
+    const packageJson = JSON.parse(await readFile(join(CONDUCTOR_ROOT, 'package.json'), 'utf8')) as {
+      scripts: { test: string };
+    };
+    const selector = '__fake_vitest_selector__';
+    const legacy = "vitest run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'";
+    const legacyResult = invokeScriptWithFakeVitest(legacy, [selector]);
+
+    expect(packageJson.scripts.test).not.toBe(legacy);
+    expect(legacyResult).toMatchObject({
+      exitCode: 0,
+      stdout: `AGGREGATE_TEST_SUITE_PASS ${selector}\n`,
+      runnerArguments: expect.not.arrayContaining([selector]),
+    });
+  });
+
+  it.each(['test', 'test:changed'] as const)(
+    'forwards selectors to Vitest and preserves runner failures for %s',
+    async (scriptName) => {
+      const packageJson = JSON.parse(await readFile(join(CONDUCTOR_ROOT, 'package.json'), 'utf8')) as {
+        scripts: Record<string, string>;
+      };
+      const selector = `test/${scriptName.replace(':', '-')}-selector.test.ts`;
+      const successful = invokeScriptWithFakeVitest(packageJson.scripts[scriptName], [selector]);
+      const failing = invokeScriptWithFakeVitest(packageJson.scripts[scriptName], ['__fake_vitest_failure__']);
+
+      expect(successful).toMatchObject({
+        exitCode: 0,
+        stdout: 'AGGREGATE_TEST_SUITE_PASS\n',
+        runnerArguments: expect.arrayContaining([selector]),
+      });
+      expect(successful.stdout).not.toContain(selector);
+      expect(failing).toMatchObject({
+        exitCode: 23,
+        stdout: '',
+        runnerArguments: expect.arrayContaining(['__fake_vitest_failure__']),
+      });
+      expect(failing.stdout).not.toContain('AGGREGATE_TEST_SUITE_PASS');
+    },
+  );
 });
 
 describe('Stories 4 and 5 — reusable current proof (FR-3, FR-4, FR-6, FR-11, FR-12, FR-16)', () => {
