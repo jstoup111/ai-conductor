@@ -97,10 +97,13 @@ fail once actually run" row (Likelihood Medium / Impact High), not an oversight.
 ## Alternatives considered
 
 - **Characterize `publish-interrupted` in CI first** (advisory `live-daemon-e2e.yml` dispatch,
-  attach the run link as C-2 evidence, re-run the as-built gate). Rejected as described above:
-  cheapest in tokens, but it delays a complete feature and yields evidence with a short shelf life.
-- **Quarantine it in the shipped tree** (a `fetch-depth: 0` checkout plus a recorded
-  `SMOKE_FORCE_SKIP` default, or reclassifying the file so gate mode does not execute it).
+  attach the run link as C-2 evidence, re-run the as-built gate). Rejected as described above: it
+  delays a complete feature and yields evidence with a short shelf life. Note this is not free —
+  `CLAUDE_CODE_OAUTH_TOKEN` has been provisioned since 2026-08-05, so advisory mode no longer skips
+  the credentialed leg and a dispatch spends real provider tokens.
+- **Quarantine it in the shipped tree** (a `fetch-depth: 0` checkout, or reclassifying the file so
+  gate mode does not execute it — note a committed `SMOKE_FORCE_SKIP` default would *not* work,
+  since gate mode resolves an override to `failed`).
   Rejected: a persisted skip over a file whose actual state is unknown hides the very signal the
   tier exists to produce, and the plan's Amendment 3 forbids force-skipping to paper over a defect.
   Since it is not established whether the local failure was an environment limitation or a real
@@ -116,9 +119,15 @@ implicit in a shell-history force-skip, so a future reader sees a decision inste
 
 **Negative.** The first release cut after this merges may block on
 `publish-interrupted.smoke.test.ts` failing inside a paid, credentialed CI job, requiring someone
-to debug a never-before-executed test at release time. `SMOKE_FORCE_SKIP` is the documented escape
-hatch for that moment; using it to unblock a release still requires deciding whether the failure is
-an environment limitation or a defect, and recording which.
+to debug a never-before-executed test at release time.
+
+**There is no env-var escape hatch, by design.** `SMOKE_FORCE_SKIP` does not unblock a gated
+release: `resolveGateSmokeCapabilities` (`smoke-capability.ts:155-167`) resolves a force-skipped
+capability to `failed (unmet: operator override)` for all three capabilities, so overriding the
+gate is itself a gate failure. Unblocking requires a committed change — fix the test, or reclassify
+the file so gate mode does not execute it — followed by a fresh release attempt. Decide first
+whether the failure is a genuine CI-environment limitation or a `bin/setup` defect, and record
+which; Amendment 3 of the plan forbids skipping to paper over a defect.
 
 **Follow-up (non-blocking).** The first observed gate-mode ledger line for
 `test/smoke/publish-interrupted.smoke.test.ts` should be attached to this ADR as the evidence that
