@@ -185,4 +185,39 @@ describe('conductor build-outcome baseline capture', () => {
       note: ['failed build output'],
     });
   });
+
+  it('stamps an auth failure as a no-verdict build outcome', async () => {
+    vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue(fixtureHead);
+    const runner: StepRunner = {
+      run: vi.fn(async () => ({ success: false, authFailure: true, output: 'authentication failed' })),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+    (conductor as unknown as {
+      parkOnAuthFailure: () => Promise<{ disposition: 'halt'; haltReason: string }>;
+    }).parkOnAuthFailure = async () => ({ disposition: 'halt', haltReason: 'auth halted' });
+
+    await conductor.run();
+
+    const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {
+      records: Array<Record<string, unknown>>;
+    };
+    expect(payload.records.at(-1)).toMatchObject({
+      terminalOutcome: 'no-verdict',
+      reason: 'authFailure',
+      treeBefore: 'tree-witness',
+      treeAfter: 'tree-witness',
+      headBefore: fixtureHead,
+      headAfter: fixtureHead,
+    });
+  });
 });

@@ -27,6 +27,7 @@ export interface BuildOutcomeRecord {
   headAfter: string | null;
   note?: string[];
   category?: string;
+  reason?: string;
 }
 
 /** Durable build-settle observations stored outside the feature branch. */
@@ -110,6 +111,7 @@ function isBuildOutcomeRecord(value: unknown): value is BuildOutcomeRecord {
     && isNullableString(record.headAfter)
     && (record.note === undefined || (Array.isArray(record.note) && record.note.every((line) => typeof line === 'string')))
     && (record.category === undefined || typeof record.category === 'string')
+    && (record.reason === undefined || typeof record.reason === 'string')
   );
 }
 
