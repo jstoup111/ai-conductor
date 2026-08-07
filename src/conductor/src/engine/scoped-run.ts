@@ -7,7 +7,7 @@ export type ScopedRunRunner = (
   options: ScopedRunRunnerOptions,
 ) => Promise<number>;
 
-export type ScopedRunReason = 'passed' | 'test_failure' | 'launch_failure' | 'timeout';
+export type ScopedRunReason = 'passed' | 'test_failure' | 'launch_failure' | 'timeout' | 'empty_selection';
 
 export interface ScopedRunResult {
   exitCode: number;
@@ -38,6 +38,14 @@ export async function runScopedCommand({
     return () => clearTimeout(timeout);
   },
 }: ScopedRunCommandOptions): Promise<ScopedRunResult> {
+  if (selectors.length === 0) {
+    return {
+      exitCode: 1,
+      reason: 'empty_selection',
+      message: 'Scoped test run requires at least one selector.',
+    };
+  }
+
   const command = template.replace('{selectors}', selectors.join(' '));
   const controller = new AbortController();
   const run = runner(command, { signal: controller.signal });

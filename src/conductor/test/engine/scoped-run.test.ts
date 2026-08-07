@@ -37,6 +37,23 @@ describe('runScopedCommand', () => {
     );
   });
 
+  it('refuses an empty selector list before substituting or running a command', async () => {
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    const result = await runScopedCommand({
+      template: 'npx vitest run {selectors}',
+      selectors: [],
+      runner,
+    });
+
+    expect(result).toMatchObject({
+      exitCode: 1,
+      reason: 'empty_selection',
+      message: expect.stringMatching(/requires at least one selector/i),
+    });
+    expect(runner).not.toHaveBeenCalled();
+  });
+
   it('reports a selected-test failure without invoking the aggregate command', async () => {
     const runner = vi.fn<ScopedRunRunner>(async () => 7);
 
