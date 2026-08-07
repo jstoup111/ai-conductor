@@ -1,6 +1,6 @@
 import { Command } from 'commander';
-import { readFile } from 'node:fs/promises';
-import { basename } from 'node:path';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { basename, join } from 'node:path';
 import type { ViewMode } from './ui/types.js';
 import type { EffortLevel } from './types/config.js';
 import { scanPlanProtectedTargets } from './engine/plan-protected-targets.js';
@@ -110,6 +110,64 @@ export interface PlanProtectedTargetsDispatch {
   path: string;
 }
 
+export interface DecideGrantDispatch {
+  kind: 'decide-grant';
+  slug: string;
+  step: string;
+  reason: string;
+}
+
+/** Parse the explicit, operator-only DECIDE grant command without booting the pipeline. */
+export function detectDecideGrantCommand(argv: string[]): DecideGrantDispatch | null {
+  if (argv[2] !== 'decide-grant') return null;
+  const values = new Map<string, string>();
+  for (let index = 3; index < argv.length; index += 2) {
+    const flag = argv[index];
+    const value = argv[index + 1];
+    if (!flag || !value || !['--slug', '--step', '--reason'].includes(flag) || values.has(flag)) {
+      return null;
+    }
+    values.set(flag, value);
+  }
+  const slug = values.get('--slug');
+  const step = values.get('--step');
+  const reason = values.get('--reason');
+  if (
+    !slug ||
+    !step ||
+    !reason ||
+    values.size !== 3 ||
+    slug.includes('/') ||
+    slug === '.' ||
+    slug === '..'
+  ) {
+    return null;
+  }
+  return { kind: 'decide-grant', slug, step, reason };
+}
+
+/** Write the sole durable authorization artifact for one autonomous DECIDE entry. */
+export async function dispatchDecideGrantCommand(
+  command: DecideGrantDispatch,
+  cwd: string = process.cwd(),
+): Promise<number> {
+  const pipelineDir = join(cwd, '.worktrees', command.slug, '.pipeline');
+  await mkdir(pipelineDir, { recursive: true });
+  await writeFile(
+    join(pipelineDir, 'decide-grant.json'),
+    JSON.stringify({
+      version: 1,
+      step: command.step,
+      reason: command.reason,
+      grantedAt: new Date().toISOString(),
+      grantedBy: 'operator',
+    }) + '\n',
+    'utf-8',
+  );
+  console.log(`DECIDE grant recorded for '${command.step}' in '${command.slug}'.`);
+  return 0;
+}
+
 /** Parse argv for `conduct-ts plan-protected-targets <path>` without I/O. */
 export function detectPlanProtectedTargetsCommand(
   argv: string[],
@@ -145,6 +203,16 @@ export async function planProtectedTargetsCommand(
     print(`Task ${taskId}: ${path}`);
   }
   return 1;
+}
+
+/** Register operator-directed DECIDE authorization in the discoverable CLI. */
+function registerCommands(program: Command): void {
+  program
+    .command('decide-grant')
+    .description('Authorize one named autonomous DECIDE step for one feature')
+    .requiredOption('--slug <slug>', 'Feature worktree slug')
+    .requiredOption('--step <step>', 'DECIDE step to authorize')
+    .requiredOption('--reason <reason>', 'Operator reason for this one-time grant');
 }
 
 export function createProgram(): Command {
@@ -287,6 +355,8 @@ export function createProgram(): Command {
   program
     .command('plan-protected-targets <path>')
     .description('Blocking scan for plan tasks that target another feature’s protected artifact');
+
+  registerCommands(program);
 
   // Daemon subcommand (Phase 6; promoted from the `--daemon` flag). NON-INTERACTIVE:
   // dispatched by index.ts before the pipeline boots. The bare `daemon` RUNS the

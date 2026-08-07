@@ -49,6 +49,8 @@ import {
   renderFullHelp,
   renderDaemonHelp,
   detectInline,
+  detectDecideGrantCommand,
+  dispatchDecideGrantCommand,
   detectPlanProtectedTargetsCommand,
   planProtectedTargetsCommand,
   type CLIOptions,
@@ -418,6 +420,12 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const decideGrantCmd = detectDecideGrantCommand(process.argv);
+  if (decideGrantCmd) {
+    process.exitCode = await dispatchDecideGrantCommand(decideGrantCmd);
+    return;
+  }
+
   const testSuiteCmd = detectTestSuiteCommand(process.argv);
   if (testSuiteCmd) {
     const code = await dispatchTestSuiteCommand(testSuiteCmd, {

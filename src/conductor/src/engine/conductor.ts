@@ -180,7 +180,13 @@ import {
   readKickbackLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
-import { decideKickbackDisposition } from './kickback-policy.js';
+import {
+  consumeOperatorGrant,
+  decideEntryDisposition,
+  decideKickbackDisposition,
+  readOperatorGrant,
+  renderDecideEntryHalt,
+} from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -226,7 +232,7 @@ import {
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
-import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
+import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -1014,10 +1020,14 @@ async function selectChangedArtifacts(
   return changed;
 }
 
-function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
+function hasCompletionContract(step: StepName, config: HarnessConfig): boolean {
   if (config.steps?.[step]?.completion_artifact) return true;
   if (CUSTOM_COMPLETION_PREDICATES[step]) return true;
   return (STEP_ARTIFACT_GLOBS[step] ?? []).length > 0;
+}
+
+function stepHasCompletionCheck(step: StepName, config: HarnessConfig): boolean {
+  return hasCompletionContract(step, config);
 }
 
 /** Seed best-effort task progress telemetry before every BUILD dispatch. */
@@ -1792,6 +1802,31 @@ export class Conductor {
     return navigation.index;
   }
 
+  /**
+   * Evaluate an autonomous DECIDE entry with the durable operator grant.
+   * Navigation seams may recognize a grant, but only the provider dispatch
+   * boundary consumes it.
+   */
+  private async resolveDecideEntryDisposition(
+    input: Parameters<typeof decideEntryDisposition>[0],
+    consumeGrant = false,
+  ): Promise<ReturnType<typeof decideEntryDisposition>> {
+    const targetStep = input.steps.find((step) => step.name === input.target);
+    if (!input.daemon || targetStep?.phase !== 'DECIDE') {
+      return decideEntryDisposition(input);
+    }
+
+    const grant = await readOperatorGrant(this.projectRoot);
+    const disposition = decideEntryDisposition({ ...input, grant });
+    if (!consumeGrant || disposition.kind !== 'enter' || grant?.step !== input.target) {
+      return disposition;
+    }
+
+    return (await consumeOperatorGrant(this.projectRoot, input.target))
+      ? disposition
+      : decideEntryDisposition({ ...input, grant: null });
+  }
+
   /** Read expectations immediately before constructing a guarded mutation. */
   private async currentStateForMutation(): Promise<ConductState> {
     const result = await readState(this.stateFilePath);
@@ -2439,7 +2474,16 @@ export class Conductor {
       };
     }
     if (fixes.length > 0) {
-      const target = earliestRemediationTarget(fixes, steps);
+      const { target, unresolved } = earliestRemediationTarget(fixes, steps);
+      if (unresolved.length > 0) {
+        return {
+          kind: 'halt',
+          detail:
+            `remediation contained unresolvable disposition${unresolved.length === 1 ? '' : 's'}: ` +
+            unresolved.join(', ') +
+            ' — human needed to provide a resolvable remediation target',
+        };
+      }
       // #644: DECIDE is operator-only in daemon mode. An autonomous rewind to a
       // DECIDE-phase step (architecture_review, plan, …) would re-run the whole
       // downstream DECIDE tail unattended — HALT to the human instead. Phase is
@@ -3200,6 +3244,7 @@ export class Conductor {
 
       // Clamp startIndex backward to honor on-disk gate verdicts.
       // Read verdicts and derive gate topology to find the earliest unsatisfied gate.
+      let resumeClamp: { verdicts: Awaited<ReturnType<typeof readAllVerdicts>>; earliestGateIdx: number } | undefined;
       try {
         const verdicts = await readAllVerdicts(this.projectRoot);
         const topo = deriveGateTopology(steps);
@@ -3209,35 +3254,64 @@ export class Conductor {
           verdicts,
           regionStart: topo.regionStart,
         });
-
-        // Clamp backward (min) only — never move startIndex forward.
-        // If earliestGateIdx is valid and precedes the candidate, use it.
-        // The clamp on the local startIndex is the ONLY resume-entry mechanism
-        // (adr-2026-07-11-verdict-aware-resume-entry): resume never mutates
-        // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
-        // demotion inside the loop.
-        if (earliestGateIdx >= 0 && earliestGateIdx < startIndex) {
-          // The clamp's satisfaction predicate (`gateSatisfied`) is VERDICT-
-          // authoritative, but the loop's own entry check (`checkGate` →
-          // `stepSatisfied`) is STATE-only. When a step's verdict says
-          // satisfied while its state says `failed` (e.g. build passed review
-          // once, then a later build attempt failed without rewriting the
-          // verdict), the clamp lands PAST that step on a downstream gate
-          // whose `checkGate` can never pass. The loop then takes the
-          // markerless `gate_blocked` return and the finally-backstop parks
-          // the run with "loop exited without a terminal verdict" — a
-          // deterministic livelock that re-parks identically on every resume
-          // and never dispatches a session (#1052).
-          //
-          // Walk the prerequisite chain back to the earliest step the loop
-          // will actually accept, using the SAME predicate `checkGate` uses,
-          // so the entry point is never one the very next check rejects.
-          // Backward-only and bounded by steps.length, so it cannot loop.
-          startIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
-        }
+        resumeClamp = { verdicts, earliestGateIdx };
       } catch (err) {
         // Verdict reading errors (missing file, parse failures) are non-fatal.
         // Fall through to the candidate startIndex derived from state alone.
+      }
+
+      // Clamp backward (min) only — never move startIndex forward.
+      // If earliestGateIdx is valid and precedes the candidate, use it.
+      // The clamp on the local startIndex is the ONLY resume-entry mechanism
+      // (adr-2026-07-11-verdict-aware-resume-entry): resume never mutates
+      // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
+      // demotion inside the loop.
+      if (
+        resumeClamp &&
+        resumeClamp.earliestGateIdx >= 0 &&
+        resumeClamp.earliestGateIdx < startIndex
+      ) {
+        const { verdicts, earliestGateIdx } = resumeClamp;
+        // The clamp's satisfaction predicate (`gateSatisfied`) is VERDICT-
+        // authoritative, but the loop's own entry check (`checkGate` →
+        // `stepSatisfied`) is STATE-only. When a step's verdict says
+        // satisfied while its state says `failed` (e.g. build passed review
+        // once, then a later build attempt failed without rewriting the
+        // verdict), the clamp lands PAST that step on a downstream gate
+        // whose `checkGate` can never pass. The loop then takes the
+        // markerless `gate_blocked` return and the finally-backstop parks
+        // the run with "loop exited without a terminal verdict" — a
+        // deterministic livelock that re-parks identically on every resume
+        // and never dispatches a session (#1052).
+        //
+        // Walk the prerequisite chain back to the earliest step the loop
+        // will actually accept, using the SAME predicate `checkGate` uses,
+        // so the entry point is never one the very next check rejects.
+        // Backward-only and bounded by steps.length, so it cannot loop.
+        const clampedIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
+        const clampedStep = steps[clampedIndex];
+        if (clampedStep) {
+          const disposition = await this.resolveDecideEntryDisposition({
+            target: clampedStep.name,
+            steps,
+            daemon: this.daemon,
+            tier: state.complexity_tier,
+            hasContract: hasCompletionContract(clampedStep.name, this.config),
+            satisfied: gateSatisfied(clampedStep.name, state, verdicts),
+            grant: null,
+            sourceGate: 'resume-clamp',
+            evidence: verdicts[clampedStep.name]?.reason,
+          });
+          if (disposition.kind === 'halt') {
+            await writeHaltMarker(
+              this.projectRoot,
+              renderDecideEntryHalt(disposition.halt) + '\n',
+              'needs-human',
+            );
+            return;
+          }
+        }
+        startIndex = clampedIndex;
       }
     }
 
@@ -3698,6 +3772,72 @@ export class Conductor {
           );
           await emitTracked({ type: 'config_skip', step: step.name });
           continue;
+        }
+
+        // An autonomous forward walk must not author a DECIDE artifact merely
+        // because its persisted status is unresolved. Re-check the artifact
+        // at the dispatch boundary: a missing or indeterminate answer is not
+        // authority to enter DECIDE, while a healthy artifact fast-forwards.
+        if (this.verifyArtifacts && step.phase === 'DECIDE') {
+          const hasContract = hasCompletionContract(step.name, this.config);
+          let satisfied: boolean | 'unknown' = 'unknown';
+          let evidence: string | undefined;
+          try {
+            const completion = await checkStepCompletion(
+              this.projectRoot,
+              step.name,
+              await this.completionCtx(state),
+            );
+            satisfied = completion.done;
+            evidence = completion.reason;
+          } catch {
+            // Completion verification is an authorization boundary: an
+            // unreadable or throwing predicate must fail closed, not become
+            // an implicit permission to dispatch an authoring session.
+            satisfied = 'unknown';
+          }
+          const missingStoriesArtifact =
+            step.name === 'stories' && state.feature_desc
+              ? `.docs/stories/${state.feature_desc}.md`
+              : undefined;
+          const haltEvidence =
+            missingStoriesArtifact && satisfied === false
+              ? `${evidence ?? 'completion check reported no evidence'}; expected ${missingStoriesArtifact}`
+              : evidence;
+
+          const disposition = await this.resolveDecideEntryDisposition({
+            target: step.name,
+            steps,
+            daemon: this.daemon,
+            tier: state.complexity_tier,
+            hasContract,
+            satisfied,
+            grant: null,
+            sourceGate: 'forward-walk',
+            evidence: haltEvidence,
+          }, true);
+          if (disposition.kind === 'fast-forward') {
+            await this.saveConductorStepStatus(state, step.name, disposition.as);
+            continue;
+          }
+          if (disposition.kind === 'halt') {
+            const { halt } = disposition;
+            const reason = renderDecideEntryHalt({
+              ...halt,
+              evidence: haltEvidence ?? halt.evidence,
+              reason:
+                satisfied === false
+                  ? `artifact unsatisfied — ${haltEvidence ?? 'completion check reported no evidence'}`
+                  : satisfied === 'unknown'
+                    ? 'artifact satisfaction is unknown — completion verification could not establish it'
+                    : halt.reason,
+            });
+            await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
+            await emitTracked({ type: 'loop_halt', reason });
+            process.off('SIGINT', sigintHandler);
+            process.off('SIGTERM', sigterm);
+            return;
+          }
         }
 
         // Resolve per-step config (model, effort, retries, review…). Tier is
@@ -5013,6 +5153,11 @@ export class Conductor {
         // route through the completion-seam success path instead of the
         // generic "retries exhausted" HALT.
         let anyAttemptMovedHead = false;
+        // A budget-exhausted build with real commit movement advances once to
+        // build_review even though its ordinary completion predicate remains
+        // false. This is scoped to this dispatch only: a later kickback build
+        // must re-establish ordinary completion (or route again) on its own.
+        let buildRoutedForward = false;
         // Task 8: Capture stall question for error handling in degraded remediation exits.
         // Set when a stall is detected, used to build HALT with the question when
         // remediation dispatch fails or returns a degraded outcome.
@@ -6506,6 +6651,7 @@ export class Conductor {
                   await freshEvidence.write();
                 }
                 succeeded = true;
+                buildRoutedForward = true;
                 successOutput = result.output;
                 stepResult = result;
                 break;
@@ -7811,6 +7957,7 @@ export class Conductor {
               stuckGate,
               steps,
               indexOf,
+              buildRoutedForward,
             );
           } catch (transitionErr) {
             // Tag the escaped rejection with which step-transition it happened
@@ -7979,7 +8126,7 @@ export class Conductor {
   }
 
   /**
-   * Shared kickback-verdict scan. Walks `topo.kickbackTargets` looking for a
+   * Shared kickback-verdict scan. Walks every persisted verdict looking for a
    * gate that the given step re-opened (verdict is {satisfied:false,
    * kickback.from === stepName}). Increments the durable kickback ledger
    * counter, emits the `kickback` event, and — when `navigate` is true —
@@ -7995,13 +8142,11 @@ export class Conductor {
     stepName: StepName,
     state: ConductState,
     verdicts: Partial<Record<StepName, GateObjectiveVerdict>>,
-    topo: GateTopology,
     steps: StepDefinition[],
     { navigate }: { navigate: boolean },
   ): Promise<'halt' | 'kicked' | null> {
     let result: 'halt' | 'kicked' | null = null;
-    for (const target of topo.kickbackTargets) {
-      const v = verdicts[target];
+    for (const [target, v] of Object.entries(verdicts) as Array<[StepName, GateObjectiveVerdict]>) {
       if (v && v.satisfied === false && v.kickback?.from === stepName) {
         const [treeHash, resolvedCount] = await Promise.all([
           currentTreeHash(this.projectRoot),
@@ -8029,15 +8174,29 @@ export class Conductor {
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
         }
-        const disposition = decideKickbackDisposition({
+        const hasContract = hasCompletionContract(target, this.config);
+        const disposition = await this.resolveDecideEntryDisposition({
           target,
           steps,
           daemon: this.daemon,
+          tier: state.complexity_tier,
+          hasContract,
+          satisfied: false,
+          grant: null,
+          sourceGate: stepName,
+          evidence: v.kickback?.evidence,
         });
         if (disposition.kind === 'halt') {
-          const reason =
-            `${disposition.reason}\n\nKickback evidence: ` +
-            `${v.kickback?.evidence ?? 'none provided'}`;
+          const { halt } = disposition;
+          const reason = [
+            `DECIDE entry refused — target '${halt.target}' is a DECIDE step and operator-only in daemon mode.`,
+            '',
+            `Source gate:       ${halt.sourceGate}`,
+            `Requested target:  ${halt.target}`,
+            `Evidence:          ${halt.evidence ?? 'none provided'}`,
+            `Why refused:       ${halt.reason}`,
+            'Operator choices:  direct a return to a named step | correct the routing target | reject the kickback',
+          ].join('\n');
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
@@ -8068,6 +8227,7 @@ export class Conductor {
     stuckGate: Map<StepName, number>,
     steps: StepDefinition[],
     indexOf: (name: StepName) => number,
+    buildRoutedForward = false,
   ): Promise<number | null | 'halt'> {
     // The gate-driven tail engages only when completion is verified against
     // artifacts (verifyArtifacts=true) — the single satisfaction authority
@@ -8163,7 +8323,13 @@ export class Conductor {
       // strict shipment evidence. Persist that successful verdict directly so
       // the tail does not repeat an external PR-head read before convergence.
       const verdict: GateObjectiveVerdict =
-        step.name === 'finish'
+        step.name === 'build' && buildRoutedForward
+          ? {
+              satisfied: true,
+              reason: state.build_routed_reason ?? 'build routed after commit movement',
+              checkedAt: Date.now(),
+            }
+          : step.name === 'finish'
           ? { satisfied: true, checkedAt: Date.now() }
           : await computeAndWriteVerdict(
               this.projectRoot,
@@ -8251,7 +8417,6 @@ export class Conductor {
         step.name,
         state,
         frontVerdicts,
-        topo,
         steps,
         { navigate: false },
       );
@@ -8320,14 +8485,20 @@ export class Conductor {
     // {satisfied:false, kickback.from === this step}). Re-open that gate
     // (pending) + cascade-stale its downstream so they re-run; HALT if a gate
     // has been re-opened past the cap.
-    const kickbackVerdict = await this.scanKickbackVerdicts(
-      step.name,
-      state,
-      verdicts,
-      topo,
-      steps,
-      { navigate: true },
-    );
+    // A changed rebase has already consumed every rebase-origin invalidation
+    // above, carrying the delta-derived preserved set into each navigation.
+    // Scanning the same verdicts again would navigate them a second time with
+    // the generic cascade and incorrectly stale preserved judged gates.
+    const kickbackVerdict =
+      step.name === 'rebase' && this.lastRebaseOutcome?.kind === 'changed'
+        ? null
+        : await this.scanKickbackVerdicts(
+            step.name,
+            state,
+            verdicts,
+            steps,
+            { navigate: true },
+          );
     if (kickbackVerdict === 'halt') return 'halt';
 
     const decision = selectNextGate({
@@ -9065,25 +9236,31 @@ export function resolveGroupMembership(
  * The earliest target step among a set of remediation fixes. The loop
  * navigateBacks here and re-runs forward, so picking the earliest re-runs every
  * step a fix needs (e.g. an `architecture_review` fix + a `build` fix → start at
- * `architecture_review`). Defaults to `build` if none resolve.
+ * `architecture_review`). Unresolvable dispositions are surfaced to the caller
+ * so it can refuse to route a remediation plan it cannot fully understand.
  */
 export function earliestRemediationTarget(
   fixes: RemediationGap[],
   steps: StepDefinition[],
-): StepName {
+): { target: StepName; unresolved: string[] } {
   let best: StepName = 'build';
   let bestIdx = steps.length;
+  const unresolved = new Set<string>();
   for (const g of fixes) {
     // `publication` is a disposition, not a step name — it resolves to `finish`,
     // the step that owns PR prose.
     const stepName = remediationDispositionStep(g.disposition);
     const idx = steps.findIndex((s) => s.name === stepName);
+    if (idx < 0) {
+      unresolved.add(g.disposition);
+      continue;
+    }
     if (idx >= 0 && idx < bestIdx) {
       bestIdx = idx;
       best = stepName as StepName;
     }
   }
-  return best;
+  return { target: best, unresolved: [...unresolved] };
 }
 
 /**

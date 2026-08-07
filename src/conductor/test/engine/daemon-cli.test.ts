@@ -68,21 +68,21 @@ describe('daemon state-store command boundary (Task 17)', () => {
     ]);
   });
 
-  it('derives existing-state preseed mutations without changing the observed snapshot', async () => {
+  it('leaves an unresolved tier for the engine to resolve conservatively', async () => {
     const observed: ConductState = { build: 'done', feature_desc: 'legacy-feature' };
     const baseState = deriveDaemonBaseState(observed, {
       slug: 'demo',
-      tier: 'M',
+      tier: undefined,
       track: 'technical',
     }, () => ({ worktree: 'done', prd: 'skipped' }));
     const store = new RecordingConductStateStore();
 
     await persistDaemonBaseState('/tmp/conduct-state.json', observed, baseState, store);
 
-    expect({ observed, mutations: store.calls[0]?.batch.mutations }).toEqual({
+    expect({ observed, baseState, mutations: store.calls[0]?.batch.mutations }).toEqual({
       observed: { build: 'done', feature_desc: 'legacy-feature' },
+      baseState: expect.not.objectContaining({ complexity_tier: expect.anything() }),
       mutations: expect.arrayContaining([
-        expect.objectContaining({ field: 'complexity_tier', expected: undefined, next: 'M' }),
         expect.objectContaining({ field: 'track', expected: undefined, next: 'technical' }),
         expect.objectContaining({ field: 'prd', expected: undefined, next: 'skipped' }),
       ]),

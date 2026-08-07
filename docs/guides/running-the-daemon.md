@@ -675,6 +675,23 @@ The sweep never dispatches directly; the cleared feature is re-dispatched on the
 why a git error left in a feature's worktree gets retried without backoff, and why parking is the
 only reliable way to make a feature stay stopped.
 
+### DECIDE-entry halts need a grant
+
+A `needs-human` HALT that begins `DECIDE entry refused` is not retryable. After deciding that the
+named DECIDE step should be authored, record a one-use grant from the main repository checkout, then
+clear the halt:
+
+```bash
+conduct-ts decide-grant --slug <slug> --step <step> --reason "<why this authoring pass is approved>"
+rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
+```
+
+The grant is scoped to the exact step and consumed immediately before its provider dispatch. Clearing
+the halt alone only makes the feature eligible to be checked again; with no matching grant, it halts
+again without entering DECIDE. Follow the full
+[DECIDE-entry recovery procedure](../runbooks/stalled-or-stuck-feature.md#the-halt-refused-a-decide-entry)
+when the halt names an unknown target, missing artifact, or disputed routing.
+
 Before any of this, the daemon runs a one-time startup migration (owned by whichever process holds
 the daemon lock) that stamps every pre-existing HALT still missing `.pipeline/HALT.class` as
 `legacy`, so a halt written before the sidecar existed is retryable like a `mechanical` one instead

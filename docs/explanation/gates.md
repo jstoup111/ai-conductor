@@ -172,10 +172,18 @@ re-opened it, and the evidence. Four steps opt in as kickback targets — `prd`,
 `stories`, `plan` — so the furthest back the loop can throw work is the spec. Kickbacks per gate are capped;
 past the cap the run halts instead of cycling.
 
-Daemon runs do not reopen DECIDE steps. Both the verdict-driven `scanKickbackVerdicts` seam and the
-planner-driven `planRemediation` seam consult the same phase policy: a DECIDE target halts as
-`needs-human` instead of returning the daemon to human-judgment work. Interactive amendment kickbacks
-continue to reopen DECIDE targets unchanged.
+An autonomous run may enter a DECIDE step only with explicit operator direction. The same fail-closed
+policy is consulted at all four navigation seams: the forward walk, the verdict-aware resume clamp,
+the verdict-driven `scanKickbackVerdicts` rewind, and the planner-driven `planRemediation` rewind. An
+unknown target or phase, or an unsatisfied or unverified DECIDE completion contract, writes a
+`needs-human` HALT and launches no provider. This supersedes the two-seam DECIDE-kickback policy from
+#551.
+
+The policy fast-forwards without dispatch only when the DECIDE step is tier-skipped, has no completion
+contract, or has a verified satisfied contract. Otherwise an operator must create a matching
+[`decide-grant`](../reference/cli.md#conduct-ts-decide-grant); the grant authorizes one named step and
+is consumed immediately before that step dispatches. Interactive runs retain their existing DECIDE
+authoring path.
 
 A `wiring_check` kickback into `build` additionally checks `.pipeline/build-outcome.json`
 before dispatching. If the most recent build-settle record already observed a no-movement outcome
