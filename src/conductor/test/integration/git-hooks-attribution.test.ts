@@ -16,13 +16,16 @@ import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 // plan land. See .docs/plans/deterministic-evidence-attribution.md.
 
 const execFileAsync = promisify(execFile);
+const CONDUCT_TS_BIN_DIR = join(process.cwd(), '..', '..', 'bin');
 
 describe('integration/git-hooks-attribution', () => {
   let dir: string;
 
   async function git(...args: string[]): Promise<{ stdout: string; stderr: string; code: number }> {
     try {
-      const { stdout, stderr } = await execFileAsync('git', ['-C', dir, ...args]);
+      const { stdout, stderr } = await execFileAsync('git', ['-C', dir, ...args], {
+        env: { ...process.env, PATH: `${CONDUCT_TS_BIN_DIR}:${process.env.PATH}` },
+      });
       return { stdout: stdout.trim(), stderr: stderr.trim(), code: 0 };
     } catch (err) {
       const e = err as { code?: number; stdout?: string; stderr?: string };
@@ -302,9 +305,9 @@ describe('integration/git-hooks-attribution', () => {
       expect(res.code).toBe(0);
     });
 
-    it('warns (does not block) when the staged diff spans files mapped to two plan tasks', async () => {
-      // Two rows each carrying a `files` mapping so the bundling check has
-      // something to compare against.
+    it('does not retain the retired multi-task bundling warning', async () => {
+      // The containment check abstains because neither row is active. This
+      // confirms the old tasksByFile warning was replaced rather than kept.
       await mkdir(join(dir, '.pipeline'), { recursive: true });
       await writeFile(
         join(dir, '.pipeline', 'task-status.json'),
@@ -325,7 +328,8 @@ describe('integration/git-hooks-attribution', () => {
       await git('add', 'one.txt', 'two.txt');
       const res = await git('commit', '-m', 'feat: bundled change\n\nTask: 1');
       expect(res.code).toBe(0);
-      expect(res.stderr).toContain('commit-msg: WARNING — staged diff spans files of multiple plan tasks');
+      expect(res.stderr).not.toContain('staged diff spans files of multiple plan tasks');
+      expect(res.stderr).toContain('commit-msg: scope-check abstained (exit 1); allowing commit');
     });
 
     it('warns (does not block) on a subject-vs-trailer task mismatch', async () => {

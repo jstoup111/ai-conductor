@@ -182,7 +182,7 @@ export const COMMIT_MSG_HOOK = [
   '  # returns 2 and this branch then refuses the commit.',
   '  if [[ -f "$TASK_STATUS_FILE" ]]; then',
   '    rc=0',
-  '    conduct-ts scope-check "$COMMIT_MSG_FILE" || rc=$?',
+  '    CONDUCT_SCOPE_CHECK_PROJECT_ROOT="$WORKTREE_ROOT" conduct-ts scope-check "$COMMIT_MSG_FILE" || rc=$?',
   '    if [[ "$rc" == "2" ]]; then',
   '      exit 1',
   '    fi',

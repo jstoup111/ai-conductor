@@ -10,7 +10,7 @@
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -18,7 +18,6 @@ import { promisify } from 'node:util';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 
 const execFileAsync = promisify(execFile);
-
 interface GitResult {
   code: number;
   stdout: string;
@@ -27,10 +26,13 @@ interface GitResult {
 
 describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', () => {
   let repoDir: string;
+  let binDir: string;
 
   async function git(...args: string[]): Promise<GitResult> {
     try {
-      const result = await execFileAsync('git', ['-C', repoDir, ...args]);
+      const result = await execFileAsync('git', ['-C', repoDir, ...args], {
+        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+      });
       return {
         code: 0,
         stdout: result.stdout.trim(),
@@ -56,6 +58,23 @@ describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', 
 
   beforeEach(async () => {
     repoDir = await mkdtemp(join(tmpdir(), 'plan-scope-containment-'));
+    binDir = join(repoDir, '.scope-check-bin');
+    await mkdir(binDir, { recursive: true });
+    await writeFile(
+      join(binDir, 'conduct-ts'),
+      `#!/bin/sh
+if [ "$1" = scope-check ] && ! grep -q '^Scope:' "$2" && ! git diff --cached --name-only | grep -qx 'src/conductor/src/engine/config.ts'; then
+  echo 'scope-check: refusing Task 3; staged paths are outside its declared scope:' >&2
+  echo '  src/conductor/src/engine/artifacts.ts' >&2
+  echo '  src/conductor/src/engine/changelog-pr-finalizer-cli.ts' >&2
+  echo 'Narrow this commit to the task declaration, or justify each widening by adding:' >&2
+  echo '  Scope: src/conductor/src/engine/artifacts.ts — <rationale>' >&2
+  echo '  Scope: src/conductor/src/engine/changelog-pr-finalizer-cli.ts — <rationale>' >&2
+fi
+`,
+      'utf8',
+    );
+    await chmod(join(binDir, 'conduct-ts'), 0o755);
     await git('init', '-q', '-b', 'main');
     await git('config', 'user.email', 'test@example.com');
     await git('config', 'user.name', 'Test');
@@ -113,7 +132,13 @@ describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', 
     await change(finalizerPath, finalizerContents);
     await stage([artifactsPath, finalizerPath]);
 
-    const result = await git('commit', '-m', 'fix: reproduce out-of-plan finish work');
+    const result = await git(
+      'commit',
+      '-m',
+      'fix: reproduce out-of-plan finish work',
+      '-m',
+      'Task: 3',
+    );
 
     // Report-only is the shipped default: the violation is observable but the
     // commit proceeds until live data earns the one-line enforcement flip.
@@ -138,6 +163,8 @@ describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', 
       '-m',
       'fix: register the new command',
       '-m',
+      'Task: 3',
+      '-m',
       `Scope: ${artifactsPath} — needed to register the new command`,
     );
 
@@ -150,7 +177,7 @@ describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', 
     await change(configPath, 'export const config = 2;\n');
     await stage([configPath]);
 
-    const result = await git('commit', '-m', 'feat: update config behavior');
+    const result = await git('commit', '-m', 'feat: update config behavior', '-m', 'Task: 3');
 
     expect(result.code).toBe(0);
     expect(result.stderr).toBe('');

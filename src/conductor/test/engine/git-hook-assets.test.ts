@@ -91,9 +91,11 @@ describe('git-hook-assets — embedding hook scripts', () => {
     it('does not reference src/conductor/dist and invokes scope-check', () => {
       expect(COMMIT_MSG_HOOK).not.toMatch(/src\/conductor\/dist/);
       expect(COMMIT_MSG_HOOK).not.toMatch(/tasksByFile/);
-      expect(COMMIT_MSG_HOOK).toMatch(/conduct-ts scope-check "\$COMMIT_MSG_FILE"/);
       expect(COMMIT_MSG_HOOK).toMatch(
-        /rc=0\n\s+conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "2" \]\]; then\n\s+exit 1\n\s+fi/
+        /CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE"/,
+      );
+      expect(COMMIT_MSG_HOOK).toMatch(
+        /rc=0\n\s+CONDUCT_SCOPE_CHECK_PROJECT_ROOT="\$WORKTREE_ROOT" conduct-ts scope-check "\$COMMIT_MSG_FILE" \|\| rc=\$\?\n\s+if \[\[ "\$rc" == "2" \]\]; then\n\s+exit 1\n\s+fi/,
       );
     });
   });

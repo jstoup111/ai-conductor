@@ -15,7 +15,7 @@ export interface ScopeCheckCommand {
  * The resolved shipped default. Flip this single value only after live
  * containment-floor evidence supports enforcing scope refusals.
  */
-export const DEFAULT_SCOPE_CHECK_ENFORCEMENT = false;
+const DEFAULT_SCOPE_CHECK_ENFORCEMENT = false;
 
 /** Recognize the hook-only `conduct-ts scope-check <commit-message>` command. */
 export function detectScopeCheckCommand(argv: string[]): ScopeCheckCommand | null {

@@ -558,7 +558,7 @@ async function main(): Promise<void> {
   const scopeCheckCmd = detectScopeCheckCommand(process.argv);
   if (scopeCheckCmd) {
     const code = await runScopeCheck({
-      projectRoot: process.cwd(),
+      projectRoot: process.env.CONDUCT_SCOPE_CHECK_PROJECT_ROOT ?? process.cwd(),
       commitMessagePath: scopeCheckCmd.commitMessagePath,
     });
     process.exit(code);

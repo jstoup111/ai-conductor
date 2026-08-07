@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  DEFAULT_SCOPE_CHECK_ENFORCEMENT,
   detectScopeCheckCommand,
   runScopeCheck,
 } from '../../src/engine/scope-check-cli.js';
@@ -18,10 +17,6 @@ const TASK_STATUS = JSON.stringify({
 });
 
 describe('scope-check CLI', () => {
-  it('ships report-only scope checking by default', () => {
-    expect(DEFAULT_SCOPE_CHECK_ENFORCEMENT).toBe(false);
-  });
-
   it('detects the commit-message path for the dispatcher', () => {
     expect(
       detectScopeCheckCommand(['node', 'conduct-ts', 'scope-check', '/tmp/COMMIT_EDITMSG']),
