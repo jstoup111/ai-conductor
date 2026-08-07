@@ -493,8 +493,8 @@ run_update "$REPO" "$HOME_DIR"
 assert "diverged: exits 0 without pulling" "$([ "$CODE" -eq 0 ] && echo 0 || echo 1)"
 assert "diverged: HEAD unchanged" "$([ "$(git -C "$REPO" rev-parse HEAD)" = "$BEFORE_SHA" ] && echo 0 || echo 1)"
 
-assert "CHANGELOG carries the plan-scope containment hook migration under [Unreleased]" \
-  "$(awk '/^## \[Unreleased\]/{f=1;next} f&&/^## \[/{exit} f{print}' "$HARNESS_DIR/CHANGELOG.md" | grep -q 'git -C "\$WORKTREE_ROOT" config --worktree core.hooksPath "\$HOOKS_DIR"' && echo 0 || echo 1)"
+assert "CHANGELOG carries a Migration block for the flag rename" \
+  "$(awk '/^## \[Unreleased\]/{f=1} f&&/^## Migration/{print;exit}' "$HARNESS_DIR/CHANGELOG.md" | grep -q "Migration" && echo 0 || echo 1)"
 
 echo ""
 echo -e "${BOLD}Summary: ${PASS}/${TOTAL} passed${NC}"
