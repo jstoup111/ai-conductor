@@ -72,7 +72,7 @@ import {
   type FeatureRunnerDeps,
   type WorktreeOutcome,
 } from '../../src/engine/daemon-runner.js';
-import type { BacklogItem } from '../../src/engine/daemon.js';
+import type { BacklogItem, FeatureOutcome } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
 import type { ProviderExecutionContext } from '../../src/engine/provider-execution.js';
@@ -889,10 +889,11 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         });
       },
       expected: {
-        haltFirstLine: 'feature errored — parked for human inspection',
+        haltFirstLine: 'feature parked — will not re-dispatch on the next scan',
         haltClass: 'needs-human',
         status: 'error',
         teardownKeep: true,
+        parkMarkerExists: true,
       },
     },
     {
@@ -905,6 +906,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         haltClass: 'needs-human',
         status: 'error',
         teardownKeep: true,
+        parkMarkerExists: false,
       },
     },
     {
@@ -922,6 +924,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         haltClass: 'needs-human',
         status: 'halted',
         teardownKeep: true,
+        parkMarkerExists: false,
       },
     },
     {
@@ -936,9 +939,10 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         haltClass: 'needs-human',
         status: 'error',
         teardownKeep: true,
+        parkMarkerExists: false,
       },
     },
-  ])('characterizes $site as an unparked termination today', async ({ configure, expected }) => {
+  ])('characterizes $site termination behavior', async ({ configure, expected }) => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-termination-boundary-'));
     const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
     const rec: TestRecorder = {};
@@ -963,6 +967,86 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         ).then(() => true).catch(() => false),
       }).toEqual({
         ...expected,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  async function runSetupTriageOutcome(
+    projectRoot: string,
+    item: BacklogItem,
+    triageOutcome: TriageOutcome,
+  ): Promise<{ outcome: FeatureOutcome; runConductorCalls: number }> {
+    const worktreePath = join(projectRoot, '.worktrees', item.slug);
+    const rec: TestRecorder = {};
+    let runConductorCalls = 0;
+    await mkdir(worktreePath, { recursive: true });
+    const featureDeps = deps({ done: true, halted: false }, rec);
+    featureDeps.projectRoot = projectRoot;
+    featureDeps.daemon = true;
+    featureDeps.createWorktree = async (slug) => ({ path: worktreePath, branch: `feat/${slug}` });
+    featureDeps.prepareWorktree = async () => {
+      throw new SetupFailureError('setup failed', triageOutcome.outputTail);
+    };
+    featureDeps.runSetupTriage = async () => triageOutcome;
+    featureDeps.runConductor = async () => {
+      runConductorCalls += 1;
+    };
+
+    return { outcome: await makeRunFeature(featureDeps)(item), runConductorCalls };
+  }
+
+  it('keeps the first automatic marker bytes when triage parks the same slug twice', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-park-idempotent-'));
+    try {
+      await runSetupTriageOutcome(projectRoot, ITEM, { kind: 'park', outputTail: 'first failure' });
+      const markerPath = join(projectRoot, '.daemon', 'parked', ITEM.slug);
+      const firstMarker = await readFile(markerPath, 'utf-8');
+
+      await runSetupTriageOutcome(projectRoot, ITEM, { kind: 'park', outputTail: 'second failure' });
+
+      await expect(readFile(markerPath, 'utf-8')).resolves.toBe(firstMarker);
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('writes distinct main-root automatic markers and reasons for separately triaged slugs', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-park-distinct-'));
+    const first: BacklogItem = { slug: 'first-feature' };
+    const second: BacklogItem = { slug: 'second-feature' };
+    try {
+      await runSetupTriageOutcome(projectRoot, first, { kind: 'park', outputTail: 'first setup failure' });
+      await runSetupTriageOutcome(projectRoot, second, { kind: 'park', outputTail: 'second setup failure' });
+
+      await expect(readFile(join(projectRoot, '.daemon', 'parked', first.slug), 'utf-8'))
+        .resolves.toContain('first setup failure');
+      await expect(readFile(join(projectRoot, '.daemon', 'parked', second.slug), 'utf-8'))
+        .resolves.toContain('second setup failure');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { kind: 'pass', outputTail: '' },
+    { kind: 'quarantined-pass', outputTail: '', quarantineRef: 'wip/setup-quarantine' },
+    { kind: 'fixed-pass', outputTail: '', preservedPaths: [] },
+  ] satisfies TriageOutcome[])('continues without a marker for non-park triage outcome $kind', async (triageOutcome) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-triage-non-park-'));
+    try {
+      const { outcome, runConductorCalls } = await runSetupTriageOutcome(projectRoot, ITEM, triageOutcome);
+
+      expect({
+        status: outcome.status,
+        runConductorCalls,
+        parkMarkerExists: await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')
+          .then(() => true)
+          .catch(() => false),
+      }).toEqual({
+        status: 'halted',
+        runConductorCalls: 1,
         parkMarkerExists: false,
       });
     } finally {

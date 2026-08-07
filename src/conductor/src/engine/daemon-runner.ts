@@ -354,7 +354,15 @@ export function makeRunFeature(
               featureLog(
                 `[daemon-runner] triage outcome: park, erroring feature — ${triageOutcome.outputTail}`,
               );
-              await writeErrorHalt(worktree.path, triageOutcome.outputTail, featureLog, triageOutcome, item.slug);
+              await terminateFeature({
+                worktreePath: worktree.path,
+                projectRoot: deps.projectRoot,
+                reason: triageOutcome.outputTail,
+                park: true,
+                log: featureLog,
+                triageEvidence: triageOutcome,
+                slug: item.slug,
+              });
               await deps.teardownWorktree(worktree, true);
               return {
                 slug: item.slug,
