@@ -29,6 +29,7 @@ import { execa } from 'execa';
 import { mkdtemp, rm, readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+const smokeCapability = 'hermetic';
 
 const REPO_ROOT = join(process.cwd(), '..', '..');
 const REAL_CONDUCT_TS = join(REPO_ROOT, 'bin', 'conduct-ts');

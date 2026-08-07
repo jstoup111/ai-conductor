@@ -7,6 +7,130 @@
 **Stories:** .docs/stories/no-release-time-smoke-or-eval-gate-releases-cut-wi.md
 **Conflict check:** Clean as of 2026-08-04 — 0 blocking, 2 degrading resolved
 
+## Amendments
+
+**Amendment 1 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan explicitly
+authorizes the correction of its own `**Wired-into:**` declarations recorded below, and any
+diff that carries only that correction is in scope for this plan.
+
+As authored, three anchors named call sites the wiring probe can never resolve, so
+`wiring_check` failed on every build and BUILD could not fix it — BUILD may not rewrite an
+approved plan (see #1306; #1190 is the durable DECIDE-time validator). The anchors were
+wrong as authored, not made wrong by the implementation:
+
+| Task(s) | As authored | Corrected to | Why the original could never resolve |
+|---|---|---|---|
+| 1 | `src/conductor/package.json#scripts.smoke` | `src/conductor/scripts/smoke.ts#runSmokeCli` | A JSON script key is not a code symbol; the probe searches file text for a declaration. |
+| 5–13 | `src/conductor/test/smoke-capability.ts#declareSmokeCapability` | `src/conductor/src/engine/smoke-runner.ts#resolveGateSmokeFile` | Neither that path nor that symbol has ever existed in this repository. |
+| 15–17 | `src/conductor/src/index.ts#exports` | `src/conductor/src/index.ts#classifyReleasePublication` | `exports` is a keyword, not an exported symbol. |
+
+Scope of this amendment is exactly the `**Wired-into:**` lines above. It changes no task's
+steps, files, dependencies, or acceptance criteria, and adds no work. Correcting an anchor to
+name the real production call site tightens what `wiring_check` verifies; it does not weaken
+the gate, and no gate machinery is modified.
+
+**Not authorized by this amendment:** editing `src/conductor/src/engine/wiring-probe.ts` or any
+other shared gate machinery to accommodate this feature, and deleting or un-exporting tested
+production code to satisfy the probe. Both were attempted in `b798ceaa8` and correctly failed
+Scope. Task 6 and Task 7 still owe the tests that commit removed.
+
+**Amendment 2 — 2026-08-06, operator-authorized (DECIDE-owned).** This plan authorizes the Task 13
+step 5 addition recorded below, and any diff carrying only that change is in scope.
+
+`1cfb77ab3` deleted the shared helper module
+`src/conductor/test/execution/claude-provider-smoke-env.ts` and inlined a private copy of
+`unauthenticatedClaudeEnvironment` into each of its two consumers. That was done to escape the
+wiring probe's orphan backstop, which at the time flagged an exported test helper as unwired
+production surface. The result is a tautology: `claude-provider-smoke-env.test.ts` declares the
+function it tests and asserts against its own copy, so no change to the real helper can fail it.
+
+That constraint is gone. Main now excludes test-path exports from the orphan backstop (#1334, in
+this branch since the rebase onto main), so a shared test helper no longer trips the gate and
+there is nothing left to work around.
+
+Task 13 therefore additionally requires restoring the shared module as the single definition,
+importing it in both consumers, and deleting the private copies — so the unit test exercises the
+helper the smoke test actually uses. This changes no other task, adds no production surface, and
+reverses a workaround rather than introducing a new seam.
+
+**Not authorized by this amendment:** re-deleting or un-exporting the shared helper, duplicating
+it again under another name, or weakening the unit test to accommodate the orphan backstop.
+
+**Amendment 3 — 2026-08-07, operator-authorized (DECIDE-owned).** This plan authorizes the Task 1,
+Task 10 and Task 14 additions and the new Task 21 recorded below, and any diff carrying only that
+work is in scope.
+
+`build_review` failed completeness on four findings. Three are defects in delivered work; the
+fourth is a missing test that no task owns, which is why remediation could not proceed without
+returning to DECIDE.
+
+**1. The tier can only ever execute one file (Task 1).** `discoverSmokeFiles` calls `createVitest`
+in the *parent* process, which evaluates `vitest.smoke.config.ts` and therefore
+`ensureRunTmpRootSync(tmpdir())`, mutating the parent's `AI_CONDUCTOR_TEST_TMP_ROOT` and `TMPDIR`
+to a fresh run root. Every per-file `execa` child inherits it; the first child's `global-setup`
+teardown calls `removeRunTmpRoot` and deletes it; the second child dies at config load with
+`tmpdir-leak-guard: unable to resolve realpath for run root … ENOENT`. This is fatal to the
+feature's purpose — the release gate runs `npm run smoke`, so as delivered the smoke job can never
+report success and no release can ever publish.
+
+Task 1 additionally requires that discovery not mutate the parent process's environment: resolve
+the file set without evaluating the config in-process, or restore the parent's tmp-root variables
+before dispatching any child. Each child must establish and tear down its own run root.
+
+**2. Gate mode counts a self-skipped file as executed (Task 10).** `assertGateCredentialedExecution`
+treats a file as executed whenever its `vitest` child exits 0. A file whose internal
+`describe.skipIf(...)` skips every test also exits 0 — verified: `build-token-auth.smoke.test.ts`
+reports "3 skipped" and exits 0. So with `CLAUDE_CODE_OAUTH_TOKEN` set but the `claude` binary
+absent, all three credentialed files self-skip, the ledger records them `ran`, and the gate passes
+having asserted nothing. That is exactly the vacuous pass Task 10 exists to prevent, so its stated
+guarantee — "an empty credentialed set can never report a pass" — is undelivered.
+
+Task 10 additionally requires that execution be established from the child's reported test
+outcomes, not its exit code: a file all of whose tests skipped counts as skipped, and gate mode
+fails when no `credentialed` file actually executed an assertion. The architecture review recorded
+this independently as D-3.
+
+**3. Task 14 was never performed.** Its only artifact is `3cf75a55f`
+"chore(evidence): smoke advisory tier verified", an **empty** commit, and the advisory tier
+demonstrably does not complete cleanly (finding 1). The three previously-never-run files received
+only a capability line — no recorded outcome, no fix, no force-skip reason. Task 14 stands as
+written and is still owed; its evidence must be a real recorded run, and a commit with no files
+does not discharge it.
+
+**4. Nothing exercises the runner's real dispatch path (new Task 21).** Every runner test
+(`test/structural/smoke-entry-point.test.ts`, `test/smoke-capability.test.ts`) injects a stubbed
+`runVitest`/`discover`, and the workflow tests only string-match YAML and `package.json`. No test
+invokes `runSmokeCli` against the real `discoverSmokeFiles` + `execa` path with more than one
+executing file — which is precisely why finding 1 shipped green. The plan as authored has no task
+that owns this, so it is added rather than assigned to an existing one.
+
+### Task 21: Execute more than one file through the real runner path
+**Story:** Story 1, negative path
+**Type:** negative-path
+
+**Steps:**
+1. Write a failing test that invokes `runSmokeCli` with real discovery and real child dispatch over
+   at least two executing smoke files, asserting both run and the process exits 0.
+2. Verify the test fails (RED) — it reproduces the `tmpdir-leak-guard` ENOENT on the second file.
+3. Implement the Task 1 discovery fix above.
+4. Verify the test passes (GREEN).
+5. Commit: "test(smoke): execute the whole tier through the real runner"
+
+**Files:**
+- `src/conductor/test/structural/smoke-entry-point.test.ts`
+- `src/conductor/src/engine/smoke-runner.ts`
+
+**Wired-into:** `src/conductor/scripts/smoke.ts#runSmokeCli`
+**Dependencies:** Task 1
+
+This test must not stub `discoverSmokeFiles`, `runVitest`, or `execa`. A stubbed runner cannot
+observe the inherited-tmp-root defect, which is the whole reason the gap exists.
+
+**Not authorized by this amendment:** deleting, skipping, or force-skipping smoke files to make the
+tier pass; relaxing the tmpdir leak guard or `global-setup`'s teardown to tolerate a shared run
+root; or satisfying Task 21 with a stubbed dispatch. Task 14's force-skip route remains available
+only for a genuine environment limitation with a recorded reason, never for a defect.
+
 ## Summary
 
 Give the smoke tier one auto-discovering entry point, replace nine bespoke env gates with a
@@ -78,7 +202,7 @@ complete.
 - `src/conductor/package.json` — new `smoke` script
 - `src/conductor/test/structural/smoke-entry-point.test.ts` — new test
 
-**Wired-into:** `src/conductor/package.json#scripts.smoke`
+**Wired-into:** `src/conductor/scripts/smoke.ts#runSmokeCli`
 **Dependencies:** none
 
 ### Task 2: Prove discovery finds every known smoke file
@@ -148,7 +272,7 @@ complete.
 - `src/conductor/test/smoke-capability.ts` — helper module
 - `src/conductor/test/smoke-capability.test.ts` — new test
 
-**Wired-into:** `src/conductor/test/smoke-capability.ts#declareSmokeCapability`
+**Wired-into:** `src/conductor/src/engine/smoke-runner.ts#resolveGateSmokeFile`
 **Dependencies:** none
 
 ### Task 6: Reject an undeclared smoke file
@@ -276,9 +400,16 @@ complete.
 3. Replace each file's gate with a declaration; `publish-interrupted` is `toolchain` (it execs
    `bin/setup`, which runs `npm install`), not `hermetic`.
 4. Verify test passes (GREEN).
-5. Commit: "refactor(smoke): declare capabilities across the smoke tier"
+5. Restore `src/conductor/test/execution/claude-provider-smoke-env.ts` as the single definition of
+   `unauthenticatedClaudeEnvironment`, import it from both
+   `claude-provider.smoke.test.ts` and `claude-provider-smoke-env.test.ts`, and delete the private
+   copy each of those files currently declares. The unit test must exercise the imported helper, so
+   a change to it can fail the test (Amendment 2).
+6. Commit: "refactor(smoke): declare capabilities across the smoke tier"
 
 **Files:**
+- `src/conductor/test/execution/claude-provider-smoke-env.ts`
+- `src/conductor/test/execution/claude-provider-smoke-env.test.ts`
 - `src/conductor/test/smoke/autoresolve-smoke.test.ts`
 - `src/conductor/test/smoke/finish-record.smoke.test.ts`
 - `src/conductor/test/smoke/publish-interrupted.smoke.test.ts`
@@ -330,7 +461,7 @@ complete.
 - `src/conductor/src/engine/release-publisher-action.ts`
 - `src/conductor/test/engine/release-publisher-action.test.ts`
 
-**Wired-into:** `src/conductor/src/index.ts#exports, .github/workflows/release.yml#classify`
+**Wired-into:** `src/conductor/src/index.ts#classifyReleasePublication, .github/workflows/release.yml#classify`
 **Dependencies:** none
 
 ### Task 16: Classify performs no mutation, and rejects bad evidence
@@ -437,7 +568,8 @@ complete.
 Smoke runner seam                    Publisher seam
 ─────────────────                    ──────────────
 Task 1 ─┬─ Task 2 ── Task 3          Task 15 ── Task 16 ── Task 17
-        └─ Task 4                                   │
+        ├─ Task 4                                   │
+        └─ Task 21 (Amendment 3)                    │
                                                     │
 Task 5 ─┬─ Task 6                                   │
         └─ Task 7 ── Task 8 ── Task 9 ── Task 10 ── Task 11 ── Task 12 ── Task 13 ── Task 14
@@ -460,7 +592,7 @@ Tasks 1-4 and 5-14 are independent of 15-17; all three converge at Task 18.
 
 - [ ] All happy-path criteria covered: Story 1 → Tasks 1-2; Story 2 → Tasks 5, 8, 12-13;
       Story 3 → Tasks 15, 17; Story 4 → Tasks 18-19; Story 5 → Task 20
-- [ ] All negative-path criteria covered: Story 1 → Tasks 3-4; Story 2 → Tasks 6-7, 9-11;
+- [ ] All negative-path criteria covered: Story 1 → Tasks 3-4, 21; Story 2 → Tasks 6-7, 9-11;
       Story 3 → Task 16; Story 4 → Task 19; Story 5 → Task 20
 - [ ] No task exceeds 5 minutes of work
 - [ ] Dependencies are explicit and acyclic

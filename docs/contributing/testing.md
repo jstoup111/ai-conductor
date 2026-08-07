@@ -106,12 +106,16 @@ npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.
 ```
 
 The reusable [Live daemon E2E workflow](../../.github/workflows/live-daemon-e2e.yml)
-is advisory when dispatched normally: a missing credential records a skipped
-provider run. A caller can set `require_credentials: true` to make the same
-missing-secret condition fail. Claude is the single current matrix entry. To
-add a provider, expand that matrix in this workflow, wire its credential into
-the job environment, and extend the smoke's provider setup and assertions in
-the same change; do not create a parallel live-E2E workflow.
+runs the **complete** smoke tier — `npm run smoke`, every file in
+[Smoke tests](#smoke-tests), not just this one — through the same runner
+described there. It sets `SMOKE_MODE=gate` when the caller passes
+`require_credentials: true` and `SMOKE_MODE=advisory` otherwise: gate mode
+fails closed on any unmet capability and requires at least one credentialed
+file to have actually run; advisory mode skips a file whose capability is
+unmet and never fails the job for that reason. Claude is the single current
+matrix entry. To add a provider, expand that matrix in this workflow, wire its
+credential into the job environment, and extend the smoke's provider setup and
+assertions in the same change; do not create a parallel live-E2E workflow.
 
 ## Linters
 
@@ -303,32 +307,35 @@ is `--bare`, commented out, or annotated `// portability-ok: <reason>`. It also 
 
 ## Smoke tests
 
-Smoke tests are excluded from `npm test` by the two globs in `vitest.config.ts`. Most add a second env
-gate on top. There is no `npm run smoke` — run each file directly.
+Smoke tests are excluded from `npm test` by the two globs in `vitest.config.ts`. Run the complete,
+glob-discovered smoke tier from `src/conductor`:
 
-| File | Second gate | Command |
+```bash
+npm run smoke
+```
+
+The smoke config includes `test/smoke/**` and every `*.smoke.test.ts` file. It currently discovers nine
+files. Each declares exactly one required capability beside the test:
+
+| Capability | Current files | Requirement |
 | --- | --- | --- |
-| `test/smoke/autoresolve-smoke.test.ts` | Opt-in: `AUTORESOLVE_SMOKE_TEST=1` | `AUTORESOLVE_SMOKE_TEST=1 npx vitest run test/smoke/autoresolve-smoke.test.ts` |
-| `test/smoke/finish-record.smoke.test.ts` | None | `npx vitest run test/smoke/finish-record.smoke.test.ts` |
-| `test/smoke/publish-interrupted.smoke.test.ts` | None | `npx vitest run test/smoke/publish-interrupted.smoke.test.ts` |
-| `test/smoke/surgical-finish-retry.smoke.test.ts` | None | `npx vitest run test/smoke/surgical-finish-retry.smoke.test.ts` |
-| `test/execution/claude-provider.smoke.test.ts` | Opt-out: `MODEL_UNAVAILABLE_SMOKE=0`, `AUTH_FAILURE_SMOKE=0` | `npx vitest run test/execution/claude-provider.smoke.test.ts` |
-| `test/execution/codex-provider.smoke.test.ts` | Opt-in: `CODEX_CLI_SMOKE_TEST=1` plus the `codex` binary | `CODEX_CLI_SMOKE_TEST=1 npx vitest run test/execution/codex-provider.smoke.test.ts` |
-| `test/backlog-priority.smoke.test.ts` | Opt-in: `PRIORITY_GH_SMOKE` set | `PRIORITY_GH_SMOKE=1 npx vitest run test/backlog-priority.smoke.test.ts` |
-| `test/engine/build-token-auth.smoke.test.ts` | Opt-out: needs the binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `BUILD_TOKEN_AUTH_SMOKE=0` | `npx vitest run test/engine/build-token-auth.smoke.test.ts` |
-| `test/engine/daemon-e2e-live.smoke.test.ts` | Opt-out: needs the `claude` binary and `CLAUDE_CODE_OAUTH_TOKEN`, unless `DAEMON_E2E_LIVE_SMOKE=0`; cap defaults to `DAEMON_E2E_LIVE_TOKEN_CAP=100000` | `npx vitest run --config vitest.live-smoke.config.ts test/engine/daemon-e2e-live.smoke.test.ts` |
-| `test/engine/daemon-tmux.smoke.test.ts` | None; self-skips when `tmux` is not on `PATH` | `npx vitest run test/engine/daemon-tmux.smoke.test.ts` |
+| `hermetic` | `finish-record`, `surgical-finish-retry` | No external binary or credential. |
+| `toolchain` | `publish-interrupted`, `backlog-priority`, `codex-provider`, `daemon-tmux` | A local toolchain or network-backed setup. |
+| `credentialed` | `claude-provider`, `build-token-auth`, `daemon-e2e-live` | A live provider credential. |
 
-> **Known limitation.** Three of the five files in `test/smoke/` — `finish-record`,
-> `publish-interrupted`, and `surgical-finish-retry` — are plain `describe` blocks with no env gate at
-> all. The Vitest exclusion glob is the only thing keeping them out of a run, so pointing any Vitest
-> command at `test/smoke/` explicitly executes them. `publish-interrupted.smoke.test.ts` performs a real
-> `git worktree add` against this checkout and then runs the real `bin/setup` inside it, under a 600-second
-> timeout; it self-skips only when `bin/setup` is absent. The gating idioms across the nine smoke files
-> also disagree — three are opt-in (`AUTORESOLVE_SMOKE_TEST`, `CODEX_CLI_SMOKE_TEST`, `PRIORITY_GH_SMOKE`)
-> and three are opt-out kill-switches (`MUTATION_GATE_PROBE`, `MODEL_UNAVAILABLE_SMOKE` /
-> `AUTH_FAILURE_SMOKE`, `BUILD_TOKEN_AUTH_SMOKE`), so there is no single rule for whether a smoke file
-> runs. Tracked in [#1021](https://github.com/jstoup111/ai-conductor/issues/1021).
+`publish-interrupted.smoke.test.ts` is `toolchain`, not hermetic: it creates a worktree and runs the
+real `bin/setup`, which may install dependencies. `npm run smoke` runs in advisory mode by default
+(`SMOKE_MODE` unset or anything but `gate`): a file whose capability is unmet — no toolchain binary,
+no `CLAUDE_CODE_OAUTH_TOKEN` — is skipped, not failed, and a run that executed zero smoke assertions
+for a file still fails that file. Set `SMOKE_MODE=gate` for the fail-closed release variant: every
+unmet capability fails its file outright, and the whole run fails if no `credentialed` file actually
+executed — an all-skipped credentialed tier can never pass a gate run. `SMOKE_FORCE_SKIP` (comma-
+separated `capability:<name>` or `file:<path>` entries) forces an operator override in either mode;
+in gate mode a forced skip still counts as a failure. Every run ends with one `smoke ledger:` line per
+file naming its capability and outcome (`ran`, `skipped (unmet: …)`, or `failed (evidence: …)`).
+
+For a single case, invoke Vitest with `vitest.smoke.config.ts` and the case path. Keep the normal
+`vitest.config.ts` exclusions intact: ordinary unit and integration runs must never execute smoke tests.
 
 ## Bash test scripts
 

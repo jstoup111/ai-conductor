@@ -12,7 +12,123 @@ permissions:
   checks: read
 
 jobs:
-  release:
+  classify:
+    runs-on: ubuntu-latest
+    outputs:
+      publishable: ${{ steps.classify.outputs.publishable }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: src/conductor/.tool-versions
+          cache: npm
+          cache-dependency-path: src/conductor/package-lock.json
+      - run: npm ci
+        working-directory: src/conductor
+      - run: npm run build
+        working-directory: src/conductor
+      - id: app-token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.RELEASE_PR_APP_ID }}
+          private-key: ${{ secrets.RELEASE_PR_APP_PRIVATE_KEY }}
+          permission-contents: read
+          permission-pull-requests: read
+          permission-checks: read
+      - id: classify
+        name: Classify release PR merge
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            const { classifyReleasePublication } = await import(`${process.env.GITHUB_WORKSPACE}/src/conductor/dist/index.js`);
+            const { owner, repo } = context.repo;
+            const commit = context.sha;
+            const missing = error => error && error.status === 404;
+            const contentAt = async (path, ref) => {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path, ref });
+              if (Array.isArray(data) || data.type !== 'file' || typeof data.content !== 'string') {
+                throw new Error(`Expected ${path} to be a file at ${ref}`);
+              }
+              return Buffer.from(data.content, data.encoding).toString('utf8');
+            };
+
+            const result = await classifyReleasePublication({
+              config: {
+                branch: 'automation/release-pr',
+                base: 'main',
+                appLogin: '${{ steps.app-token.outputs.app-slug }}[bot]',
+              },
+              event: { branch: context.ref.replace('refs/heads/', ''), commit },
+              git: {
+                async readCommitFiles(ref) {
+                  try {
+                    const [changelog, version] = await Promise.all([
+                      contentAt('CHANGELOG.md', ref), contentAt('VERSION', ref),
+                    ]);
+                    return { 'CHANGELOG.md': changelog, VERSION: version };
+                  } catch (error) {
+                    if (missing(error)) return undefined;
+                    throw error;
+                  }
+                },
+                async readAnnotatedTag(tag) {
+                  try {
+                    const { data: ref } = await github.rest.git.getRef({ owner, repo, ref: `tags/${tag}` });
+                    if (ref.object.type !== 'tag') return undefined;
+                    const { data: annotated } = await github.rest.git.getTag({ owner, repo, tag_sha: ref.object.sha });
+                    return annotated.object.type === 'commit' ? { commit: annotated.object.sha } : undefined;
+                  } catch (error) {
+                    if (missing(error)) return undefined;
+                    throw error;
+                  }
+                },
+              },
+              github: {
+                async findMergedPullRequestByMergeCommit(mergeCommit) {
+                  const { data: candidates } = await github.rest.repos.listPullRequestsAssociatedWithCommit({ owner, repo, commit_sha: mergeCommit });
+                  const candidate = candidates.find(pull => pull.merge_commit_sha === mergeCommit);
+                  if (candidate === undefined) return undefined;
+                  const { data: pull } = await github.rest.pulls.get({ owner, repo, pull_number: candidate.number });
+                  if (!pull.merged || pull.merge_commit_sha !== mergeCommit) return undefined;
+                  return { number: pull.number, author: pull.user?.login ?? '', head: pull.head.ref, headCommit: pull.head.sha, base: pull.base.ref, mergeCommit };
+                },
+                async readReleaseAudit({ pullRequestNumber }) {
+                  const pull = await github.rest.pulls.get({ owner, repo, pull_number: pullRequestNumber });
+                  const { data } = await github.rest.checks.listForRef({ owner, repo, ref: pull.data.head.sha, filter: 'latest' });
+                  const audit = data.check_runs.find(check => check.name === 'release-candidate-audit');
+                  return audit === undefined ? undefined : { head: pull.data.head.sha, complete: audit.conclusion === 'success' };
+                },
+                async findReleaseByTag(tag) {
+                  try {
+                    const { data } = await github.rest.repos.getReleaseByTag({ owner, repo, tag });
+                    return { tag: data.tag_name, title: data.name ?? '', body: data.body ?? '', target: data.target_commitish };
+                  } catch (error) {
+                    if (missing(error)) return undefined;
+                    throw error;
+                  }
+                },
+              },
+            });
+
+            core.setOutput('publishable', result.state === 'publishable' ? 'true' : 'false');
+            if (result.state === 'rejected') core.setFailed(result.reason);
+            if (result.state === 'ignored') core.info('No approved release PR merge to publish.');
+
+  smoke:
+    needs: classify
+    if: ${{ needs.classify.outputs.publishable == 'true' }}
+    uses: ./.github/workflows/live-daemon-e2e.yml
+    secrets: inherit
+    with:
+      require_credentials: true
+
+  publish:
+    needs: [classify, smoke]
+    if: ${{ needs.classify.outputs.publishable == 'true' && needs.smoke.result == 'success' }}
     runs-on: ubuntu-latest
     concurrency:
       group: release-publisher

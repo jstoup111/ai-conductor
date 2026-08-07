@@ -82,9 +82,20 @@ the run rather than proposing a release that under-reports what shipped.
 
 ## What CI does on merge to main
 
-`.github/workflows/release.yml` triggers on every `push` to `main`, serializes publication, then obtains a
-narrowly scoped GitHub App token. It loads `runReleasePublisherAction`, which verifies all release authority
-before any mutation:
+`.github/workflows/release.yml` triggers on every `push` to `main` and runs three jobs in order:
+
+1. `classify` reads the release-PR provenance, audit, and committed artifacts, then exposes whether the
+   commit is publishable. It performs no publication mutation.
+2. `smoke` runs only for a publishable classification. It calls the reusable live-daemon E2E workflow with
+   inherited secrets and `require_credentials: true`, which runs the complete smoke tier
+   (`npm run smoke`) in fail-closed gate mode — see [testing](testing.md#smoke-tests) — not just the
+   daemon E2E case.
+3. `publish` runs only when the classification remains publishable and the smoke job concludes `success`.
+   Cancelled, timed-out, skipped, and failed smoke jobs do not authorize publication.
+
+Ordinary `main` merges stop after classification, so they do not spend live-provider tokens. A blocked
+smoke run creates no tag or GitHub Release; after the issue is resolved, re-run the same workflow. The
+publisher still re-derives all release authority immediately before mutation:
 
 1. The main commit must be the merge commit of the configured App-owned `automation/release-pr` into `main`.
 2. That PR must have successful release-candidate audit evidence bound to its exact head.

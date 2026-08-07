@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
+import { createVitest } from 'vitest/node';
 
 const testRoot = dirname(fileURLToPath(import.meta.url)).replace(/\/structural$/, '');
 const conductorRoot = dirname(testRoot);
@@ -67,6 +68,19 @@ function hasForbiddenCall(source: ts.SourceFile): boolean {
 }
 
 describe('structural: test execution policy', () => {
+  it('does not discover smoke tests through the default Vitest configuration', async () => {
+    const vitest = await createVitest('test', { root: conductorRoot });
+    try {
+      const testFiles = await vitest.globTestFiles();
+
+      expect(testFiles.filter(({ moduleId }) =>
+        relative(conductorRoot, moduleId).startsWith('test/smoke/') || moduleId.endsWith('.smoke.test.ts'),
+      )).toEqual([]);
+    } finally {
+      await vitest.close();
+    }
+  });
+
   it('keeps real provider, network, and full-setup execution smoke-only', async () => {
     const violations = (await Promise.all((await testFiles(testRoot))
       .filter((path) => path !== thisFile && !relative(testRoot, path).startsWith('smoke/') && !path.endsWith('.smoke.test.ts'))

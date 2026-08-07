@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ghIssueLabelReader, parsePriorityLabels } from '../src/engine/backlog-priority.js';
 import type { GhRunner } from '../src/engine/tracker-client.js';
 import { execFileSync } from 'child_process';
+const smokeCapability = 'toolchain';
 
 /**
  * Real-binary exec runner: executes the PRODUCTION argv verbatim against the
@@ -28,9 +29,9 @@ function realExecRunner(): GhRunner {
  * - Verifies the issue has a priority label
  * - Confirms the label parses to a valid priority band
  *
- * Gated by PRIORITY_GH_SMOKE env var — skipped in CI/offline environments.
+ * Runs when the smoke tier provides the required toolchain capability.
  */
-describe.skipIf(!process.env.PRIORITY_GH_SMOKE)(
+describe(
   'gh label reader smoke test (real gh binary)',
   () => {
     it('reads priority label from real issue jstoup111/ai-conductor#200', async () => {

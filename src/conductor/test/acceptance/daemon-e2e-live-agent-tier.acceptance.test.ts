@@ -11,12 +11,9 @@
  * task-evidence artifacts.
  */
 
-import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execa } from 'execa';
 import { describe, expect, it } from 'vitest';
 
 const CONDUCTOR_ROOT = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
@@ -100,7 +97,8 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(workflow).toMatch(/provider:\s*\[\s*claude\s*\]/);
     expect(workflow).toMatch(/inputs\.require_credentials/);
     expect(workflow).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/);
-    expect(workflow).toMatch(/npx\s+vitest\s+run[^\n]*daemon-e2e-live\.smoke\.test\.ts/);
+    expect(workflow).toMatch(/npm\s+run\s+smoke/);
+    expect(workflow).toMatch(/SMOKE_MODE:\s*\$\{\{\s*inputs\.require_credentials\s*&&\s*'gate'\s*\|\|\s*'advisory'\s*\}\}/);
 
     const ciGate = ci.slice(ci.indexOf('ci-gate:'));
     expect(ciGate).not.toMatch(/live-daemon-e2e|daemon-e2e-live/);
@@ -111,51 +109,18 @@ describe('live-agent daemon E2E tier (#1124)', () => {
     expect(smoke).toMatch(/expect\(process\.env\.AI_CONDUCTOR_NO_REAL_EXEC\)\.toBeUndefined\(\)/);
   });
 
-  it('collects the direct live-smoke command while retaining the normal Vitest environment', async () => {
-    const parentRunRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
-    // A nested Vitest run installs the same run-scoped tmpdir guards as its
-    // parent (test/global-setup.ts), so it needs a private tmpdir of its own.
-    // Inheriting AI_CONDUCTOR_TEST_TMP_ROOT would make the child adopt — and at
-    // teardown delete — the parent's run root mid-suite; inheriting only TMPDIR
-    // would make the child treat the parent's run root as the "real" tmpdir and
-    // report the parent's concurrent mkdtemp directories as leaks. Hand it a
-    // dedicated directory instead. It is created under the parent's run root,
-    // so the parent's own teardown reclaims it even if this test dies.
-    const childTmpdir = await mkdtemp(join(tmpdir(), 'daemon-e2e-live-nested-'));
-    const childEnv: NodeJS.ProcessEnv = {
-      ...process.env,
-      AI_CONDUCTOR_NO_REAL_EXEC: '1',
-      CLAUDE_CODE_OAUTH_TOKEN: '',
-      DAEMON_E2E_LIVE_SMOKE: '0',
-      TMPDIR: childTmpdir,
-      // Pin the child's reporter output to plain text. Under CI the parent's
-      // environment turns colour ON, and a coloured summary interleaves ANSI
-      // escapes between "Test Files" and "1 passed" — which the assertion below
-      // cannot match. Locally (no CI, not a TTY) colour is off, so the
-      // assertion passed on a developer machine and failed only in CI.
-      NO_COLOR: '1',
-      FORCE_COLOR: '0',
-    };
-    delete childEnv.AI_CONDUCTOR_TEST_TMP_ROOT;
+  it('routes the live workflow through the full smoke entry point without running third-party smoke cases in acceptance', async () => {
+    const [workflow, packageJson, smokeConfig] = await Promise.all([
+      requiredSource(WORKFLOW_PATH),
+      requiredSource(join(CONDUCTOR_ROOT, 'package.json')),
+      requiredSource(join(CONDUCTOR_ROOT, 'vitest.smoke.config.ts')),
+    ]);
 
-    try {
-      const result = await execa(
-        'npx',
-        [
-          'vitest', 'run', '--config', 'vitest.live-smoke.config.ts',
-          'test/engine/daemon-e2e-live.smoke.test.ts', '--reporter=dot',
-        ],
-        {
-          cwd: CONDUCTOR_ROOT,
-          env: childEnv,
-          extendEnv: false,
-        },
-      );
-
-      expect(result.stdout).toMatch(/Test Files\s+1 passed/);
-      expect(existsSync(parentRunRoot ?? '')).toBe(true);
-    } finally {
-      await rm(childTmpdir, { recursive: true, force: true });
-    }
+    expect(workflow).toMatch(/run:\s*npm\s+run\s+smoke/);
+    expect(JSON.parse(packageJson).scripts.smoke)
+      .toBe('node --import tsx scripts/smoke.ts vitest.smoke.config.ts');
+    expect(smokeConfig).toMatch(/environment:\s*['"]node['"]/);
+    expect(smokeConfig).toMatch(/setupFiles:\s*\[\s*['"]\.\/test\/setup\.ts['"]\s*\]/);
+    expect(smokeConfig).toMatch(/globalSetup:\s*\[\s*['"]\.\/test\/global-setup\.ts['"]\s*\]/);
   });
 });

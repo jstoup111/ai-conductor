@@ -1,7 +1,10 @@
 # ADR: Smoke files declare a required capability; the tier has one auto-discovering entry point
 
 **Date:** 2026-08-04
-**Status:** APPROVED
+**Status:** SUPERSEDED by `adr-2026-08-07-smoke-gate-goes-live-without-precharacterization`
+(operator-approved 2026-08-07; carries forward the capability model and single entry point, and
+withdraws the Consequences → Negative clause requiring every previously-ungated file be fixed or
+quarantined before the gate goes live)
 **Feature:** no-release-time-smoke-or-eval-gate-releases-cut-wi (jstoup111/ai-conductor#1259)
 **Related:** adr-2026-08-04-classify-before-spend-release-smoke-gate (the gate that consumes this
 runner)
