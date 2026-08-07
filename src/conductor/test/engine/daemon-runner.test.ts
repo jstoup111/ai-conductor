@@ -122,6 +122,64 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
+  it('terminateFeature with park false preserves the human HALT class, resume procedure, and park triage evidence', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-terminate-feature-evidence-'));
+    const withQuarantine = join(projectRoot, '.worktrees', 'with-quarantine');
+    const withoutQuarantine = join(projectRoot, '.worktrees', 'without-quarantine');
+    try {
+      await Promise.all([
+        mkdir(withQuarantine, { recursive: true }),
+        mkdir(withoutQuarantine, { recursive: true }),
+      ]);
+
+      await terminateFeature({
+        worktreePath: withQuarantine,
+        reason: 'setup triage requires intervention',
+        park: false,
+        slug: 'with-quarantine',
+        triageEvidence: {
+          kind: 'park',
+          outputTail: 'setup output tail',
+          quarantineRef: 'refs/quarantine/with-quarantine',
+          contractOutcome: 'dirty-tree-uncleaned',
+          preservedPaths: ['src/unfinished.ts', 'docs/recovery.md'],
+        } satisfies TriageOutcome,
+      });
+      await terminateFeature({
+        worktreePath: withoutQuarantine,
+        reason: 'setup triage requires intervention',
+        park: false,
+        slug: 'without-quarantine',
+        triageEvidence: {
+          kind: 'park',
+          outputTail: 'clean HEAD output tail',
+          contractOutcome: 'clean-head-contract-failed',
+          preservedPaths: ['src/still-needed.ts'],
+        } satisfies TriageOutcome,
+      });
+
+      const [withQuarantineHalt, withQuarantineClass, withoutQuarantineHalt] = await Promise.all([
+        readFile(join(withQuarantine, '.pipeline', 'HALT'), 'utf-8'),
+        readFile(join(withQuarantine, '.pipeline', 'HALT.class'), 'utf-8'),
+        readFile(join(withoutQuarantine, '.pipeline', 'HALT'), 'utf-8'),
+      ]);
+
+      expect(withQuarantineClass).toBe('needs-human');
+      expect(withQuarantineHalt).toContain('Resume procedure:');
+      expect(withQuarantineHalt).toContain('setup output tail');
+      expect(withQuarantineHalt).toContain('refs/quarantine/with-quarantine');
+      expect(withQuarantineHalt).toContain('Contract outcome: dirty-tree-uncleaned');
+      expect(withQuarantineHalt).toContain('src/unfinished.ts');
+      expect(withQuarantineHalt).toContain('docs/recovery.md');
+      expect(withoutQuarantineHalt).toContain('clean HEAD output tail');
+      expect(withoutQuarantineHalt).toContain('No quarantine ref exists (clean-HEAD case)');
+      expect(withoutQuarantineHalt).toContain('Contract outcome: clean-head-contract-failed');
+      expect(withoutQuarantineHalt).toContain('src/still-needed.ts');
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('classifies a boundary stop before reading markers or running terminal side effects', async () => {
     const termination: OperatorParkedTermination = {
       kind: 'operator-parked',
