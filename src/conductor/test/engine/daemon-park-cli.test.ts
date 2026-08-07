@@ -11,6 +11,7 @@ import {
   resolveMainRepoRoot,
 } from '../../src/engine/daemon-park-cli.js';
 import { isOperatorParked, __resetResolveCacheForTests } from '../../src/engine/park-marker.js';
+import { discoverBacklog } from '../../src/engine/daemon-backlog.js';
 
 const execFile = promisify(execFileCb);
 
@@ -314,6 +315,33 @@ describe('engine/daemon-park-cli', () => {
       expect(code).toBe(0);
       expect(await isOperatorParked(root, 'feat-widgets')).toBe(false);
       expect(out.join('\n')).toContain('feat-widgets');
+    });
+
+    it('unpark removes an automatic marker and restores default backlog eligibility', async () => {
+      const slug = 'auto-parked-widgets';
+      const worktreeDir = await initGitRepoWithWorktree(root, slug);
+      await mkdir(join(root, '.docs', 'plans'), { recursive: true });
+      await mkdir(join(root, '.docs', 'stories'), { recursive: true });
+      await mkdir(join(root, '.docs', 'coherence'), { recursive: true });
+      await writeFile(join(root, `.docs/plans/${slug}.md`), `# Plan\n**Stories:** .docs/stories/${slug}.md\n### Task 1\n**Dependencies:** none\n`);
+      await writeFile(join(root, `.docs/stories/${slug}.md`), '# Stories\n**Status:** Accepted\n');
+      await writeFile(join(root, `.docs/coherence/${slug}.md`), '| Row class | Cited id(s) | Counterpart id(s) | Verdict | Notes |\n|---|---|---|---|---|\n| story | S1 | Task 1 | covered | fixture |\n');
+      await execFile('git', ['add', '.docs'], { cwd: root });
+      await execFile('git', ['commit', '-q', '-m', 'add eligible spec'], { cwd: root });
+      const { writeAutoPark } = await import('../../src/engine/park-marker.js');
+      await writeAutoPark(root, slug, 'terminal daemon failure');
+
+      const code = await dispatchDaemonPark(
+        { kind: 'unpark', slug },
+        { cwd: worktreeDir, out: () => {} },
+      );
+
+      const backlog = await discoverBacklog(root);
+      expect({ code, parked: await isOperatorParked(root, slug), items: backlog.items }).toEqual({
+        code: 0,
+        parked: false,
+        items: [{ slug }],
+      });
     });
 
     it('unpark on a slug that was never parked is a graceful no-op', async () => {

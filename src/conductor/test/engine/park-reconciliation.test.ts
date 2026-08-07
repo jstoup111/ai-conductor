@@ -9,7 +9,13 @@ import {
   reconcileParkedFeatures,
 } from '../../src/engine/park-reconciliation.js';
 import type { GhRunner, GitRunner } from '../../src/engine/pr-labels.js';
-import { isOperatorParked, removeOperatorPark, writeOperatorPark } from '../../src/engine/park-marker.js';
+import {
+  getProvenanceType,
+  isOperatorParked,
+  removeOperatorPark,
+  writeAutoPark,
+  writeOperatorPark,
+} from '../../src/engine/park-marker.js';
 
 /**
  * A faithful in-memory stand-in for the four git reads the reconciler makes,
@@ -976,6 +982,43 @@ describe('engine/park-reconciliation — reconcileMergedPark', () => {
 });
 
 describe('engine/park-reconciliation — reconcileParkedFeatures', () => {
+  it('counts an open-intake automatic park and preserves machine versus operator provenance', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'park-reconciliation-'));
+    const autoSlug = 'auto-parked';
+    const operatorSlug = 'operator-parked';
+    const { run } = makeGit({ branches: [`feat/${autoSlug}`, `feat/${operatorSlug}`] });
+    try {
+      await writeAutoPark(projectRoot, autoSlug, 'terminal daemon failure');
+      await writeOperatorPark(projectRoot, operatorSlug);
+      await mkdir(join(projectRoot, '.docs', 'intake'), { recursive: true });
+      for (const slug of [autoSlug, operatorSlug]) {
+        await writeFile(join(projectRoot, '.docs', 'intake', `${slug}.md`), 'Source-Ref: acme/app#42\n');
+      }
+
+      const result = await reconcileParkedFeatures({
+        projectRoot,
+        runGit: run,
+        getIssueState: async () => 'OPEN',
+        autoCleanup: false,
+      });
+
+      expect({
+        counts: result.counts,
+        entries: result.entries.sort((left, right) => left.slug.localeCompare(right.slug)),
+        provenance: await Promise.all([autoSlug, operatorSlug].map((slug) => getProvenanceType(projectRoot, slug))),
+      }).toEqual({
+        counts: { reconciled: 0, deferred: 0, orphaned: 0, parked: 2, refused: 0, skipped: 0 },
+        entries: [
+          { slug: autoSlug, classification: 'normal', annotation: undefined },
+          { slug: operatorSlug, classification: 'normal', annotation: undefined },
+        ],
+        provenance: ['auto', 'operator'],
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it.each([
     {
       slug: 'merged-by-record',
