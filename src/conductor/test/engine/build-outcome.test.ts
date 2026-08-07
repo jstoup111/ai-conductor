@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
-import { describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyBuildSettle,
+  readBuildOutcome,
   sameNoOpCycle,
   type BuildOutcomeRecord,
 } from '../../src/engine/build-outcome.js';
@@ -84,5 +88,54 @@ describe('classifyBuildSettle', () => {
     expect(
       readFileSync(new URL('../../src/engine/build-outcome.ts', import.meta.url), 'utf8'),
     ).not.toMatch(/import\s+(?:type\s+)?[\s\S]*?\bclassifyBuildProgress\b/);
+  });
+});
+
+describe('readBuildOutcome', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-outcome-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('returns an empty record set when the sidecar is absent', async () => {
+    await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
+  });
+
+  it.each([
+    ['invalid JSON', 'not valid json {'],
+    ['an unsupported version', JSON.stringify({ version: 2, records: [] })],
+    ['a record that fails the shape guard', JSON.stringify({ version: 1, records: [{ outcome: 'moved' }] })],
+  ])('returns an empty record set and warns once for %s', async (_description, contents) => {
+    const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(sidecarPath, contents);
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(sidecarPath));
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it('returns an empty record set and warns once when the sidecar path is unreadable', async () => {
+    const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
+    await mkdir(sidecarPath, { recursive: true });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining(sidecarPath));
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
