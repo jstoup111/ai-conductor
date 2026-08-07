@@ -7,6 +7,7 @@ export type BuildSettleOutcome = 'moved' | 'no-movement';
 
 /** The terminal state reached by a build step. */
 export type BuildTerminalOutcome = 'done' | 'failed' | 'no-verdict';
+export type BuildOutcomeCategory = 'disputes-gate' | 'belongs-to-decide' | 'silent-no-movement';
 
 /** The model and reasoning-effort rung used for a build attempt. */
 export interface BuildOutcomeRung {
@@ -26,7 +27,7 @@ export interface BuildOutcomeRecord {
   headBefore: string | null;
   headAfter: string | null;
   note?: string[];
-  category?: string;
+  category?: BuildOutcomeCategory;
   reason?: string;
 }
 
@@ -37,6 +38,7 @@ export interface BuildOutcomeStore {
 }
 
 export const BUILD_OUTCOME_PATH = '.pipeline/build-outcome.json';
+const BUILD_DISPUTE_PATH = '.pipeline/build-dispute.json';
 
 export interface ClassifyBuildSettleInput {
   treeBefore: string | null;
@@ -63,6 +65,30 @@ export function classifyBuildSettle({
   if (treeBefore !== null && treeAfter !== null && treeBefore !== treeAfter) return 'moved';
   if (resolvedAfter > resolvedBefore) return 'moved';
   return 'no-movement';
+}
+
+export function inferBuildOutcomeCategory(note?: string[]): BuildOutcomeCategory {
+  const text = note?.join('\n').toLowerCase() ?? '';
+  if (!text) return 'silent-no-movement';
+  if (/\b(decide|decision|product scope|requirements?)\b/.test(text)) return 'belongs-to-decide';
+  return 'disputes-gate';
+}
+
+/** Reads optional agent enrichment; invalid artifacts deliberately fall back to inference. */
+export async function resolveBuildOutcomeCategory(
+  projectRoot: string,
+  note?: string[],
+): Promise<BuildOutcomeCategory> {
+  try {
+    const parsed: unknown = JSON.parse(await readFile(join(projectRoot, BUILD_DISPUTE_PATH), 'utf-8'));
+    const category = (parsed as { category?: unknown })?.category;
+    if (category === 'disputes-gate' || category === 'belongs-to-decide' || category === 'silent-no-movement') {
+      return category;
+    }
+  } catch {
+    // Optional enrichment must never block the engine-authored outcome.
+  }
+  return inferBuildOutcomeCategory(note);
 }
 
 /** Returns whether a prior build settled without movement for this exact cycle. */
@@ -110,7 +136,7 @@ function isBuildOutcomeRecord(value: unknown): value is BuildOutcomeRecord {
     && isNullableString(record.headBefore)
     && isNullableString(record.headAfter)
     && (record.note === undefined || (Array.isArray(record.note) && record.note.every((line) => typeof line === 'string')))
-    && (record.category === undefined || typeof record.category === 'string')
+    && (record.category === undefined || record.category === 'disputes-gate' || record.category === 'belongs-to-decide' || record.category === 'silent-no-movement')
     && (record.reason === undefined || typeof record.reason === 'string')
   );
 }
