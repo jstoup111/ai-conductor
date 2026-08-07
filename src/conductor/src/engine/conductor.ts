@@ -3435,7 +3435,7 @@ export class Conductor {
         currentTreeHash(this.projectRoot),
       ]);
       const priorOutcome = latestBuildOutcome(outcomes);
-      if (sameNoOpCycle(priorOutcome, {
+      if (sourceGate === 'wiring_check' && sameNoOpCycle(priorOutcome, {
         gate: sourceGate,
         treeHash,
         verdict: false,

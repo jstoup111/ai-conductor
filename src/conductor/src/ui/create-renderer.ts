@@ -113,7 +113,7 @@ export function createRenderer(
           lastStepTail = { step: event.step, lines: event.tail };
         }
         region.resume();
-        if (event.step === 'build' && (event.treeBefore !== undefined || event.treeAfter !== undefined)) {
+        if (event.step === 'build' && event.treeBefore !== undefined && event.treeAfter !== undefined) {
           const treeAnnotation = event.treeBefore === null || event.treeAfter === null
             ? 'tree unknown'
             : event.treeBefore === event.treeAfter
