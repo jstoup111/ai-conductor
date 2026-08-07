@@ -26,6 +26,19 @@ export const TASK_ID_PATTERN = '[A-Za-z0-9._-]+';
 const PATH_EXTENSIONS = /\.(?:ts|tsx|js|jsx|mjs|cjs|md|json|yml|yaml|sh|rb|py|go|rs|html|css|scss|vue|toml)$/i;
 const BACKTICK_TOKEN = /`([^`\s]+)`/g;
 
+/**
+ * Plan task paths with provenance for explicit `**Files:**` declarations.
+ *
+ * The Map preserves the established parser contract: callers that need only
+ * resolved paths (including legacy prose fallback) keep using it unchanged.
+ * `declaredTaskIds` identifies the sections whose paths came from an explicit
+ * Files declaration, including an empty `Files: none` declaration and a
+ * `same as Task N` inheritance declaration.
+ */
+export interface ParsedPlanTaskPaths extends Map<string, Set<string>> {
+  declaredTaskIds: ReadonlySet<string>;
+}
+
 // A task's **Files:** line is the authoritative declaration of which paths
 // corroborate its commits (#424). Plans write these as plain text (no
 // backticks) with `;`/`,` separators, and use `same` / `same as Task N`
@@ -67,7 +80,7 @@ function expandTaskIds(raw: string): string[] {
   return ids;
 }
 
-export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
+export function parsePlanTaskPaths(text: string): ParsedPlanTaskPaths {
   interface TaskSection {
     ids: string[];
     filesPaths: Set<string>; // declared on **Files:** lines
@@ -200,7 +213,8 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
   // Resolve in document order so `same` chains (1 ← 2 ← 3) terminate at the
   // last explicit set. An unresolvable `same` (no predecessor / unknown id)
   // resolves empty — trailer-alone corroboration, same as `none`.
-  const result = new Map<string, Set<string>>();
+  const result = new Map<string, Set<string>>() as ParsedPlanTaskPaths;
+  const declaredTaskIds = new Set<string>();
   const resolvedBySection: Set<string>[] = [];
   for (let i = 0; i < sections.length; i++) {
     const s = sections[i];
@@ -226,6 +240,7 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
     }
     resolvedBySection.push(resolved);
     for (const id of s.ids) {
+      if (s.hasFilesLine) declaredTaskIds.add(id);
       const existing = result.get(id);
       if (existing) {
         for (const p of resolved) existing.add(p);
@@ -234,6 +249,8 @@ export function parsePlanTaskPaths(text: string): Map<string, Set<string>> {
       }
     }
   }
+
+  result.declaredTaskIds = declaredTaskIds;
 
   return result;
 }

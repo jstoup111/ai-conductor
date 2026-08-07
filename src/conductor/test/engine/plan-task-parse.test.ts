@@ -22,4 +22,20 @@ describe('plan-task-parse.ts (relocated shared utilities, #relocate-for-wiring)'
     expect(Array.from(result.keys())).toEqual(['1']);
     expect(Array.from(result.get('1') ?? [])).toEqual(['src/foo.ts']);
   });
+
+  it('marks explicit Files declarations while preserving their resolved paths', () => {
+    const result = parsePlanTaskPaths(`### Task 1: First
+**Files:** src/one.ts; src/two.ts
+
+### Task 2: Inherits
+**Files:** same as Task 1
+
+### Task 3: Legacy
+- \`src/incidental.ts\`
+`);
+
+    expect(Array.from(result.get('1') ?? [])).toEqual(['src/one.ts', 'src/two.ts']);
+    expect(Array.from(result.get('2') ?? [])).toEqual(['src/one.ts', 'src/two.ts']);
+    expect(result.declaredTaskIds).toEqual(new Set(['1', '2']));
+  });
 });

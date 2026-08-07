@@ -61,6 +61,32 @@ Content with \`src/file3.ts\`
       expect(task3.name).toBe('Third Task');
       expect(task3.status).toBe('pending');
     });
+
+    it('seeds only explicitly declared Files paths, including same-as inheritance', async () => {
+      const planPath = join(dir, '.docs/plans/test.md');
+      await fsPromises.mkdir(join(dir, '.docs/plans'), { recursive: true });
+      await fsPromises.writeFile(
+        planPath,
+        `# Plan
+
+## Task 1: First Task
+**Files:** src/one.ts; src/two.ts
+
+## Task 2: Inherited Task
+**Files:** same as Task 1
+
+## Task 3: Prose Task
+- \`src/incidental.ts\`
+`,
+      );
+
+      await seedTaskStatus(dir, planPath);
+
+      const status = JSON.parse(await fsPromises.readFile(join(dir, '.pipeline/task-status.json'), 'utf-8'));
+      expect(status.tasks.find((task: any) => task.id === '1').files).toEqual(['src/one.ts', 'src/two.ts']);
+      expect(status.tasks.find((task: any) => task.id === '2').files).toEqual(['src/one.ts', 'src/two.ts']);
+      expect(status.tasks.find((task: any) => task.id === '3').files).toBeUndefined();
+    });
   });
 
   describe('Task 14: reseed no longer restores rows from evidence stamps', () => {
