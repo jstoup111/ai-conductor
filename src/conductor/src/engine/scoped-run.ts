@@ -28,6 +28,10 @@ export interface ScopedRunCommandOptions {
   scheduleTimeout?: ScopedRunTimeoutScheduler;
 }
 
+function formatSelector(selector: string): string {
+  return /\s/.test(selector) ? `'${selector}'` : selector;
+}
+
 export async function runScopedCommand({
   template,
   selectors,
@@ -48,7 +52,7 @@ export async function runScopedCommand({
     };
   }
 
-  const command = template.replace('{selectors}', normalizedSelectors.join(' '));
+  const command = template.replace('{selectors}', normalizedSelectors.map(formatSelector).join(' '));
   const controller = new AbortController();
   const run = runner(command, { signal: controller.signal });
   let cancelTimeout: (() => void) | undefined;

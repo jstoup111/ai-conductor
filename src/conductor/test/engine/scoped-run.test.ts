@@ -37,6 +37,22 @@ describe('runScopedCommand', () => {
     );
   });
 
+  it('delivers a space-bearing selector as one shell argument without changing ordinary path characters', async () => {
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+    const selector = 'test/with space-_./~:.test.ts';
+
+    await runScopedCommand({
+      template: 'npx vitest run {selectors}',
+      selectors: [selector],
+      runner,
+    });
+
+    expect(runner).toHaveBeenCalledWith(
+      "npx vitest run 'test/with space-_./~:.test.ts'",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
   it('refuses an empty selector list before substituting or running a command', async () => {
     const runner = vi.fn<ScopedRunRunner>(async () => 0);
 
