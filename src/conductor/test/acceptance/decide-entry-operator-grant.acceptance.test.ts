@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execa } from 'execa';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import type { StepName } from '../../src/types/index.js';
@@ -74,6 +74,37 @@ describe('acceptance: explicit operator grants are scoped and single-use', () =>
     });
   }, 30_000);
 
+  it('rejects a traversal slug instead of writing outside a feature worktree', async () => {
+    const binary = join(process.cwd(), '..', '..', 'bin', 'conduct-ts');
+
+    const result = await execa(
+      binary,
+      ['decide-grant', '--slug', '..', '--step', 'plan', '--reason', 'unsafe target'],
+      { cwd: commandRoot, reject: false },
+    );
+
+    expect(result.exitCode).toBe(1);
+  }, 30_000);
+
+  it('constructs grants only in the CLI command module', async () => {
+    const sourceRoot = join(process.cwd(), 'src');
+    const sourceFiles = await readdir(sourceRoot, { recursive: true });
+    const grantWriters = (
+      await Promise.all(
+        sourceFiles
+          .filter((path) => path.endsWith('.ts'))
+          .map(async (path) => ({
+            path,
+            source: await readFile(join(sourceRoot, path), 'utf-8'),
+          })),
+      )
+    )
+      .filter(({ source }) => source.includes('decide-grant.json') && source.includes('writeFile('))
+      .map(({ path }) => path);
+
+    expect(grantWriters).toEqual(['cli.ts']);
+  });
+
   it('dispatches only the granted step and consumes the grant before provider work starts', async () => {
     await writeFixtureState(fixture, resolvedState({ plan: 'pending', coherence_check: 'pending' }));
     await seedGrant('plan');
@@ -83,6 +114,20 @@ describe('acceptance: explicit operator grants are scoped and single-use', () =>
 
     expect(ran[0]).toBe('plan');
     expect(await pathExists(fixture.root, '.pipeline/decide-grant.json')).toBe(false);
+  });
+
+  it('a consumed plan grant cannot authorize a later plan entry', async () => {
+    await writeFixtureState(fixture, resolvedState({ plan: 'pending', coherence_check: 'pending' }));
+    await seedGrant('plan');
+    await conductorFor(fixture, recordingFailureRunner([])).run();
+    await rm(join(fixture.root, '.pipeline/HALT'), { force: true });
+    await rm(join(fixture.root, '.pipeline/HALT.class'), { force: true });
+    await writeFixtureState(fixture, resolvedState({ plan: 'pending', coherence_check: 'pending' }));
+    const rerun: StepName[] = [];
+
+    await conductorFor(fixture, recordingFailureRunner(rerun)).run();
+
+    expect(rerun).toEqual([]);
   });
 
   it('a grant for plan cannot authorize an earlier missing stories step', async () => {
