@@ -92,6 +92,25 @@ describe('runScopedCommand', () => {
     expect(runner).not.toHaveBeenCalled();
   });
 
+  it('reports scoped running as unavailable when test_suite.scoped_command is unconfigured without running an aggregate fallback', async () => {
+    const runner = vi.fn<ScopedRunRunner>(async () => 0);
+
+    const result = await runScopedCommand({
+      template: undefined,
+      selectors: ['test/selected.test.ts'],
+      runner,
+    });
+
+    expect({ result, runnerCallCount: runner.mock.calls.length }).toEqual({
+      result: {
+        exitCode: 1,
+        reason: 'unavailable',
+        message: expect.stringMatching(/test_suite\.scoped_command/),
+      },
+      runnerCallCount: 0,
+    });
+  });
+
   it('refuses all-whitespace selectors as an aggregate selection without running a command', async () => {
     const runner = vi.fn<ScopedRunRunner>(async () => 0);
 

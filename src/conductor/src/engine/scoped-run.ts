@@ -7,7 +7,7 @@ export type ScopedRunRunner = (
   options: ScopedRunRunnerOptions,
 ) => Promise<number>;
 
-export type ScopedRunReason = 'passed' | 'test_failure' | 'launch_failure' | 'timeout' | 'empty_selection';
+export type ScopedRunReason = 'passed' | 'test_failure' | 'launch_failure' | 'timeout' | 'empty_selection' | 'unavailable';
 
 export interface ScopedRunResult {
   exitCode: number;
@@ -21,7 +21,7 @@ export type ScopedRunTimeoutScheduler = (
 ) => () => void;
 
 export interface ScopedRunCommandOptions {
-  template: string;
+  template?: string;
   selectors: string[];
   runner: ScopedRunRunner;
   timeoutMs?: number;
@@ -43,6 +43,14 @@ export async function runScopedCommand({
     return () => clearTimeout(timeout);
   },
 }: ScopedRunCommandOptions): Promise<ScopedRunResult> {
+  if (template === undefined) {
+    return {
+      exitCode: 1,
+      reason: 'unavailable',
+      message: 'Scoped test running is unavailable; configure test_suite.scoped_command.',
+    };
+  }
+
   const normalizedSelectors = selectors.map((selector) => selector.trim()).filter(Boolean);
 
   if (normalizedSelectors.length === 0) {
