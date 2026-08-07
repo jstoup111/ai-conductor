@@ -4,7 +4,12 @@ import { execFile as execFileCb } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { makeRunFeature, type FeatureRunnerDeps, type WorktreeOutcome } from '../../src/engine/daemon-runner.js';
+import {
+  makeRunFeature,
+  terminateFeature,
+  type FeatureRunnerDeps,
+  type WorktreeOutcome,
+} from '../../src/engine/daemon-runner.js';
 import type { BacklogItem } from '../../src/engine/daemon.js';
 import type { TriageOutcome } from '../../src/engine/setup-triage.js';
 import { SetupFailureError } from '../../src/engine/worktree-prepare.js';
@@ -86,6 +91,37 @@ function deps(
 }
 
 describe('engine/daemon-runner — makeRunFeature', () => {
+  it('terminateFeature with park false records an error that will re-dispatch without a park marker', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-terminate-feature-'));
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    try {
+      await mkdir(worktreePath, { recursive: true });
+
+      await terminateFeature({
+        worktreePath,
+        reason: 'runtime dispatch failure',
+        park: false,
+        slug: ITEM.slug,
+      });
+
+      const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
+      const parkMarkerExists = await readFile(
+        join(projectRoot, '.daemon', 'parked', ITEM.slug),
+        'utf-8',
+      ).then(() => true).catch(() => false);
+
+      expect({
+        haltFirstLine: halt.split('\n', 1)[0],
+        parkMarkerExists,
+      }).toEqual({
+        haltFirstLine: 'feature errored — will re-dispatch on the next scan',
+        parkMarkerExists: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('classifies a boundary stop before reading markers or running terminal side effects', async () => {
     const termination: OperatorParkedTermination = {
       kind: 'operator-parked',

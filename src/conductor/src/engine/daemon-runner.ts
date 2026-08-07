@@ -581,8 +581,9 @@ async function writeErrorHalt(
   log?: (msg: string) => void,
   triageEvidence?: unknown,
   slug?: string,
+  heading = 'feature errored — parked for human inspection',
 ): Promise<void> {
-  let note = `feature errored — parked for human inspection\n${reason}\n`;
+  let note = `${heading}\n${reason}\n`;
 
   // If triage evidence is present and it's a park outcome, render extended diagnostics
   const triage = triageEvidence as any;
@@ -632,6 +633,39 @@ async function writeErrorHalt(
       );
     }
   });
+}
+
+export interface TerminateFeatureOptions {
+  worktreePath: string;
+  reason: string;
+  park: boolean;
+  log?: (msg: string) => void;
+  triageEvidence?: unknown;
+  slug?: string;
+}
+
+/**
+ * Record an errored feature's diagnostic HALT. A non-parked termination leaves
+ * no daemon park marker so the normal backlog scan may dispatch it again.
+ */
+export async function terminateFeature({
+  worktreePath,
+  reason,
+  park,
+  log,
+  triageEvidence,
+  slug,
+}: TerminateFeatureOptions): Promise<void> {
+  await writeErrorHalt(
+    worktreePath,
+    reason,
+    log,
+    triageEvidence,
+    slug,
+    park
+      ? 'feature errored — parked for human inspection'
+      : 'feature errored — will re-dispatch on the next scan',
+  );
 }
 
 /**
