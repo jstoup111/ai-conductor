@@ -184,7 +184,7 @@ import {
   readKickbackLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
-import { decideKickbackDisposition } from './decide-entry-policy.js';
+import { decideEntryDisposition, decideKickbackDisposition } from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -8060,7 +8060,7 @@ export class Conductor {
   }
 
   /**
-   * Shared kickback-verdict scan. Walks `topo.kickbackTargets` looking for a
+   * Shared kickback-verdict scan. Walks every persisted verdict looking for a
    * gate that the given step re-opened (verdict is {satisfied:false,
    * kickback.from === stepName}). Increments the durable kickback ledger
    * counter, emits the `kickback` event, and — when `navigate` is true —
@@ -8076,13 +8076,11 @@ export class Conductor {
     stepName: StepName,
     state: ConductState,
     verdicts: Partial<Record<StepName, GateObjectiveVerdict>>,
-    topo: GateTopology,
     steps: StepDefinition[],
     { navigate }: { navigate: boolean },
   ): Promise<'halt' | 'kicked' | null> {
     let result: 'halt' | 'kicked' | null = null;
-    for (const target of topo.kickbackTargets) {
-      const v = verdicts[target];
+    for (const [target, v] of Object.entries(verdicts) as Array<[StepName, GateObjectiveVerdict]>) {
       if (v && v.satisfied === false && v.kickback?.from === stepName) {
         const [treeHash, resolvedCount] = await Promise.all([
           currentTreeHash(this.projectRoot),
@@ -8110,15 +8108,32 @@ export class Conductor {
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
           return 'halt';
         }
-        const disposition = decideKickbackDisposition({
+        const hasContract =
+          this.config.steps?.[target]?.completion_artifact !== undefined ||
+          CUSTOM_COMPLETION_PREDICATES[target] !== undefined ||
+          (STEP_ARTIFACT_GLOBS[target] ?? []).length > 0;
+        const disposition = decideEntryDisposition({
           target,
           steps,
           daemon: this.daemon,
+          tier: state.complexity_tier,
+          hasContract,
+          satisfied: false,
+          grant: null,
+          sourceGate: stepName,
+          evidence: v.kickback?.evidence,
         });
         if (disposition.kind === 'halt') {
-          const reason =
-            `${disposition.reason}\n\nKickback evidence: ` +
-            `${v.kickback?.evidence ?? 'none provided'}`;
+          const { halt } = disposition;
+          const reason = [
+            `DECIDE entry refused — target '${halt.target}' is a DECIDE step and operator-only in daemon mode.`,
+            '',
+            `Source gate:       ${halt.sourceGate}`,
+            `Requested target:  ${halt.target}`,
+            `Evidence:          ${halt.evidence ?? 'none provided'}`,
+            `Why refused:       ${halt.reason}`,
+            'Operator choices:  direct a return to a named step | correct the routing target | reject the kickback',
+          ].join('\n');
           await writeHaltMarker(this.projectRoot, reason + '\n', 'needs-human');
           const prUrl = await this.surfaceRemediationPr(reason);
           await this.events.emit({ type: 'loop_halt', reason, prUrl });
@@ -8332,7 +8347,6 @@ export class Conductor {
         step.name,
         state,
         frontVerdicts,
-        topo,
         steps,
         { navigate: false },
       );
@@ -8405,7 +8419,6 @@ export class Conductor {
       step.name,
       state,
       verdicts,
-      topo,
       steps,
       { navigate: true },
     );
