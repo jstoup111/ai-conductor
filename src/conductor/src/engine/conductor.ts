@@ -184,7 +184,7 @@ import {
   readKickbackLedger,
   writeKickbackLedger,
 } from './kickback-ledger.js';
-import { decideKickbackDisposition } from './kickback-policy.js';
+import { decideKickbackDisposition } from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
