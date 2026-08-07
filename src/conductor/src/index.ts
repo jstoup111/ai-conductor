@@ -126,6 +126,10 @@ import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
 } from './engine/test-suite-cli.js';
+import {
+  detectScopedRunCommand,
+  dispatchScopedRunCommand,
+} from './engine/scoped-run-cli.js';
 import { detectEvidenceCommand, dispatchEvidence } from './engine/evidence-cli.js';
 import { detectKpiCommand, dispatchKpi } from './engine/kpi-cli.js';
 import { detectBuildAuthStatusCommand, dispatchBuildAuthStatus } from './engine/build-auth-cli.js';
@@ -418,6 +422,15 @@ export async function overlapScanCommand(
 // --- Main ---
 
 async function main(): Promise<void> {
+  const scopedRunCmd = detectScopedRunCommand(process.argv);
+  if (scopedRunCmd) {
+    const code = await dispatchScopedRunCommand(scopedRunCmd, {
+      projectRoot: process.cwd(),
+    });
+    process.exitCode = code;
+    return;
+  }
+
   const testSuiteCmd = detectTestSuiteCommand(process.argv);
   if (testSuiteCmd) {
     const code = await dispatchTestSuiteCommand(testSuiteCmd, {
