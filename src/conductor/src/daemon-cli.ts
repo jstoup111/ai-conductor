@@ -55,7 +55,6 @@ import {
   createProductionReleaseReadinessObserver,
 } from './engine/finish-publication-production.js';
 import { makeProductionGit as makeFinishPublicationGit } from './engine/pr-labels.js';
-import { ALL_STEPS, getStepDefinition } from './engine/steps.js';
 import { AuditTrailWriter } from './engine/audit-trail.js';
 import { isForwardedFromFeature, startFeatureEventPersistence } from './engine/event-persister.js';
 import { renderedEventTypes } from './engine/event-sinks.js';
@@ -75,7 +74,6 @@ import {
   type DaemonLogSink,
 } from './engine/daemon-log.js';
 import type { ConductState, ConductorEvent, StepName, StepStatus } from './types/index.js';
-import type { ComplexityTier } from './types/steps.js';
 import { runDaemon, type BacklogItem } from './engine/daemon.js';
 import { createDaemonTeardown } from './engine/daemon-teardown.js';
 import { discoverBacklog, fastForwardRoot, gitTreeSource, type DiscoveryLogger } from './engine/daemon-backlog.js';
@@ -121,7 +119,6 @@ import { createFilesystemConductStateStore } from './engine/filesystem-conduct-s
 import {
   deriveDaemonBaseState,
   persistDaemonBaseState,
-  preseedDaemonStepStatuses,
 } from './engine/daemon-state.js';
 import { makeGitRunner, originDefaultBranch, type RebaseResolver } from './engine/rebase.js';
 import { prepareWorktree } from './engine/worktree-prepare.js';
@@ -360,29 +357,13 @@ async function runOwnedHaltClassMigration(
   return worktreeBase;
 }
 
-// Front-half steps the daemon treats as already done — the human authored the
-// specs, so the loop starts at BUILD (acceptance_specs onward). DECIDE phase
-// membership owns the derived portion; worktree and memory are intentional
-// non-DECIDE exceptions.
-export const PRESEEDED_DONE: StepName[] = [
-  'worktree',
-  'memory',
-  ...ALL_STEPS.filter((step) => step.phase === 'DECIDE').map((step) => step.name),
-];
+// These are the only mechanical daemon bootstrap steps. DECIDE satisfaction
+// belongs to Conductor's artifact-backed entry policy, never this preseed.
+export const PRESEEDED_DONE: StepName[] = ['worktree', 'memory'];
 
-/**
- * Resolve daemon-owned front-half steps to their durable state for a tier.
- * An unresolved tier deliberately falls back to M before evaluating skips, so
- * a missing complexity marker can never receive the Small-tier exemption.
- */
-export function preseedStepStatuses(
-  tier: ComplexityTier | undefined,
-): Record<string, StepStatus> {
-  return preseedDaemonStepStatuses(
-    tier,
-    PRESEEDED_DONE,
-    (name, resolvedTier) => getStepDefinition(name).skippableForTiers.includes(resolvedTier),
-  );
+/** Mark only the mechanical daemon bootstrap steps as durable. */
+export function preseedStepStatuses(): Record<string, StepStatus> {
+  return Object.fromEntries(PRESEEDED_DONE.map((name) => [name, 'done']));
 }
 
 /**
@@ -978,17 +959,16 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
     // clean provider start.
     await preparePipelineForDaemonDispatch(pipelineDir);
 
-    // Pre-seed: specs are authored, so DECIDE is stamped done and the loop
-    // resumes at BUILD for a fresh feature. On re-dispatch of a halted feature,
-    // preserve any BUILD/SHIP progress already recorded in the existing state
-    // file so the resume picks up from the real next step (see `resume: true`).
+    // Pre-seed only mechanical bootstrap state. The engine checks DECIDE
+    // artifacts before it can advance into BUILD. On re-dispatch of a halted
+    // feature, preserve any recorded progress so resume picks up from its real
+    // next step (see `resume: true`).
     const stateFilePath = join(pipelineDir, 'conduct-state.json');
     const existingResult = await readState(stateFilePath);
     const observedState = existingResult.ok ? existingResult.value : {};
-    // Seed the complexity tier from the engineer-assessed value carried on the
-    // backlog item (parsed from `.docs/complexity/<slug>.md`). Fall back to 'M'
-    // for legacy/non-engineer specs that have no marker — that preserves the
-    // exact prior behavior (M and L are BUILD-identical; only Small skips steps).
+    // Seed the complexity tier only when the engineer supplied one. An
+    // unresolved tier remains unresolved here; Conductor alone resolves it
+    // conservatively to L when it evaluates step eligibility.
     const baseState = deriveDaemonBaseState(observedState, item, preseedStepStatuses);
 
     const stateStore = createFilesystemConductStateStore(stateFilePath);
@@ -1055,13 +1035,11 @@ export async function runDaemonMode(opts: DaemonModeOptions): Promise<void> {
       baseBranch,
       verifyArtifacts: true,
       // Resume from the first unsatisfied step rather than hardcoding the entry
-      // point. With the DECIDE steps stamped done (PRESEEDED_DONE above), a
-      // FRESH feature resumes at `acceptance_specs` — the first pending step —
-      // exactly as before. A RE-DISPATCH of a feature with recorded BUILD/SHIP
-      // progress resumes at its real next step (e.g. prd_audit / finish) instead
-      // of re-entering at acceptance_specs every cycle. (`fromStep` forced
-      // acceptance_specs and, being `explicitlyTargeted`, re-ran it on every
-      // resume.)
+      // point. The engine fast-forwards artifact-satisfied DECIDE work before
+      // entering BUILD. A re-dispatch with recorded BUILD/SHIP progress resumes
+      // at its real next step (e.g. prd_audit / finish), rather than re-entering
+      // at acceptance_specs every cycle. (`fromStep` forced acceptance_specs
+      // and, being explicitly targeted, re-ran it on every resume.)
       resume: true,
       // Phase 9.1: daemon runs skip the in-loop retro; the emission step writes
       // the narrative to the engineer store instead of the repo's .docs/retros/.
