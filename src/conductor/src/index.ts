@@ -123,6 +123,10 @@ import {
 } from './engine/daemon-park-cli.js';
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import {
+  detectScopeCheckCommand,
+  runScopeCheck,
+} from './engine/scope-check-cli.js';
+import {
   detectTestSuiteCommand,
   dispatchTestSuiteCommand,
 } from './engine/test-suite-cli.js';
@@ -548,6 +552,15 @@ async function main(): Promise<void> {
   const taskCmd = detectTaskCommand(process.argv);
   if (taskCmd) {
     const code = await dispatchTaskCommand(taskCmd, process.cwd());
+    process.exit(code);
+  }
+
+  const scopeCheckCmd = detectScopeCheckCommand(process.argv);
+  if (scopeCheckCmd) {
+    const code = await runScopeCheck({
+      projectRoot: process.cwd(),
+      commitMessagePath: scopeCheckCmd.commitMessagePath,
+    });
     process.exit(code);
   }
 
