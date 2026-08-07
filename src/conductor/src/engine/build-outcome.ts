@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 import type { EffortLevel } from '../types/config.js';
 
 /** The tree-level outcome observed when a build step settles. */
@@ -142,4 +142,26 @@ export async function readBuildOutcome(projectRoot: string): Promise<BuildOutcom
   }
 
   return emptyBuildOutcome();
+}
+
+/** Write build-settle observations atomically, so readers never see partial JSON. */
+export async function writeBuildOutcome(
+  projectRoot: string,
+  outcome: BuildOutcomeStore,
+): Promise<void> {
+  const outcomePath = join(projectRoot, BUILD_OUTCOME_PATH);
+  const outcomeDir = dirname(outcomePath);
+  const tempPath = join(
+    outcomeDir,
+    `.build-outcome.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`,
+  );
+
+  await mkdir(outcomeDir, { recursive: true });
+  try {
+    await writeFile(tempPath, JSON.stringify(outcome, null, 2));
+    await rename(tempPath, outcomePath);
+  } catch (error) {
+    await rm(tempPath, { force: true }).catch(() => {});
+    throw error;
+  }
 }

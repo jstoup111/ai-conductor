@@ -1,12 +1,23 @@
 import { readFileSync } from 'node:fs';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return {
+    ...actual,
+    rename: vi.fn(actual.rename),
+  };
+});
+
+import { rename } from 'node:fs/promises';
 import {
   classifyBuildSettle,
   readBuildOutcome,
   sameNoOpCycle,
+  writeBuildOutcome,
   type BuildOutcomeRecord,
 } from '../../src/engine/build-outcome.js';
 
@@ -137,5 +148,42 @@ describe('readBuildOutcome', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('writeBuildOutcome', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'build-outcome-test-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+    vi.clearAllMocks();
+  });
+
+  it('writes to a temp file before atomically renaming it into place', async () => {
+    await writeBuildOutcome(dir, { version: 1, records: [priorOutcome()] });
+
+    const sidecarPath = join(dir, '.pipeline', 'build-outcome.json');
+    const renameMock = vi.mocked(rename);
+    expect(renameMock).toHaveBeenCalledTimes(1);
+    expect(renameMock).toHaveBeenCalledWith(
+      expect.stringMatching(/\.build-outcome\.[^.]+\.[^.]+\.tmp$/),
+      sidecarPath,
+    );
+    await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [priorOutcome()] });
+  });
+
+  it('removes the temp file and leaves no partial sidecar when rename fails', async () => {
+    const renameError = new Error('simulated rename failure');
+    vi.mocked(rename).mockRejectedValueOnce(renameError);
+
+    await expect(writeBuildOutcome(dir, { version: 1, records: [priorOutcome()] })).rejects.toThrow(renameError);
+
+    const pipelineDir = join(dir, '.pipeline');
+    await expect(readdir(pipelineDir)).resolves.toEqual([]);
+    await expect(readBuildOutcome(dir)).resolves.toEqual({ version: 1, records: [] });
   });
 });
