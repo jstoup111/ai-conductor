@@ -1,4 +1,8 @@
 import type { ComplexityTier, StepDefinition, StepName } from '../types/index.js';
+import { readFile, unlink } from 'node:fs/promises';
+import { join } from 'node:path';
+
+const DECIDE_GRANT_PATH = '.pipeline/decide-grant.json';
 
 export interface OperatorGrant {
   version?: number;
@@ -7,6 +11,44 @@ export interface OperatorGrant {
   grantedAt?: string;
   grantedBy: string;
   [key: string]: unknown;
+}
+
+/** Read a durable operator grant. Malformed or unavailable grants authorize nothing. */
+export async function readOperatorGrant(projectRoot: string): Promise<OperatorGrant | null> {
+  try {
+    const value: unknown = JSON.parse(
+      await readFile(join(projectRoot, DECIDE_GRANT_PATH), 'utf-8'),
+    );
+    if (
+      typeof value !== 'object' ||
+      value === null ||
+      typeof (value as { step?: unknown }).step !== 'string' ||
+      typeof (value as { grantedBy?: unknown }).grantedBy !== 'string'
+    ) {
+      return null;
+    }
+    return value as OperatorGrant;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Consume an exact, previously-read grant before provider work begins.
+ * A failed deletion fails closed, leaving the caller to re-evaluate with no grant.
+ */
+export async function consumeOperatorGrant(
+  projectRoot: string,
+  target: StepName,
+): Promise<OperatorGrant | null> {
+  const grant = await readOperatorGrant(projectRoot);
+  if (grant?.step !== target) return null;
+  try {
+    await unlink(join(projectRoot, DECIDE_GRANT_PATH));
+    return grant;
+  } catch {
+    return null;
+  }
 }
 
 export interface DecideEntryHalt {

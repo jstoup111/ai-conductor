@@ -185,8 +185,10 @@ import {
   writeKickbackLedger,
 } from './kickback-ledger.js';
 import {
+  consumeOperatorGrant,
   decideEntryDisposition,
   decideKickbackDisposition,
+  readOperatorGrant,
   renderDecideEntryHalt,
 } from './decide-entry-policy.js';
 import { scanPlanProtectedTargets } from './plan-protected-targets.js';
@@ -1822,6 +1824,31 @@ export class Conductor {
     return navigation.index;
   }
 
+  /**
+   * Evaluate an autonomous DECIDE entry with the durable operator grant.
+   * Navigation seams may recognize a grant, but only the provider dispatch
+   * boundary consumes it.
+   */
+  private async resolveDecideEntryDisposition(
+    input: Parameters<typeof decideEntryDisposition>[0],
+    consumeGrant = false,
+  ): Promise<ReturnType<typeof decideEntryDisposition>> {
+    const targetStep = input.steps.find((step) => step.name === input.target);
+    if (!input.daemon || targetStep?.phase !== 'DECIDE') {
+      return decideEntryDisposition(input);
+    }
+
+    const grant = await readOperatorGrant(this.projectRoot);
+    const disposition = decideEntryDisposition({ ...input, grant });
+    if (!consumeGrant || disposition.kind !== 'enter' || grant?.step !== input.target) {
+      return disposition;
+    }
+
+    return (await consumeOperatorGrant(this.projectRoot, input.target))
+      ? disposition
+      : decideEntryDisposition({ ...input, grant: null });
+  }
+
   /** Read expectations immediately before constructing a guarded mutation. */
   private async currentStateForMutation(): Promise<ConductState> {
     const result = await readState(this.stateFilePath);
@@ -3286,7 +3313,7 @@ export class Conductor {
         const clampedIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
         const clampedStep = steps[clampedIndex];
         if (clampedStep) {
-          const disposition = decideEntryDisposition({
+          const disposition = await this.resolveDecideEntryDisposition({
             target: clampedStep.name,
             steps,
             daemon: this.daemon,
@@ -3803,7 +3830,7 @@ export class Conductor {
               ? `${evidence ?? 'completion check reported no evidence'}; expected ${missingStoriesArtifact}`
               : evidence;
 
-          const disposition = decideEntryDisposition({
+          const disposition = await this.resolveDecideEntryDisposition({
             target: step.name,
             steps,
             daemon: this.daemon,
@@ -3813,7 +3840,7 @@ export class Conductor {
             grant: null,
             sourceGate: 'forward-walk',
             evidence: haltEvidence,
-          });
+          }, true);
           if (disposition.kind === 'fast-forward') {
             await this.saveConductorStepStatus(state, step.name, disposition.as);
             continue;
@@ -8224,7 +8251,7 @@ export class Conductor {
           this.config.steps?.[target]?.completion_artifact !== undefined ||
           CUSTOM_COMPLETION_PREDICATES[target] !== undefined ||
           (STEP_ARTIFACT_GLOBS[target] ?? []).length > 0;
-        const disposition = decideEntryDisposition({
+        const disposition = await this.resolveDecideEntryDisposition({
           target,
           steps,
           daemon: this.daemon,
