@@ -129,7 +129,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### daemon-triage
 
-> Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why.
+> Use when a feature is stuck in daemon execution — halted, spinning, stalled, or silently not progressing — and an operator needs to know why. Diagnoses the failure and routes it to the right runbook. Operator-invoked only; never auto-dispatched, and never mutates anything without explicit per-action approval.
 
 - **Frontmatter** — `enforcement: advisory`, `phase: all`, `standalone: true`, `operator_only: true`,
   `phase_active_policy: advisory`, `requires: [verify-claims]`, no model pin.
@@ -350,7 +350,7 @@ records but never blocks. **Neither** means it has no gate role in the flow.
 
 ### engineer
 
-> Interactive, phone-drivable idea→spec loop. The operator hands the host agent a raw idea; the agent routes it to the right repo, runs the FULL DECIDE phase (explore [track] → complexity → prd [product track] → architecture-diagram → architecture-review → stories → conflict-check → plan, tier-aware) in that repo, opens a spec PR there, and nudges that repo's daemon. Runs independently of any build/execution loop. Use when capturing and routing new work, NOT when building inside one repo (that's plain conduct).
+> Interactive, phone-drivable idea→spec loop: hands a raw idea to the right repo, runs the full DECIDE phase there, and opens a spec PR. Use when capturing and routing new work, NOT when building inside one repo (that is plain conduct).
 
 - **Frontmatter** — `enforcement: advisory`, `phase: decide`, `standalone: true`, `requires: []`,
   `model: opus`.
@@ -521,7 +521,7 @@ respectively. Both are blocking and cannot be tier-skipped or satisfied by a sco
 
 ### remediate
 
-> Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Reasons over the blocking gaps and emits per-gap remediation dispositions + concrete tasks, routing each to the right step (build/acceptance_specs/architecture_review/plan) — and HALTs only for architectural-clarity or product-scope gaps that need a human.
+> Use at SHIP when prd-audit, the as-built architecture review, or the finish verification blocks. Emits a per-gap disposition and concrete tasks routed to the owning step, and HALTs only for gaps that need a human.
 
 - **Frontmatter** — `enforcement: gating`, `phase: ship`, `standalone: true`,
   `requires: [verify-claims]`, no model pin.
