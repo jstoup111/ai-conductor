@@ -230,7 +230,7 @@ import {
 import { fingerprintLiveBoundary, verifyLiveBoundary } from './self-host/live-boundary.js';
 import { auditEnvironmentBlockerClaims } from './self-host/environment-claim-audit.js';
 import { resolveVersionFreeze } from './self-host/version-gate.js';
-import { selectNextGate, earliestUnsatisfiedGateIndex } from './selector.js';
+import { selectNextGate, earliestUnsatisfiedGateIndex, gateSatisfied } from './selector.js';
 import {
   computeAndWriteVerdict,
   readAllVerdicts,
@@ -3213,6 +3213,7 @@ export class Conductor {
 
       // Clamp startIndex backward to honor on-disk gate verdicts.
       // Read verdicts and derive gate topology to find the earliest unsatisfied gate.
+      let resumeClamp: { verdicts: Awaited<ReturnType<typeof readAllVerdicts>>; earliestGateIdx: number } | undefined;
       try {
         const verdicts = await readAllVerdicts(this.projectRoot);
         const topo = deriveGateTopology(steps);
@@ -3222,35 +3223,64 @@ export class Conductor {
           verdicts,
           regionStart: topo.regionStart,
         });
-
-        // Clamp backward (min) only — never move startIndex forward.
-        // If earliestGateIdx is valid and precedes the candidate, use it.
-        // The clamp on the local startIndex is the ONLY resume-entry mechanism
-        // (adr-2026-07-11-verdict-aware-resume-entry): resume never mutates
-        // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
-        // demotion inside the loop.
-        if (earliestGateIdx >= 0 && earliestGateIdx < startIndex) {
-          // The clamp's satisfaction predicate (`gateSatisfied`) is VERDICT-
-          // authoritative, but the loop's own entry check (`checkGate` →
-          // `stepSatisfied`) is STATE-only. When a step's verdict says
-          // satisfied while its state says `failed` (e.g. build passed review
-          // once, then a later build attempt failed without rewriting the
-          // verdict), the clamp lands PAST that step on a downstream gate
-          // whose `checkGate` can never pass. The loop then takes the
-          // markerless `gate_blocked` return and the finally-backstop parks
-          // the run with "loop exited without a terminal verdict" — a
-          // deterministic livelock that re-parks identically on every resume
-          // and never dispatches a session (#1052).
-          //
-          // Walk the prerequisite chain back to the earliest step the loop
-          // will actually accept, using the SAME predicate `checkGate` uses,
-          // so the entry point is never one the very next check rejects.
-          // Backward-only and bounded by steps.length, so it cannot loop.
-          startIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
-        }
+        resumeClamp = { verdicts, earliestGateIdx };
       } catch (err) {
         // Verdict reading errors (missing file, parse failures) are non-fatal.
         // Fall through to the candidate startIndex derived from state alone.
+      }
+
+      // Clamp backward (min) only — never move startIndex forward.
+      // If earliestGateIdx is valid and precedes the candidate, use it.
+      // The clamp on the local startIndex is the ONLY resume-entry mechanism
+      // (adr-2026-07-11-verdict-aware-resume-entry): resume never mutates
+      // conduct-state.json; scanKickbackVerdicts owns verdict-driven state
+      // demotion inside the loop.
+      if (
+        resumeClamp &&
+        resumeClamp.earliestGateIdx >= 0 &&
+        resumeClamp.earliestGateIdx < startIndex
+      ) {
+        const { verdicts, earliestGateIdx } = resumeClamp;
+        // The clamp's satisfaction predicate (`gateSatisfied`) is VERDICT-
+        // authoritative, but the loop's own entry check (`checkGate` →
+        // `stepSatisfied`) is STATE-only. When a step's verdict says
+        // satisfied while its state says `failed` (e.g. build passed review
+        // once, then a later build attempt failed without rewriting the
+        // verdict), the clamp lands PAST that step on a downstream gate
+        // whose `checkGate` can never pass. The loop then takes the
+        // markerless `gate_blocked` return and the finally-backstop parks
+        // the run with "loop exited without a terminal verdict" — a
+        // deterministic livelock that re-parks identically on every resume
+        // and never dispatches a session (#1052).
+        //
+        // Walk the prerequisite chain back to the earliest step the loop
+        // will actually accept, using the SAME predicate `checkGate` uses,
+        // so the entry point is never one the very next check rejects.
+        // Backward-only and bounded by steps.length, so it cannot loop.
+        const clampedIndex = clampToRunnablePrerequisite(steps, state, earliestGateIdx);
+        const clampedStep = steps[clampedIndex];
+        if (clampedStep) {
+          const disposition = decideEntryDisposition({
+            target: clampedStep.name,
+            steps,
+            daemon: this.daemon,
+            tier: state.complexity_tier,
+            hasContract: stepHasCompletionCheck(clampedStep.name, this.config),
+            satisfied: gateSatisfied(clampedStep.name, state, verdicts),
+            grant: null,
+            sourceGate: 'resume-clamp',
+            evidence: verdicts[clampedStep.name]?.reason,
+          });
+          if (disposition.kind === 'halt') {
+            await writeHaltMarker(
+              this.projectRoot,
+              renderDecideEntryHalt(disposition.halt) + '\n',
+              'needs-human',
+            );
+            return;
+          }
+        }
+        startIndex = clampedIndex;
       }
     }
 

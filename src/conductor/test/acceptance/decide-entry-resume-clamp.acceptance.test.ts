@@ -31,7 +31,8 @@ describe('acceptance: autonomous resume clamp refuses DECIDE targets', () => {
   });
 
   it('halts before a verdict-aware clamp can dispatch stories and leaves its state unresolved', async () => {
-    await writeFixtureState(fixture, resolvedState({ stories: 'failed' }));
+    const initialState = resolvedState({ stories: 'failed' });
+    await writeFixtureState(fixture, initialState);
     await writeVerdict(fixture.root, 'stories', {
       satisfied: false,
       checkedAt: 1,
@@ -47,7 +48,7 @@ describe('acceptance: autonomous resume clamp refuses DECIDE targets', () => {
     expect(halt).toMatch(/Source gate:\s*resume-clamp/i);
     expect(halt).toMatch(/Requested target:\s*stories/i);
     const state = await readState(fixture.statePath);
-    expect(state.ok && state.value.stories).toBe('failed');
+    expect(state).toMatchObject({ ok: true, value: initialState });
   });
 
   it('still clamps to and dispatches a known BUILD target', async () => {
