@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateScopeContainment } from '../../src/engine/plan-scope-containment.js';
+import {
+  evaluateScopeContainment,
+  type ScopeContainmentInput,
+} from '../../src/engine/plan-scope-containment.js';
 
 describe('evaluateScopeContainment', () => {
   const task = {
     id: '3',
+    status: 'in_progress',
     files: [
       'src/conductor/src/engine/config.ts',
       'src/conductor/test/engine/config.test.ts',
@@ -39,7 +43,7 @@ describe('evaluateScopeContainment', () => {
     expect(
       evaluateScopeContainment({
         stagedPaths: ['src/conductor/src/engine/config.ts'],
-        task: { id: '3', files: ['engine/config.ts'] },
+        task: { id: '3', status: 'in_progress', files: ['engine/config.ts'] },
       }),
     ).toEqual({ allowed: true });
   });
@@ -48,7 +52,11 @@ describe('evaluateScopeContainment', () => {
     expect(
       evaluateScopeContainment({
         stagedPaths: ['src/conductor/src/engine/audit-trail.ts'],
-        task: { id: '4', files: ['src/conductor/src/engine/trail.ts'] },
+        task: {
+          id: '4',
+          status: 'in_progress',
+          files: ['src/conductor/src/engine/trail.ts'],
+        },
       }),
     ).toEqual({
       allowed: false,
@@ -65,8 +73,67 @@ describe('evaluateScopeContainment', () => {
           '.pipeline/task-status.json',
           '.docs/shipped/pipeline-commits-files-outside-the-active-plan-bef.md',
         ],
-        task: { id: '4', files: ['src/conductor/src/engine/plan-scope-containment.ts'] },
+        task: {
+          id: '4',
+          status: 'in_progress',
+          files: ['src/conductor/src/engine/plan-scope-containment.ts'],
+        },
       }),
     ).toEqual({ allowed: true });
+  });
+
+  it.each([
+    {
+      name: 'no task declares Files anywhere',
+      input: {
+        stagedPaths: ['src/conductor/src/engine/artifacts.ts'],
+        taskId: '3',
+        tasks: [{ id: '3', status: 'in_progress' }],
+      },
+    },
+    {
+      name: 'no row exists for the stamped task id',
+      input: {
+        stagedPaths: ['src/conductor/src/engine/artifacts.ts'],
+        taskId: '3',
+        tasks: [{ id: '4', status: 'in_progress', files: ['src/conductor/src/engine/config.ts'] }],
+      },
+    },
+    {
+      name: 'the stamped row has no Files declaration',
+      input: {
+        stagedPaths: ['src/conductor/src/engine/artifacts.ts'],
+        taskId: '3',
+        tasks: [
+          { id: '3', status: 'in_progress' },
+          { id: '4', status: 'pending', files: ['src/conductor/src/engine/config.ts'] },
+        ],
+      },
+    },
+    {
+      name: 'the stamped row declares no files',
+      input: {
+        stagedPaths: ['src/conductor/src/engine/artifacts.ts'],
+        taskId: '3',
+        tasks: [{ id: '3', status: 'in_progress', files: [] }],
+      },
+    },
+    {
+      name: 'no task id is supplied',
+      input: {
+        stagedPaths: ['src/conductor/src/engine/artifacts.ts'],
+        tasks: [{ id: '3', status: 'in_progress', files: ['src/conductor/src/engine/config.ts'] }],
+      },
+    },
+    {
+      name: 'the stamped row is not in progress',
+      input: {
+        stagedPaths: ['src/conductor/src/engine/artifacts.ts'],
+        taskId: '3',
+        tasks: [{ id: '3', status: 'completed', files: ['src/conductor/src/engine/config.ts'] }],
+      },
+    },
+  ] as Array<{ name: string; input: ScopeContainmentInput }>)('abstains when $name', ({ input }) => {
+    expect(evaluateScopeContainment(input)).toEqual({ allowed: true });
   });
 });

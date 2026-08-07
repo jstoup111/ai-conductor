@@ -3,12 +3,15 @@ import { MACHINERY_AUTHORED_PATHS } from './build-review-inputs.js';
 
 export interface ScopeContainmentTask {
   id: string;
-  files: readonly string[];
+  status: string;
+  files?: readonly string[];
 }
 
 export interface ScopeContainmentInput {
   stagedPaths: readonly string[];
-  task: ScopeContainmentTask;
+  task?: ScopeContainmentTask;
+  taskId?: string;
+  tasks?: readonly ScopeContainmentTask[];
 }
 
 export type ScopeContainmentResult =
@@ -24,14 +27,38 @@ export type ScopeContainmentResult =
 export function evaluateScopeContainment({
   stagedPaths,
   task,
+  taskId,
+  tasks,
 }: ScopeContainmentInput): ScopeContainmentResult {
+  const taskRows = tasks ?? (task === undefined ? [] : [task]);
+  const activeTaskId = taskId ?? task?.id;
+
+  if (
+    activeTaskId === undefined ||
+    !taskRows.some((row) => row.files !== undefined)
+  ) {
+    return { allowed: true };
+  }
+
+  const activeTask = task ?? taskRows.find((row) => row.id === activeTaskId);
+  const declaredFiles = activeTask?.files;
+
+  if (
+    activeTask === undefined ||
+    activeTask.status !== 'in_progress' ||
+    declaredFiles === undefined ||
+    declaredFiles.length === 0
+  ) {
+    return { allowed: true };
+  }
+
   const offendingPaths = stagedPaths.filter(
     (path) =>
       !MACHINERY_AUTHORED_PATHS.some((machineryPath) => path.startsWith(machineryPath)) &&
-      !task.files.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)),
+      !declaredFiles.some((declaredPath) => fileMatchesPlanPath(path, declaredPath)),
   );
 
   return offendingPaths.length === 0
     ? { allowed: true }
-    : { allowed: false, taskId: task.id, offendingPaths };
+    : { allowed: false, taskId: activeTask.id, offendingPaths };
 }
