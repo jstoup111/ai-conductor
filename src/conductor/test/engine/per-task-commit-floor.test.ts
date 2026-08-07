@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execa } from 'execa';
 import {
+  runContainmentFloor,
   runPerTaskCommitFloor,
   renderPerTaskFloorReport,
 } from '../../src/engine/per-task-commit-floor.js';
@@ -18,6 +19,9 @@ describe('per-task-commit-floor', () => {
     await execa('git', ['init', '-b', 'main'], { cwd: dir });
     await execa('git', ['config', 'user.email', 'test@test.com'], { cwd: dir });
     await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+    await writeFile(join(dir, '.gitkeep'), '');
+    await execa('git', ['add', '.gitkeep'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'baseline'], { cwd: dir });
   });
 
   afterEach(async () => {
@@ -143,5 +147,53 @@ describe('per-task-commit-floor', () => {
     expect(report.satisfied).toBe(true);
     expect(report.gaps).toEqual([]);
     expect(report.markedTasks).toEqual(['6']);
+  });
+
+  it('is satisfied when a Task-trailer commit changes only its declared plan paths', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await writeFile(join(dir, 'declared.ts'), 'x');
+    await execa('git', ['add', 'declared.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'contained\n\nTask: 3'], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({ satisfied: true, violations: [] });
+  });
+
+  it('reports the Task trailer id, commit sha, and undeclared changed path', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await writeFile(join(dir, 'undeclared.ts'), 'x');
+    await execa('git', ['add', 'undeclared.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'escaped\n\nTask: 3'], { cwd: dir });
+    const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({
+      satisfied: false,
+      violations: [{ taskId: '3', sha, paths: ['undeclared.ts'] }],
+    });
+  });
+
+  it('accepts a commit-local Scope widening and exposes it for build review', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await writeFile(join(dir, 'widened.ts'), 'x');
+    await execa('git', ['add', 'widened.ts'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      'widened\n\nTask: 3\nScope: widened.ts — needed by the task',
+    ], { cwd: dir });
+    const sha = (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout;
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({
+      satisfied: true,
+      violations: [],
+      acceptedWidenings: [
+        { path: 'widened.ts', rationale: 'needed by the task', taskId: '3', sha },
+      ],
+    });
   });
 });

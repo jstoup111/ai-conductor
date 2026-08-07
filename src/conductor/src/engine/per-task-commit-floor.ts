@@ -1,11 +1,15 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { execa } from 'execa';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   parsePlanTaskVerifyOnly,
   canonicalTaskId,
+  filesForCommit,
   listCommitsWithTrailers,
 } from './autoheal.js';
+import { evaluateScopeContainment } from './plan-scope-containment.js';
+import { parseScopeTrailers } from './scope-trailer.js';
 import { normalizeTasks } from './task-progress.js';
 
 /**
@@ -23,6 +27,26 @@ export interface PerTaskFloorReport {
   coveredTasks: string[];
   markedTasks: string[];
   skipNotes: string[];
+}
+
+export interface ContainmentFloorViolation {
+  taskId: string;
+  sha: string;
+  paths: string[];
+}
+
+/** A commit-local `Scope:` widening supplied to the isolated build reviewer. */
+export interface AcceptedScopeWidening {
+  path: string;
+  rationale: string;
+  taskId: string;
+  sha: string;
+}
+
+export interface ContainmentFloorReport {
+  satisfied: boolean;
+  violations: ContainmentFloorViolation[];
+  acceptedWidenings: AcceptedScopeWidening[];
 }
 
 export async function runPerTaskCommitFloor(args: {
@@ -76,6 +100,75 @@ export async function runPerTaskCommitFloor(args: {
       skipNotes: [`per-task-commit-floor: ${message}`],
     };
   }
+}
+
+/**
+ * Commit-history containment backstop. Unlike the commit-msg hook, this runs
+ * after the branch is built, so it records rather than refuses an undeclared
+ * change. The report is intentionally self-contained: build_review receives a
+ * diff, not commit messages, and needs accepted `Scope:` widenings explicitly.
+ */
+export async function runContainmentFloor(args: {
+  projectRoot: string;
+  planPath: string;
+}): Promise<ContainmentFloorReport> {
+  const planText = await readFile(args.planPath, 'utf-8');
+  const taskPaths = parsePlanTaskPaths(planText);
+  const tasksByCanonicalId = new Map(
+    [...taskPaths.entries()].map(([id, files]) => [canonicalTaskId(id), { id, files: [...files] }]),
+  );
+  const commits = await listCommitsWithTrailers(args.projectRoot);
+  const violations: ContainmentFloorViolation[] = [];
+  const acceptedWidenings: AcceptedScopeWidening[] = [];
+
+  for (const commit of commits) {
+    const taskIds = new Set((commit.trailers.Task ?? []).map(canonicalTaskId));
+    if (taskIds.size === 0) continue;
+
+    const files = await filesForCommit(args.projectRoot, commit.sha);
+    const message = await commitMessage(args.projectRoot, commit.sha);
+    const scopeTrailers = parseScopeTrailers(message, files);
+
+    for (const taskId of taskIds) {
+      const task = tasksByCanonicalId.get(taskId);
+      if (!task) continue;
+
+      const result = evaluateScopeContainment({
+        stagedPaths: files,
+        task: { id: task.id, status: 'in_progress', files: task.files },
+        scopeTrailers,
+      });
+      if (!result.allowed) {
+        violations.push({ taskId: task.id, sha: commit.sha, paths: result.offendingPaths });
+        continue;
+      }
+
+      for (const scope of scopeTrailers) {
+        if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
+          continue;
+        }
+        if (task.files.includes(scope.path)) continue;
+        acceptedWidenings.push({ ...scope, taskId: task.id, sha: commit.sha });
+      }
+    }
+  }
+
+  return {
+    satisfied: violations.length === 0,
+    violations,
+    acceptedWidenings,
+  };
+}
+
+async function commitMessage(projectRoot: string, sha: string): Promise<string> {
+  const result = await execa('git', ['show', '-s', '--format=%B', sha], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`git show ${sha} failed: ${result.stderr || 'unknown error'}`);
+  }
+  return result.stdout;
 }
 
 /**
