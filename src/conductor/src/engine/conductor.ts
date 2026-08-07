@@ -187,6 +187,11 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 import { currentCommitSha, currentTreeHash } from './project-prelude.js';
+import {
+  classifyBuildSettle,
+  readBuildOutcome,
+  writeBuildOutcome,
+} from './build-outcome.js';
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
@@ -7559,6 +7564,37 @@ export class Conductor {
           state[step.name] = 'done';
           lastSettledUnit = { kind: 'step', name: step.name };
           const tail = successOutput ? successOutput.split('\n').slice(-200) : undefined;
+          if (step.name === 'build') {
+            const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
+              currentCommitSha(this.projectRoot),
+              currentTreeHash(this.projectRoot),
+              countResolvedTasks(this.projectRoot),
+            ]);
+            const outcomeStore = await readBuildOutcome(this.projectRoot);
+            await writeBuildOutcome(this.projectRoot, {
+              ...outcomeStore,
+              records: [
+                ...outcomeStore.records,
+                {
+                  outcome: classifyBuildSettle({
+                    treeBefore: treeHashBeforeBuild,
+                    treeAfter,
+                    resolvedBefore: resolvedTasksBefore,
+                    resolvedAfter,
+                  }),
+                  terminalOutcome: 'done',
+                  gate: null,
+                  verdict: null,
+                  rung: { model: stepResult?.model ?? resolved.model, effort: resolved.effort },
+                  treeBefore: treeHashBeforeBuild,
+                  treeAfter,
+                  headBefore: headShaBeforeBuild,
+                  headAfter,
+                  note: tail,
+                },
+              ],
+            });
+          }
           await emitTracked({
             type: 'step_completed',
             step: step.name,
