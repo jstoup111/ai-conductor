@@ -197,6 +197,26 @@ describe('per-task-commit-floor', () => {
     });
   });
 
+  it('does not record a redundant Scope trailer when the plan path matches by suffix', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** config.ts\n');
+    await mkdir(join(dir, 'src/engine'), { recursive: true });
+    await writeFile(join(dir, 'src/engine/config.ts'), 'x');
+    await execa('git', ['add', 'src/engine/config.ts'], { cwd: dir });
+    await execa('git', [
+      'commit',
+      '-m',
+      'contained by suffix\n\nTask: 3\nScope: src/engine/config.ts — redundant declaration',
+    ], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({
+      satisfied: true,
+      violations: [],
+      acceptedWidenings: [],
+    });
+  });
+
   it.each([
     ['an unreadable plan', async () => ({ projectRoot: dir, planPath: join(dir, 'missing.md') })],
     ['a git failure', async () => {

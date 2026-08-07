@@ -57,7 +57,7 @@ interface FloorReport {
 function planBody(tasks: PlanTaskSpec[]): string {
   return tasks
     .map((t) => {
-      let block = `## Task ${t.id} — ${t.title}\n\n**Files:** src/${t.id}.ts\n`;
+      let block = `## Task ${t.id} — ${t.title}\n\n**Files:** t${t.id}.txt\n`;
       if (t.verifyOnly) block += `**Verify-only:** yes\n`;
       if (t.type) block += `**Type:** ${t.type}\n`;
       return block;

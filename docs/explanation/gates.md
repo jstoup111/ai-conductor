@@ -84,10 +84,16 @@ scope review.
 
 Containment ships report-only by default because false-positive refusals can stall a live build. The checker
 prints every verified violation but returns `0`, so the commit proceeds and the containment floor retains the
-evidence for later review. Its three-valued contract keeps the hook safe if state is unavailable: `0` allows
-(including a reported default violation), `2` is a positive refusal for the later enforcement flip, and every
-other result is an abstention that the hook logs and allows. The hook converts only `2` to Git's blocking
-exit `1`; malformed or missing task state never blocks a build.
+evidence for later review. Set `build_review.scopeContainmentEnforced: true` to enable refusal. Its
+three-valued contract keeps the hook safe if state is unavailable: `0` allows (including a reported default
+violation), `2` is a positive refusal when enforcement is enabled, and every other result is an abstention
+that the hook logs and allows. The hook converts only `2` to Git's blocking exit `1`; malformed or missing
+task state never blocks a build.
+
+At `build_review`, the containment floor writes `.pipeline/containment-floor.json`. Every violation is also
+printed in the step output and warning log with its task id, commit SHA, and offending paths. Every accepted
+widening is supplied directly to the isolated grader with its path, rationale, task id, and commit SHA, because
+the grader receives the branch diff rather than commit messages.
 
 ### Per-step completion gates
 

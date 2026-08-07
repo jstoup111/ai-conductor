@@ -1,10 +1,13 @@
 import { readFile } from 'node:fs/promises';
+import { writeSync } from 'node:fs';
 import { execa } from 'execa';
 import { extractBodyTaskIds } from './autoheal.js';
+import { loadConfig, type ConfigResult } from './config.js';
 import {
   evaluateScopeContainment,
   type ScopeContainmentTask,
 } from './plan-scope-containment.js';
+import { resolveBuildReviewConfig } from './resolved-config.js';
 import { parseScopeTrailers } from './scope-trailer.js';
 
 export interface ScopeCheckCommand {
@@ -16,6 +19,22 @@ export interface ScopeCheckCommand {
  * containment-floor evidence supports enforcing scope refusals.
  */
 const DEFAULT_SCOPE_CHECK_ENFORCEMENT = false;
+
+type ScopeCheckConfigLoader = (projectRoot: string) => Promise<ConfigResult>;
+
+/** Load the resolved containment mode, failing open to report-only. */
+export async function loadScopeCheckEnforcement(
+  projectRoot: string,
+  load: ScopeCheckConfigLoader = loadConfig,
+): Promise<boolean> {
+  try {
+    const result = await load(projectRoot);
+    if (!result.ok) return DEFAULT_SCOPE_CHECK_ENFORCEMENT;
+    return resolveBuildReviewConfig(result.config).scopeContainmentEnforced;
+  } catch {
+    return DEFAULT_SCOPE_CHECK_ENFORCEMENT;
+  }
+}
 
 /** Recognize the hook-only `conduct-ts scope-check <commit-message>` command. */
 export function detectScopeCheckCommand(argv: string[]): ScopeCheckCommand | null {
@@ -71,7 +90,8 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
     });
     if (result.allowed) return 0;
 
-    (deps.print ?? console.error)(renderScopeRefusal(result.taskId, result.offendingPaths));
+    const print = deps.print ?? ((message: string) => writeSync(process.stderr.fd, `${message}\n`));
+    print(renderScopeRefusal(result.taskId, result.offendingPaths));
     const enforce = deps.enforce ?? DEFAULT_SCOPE_CHECK_ENFORCEMENT;
     return enforce ? 2 : 0;
   } catch {

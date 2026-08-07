@@ -2,15 +2,15 @@
  * RED acceptance spec for #1227 / #1074 plan-scope containment.
  *
  * Production call site: prepareWorktree() provisions COMMIT_MSG_HOOK, then a
- * real `git commit` supplies the staged paths and Task:/Scope: trailers. The
- * shipped mode is report-only, so a verified violation must print the complete
- * refusal diagnostic while allowing the commit. Unit tests own the later
- * enforcement flip and the evaluator's abstention matrix.
+ * real `git commit` invokes the repository's real conduct-ts binary. These
+ * scenarios therefore fail if either the hook wiring, resolved configuration,
+ * evaluateScopeContainment(), or parseScopeTrailers() stops enforcing the
+ * observable commit boundary.
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -18,6 +18,8 @@ import { promisify } from 'node:util';
 import { prepareWorktree } from '../../src/engine/worktree-prepare.js';
 
 const execFileAsync = promisify(execFile);
+const CONDUCT_TS_BIN_DIR = join(process.cwd(), '..', '..', 'bin');
+
 interface GitResult {
   code: number;
   stdout: string;
@@ -26,12 +28,11 @@ interface GitResult {
 
 describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', () => {
   let repoDir: string;
-  let binDir: string;
 
   async function git(...args: string[]): Promise<GitResult> {
     try {
       const result = await execFileAsync('git', ['-C', repoDir, ...args], {
-        env: { ...process.env, PATH: `${binDir}:${process.env.PATH}` },
+        env: { ...process.env, PATH: `${CONDUCT_TS_BIN_DIR}:${process.env.PATH}` },
       });
       return {
         code: 0,
@@ -49,7 +50,8 @@ describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', 
   }
 
   async function stage(paths: string[]): Promise<void> {
-    await git('add', ...paths);
+    const result = await git('add', ...paths);
+    expect(result.code).toBe(0);
   }
 
   async function change(path: string, contents: string): Promise<void> {
@@ -58,23 +60,6 @@ describe('acceptance: #1074 out-of-plan commits reach the plan-scope boundary', 
 
   beforeEach(async () => {
     repoDir = await mkdtemp(join(tmpdir(), 'plan-scope-containment-'));
-    binDir = join(repoDir, '.scope-check-bin');
-    await mkdir(binDir, { recursive: true });
-    await writeFile(
-      join(binDir, 'conduct-ts'),
-      `#!/bin/sh
-if [ "$1" = scope-check ] && ! grep -q '^Scope:' "$2" && ! git diff --cached --name-only | grep -qx 'src/conductor/src/engine/config.ts'; then
-  echo 'scope-check: refusing Task 3; staged paths are outside its declared scope:' >&2
-  echo '  src/conductor/src/engine/artifacts.ts' >&2
-  echo '  src/conductor/src/engine/changelog-pr-finalizer-cli.ts' >&2
-  echo 'Narrow this commit to the task declaration, or justify each widening by adding:' >&2
-  echo '  Scope: src/conductor/src/engine/artifacts.ts — <rationale>' >&2
-  echo '  Scope: src/conductor/src/engine/changelog-pr-finalizer-cli.ts — <rationale>' >&2
-fi
-`,
-      'utf8',
-    );
-    await chmod(join(binDir, 'conduct-ts'), 0o755);
     await git('init', '-q', '-b', 'main');
     await git('config', 'user.email', 'test@example.com');
     await git('config', 'user.name', 'Test');
@@ -82,6 +67,12 @@ fi
 
     const engineDir = join(repoDir, 'src', 'conductor', 'src', 'engine');
     await mkdir(engineDir, { recursive: true });
+    await mkdir(join(repoDir, '.ai-conductor'), { recursive: true });
+    await writeFile(
+      join(repoDir, '.ai-conductor', 'config.yml'),
+      ['build_review:', '  scopeContainmentEnforced: true', ''].join('\n'),
+      'utf8',
+    );
     await writeFile(join(engineDir, 'config.ts'), 'export const config = 1;\n', 'utf8');
     await writeFile(join(engineDir, 'artifacts.ts'), 'export const artifacts = 1;\n', 'utf8');
     await writeFile(
@@ -122,7 +113,7 @@ fi
     await rm(repoDir, { recursive: true, force: true });
   });
 
-  it('reports both #1074 paths at the real commit boundary without deleting either file', async () => {
+  it('refuses both #1074 paths for Task 3 while preserving the files and index', async () => {
     const artifactsPath = 'src/conductor/src/engine/artifacts.ts';
     const finalizerPath = 'src/conductor/src/engine/changelog-pr-finalizer-cli.ts';
     const artifactsContents = 'export const artifacts = 2;\n';
@@ -140,9 +131,7 @@ fi
       'Task: 3',
     );
 
-    // Report-only is the shipped default: the violation is observable but the
-    // commit proceeds until live data earns the one-line enforcement flip.
-    expect(result.code).toBe(0);
+    expect(result.code).toBe(1);
     expect(result.stderr).toContain('Task 3');
     expect(result.stderr).toContain(artifactsPath);
     expect(result.stderr).toContain(finalizerPath);
@@ -151,28 +140,61 @@ fi
     expect(result.stderr.toLowerCase()).not.toContain('delete');
     expect(await readFile(join(repoDir, artifactsPath), 'utf8')).toBe(artifactsContents);
     expect(await readFile(join(repoDir, finalizerPath), 'utf8')).toBe(finalizerContents);
+    expect((await git('diff', '--cached', '--name-only')).stdout.split('\n')).toEqual([
+      artifactsPath,
+      finalizerPath,
+    ]);
   });
 
-  it('accepts an explicitly justified widening without reporting a violation', async () => {
+  it('allows both paths when each has a valid same-commit Scope trailer', async () => {
     const artifactsPath = 'src/conductor/src/engine/artifacts.ts';
+    const finalizerPath = 'src/conductor/src/engine/changelog-pr-finalizer-cli.ts';
     await change(artifactsPath, 'export const artifacts = 3;\n');
+    await change(finalizerPath, 'export const finalizer = 3;\n');
+    await stage([artifactsPath, finalizerPath]);
+
+    const result = await git(
+      'commit',
+      '-m',
+      'fix: register both widened paths',
+      '-m',
+      'Task: 3',
+      '-m',
+      `Scope: ${artifactsPath} — needed to update artifact discovery`,
+      '-m',
+      `Scope: ${finalizerPath} — needed to finalize the registered artifact`,
+    );
+
+    expect(result.code).toBe(0);
+    expect(result.stderr).not.toContain('scope-check: refusing');
+  });
+
+  it.each([
+    ['an empty rationale', 'Scope: src/conductor/src/engine/artifacts.ts —'],
+    ['a bare trailer', 'Scope:'],
+    ['a trailer for an unstaged path', 'Scope: src/conductor/src/engine/config.ts — adjacent config work'],
+  ])('does not allow the out-of-plan path with %s', async (_case, scopeTrailer) => {
+    const artifactsPath = 'src/conductor/src/engine/artifacts.ts';
+    await change(artifactsPath, 'export const artifacts = 4;\n');
     await stage([artifactsPath]);
 
     const result = await git(
       'commit',
       '-m',
-      'fix: register the new command',
+      'fix: malformed widening attempt',
       '-m',
       'Task: 3',
       '-m',
-      `Scope: ${artifactsPath} — needed to register the new command`,
+      scopeTrailer,
     );
 
-    expect(result.code).toBe(0);
-    expect(result.stderr).not.toContain(artifactsPath);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain('Task 3');
+    expect(result.stderr).toContain(artifactsPath);
+    expect((await git('diff', '--cached', '--name-only')).stdout).toBe(artifactsPath);
   });
 
-  it('accepts a commit confined to the active task declaration without reporting', async () => {
+  it('allows a commit confined to the active task declaration', async () => {
     const configPath = 'src/conductor/src/engine/config.ts';
     await change(configPath, 'export const config = 2;\n');
     await stage([configPath]);
@@ -180,6 +202,6 @@ fi
     const result = await git('commit', '-m', 'feat: update config behavior', '-m', 'Task: 3');
 
     expect(result.code).toBe(0);
-    expect(result.stderr).toBe('');
+    expect(result.stderr).not.toContain('scope-check: refusing');
   });
 });

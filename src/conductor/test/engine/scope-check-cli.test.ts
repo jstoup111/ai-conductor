@@ -1,9 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import {
-  detectScopeCheckCommand,
-  runScopeCheck,
-} from '../../src/engine/scope-check-cli.js';
+import * as scopeCheckCli from '../../src/engine/scope-check-cli.js';
+
+const { detectScopeCheckCommand, runScopeCheck } = scopeCheckCli;
+const loadScopeCheckEnforcement = (
+  scopeCheckCli as typeof scopeCheckCli & {
+    loadScopeCheckEnforcement(
+      projectRoot: string,
+    ): Promise<boolean>;
+  }
+).loadScopeCheckEnforcement;
 
 const MESSAGE = 'feat(engine): scope check\n\nTask: 3\n';
 const TASK_STATUS = JSON.stringify({
@@ -17,6 +26,32 @@ const TASK_STATUS = JSON.stringify({
 });
 
 describe('scope-check CLI', () => {
+  let projectRoot: string;
+
+  beforeEach(async () => {
+    projectRoot = await mkdtemp(join(tmpdir(), 'scope-check-config-'));
+    await mkdir(join(projectRoot, '.ai-conductor'), { recursive: true });
+  });
+
+  afterEach(async () => {
+    await rm(projectRoot, { recursive: true, force: true });
+  });
+
+  it('loads report-only as the default from resolved project configuration', async () => {
+    await writeFile(join(projectRoot, '.ai-conductor', 'config.yml'), '{}\n');
+
+    await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(false);
+  });
+
+  it('loads explicit enforcement from resolved project configuration', async () => {
+    await writeFile(
+      join(projectRoot, '.ai-conductor', 'config.yml'),
+      'build_review:\n  scopeContainmentEnforced: true\n',
+    );
+
+    await expect(loadScopeCheckEnforcement(projectRoot)).resolves.toBe(true);
+  });
+
   it('detects the commit-message path for the dispatcher', () => {
     expect(
       detectScopeCheckCommand(['node', 'conduct-ts', 'scope-check', '/tmp/COMMIT_EDITMSG']),

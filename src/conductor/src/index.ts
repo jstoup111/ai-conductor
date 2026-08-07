@@ -124,6 +124,7 @@ import {
 import { detectTaskCommand, dispatchTaskCommand } from './engine/task-cli.js';
 import {
   detectScopeCheckCommand,
+  loadScopeCheckEnforcement,
   runScopeCheck,
 } from './engine/scope-check-cli.js';
 import {
@@ -557,9 +558,11 @@ async function main(): Promise<void> {
 
   const scopeCheckCmd = detectScopeCheckCommand(process.argv);
   if (scopeCheckCmd) {
+    const projectRoot = process.env.CONDUCT_SCOPE_CHECK_PROJECT_ROOT ?? process.cwd();
     const code = await runScopeCheck({
-      projectRoot: process.env.CONDUCT_SCOPE_CHECK_PROJECT_ROOT ?? process.cwd(),
+      projectRoot,
       commitMessagePath: scopeCheckCmd.commitMessagePath,
+      enforce: await loadScopeCheckEnforcement(projectRoot),
     });
     process.exit(code);
   }

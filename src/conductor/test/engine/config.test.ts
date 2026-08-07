@@ -1723,6 +1723,35 @@ complexity:
       expect(result.ok && resolveBuildReviewConfig(result.config)).toEqual({
         enabled: true,
         perTaskFloor: false,
+        scopeContainmentEnforced: false,
+      });
+    });
+
+    it('preserves an explicit boolean scope-containment enforcement mode', () => {
+      const result = validateConfig({
+        build_review: { scopeContainmentEnforced: true },
+      });
+
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: true, scopeContainmentEnforced: true },
+        warnings: [],
+      });
+    });
+
+    it('rejects a non-boolean scope-containment enforcement mode', () => {
+      const result = validateConfig({
+        build_review: { enabled: false, scopeContainmentEnforced: 'yes' },
+      });
+
+      expect(result.ok && {
+        build_review: result.config.build_review,
+        warnings: result.warnings,
+      }).toEqual({
+        build_review: { enabled: false },
+        warnings: [expect.stringMatching(/build_review\.scopeContainmentEnforced/)],
       });
     });
 

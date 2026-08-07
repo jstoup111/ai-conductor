@@ -930,6 +930,7 @@ export function validateConfig(
         [
           { key: 'enabled', isValid: (value) => typeof value === 'boolean' },
           { key: 'perTaskFloor', isValid: (value) => typeof value === 'boolean' },
+          { key: 'scopeContainmentEnforced', isValid: (value) => typeof value === 'boolean' },
         ],
         warnings,
       );

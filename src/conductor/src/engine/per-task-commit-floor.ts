@@ -5,6 +5,7 @@ import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
   parsePlanTaskVerifyOnly,
   canonicalTaskId,
+  fileMatchesPlanPath,
   filesForCommit,
   listCommitsWithTrailers,
 } from './autoheal.js';
@@ -159,7 +160,9 @@ export async function runContainmentFloor(args: {
           if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
             continue;
           }
-          if (task.files.includes(scope.path)) continue;
+          if (task.files.some((declaredPath) => fileMatchesPlanPath(scope.path, declaredPath))) {
+            continue;
+          }
           acceptedWidenings.push({ ...scope, taskId: task.id, sha: commit.sha });
         }
       }
@@ -275,5 +278,12 @@ export function renderPerTaskFloorReport(report: PerTaskFloorReport): string[] {
   return report.gaps.map(
     (id) =>
       `Advisory: task ${id} produced no commit carrying its Task: trailer and no verify-only/skip marker — confirm its work shipped inside another task's commit or add a **Verify-only:** marker.`,
+  );
+}
+
+export function renderContainmentFloorReport(report: ContainmentFloorReport): string[] {
+  return report.violations.map(
+    (violation) =>
+      `Advisory: containment violation for Task ${violation.taskId} in commit ${violation.sha}; offending paths: ${violation.paths.join(', ')}.`,
   );
 }

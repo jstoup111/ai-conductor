@@ -1,8 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, readFile, writeFile, access, mkdir } from 'node:fs/promises';
+import { writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
+import { execa } from 'execa';
 import type { LLMProvider, InvokeOptions, InvokeResult } from '../../src/execution/llm-provider.js';
 import type { ConductState, StepName } from '../../src/types/index.js';
 import type { HarnessConfig } from '../../src/types/config.js';
@@ -22,6 +24,7 @@ import { ProviderRuntimeSet } from '../../src/engine/provider-runtime.js';
 import { ProviderSessionStore } from '../../src/engine/provider-session.js';
 import { executeProviderCandidates } from '../../src/engine/provider-execution.js';
 import type { ExecuteProviderCandidatesInput } from '../../src/engine/provider-execution.js';
+import { makeGitRunner } from '../../src/engine/rebase.js';
 
 function createMockProvider(): LLMProvider {
   return {
@@ -3097,6 +3100,154 @@ TIER: M`,
       };
       return git;
     }
+
+    async function prepareContainmentRepo(
+      changedPaths: string[],
+      commitMessage: string,
+    ): Promise<string> {
+      await execa('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+      await execa('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+      await execa('git', ['config', 'user.name', 'Test'], { cwd: dir });
+      await execa('git', ['config', 'commit.gpgsign', 'false'], { cwd: dir });
+      writeFileSync(planPath, '### Task 3: Config only\n**Files:** config.ts\n');
+      writeFileSync(join(dir, 'config.ts'), 'base\n');
+      await execa('git', ['add', 'config.ts'], { cwd: dir });
+      await execa('git', ['commit', '-q', '-m', 'base'], { cwd: dir });
+      await execa('git', ['remote', 'add', 'origin', dir], { cwd: dir });
+      await execa('git', ['update-ref', 'refs/remotes/origin/main', 'refs/heads/main'], { cwd: dir });
+      await execa('git', ['symbolic-ref', 'refs/remotes/origin/HEAD', 'refs/remotes/origin/main'], { cwd: dir });
+      await execa('git', ['checkout', '-q', '-b', 'feature/containment'], { cwd: dir });
+      for (const path of changedPaths) {
+        writeFileSync(join(dir, path), `${path}\n`);
+      }
+      await execa('git', ['add', '--', ...changedPaths], { cwd: dir });
+      await execa('git', ['commit', '-q', '-m', commitMessage], { cwd: dir });
+      return (await execa('git', ['rev-parse', 'HEAD'], { cwd: dir })).stdout.trim();
+    }
+
+    it('passes accepted scope-widening evidence into the isolated grader prompt', async () => {
+      const sha = await prepareContainmentRepo(
+        ['shared.ts'],
+        'widen shared parser\n\nTask: 3\nScope: shared.ts — shared parser changes atomically',
+      );
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: '{"verdict":"PASS"}',
+        exitCode: 0,
+      });
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        {
+          gitRunner: makeGitRunner(dir),
+          planPath,
+          pipelineDir: join(dir, '.pipeline'),
+        },
+      );
+
+      await runner.run('build_review', emptyState);
+
+      const prompt = (invoke.mock.calls[0][0] as InvokeOptions).prompt;
+      expect(prompt).toContain('shared.ts');
+      expect(prompt).toContain('shared parser changes atomically');
+      expect(prompt).toContain('Task 3');
+      expect(prompt).toContain(sha);
+    });
+
+    it('renders and warning-logs containment violations with task, sha, and every path', async () => {
+      const sha = await prepareContainmentRepo(
+        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        'out of scope\n\nTask: 3',
+      );
+      const invoke = vi.fn().mockResolvedValue({
+        success: true,
+        output: '{"verdict":"PASS"}',
+        exitCode: 0,
+      });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        {
+          gitRunner: makeGitRunner(dir),
+          planPath,
+          pipelineDir: join(dir, '.pipeline'),
+          log: (message) => console.warn(message),
+        },
+      );
+
+      try {
+        const result = await runner.run('build_review', emptyState);
+        const warnings = warnSpy.mock.calls.flat().join('\n');
+
+        expect(result.output).toContain('Task 3');
+        expect(result.output).toContain(sha);
+        expect(result.output).toContain('artifacts.ts');
+        expect(result.output).toContain('changelog-pr-finalizer-cli.ts');
+        expect(warnings).toContain('Task 3');
+        expect(warnings).toContain(sha);
+        expect(warnings).toContain('artifacts.ts');
+        expect(warnings).toContain('changelog-pr-finalizer-cli.ts');
+        const sidecar = JSON.parse(await readFile(
+          join(dir, '.pipeline/containment-floor.json'),
+          'utf-8',
+        )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
+        expect(sidecar.violations).toEqual([{
+          taskId: '3',
+          sha,
+          paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        }]);
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('prepends containment violations to an ordinary grader failure output', async () => {
+      const sha = await prepareContainmentRepo(
+        ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+        'out of scope\n\nTask: 3',
+      );
+      const invoke = vi.fn().mockResolvedValue({
+        success: false,
+        output: 'grader exited before writing a verdict',
+        exitCode: 1,
+      });
+      const log = vi.fn();
+      const runner = new DefaultStepRunner(
+        { invoke, invokeInteractive: vi.fn().mockResolvedValue(undefined) },
+        'session-1',
+        dir,
+        {
+          gitRunner: makeGitRunner(dir),
+          planPath,
+          pipelineDir: join(dir, '.pipeline'),
+          log,
+        },
+      );
+
+      const result = await runner.run('build_review', emptyState);
+      const output = result.output ?? '';
+
+      expect(result.success).toBe(false);
+      expect(output).toContain('Task 3');
+      expect(output).toContain(sha);
+      expect(output).toContain('artifacts.ts');
+      expect(output).toContain('changelog-pr-finalizer-cli.ts');
+      expect(output.endsWith('grader exited before writing a verdict')).toBe(true);
+      expect(log.mock.calls.flat().join('\n')).toContain('artifacts.ts');
+      expect(log.mock.calls.flat().join('\n')).toContain('changelog-pr-finalizer-cli.ts');
+      const sidecar = JSON.parse(await readFile(
+        join(dir, '.pipeline/containment-floor.json'),
+        'utf-8',
+      )) as { violations: Array<{ taskId: string; sha: string; paths: string[] }> };
+      expect(sidecar.violations).toEqual([{
+        taskId: '3',
+        sha,
+        paths: ['artifacts.ts', 'changelog-pr-finalizer-cli.ts'],
+      }]);
+    });
 
     it('preserves observed intervals through the build-review scalar adapter', async () => {
       const observedIntervals = [{ startedAtMs: 500, durationMs: 45 }];

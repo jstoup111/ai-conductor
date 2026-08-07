@@ -14,10 +14,15 @@ import type { BuildReviewInputs } from './build-review-inputs.js';
  * (diff + plan body only).
  */
 export function buildGraderPrompt(inputs: BuildReviewInputs): string {
-  const { diff, planBody, repairContext = [] } = inputs;
+  const { diff, planBody, repairContext = [], acceptedWidenings = [] } = inputs;
   const renderedRepairContext = repairContext.length > 0
     ? repairContext.map((repair) =>
         `- ${repair.id} [${repair.reason}]: ${repair.diagnostic}`,
+      ).join('\n')
+    : '(none)';
+  const renderedAcceptedWidenings = acceptedWidenings.length > 0
+    ? acceptedWidenings.map((widening) =>
+        `- Path: ${widening.path}\n  Rationale: ${widening.rationale}\n  Task ${widening.taskId}\n  Commit SHA: ${widening.sha}`,
       ).join('\n')
     : '(none)';
 
@@ -86,5 +91,13 @@ ${planBody}
 ## Engine-recorded rebase repair context
 
 ${renderedRepairContext}
+
+## Engine-accepted scope widenings
+
+These commit-local widenings passed the containment evaluator and are explicit
+evidence, not exemptions, for the Scope rubric. Judge whether each rationale
+actually justifies the widened path:
+
+${renderedAcceptedWidenings}
 `;
 }

@@ -77,12 +77,13 @@ intentional widening. It is not an operator workflow; worktree provisioning wire
 
 | Exit | Meaning | Hook behavior |
 | --- | --- | --- |
-| 0 | Allowed, including a verified violation in the shipped report-only mode | Allows the commit; a reported violation remains visible to the containment floor and `build_review` |
-| 2 | Positive scope refusal after the future enforcement flip | `commit-msg` converts it to exit 1 and blocks the commit |
+| 0 | Allowed, including a verified violation in the default report-only mode | Allows the commit; a reported violation remains visible in containment-floor step output and warnings |
+| 2 | Positive scope refusal when `build_review.scopeContainmentEnforced` is `true` | `commit-msg` converts it to exit 1 and blocks the commit without changing the working tree or index |
 | other | Abstention: no Task trailer, unusable/missing task state, or a checker failure | Logs the abstention and allows the commit |
 
-The report-only default is deliberate: enforcement changes only after live containment-floor evidence supports
-the flip. A `Scope:` trailer documents a widening; it never bypasses `build_review`'s semantic scope judgment.
+The report-only default is deliberate. Set `build_review.scopeContainmentEnforced: true` to enable refusal.
+A `Scope:` trailer documents a widening; its path, rationale, task id, and commit SHA are supplied directly to
+`build_review`, and it never bypasses the grader's semantic scope judgment.
 
 ## `conduct-ts inline`
 
