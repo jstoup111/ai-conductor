@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { classifyBuildSettle } from '../../src/engine/build-outcome.js';
+import {
+  classifyBuildSettle,
+  sameNoOpCycle,
+  type BuildOutcomeRecord,
+} from '../../src/engine/build-outcome.js';
+
+const priorOutcome = (overrides: Partial<BuildOutcomeRecord> = {}): BuildOutcomeRecord => ({
+  outcome: 'no-movement',
+  terminalOutcome: 'done',
+  gate: 'wiring_check',
+  treeBefore: 'tree-0',
+  treeAfter: 'tree-1',
+  headBefore: 'head-0',
+  headAfter: 'head-1',
+  verdict: false,
+  rung: { model: 'gpt-5.6-terra', effort: 'medium' },
+  ...overrides,
+});
 
 describe('classifyBuildSettle', () => {
   it.each([
@@ -20,5 +37,24 @@ describe('classifyBuildSettle', () => {
     expect(
       classifyBuildSettle({ treeBefore, treeAfter, resolvedBefore: 2, resolvedAfter: 3 }),
     ).toBe('no-movement');
+  });
+
+  it.each([
+    ['matches a prior no-movement outcome', priorOutcome(), true],
+    ['rejects a different tree', priorOutcome({ treeAfter: 'tree-2' }), false],
+    ['rejects a different gate', priorOutcome({ gate: 'test_suite' }), false],
+    ['rejects a different verdict', priorOutcome({ verdict: true }), false],
+    ['rejects a different rung', priorOutcome({ rung: { model: 'gpt-5.6-terra', effort: 'high' } }), false],
+    ['rejects a prior moved outcome', priorOutcome({ outcome: 'moved' }), false],
+    ['rejects an absent prior outcome', null, false],
+  ] as const)('%s', (_description, prior, expected) => {
+    expect(
+      sameNoOpCycle(prior, {
+        gate: 'wiring_check',
+        treeHash: 'tree-1',
+        verdict: false,
+        rung: { model: 'gpt-5.6-terra', effort: 'medium' },
+      }),
+    ).toBe(expected);
   });
 });

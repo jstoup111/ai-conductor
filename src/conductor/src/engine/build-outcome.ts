@@ -34,6 +34,13 @@ export interface ClassifyBuildSettleInput {
   resolvedAfter: number;
 }
 
+export interface NoOpCycleInput {
+  gate: string;
+  treeHash: string;
+  verdict: boolean;
+  rung: BuildOutcomeRung;
+}
+
 /** Classifies the tree/resolved-work movement observed during a build settle. */
 export function classifyBuildSettle({
   treeBefore,
@@ -45,4 +52,18 @@ export function classifyBuildSettle({
   if (treeBefore !== null && treeAfter !== null && treeBefore !== treeAfter) return 'moved';
   if (resolvedAfter > resolvedBefore) return 'moved';
   return 'no-movement';
+}
+
+/** Returns whether a prior build settled without movement for this exact cycle. */
+export function sameNoOpCycle(
+  prior: BuildOutcomeRecord | null,
+  current: NoOpCycleInput,
+): boolean {
+  return prior !== null
+    && prior.outcome === 'no-movement'
+    && prior.gate === current.gate
+    && prior.treeAfter === current.treeHash
+    && prior.verdict === current.verdict
+    && prior.rung.model === current.rung.model
+    && prior.rung.effort === current.rung.effort;
 }
