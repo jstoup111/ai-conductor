@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  DEFAULT_SCOPE_CHECK_ENFORCEMENT,
   detectScopeCheckCommand,
   runScopeCheck,
 } from '../../src/engine/scope-check-cli.js';
@@ -17,6 +18,10 @@ const TASK_STATUS = JSON.stringify({
 });
 
 describe('scope-check CLI', () => {
+  it('ships report-only scope checking by default', () => {
+    expect(DEFAULT_SCOPE_CHECK_ENFORCEMENT).toBe(false);
+  });
+
   it('detects the commit-message path for the dispatcher', () => {
     expect(
       detectScopeCheckCommand(['node', 'conduct-ts', 'scope-check', '/tmp/COMMIT_EDITMSG']),
@@ -41,7 +46,7 @@ describe('scope-check CLI', () => {
     expect(output).toEqual([]);
   });
 
-  it('refuses every undeclared path with copy-pasteable Scope trailers and no deletion advice', async () => {
+  it('reports every undeclared path in the shipped report-only mode with copy-pasteable Scope trailers and no deletion advice', async () => {
     const output: string[] = [];
 
     await expect(
@@ -56,7 +61,7 @@ describe('scope-check CLI', () => {
         ],
         print: (message) => output.push(message),
       }),
-    ).resolves.toBe(2);
+    ).resolves.toBe(0);
 
     expect(output.join('\n')).toContain('Task 3');
     expect(output.join('\n')).toContain('src/conductor/src/engine/artifacts.ts');
@@ -66,29 +71,52 @@ describe('scope-check CLI', () => {
     expect(output.join('\n').toLowerCase()).not.toContain('delete');
   });
 
-  it.each([
-    ['missing Task trailer', 'feat(engine): no task\n', TASK_STATUS],
-    ['missing task-status data', MESSAGE, undefined],
-    ['a malformed task-status file', MESSAGE, '{'],
-    ['a stale task row', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] })],
-  ])('abstains on %s', async (_name, message, status) => {
+  it('refuses every undeclared path when enforcement is enabled', async () => {
     const output: string[] = [];
 
     await expect(
       runScopeCheck({
         projectRoot: '/repo',
         commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
-        readFile: async (path) => {
-          if (path.endsWith('task-status.json')) {
-            if (status === undefined) throw new Error('ENOENT');
-            return status;
-          }
-          return message;
-        },
+        enforce: true,
+        readFile: async (path) =>
+          path.endsWith('task-status.json') ? TASK_STATUS : MESSAGE,
         stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
-        print: (line) => output.push(line),
+        print: (message) => output.push(message),
       }),
-    ).resolves.toBe(1);
+    ).resolves.toBe(2);
+
+    expect(output).toHaveLength(1);
+    expect(output[0]).toContain('Task 3');
+    expect(output[0]).toContain('src/conductor/src/engine/artifacts.ts');
+  });
+
+  it.each([
+    ['missing Task trailer', 'feat(engine): no task\n', TASK_STATUS],
+    ['missing task-status data', MESSAGE, undefined],
+    ['a malformed task-status file', MESSAGE, '{'],
+    ['a stale task row', MESSAGE, JSON.stringify({ tasks: [{ id: '3', status: 'completed', files: ['config.ts'] }] })],
+  ])('abstains silently on %s in either mode', async (_name, message, status) => {
+    const output: string[] = [];
+
+    for (const enforce of [false, true]) {
+      await expect(
+        runScopeCheck({
+          projectRoot: '/repo',
+          commitMessagePath: '/repo/.git/COMMIT_EDITMSG',
+          enforce,
+          readFile: async (path) => {
+            if (path.endsWith('task-status.json')) {
+              if (status === undefined) throw new Error('ENOENT');
+              return status;
+            }
+            return message;
+          },
+          stagedPaths: async () => ['src/conductor/src/engine/artifacts.ts'],
+          print: (line) => output.push(line),
+        }),
+      ).resolves.toBe(1);
+    }
 
     expect(output).toEqual([]);
   });

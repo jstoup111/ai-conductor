@@ -11,6 +11,12 @@ export interface ScopeCheckCommand {
   commitMessagePath: string;
 }
 
+/**
+ * The resolved shipped default. Flip this single value only after live
+ * containment-floor evidence supports enforcing scope refusals.
+ */
+export const DEFAULT_SCOPE_CHECK_ENFORCEMENT = false;
+
 /** Recognize the hook-only `conduct-ts scope-check <commit-message>` command. */
 export function detectScopeCheckCommand(argv: string[]): ScopeCheckCommand | null {
   if (argv[2] !== 'scope-check' || !argv[3]) return null;
@@ -20,6 +26,11 @@ export function detectScopeCheckCommand(argv: string[]): ScopeCheckCommand | nul
 export interface ScopeCheckDependencies {
   projectRoot: string;
   commitMessagePath: string;
+  /**
+   * Resolved containment enforcement mode. The shipped default is report-only
+   * until live containment-floor evidence earns the one-line enforcement flip.
+   */
+  enforce?: boolean;
   readFile?: (path: string) => Promise<string>;
   stagedPaths?: () => Promise<string[]>;
   print?: (message: string) => void;
@@ -28,8 +39,9 @@ export interface ScopeCheckDependencies {
 /**
  * Check a staged commit against its Task trailer's declared paths.
  *
- * Exit 0 means positively allowed; 2 means positively refused; every other
- * value is intentionally an abstention so the shell hook can fail open.
+ * Exit 0 means allowed (including a report-only violation); 2 means positively
+ * refused; every other value is intentionally an abstention so the shell hook
+ * can fail open.
  */
 export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<number> {
   try {
@@ -60,7 +72,8 @@ export async function runScopeCheck(deps: ScopeCheckDependencies): Promise<numbe
     if (result.allowed) return 0;
 
     (deps.print ?? console.error)(renderScopeRefusal(result.taskId, result.offendingPaths));
-    return 2;
+    const enforce = deps.enforce ?? DEFAULT_SCOPE_CHECK_ENFORCEMENT;
+    return enforce ? 2 : 0;
   } catch {
     return 1;
   }
