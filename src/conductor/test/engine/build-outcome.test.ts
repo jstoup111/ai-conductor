@@ -15,7 +15,9 @@ vi.mock('node:fs/promises', async (importOriginal) => {
 import { rename } from 'node:fs/promises';
 import {
   classifyBuildSettle,
+  inferBuildOutcomeCategory,
   readBuildOutcome,
+  resolveBuildOutcomeCategory,
   sameNoOpCycle,
   writeBuildOutcome,
   type BuildOutcomeRecord,
@@ -159,6 +161,23 @@ describe('readBuildOutcome', () => {
     } finally {
       warnSpy.mockRestore();
     }
+  });
+});
+
+describe('build outcome category', () => {
+  let dir: string;
+
+  beforeEach(async () => { dir = await mkdtemp(join(tmpdir(), 'build-outcome-category-')); });
+  afterEach(async () => { await rm(dir, { recursive: true, force: true }); });
+
+  it('prefers a valid declared dispute category and falls back safely', async () => {
+    await mkdir(join(dir, '.pipeline'), { recursive: true });
+    await writeFile(join(dir, '.pipeline', 'build-dispute.json'), JSON.stringify({ category: 'belongs-to-decide' }));
+    await expect(resolveBuildOutcomeCategory(dir, ['the gate is wrong'])).resolves.toBe('belongs-to-decide');
+    await writeFile(join(dir, '.pipeline', 'build-dispute.json'), 'broken');
+    await expect(resolveBuildOutcomeCategory(dir, ['this needs a decision'])).resolves.toBe('belongs-to-decide');
+    await expect(resolveBuildOutcomeCategory(dir)).resolves.toBe('silent-no-movement');
+    expect(inferBuildOutcomeCategory(['the gate is stale'])).toBe('disputes-gate');
   });
 });
 
