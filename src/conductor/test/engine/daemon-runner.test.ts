@@ -894,6 +894,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         status: 'error',
         teardownKeep: true,
         parkMarkerExists: true,
+        containsParkedClaim: true,
       },
     },
     {
@@ -902,11 +903,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         featureDeps.readOutcome = async () => ({ done: false, halted: false });
       },
       expected: {
-        haltFirstLine: 'feature errored — parked for human inspection',
+        haltFirstLine: 'feature errored — will re-dispatch on the next scan',
         haltClass: 'needs-human',
         status: 'error',
         teardownKeep: true,
         parkMarkerExists: false,
+        containsParkedClaim: false,
       },
     },
     {
@@ -920,11 +922,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         });
       },
       expected: {
-        haltFirstLine: 'feature errored — parked for human inspection',
+        haltFirstLine: 'feature errored — will re-dispatch on the next scan',
         haltClass: 'needs-human',
         status: 'halted',
         teardownKeep: true,
         parkMarkerExists: false,
+        containsParkedClaim: false,
       },
     },
     {
@@ -935,11 +938,12 @@ describe('engine/daemon-runner — makeRunFeature', () => {
         };
       },
       expected: {
-        haltFirstLine: 'feature errored — parked for human inspection',
+        haltFirstLine: 'feature errored — will re-dispatch on the next scan',
         haltClass: 'needs-human',
         status: 'error',
         teardownKeep: true,
         parkMarkerExists: false,
+        containsParkedClaim: false,
       },
     },
   ])('characterizes $site termination behavior', async ({ configure, expected }) => {
@@ -958,6 +962,7 @@ describe('engine/daemon-runner — makeRunFeature', () => {
 
       expect({
         haltFirstLine: halt.split('\n', 1)[0],
+        containsParkedClaim: halt.includes('feature parked — will not re-dispatch on the next scan'),
         haltClass: await readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),
         status: outcome.status,
         teardownKeep: rec.teardownKeep,
@@ -968,6 +973,27 @@ describe('engine/daemon-runner — makeRunFeature', () => {
       }).toEqual({
         ...expected,
       });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('a non-park termination preserves an existing operator park marker', async () => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-operator-park-'));
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    const operatorMarker = 'parked by operator: awaiting environment repair\n';
+    try {
+      await mkdir(join(projectRoot, '.daemon', 'parked'), { recursive: true });
+      await mkdir(worktreePath, { recursive: true });
+      await writeFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), operatorMarker, 'utf-8');
+      const featureDeps = deps({ done: false, halted: false });
+      featureDeps.projectRoot = projectRoot;
+      featureDeps.createWorktree = async (slug) => ({ path: worktreePath, branch: `feat/${slug}` });
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+
+      expect(outcome.status).toBe('error');
+      expect(await readFile(join(projectRoot, '.daemon', 'parked', ITEM.slug), 'utf-8')).toBe(operatorMarker);
     } finally {
       await rm(projectRoot, { recursive: true, force: true });
     }
