@@ -238,7 +238,7 @@ describe('Story 3 — project-owned aggregate operation (FR-9, FR-10)', () => {
     });
     expect(template).toMatch(/test_suite:[\s\S]*command:[^\n]*npm test[\s\S]*working_directory:/i);
     expect(JSON.parse(packageJson).scripts.test).toBe(
-      "vitest run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'",
+      "sh -c \"vitest run --reporter=dot --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
     );
     expect(vitestConfig).toMatch(/include:[^\n]*test\/\*\*\/\*\.test\.ts/);
     expect(vitestConfig).toMatch(/pool:\s*'forks'/);

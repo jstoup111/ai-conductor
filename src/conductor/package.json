@@ -8,8 +8,8 @@
   },
   "scripts": {
     "build": "node scripts/publish-engine.mjs",
-    "test": "vitest run --reporter=dot --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'",
-    "test:changed": "vitest run --reporter=dot --changed --silent --slowTestThreshold=1800000 && echo 'AGGREGATE_TEST_SUITE_PASS'",
+    "test": "sh -c \"vitest run --reporter=dot --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
+    "test:changed": "sh -c \"vitest run --reporter=dot --changed --silent --slowTestThreshold=1800000 \\\"\\$@\\\" && echo 'AGGREGATE_TEST_SUITE_PASS'\" --",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "typecheck:test": "tsc -p tsconfig.test.json",
