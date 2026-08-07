@@ -9,13 +9,20 @@ export interface ScopeTrailer {
  * A widening is intentionally scoped to one commit message; callers must pass
  * the parsed trailers only while evaluating that commit's staged paths.
  */
-export function parseScopeTrailers(commitMessage: string): ScopeTrailer[] {
+export function parseScopeTrailers(
+  commitMessage: string,
+  stagedPaths?: readonly string[],
+): ScopeTrailer[] {
   return commitMessage
     .split('\n')
     .flatMap((line) => {
-      const match = line.match(/^Scope:\s+(.+?)\s+(?:—|-)\s+(.+)$/);
+      const match = line.match(/^Scope:\s+(\S.*?)\s+(?:—|-)\s+(\S.*)$/);
       if (match === null) return [];
 
-      return [{ path: match[1], rationale: match[2] }];
+      const path = match[1].trim();
+      const rationale = match[2].trim();
+      if (stagedPaths !== undefined && !stagedPaths.includes(path)) return [];
+
+      return [{ path, rationale }];
     });
 }

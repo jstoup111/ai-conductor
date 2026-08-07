@@ -97,6 +97,32 @@ describe('evaluateScopeContainment', () => {
     ).toEqual({ allowed: true });
   });
 
+  it('refuses only an undeclared staged path when another staged path is widened', () => {
+    expect(
+      evaluateScopeContainment({
+        stagedPaths: [
+          'src/conductor/src/index.ts',
+          'src/conductor/src/engine/artifacts.ts',
+        ],
+        task: {
+          id: '6',
+          status: 'in_progress',
+          files: ['src/conductor/src/engine/scope-trailer.ts'],
+        },
+        scopeTrailers: [
+          {
+            path: 'src/conductor/src/index.ts',
+            rationale: 'registers the command',
+          },
+        ],
+      }),
+    ).toEqual({
+      allowed: false,
+      taskId: '6',
+      offendingPaths: ['src/conductor/src/engine/artifacts.ts'],
+    });
+  });
+
   it.each([
     {
       name: 'no task declares Files anywhere',
