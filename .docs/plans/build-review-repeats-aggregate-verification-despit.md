@@ -8,6 +8,29 @@
 **Conflict check:** Clean as of 2026-08-01 (0 blocking; 4 degrading items folded into tasks below)
 **Intake:** jstoup111/ai-conductor#1173
 
+## Amendments
+
+**Amendment 1 — 2026-08-07, operator-authorized (DECIDE-owned).** This plan explicitly authorizes
+the correction of its own `**Wired-into:**` declarations recorded below, and any diff that carries
+only that correction is in scope for this plan.
+
+As authored, three anchors named call sites the wiring probe can never resolve, so `wiring_check`
+could not pass and BUILD could not legally fix it — BUILD may not rewrite an approved plan (#1306;
+#1190 is the durable DECIDE-time validator). The anchors were wrong as authored, not made wrong by
+the implementation; each correction was verified against the shipped source at this HEAD:
+
+| Task | As authored | Corrected to | Why the original could never resolve |
+|---|---|---|---|
+| 1 | `src/conductor/src/engine/config.ts#validateTestSuite` | `src/conductor/src/engine/config.ts#validateTestSuiteBlock` | No symbol named `validateTestSuite` has ever existed; the declaration is `validateTestSuiteBlock` (`config.ts:1191`, called at `config.ts:679`). |
+| 16 | `.ai-conductor/config.yml#test_suite.command` | `src/conductor/src/engine/full-suite-executor.ts#testSuite.command` | A YAML config key is not a code symbol; the probe searches file text for a declaration. The consuming code reads `testSuite.command` at `full-suite-executor.ts:325`. |
+| 18 | `src/conductor/src/engine/step-runners.ts#dispatchBuildReview` | `src/conductor/src/engine/step-runners.ts#DefaultStepRunner.runBuildReview` | No symbol named `dispatchBuildReview` exists; the dispatch method is `DefaultStepRunner.runBuildReview` (`step-runners.ts:1656`, called at `step-runners.ts:525`). |
+
+**Not authorized: `skills/finish/SKILL.md`.** Commit `d65d46042` also added "Only an
+`EXECUTED PASS` or `REUSED PASS` result satisfies this boundary." to the finish aggregate-verifier
+boundary. No task owns that file, no test asserts the sentence, and the token contract it restates
+already exists on the default branch at `skills/conduct/SKILL.md:256`. This plan does not adopt it;
+the line is reverted as out-of-scope rather than re-planned.
+
 ## Summary
 
 Give the scoped test path an engine-owned invocation surface so a scoped request can never widen
