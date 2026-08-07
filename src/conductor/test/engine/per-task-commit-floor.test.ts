@@ -160,6 +160,20 @@ describe('per-task-commit-floor', () => {
     expect(report).toMatchObject({ satisfied: true, violations: [] });
   });
 
+  it('abstains when a task has only a fallback prose path and no explicit Files declaration', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n- `fallback.ts`\n');
+    await writeFile(join(dir, 'other.ts'), 'x');
+    await execa('git', ['add', 'other.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'unconstrained\n\nTask: 3'], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({ satisfied: true, violations: [] });
+    expect(report.skipNotes).toEqual([
+      'containment-floor: plan contains no explicit Files declarations',
+    ]);
+  });
+
   it('reports the Task trailer id, commit sha, and undeclared changed path', async () => {
     await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
     await writeFile(join(dir, 'undeclared.ts'), 'x');

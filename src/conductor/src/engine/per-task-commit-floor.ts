@@ -121,9 +121,12 @@ export async function runContainmentFloor(args: {
     }
 
     const planText = await readFile(args.planPath, 'utf-8');
-    const taskPaths = parsePlanTaskPaths(planText);
+    const parsedTaskPaths = parsePlanTaskPaths(planText);
+    const taskPaths = new Map(
+      [...parsedTaskPaths.entries()].filter(([id]) => parsedTaskPaths.declaredTaskIds.has(id)),
+    );
     if (taskPaths.size === 0) {
-      return skippedContainmentFloor('plan contains no parseable task declarations');
+      return skippedContainmentFloor('plan contains no explicit Files declarations');
     }
     const tasksByCanonicalId = new Map(
       [...taskPaths.entries()].map(([id, files]) => [canonicalTaskId(id), { id, files: [...files] }]),
