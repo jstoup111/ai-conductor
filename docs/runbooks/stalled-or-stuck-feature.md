@@ -588,6 +588,41 @@ never modifies `task-status.json`.
    ```
 3. Clear the halt (next section).
 
+### The halt refused a DECIDE entry
+
+**Symptom:** `.pipeline/HALT` begins `DECIDE entry refused` and `.pipeline/HALT.class` is
+`needs-human`. The body names the source gate, requested target, evidence, and why autonomous entry
+was refused. The daemon will not re-kick this class of halt.
+
+**Recovery:** Read that body first. Correct an unknown target, missing artifact, or wrong routing before
+authorizing anything. When the named DECIDE authoring pass is the intended operator decision, run these
+commands from the main repository checkout:
+
+```bash
+conduct-ts decide-grant --slug <slug> --step <target-from-HALT> \
+  --reason "<why this one DECIDE entry is approved>"
+rm -f .worktrees/<slug>/.pipeline/HALT .worktrees/<slug>/.pipeline/HALT.class
+```
+
+The first command writes a durable grant for only that target. The conductor consumes it immediately
+before provider dispatch, so it cannot authorize another DECIDE step or a later retry. Do not create or
+edit `.pipeline/decide-grant.json` by hand.
+
+**Clearing the HALT alone does not authorize entry.** Without a valid matching grant, the next poll
+writes the same `needs-human` HALT and launches no provider. A grant for `plan`, for example, does not
+authorize `stories`.
+
+**Verification:** After the daemon resumes, confirm the one-use artifact was consumed and then inspect
+the result of the named step:
+
+```bash
+test ! -e .worktrees/<slug>/.pipeline/decide-grant.json
+conduct-ts daemon logs | grep '\[<slug>\]'
+```
+
+If the grant remains, the feature did not enter the authorized step; re-read the HALT rather than
+clearing it again.
+
 ### The halt is a protected-artifact violation
 
 Do not delete or edit `.pipeline/protected-artifact-seal.json`. The engine rebaselines a stale seal
