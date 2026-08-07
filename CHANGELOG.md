@@ -18,6 +18,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Plan authoring and land now block a task that would hand BUILD a mutation to another feature's sealed DECIDE artifact, routing that amendment back to its owning DECIDE step instead. ([implementation PR #1303](https://github.com/jstoup111/ai-conductor/pull/1303)).
 - The self-host version freeze can track a branch's current VERSION via "latest" or "branch:<name>" instead of only a pinned semver string. ([implementation PR #1058](https://github.com/jstoup111/ai-conductor/pull/1058)).
 - The daemon dashboard now shows a NEVER-STARTED section for worktrees with no pipeline state, distinguishes retained-worktree exclusion reasons (open/closed/unknown PR state, missing PR reference), and prints a concrete remedy for every excluded row. ([implementation PR #1338](https://github.com/jstoup111/ai-conductor/pull/1338)).
+- The daemon now refuses to re-dispatch a build after a wiring-check kickback that would repeat an already-observed no-op build cycle, halting immediately instead of burning a turn, and annotates build completion log lines with the observed tree-hash movement. ([implementation PR #1350](https://github.com/jstoup111/ai-conductor/pull/1350)).
 
 ### Changed
 
