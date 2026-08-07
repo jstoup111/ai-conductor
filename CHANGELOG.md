@@ -11,7 +11,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 
 ## [Unreleased]
 
-## [0.100.0] - 2026-08-06
+## [0.100.0] - 2026-08-07
 
 ### Added
 
@@ -46,6 +46,7 @@ branches never edit either file (see `docs/contributing/releases.md`).
 - Merged specs whose plan uses an inline-code, linked, or annotated `**Stories:**` reference now resolve and dispatch instead of being silently dropped; `conduct-ts daemon status` lists blocked specs with reason and remedy; and a `## Migration` section that ends a PR body no longer parses as malformed release metadata. ([implementation PR #1337](https://github.com/jstoup111/ai-conductor/pull/1337)).
 - The /stories skill now requires machine-parseable story IDs, preserving per-story validation, plan coverage, and coherence checks. ([implementation PR #1341](https://github.com/jstoup111/ai-conductor/pull/1341)).
 - FINISH now re-enters immediately after a verified publication transition instead of spending step retry budget or escalation, bounded to 12 transitions per FINISH entry with a dedicated needs-human halt if publication still hasn't converged. ([implementation PR #1345](https://github.com/jstoup111/ai-conductor/pull/1345)).
+- The live daemon E2E build step now dispatches a real, credentialed agent and the engine halts deterministically with a clear diagnostic when a step's slash command is unresolved by the provider's skill catalog, instead of the step silently reporting an artifactless success. ([implementation PR #1319](https://github.com/jstoup111/ai-conductor/pull/1319)).
 
 ## [0.99.20] - 2026-08-03
 
