@@ -192,6 +192,11 @@ import {
   readBuildOutcome,
   writeBuildOutcome,
 } from './build-outcome.js';
+import type { BuildOutcomeStore } from './build-outcome.js';
+
+async function writeBuildOutcomeBestEffort(projectRoot: string, outcome: BuildOutcomeStore): Promise<void> {
+  await writeBuildOutcome(projectRoot, outcome).catch(() => {});
+}
 import type { Track } from '../types/index.js';
 import {
   resolveStepConfig,
@@ -5425,7 +5430,7 @@ export class Conductor {
                 countResolvedTasks(this.projectRoot),
               ]);
               const outcomeStore = await readBuildOutcome(this.projectRoot);
-              await writeBuildOutcome(this.projectRoot, {
+              await writeBuildOutcomeBestEffort(this.projectRoot, {
                 ...outcomeStore,
                 records: [
                   ...outcomeStore.records,
@@ -6499,7 +6504,7 @@ export class Conductor {
               countResolvedTasks(this.projectRoot),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
-            await writeBuildOutcome(this.projectRoot, {
+            await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
               records: [
                 ...outcomeStore.records,
@@ -7637,7 +7642,7 @@ export class Conductor {
               countResolvedTasks(this.projectRoot),
             ]);
             const outcomeStore = await readBuildOutcome(this.projectRoot);
-            await writeBuildOutcome(this.projectRoot, {
+            await writeBuildOutcomeBestEffort(this.projectRoot, {
               ...outcomeStore,
               records: [
                 ...outcomeStore.records,
