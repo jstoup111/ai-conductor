@@ -49,6 +49,8 @@ describe('renderDaemonEvent', () => {
       .toEqual(['·   build ✓ done (tree unknown)']);
     expect(lines({ type: 'step_completed', step: 'plan', status: 'done', treeBefore: 'abc', treeAfter: 'def' }))
       .toEqual(['·   plan ✓ done']);
+    expect(lines({ type: 'step_completed', step: 'build', status: 'done', treeBefore: 'abc123456' }))
+      .toEqual(['·   build ✓ done']);
   });
 
   it('renders deterministic build verification group boundaries', () => {

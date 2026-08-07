@@ -2063,7 +2063,7 @@ function renderDaemonEventUnsafe(event: ConductorEvent, log: (msg: string) => vo
     case 'step_completed':
       {
         let treeAnnotation = '';
-        if (event.step === 'build' && (event.treeBefore !== undefined || event.treeAfter !== undefined)) {
+        if (event.step === 'build' && event.treeBefore !== undefined && event.treeAfter !== undefined) {
           if (event.treeBefore === null || event.treeAfter === null) {
             treeAnnotation = ' (tree unknown)';
           } else if (event.treeBefore === event.treeAfter) {
