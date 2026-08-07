@@ -21,7 +21,7 @@ let fixtureRoot: string;
 let runnerArgvPath: string;
 
 async function invokeScript(script: 'test' | 'test:changed', selectors: string[]) {
-  return execa('npm', ['run', script, '--', ...selectors], {
+  return execa('npm', ['run', '--silent', script, '--', ...selectors], {
     cwd: fixtureRoot,
     env: {
       ...process.env,

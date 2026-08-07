@@ -102,7 +102,7 @@ code. No task records the release note: implementation branches never write `CHA
 - `src/conductor/src/engine/config.ts` — add the key to the `test_suite` allowed set
 - `src/conductor/test/engine/config.test.ts` — key present and key absent both validate
 
-**Wired-into:** `src/conductor/src/engine/config.ts#validateTestSuite`
+**Wired-into:** `src/conductor/src/engine/config.ts#validateTestSuiteBlock`
 **Dependencies:** none
 
 ### Task 2: Reject a scoped-run template with no selector placeholder
@@ -387,7 +387,7 @@ code. No task records the release note: implementation branches never write `CHA
 - `src/conductor/test/acceptance/full-suite-verification-gate.acceptance.test.ts` — update the pinned
   script string at `:241` (conflict F3)
 
-**Wired-into:** `.ai-conductor/config.yml#test_suite.command`
+**Wired-into:** `src/conductor/src/engine/full-suite-executor.ts#testSuite.command`
 **Dependencies:** Task 1
 
 ### Task 17: Prove forwarded arguments reach the runner and failures still fail
@@ -426,7 +426,7 @@ code. No task records the release note: implementation branches never write `CHA
 - `src/conductor/src/engine/build-review-prompt.ts` — instruction paragraph
 - `src/conductor/test/engine/build-review-prompt.test.ts` — interface named, stale clause gone
 
-**Wired-into:** `src/conductor/src/engine/step-runners.ts#dispatchBuildReview`
+**Wired-into:** `src/conductor/src/engine/step-runners.ts#DefaultStepRunner.runBuildReview`
 **Dependencies:** Task 13
 
 ### Task 19: Prove grader input isolation survives and the fallback triggers are intact

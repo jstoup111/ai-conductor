@@ -54,9 +54,8 @@ normal model. This is an orchestration instruction, not a separate conductor ste
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
-3. The agent derives the selectors for the scoped union and runs
-   `conduct-ts scoped-run <selectors...>`, retaining the test under change as
-   an expected failing member
+3. The agent derives selectors, retains the test under change as an expected failing member,
+   and runs the scoped union of affected tests through `conduct-ts scoped-run <selectors...>`
 4. Confirm that the test under change fails for the expected reason and every
    other affected test passes
 5. Paste the expected failure output

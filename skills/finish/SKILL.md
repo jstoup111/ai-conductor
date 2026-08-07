@@ -35,6 +35,7 @@ configured aggregate verifier for current completion evidence. It reuses a
 current passing result; when evidence is missing or stale, the verifier obtains
 the required current result. A previous session's report, marker, or provider
 response does not substitute for current repository and external evidence.
+Only an `EXECUTED PASS` or `REUSED PASS` result satisfies this boundary.
 
 When that verifier exits non-zero, the coordinator **STOP**s before any choice
 or options and leaves `.pipeline/finish-choice` unwritten. It preserves the
