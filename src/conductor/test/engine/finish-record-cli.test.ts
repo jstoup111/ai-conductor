@@ -1165,7 +1165,7 @@ describe('engine/finish-record-cli', () => {
     it('index.ts imports and dispatches detectFinishRecordCommand/dispatchFinishRecord adjacent to shipped-record', async () => {
       const src = await readFile(new URL('../../src/index.ts', import.meta.url), 'utf8');
       expect(src).toMatch(
-        /import\s*\{\s*detectFinishRecordCommand,\s*dispatchFinishRecord,\s*makeProductionFinishRecordRunners,?\s*\}\s*from\s*['"]\.\/engine\/finish-record-cli\.js['"]/,
+        /import\s*\{(?=[^}]*\bdetectFinishRecordCommand\b)(?=[^}]*\bdispatchFinishRecord\b)(?=[^}]*\bmakeProductionFinishRecordRunners\b)[^}]*\}\s*from\s*['"]\.\/engine\/finish-record-cli\.js['"]/,
       );
       expect(src).toMatch(/detectFinishRecordCommand\(process\.argv\)/);
       expect(src).toMatch(
