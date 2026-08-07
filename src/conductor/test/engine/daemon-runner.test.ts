@@ -593,6 +593,101 @@ describe('engine/daemon-runner — makeRunFeature', () => {
     }
   });
 
+  it.each([
+    {
+      site: 'triage park',
+      configure: (featureDeps: FeatureRunnerDeps) => {
+        featureDeps.daemon = true;
+        featureDeps.prepareWorktree = async () => {
+          throw new SetupFailureError('setup failed', 'setup triage parked this feature');
+        };
+        featureDeps.runSetupTriage = async () => ({
+          kind: 'park',
+          outputTail: 'setup triage parked this feature',
+        });
+      },
+      expected: {
+        haltFirstLine: 'feature errored — parked for human inspection',
+        haltClass: 'needs-human',
+        status: 'error',
+        teardownKeep: true,
+      },
+    },
+    {
+      site: 'no DONE/HALT outcome',
+      configure: (featureDeps: FeatureRunnerDeps) => {
+        featureDeps.readOutcome = async () => ({ done: false, halted: false });
+      },
+      expected: {
+        haltFirstLine: 'feature errored — parked for human inspection',
+        haltClass: 'needs-human',
+        status: 'error',
+        teardownKeep: true,
+      },
+    },
+    {
+      site: 'false-ship guard',
+      configure: (featureDeps: FeatureRunnerDeps) => {
+        featureDeps.readOutcome = async () => ({
+          done: true,
+          halted: false,
+          finishChoice: 'keep',
+          prUrl: 'https://github.com/owner/repo/pull/123',
+        });
+      },
+      expected: {
+        haltFirstLine: 'feature errored — parked for human inspection',
+        haltClass: 'needs-human',
+        status: 'halted',
+        teardownKeep: true,
+      },
+    },
+    {
+      site: 'caught thrown runtime failure',
+      configure: (featureDeps: FeatureRunnerDeps) => {
+        featureDeps.runConductor = async () => {
+          throw new Error('runtime dispatch failure');
+        };
+      },
+      expected: {
+        haltFirstLine: 'feature errored — parked for human inspection',
+        haltClass: 'needs-human',
+        status: 'error',
+        teardownKeep: true,
+      },
+    },
+  ])('characterizes $site as an unparked termination today', async ({ configure, expected }) => {
+    const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-termination-boundary-'));
+    const worktreePath = join(projectRoot, '.worktrees', ITEM.slug);
+    const rec: TestRecorder = {};
+    try {
+      await mkdir(worktreePath, { recursive: true });
+      const featureDeps = deps({ done: false, halted: false }, rec);
+      featureDeps.projectRoot = projectRoot;
+      featureDeps.createWorktree = async (slug) => ({ path: worktreePath, branch: `feat/${slug}` });
+      configure(featureDeps);
+
+      const outcome = await makeRunFeature(featureDeps)(ITEM);
+      const halt = await readFile(join(worktreePath, '.pipeline', 'HALT'), 'utf-8');
+
+      expect({
+        haltFirstLine: halt.split('\n', 1)[0],
+        haltClass: await readFile(join(worktreePath, '.pipeline', 'HALT.class'), 'utf-8'),
+        status: outcome.status,
+        teardownKeep: rec.teardownKeep,
+        parkMarkerExists: await readFile(
+          join(projectRoot, '.daemon', 'parked', ITEM.slug),
+          'utf-8',
+        ).then(() => true).catch(() => false),
+      }).toEqual({
+        ...expected,
+        parkMarkerExists: false,
+      });
+    } finally {
+      await rm(projectRoot, { recursive: true, force: true });
+    }
+  });
+
   it('warns of unrecoverable state when the slug-derived HALT marker cannot be written', async () => {
     const projectRoot = await mkdtemp(join(tmpdir(), 'daemon-runner-unrecoverable-marker-'));
     const logs: string[] = [];
