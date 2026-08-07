@@ -16,6 +16,7 @@ import { Conductor } from '../../src/engine/conductor.js';
 import { runDaemon } from '../../src/engine/daemon.js';
 import { DefaultStepRunner } from '../../src/engine/step-runners.js';
 import { ConductorEventEmitter } from '../../src/ui/events.js';
+import type { StepName } from '../../src/types/steps.js';
 import { dumpPipelineDiagnostics } from './daemon-e2e-fixture.test.js';
 import { initTestRepo } from '../fixtures/git-repo.js';
 import { dispatchableStepCommands } from '../fixtures/step-command-preflight.js';
@@ -43,8 +44,17 @@ class TokenMeter implements LLMProvider {
   totalTokens = 0;
   totalTurns = 0;
   unmetered = 0;
+  /**
+   * Step attribution for every unmetered dispatch. A dispatch that reports no
+   * token usage is only acceptable past the PR-creation boundary — see
+   * assertSuccessfulCredentialedRun.
+   */
+  readonly unmeteredSteps: (StepName | 'unattributed')[] = [];
 
-  constructor(private readonly provider: LLMProvider) {
+  constructor(
+    private readonly provider: LLMProvider,
+    private readonly currentStep: () => StepName | undefined = () => undefined,
+  ) {
     this.supportsSessionResume = provider.supportsSessionResume;
     this.lifecycleCapability = provider.lifecycleCapability;
     this.readiness = provider.readiness?.bind(provider);
@@ -67,6 +77,7 @@ class TokenMeter implements LLMProvider {
   private record(result: InvokeResult): void {
     if (!result.tokenUsage) {
       this.unmetered += 1;
+      this.unmeteredSteps.push(this.currentStep() ?? 'unattributed');
       return;
     }
     this.totalTokens += result.tokenUsage.input + result.tokenUsage.output;
@@ -125,14 +136,40 @@ function assertTokenCap(totalTokens: number, unmetered: number, cap: number): vo
   }
 }
 
+/**
+ * Steps allowed to contribute an unmetered dispatch.
+ *
+ * The fixture worktree has no git remote, so publication cannot create a real
+ * PR. `finish`'s bounded PR-prose judgment therefore has nothing to inspect and
+ * comes back without token usage (observed as `{"kind":"provider_unavailable"}`,
+ * `finish-publication.ts:987`). Operator decision, 2026-08-07: driving the
+ * pipeline *up to* PR creation is the success criterion for this smoke; PR
+ * creation itself failing in the fixture is expected, not a regression.
+ *
+ * This is deliberately an allow-list of one rather than a relaxed count. Every
+ * step before the publication boundary must still report usage — an unmetered
+ * `build` or `build_review` is the metering defect the assertion exists to
+ * catch, and it stays caught.
+ */
+const STEPS_ALLOWED_UNMETERED: readonly StepName[] = ['finish'];
+
 function assertSuccessfulCredentialedRun(
   provisioned: Pick<ProvisionedHome, 'dispatches'> | undefined,
-  meter: Pick<TokenMeter, 'totalTurns' | 'totalTokens' | 'unmetered'>,
+  meter: Pick<TokenMeter, 'totalTurns' | 'totalTokens' | 'unmetered' | 'unmeteredSteps'>,
 ): void {
   expect(provisioned?.dispatches ?? 0).toBeGreaterThan(0);
   expect(meter.totalTurns).toBeGreaterThan(0);
   expect(meter.totalTokens).toBeGreaterThan(0);
-  expect(meter.unmetered).toBe(0);
+
+  // Named so a failure says which step went unmetered instead of "expected 1 to be 0".
+  const disallowed = meter.unmeteredSteps.filter(
+    (step) => !STEPS_ALLOWED_UNMETERED.includes(step as StepName),
+  );
+  expect(disallowed).toEqual([]);
+  // Attribution must be real: an unmetered dispatch we cannot attribute to a
+  // step is itself a failure, so the allow-list can never be satisfied by a
+  // missing step_started event.
+  expect(meter.unmeteredSteps.length).toBe(meter.unmetered);
 }
 
 const fixturePlanPath = fileURLToPath(
@@ -247,23 +284,49 @@ describe('daemon E2E live terminal guard', () => {
   it('requires successful credentialed runs to dispatch with reported turns, tokens, and no unmetered results', () => {
     expect(() => assertSuccessfulCredentialedRun(
       { dispatches: 1 },
-      { totalTurns: 1, totalTokens: 1, unmetered: 0 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 0, unmeteredSteps: [] },
     )).not.toThrow();
     expect(() => assertSuccessfulCredentialedRun(
       { dispatches: 0 },
-      { totalTurns: 1, totalTokens: 1, unmetered: 0 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 0, unmeteredSteps: [] },
     )).toThrow();
     expect(() => assertSuccessfulCredentialedRun(
       { dispatches: 1 },
-      { totalTurns: 0, totalTokens: 1, unmetered: 0 },
+      { totalTurns: 0, totalTokens: 1, unmetered: 0, unmeteredSteps: [] },
     )).toThrow();
     expect(() => assertSuccessfulCredentialedRun(
       { dispatches: 1 },
-      { totalTurns: 1, totalTokens: 0, unmetered: 0 },
+      { totalTurns: 1, totalTokens: 0, unmetered: 0, unmeteredSteps: [] },
     )).toThrow();
+  });
+
+  it('accepts an unmetered finish dispatch but no unmetered step before publication', () => {
+    // The fixture has no remote, so finish's PR-prose judgment has nothing to
+    // judge and reports no usage. That is the tolerated case.
     expect(() => assertSuccessfulCredentialedRun(
       { dispatches: 1 },
-      { totalTurns: 1, totalTokens: 1, unmetered: 1 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 1, unmeteredSteps: ['finish'] },
+    )).not.toThrow();
+
+    // Everything before the publication boundary must still report usage.
+    for (const step of ['build', 'build_review', 'manual_test'] as StepName[]) {
+      expect(() => assertSuccessfulCredentialedRun(
+        { dispatches: 1 },
+        { totalTurns: 1, totalTokens: 1, unmetered: 1, unmeteredSteps: [step] },
+      )).toThrow();
+    }
+
+    // An unmetered dispatch we cannot attribute is a failure, so a missing
+    // step_started event can never buy its way into the allow-list.
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 1, unmeteredSteps: ['unattributed'] },
+    )).toThrow();
+
+    // Attribution must account for every unmetered dispatch.
+    expect(() => assertSuccessfulCredentialedRun(
+      { dispatches: 1 },
+      { totalTurns: 1, totalTokens: 1, unmetered: 2, unmeteredSteps: ['finish'] },
     )).toThrow();
   });
 
@@ -505,7 +568,10 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         args: providerHome.childArgs(),
         teardown: () => providerHome?.teardown() ?? Promise.resolve(),
       });
-      meter = new TokenMeter(provisioned);
+      // Tracks the running step so the meter can attribute an unmetered
+      // dispatch. Populated from the conductor's own step_started events.
+      const stepTracker: { current: StepName | undefined } = { current: undefined };
+      meter = new TokenMeter(provisioned, () => stepTracker.current);
       await dispatchAfterLivePreflight(providerHome, async () => {
       await execa('git', ['add', '-A'], { cwd: worktreeDir });
       await execa('git', ['commit', '-m', 'test: seed live daemon E2E fixture', '-m', 'Task: T0'], {
@@ -539,10 +605,14 @@ describe.skipIf(!shouldRun)('daemon E2E with real Claude provider', () => {
         {
           discoverBacklog: async () => [{ slug, tier: 'S', track: 'technical' }],
           runFeature: async (item) => {
+            const events = new ConductorEventEmitter();
+            events.on('step_started', (event) => {
+              if (event.type === 'step_started') stepTracker.current = event.step;
+            });
             const conductor = new Conductor({
               stateFilePath: statePath,
               stepRunner: runner,
-              events: new ConductorEventEmitter(),
+              events,
               projectRoot: worktreeDir,
               fromStep: 'build',
               mode: 'auto',
