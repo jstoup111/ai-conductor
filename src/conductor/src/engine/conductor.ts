@@ -5417,6 +5417,39 @@ export class Conductor {
           // branch gates the retry budget: attempt stays the same across
           // park-resume, so credentials expiry doesn't leak into the retry circuit.
           if (result.authFailure) {
+            const stampNoVerdict = async () => {
+              if (step.name !== 'build') return;
+              const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
+                currentCommitSha(this.projectRoot),
+                currentTreeHash(this.projectRoot),
+                countResolvedTasks(this.projectRoot),
+              ]);
+              const outcomeStore = await readBuildOutcome(this.projectRoot);
+              await writeBuildOutcome(this.projectRoot, {
+                ...outcomeStore,
+                records: [
+                  ...outcomeStore.records,
+                  {
+                    outcome: classifyBuildSettle({
+                      treeBefore: treeHashBeforeBuild,
+                      treeAfter,
+                      resolvedBefore: resolvedTasksBefore,
+                      resolvedAfter,
+                    }),
+                    terminalOutcome: 'no-verdict',
+                    gate: null,
+                    verdict: null,
+                    rung: { model: result.model ?? resolved.model, effort: resolved.effort },
+                    treeBefore: treeHashBeforeBuild,
+                    treeAfter,
+                    headBefore: headShaBeforeBuild,
+                    headAfter,
+                    note: result.output ? result.output.split('\n').slice(-200) : undefined,
+                    reason: 'authFailure',
+                  },
+                ],
+              });
+            };
             if (isAuthorizedRecoveryTrial) {
               // The failed dispatch is the one bounded recovery trial for an
               // unavailable probe. Do not recurse into another probe; keep the
@@ -5424,6 +5457,7 @@ export class Conductor {
               const haltReason =
                 `Codex cached-login recovery trial failed authentication after the readiness probe was unavailable (${formatProbeFailureClassification(recoveryProbeFailure!)}).\n` +
                 'Refresh the Codex login, then re-queue this feature.';
+              await stampNoVerdict();
               await writeHaltMarker(this.projectRoot, haltReason + '\n', 'needs-human');
               await this.persistPendingStateChanges(state, 'persist conductor transition');
               const prUrl = await this.surfaceRemediationPr(haltReason);
@@ -5435,6 +5469,7 @@ export class Conductor {
             const park = await this.parkOnAuthFailure(result);
             if (park.disposition === 'halt') {
               // Task 14: Auth-park timeout → credentials-specific HALT.
+              await stampNoVerdict();
               await writeHaltMarker(this.projectRoot, park.haltReason + '\n', 'needs-human');
               // Durable signals (HALT marker + state) are written BEFORE escalation
               // so the daemon can classify the outcome even if escalation throws (C1).
