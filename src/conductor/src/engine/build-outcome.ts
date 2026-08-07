@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { EffortLevel } from '../types/config.js';
 
 /** The tree-level outcome observed when a build step settles. */
@@ -26,6 +28,14 @@ export interface BuildOutcomeRecord {
   note?: string[];
   category?: string;
 }
+
+/** Durable build-settle observations stored outside the feature branch. */
+export interface BuildOutcomeStore {
+  version: 1;
+  records: BuildOutcomeRecord[];
+}
+
+export const BUILD_OUTCOME_PATH = '.pipeline/build-outcome.json';
 
 export interface ClassifyBuildSettleInput {
   treeBefore: string | null;
@@ -68,4 +78,68 @@ export function sameNoOpCycle(
     && prior.verdict === current.verdict
     && prior.rung.model === current.rung.model
     && prior.rung.effort === current.rung.effort;
+}
+
+function emptyBuildOutcome(): BuildOutcomeStore {
+  return { version: 1, records: [] };
+}
+
+function isBuildOutcomeRecord(value: unknown): value is BuildOutcomeRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+
+  const record = value as Record<string, unknown>;
+  const isNullableString = (candidate: unknown): candidate is string | null =>
+    typeof candidate === 'string' || candidate === null;
+  return (
+    (record.outcome === 'moved' || record.outcome === 'no-movement')
+    && (record.terminalOutcome === 'done' || record.terminalOutcome === 'failed' || record.terminalOutcome === 'no-verdict')
+    && isNullableString(record.gate)
+    && (typeof record.verdict === 'boolean' || record.verdict === null)
+    && typeof record.rung === 'object'
+    && record.rung !== null
+    && !Array.isArray(record.rung)
+    && typeof (record.rung as Record<string, unknown>).model === 'string'
+    && typeof (record.rung as Record<string, unknown>).effort === 'string'
+    && isNullableString(record.treeBefore)
+    && isNullableString(record.treeAfter)
+    && isNullableString(record.headBefore)
+    && isNullableString(record.headAfter)
+    && (record.note === undefined || (Array.isArray(record.note) && record.note.every((line) => typeof line === 'string')))
+    && (record.category === undefined || typeof record.category === 'string')
+  );
+}
+
+function isBuildOutcomeStore(value: unknown): value is BuildOutcomeStore {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+
+  const store = value as Record<string, unknown>;
+  return store.version === 1 && Array.isArray(store.records) && store.records.every(isBuildOutcomeRecord);
+}
+
+/**
+ * Read durable build-settle observations. Missing, malformed, and incompatible
+ * sidecars deliberately fail open so they can never block a build dispatch.
+ */
+export async function readBuildOutcome(projectRoot: string): Promise<BuildOutcomeStore> {
+  const outcomePath = join(projectRoot, BUILD_OUTCOME_PATH);
+
+  try {
+    const parsed: unknown = JSON.parse(await readFile(outcomePath, 'utf-8'));
+    if (isBuildOutcomeStore(parsed)) return parsed;
+
+    if (typeof parsed === 'object' && parsed !== null && (parsed as { version?: unknown }).version !== 1) {
+      console.warn(`[build-outcome] unsupported sidecar version at ${outcomePath}; using empty record set`);
+      return emptyBuildOutcome();
+    }
+
+    console.warn(`[build-outcome] corrupt sidecar at ${outcomePath}; using empty record set`);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      console.warn(
+        `[build-outcome] unable to read sidecar at ${outcomePath}; using empty record set: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  return emptyBuildOutcome();
 }
