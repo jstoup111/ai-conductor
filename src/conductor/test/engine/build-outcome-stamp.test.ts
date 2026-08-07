@@ -142,7 +142,7 @@ describe('conductor build-outcome baseline capture', () => {
     const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {
       records: Array<Record<string, unknown>>;
     };
-    const latest = payload.records.at(-1);
+    const latest = payload.records.find((record) => record.terminalOutcome === 'done');
     const event = completed.at(-1) as { tail?: string[] } | undefined;
     expect(latest).toMatchObject({
       terminalOutcome: 'done',
@@ -151,6 +151,38 @@ describe('conductor build-outcome baseline capture', () => {
       headBefore: fixtureHead,
       headAfter: 'head-after-build',
       note: event?.tail,
+    });
+  });
+
+  it('stamps a terminal failed build settle with both witnesses', async () => {
+    vi.mocked(projectPrelude.currentCommitSha).mockResolvedValue(fixtureHead);
+    const runner: StepRunner = {
+      run: vi.fn(async () => ({ success: false, output: 'failed build output' })),
+    };
+    const conductor = new Conductor({
+      stateFilePath: statePath,
+      stepRunner: runner,
+      events: new ConductorEventEmitter(),
+      projectRoot: dir,
+      fromStep: 'build',
+      mode: 'auto',
+      daemon: true,
+      verifyArtifacts: true,
+      maxRetries: 1,
+    });
+
+    await conductor.run();
+
+    const payload = JSON.parse(await readFile(join(dir, '.pipeline', 'build-outcome.json'), 'utf8')) as {
+      records: Array<Record<string, unknown>>;
+    };
+    expect(payload.records.at(-1)).toMatchObject({
+      terminalOutcome: 'failed',
+      treeBefore: 'tree-witness',
+      treeAfter: 'tree-witness',
+      headBefore: fixtureHead,
+      headAfter: fixtureHead,
+      note: ['failed build output'],
     });
   });
 });

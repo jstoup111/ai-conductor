@@ -6457,6 +6457,37 @@ export class Conductor {
         if (!succeeded) {
           // Exhausted retries — route through the recovery menu.
           await this.saveConductorStepStatus(state, step.name, 'failed');
+          if (step.name === 'build') {
+            const [headAfter, treeAfter, resolvedAfter] = await Promise.all([
+              currentCommitSha(this.projectRoot),
+              currentTreeHash(this.projectRoot),
+              countResolvedTasks(this.projectRoot),
+            ]);
+            const outcomeStore = await readBuildOutcome(this.projectRoot);
+            await writeBuildOutcome(this.projectRoot, {
+              ...outcomeStore,
+              records: [
+                ...outcomeStore.records,
+                {
+                  outcome: classifyBuildSettle({
+                    treeBefore: treeHashBeforeBuild,
+                    treeAfter,
+                    resolvedBefore: resolvedTasksBefore,
+                    resolvedAfter,
+                  }),
+                  terminalOutcome: 'failed',
+                  gate: null,
+                  verdict: null,
+                  rung: { model: failedStepResult?.model ?? resolved.model, effort: resolved.effort },
+                  treeBefore: treeHashBeforeBuild,
+                  treeAfter,
+                  headBefore: headShaBeforeBuild,
+                  headAfter,
+                  note: lastError ? lastError.split('\n').slice(-200) : undefined,
+                },
+              ],
+            });
+          }
           await emitTracked({
             type: 'step_failed',
             step: step.name,
