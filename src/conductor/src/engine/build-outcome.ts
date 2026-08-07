@@ -41,6 +41,7 @@ export function classifyBuildSettle({
   resolvedBefore,
   resolvedAfter,
 }: ClassifyBuildSettleInput): BuildSettleOutcome {
+  if (treeBefore === null || treeAfter === null) return 'no-movement';
   if (treeBefore !== null && treeAfter !== null && treeBefore !== treeAfter) return 'moved';
   if (resolvedAfter > resolvedBefore) return 'moved';
   return 'no-movement';
