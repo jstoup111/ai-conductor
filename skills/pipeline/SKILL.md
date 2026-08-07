@@ -91,7 +91,7 @@ DEPENDENCY ORDER — Dispatch tasks in topological order respecting declared dep
                   Dispatch template's line 1 MUST be exactly `Task: <id>` — <id> is the bare PLAN header id (e.g. 9, not task-9).
                   Implementer includes it as a trailer in all commits (including refactors); implementer amends before PASS
                   if the trailer is malformed. Implementer runs full TDD cycle: RED → DOMAIN → GREEN → DOMAIN → COMMIT
-3. VERIFY       — Run the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
+3. VERIFY       — Run `conduct-ts scoped-run <selectors...>` for the scoped affected-test set (see Scoped VERIFY below) to confirm the implementer's work
 4. FIX          — If tests fail, VERIFY failure first (see below), then dispatch implementer with error context
 5. COMMIT       — Verify the implementer's commit carries the `Task: <id>` trailer with <id> as the bare plan id
                   (e.g. Task: 9, not Task: task-9). The trailer is non-authoritative routing
@@ -206,19 +206,21 @@ Scoping logic:
    files covering the modified production modules. Discover these by naming convention (e.g.,
    `src/foo/bar.ts` → `test/foo/bar.test.ts`) and by grepping test files for imports of or
    references to modified modules.
-3. Run the project's test runner with explicit file arguments targeting only the scoped set.
+3. The agent derives the selectors from that scoped set and runs `conduct-ts scoped-run <selectors...>`.
 4. Retain the named affected-test set for the batch-boundary union described below.
 
-**Fallback to full suite:**
-- Trigger (a): Diff touches a shared/core module imported/required by 3+ other production modules
-- Trigger (b): Diff touches config, migrations, dependency manifests, or test infrastructure (helpers, fixtures, global setup)
-- Trigger (c): The scoped set is empty
-- Trigger (d): The module→test mapping cannot be made confidently
+**Broad fallback:**
+- A shared/core module has 3+ production importers.
+- The diff touches config, migrations, dependency manifests, or test infrastructure.
+- The scoped/affected set is empty.
+- Module-to-test mapping is low-confidence and cannot be made confidently.
 
 For per-task VERIFY, uncertainty resolves toward this fallback scope — scoping is an
 optimization, never a gate change.
 
-When a trigger fires, the task REPORT names it.
+When a trigger fires, state `Aggregate fallback: <exact trigger and reason>` and invoke the
+repository-configured aggregate verifier interface. Do not call the project's aggregate command
+directly. The task REPORT names the trigger and fallback scope.
 
 **Batch affected-test union:** At each batch boundary, compute one named
 `BATCH_AFFECTED_TESTS` union by deduplicating every task's scoped affected-test set, then run

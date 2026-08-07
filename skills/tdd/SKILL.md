@@ -54,7 +54,8 @@ normal model. This is an orchestration instruction, not a separate conductor ste
 
 1. Choose the next acceptance criterion from the plan (or the most obvious next behavior)
 2. Write one test with one assertion
-3. Run the scoped union of affected tests, retaining the test under change as
+3. The agent derives the selectors for the scoped union and runs
+   `conduct-ts scoped-run <selectors...>`, retaining the test under change as
    an expected failing member
 4. Confirm that the test under change fails for the expected reason and every
    other affected test passes
@@ -105,7 +106,7 @@ production call site of any security/correctness derivation, with real adversari
 
 2. Write the minimum code to pass the test
 3. Run the test — **watch it pass**
-4. Run the affected/scoped test set (the task's own tests + the files this change touches). The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
+4. The agent derives the selectors for the affected/scoped test set (the task's own tests + the files this change touches) and runs `conduct-ts scoped-run <selectors...>`. The dedicated pre-SHIP gate and CI own broad verification, not each TDD cycle.
 
 A known failure in that scoped set blocks the current GREEN phase; fix it here
 rather than deferring it to a later gate. If one of the repository's documented
