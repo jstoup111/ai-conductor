@@ -196,4 +196,64 @@ describe('per-task-commit-floor', () => {
       ],
     });
   });
+
+  it.each([
+    ['an unreadable plan', async () => ({ projectRoot: dir, planPath: join(dir, 'missing.md') })],
+    ['a git failure', async () => {
+      await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+      return { projectRoot: join(dir, 'not-a-repository'), planPath };
+    }],
+    ['malformed plan input', async () => {
+      await writeFile(planPath, 'this is not a task plan');
+      return { projectRoot: dir, planPath };
+    }],
+  ])('fails soft with a skip note for %s', async (_caseName, makeArgs) => {
+    const report = await runContainmentFloor(await makeArgs());
+
+    expect(report).toMatchObject({ satisfied: true, violations: [] });
+    expect(report.skipNotes).toHaveLength(1);
+  });
+
+  it('does not report a merge commit carrying a Task trailer as a violation', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await execa('git', ['checkout', '-b', 'side'], { cwd: dir });
+    await writeFile(join(dir, 'undeclared.ts'), 'x');
+    await execa('git', ['add', 'undeclared.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'side work'], { cwd: dir });
+    await execa('git', ['checkout', 'main'], { cwd: dir });
+    await execa('git', ['merge', '--no-ff', 'side', '-m', 'merge side\n\nTask: 3'], { cwd: dir });
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({ satisfied: true, violations: [] });
+  });
+
+  it('does not report commits while a rebase replay is in progress', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await writeFile(join(dir, 'undeclared.ts'), 'x');
+    await execa('git', ['add', 'undeclared.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'replayed\n\nTask: 3'], { cwd: dir });
+    await mkdir(join(dir, '.git', 'rebase-merge'));
+
+    const report = await runContainmentFloor({ projectRoot: dir, planPath });
+
+    expect(report).toMatchObject({ satisfied: true, violations: [] });
+  });
+
+  it('does not report commits while the engine commit exemption is set', async () => {
+    await writeFile(planPath, '### Task 3: Contain\n**Files:** declared.ts\n');
+    await writeFile(join(dir, 'undeclared.ts'), 'x');
+    await execa('git', ['add', 'undeclared.ts'], { cwd: dir });
+    await execa('git', ['commit', '-m', 'bookkeeping\n\nTask: 3'], { cwd: dir });
+    const prior = process.env.CONDUCT_ENGINE_COMMIT;
+    process.env.CONDUCT_ENGINE_COMMIT = '1';
+
+    try {
+      const report = await runContainmentFloor({ projectRoot: dir, planPath });
+      expect(report).toMatchObject({ satisfied: true, violations: [] });
+    } finally {
+      if (prior === undefined) delete process.env.CONDUCT_ENGINE_COMMIT;
+      else process.env.CONDUCT_ENGINE_COMMIT = prior;
+    }
+  });
 });

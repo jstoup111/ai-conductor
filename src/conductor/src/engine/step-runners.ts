@@ -28,7 +28,11 @@ import { findArtifactFiles, resolveFeaturePlanPath, BUILD_REVIEW_VERDICT } from 
 import { currentCommitSha } from './project-prelude.js';
 import { resolveGateCodeValidityConfig } from './config.js';
 import { assembleBuildReviewInputs } from './build-review-inputs.js';
-import { runPerTaskCommitFloor, renderPerTaskFloorReport } from './per-task-commit-floor.js';
+import {
+  runContainmentFloor,
+  runPerTaskCommitFloor,
+  renderPerTaskFloorReport,
+} from './per-task-commit-floor.js';
 import { resolveBuildReviewConfig } from './resolved-config.js';
 import { buildGraderPrompt } from './build-review-prompt.js';
 import {
@@ -1737,6 +1741,15 @@ export class DefaultStepRunner implements StepRunner {
         await writeFile(
           join(effectivePipelineDir, 'per-task-floor.json'),
           JSON.stringify(floorReport, null, 2),
+          'utf-8',
+        );
+        const containmentReport = await runContainmentFloor({
+          projectRoot: this.projectDir,
+          planPath,
+        });
+        await writeFile(
+          join(effectivePipelineDir, 'containment-floor.json'),
+          JSON.stringify(containmentReport, null, 2),
           'utf-8',
         );
         if (floorReport.gaps.length > 0) {

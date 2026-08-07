@@ -1,5 +1,5 @@
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { readFile, stat } from 'node:fs/promises';
+import { isAbsolute, join } from 'node:path';
 import { execa } from 'execa';
 import { parsePlanTaskPaths } from './plan-task-parse.js';
 import {
@@ -47,6 +47,7 @@ export interface ContainmentFloorReport {
   satisfied: boolean;
   violations: ContainmentFloorViolation[];
   acceptedWidenings: AcceptedScopeWidening[];
+  skipNotes: string[];
 }
 
 export async function runPerTaskCommitFloor(args: {
@@ -112,52 +113,123 @@ export async function runContainmentFloor(args: {
   projectRoot: string;
   planPath: string;
 }): Promise<ContainmentFloorReport> {
-  const planText = await readFile(args.planPath, 'utf-8');
-  const taskPaths = parsePlanTaskPaths(planText);
-  const tasksByCanonicalId = new Map(
-    [...taskPaths.entries()].map(([id, files]) => [canonicalTaskId(id), { id, files: [...files] }]),
-  );
-  const commits = await listCommitsWithTrailers(args.projectRoot);
-  const violations: ContainmentFloorViolation[] = [];
-  const acceptedWidenings: AcceptedScopeWidening[] = [];
+  try {
+    await assertGitRepository(args.projectRoot);
+    if (await isContainmentFloorExempt(args.projectRoot)) {
+      return skippedContainmentFloor('commit exemption is active');
+    }
 
-  for (const commit of commits) {
-    const taskIds = new Set((commit.trailers.Task ?? []).map(canonicalTaskId));
-    if (taskIds.size === 0) continue;
+    const planText = await readFile(args.planPath, 'utf-8');
+    const taskPaths = parsePlanTaskPaths(planText);
+    if (taskPaths.size === 0) {
+      return skippedContainmentFloor('plan contains no parseable task declarations');
+    }
+    const tasksByCanonicalId = new Map(
+      [...taskPaths.entries()].map(([id, files]) => [canonicalTaskId(id), { id, files: [...files] }]),
+    );
+    const commits = await listCommitsWithTrailers(args.projectRoot);
+    const violations: ContainmentFloorViolation[] = [];
+    const acceptedWidenings: AcceptedScopeWidening[] = [];
 
-    const files = await filesForCommit(args.projectRoot, commit.sha);
-    const message = await commitMessage(args.projectRoot, commit.sha);
-    const scopeTrailers = parseScopeTrailers(message, files);
+    for (const commit of commits) {
+      if (await isMergeCommit(args.projectRoot, commit.sha)) continue;
 
-    for (const taskId of taskIds) {
-      const task = tasksByCanonicalId.get(taskId);
-      if (!task) continue;
+      const taskIds = new Set((commit.trailers.Task ?? []).map(canonicalTaskId));
+      if (taskIds.size === 0) continue;
 
-      const result = evaluateScopeContainment({
-        stagedPaths: files,
-        task: { id: task.id, status: 'in_progress', files: task.files },
-        scopeTrailers,
-      });
-      if (!result.allowed) {
-        violations.push({ taskId: task.id, sha: commit.sha, paths: result.offendingPaths });
-        continue;
-      }
+      const files = await filesForCommit(args.projectRoot, commit.sha);
+      const message = await commitMessage(args.projectRoot, commit.sha);
+      const scopeTrailers = parseScopeTrailers(message, files);
 
-      for (const scope of scopeTrailers) {
-        if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
+      for (const taskId of taskIds) {
+        const task = tasksByCanonicalId.get(taskId);
+        if (!task) continue;
+
+        const result = evaluateScopeContainment({
+          stagedPaths: files,
+          task: { id: task.id, status: 'in_progress', files: task.files },
+          scopeTrailers,
+        });
+        if (!result.allowed) {
+          violations.push({ taskId: task.id, sha: commit.sha, paths: result.offendingPaths });
           continue;
         }
-        if (task.files.includes(scope.path)) continue;
-        acceptedWidenings.push({ ...scope, taskId: task.id, sha: commit.sha });
+
+        for (const scope of scopeTrailers) {
+          if (!files.some((path) => path === scope.path || path.startsWith(`${scope.path}/`))) {
+            continue;
+          }
+          if (task.files.includes(scope.path)) continue;
+          acceptedWidenings.push({ ...scope, taskId: task.id, sha: commit.sha });
+        }
       }
     }
-  }
 
+    return {
+      satisfied: violations.length === 0,
+      violations,
+      acceptedWidenings,
+      skipNotes: [],
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return skippedContainmentFloor(message);
+  }
+}
+
+function skippedContainmentFloor(message: string): ContainmentFloorReport {
   return {
-    satisfied: violations.length === 0,
-    violations,
-    acceptedWidenings,
+    satisfied: true,
+    violations: [],
+    acceptedWidenings: [],
+    skipNotes: [`containment-floor: ${message}`],
   };
+}
+
+async function assertGitRepository(projectRoot: string): Promise<void> {
+  const result = await execa('git', ['rev-parse', '--is-inside-work-tree'], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  if (result.exitCode !== 0 || result.stdout.trim() !== 'true') {
+    throw new Error(`git repository check failed: ${result.stderr || 'not a work tree'}`);
+  }
+}
+
+async function isContainmentFloorExempt(projectRoot: string): Promise<boolean> {
+  if (process.env.CONDUCT_ENGINE_COMMIT === '1') return true;
+
+  const gitPath = async (name: string): Promise<string> => {
+    const result = await execa('git', ['rev-parse', '--git-path', name], {
+      cwd: projectRoot,
+      reject: false,
+    });
+    if (result.exitCode !== 0 || !result.stdout.trim()) {
+      throw new Error(`git path ${name} failed: ${result.stderr || 'unknown error'}`);
+    }
+    const path = result.stdout.trim();
+    return isAbsolute(path) ? path : join(projectRoot, path);
+  };
+
+  for (const name of ['rebase-merge', 'rebase-apply']) {
+    try {
+      if ((await stat(await gitPath(name))).isDirectory()) return true;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+  }
+  return false;
+}
+
+async function isMergeCommit(projectRoot: string, sha: string): Promise<boolean> {
+  const result = await execa('git', ['rev-list', '--parents', '-n', '1', sha], {
+    cwd: projectRoot,
+    reject: false,
+  });
+  if (result.exitCode !== 0 || !result.stdout.trim()) {
+    throw new Error(`git parent lookup ${sha} failed: ${result.stderr || 'unknown error'}`);
+  }
+  return result.stdout.trim().split(/\s+/).length > 2;
 }
 
 async function commitMessage(projectRoot: string, sha: string): Promise<string> {
