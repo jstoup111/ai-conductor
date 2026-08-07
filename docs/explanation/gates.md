@@ -74,6 +74,21 @@ different times against different evidence.
 | self-host | before the finish step, only when the harness is building itself | the PR | 6 |
 | hook | at the moment of a tool call | the individual edit, command, or dispatch | see [settings and hooks](../reference/settings-and-hooks.md) |
 
+### Commit scope-containment boundary
+
+The generated `commit-msg` hook checks staged paths on a task-attributed commit against the active task's
+declared files. A path outside that declaration is diagnosed with one copy-pasteable
+`Scope: <path> — <rationale>` trailer per path. Those trailers make an intentional widening visible to the
+engine-side containment floor and to `build_review`; they do not declare a task complete or waive semantic
+scope review.
+
+Containment ships report-only by default because false-positive refusals can stall a live build. The checker
+prints every verified violation but returns `0`, so the commit proceeds and the containment floor retains the
+evidence for later review. Its three-valued contract keeps the hook safe if state is unavailable: `0` allows
+(including a reported default violation), `2` is a positive refusal for the later enforcement flip, and every
+other result is an abstention that the hook logs and allows. The hook converts only `2` to Git's blocking
+exit `1`; malformed or missing task state never blocks a build.
+
 ### Per-step completion gates
 
 These are the twelve gates that decide whether a step's work is real. Ten replace the default
