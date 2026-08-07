@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
   classifyBuildSettle,
@@ -56,5 +57,32 @@ describe('classifyBuildSettle', () => {
         rung: { model: 'gpt-5.6-terra', effort: 'medium' },
       }),
     ).toBe(expected);
+  });
+
+  it.each([
+    ['a null prior tree witness', priorOutcome({ treeAfter: null }), 'tree-1', priorOutcome().rung],
+    ['a null current tree witness', priorOutcome(), null, priorOutcome().rung],
+    ['null tree witnesses on both outcomes', priorOutcome({ treeAfter: null }), null, priorOutcome().rung],
+    [
+      'a changed rung',
+      priorOutcome({ rung: { model: 'sonnet', effort: 'medium' } }),
+      'tree-1',
+      { model: 'opus', effort: 'high' },
+    ],
+  ] as const)('rejects %s', (_description, prior, treeHash, rung) => {
+    expect(
+      sameNoOpCycle(prior, {
+        gate: 'wiring_check',
+        treeHash,
+        verdict: false,
+        rung,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not import the retired build-progress classifier', () => {
+    expect(
+      readFileSync(new URL('../../src/engine/build-outcome.ts', import.meta.url), 'utf8'),
+    ).not.toMatch(/import\s+(?:type\s+)?[\s\S]*?\bclassifyBuildProgress\b/);
   });
 });
