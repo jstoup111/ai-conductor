@@ -16,7 +16,6 @@ import { rename } from 'node:fs/promises';
 import {
   classifyBuildSettle,
   composeBuildOutcomeHaltReason,
-  inferBuildOutcomeCategory,
   readBuildOutcome,
   resolveBuildOutcomeCategory,
   sameNoOpCycle,
@@ -178,7 +177,7 @@ describe('build outcome category', () => {
     await writeFile(join(dir, '.pipeline', 'build-dispute.json'), 'broken');
     await expect(resolveBuildOutcomeCategory(dir, ['this needs a decision'])).resolves.toBe('belongs-to-decide');
     await expect(resolveBuildOutcomeCategory(dir)).resolves.toBe('silent-no-movement');
-    expect(inferBuildOutcomeCategory(['the gate is stale'])).toBe('disputes-gate');
+    await expect(resolveBuildOutcomeCategory(dir, ['the gate is stale'])).resolves.toBe('disputes-gate');
   });
 
   it.each(['disputes-gate', 'belongs-to-decide', 'silent-no-movement'] as const)(

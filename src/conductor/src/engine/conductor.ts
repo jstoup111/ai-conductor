@@ -3371,8 +3371,9 @@ export class Conductor {
 
     const currentBuildRung = (): BuildOutcomeRung => {
       const build = getStepDefinition('build');
+      const buildModelPolicy = this.modelPolicyForStep('build');
       const resolvedBuild = resolveStepConfig(
-        'build', build.phase, this.modelPolicyForStep('build'), this.config,
+        'build', build.phase, buildModelPolicy, this.config,
         { tier: state.complexity_tier },
       );
       return { model: resolvedBuild.model, effort: resolvedBuild.effort };
@@ -3435,7 +3436,7 @@ export class Conductor {
         currentTreeHash(this.projectRoot),
       ]);
       const priorOutcome = latestBuildOutcome(outcomes);
-      if (sourceGate === 'wiring_check' && sameNoOpCycle(priorOutcome, {
+      if (kickbackEscalationEnabled && sourceGate === 'wiring_check' && sameNoOpCycle(priorOutcome, {
         gate: sourceGate,
         treeHash,
         verdict: false,
