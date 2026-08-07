@@ -1,6 +1,8 @@
 import { existsSync } from 'node:fs';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import { join, relative, resolve } from 'node:path';
 
 import { execa } from 'execa';
 import { createVitest } from 'vitest/node';
@@ -23,9 +25,14 @@ export interface DiscoveredSmokeFile {
   source: string;
 }
 
+export interface SmokeVitestOutcome {
+  executedAssertions: boolean;
+  output: string;
+}
+
 export interface SmokeRunDependencies {
   discover: () => Promise<readonly DiscoveredSmokeFile[]>;
-  runVitest: (file: string) => Promise<unknown>;
+  runVitest: (file: string) => Promise<SmokeVitestOutcome>;
   mode?: SmokeRunMode;
   hasCommand?: (command: string) => boolean;
   environment?: Readonly<Record<string, string | undefined>>;
@@ -81,18 +88,61 @@ async function runSmoke({
     }
 
     try {
-      await runVitest(file);
-      executedCapabilities.push(capability);
-      ledger.push({ file, capability, outcome: 'ran' });
+      const outcome = await runVitest(file);
+      if (outcome.output.length > 0) emit(outcome.output);
+      if (outcome.executedAssertions) {
+        executedCapabilities.push(capability);
+        ledger.push({ file, capability, outcome: 'ran' });
+      } else {
+        ledger.push({ file, capability, outcome: 'skipped', unmet: 'no Vitest assertions executed' });
+      }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.length > 0) emit(message);
       ledger.push({ file, capability, outcome: 'failed', evidencePath: `Vitest output for ${file}` });
-      failure ??= error instanceof Error ? error : new Error(String(error));
+      failure ??= error instanceof Error ? error : new Error(message);
     }
   }
 
   emitSmokeOutcomeLedger(ledger, emit);
   if (failure !== undefined) throw failure;
   if (mode === 'gate') assertGateCredentialedExecution(executedCapabilities);
+}
+
+interface VitestJsonReport {
+  numPassedTests: number;
+}
+
+function parseVitestOutcome(output: string): SmokeVitestOutcome {
+  const report = JSON.parse(output) as Partial<VitestJsonReport>;
+  if (typeof report.numPassedTests !== 'number') {
+    throw new Error('Vitest JSON report does not include numPassedTests');
+  }
+  return { executedAssertions: report.numPassedTests > 0, output };
+}
+
+async function runVitestWithReport(file: string, config: string): Promise<SmokeVitestOutcome> {
+  const reportDirectory = await mkdtemp(join(tmpdir(), 'ai-conductor-smoke-report-'));
+  const reportPath = join(reportDirectory, 'vitest.json');
+  try {
+    const result = await execa(
+      'vitest',
+      ['run', '--config', config, '--reporter=json', '--outputFile', reportPath, file],
+      { all: true, reject: false },
+    );
+    const report = await readFile(reportPath, 'utf8').catch(() => '');
+    const output = result.all.length > 0 ? `${result.all}\n${report}` : report;
+    if (result.exitCode !== 0) {
+      throw new Error(output.length > 0 ? output : `Vitest exited ${result.exitCode} for ${file}`);
+    }
+    const outcome = parseVitestOutcome(report);
+    return {
+      ...outcome,
+      output,
+    };
+  } finally {
+    await rm(reportDirectory, { recursive: true, force: true });
+  }
 }
 
 function defaultHasCommand(command: string): boolean {
@@ -121,7 +171,7 @@ async function discoverSmokeFiles(config: string): Promise<readonly DiscoveredSm
     const files = await vitest.globTestFiles();
     const { readFile } = await import('node:fs/promises');
     return Promise.all(files.map(async ({ moduleId }) => {
-      const file = moduleId.slice(process.cwd().length + 1).replaceAll('\\', '/');
+      const file = relative(process.cwd(), moduleId).replaceAll('\\', '/');
       const source = await readFile(moduleId, 'utf8');
       return { file, source };
     }));
@@ -143,8 +193,7 @@ export async function runSmokeCli(
 ): Promise<void> {
   await runSmoke({
     discover: dependencies.discover ?? (() => discoverSmokeFiles(config)),
-    runVitest: dependencies.runVitest
-      ?? ((file) => execa('vitest', ['run', '--config', config, file], { stdio: 'inherit' })),
+    runVitest: dependencies.runVitest ?? ((file) => runVitestWithReport(file, config)),
     mode: dependencies.mode ?? (process.env.SMOKE_MODE === 'gate' ? 'gate' : 'advisory'),
     hasCommand: dependencies.hasCommand,
     environment: dependencies.environment,

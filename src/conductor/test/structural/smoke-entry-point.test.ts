@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -37,7 +38,7 @@ describe('structural: smoke test entry point', () => {
   });
 
   it('applies per-file capability decisions, records skips, and requires credentialed execution in gate mode', async () => {
-    const runVitest = vi.fn(async () => undefined);
+    const runVitest = vi.fn(async () => ({ executedAssertions: true, output: '' }));
     const emit = vi.fn();
 
     await runSmokeCli('vitest.smoke.config.ts', {
@@ -78,10 +79,10 @@ describe('structural: smoke test entry point', () => {
     'executes both hermetic smoke files through real discovery and child-process dispatch',
     async () => {
       const ledger: string[] = [];
-      const fixtureDir = await mkdtemp(join(structuralRoot, '.task21-smoke-'));
+      const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-task21-smoke-'));
       const fixtureFiles = ['first.smoke.test.ts', 'second.smoke.test.ts']
         .map((name) => join(fixtureDir, name));
-      const config = join(conductorRoot, `${fixtureDir.split('/').at(-1)?.slice(1)}.config.ts`);
+      const config = join(fixtureDir, 'vitest.config.ts');
       const originalRunTmpRoot = process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
       const originalTmpdir = process.env.TMPDIR;
 
@@ -93,16 +94,16 @@ describe('structural: smoke test entry point', () => {
         ].join('\n'))));
         await writeFile(config, [
           "import { tmpdir } from 'node:os';",
-          "import { defineConfig } from 'vitest/config';",
-          "import { ensureRunTmpRootSync } from './test/tmpdir-leak-guard.js';",
+          `import { defineConfig } from ${JSON.stringify(join(conductorRoot, 'node_modules/vitest/dist/config.js'))};`,
+          `import { ensureRunTmpRootSync } from ${JSON.stringify(join(conductorRoot, 'test/tmpdir-leak-guard.js'))};`,
           '',
           'ensureRunTmpRootSync(tmpdir());',
           'export default defineConfig({ test: {',
-          `  include: ${JSON.stringify(fixtureFiles.map((file) => relative(conductorRoot, file)))},`,
+          `  include: ${JSON.stringify(fixtureFiles)},`,
           '  exclude: [],',
           "  environment: 'node',",
-          "  setupFiles: ['./test/setup.ts'],",
-          "  globalSetup: ['./test/global-setup.ts'],",
+          `  setupFiles: [${JSON.stringify(join(conductorRoot, 'test/setup.ts'))}],`,
+          `  globalSetup: [${JSON.stringify(join(conductorRoot, 'test/global-setup.ts'))}],`,
           "  pool: 'forks',",
           "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
           '} });',
@@ -111,7 +112,7 @@ describe('structural: smoke test entry point', () => {
         delete process.env.AI_CONDUCTOR_TEST_TMP_ROOT;
         delete process.env.TMPDIR;
         try {
-          await runSmokeCli(relative(conductorRoot, config), {
+          await runSmokeCli(config, {
             mode: 'advisory',
             environment: {},
             emit: (line) => ledger.push(line),
@@ -128,6 +129,54 @@ describe('structural: smoke test entry point', () => {
         );
       } finally {
         await rm(config, { force: true });
+        await rm(fixtureDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  it(
+    'ledgers a credentialed child with only skipped assertions as skipped and rejects it in gate mode',
+    async () => {
+      const ledger: string[] = [];
+      const fixtureDir = await mkdtemp(join(tmpdir(), 'ai-conductor-skipped-smoke-'));
+      const fixtureFile = join(fixtureDir, 'credentialed.smoke.test.ts');
+      const config = join(fixtureDir, 'vitest.config.ts');
+      const vitestEntry = join(conductorRoot, 'node_modules/vitest/dist/index.js');
+
+      try {
+        await writeFile(fixtureFile, [
+          `import { it } from ${JSON.stringify(vitestEntry)};`,
+          "const smokeCapability = 'credentialed';",
+          "it.skip('has no executable assertion', () => {});",
+        ].join('\n'));
+        await writeFile(config, [
+          `import { defineConfig } from ${JSON.stringify(join(conductorRoot, 'node_modules/vitest/dist/config.js'))};`,
+          '',
+          'export default defineConfig({ test: {',
+          `  include: [${JSON.stringify(fixtureFile)}],`,
+          '  exclude: [],',
+          "  environment: 'node',",
+          "  pool: 'forks',",
+          "  poolOptions: { forks: { maxForks: 1, minForks: 1 } },",
+          '} });',
+        ].join('\n'));
+
+        await runSmokeCli(config, {
+          mode: 'advisory',
+          environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+          emit: (line) => ledger.push(line),
+        });
+
+        await expect(runSmokeCli(config, {
+          mode: 'gate',
+          environment: { CLAUDE_CODE_OAUTH_TOKEN: 'test-token' },
+        })).rejects.toThrow('Gate-mode smoke run executed no credentialed test files');
+
+        expect(ledger, ledger.join('\n')).toContain(
+          `smoke ledger: ${relative(conductorRoot, fixtureFile)} [credentialed] skipped (unmet: no Vitest assertions executed)`,
+        );
+      } finally {
         await rm(fixtureDir, { recursive: true, force: true });
       }
     },

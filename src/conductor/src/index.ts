@@ -21,7 +21,7 @@ export function deriveMode(opts: { auto: boolean; interactive: boolean }): RunMo
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { mkdir, readFile } from 'node:fs/promises';
-import { realpathSync } from 'node:fs';
+import { realpathSync, writeSync } from 'node:fs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { v4 as uuidv4 } from 'uuid';
@@ -101,6 +101,7 @@ import {
 import {
   detectFinishRecordCommand,
   dispatchFinishRecord,
+  FINISH_RECORD_USAGE,
   makeProductionFinishRecordRunners,
 } from './engine/finish-record-cli.js';
 import {
@@ -513,8 +514,14 @@ async function main(): Promise<void> {
   // shipped-record dispatch pattern.
   const finishRecordCmd = detectFinishRecordCommand(process.argv);
   if (finishRecordCmd) {
+    if (finishRecordCmd.kind === 'guide') {
+      writeSync(process.stderr.fd, `${FINISH_RECORD_USAGE}\n`);
+      process.exitCode = 1;
+      return;
+    }
     const code = await dispatchFinishRecord(finishRecordCmd, process.cwd(), makeProductionFinishRecordRunners());
-    process.exit(code);
+    process.exitCode = code;
+    return;
   }
 
   // Manual-test-record subcommand (`manual-test-record --skip --reason <r>
